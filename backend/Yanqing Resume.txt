@@ -1,0 +1,116 @@
+# Yanqing Jiang
+
+Current Location: Seattle, WA  
+Email: jiangyanqing90@gmail.com  
+Cell: (270) 978-9240  
+AI Portfolio Website: ai.jiangyanqing.com
+Pre-AI website: www.jiangyanqing.com
+
+---
+
+## Work Experience
+
+### **Procter & Gamble**  
+**Advance Analytics Senior Manager**  
+*Amazon Sales Team, Seattle, WA*  
+**Jul 2024 – Present**
+
+- Lead development of marketing analytics products for the Highest Growth team in P&G
+- Optimized shopper targeting strategies, increasing search-to-purchase conversion by 50% YoY and increase "Buy x Get y" 5 yearly scale campaign sales by 20%.
+- Deployed ML algorithms to reduce search cost by 10% while driving sales growth.
+- Architected 100+ A/B tests and hypothesis-driven analytic insights.
+
+---
+
+### **Procter & Gamble**  
+**Analytics & Insight Senior Manager**  
+*Walgreens Sales Team, Chicago, IL*  
+**Apr 2022 – Jun 2024**
+
+- Built an end-to-end machine learning pipeline that generated $150M+ incremental sales under a year
+- Developed full-stack GenAI website saving 1,000+ hours annually.
+- Tech lead in a multi-function team project that out-performed a multimillion-dollar AI company on store level forecasting algorithm. Added $70M incremental sales in a 3 month 
+- Lead development and alignment of enterprise BI & Analytics products, including terabyte level data management, cloud-base data platforms, digital product development cycles 
+- Lead digital commerce analytics transformation, driving sales team’s adoption of digital strategies and revolutionizing BI platform with automation, actionable insights and opportunity detection. Reversed digital growth rate from -8% to 20% under a year
+
+---
+
+### **Archer Daniels Midland**  
+**Data Analytics Engineer**  
+*Global Procurement & Supply Chain, Decatur, IL*  
+**Jan 2020 – Mar 2022**
+
+- Built an end-to-end project management application for global teams with 400+ members, cut communication time by more than 80%, and saved $300K+ yearly budget 
+- Administered MS SQL Server database with 100+ large-scale tables and weekly ETL pipelines.
+- Managed enterprise data visualization and analytics solutions in Power Platform (Power BI premium, PowerApps, Power Automate…etc)
+
+---
+
+### **U.S. Army**  
+**Supply Specialist**  
+*2-35 Infantry Battalion, Schofield Barracks, HI*  
+**Nov 2015 – Jan 2020**
+
+- First E4 soldier to serve as GTC Program Manager and DTS Approving Official.
+- Government Purchase Card holder; expanded battalion budget by 20%.
+
+---
+
+### ****  
+**Ecommerce Retailer**  
+*Alpha J Store, Inc. – City of Industry, CA*  
+**Jan 2014 – Nov 2015**
+
+- Built an E-commerce business from $0 to $1.2M revenue with 1000+ SKUs in Amazon, eBay, and Etsy
+- Introduced top Chinese luggage manufacturer to North America; built 100+ retail partnerships.
+
+---
+* Build out case studies that strengthen go- to market approach for with sponsorships, and strategic marketing plans
+* Facilitate the analysis of data and coordinate with key decision makers to ensure the overall support and development of business strategies.
+* Own the delivery of product insights, highlight opportunities to improve acquisition, retention, monetization and player/family experience
+* Oversee the creation of dashboards and reports that analyze performance metrics
+* Ensure accuracy of data and deliverables
+* Cultivate relationships across departments and functions to foster effective teamwork throughout the organization.
+* Cross-functional partner willing to work with sales, sponsorship and marketing to create unmatched activation ROI for partners.
+* Drive highly visible strategic projects, collaborate cross-functionally to understand opportunities and develop solutions
+* Persuasively communicate your recommendations through data driven conversations
+* Evolve best practices across all business functions, discouraging silos and encouraging cross-communication and collaboration.
+* Build out of scalable and efficient ETL/ELT pipelines resulting in Certified Datasets that enable the analyses, insights and visualization of business critical initiatives throughout the organization
+* Collaborate with business partners (Sales, Finance, Marketing, etc.) to understand, scope and develop new company wide certified datasets/models
+* Enable and coach consumers of data, helping them use new datasets drive decision making and optimization of our business
+* Assist in modeling Key Performance Indicators for visualization that drive operational and strategic success.
+* Maintain and communicate analytics and engineering-related standards and best practices.
+* Work closely with Analytics teams, Data Science, Data Engineers, Sales, Marketing, and Product teams.
+* Drive and champion data fluency throughout the organization through the creation of standardized metrics, intuitive dashboards, and compelling business insights
+* Lead a team of analysts to translate complex analytical tasks into actionable insights and easily consumable outputs
+* Define and manage processes needed to achieve operational excellence for your team
+* Provide guidance and mentorship the members of your team
+* Be able to extract data out of Big Data technologies (i.e. Redshift, Big Query, Azure Databricks) to produce clear and actionable insights
+* Synthesize complex data analyses and communicate clearly and effectively to stakeholders across the organization
+* Craft compelling dashboards and visualizations to “tell the story” of the business
+* Continually evaluate and refine your technical toolkit; teach what you learn to the team
+* Collaborate daily with cross-functional colleagues to drive strategies and tactics for growth
+
+* Build out our data pipeline architecture, and optimize data flow and collection for cross functional teams. This includes designing and implementing a new scalable Data Platform and pipelines using modern data technologies
+* Integrate data into our Data Warehouse from multiple sources at various time intervals to support the company’s Business Intelligence and Reporting/Analytic requirements
+* Help build and maintain our data model in the Data Warehouse, the Business Intelligence Platform, and integrations with source systems
+* Work closely with both technical and non-technical/business teams to understand their data needs, and develop solutions to meet them
+* Help evolve the implementation of the data warehouse and data integrations as requirements change
+* Perform data validity, accuracy, and integrity tests across different components of the Data Platform to ensure high quality data
+* Performance tuning/optimization, troubleshooting, and production support
+## Education
+
+- **The Ohio State University**, Max M. Fisher College of Business  
+  *B.S. in Corporate Finance* (Jan 2012 – Dec 2013)
+
+- **Murray State University**  
+  *(Jan 2010 – Dec 2011)*
+
+---
+
+## 📜 Certificates
+
+- **Machine Learning Specialization** – DeepLearning.AI  
+- **Data Analyst Professional Certificate** – IBM  
+- **Data Science Professional Certificate** – IBM  
+- **SQL Server for Database Administrators** – DataCamp  

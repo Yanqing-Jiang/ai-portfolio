@@ -1,0 +1,15 @@
+User-agent: *
+Allow: /
+
+# Disallow common non-content paths
+Disallow: /backend/
+Disallow: /venv/
+Disallow: /node_modules/
+Disallow: /*.json$
+Disallow: /*.config.*$
+
+# Sitemap location
+Sitemap: https://ai.jiangyanqing.com/sitemap.xml
+
+# Crawl-delay to be respectful to server resources
+Crawl-delay: 1 

@@ -1,0 +1,6 @@
+{
+  "name": "Yanqing AI Portfolio",
+  "description": "A personal portfolio website showcasing projects with integrated AI chat assistants powered by Gemini. Features a dynamic sidebar for navigating projects by year and a modern, interactive interface.",
+  "requestFramePermissions": [],
+  "prompt": ""
+}
