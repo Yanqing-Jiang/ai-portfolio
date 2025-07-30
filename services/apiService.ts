@@ -19,8 +19,9 @@ export interface UsageStats {
 class ApiService {
   private baseUrl: string
 
-  constructor(baseUrl: string = 'http://localhost:8000') {
-    this.baseUrl = baseUrl
+  constructor(baseUrl?: string) {
+    // Use environment variable first, then provided baseUrl, then fallback
+    this.baseUrl = import.meta.env.VITE_BACKEND_URL || baseUrl || 'http://localhost:8000'
   }
 
   private async makeRequest<T>(
