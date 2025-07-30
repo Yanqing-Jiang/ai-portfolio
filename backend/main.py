@@ -14,7 +14,7 @@ from research_agent import run_research_agent, run_research_agent_stream
 from resume_agent import run_resume_agent, run_resume_agent_stream
 from tts import get_voice_bytes
 from gemini_service import gemini_service
-from rate_limiter import init_rate_limiter, smart_rate_limit
+from rate_limiter import init_rate_limiter, smart_rate_limit, get_user_usage, who_am_i
 
 from langchain.callbacks.base import BaseCallbackHandler
 from typing import List, Tuple, Optional
@@ -644,6 +644,39 @@ async def delete_gemini_chat(session_id: str):
         gemini_service.delete_chat(session_id)
         return JSONResponse(
             content={"message": "Chat session deleted"}, 
+            headers={"Access-Control-Allow-Origin": "*"}
+        )
+    except Exception as e:
+        return JSONResponse(
+            content={"error": str(e)}, 
+            status_code=500, 
+            headers={"Access-Control-Allow-Origin": "*"}
+        )
+
+# -------------------- Rate Limiting Endpoints --------------------
+
+@app.get("/api/rate-limit/usage")
+async def get_usage_stats(request: Request):
+    """Get current rate limit usage for the user"""
+    try:
+        # Get user identifier
+        identifier = await who_am_i(request)
+        
+        # Get usage stats
+        current_usage, limit = await get_user_usage(identifier)
+        
+        # Determine user type
+        is_authenticated = not identifier.startswith("ip:")
+        user_type = "member" if is_authenticated else "guest"
+        
+        return JSONResponse(
+            content={
+                "current_usage": current_usage,
+                "limit": limit,
+                "remaining": max(0, limit - current_usage),
+                "user_type": user_type,
+                "identifier": identifier
+            },
             headers={"Access-Control-Allow-Origin": "*"}
         )
     except Exception as e:

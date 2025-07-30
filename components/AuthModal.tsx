@@ -135,11 +135,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
             <div className="flex items-center justify-center space-x-6 text-sm text-white/90 mb-2">
               <div className="flex items-center">
                 <div className="w-2 h-2 bg-yellow-300 rounded-full mr-2"></div>
-                <span>Guest: 5/day</span>
+                <span>Guest: 0/5/day</span>
               </div>
               <div className="flex items-center">
                 <div className="w-2 h-2 bg-green-300 rounded-full mr-2"></div>
-                <span>Member: 20/day</span>
+                <span>Member: 0/20/day</span>
               </div>
             </div>
           )}
@@ -300,11 +300,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
               <div className="flex items-center justify-center space-x-6 text-xs text-gray-500">
                 <div className="flex items-center">
                   <div className="w-2 h-2 bg-yellow-400 rounded-full mr-2"></div>
-                  <span>Guest: 5/day</span>
+                  <span>Guest: 0/5/day</span>
                 </div>
                 <div className="flex items-center">
                   <div className="w-2 h-2 bg-green-500 rounded-full mr-2"></div>
-                  <span>Member: 20/day</span>
+                  <span>Member: 0/20/day</span>
                 </div>
               </div>
             </div>

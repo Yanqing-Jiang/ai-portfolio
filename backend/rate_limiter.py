@@ -1,13 +1,14 @@
 import redis.asyncio as redis
-from fastapi import Request, HTTPException, status
+from fastapi import Request, HTTPException, status, Depends
 from fastapi_limiter import FastAPILimiter
 from fastapi_limiter.depends import RateLimiter
 from jose import jwt, JWTError
 from math import ceil
 import os
-from typing import Optional
+from typing import Optional, Dict, Tuple
 from dotenv import load_dotenv
 from pathlib import Path
+import time
 
 # Load environment variables from .env file
 env_path = Path(__file__).resolve().parent / ".env"
@@ -30,6 +31,11 @@ SUPABASE_JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET")
 if not SUPABASE_JWT_SECRET or SUPABASE_JWT_SECRET == "your-jwt-secret-here":
     print("Warning: SUPABASE_JWT_SECRET not properly configured in .env file")
     SUPABASE_JWT_SECRET = "fallback-secret-key"
+
+# Rate limiting constants
+GUEST_LIMIT = 5
+MEMBER_LIMIT = 20
+LIMIT_WINDOW = 86400  # 24 hours in seconds
 
 def parse_user_id(token: str) -> Optional[str]:
     """Extract user ID from Supabase JWT token"""
@@ -74,6 +80,30 @@ async def rate_limit_callback(request: Request, response, pexpire: int):
         headers={"Retry-After": str(ceil(pexpire/1000))}
     )
 
+async def get_user_usage(identifier: str) -> Tuple[int, int]:
+    """Get current usage count for a user identifier"""
+    if redis_pool is None:
+        return 0, GUEST_LIMIT if identifier.startswith("ip:") else MEMBER_LIMIT
+    
+    try:
+        # Create Redis key for the identifier
+        key = f"fastapi-limiter:{identifier}:86400"
+        
+        # Get current count from Redis
+        current_count = await redis_pool.get(key)
+        current_count = int(current_count) if current_count else 0
+        
+        # Determine limit based on identifier type
+        is_guest = identifier.startswith("ip:")
+        limit = GUEST_LIMIT if is_guest else MEMBER_LIMIT
+        
+        return current_count, limit
+    except Exception as e:
+        print(f"Warning: Failed to get usage count: {e}")
+        is_guest = identifier.startswith("ip:")
+        limit = GUEST_LIMIT if is_guest else MEMBER_LIMIT
+        return 0, limit
+
 async def init_rate_limiter():
     """Initialize the rate limiter with Redis"""
     if redis_pool is None:
@@ -88,56 +118,60 @@ async def init_rate_limiter():
         print(f"Warning: Failed to initialize rate limiter: {e}")
         return False
 
-# Rate limiters for different user types - with error handling
-try:
-    guest_limiter = RateLimiter(
-        times=5, 
-        seconds=86400,  # 24 hours
-        identifier=who_am_i
-    )
+# Create individual rate limiter dependencies
+def create_guest_limiter():
+    """Create rate limiter for guest users (5/day)"""
+    return RateLimiter(times=GUEST_LIMIT, seconds=LIMIT_WINDOW, identifier=who_am_i)
 
-    authenticated_limiter = RateLimiter(
-        times=20, 
-        seconds=86400,  # 24 hours  
-        identifier=who_am_i
-    )
+def create_member_limiter():
+    """Create rate limiter for authenticated users (20/day)"""  
+    return RateLimiter(times=MEMBER_LIMIT, seconds=LIMIT_WINDOW, identifier=who_am_i)
+
+# Initialize limiters with error handling
+try:
+    guest_rate_limiter = create_guest_limiter()
+    member_rate_limiter = create_member_limiter()
+    print("Rate limiters created successfully")
 except Exception as e:
     print(f"Warning: Failed to create rate limiters: {e}")
-    guest_limiter = None
-    authenticated_limiter = None
+    guest_rate_limiter = None
+    member_rate_limiter = None
 
 async def smart_rate_limit(request: Request):
-    """Smart rate limiter that applies different limits based on authentication status"""
-    # If rate limiters are not available, skip rate limiting
-    if guest_limiter is None or authenticated_limiter is None:
+    """Smart rate limiter based on authentication status"""
+    if guest_rate_limiter is None or member_rate_limiter is None:
         print("Warning: Rate limiting disabled - limiters not available")
         return
     
-    # Check if user is authenticated
-    auth_header = request.headers.get("Authorization")
-    is_authenticated = False
-    
-    if auth_header:
-        user_id = parse_user_id(auth_header)
-        is_authenticated = user_id is not None
+    # Get user identifier and check authentication
+    identifier = await who_am_i(request)
+    is_authenticated = not identifier.startswith("ip:")
     
     try:
         if is_authenticated:
-            # Use higher limit for authenticated users
-            await authenticated_limiter(request)
+            # Use member rate limiter
+            await member_rate_limiter(request, None)
         else:
-            # Use lower limit for guests and return 401 when exceeded
-            await guest_limiter(request)
+            # Use guest rate limiter
+            await guest_rate_limiter(request, None)
     except HTTPException as e:
         if e.status_code == 429:
             if is_authenticated:
-                await rate_limit_callback(request, None, 0)
+                # Standard rate limit for members
+                raise HTTPException(
+                    status_code=429,
+                    detail="Rate limit exceeded. Please try again later.",
+                    headers={"Retry-After": "3600"}
+                )
             else:
-                await auth_required_callback(request, None, 0)
+                # Require auth for guests
+                raise HTTPException(
+                    status_code=401,
+                    detail="Sign-in required after free quota",
+                    headers={"Retry-After": "3600"}
+                )
         else:
-            # Re-raise other HTTP exceptions
             raise e
     except Exception as e:
         print(f"Warning: Rate limiting error: {e}")
-        # Continue without rate limiting if there's an error
         return

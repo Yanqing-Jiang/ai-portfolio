@@ -10,7 +10,7 @@ import { QuestionMarkIcon } from './icons/QuestionMarkIcon';
 import { fetchEventSource } from '@microsoft/fetch-event-source';
 import { AuthModal } from './AuthModal';
 import { authService, type AuthState } from '../services/auth';
-import { apiService, handleApiError } from '../services/apiService';
+import { apiService, handleApiError, type UsageStats } from '../services/apiService';
 
 interface ChatProps {
   project: Project;
@@ -53,6 +53,9 @@ const Chat: React.FC<ChatProps> = ({ project }) => {
   // Auth state
   const [authState, setAuthState] = useState<AuthState>({ user: null, loading: true, error: null });
   const [showAuthModal, setShowAuthModal] = useState(false);
+  
+  // Usage stats state
+  const [usageStats, setUsageStats] = useState<UsageStats | null>(null);
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -138,11 +141,32 @@ const Chat: React.FC<ChatProps> = ({ project }) => {
 
   useEffect(scrollToBottom, [messages]);
 
-  // Subscribe to auth state changes
+  // Function to fetch usage stats
+  const fetchUsageStats = useCallback(async () => {
+    try {
+      const response = await apiService.getUsageStats();
+      if (response.success && response.data) {
+        setUsageStats(response.data);
+      }
+    } catch (error) {
+      console.warn('Failed to fetch usage stats:', error);
+    }
+  }, []);
+
+  // Subscribe to auth state changes and fetch usage stats
   useEffect(() => {
     const unsubscribe = authService.subscribe(setAuthState);
+    // Fetch initial usage stats
+    fetchUsageStats();
     return unsubscribe;
-  }, []);
+  }, [fetchUsageStats]);
+
+  // Refetch usage stats when auth state changes
+  useEffect(() => {
+    if (!authState.loading) {
+      fetchUsageStats();
+    }
+  }, [authState.user, fetchUsageStats]);
 
   const adjustTextareaHeight = () => {
     const textarea = textareaRef.current;
@@ -214,6 +238,8 @@ const Chat: React.FC<ChatProps> = ({ project }) => {
                             // Stream completed successfully
                             setIsLoading(false);
                             setShowAgentStatus(false);
+                            // Refresh usage stats after successful request
+                            fetchUsageStats();
                             return;
                         }
                     },
@@ -302,6 +328,8 @@ const Chat: React.FC<ChatProps> = ({ project }) => {
                             // Stream completed successfully
                             setIsLoading(false);
                             setShowAgentStatus(false);
+                            // Refresh usage stats after successful request
+                            fetchUsageStats();
                             return;
                         }
                     },
@@ -575,7 +603,7 @@ const Chat: React.FC<ChatProps> = ({ project }) => {
               <>
                 <div className="w-2 h-2 bg-green-500 rounded-full"></div>
                 <span>Signed in as {authState.user.email}</span>
-                <span>• 20 requests/day</span>
+                <span>• {usageStats ? `${usageStats.current_usage}/${usageStats.limit}` : '0/20'} requests/day</span>
                 <button
                   onClick={() => authService.signOut()}
                   className="text-blue-400 hover:text-blue-300 underline ml-2"
@@ -587,7 +615,7 @@ const Chat: React.FC<ChatProps> = ({ project }) => {
               <>
                 <div className="w-2 h-2 bg-yellow-500 rounded-full"></div>
                 <span>Guest</span>
-                <span>• 5 requests/day</span>
+                <span>• {usageStats ? `${usageStats.current_usage}/${usageStats.limit}` : '0/5'} requests/day</span>
                 <button
                   onClick={() => setShowAuthModal(true)}
                   className="text-blue-400 hover:text-blue-300 underline ml-2"

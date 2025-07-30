@@ -8,6 +8,14 @@ export interface ApiResponse<T = any> {
   retryAfter?: number
 }
 
+export interface UsageStats {
+  current_usage: number
+  limit: number
+  remaining: number
+  user_type: 'guest' | 'member'
+  identifier: string
+}
+
 class ApiService {
   private baseUrl: string
 
@@ -85,6 +93,10 @@ class ApiService {
     return this.makeRequest<T>(endpoint, {
       method: 'GET',
     })
+  }
+
+  async getUsageStats(): Promise<ApiResponse<UsageStats>> {
+    return this.get<UsageStats>('/api/rate-limit/usage')
   }
 
   // Enhanced streaming method that handles auth errors
