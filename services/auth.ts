@@ -188,13 +188,22 @@ class AuthService {
   }
 
   private getRedirectUrl(): string {
-    // Always use the current window location origin
-    // This ensures it works in any environment automatically
-    const currentOrigin = window.location.origin
+    // Get the correct URL based on environment
+    let url = import.meta.env.VITE_APP_URL ?? // Production URL from env
+              window.location.origin ?? // Current origin fallback
+              'http://localhost:3000' // Development fallback
     
-    console.log(`OAuth Redirect URL: ${currentOrigin}`)
+    // Ensure URL starts with http
+    if (!url.startsWith('http')) {
+      url = `https://${url}`
+    }
     
-    return currentOrigin
+    // Remove trailing slash if present
+    url = url.replace(/\/$/, '')
+    
+    console.log(`OAuth Redirect URL: ${url}`)
+    
+    return url
   }
 
   async signOut() {
