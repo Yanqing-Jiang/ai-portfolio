@@ -135,10 +135,13 @@ class AuthService {
     try {
       this.updateState({ ...this.currentState, loading: true, error: null })
       
+      // Get the correct redirect URL based on environment
+      const redirectTo = this.getRedirectUrl()
+      
       const { data, error } = await supabase.auth.signInWithOAuth({
         provider: 'github',
         options: {
-          redirectTo: `${window.location.origin}`
+          redirectTo
         }
       })
 
@@ -160,10 +163,13 @@ class AuthService {
     try {
       this.updateState({ ...this.currentState, loading: true, error: null })
       
+      // Get the correct redirect URL based on environment
+      const redirectTo = this.getRedirectUrl()
+      
       const { data, error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          redirectTo: `${window.location.origin}`
+          redirectTo
         }
       })
 
@@ -179,6 +185,16 @@ class AuthService {
       this.updateState({ ...this.currentState, loading: false, error: errorMessage })
       return { success: false, error: errorMessage }
     }
+  }
+
+  private getRedirectUrl(): string {
+    // Always use the current window location origin
+    // This ensures it works in any environment automatically
+    const currentOrigin = window.location.origin
+    
+    console.log(`OAuth Redirect URL: ${currentOrigin}`)
+    
+    return currentOrigin
   }
 
   async signOut() {
