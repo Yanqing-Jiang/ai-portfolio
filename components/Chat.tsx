@@ -189,6 +189,10 @@ const Chat: React.FC<ChatProps> = ({ project }) => {
     setMessages((prev: ChatMessage[]) => [...prev, userMessage]);
     setIsLoading(true);
     
+    // Refresh usage stats immediately when making a request
+    // This ensures the count updates even if the request fails
+    setTimeout(() => fetchUsageStats(), 1000);
+    
     const modelMessageId = (Date.now() + 1).toString();
 
     // Handle backend-powered projects

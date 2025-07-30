@@ -129,6 +129,7 @@ async def get_user_usage(identifier: str) -> Tuple[int, int]:
         print(f"All Redis keys: {all_keys}")
         
         # Try multiple possible Redis key formats used by fastapi-limiter
+        # The actual pattern is fastapi-limiter:{identifier}:{limit}:{window_slot}
         possible_keys = [
             f"fastapi-limiter:{identifier}:{LIMIT_WINDOW}",
             f"fastapi-limiter:{identifier}:86400", 
@@ -137,6 +138,16 @@ async def get_user_usage(identifier: str) -> Tuple[int, int]:
             f"fastapi-limiter:{identifier}",
             f"{identifier}"
         ]
+        
+        # Add keys with limit patterns (fastapi-limiter uses limit:window format)
+        possible_keys.extend([
+            f"fastapi-limiter:{identifier}:{limit}:0",
+            f"fastapi-limiter:{identifier}:{limit}:1", 
+            f"fastapi-limiter:{identifier}:{limit}:2",
+            f"fastapi-limiter:{identifier}:{limit}:3",
+            f"fastapi-limiter:{identifier}:{limit}:4",
+            f"fastapi-limiter:{identifier}:{limit}:5",
+        ])
         
         # Also check for any keys that contain the identifier (wildcard search)
         for key in all_keys:
