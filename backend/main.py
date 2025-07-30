@@ -207,7 +207,7 @@ async def research_stream_endpoint(query: str, request: Request, _=Depends(smart
     )
 
 @app.get("/api/resume-search/stream")
-async def resume_search_stream_endpoint(query: str, chat_history: str = "[]", request: Request, _=Depends(smart_rate_limit)):
+async def resume_search_stream_endpoint(query: str, request: Request, chat_history: str = "[]", _=Depends(smart_rate_limit)):
     # Parse chat_history from JSON string
     try:
         parsed_history = json.loads(chat_history) if chat_history else []
