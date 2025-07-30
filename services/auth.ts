@@ -131,6 +131,56 @@ class AuthService {
     }
   }
 
+  async signInWithGitHub() {
+    try {
+      this.updateState({ ...this.currentState, loading: true, error: null })
+      
+      const { data, error } = await supabase.auth.signInWithOAuth({
+        provider: 'github',
+        options: {
+          redirectTo: `${window.location.origin}`
+        }
+      })
+
+      if (error) {
+        this.updateState({ ...this.currentState, loading: false, error: error.message })
+        return { success: false, error: error.message }
+      }
+
+      // OAuth will redirect, so we don't need to update state here
+      return { success: true }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+      this.updateState({ ...this.currentState, loading: false, error: errorMessage })
+      return { success: false, error: errorMessage }
+    }
+  }
+
+  async signInWithGoogle() {
+    try {
+      this.updateState({ ...this.currentState, loading: true, error: null })
+      
+      const { data, error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: `${window.location.origin}`
+        }
+      })
+
+      if (error) {
+        this.updateState({ ...this.currentState, loading: false, error: error.message })
+        return { success: false, error: error.message }
+      }
+
+      // OAuth will redirect, so we don't need to update state here
+      return { success: true }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+      this.updateState({ ...this.currentState, loading: false, error: errorMessage })
+      return { success: false, error: errorMessage }
+    }
+  }
+
   async signOut() {
     try {
       this.updateState({ ...this.currentState, loading: true, error: null })

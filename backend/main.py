@@ -669,6 +669,9 @@ async def get_usage_stats(request: Request):
         is_authenticated = not identifier.startswith("ip:")
         user_type = "member" if is_authenticated else "guest"
         
+        # Debug logging
+        print(f"Usage stats - Identifier: {identifier}, Usage: {current_usage}/{limit}, Type: {user_type}")
+        
         return JSONResponse(
             content={
                 "current_usage": current_usage,
@@ -680,6 +683,7 @@ async def get_usage_stats(request: Request):
             headers={"Access-Control-Allow-Origin": "*"}
         )
     except Exception as e:
+        print(f"Error in get_usage_stats: {e}")
         return JSONResponse(
             content={"error": str(e)}, 
             status_code=500, 
