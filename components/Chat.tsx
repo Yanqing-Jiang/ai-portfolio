@@ -8,6 +8,9 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { QuestionMarkIcon } from './icons/QuestionMarkIcon';
 import { fetchEventSource } from '@microsoft/fetch-event-source';
+import { AuthModal } from './AuthModal';
+import { authService, type AuthState } from '../services/auth';
+import { apiService, handleApiError } from '../services/apiService';
 
 interface ChatProps {
   project: Project;
@@ -46,6 +49,10 @@ const Chat: React.FC<ChatProps> = ({ project }) => {
   const [showAgentStatus, setShowAgentStatus] = useState(false);
   const gogginsAudioRef = useRef<{ playAudio: (text: string) => void; stop: () => void } | null>(null);
   // Remove all steps/progress state and rendering
+  
+  // Auth state
+  const [authState, setAuthState] = useState<AuthState>({ user: null, loading: true, error: null });
+  const [showAuthModal, setShowAuthModal] = useState(false);
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -131,6 +138,12 @@ const Chat: React.FC<ChatProps> = ({ project }) => {
 
   useEffect(scrollToBottom, [messages]);
 
+  // Subscribe to auth state changes
+  useEffect(() => {
+    const unsubscribe = authService.subscribe(setAuthState);
+    return unsubscribe;
+  }, []);
+
   const adjustTextareaHeight = () => {
     const textarea = textareaRef.current;
     if (textarea) {
@@ -167,72 +180,63 @@ const Chat: React.FC<ChatProps> = ({ project }) => {
                 let currentText = '';
                 let statusText = '';
                 
-                await fetchEventSource(`${backendUrl}/api/research/stream?query=${encodeURIComponent(messageText)}`, {
-                    method: 'GET',
-                    headers: { 
-                        'Accept': 'text/event-stream',
-                        'Cache-Control': 'no-cache'
-                    },
-                    openWhenHidden: true,
-                    onmessage(event) {
-                        try {
-                            const data = JSON.parse(event.data);
+                await apiService.streamWithAuth(
+                    `/api/research/stream?query=${encodeURIComponent(messageText)}`,
+                    (data) => {
+                        if (data.type === 'heartbeat') {
+                            // Ignore heartbeat messages - they're just for keeping connection alive
+                            return;
+                        } else if (data.type === 'status') {
+                            // Always accumulate status messages
+                            statusText += data.message + '\n';
+                            setAgentStatus(statusText);
                             
-                            if (data.type === 'heartbeat') {
-                                // Ignore heartbeat messages - they're just for keeping connection alive
-                                return;
-                            } else if (data.type === 'status') {
-                                // Always accumulate status messages
-                                    statusText += data.message + '\n';
-                                setAgentStatus(statusText);
-                                
-                            } else if (data.type === 'chunk') {
-                                // All chunks should now go to status window since we have proper separation
-                                statusText += data.text;
-                                setAgentStatus(statusText);
-                            } else if (data.type === 'response') {
-                                // Final response content - always goes to main chat
-                                currentText += data.text;
-                                setMessages((prev: ChatMessage[]) =>
-                                    prev.map((msg: ChatMessage) =>
-                                        msg.id === modelMessageId ? { ...msg, text: currentText } : msg
-                                    )
-                                );
-                            } else if (data.type === 'error') {
-                                currentText = `Sorry, I encountered an error during research.\n\n**Details:** ${data.message}`;
-                                setMessages((prev: ChatMessage[]) =>
-                                    prev.map((msg: ChatMessage) =>
-                                        msg.id === modelMessageId ? { ...msg, text: currentText } : msg
-                                    )
-                                );
-                            } else if (data.type === 'done') {
-                                // Stream completed successfully
-                                setIsLoading(false);
-                                setShowAgentStatus(false);
-                                return;
-                            }
-                        } catch (parseError) {
-                            console.error('Error parsing event data:', parseError);
+                        } else if (data.type === 'chunk') {
+                            // All chunks should now go to status window since we have proper separation
+                            statusText += data.text;
+                            setAgentStatus(statusText);
+                        } else if (data.type === 'response') {
+                            // Final response content - always goes to main chat
+                            currentText += data.text;
+                            setMessages((prev: ChatMessage[]) =>
+                                prev.map((msg: ChatMessage) =>
+                                    msg.id === modelMessageId ? { ...msg, text: currentText } : msg
+                                )
+                            );
+                        } else if (data.type === 'error') {
+                            currentText = `Sorry, I encountered an error during research.\n\n**Details:** ${data.message}`;
+                            setMessages((prev: ChatMessage[]) =>
+                                prev.map((msg: ChatMessage) =>
+                                    msg.id === modelMessageId ? { ...msg, text: currentText } : msg
+                                )
+                            );
+                        } else if (data.type === 'done') {
+                            // Stream completed successfully
+                            setIsLoading(false);
+                            setShowAgentStatus(false);
+                            return;
                         }
                     },
-                    onerror(error) {
-                        console.error('Stream error:', error);
+                    (error, needsAuth) => {
+                        if (needsAuth) {
+                            setShowAuthModal(true);
+                            currentText = 'Please sign in to continue using the research service.';
+                        } else {
+                            currentText = currentText || `Sorry, I encountered an error connecting to the research service: ${error}`;
+                        }
                         setMessages((prev: ChatMessage[]) =>
                             prev.map((msg: ChatMessage) =>
-                                msg.id === modelMessageId
-                                    ? { ...msg, text: currentText || 'Sorry, I encountered an error connecting to the research service. Please try again.' }
-                                    : msg
+                                msg.id === modelMessageId ? { ...msg, text: currentText } : msg
                             )
                         );
                         setIsLoading(false);
                         setShowAgentStatus(false);
-                        throw error; // This will stop the fetchEventSource
                     },
-                    onclose() {
+                    () => {
                         setIsLoading(false);
                         setShowAgentStatus(false);
                     }
-                });
+                );
             } catch (error) {
                 console.error('Error setting up stream:', error);
                 setMessages((prev: ChatMessage[]) =>
@@ -264,72 +268,63 @@ const Chat: React.FC<ChatProps> = ({ project }) => {
                 
                 const chatHistoryParam = encodeURIComponent(JSON.stringify(history));
                 
-                await fetchEventSource(`${backendUrl}/api/resume-search/stream?query=${encodeURIComponent(messageText)}&chat_history=${chatHistoryParam}`, {
-                    method: 'GET',
-                    headers: { 
-                        'Accept': 'text/event-stream',
-                        'Cache-Control': 'no-cache'
-                    },
-                    openWhenHidden: true,
-                    onmessage(event) {
-                        try {
-                            const data = JSON.parse(event.data);
+                await apiService.streamWithAuth(
+                    `/api/resume-search/stream?query=${encodeURIComponent(messageText)}&chat_history=${chatHistoryParam}`,
+                    (data) => {
+                        if (data.type === 'heartbeat') {
+                            // Ignore heartbeat messages - they're just for keeping connection alive
+                            return;
+                        } else if (data.type === 'status') {
+                            // Always accumulate status messages
+                            statusText += data.message + '\n';
+                            setAgentStatus(statusText);
                             
-                            if (data.type === 'heartbeat') {
-                                // Ignore heartbeat messages - they're just for keeping connection alive
-                                return;
-                            } else if (data.type === 'status') {
-                                // Always accumulate status messages
-                                    statusText += data.message + '\n';
-                                setAgentStatus(statusText);
-                                
-                            } else if (data.type === 'chunk') {
-                                // All chunks should now go to status window since we have proper separation
-                                statusText += data.text;
-                                setAgentStatus(statusText);
-                            } else if (data.type === 'response') {
-                                // Final response content - always goes to main chat
-                                currentText += data.text;
-                                setMessages((prev: ChatMessage[]) =>
-                                    prev.map((msg: ChatMessage) =>
-                                        msg.id === modelMessageId ? { ...msg, text: currentText } : msg
-                                    )
-                                );
-                            } else if (data.type === 'error') {
-                                currentText = `Sorry, I encountered an error during resume search.\n\n**Details:** ${data.message}`;
-                                setMessages((prev: ChatMessage[]) =>
-                                    prev.map((msg: ChatMessage) =>
-                                        msg.id === modelMessageId ? { ...msg, text: currentText } : msg
-                                    )
-                                );
-                            } else if (data.type === 'done') {
-                                // Stream completed successfully
-                                setIsLoading(false);
-                                setShowAgentStatus(false);
-                                return;
-                            }
-                        } catch (parseError) {
-                            console.error('Error parsing event data:', parseError);
+                        } else if (data.type === 'chunk') {
+                            // All chunks should now go to status window since we have proper separation
+                            statusText += data.text;
+                            setAgentStatus(statusText);
+                        } else if (data.type === 'response') {
+                            // Final response content - always goes to main chat
+                            currentText += data.text;
+                            setMessages((prev: ChatMessage[]) =>
+                                prev.map((msg: ChatMessage) =>
+                                    msg.id === modelMessageId ? { ...msg, text: currentText } : msg
+                                )
+                            );
+                        } else if (data.type === 'error') {
+                            currentText = `Sorry, I encountered an error during resume search.\n\n**Details:** ${data.message}`;
+                            setMessages((prev: ChatMessage[]) =>
+                                prev.map((msg: ChatMessage) =>
+                                    msg.id === modelMessageId ? { ...msg, text: currentText } : msg
+                                )
+                            );
+                        } else if (data.type === 'done') {
+                            // Stream completed successfully
+                            setIsLoading(false);
+                            setShowAgentStatus(false);
+                            return;
                         }
                     },
-                    onerror(error) {
-                        console.error('Stream error:', error);
+                    (error, needsAuth) => {
+                        if (needsAuth) {
+                            setShowAuthModal(true);
+                            currentText = 'Please sign in to continue using the resume search service.';
+                        } else {
+                            currentText = currentText || `Sorry, I encountered an error connecting to the resume search service: ${error}`;
+                        }
                         setMessages((prev: ChatMessage[]) =>
                             prev.map((msg: ChatMessage) =>
-                                msg.id === modelMessageId
-                                    ? { ...msg, text: currentText || 'Sorry, I encountered an error connecting to the resume search service. Please try again.' }
-                                    : msg
+                                msg.id === modelMessageId ? { ...msg, text: currentText } : msg
                             )
                         );
                         setIsLoading(false);
                         setShowAgentStatus(false);
-                        throw error; // This will stop the fetchEventSource
                     },
-                    onclose() {
+                    () => {
                         setIsLoading(false);
                         setShowAgentStatus(false);
                     }
-                });
+                );
             } catch (error) {
                 console.error('Error setting up resume search stream:', error);
                 setMessages((prev: ChatMessage[]) =>
@@ -572,7 +567,48 @@ const Chat: React.FC<ChatProps> = ({ project }) => {
             </svg>
           </button>
         </form>
+        
+        {/* User Status Indicator */}
+        <div className="max-w-4xl mx-auto mt-2 flex justify-between items-center text-xs text-gray-400">
+          <div className="flex items-center gap-2">
+            {authState.user ? (
+              <>
+                <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                <span>Signed in as {authState.user.email}</span>
+                <span>• 20 requests/day</span>
+                <button
+                  onClick={() => authService.signOut()}
+                  className="text-blue-400 hover:text-blue-300 underline ml-2"
+                >
+                  Sign out
+                </button>
+              </>
+            ) : (
+              <>
+                <div className="w-2 h-2 bg-yellow-500 rounded-full"></div>
+                <span>Guest</span>
+                <span>• 5 requests/day</span>
+                <button
+                  onClick={() => setShowAuthModal(true)}
+                  className="text-blue-400 hover:text-blue-300 underline ml-2"
+                >
+                  Sign in for more
+                </button>
+              </>
+            )}
+          </div>
+        </div>
       </div>
+
+      {/* Authentication Modal */}
+      <AuthModal
+        isOpen={showAuthModal}
+        onClose={() => setShowAuthModal(false)}
+        onSuccess={() => {
+          setShowAuthModal(false);
+          // Optionally retry the last action
+        }}
+      />
     </div>
   );
 };

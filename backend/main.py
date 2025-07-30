@@ -1,5 +1,5 @@
 import asyncio
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, Response, JSONResponse
 from pydantic import BaseModel
@@ -14,6 +14,7 @@ from research_agent import run_research_agent, run_research_agent_stream
 from resume_agent import run_resume_agent, run_resume_agent_stream
 from tts import get_voice_bytes
 from gemini_service import gemini_service
+from rate_limiter import init_rate_limiter, smart_rate_limit
 
 from langchain.callbacks.base import BaseCallbackHandler
 from typing import List, Tuple, Optional
@@ -23,6 +24,11 @@ env_path = Path(__file__).resolve().parent / ".env"
 load_dotenv(dotenv_path=env_path, override=False)
 
 app = FastAPI()
+
+# Initialize rate limiter on startup
+@app.on_event("startup")
+async def startup_event():
+    await init_rate_limiter()
 
 # Allow CORS for local frontend dev
 origins = [
@@ -106,7 +112,7 @@ def research_endpoint(request: ResearchRequest):
     return result  # returns both 'answer' and 'steps'
 
 @app.get("/api/research/stream")
-async def research_stream_endpoint(query: str):
+async def research_stream_endpoint(query: str, request: Request, _=Depends(smart_rate_limit)):
     async def generate_stream():
         try:
             # Send initial status
@@ -201,7 +207,7 @@ async def research_stream_endpoint(query: str):
     )
 
 @app.get("/api/resume-search/stream")
-async def resume_search_stream_endpoint(query: str, chat_history: str = "[]"):
+async def resume_search_stream_endpoint(query: str, chat_history: str = "[]", request: Request, _=Depends(smart_rate_limit)):
     # Parse chat_history from JSON string
     try:
         parsed_history = json.loads(chat_history) if chat_history else []
@@ -538,7 +544,7 @@ async def create_gemini_chat(request: GeminiChatRequest):
         return JSONResponse(content=error_detail, status_code=500, headers={"Access-Control-Allow-Origin": "*"})
 
 @app.get("/api/gemini/chat/stream")
-async def gemini_chat_stream(session_id: str, message: str):
+async def gemini_chat_stream(session_id: str, message: str, request: Request, _=Depends(smart_rate_limit)):
     """Stream Gemini chat response with no buffering"""
     
     async def generate_stream():

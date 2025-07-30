@@ -1,8 +1,11 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import type { Project, ProjectYear } from '../types';
 import { ChevronDownIcon } from './icons/ChevronDownIcon';
 import { ChevronRightIcon } from './icons/ChevronRightIcon';
+import { SignInIcon } from './icons/SignInIcon';
+import { authService, type AuthState } from '../services/auth';
+import { AuthModal } from './AuthModal';
 
 interface SidebarProps {
   projectData: ProjectYear[];
@@ -14,6 +17,14 @@ interface SidebarProps {
 
 const Sidebar: React.FC<SidebarProps> = ({ projectData, selectedProject, onSelectProject, isSidebarOpen, onGoHome }) => {
   const [openYears, setOpenYears] = useState<Set<number>>(() => new Set(projectData.map(p => p.year)));
+  const [authState, setAuthState] = useState<AuthState>({ user: null, loading: true, error: null });
+  const [showAuthModal, setShowAuthModal] = useState(false);
+
+  // Subscribe to auth state changes
+  useEffect(() => {
+    const unsubscribe = authService.subscribe(setAuthState);
+    return unsubscribe;
+  }, []);
 
   const toggleYear = (year: number) => {
     setOpenYears(prev => {
@@ -25,6 +36,14 @@ const Sidebar: React.FC<SidebarProps> = ({ projectData, selectedProject, onSelec
       }
       return newSet;
     });
+  };
+
+  const handleAuthAction = () => {
+    if (authState.user) {
+      authService.signOut();
+    } else {
+      setShowAuthModal(true);
+    }
   };
 
   return (
@@ -44,7 +63,7 @@ const Sidebar: React.FC<SidebarProps> = ({ projectData, selectedProject, onSelec
         {/* Header with logo and title - responsive sizing */}
         <button 
           onClick={onGoHome} 
-          className="flex items-center gap-3 mb-6 sm:mb-8 px-2 flex-shrink-0 hover:bg-gray-700/30 rounded-lg transition-colors duration-200"
+          className="flex items-center gap-2 mb-6 sm:mb-8 px-2 flex-shrink-0 hover:bg-gray-700/30 rounded-lg transition-colors duration-200"
         >
           <img 
             src="https://yanqinghot.blob.core.windows.net/public-access/Profile%20Logo%20black.png" 
@@ -52,10 +71,10 @@ const Sidebar: React.FC<SidebarProps> = ({ projectData, selectedProject, onSelec
             className="w-16 h-17 sm:w-20 sm:h-21 md:w-20 md:h-21 shrink-0" 
           />
           <div className="min-w-0">
-            <h1 className="text-xl font-bold text-white">
+            <h1 className="text-2xl sm:text-3xl font-bold text-white">
               Yanqing{' '}
               <span className="bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-purple-500">
-                AI & ML Portfolio
+                AI Portfolio
               </span>
             </h1>
           </div>
@@ -111,8 +130,22 @@ const Sidebar: React.FC<SidebarProps> = ({ projectData, selectedProject, onSelec
           </ul>
         </nav>
 
-        {/* Footer link with responsive sizing */}
-        <div className="flex-shrink-0 mt-auto pt-4 border-t border-gray-700/50">
+        {/* Footer with auth and external link */}
+        <div className="flex-shrink-0 mt-auto pt-4 border-t border-gray-700/50 space-y-2">
+          {/* Sign In/Out Button */}
+          <button 
+            onClick={handleAuthAction}
+            className="flex items-center gap-3 w-full text-left py-2 sm:py-3 px-2 sm:px-3 
+                     text-sm sm:text-base rounded-md transition-all duration-200 
+                     text-gray-400 hover:bg-gray-700/50 hover:text-white group"
+          >
+            <SignInIcon />
+            <span className="truncate">
+              {authState.user ? `Sign Out (${authState.user.email})` : 'Sign In / Sign Up'}
+            </span>
+          </button>
+
+          {/* External website link */}
           <a 
             href="https://www.jiangyanqing.com" 
             target="_blank" 
@@ -126,10 +159,19 @@ const Sidebar: React.FC<SidebarProps> = ({ projectData, selectedProject, onSelec
               alt="Website Logo" 
               className="w-4 h-4 sm:w-5 sm:h-5 shrink-0 group-hover:scale-110 transition-transform duration-200" 
             />
-            <span className="truncate">Navigate to Yanqing Pre-LLM page</span>
+            <span className="truncate">Visit Yanqing Pre-AI Page</span>
           </a>
         </div>
       </div>
+      
+      {/* Authentication Modal */}
+      <AuthModal
+        isOpen={showAuthModal}
+        onClose={() => setShowAuthModal(false)}
+        onSuccess={() => {
+          setShowAuthModal(false);
+        }}
+      />
     </aside>
   );
 };

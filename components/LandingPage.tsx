@@ -141,7 +141,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ projectData, onSelectProject 
                 <h2 className="text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-bold tracking-tight text-white">
                     <span className="font-light">Yanqing</span>{' '}
                     <span className="bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-purple-500">
-                        AI & ML Portfolio
+                        AI Portfolio
                     </span>
                 </h2>
             </div>

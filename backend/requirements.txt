@@ -14,3 +14,7 @@ faiss-cpu
 tiktoken
 langchain-community
 google-generativeai
+fastapi-limiter
+redis
+supabase
+python-jose[cryptography]

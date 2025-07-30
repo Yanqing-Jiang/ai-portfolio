@@ -1,4 +1,5 @@
 import { fetchEventSource } from '@microsoft/fetch-event-source';
+import { authService } from './auth';
 
 // Backend-powered Gemini service that replaces frontend SDK
 export class BackendGeminiService {
@@ -9,13 +10,20 @@ export class BackendGeminiService {
     this.backendUrl = backendUrl;
   }
 
+  private async getHeaders(): Promise<Record<string, string>> {
+    const authHeaders = await authService.getAuthHeaders();
+    return {
+      'Content-Type': 'application/json',
+      ...authHeaders
+    };
+  }
+
   async createChat(systemInstruction: string): Promise<string | null> {
     try {
+      const headers = await this.getHeaders();
       const response = await fetch(`${this.backendUrl}/api/gemini/chat/create`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers,
         body: JSON.stringify({ system_instruction: systemInstruction }),
       });
 
@@ -46,6 +54,7 @@ export class BackendGeminiService {
     }
 
     try {
+      const authHeaders = await authService.getAuthHeaders();
       await fetchEventSource(
         `${this.backendUrl}/api/gemini/chat/stream?session_id=${this.sessionId}&message=${encodeURIComponent(message)}`,
         {
@@ -53,6 +62,7 @@ export class BackendGeminiService {
           headers: {
             'Accept': 'text/event-stream',
             'Cache-Control': 'no-cache',
+            ...authHeaders
           },
           openWhenHidden: true,
           onmessage(event) {
@@ -97,11 +107,10 @@ export class BackendGeminiService {
     }
 
     try {
+      const headers = await this.getHeaders();
       const response = await fetch(`${this.backendUrl}/api/gemini/chat/message`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers,
         body: JSON.stringify({
           message,
           session_id: this.sessionId,
