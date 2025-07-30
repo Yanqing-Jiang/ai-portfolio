@@ -147,6 +147,8 @@ const Chat: React.FC<ChatProps> = ({ project }) => {
       const response = await apiService.getUsageStats();
       if (response.success && response.data) {
         setUsageStats(response.data);
+      } else {
+        console.warn('Failed to fetch usage stats:', response.error);
       }
     } catch (error) {
       console.warn('Failed to fetch usage stats:', error);
@@ -156,17 +158,22 @@ const Chat: React.FC<ChatProps> = ({ project }) => {
   // Subscribe to auth state changes and fetch usage stats
   useEffect(() => {
     const unsubscribe = authService.subscribe(setAuthState);
-    // Fetch initial usage stats
-    fetchUsageStats();
     return unsubscribe;
-  }, [fetchUsageStats]);
+  }, []);
 
-  // Refetch usage stats when auth state changes
+  // Refetch usage stats when auth state changes or loads
   useEffect(() => {
     if (!authState.loading) {
-      fetchUsageStats();
+      // Clear current stats to prevent showing stale data during transition
+      setUsageStats(null);
+      
+      // Add a small delay to ensure auth headers are set
+      const timer = setTimeout(() => {
+        fetchUsageStats();
+      }, 100);
+      return () => clearTimeout(timer);
     }
-  }, [authState.user, fetchUsageStats]);
+  }, [authState.loading, authState.user, fetchUsageStats]);
 
   const adjustTextareaHeight = () => {
     const textarea = textareaRef.current;
@@ -191,7 +198,7 @@ const Chat: React.FC<ChatProps> = ({ project }) => {
     
     // Refresh usage stats immediately when making a request
     // This ensures the count updates even if the request fails
-    setTimeout(() => fetchUsageStats(), 1000);
+    setTimeout(() => fetchUsageStats(), 500);
     
     const modelMessageId = (Date.now() + 1).toString();
 
@@ -607,7 +614,7 @@ const Chat: React.FC<ChatProps> = ({ project }) => {
               <>
                 <div className="w-2 h-2 bg-green-500 rounded-full"></div>
                 <span>Signed in as {authState.user.email}</span>
-                <span>• {usageStats ? `${usageStats.current_usage}/${usageStats.limit}` : '0/20'} requests/day</span>
+                <span>• {usageStats ? `${usageStats.current_usage}/${usageStats.limit}` : 'Loading...'} requests/day</span>
                 <button
                   onClick={() => authService.signOut()}
                   className="text-blue-400 hover:text-blue-300 underline ml-2"
@@ -619,7 +626,7 @@ const Chat: React.FC<ChatProps> = ({ project }) => {
               <>
                 <div className="w-2 h-2 bg-yellow-500 rounded-full"></div>
                 <span>Guest</span>
-                <span>• {usageStats ? `${usageStats.current_usage}/${usageStats.limit}` : '0/5'} requests/day</span>
+                <span>• {usageStats ? `${usageStats.current_usage}/${usageStats.limit}` : 'Loading...'} requests/day</span>
                 <button
                   onClick={() => setShowAuthModal(true)}
                   className="text-blue-400 hover:text-blue-300 underline ml-2"
