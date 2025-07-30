@@ -86,7 +86,7 @@ export class BackendGeminiService {
           },
           onerror(error) {
             console.error('Gemini stream error:', error);
-            onError?.('Stream connection failed');
+            onError?.('Failed to connect to Gemini service');
             throw error;
           },
           onclose() {
