@@ -53,8 +53,14 @@ def parse_user_id(token: str) -> Optional[str]:
             token = token[7:]
             print(f"JWT DEBUG - After removing Bearer prefix: {token[:50]}...")
         
-        # Decode the JWT token
-        payload = jwt.decode(token, SUPABASE_JWT_SECRET, algorithms=["HS256"])
+        # Decode the JWT token with proper audience validation
+        # Supabase JWTs use 'authenticated' as the audience
+        payload = jwt.decode(
+            token, 
+            SUPABASE_JWT_SECRET, 
+            algorithms=["HS256"],
+            audience="authenticated"
+        )
         print(f"JWT DEBUG - Decoded payload: {payload}")
         
         user_id = payload.get("sub")
@@ -131,6 +137,11 @@ async def get_user_usage(identifier: str) -> Tuple[int, int]:
             f"fastapi-limiter:{identifier}",
             f"{identifier}"
         ]
+        
+        # Also check for any keys that contain the identifier (wildcard search)
+        for key in all_keys:
+            if identifier in key:
+                possible_keys.append(key)
         
         current_count = 0
         key_found = None
