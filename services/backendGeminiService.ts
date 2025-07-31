@@ -86,6 +86,19 @@ export class BackendGeminiService {
           },
           onerror(error) {
             console.error('Gemini stream error:', error);
+            
+            // Handle rate limiting errors
+            if (error && typeof error === 'object' && 'status' in error) {
+              const status = (error as any).status;
+              if (status === 401) {
+                onError?.('You have reached your free quota limit (5 requests per day). Please sign in to get 20 requests per day and continue using the service.');
+                return;
+              } else if (status === 429) {
+                onError?.('Rate limit exceeded. Please try again later.');
+                return;
+              }
+            }
+            
             onError?.('Failed to connect to Gemini service');
             throw error;
           },
@@ -96,6 +109,19 @@ export class BackendGeminiService {
       );
     } catch (error) {
       console.error('Error setting up Gemini stream:', error);
+      
+      // Handle rate limiting errors that occur before stream starts
+      if (error && typeof error === 'object' && 'status' in error) {
+        const status = (error as any).status;
+        if (status === 401) {
+          onError?.('You have reached your free quota limit (5 requests per day). Please sign in to get 20 requests per day and continue using the service.');
+          return;
+        } else if (status === 429) {
+          onError?.('Rate limit exceeded. Please try again later.');
+          return;
+        }
+      }
+      
       onError?.('Failed to connect to Gemini service');
     }
   }

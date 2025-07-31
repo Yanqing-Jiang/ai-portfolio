@@ -107,7 +107,7 @@ class StepCollectorCallbackHandler(BaseCallbackHandler):
         self.steps.append(f"Agent: {text}")
 
 @app.post("/api/research")
-def research_endpoint(request: ResearchRequest):
+def research_endpoint(request: ResearchRequest, _=Depends(smart_rate_limit)):
     result = run_research_agent(request.query)
     return result  # returns both 'answer' and 'steps'
 
@@ -513,7 +513,7 @@ async def cleanup_tts_session(session_id: str):
 # -------------------- Gemini API Endpoints --------------------
 
 @app.post("/api/gemini/chat/create")
-async def create_gemini_chat(request: GeminiChatRequest):
+async def create_gemini_chat(request: GeminiChatRequest, _=Depends(smart_rate_limit)):
     """Create a new Gemini chat session"""
     try:
         # Generate unique session ID
@@ -544,28 +544,11 @@ async def create_gemini_chat(request: GeminiChatRequest):
         return JSONResponse(content=error_detail, status_code=500, headers={"Access-Control-Allow-Origin": "*"})
 
 @app.get("/api/gemini/chat/stream")
-async def gemini_chat_stream(session_id: str, message: str, request: Request):
+async def gemini_chat_stream(session_id: str, message: str, request: Request, _=Depends(smart_rate_limit)):
     """Stream Gemini chat response with no buffering"""
     
     async def generate_stream():
         try:
-            # Check rate limits first (inside stream so we can send proper error messages)
-            try:
-                await smart_rate_limit(request)
-            except HTTPException as rate_limit_error:
-                # Send rate limit error as a stream message instead of HTTP error
-                if rate_limit_error.status_code == 401:
-                    error_message = "You have reached your free quota limit (5 requests per day). Please sign in to get 20 requests per day and continue using the service."
-                elif rate_limit_error.status_code == 429:
-                    retry_after = rate_limit_error.headers.get('Retry-After', 'a few seconds')
-                    error_message = f"Rate limit exceeded. Please try again in {retry_after}."
-                else:
-                    error_message = rate_limit_error.detail
-                
-                yield f"data: {json.dumps({'type': 'error', 'message': error_message})}\n\n"
-                yield f"data: {json.dumps({'type': 'done'})}\n\n"
-                return
-            
             # Send initial status
             yield f"data: {json.dumps({'type': 'status', 'message': '🤖 Gemini is thinking...', 'replace': False})}\n\n"
             await asyncio.sleep(0)
@@ -628,7 +611,7 @@ async def gemini_chat_stream(session_id: str, message: str, request: Request):
     )
 
 @app.post("/api/gemini/chat/message")
-async def send_gemini_message(request: GeminiMessageRequest):
+async def send_gemini_message(request: GeminiMessageRequest, _=Depends(smart_rate_limit)):
     """Send message to Gemini chat (non-streaming)"""
     try:
         response = gemini_service.send_message_sync(request.session_id, request.message)
