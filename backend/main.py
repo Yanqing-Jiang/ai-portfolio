@@ -660,9 +660,15 @@ async def count_user_input(request: Request, _=Depends(smart_rate_limit)):
     """Count a user input against their rate limit without doing any processing"""
     try:
         identifier = await who_am_i(request)
-        current_usage, limit = await get_user_usage(identifier)
         is_authenticated = not identifier.startswith("ip:")
         user_type = "member" if is_authenticated else "guest"
+        
+        # Add a small delay to ensure Redis counter is updated after rate limiting
+        import asyncio
+        await asyncio.sleep(0.1)
+        
+        # Now get the updated usage count
+        current_usage, limit = await get_user_usage(identifier)
         
         print(f"User input counted - Identifier: {identifier}, Usage: {current_usage}/{limit}, Type: {user_type}")
         

@@ -261,6 +261,13 @@ async def smart_rate_limit(request: Request):
         
         print(f"Rate limit check passed for {identifier}")
         
+        # Debug: Check Redis count immediately after rate limiting
+        try:
+            updated_usage, updated_limit = await get_user_usage(identifier)
+            print(f"DEBUG - After rate limiting: {identifier}, Count: {updated_usage}/{updated_limit}")
+        except Exception as debug_error:
+            print(f"DEBUG - Error checking updated usage: {debug_error}")
+        
     except HTTPException as e:
         print(f"Rate limit exceeded for {identifier}: {e.status_code} {e.detail}")
         if e.status_code == 429:
