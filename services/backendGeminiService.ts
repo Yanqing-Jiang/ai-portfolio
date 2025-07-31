@@ -27,6 +27,15 @@ export class BackendGeminiService {
         body: JSON.stringify({ system_instruction: systemInstruction }),
       });
 
+      // Handle rate limiting errors
+      if (response.status === 401) {
+        throw new Error('RATE_LIMIT_AUTH_REQUIRED:You have reached your free quota limit (5 requests per day). Please sign in to get 20 requests per day and continue using the service.');
+      }
+      
+      if (response.status === 429) {
+        throw new Error('RATE_LIMIT_EXCEEDED:Rate limit exceeded. Please try again later.');
+      }
+
       if (!response.ok) {
         console.error('Failed to create Gemini chat session:', response.statusText);
         return null;
@@ -37,7 +46,7 @@ export class BackendGeminiService {
       return this.sessionId;
     } catch (error) {
       console.error('Error creating Gemini chat session:', error);
-      return null;
+      throw error; // Re-throw to allow proper error handling
     }
   }
 
@@ -180,12 +189,23 @@ export const createBackendChat = async (
   backendUrl?: string
 ): Promise<BackendGeminiService | null> => {
   const service = new BackendGeminiService(backendUrl);
-  const sessionId = await service.createChat(systemInstruction);
   
-  if (!sessionId) {
-    console.error('Failed to initialize backend Gemini chat');
+  try {
+    const sessionId = await service.createChat(systemInstruction);
+    
+    if (!sessionId) {
+      console.error('Failed to initialize backend Gemini chat');
+      return null;
+    }
+    
+    return service;
+  } catch (error) {
+    // Re-throw rate limiting errors with specific context
+    if (error instanceof Error && error.message.startsWith('RATE_LIMIT_')) {
+      throw error;
+    }
+    
+    console.error('Failed to initialize backend Gemini chat:', error);
     return null;
   }
-  
-  return service;
 };

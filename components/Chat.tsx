@@ -116,12 +116,32 @@ const Chat: React.FC<ChatProps> = ({ project }) => {
         .catch(error => {
           console.error('Failed to create backend chat:', error);
           setChat(null);
-          // Show error message
-          setMessages([{
-            id: 'initial-message',
-            role: 'model',
-            text: "⚠️ **Chat service not available**\n\nThe Gemini API key is not configured or invalid. Please:\n\n1. Check your backend `.env` file has `GEMINI_API_KEY=your_key`\n2. Verify your API key is valid\n3. Restart the backend server\n4. Check the browser console for detailed errors",
-          }]);
+          
+          // Handle rate limiting errors specifically
+          if (error instanceof Error && error.message.startsWith('RATE_LIMIT_AUTH_REQUIRED:')) {
+            const message = error.message.replace('RATE_LIMIT_AUTH_REQUIRED:', '');
+            setMessages([{
+              id: 'initial-message',
+              role: 'model',
+              text: `⚠️ **Rate Limit Reached**\n\n${message}\n\nClick "Sign in for more" at the bottom to continue using the chat service.`,
+            }]);
+            // Also show the auth modal
+            setShowAuthModal(true);
+          } else if (error instanceof Error && error.message.startsWith('RATE_LIMIT_EXCEEDED:')) {
+            const message = error.message.replace('RATE_LIMIT_EXCEEDED:', '');
+            setMessages([{
+              id: 'initial-message',
+              role: 'model',
+              text: `⚠️ **Rate Limit Exceeded**\n\n${message}`,
+            }]);
+          } else {
+            // Show generic API key error for other issues
+            setMessages([{
+              id: 'initial-message',
+              role: 'model',
+              text: "⚠️ **Chat service not available**\n\nThe Gemini API key is not configured or invalid. Please:\n\n1. Check your backend `.env` file has `GEMINI_API_KEY=your_key`\n2. Verify your API key is valid\n3. Restart the backend server\n4. Check the browser console for detailed errors",
+            }]);
+          }
         });
     } else {
       setChat(null);
