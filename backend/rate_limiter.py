@@ -110,6 +110,45 @@ async def rate_limit_callback(request: Request, response, pexpire: int):
         headers={"Retry-After": str(ceil(pexpire/1000))}
     )
 
+async def manual_increment_counter(identifier: str, is_authenticated: bool) -> None:
+    """Manually increment the Redis counter for the user"""
+    if redis_pool is None:
+        # Use in-memory fallback for development
+        print(f"Using in-memory increment for identifier: {identifier}")
+        current_count = in_memory_usage.get(identifier, 0)
+        in_memory_usage[identifier] = current_count + 1
+        print(f"In-memory count incremented: {identifier} -> {in_memory_usage[identifier]}")
+        return
+    
+    try:
+        # Find the existing Redis key for this identifier
+        all_keys = await redis_pool.keys("*")
+        target_key = None
+        
+        # Look for existing keys
+        for key in all_keys:
+            if identifier in key and (':5:' in key or ':20:' in key):
+                target_key = key
+                break
+        
+        if target_key:
+            # Increment existing key
+            new_count = await redis_pool.incr(target_key)
+            print(f"REDIS INCREMENT - Key: {target_key}, New count: {new_count}")
+        else:
+            # Create new key with appropriate limit
+            limit = GUEST_LIMIT if not is_authenticated else MEMBER_LIMIT
+            new_key = f"fastapi-limiter:{identifier}:{limit}:0"
+            await redis_pool.setex(new_key, LIMIT_WINDOW, 1)
+            print(f"REDIS CREATE - New key: {new_key}, Count: 1")
+            
+    except Exception as e:
+        print(f"ERROR: Failed to manually increment counter for {identifier}: {e}")
+        # Fall back to in-memory tracking
+        current_count = in_memory_usage.get(identifier, 0)
+        in_memory_usage[identifier] = current_count + 1
+        print(f"Fallback increment: {identifier} -> {in_memory_usage[identifier]}")
+
 async def get_user_usage(identifier: str) -> Tuple[int, int]:
     """Get current usage count for a user identifier"""
     # Determine limit based on identifier type
@@ -256,13 +295,13 @@ async def smart_rate_limit(request: Request):
         return
     
     try:
-        # First check current usage manually before applying rate limiter
+        # Get current usage and manually increment
         current_usage, user_limit = await get_user_usage(identifier)
         limit = MEMBER_LIMIT if is_authenticated else GUEST_LIMIT
         
-        print(f"MANUAL CHECK - {identifier}: {current_usage}/{limit} (user_limit from get_user_usage: {user_limit})")
+        print(f"MANUAL CHECK - {identifier}: {current_usage}/{limit}")
         
-        # Manual rate limit check for guests
+        # Check rate limits
         if not is_authenticated and current_usage >= GUEST_LIMIT:
             print(f"MANUAL RATE LIMIT - Guest {identifier} exceeded {GUEST_LIMIT}/day limit")
             raise HTTPException(
@@ -270,17 +309,23 @@ async def smart_rate_limit(request: Request):
                 detail="Sign-in required after free quota",
                 headers={"Retry-After": "3600"}
             )
+        elif is_authenticated and current_usage >= MEMBER_LIMIT:
+            print(f"MANUAL RATE LIMIT - Member {identifier} exceeded {MEMBER_LIMIT}/day limit")
+            raise HTTPException(
+                status_code=429,
+                detail="Rate limit exceeded. Please try again later.",
+                headers={"Retry-After": "3600"}
+            )
         
-        # Use unified rate limiter (this will increment the counter)
-        print(f"Using unified rate limiter for {identifier}")
-        await unified_rate_limiter(request, None)
+        # Manually increment the counter in Redis
+        await manual_increment_counter(identifier, is_authenticated)
         
-        print(f"Rate limit check passed for {identifier}")
+        print(f"Rate limit check passed and counter incremented for {identifier}")
         
-        # Debug: Check Redis count immediately after rate limiting
+        # Debug: Check Redis count immediately after incrementing
         try:
             updated_usage, updated_limit = await get_user_usage(identifier)
-            print(f"DEBUG - After rate limiting: {identifier}, Count: {updated_usage}/{updated_limit}")
+            print(f"DEBUG - After manual increment: {identifier}, Count: {updated_usage}/{updated_limit}")
         except Exception as debug_error:
             print(f"DEBUG - Error checking updated usage: {debug_error}")
         
