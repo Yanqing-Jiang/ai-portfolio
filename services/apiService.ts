@@ -100,6 +100,10 @@ class ApiService {
     return this.get<UsageStats>('/api/rate-limit/usage')
   }
 
+  async countUserInput(): Promise<ApiResponse<UsageStats>> {
+    return this.post<UsageStats>('/api/user-input')
+  }
+
   // Enhanced streaming method that handles auth errors
   async streamWithAuth(
     endpoint: string,

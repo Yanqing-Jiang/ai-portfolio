@@ -116,32 +116,12 @@ const Chat: React.FC<ChatProps> = ({ project }) => {
         .catch(error => {
           console.error('Failed to create backend chat:', error);
           setChat(null);
-          
-          // Handle rate limiting errors specifically
-          if (error instanceof Error && error.message.startsWith('RATE_LIMIT_AUTH_REQUIRED:')) {
-            const message = error.message.replace('RATE_LIMIT_AUTH_REQUIRED:', '');
-            setMessages([{
-              id: 'initial-message',
-              role: 'model',
-              text: `⚠️ **Rate Limit Reached**\n\n${message}\n\nClick "Sign in for more" at the bottom to continue using the chat service.`,
-            }]);
-            // Also show the auth modal
-            setShowAuthModal(true);
-          } else if (error instanceof Error && error.message.startsWith('RATE_LIMIT_EXCEEDED:')) {
-            const message = error.message.replace('RATE_LIMIT_EXCEEDED:', '');
-            setMessages([{
-              id: 'initial-message',
-              role: 'model',
-              text: `⚠️ **Rate Limit Exceeded**\n\n${message}`,
-            }]);
-          } else {
-            // Show generic API key error for other issues
-            setMessages([{
-              id: 'initial-message',
-              role: 'model',
-              text: "⚠️ **Chat service not available**\n\nThe Gemini API key is not configured or invalid. Please:\n\n1. Check your backend `.env` file has `GEMINI_API_KEY=your_key`\n2. Verify your API key is valid\n3. Restart the backend server\n4. Check the browser console for detailed errors",
-            }]);
-          }
+          // Show generic API key error
+          setMessages([{
+            id: 'initial-message',
+            role: 'model',
+            text: "⚠️ **Chat service not available**\n\nThe Gemini API key is not configured or invalid. Please:\n\n1. Check your backend `.env` file has `GEMINI_API_KEY=your_key`\n2. Verify your API key is valid\n3. Restart the backend server\n4. Check the browser console for detailed errors",
+          }]);
         });
     } else {
       setChat(null);
@@ -216,9 +196,43 @@ const Chat: React.FC<ChatProps> = ({ project }) => {
     setMessages((prev: ChatMessage[]) => [...prev, userMessage]);
     setIsLoading(true);
     
-    // Refresh usage stats immediately when making a request
-    // This ensures the count updates even if the request fails
-    setTimeout(() => fetchUsageStats(), 500);
+    // First, count this user input against rate limit
+    try {
+      const countResponse = await apiService.countUserInput();
+      if (!countResponse.success) {
+        if (countResponse.needsAuth) {
+          setShowAuthModal(true);
+          setMessages((prev: ChatMessage[]) => [...prev, {
+            id: (Date.now() + 1).toString(),
+            role: 'model',
+            text: 'Please sign in to continue using the service.',
+          }]);
+        } else {
+          setMessages((prev: ChatMessage[]) => [...prev, {
+            id: (Date.now() + 1).toString(),
+            role: 'model',
+            text: countResponse.error || 'Rate limit exceeded. Please try again later.',
+          }]);
+        }
+        setIsLoading(false);
+        return;
+      }
+      
+      // Update usage stats immediately with the response from counting
+      if (countResponse.data) {
+        setUsageStats(countResponse.data);
+      }
+      
+    } catch (error) {
+      console.error('Error counting user input:', error);
+      setMessages((prev: ChatMessage[]) => [...prev, {
+        id: (Date.now() + 1).toString(),
+        role: 'model',
+        text: 'Sorry, there was an error processing your request. Please try again.',
+      }]);
+      setIsLoading(false);
+      return;
+    }
     
     const modelMessageId = (Date.now() + 1).toString();
 
@@ -269,8 +283,6 @@ const Chat: React.FC<ChatProps> = ({ project }) => {
                             // Stream completed successfully
                             setIsLoading(false);
                             setShowAgentStatus(false);
-                            // Refresh usage stats after successful request
-                            fetchUsageStats();
                             return;
                         }
                     },
@@ -359,8 +371,6 @@ const Chat: React.FC<ChatProps> = ({ project }) => {
                             // Stream completed successfully
                             setIsLoading(false);
                             setShowAgentStatus(false);
-                            // Refresh usage stats after successful request
-                            fetchUsageStats();
                             return;
                         }
                     },

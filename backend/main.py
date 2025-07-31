@@ -107,12 +107,12 @@ class StepCollectorCallbackHandler(BaseCallbackHandler):
         self.steps.append(f"Agent: {text}")
 
 @app.post("/api/research")
-def research_endpoint(request: ResearchRequest, _=Depends(smart_rate_limit)):
+def research_endpoint(request: ResearchRequest):
     result = run_research_agent(request.query)
     return result  # returns both 'answer' and 'steps'
 
 @app.get("/api/research/stream")
-async def research_stream_endpoint(query: str, request: Request, _=Depends(smart_rate_limit)):
+async def research_stream_endpoint(query: str, request: Request):
     async def generate_stream():
         try:
             # Send initial status
@@ -207,7 +207,7 @@ async def research_stream_endpoint(query: str, request: Request, _=Depends(smart
     )
 
 @app.get("/api/resume-search/stream")
-async def resume_search_stream_endpoint(query: str, request: Request, chat_history: str = "[]", _=Depends(smart_rate_limit)):
+async def resume_search_stream_endpoint(query: str, request: Request, chat_history: str = "[]"):
     # Parse chat_history from JSON string
     try:
         parsed_history = json.loads(chat_history) if chat_history else []
@@ -513,7 +513,7 @@ async def cleanup_tts_session(session_id: str):
 # -------------------- Gemini API Endpoints --------------------
 
 @app.post("/api/gemini/chat/create")
-async def create_gemini_chat(request: GeminiChatRequest, _=Depends(smart_rate_limit)):
+async def create_gemini_chat(request: GeminiChatRequest):
     """Create a new Gemini chat session"""
     try:
         # Generate unique session ID
@@ -544,7 +544,7 @@ async def create_gemini_chat(request: GeminiChatRequest, _=Depends(smart_rate_li
         return JSONResponse(content=error_detail, status_code=500, headers={"Access-Control-Allow-Origin": "*"})
 
 @app.get("/api/gemini/chat/stream")
-async def gemini_chat_stream(session_id: str, message: str, request: Request, _=Depends(smart_rate_limit)):
+async def gemini_chat_stream(session_id: str, message: str, request: Request):
     """Stream Gemini chat response with no buffering"""
     
     async def generate_stream():
@@ -611,7 +611,7 @@ async def gemini_chat_stream(session_id: str, message: str, request: Request, _=
     )
 
 @app.post("/api/gemini/chat/message")
-async def send_gemini_message(request: GeminiMessageRequest, _=Depends(smart_rate_limit)):
+async def send_gemini_message(request: GeminiMessageRequest):
     """Send message to Gemini chat (non-streaming)"""
     try:
         response = gemini_service.send_message_sync(request.session_id, request.message)
@@ -654,6 +654,36 @@ async def delete_gemini_chat(session_id: str):
         )
 
 # -------------------- Rate Limiting Endpoints --------------------
+
+@app.post("/api/user-input")
+async def count_user_input(request: Request, _=Depends(smart_rate_limit)):
+    """Count a user input against their rate limit without doing any processing"""
+    try:
+        identifier = await who_am_i(request)
+        current_usage, limit = await get_user_usage(identifier)
+        is_authenticated = not identifier.startswith("ip:")
+        user_type = "member" if is_authenticated else "guest"
+        
+        print(f"User input counted - Identifier: {identifier}, Usage: {current_usage}/{limit}, Type: {user_type}")
+        
+        return JSONResponse(
+            content={
+                "success": True,
+                "current_usage": current_usage,
+                "limit": limit,
+                "remaining": max(0, limit - current_usage),
+                "user_type": user_type,
+                "message": "User input counted successfully"
+            },
+            headers={"Access-Control-Allow-Origin": "*"}
+        )
+    except Exception as e:
+        print(f"Error in count_user_input: {e}")
+        return JSONResponse(
+            content={"error": str(e)}, 
+            status_code=500, 
+            headers={"Access-Control-Allow-Origin": "*"}
+        )
 
 @app.get("/api/rate-limit/usage")
 async def get_usage_stats(request: Request):
