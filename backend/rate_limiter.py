@@ -140,6 +140,17 @@ async def get_user_usage(identifier: str) -> Tuple[int, int]:
         ]
         
         # Add keys with limit patterns (fastapi-limiter uses limit:window format)
+        # Since we're using unified limiter with MEMBER_LIMIT (20), all keys will have :20:
+        possible_keys.extend([
+            f"fastapi-limiter:{identifier}:{MEMBER_LIMIT}:0",
+            f"fastapi-limiter:{identifier}:{MEMBER_LIMIT}:1", 
+            f"fastapi-limiter:{identifier}:{MEMBER_LIMIT}:2",
+            f"fastapi-limiter:{identifier}:{MEMBER_LIMIT}:3",
+            f"fastapi-limiter:{identifier}:{MEMBER_LIMIT}:4",
+            f"fastapi-limiter:{identifier}:{MEMBER_LIMIT}:5",
+        ])
+        
+        # Also check legacy keys with the old limits for backward compatibility
         possible_keys.extend([
             f"fastapi-limiter:{identifier}:{limit}:0",
             f"fastapi-limiter:{identifier}:{limit}:1", 
@@ -189,24 +200,19 @@ async def init_rate_limiter():
         print(f"Warning: Failed to initialize rate limiter: {e}")
         return False
 
-# Create individual rate limiter dependencies
-def create_guest_limiter():
-    """Create rate limiter for guest users (5/day)"""
-    return RateLimiter(times=GUEST_LIMIT, seconds=LIMIT_WINDOW, identifier=who_am_i)
-
-def create_member_limiter():
-    """Create rate limiter for authenticated users (20/day)"""  
+# Create a unified rate limiter
+def create_unified_rate_limiter():
+    """Create a single rate limiter that we'll use for all users"""
+    # Use the higher limit (20) and we'll manually check the appropriate limit in smart_rate_limit
     return RateLimiter(times=MEMBER_LIMIT, seconds=LIMIT_WINDOW, identifier=who_am_i)
 
-# Initialize limiters with error handling
+# Initialize unified limiter with error handling
 try:
-    guest_rate_limiter = create_guest_limiter()
-    member_rate_limiter = create_member_limiter()
-    print("Rate limiters created successfully")
+    unified_rate_limiter = create_unified_rate_limiter()
+    print("Unified rate limiter created successfully")
 except Exception as e:
-    print(f"Warning: Failed to create rate limiters: {e}")
-    guest_rate_limiter = None
-    member_rate_limiter = None
+    print(f"Warning: Failed to create rate limiter: {e}")
+    unified_rate_limiter = None
 
 async def smart_rate_limit(request: Request):
     """Smart rate limiter based on authentication status"""
@@ -245,19 +251,29 @@ async def smart_rate_limit(request: Request):
         return
     
     # Redis-based rate limiting
-    if guest_rate_limiter is None or member_rate_limiter is None:
-        print("Warning: Rate limiting disabled - limiters not available")
+    if unified_rate_limiter is None:
+        print("Warning: Rate limiting disabled - limiter not available")
         return
     
     try:
-        if is_authenticated:
-            # Use member rate limiter
-            print(f"Using member rate limiter for {identifier}")
-            await member_rate_limiter(request, None)
-        else:
-            # Use guest rate limiter
-            print(f"Using guest rate limiter for {identifier}")
-            await guest_rate_limiter(request, None)
+        # First check current usage manually before applying rate limiter
+        current_usage, user_limit = await get_user_usage(identifier)
+        limit = MEMBER_LIMIT if is_authenticated else GUEST_LIMIT
+        
+        print(f"MANUAL CHECK - {identifier}: {current_usage}/{limit} (user_limit from get_user_usage: {user_limit})")
+        
+        # Manual rate limit check for guests
+        if not is_authenticated and current_usage >= GUEST_LIMIT:
+            print(f"MANUAL RATE LIMIT - Guest {identifier} exceeded {GUEST_LIMIT}/day limit")
+            raise HTTPException(
+                status_code=401,
+                detail="Sign-in required after free quota",
+                headers={"Retry-After": "3600"}
+            )
+        
+        # Use unified rate limiter (this will increment the counter)
+        print(f"Using unified rate limiter for {identifier}")
+        await unified_rate_limiter(request, None)
         
         print(f"Rate limit check passed for {identifier}")
         
