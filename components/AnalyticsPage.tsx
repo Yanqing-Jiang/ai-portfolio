@@ -437,7 +437,6 @@ const AnalyticsPage: React.FC = () => {
             {/* Left: Text */}
             <div className="flex-1 text-center md:text-left">
               <h1 className="text-2xl sm:text-3xl font-bold text-white">Next Gen Analytics (SQL)</h1>
-              <p className="text-gray-300 mt-1">Agentic Workflow • SQL Agent • Agentic Charting • Dynamic Download</p>
               {/* Feature bullets */}
               <ul className="mt-3 text-gray-300 text-sm sm:text-base space-y-1">
                 <li>• Tired of looking for answers in Dashboard? try ask questions and get a direct answer.</li>
