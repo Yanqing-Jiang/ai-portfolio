@@ -18,3 +18,8 @@ fastapi-limiter
 redis
 supabase
 python-jose[cryptography]
+# Analytics SQL Project Dependencies
+langgraph
+psycopg2-binary
+asyncpg
+sqlalchemy

@@ -27,6 +27,50 @@ export const PROJECT_DATA: ProjectYear[] = [
     subtitle: '(Cutting-Edge AI & Automation)',
     projects: [
       {
+        id: 'next-gen-analytics-sql',
+        title: 'Next Gen Analytics (SQL)',
+        description: `• AI-powered financial analytics chatbot that queries semiconductor company financials via an agentic SQL workflow.\n• Uses LangGraph agents to coordinate schema understanding → SQL generation → Agentic Charting → financial analysis.\n• Real-time streaming with progressive chart updates and expandable process visualization panel.\n\nResult:\n\n• Interactive financial analysis for AMD, AVGO, INTC, MU, NVDA, QCOM, TXN with 29 key metrics.\n• Streaming agent coordination with live process visualization.\n• Dynamic Agentic Charting and Dynamic Download for comprehensive financial insights.`,
+        technologies: ['LangGraph', 'Agentic Workflow', 'SQL Agent', 'Agentic Charting', 'Dynamic Download', 'FastAPI', 'PostgreSQL'],
+        systemInstruction: `You are the AI assistant for **Next Gen Analytics (SQL)**. You have full knowledge of the project described below. Use this embedded reference to answer questions with detail and accuracy. Quote or paraphrase the content to explain features, tech stack, workflow and technical implementation.
+
++--------------------
+EMBEDDED PROJECT DOC
+🔧 Tech Stack
+Frontend: React, TypeScript, ECharts for interactive visualizations
+Backend: Python, FastAPI, LangGraph for agent orchestration
+Database: Supabase (PostgreSQL) with comp_financials table
+LLM: OpenAI API (GPT-4o-mini) for SQL generation and analysis
+Agent Coordination: LangGraph state machine for multi-step workflow
+
+📘 Data Schema
+Table: comp_financials
+Tickers: AMD, AVGO, INTC, MU, NVDA, QCOM, TXN (semiconductor companies)
+Metrics: 29 financial statement items including Revenue, Net Income, EPS, Cash Flow, Balance Sheet items
+Time Series: Quarterly financial data
+
+🔄 Agent Workflow
+1. Schema Agent: Understands user query and maps to available financial metrics
+2. SQL Agent: Generates optimized PostgreSQL queries based on schema understanding
+3. ECharts Agent: Creates interactive chart specifications from query results
+4. Analysis Agent: Provides financial interpretation and insights
+
+✨ Key Features
+• Streaming agent coordination with real-time process visualization
+• Progressive chart updates as data arrives
+• Expandable side panel showing LangGraph execution steps
+• Interactive ECharts with drill-down capabilities
+• Multi-company comparative analysis
+• Time series trend analysis and forecasting
++--------------------`,
+        defaultPrompts: [
+          'Show me the revenue trends for NVDA vs AMD over the last 8 quarters',
+          'Compare the profit margins of all semiconductor companies',
+          'What is the cash flow situation for Intel and how does it compare to competitors?',
+        ],
+        coverUrl: 'https://yanqinghot.blob.core.windows.net/public-access/next-gen-sql.png',
+        imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/next-gen-sql.png'
+      },
+      {
         id: 'llm-invoice-processor',
         title: 'LLM Invoice Processor',
         description: `• Accounting team struggled to validate invoices with complex parent-child item numbers.\n• Millions of dollars in invoices were delayed or unpaid due to mismatches.\n\nResult:\n\n• Automates 1,000+ hours of manual work every year.\n• Dramatically reduces late payment rate by 90%.`,

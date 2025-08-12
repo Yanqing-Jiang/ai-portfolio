@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 from pathlib import Path
 import os
 import json
+from datetime import date as _Date, datetime as _DateTime
 import uuid
 
 
@@ -15,6 +16,7 @@ from resume_agent import run_resume_agent, run_resume_agent_stream
 from tts import get_voice_bytes
 from gemini_service import gemini_service
 from rate_limiter import init_rate_limiter, smart_rate_limit, get_user_usage, who_am_i
+from analytics_agent import create_analytics_workflow
 
 from langchain.callbacks.base import BaseCallbackHandler
 from typing import List, Tuple, Optional
@@ -22,6 +24,12 @@ from typing import List, Tuple, Optional
 # Always load the .env file located in the backend directory (same folder as this file)
 env_path = Path(__file__).resolve().parent / ".env"
 load_dotenv(dotenv_path=env_path, override=False)
+
+# Support interpolated DB_PASSWORD in DATABASE_URL
+db_password = os.getenv("DB_PASSWORD")
+database_url = os.getenv("DATABASE_URL")
+if database_url and "${DB_PASSWORD}" in database_url and db_password is not None:
+    os.environ["DATABASE_URL"] = database_url.replace("${DB_PASSWORD}", db_password)
 
 app = FastAPI()
 
@@ -725,3 +733,90 @@ async def get_usage_stats(request: Request):
             status_code=500, 
             headers={"Access-Control-Allow-Origin": "*"}
         )
+
+# -------------------- Analytics Endpoints --------------------
+
+@app.get("/api/analytics/stream")
+async def analytics_stream_endpoint(query: str, request: Request):
+    """Stream analytics results with LangGraph workflow visualization"""
+    
+    async def generate_analytics_stream():
+        # Helper: recursively convert date/datetime to ISO strings for JSON serialization
+        def _to_serializable(obj):
+            if isinstance(obj, (_Date, _DateTime)):
+                return obj.isoformat()
+            if isinstance(obj, list):
+                return [_to_serializable(x) for x in obj]
+            if isinstance(obj, tuple):
+                return tuple(_to_serializable(x) for x in obj)
+            if isinstance(obj, dict):
+                return {k: _to_serializable(v) for k, v in obj.items()}
+            return obj
+        try:
+            print(f"[MAIN] Starting analytics stream for query: {query[:100]}...")
+            
+            # Create analytics workflow instance
+            print("[MAIN] Creating analytics workflow...")
+            analytics_workflow = await create_analytics_workflow()
+            print("[MAIN] Analytics workflow created successfully")
+            
+            chunk_count = 0
+            last_heartbeat = asyncio.get_event_loop().time()
+            
+            print("[MAIN] Starting workflow stream...")
+            # Stream analytics workflow
+            async for result in analytics_workflow.stream_analysis(query):
+                try:
+                    if result:
+                        # Send the analytics update with proper event structure
+                        yield f"data: {json.dumps(_to_serializable(result))}\n\n"
+                        await asyncio.sleep(0)
+                        chunk_count += 1
+                        
+                        # Send heartbeat every 15 seconds
+                        current_time = asyncio.get_event_loop().time()
+                        if current_time - last_heartbeat > 15:
+                            print("[MAIN] Sending heartbeat...")
+                            yield f"data: {json.dumps({'event': 'heartbeat', 'data': {}})}\n\n"
+                            await asyncio.sleep(0)
+                            last_heartbeat = current_time
+                        
+                        # Safety limit
+                        if chunk_count > 1000:
+                            print("[MAIN] Chunk limit reached, stopping...")
+                            yield f"data: {json.dumps({'event': 'errors', 'data': {'errors': ['Response truncated due to length']}})}\n\n"
+                            break
+                            
+                except Exception as chunk_error:
+                    error_msg = f"Chunk error: {str(chunk_error)}"
+                    print(f"[MAIN ERROR] {error_msg}")
+                    yield f"data: {json.dumps({'event': 'errors', 'data': {'errors': [error_msg]}})}\n\n"
+                    await asyncio.sleep(0)
+                    break
+            
+            # Workflow handles its own completion signal
+            await asyncio.sleep(0)
+            
+        except GeneratorExit:
+            return
+        except Exception as e:
+            try:
+                error_msg = f"Error during analytics: {str(e)}"
+                print(f"[MAIN CRITICAL ERROR] {error_msg}")
+                import traceback
+                print(f"[MAIN CRITICAL ERROR] Traceback: {traceback.format_exc()}")
+                yield f"data: {json.dumps({'event': 'errors', 'data': {'errors': [error_msg]}})}\n\n"
+                await asyncio.sleep(0)
+            except:
+                return
+    
+    return StreamingResponse(
+        generate_analytics_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive", 
+            "Access-Control-Allow-Origin": "*",
+            "X-Accel-Buffering": "no",
+        }
+    )
