@@ -1189,15 +1189,24 @@ Guidelines:
 async def create_analytics_workflow() -> AnalyticsWorkflow:
     """Factory function to create analytics workflow with environment variables"""
     database_url = os.getenv("DATABASE_URL")
-    # Support interpolated DB_PASSWORD in DATABASE_URL
-    db_password = os.getenv("DB_PASSWORD")
-    if database_url and "${DB_PASSWORD}" in database_url and db_password is not None:
-        database_url = database_url.replace("${DB_PASSWORD}", db_password)
     openai_api_key = os.getenv("OPENAI_API_KEY")
     
     if not database_url:
         raise ValueError("DATABASE_URL environment variable is required")
     if not openai_api_key:
         raise ValueError("OPENAI_API_KEY environment variable is required")
-    
+
+    # Ensure sslmode=require for providers like Supabase
+    try:
+        from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
+        parsed = urlparse(database_url)
+        query = dict(parse_qsl(parsed.query))
+        if 'sslmode' not in query:
+            query['sslmode'] = 'require'
+            new_query = urlencode(query)
+            database_url = urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, new_query, parsed.fragment))
+    except Exception:
+        # Fallback silently; connection may still work
+        pass
+
     return AnalyticsWorkflow(database_url, openai_api_key)

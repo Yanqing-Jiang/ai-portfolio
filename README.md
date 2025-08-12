@@ -59,7 +59,6 @@ The application follows a modern full-stack architecture with clear separation b
 - `main.py` - FastAPI application with route definitions
 - `research_agent.py` - Web research and information gathering agent
 - `resume_agent.py` - Resume-specific question answering agent
-- `analytics_agent.py` - Agentic SQL workflow (market share, margins, growth, R&D), streaming analysis, and ECharts spec builder
 - `gemini_service.py` - Gemini AI chat session management
 - `rate_limiter.py` - Redis-based rate limiting with fallback
 - `tts.py` - Text-to-speech generation service
@@ -67,7 +66,6 @@ The application follows a modern full-stack architecture with clear separation b
 **API Endpoints:**
 - `/api/research` - Research agent for web search and analysis
 - `/api/resume-search` - Resume-specific information queries
-- `/api/analytics/stream` - Next Gen Analytics (SQL) streaming endpoint (status → SQL → chart → streaming analysis)
 - `/api/gemini/chat/*` - Gemini AI chat sessions
 - `/api/tts` - Text-to-speech generation
 - `/api/rate-limit/*` - Usage tracking and limits
@@ -171,8 +169,5 @@ await apiService.streamWithAuth(
    OPENAI_API_KEY=your_openai_api_key
    SUPABASE_JWT_SECRET=your_supabase_jwt_secret
    REDIS_URL=redis://localhost:6379/0
-   # Database URL supports password interpolation
-   DB_PASSWORD=your_raw_db_password
-   DATABASE_URL=postgresql://postgres:${DB_PASSWORD}@db.<your-supabase-host>.supabase.co:5432/postgres
    ```
 4. Run the backend: `uvicorn main:app --reload`

@@ -25,12 +25,6 @@ from typing import List, Tuple, Optional
 env_path = Path(__file__).resolve().parent / ".env"
 load_dotenv(dotenv_path=env_path, override=False)
 
-# Support interpolated DB_PASSWORD in DATABASE_URL
-db_password = os.getenv("DB_PASSWORD")
-database_url = os.getenv("DATABASE_URL")
-if database_url and "${DB_PASSWORD}" in database_url and db_password is not None:
-    os.environ["DATABASE_URL"] = database_url.replace("${DB_PASSWORD}", db_password)
-
 app = FastAPI()
 
 # Initialize rate limiter on startup
