@@ -220,7 +220,7 @@ const AnalyticsPage: React.FC = () => {
     simulatePreSteps();
 
     try {
-      await fetchEventSource(`http://localhost:8000/api/analytics/stream?query=${encodeURIComponent(query)}`, {
+      await fetchEventSource(`${import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'}/api/analytics/stream?query=${encodeURIComponent(query)}`, {
         signal: abortControllerRef.current.signal,
         onmessage: (event) => {
           try {
