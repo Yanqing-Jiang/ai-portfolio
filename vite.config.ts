@@ -8,6 +8,10 @@ export default defineConfig(({ mode }) => {
     const geminiApiKey = env.GEMINI_API_KEY || env.VITE_GEMINI_API_KEY || env.API_KEY;
     
     return {
+      server: {
+        host: 'localhost',
+        port: 5173
+      },
       define: {
         'process.env.API_KEY': JSON.stringify(geminiApiKey),
         'process.env.GEMINI_API_KEY': JSON.stringify(geminiApiKey),
