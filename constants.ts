@@ -29,8 +29,8 @@ export const PROJECT_DATA: ProjectYear[] = [
       {
         id: 'next-gen-analytics-sql',
         title: 'Next Gen Analytics (SQL)',
-        description: `• AI-powered financial analytics chatbot that queries semiconductor company financials via an agentic SQL workflow.\n• Uses LangGraph agents to coordinate schema understanding → SQL generation → Agentic Charting → financial analysis.\n• Real-time streaming with progressive chart updates and expandable process visualization panel.\n\nResult:\n\n• Interactive financial analysis for AMD, AVGO, INTC, MU, NVDA, QCOM, TXN with 29 key metrics.\n• Streaming agent coordination with live process visualization.\n• Dynamic Agentic Charting and Dynamic Download for comprehensive financial insights.`,
-        technologies: ['LangGraph', 'Agentic Workflow', 'SQL Agent', 'Agentic Charting', 'Dynamic Download', 'FastAPI', 'PostgreSQL'],
+        description: `• AI-powered financial analytics chatbot that queries semiconductor company financials via an agentic SQL workflow.\n• Uses LangGraph agents to coordinate schema understanding → SQL generation → Charting Agent → financial analysis.\n• Real-time streaming with progressive chart updates and expandable process visualization panel.\n\nResult:\n\n• Interactive financial analysis for AMD, AVGO, INTC, MU, NVDA, QCOM, TXN with 29 key metrics.\n• Streaming agent coordination with live process visualization.\n• Dynamic Charting Agent and Context Engineering for comprehensive financial insights.`,
+        technologies: ['LangGraph', 'Agentic Workflow', 'SQL Agent', 'Charting Agent', 'Context Engineering', 'FastAPI', 'PostgreSQL'],
         systemInstruction: `You are the AI assistant for **Next Gen Analytics (SQL)**. You have full knowledge of the project described below. Use this embedded reference to answer questions with detail and accuracy. Quote or paraphrase the content to explain features, tech stack, workflow and technical implementation.
 
 +--------------------

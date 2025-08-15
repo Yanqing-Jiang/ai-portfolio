@@ -439,13 +439,13 @@ const AnalyticsPage: React.FC = () => {
               <h1 className="text-2xl sm:text-3xl font-bold text-white">Next Gen Analytics (SQL)</h1>
               {/* Feature bullets */}
               <ul className="mt-3 text-gray-300 text-sm sm:text-base space-y-1">
-                <li>• Tired of looking for answers in Dashboard? try ask questions and get a direct answer.</li>
-                <li>• Dynamic table selection and schema detection</li>
-                <li>• Dynamic Charting and Data download</li>
+                <li>• Tired of finding what you need on a dashboard? try ask questions directly</li>
+                <li>• Automated chart generation with streaming data analysis</li>
+                <li>• Semi-conductor industry tickers for AMD, AVGO, INTC, MU, NVDA, QCOM, TXN</li>
               </ul>
               {/* Tech tabs/pills */}
               <div className="mt-3 flex flex-wrap gap-2 justify-center md:justify-start">
-                {['Agentic Workflow','SQL Agent','Agentic Charting','Dynamic Download'].map((tag) => (
+                {['Agentic Workflow','SQL Agent','Charting Agent','Context Engineering'].map((tag) => (
                   <span
                     key={tag}
                     className="px-3 py-1 rounded-full bg-gray-700 text-gray-200 text-xs sm:text-sm border border-gray-600 shadow-inner"
