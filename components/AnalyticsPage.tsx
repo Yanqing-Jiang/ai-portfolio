@@ -1,12 +1,13 @@
 import React, { useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 // ECharts removed; using Vega-Lite
-import { fetchEventSource } from '@microsoft/fetch-event-source';
 import { ChevronLeftIcon } from './icons/ChevronLeftIcon';
 import { ChevronRightIcon } from './icons/ChevronRightIcon';
 import EChartsReact from 'echarts-for-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { apiService } from '../services/apiService';
+import { configService } from '../services/config';
 
 // Removed unused AnalyticsMessage interface
 
@@ -63,6 +64,22 @@ const AnalyticsPage: React.FC = () => {
   
   const abortControllerRef = useRef<AbortController | null>(null);
 
+  // Project data for the analytics project
+  const projectData = {
+    title: 'Next Gen Analytics (SQL)',
+    description: `• AI-powered financial analytics chatbot that queries semiconductor company financials via an agentic SQL workflow.
+• Uses LangGraph agents to coordinate schema understanding → SQL generation → Charting Agent → financial analysis.
+• Real-time streaming with progressive chart updates and expandable process visualization panel.
+
+Result:
+
+• Interactive financial analysis for AMD, AVGO, INTC, MU, NVDA, QCOM, TXN with 29 key metrics.
+• Streaming agent coordination with live process visualization.
+• Dynamic Charting Agent and Context Engineering for comprehensive financial insights.`,
+    technologies: ['LangGraph', 'Agentic Workflow', 'SQL Agent', 'Charting Agent', 'Context Engineering', 'FastAPI', 'PostgreSQL'],
+    imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/next-gen-sql.png'
+  };
+
   const isValidChartSpec = (spec: any) => {
     try {
       if (!spec || typeof spec !== 'object') return false;
@@ -76,8 +93,7 @@ const AnalyticsPage: React.FC = () => {
   const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
   const simulatePreSteps = async () => {
-    // Show panel for visibility
-    setShowProcessPanel(true);
+    // Pre-steps simulation - panel will only show if user manually toggles it
     await sleep(100);
     updateStepStatus('table', 'in_progress', ['Database Table Selection']);
     await sleep(100);
@@ -220,11 +236,10 @@ const AnalyticsPage: React.FC = () => {
     simulatePreSteps();
 
     try {
-      await fetchEventSource(`${import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'}/api/analytics/stream?query=${encodeURIComponent(query)}`, {
-        signal: abortControllerRef.current.signal,
-        onmessage: (event) => {
+      await apiService.streamWithAuth(
+        `/api/analytics/stream?query=${encodeURIComponent(query)}`,
+        (data) => {
           try {
-            const data: any = JSON.parse(event.data);
             console.log('[FRONTEND DEBUG] Received event:', data.event || data.type, data);
             
             // Handle new event structure
@@ -354,19 +369,19 @@ const AnalyticsPage: React.FC = () => {
             console.error('Error parsing SSE data:', e);
           }
         },
-        onopen: async (response) => {
-          if (response.ok) {
-            console.log('Analytics stream connected');
+        (error, needsAuth) => {
+          console.error('Analytics stream error:', error);
+          if (needsAuth) {
+            setError('Authentication required. Please sign in to continue.');
           } else {
-            throw new Error(`HTTP ${response.status}`);
+            setError(error || 'Connection error occurred');
           }
-        },
-        onerror: (err) => {
-          console.error('Analytics stream error:', err);
-          setError('Connection error occurred');
           setIsLoading(false);
+        },
+        () => {
+          console.log('Analytics stream completed');
         }
-      });
+      );
     } catch (err: any) {
       if (err.name !== 'AbortError') {
         console.error('Analytics request error:', err);
@@ -428,27 +443,27 @@ const AnalyticsPage: React.FC = () => {
   ];
 
   return (
-    <div className="flex h-screen bg-gray-900 text-gray-100">
+    <div className="flex h-screen bg-gray-900 text-gray-100 overflow-hidden">
       {/* Main Content */}
-      <div className={`flex-1 flex flex-col transition-all duration-300 ${showProcessPanel ? 'mr-80' : ''}`}>
+      <div className={`flex-1 flex flex-col transition-all duration-300 overflow-hidden ${showProcessPanel ? 'md:mr-80' : ''}`}>
         {/* Header */}
         <div className="bg-gray-800 border-b border-gray-700">
-          <div className="max-w-6xl mx-auto flex flex-col md:flex-row items-center gap-4 p-4 sm:p-6">
+          <div className="w-full max-w-6xl mx-auto flex flex-col md:flex-row items-center gap-4 sm:gap-6 p-4 sm:p-6 md:p-8 overflow-hidden">
             {/* Left: Text */}
             <div className="flex-1 text-center md:text-left">
-              <h1 className="text-2xl sm:text-3xl font-bold text-white">Next Gen Analytics (SQL)</h1>
+              <h1 className="text-2xl sm:text-3xl md:text-4xl font-bold text-white">Next Gen Analytics (SQL)</h1>
               {/* Feature bullets */}
-              <ul className="mt-3 text-gray-300 text-sm sm:text-base space-y-1">
+              <ul className="mt-3 sm:mt-4 text-gray-300 text-sm sm:text-base space-y-1 sm:space-y-1.5">
                 <li>• Tired of finding what you need on a dashboard? try ask questions directly</li>
                 <li>• Automated chart generation with streaming data analysis</li>
                 <li>• Semi-conductor industry tickers for AMD, AVGO, INTC, MU, NVDA, QCOM, TXN</li>
               </ul>
-              {/* Tech tabs/pills */}
-              <div className="mt-3 flex flex-wrap gap-2 justify-center md:justify-start">
+              {/* Tech tags/pills */}
+              <div className="mt-3 sm:mt-4 flex flex-wrap gap-2 sm:gap-2.5 justify-center md:justify-start">
                 {['Agentic Workflow','SQL Agent','Charting Agent','Context Engineering'].map((tag) => (
                   <span
                     key={tag}
-                    className="px-3 py-1 rounded-full bg-gray-700 text-gray-200 text-xs sm:text-sm border border-gray-600 shadow-inner"
+                    className="px-3 py-1 sm:py-1.5 rounded-full bg-gray-700 text-gray-200 text-xs sm:text-sm border border-gray-600 shadow-inner"
                   >
                     {tag}
                   </span>
@@ -456,11 +471,11 @@ const AnalyticsPage: React.FC = () => {
               </div>
             </div>
             {/* Right: Image */}
-            <div className="w-full md:w-1/3">
+            <div className="w-full md:w-1/3 shrink-0 min-w-0">
               <img
                 src="https://yanqinghot.blob.core.windows.net/public-access/next-gen-sql.png"
                 alt="Next Gen Analytics (SQL)"
-                className="w-full h-40 sm:h-48 object-cover rounded-lg border border-gray-700 shadow"
+                className="w-full h-40 sm:h-48 object-cover rounded-lg border border-gray-700 shadow max-w-full"
               />
             </div>
           </div>
@@ -470,23 +485,23 @@ const AnalyticsPage: React.FC = () => {
 
         {/* Main Content Area */}
         <div className="flex-1 overflow-auto p-4 sm:p-6 pb-6 bg-gray-900">
-          <div className="max-w-6xl mx-auto space-y-4 sm:space-y-6">
+          <div className="w-full max-w-6xl mx-auto space-y-4 sm:space-y-6 overflow-hidden">
             
             {/* Chart Display with ECharts (guarded by error boundary) */}
             {chartSpec && !useAltChart && (
               <motion.div
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
-                className="bg-gray-800 border border-gray-700 rounded-xl shadow-2xl p-4 sm:p-6"
+                className="bg-gray-800 border border-gray-700 rounded-xl shadow-2xl p-4 sm:p-6 md:p-8"
               >
-                <h2 className="text-xl font-semibold text-white mb-4">Interactive Visualization</h2>
-                <div className="h-[360px] sm:h-[440px] lg:h-[520px] bg-white rounded-lg p-2">
+                <h2 className="text-lg sm:text-xl md:text-2xl font-semibold text-white mb-4 sm:mb-6">Interactive Visualization</h2>
+                <div className="h-[280px] sm:h-[360px] md:h-[440px] lg:h-[520px] bg-white rounded-lg p-2 sm:p-3">
                   {/* Controls row */}
-                  <div className="flex items-center justify-between mb-2">
-                    <div className="flex items-center gap-2 text-gray-700 text-sm">
+                  <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 sm:gap-4 mb-3 sm:mb-2">
+                    <div className="flex items-center gap-2 text-gray-700 text-sm sm:text-base">
                       <label className="font-medium">Series:</label>
                       <select
-                        className="bg-gray-100 border border-gray-300 rounded px-2 py-1 text-sm"
+                        className="bg-gray-100 border border-gray-300 rounded px-2 sm:px-3 py-1 sm:py-1.5 text-sm sm:text-base min-h-[32px] sm:min-h-[36px]"
                         onChange={(e) => {
                           const selected = e.target.value
                           // Toggle legend selection by series name match
@@ -564,10 +579,10 @@ const AnalyticsPage: React.FC = () => {
               <motion.div
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
-                className="bg-gray-800 border border-gray-700 rounded-xl shadow-2xl p-4 sm:p-6"
+                className="bg-gray-800 border border-gray-700 rounded-xl shadow-2xl p-4 sm:p-6 md:p-8"
               >
-                <h2 className="text-xl font-semibold text-white mb-4">Interactive Visualization (Fallback)</h2>
-                <div className="h-96 bg-gray-900 rounded-lg p-4 text-gray-300 text-sm">
+                <h2 className="text-lg sm:text-xl md:text-2xl font-semibold text-white mb-4 sm:mb-6">Interactive Visualization (Fallback)</h2>
+                <div className="h-64 sm:h-80 md:h-96 bg-gray-900 rounded-lg p-4 sm:p-6 text-gray-300 text-sm sm:text-base">
                   Unable to render chart spec. Showing sample data preview:
                   <pre className="mt-2 overflow-auto">{JSON.stringify(dataSample.slice(0, 5), null, 2)}</pre>
                 </div>
@@ -579,9 +594,9 @@ const AnalyticsPage: React.FC = () => {
               <motion.div
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
-                className="bg-gray-800 border border-gray-700 rounded-xl shadow-2xl p-4 sm:p-6"
+                className="bg-gray-800 border border-gray-700 rounded-xl shadow-2xl p-4 sm:p-6 md:p-8"
               >
-                <h2 className="text-xl font-semibold text-white mb-4">Financial Analysis</h2>
+                <h2 className="text-lg sm:text-xl md:text-2xl font-semibold text-white mb-4 sm:mb-6">Financial Analysis</h2>
                 <div className="prose prose-invert max-w-none">
                   <ReactMarkdown remarkPlugins={[remarkGfm]}>
                     {analysis}
@@ -595,11 +610,11 @@ const AnalyticsPage: React.FC = () => {
               <motion.div
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
-                className="bg-gray-800 border border-gray-700 rounded-xl shadow-2xl p-6"
+                className="bg-gray-800 border border-gray-700 rounded-xl shadow-2xl p-4 sm:p-6 md:p-8"
               >
-                <h2 className="text-xl font-semibold text-white mb-4">Generated SQL Query</h2>
-                <div className="bg-gray-900 border border-gray-700 rounded-lg p-4 overflow-x-auto">
-                  <pre className="text-green-400 text-sm font-mono whitespace-pre-wrap">
+                <h2 className="text-lg sm:text-xl md:text-2xl font-semibold text-white mb-4 sm:mb-6">Generated SQL Query</h2>
+                <div className="bg-gray-900 border border-gray-700 rounded-lg p-4 sm:p-6 overflow-x-auto">
+                  <pre className="text-green-400 text-sm sm:text-base font-mono whitespace-pre-wrap">
                     {sqlQuery}
                   </pre>
                 </div>
@@ -613,28 +628,28 @@ const AnalyticsPage: React.FC = () => {
         <div className="sticky bottom-0 bg-gray-800 border-t border-gray-700">
           {/* Status + Error */}
           {(isLoading || currentStatus !== 'Ready to analyze financial data...' || error) && (
-            <div className="px-6 py-2 border-b border-gray-700">
-              <div className="max-w-6xl mx-auto flex items-center gap-3">
+            <div className="px-4 sm:px-6 md:px-8 py-2 sm:py-3 border-b border-gray-700">
+              <div className="w-full max-w-6xl mx-auto flex items-center gap-3 sm:gap-4 overflow-hidden">
                 {isLoading && (
-                  <div className="animate-spin h-4 w-4 border-2 border-blue-400 rounded-full border-t-transparent" />
+                  <div className="animate-spin h-4 w-4 sm:h-5 sm:w-5 border-2 border-blue-400 rounded-full border-t-transparent" />
                 )}
                 <span className="text-blue-300 text-xs sm:text-sm font-medium flex-1 truncate">{currentStatus}</span>
-                {error && <span className="text-red-400 text-xs">{error}</span>}
+                {error && <span className="text-red-400 text-xs sm:text-sm truncate max-w-xs sm:max-w-none">{error}</span>}
               </div>
             </div>
           )}
 
           {/* Prompts and Controls */}
-          <div className="px-4 sm:px-6 py-3">
-            <div className="max-w-6xl mx-auto">
+          <div className="px-4 sm:px-6 md:px-8 py-3 sm:py-4">
+            <div className="w-full max-w-6xl mx-auto overflow-hidden">
               {/* Prompt chips row (scroll horizontally to the right) */}
               {!isLoading && (
-                <div className="flex gap-2 overflow-x-auto scrollbar-thin scrollbar-thumb-gray-600 scrollbar-track-gray-800 py-1">
+                <div className="flex gap-2 sm:gap-2.5 overflow-x-auto scrollbar-thin scrollbar-thumb-gray-600 scrollbar-track-gray-800 py-1 sm:py-2 -mx-2 sm:-mx-1 px-2 sm:px-1 max-w-full">
                   {suggestedQueries.map((suggestion, idx) => (
                     <button
                       key={idx}
                       onClick={() => setQuery(suggestion)}
-                      className="px-3 py-1.5 text-xs sm:text-sm bg-gradient-to-r from-gray-700 to-gray-600 hover:from-gray-600 hover:to-gray-500 rounded-full text-gray-100 transition-colors border border-gray-600/60 whitespace-nowrap shadow-sm"
+                      className="px-2 sm:px-3 md:px-4 py-1 sm:py-1.5 md:py-2 text-[10px] sm:text-xs md:text-sm bg-gradient-to-r from-gray-700 to-gray-600 hover:from-gray-600 hover:to-gray-500 rounded-full text-gray-100 transition-colors border border-gray-600/60 whitespace-nowrap shadow-sm min-h-[28px] sm:min-h-[32px] md:min-h-[36px] flex items-center"
                     >
                       {suggestion}
                     </button>
@@ -643,21 +658,21 @@ const AnalyticsPage: React.FC = () => {
               )}
 
               {/* Input row */}
-              <div className="mt-3 flex gap-2 sm:gap-3 items-center">
+              <div className="mt-3 sm:mt-4 flex flex-col sm:flex-row gap-2 sm:gap-3 items-stretch sm:items-center w-full">
               <input
                 type="text"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Ask about financial data..."
-                  className="flex-1 px-3 sm:px-4 py-3 bg-gray-700 border border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-gray-100 placeholder-gray-400"
+                placeholder="Ask about financial data on semi-conductor industry"
+                className="flex-1 px-3 sm:px-4 py-3 sm:py-3.5 text-xs sm:text-sm md:text-base bg-gray-700 border border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-gray-100 placeholder-gray-400 min-h-[48px] sm:min-h-[44px] w-full min-w-0"
                 onKeyPress={(e) => e.key === 'Enter' && handleAnalyticsQuery()}
                 disabled={isLoading}
               />
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1 sm:gap-2 shrink-0">
                 <button
                   onClick={isLoading ? stopAnalysis : handleAnalyticsQuery}
                   disabled={!query.trim() && !isLoading}
-                  className={`px-6 py-3 rounded-lg font-medium transition-colors ${
+                  className={`px-3 sm:px-4 md:px-6 py-3 sm:py-3.5 text-xs sm:text-sm md:text-base rounded-lg font-medium transition-colors min-h-[48px] sm:min-h-[44px] min-w-[70px] sm:min-w-[80px] md:min-w-[96px] ${
                     isLoading 
                       ? 'bg-red-600 hover:bg-red-700 text-white'
                       : 'bg-blue-600 hover:bg-blue-700 text-white disabled:bg-gray-600 disabled:cursor-not-allowed'
@@ -667,17 +682,17 @@ const AnalyticsPage: React.FC = () => {
                 </button>
                 <button
                   onClick={() => setShowProcessPanel(!showProcessPanel)}
-                  className="flex items-center gap-2 px-3 py-2 bg-gray-700 text-gray-200 rounded-lg hover:bg-gray-600 transition-colors border border-gray-600"
+                  className="flex items-center gap-1 sm:gap-2 px-2 sm:px-3 md:px-4 py-3 sm:py-3.5 text-xs sm:text-sm md:text-base bg-gray-700 text-gray-200 rounded-lg hover:bg-gray-600 transition-colors border border-gray-600 min-h-[48px] sm:min-h-[44px]"
                 >
                   {showProcessPanel ? (
                     <>
-                      <span className="w-4 h-4 inline-block"><ChevronRightIcon /></span>
-                      Hide Progress
+                      <span className="w-4 h-4 sm:w-5 sm:h-5 inline-block"><ChevronRightIcon /></span>
+                      <span className="hidden sm:inline">Hide Progress</span>
                     </>
                   ) : (
                     <>
-                      <span className="w-4 h-4 inline-block"><ChevronLeftIcon /></span>
-                      Show Progress
+                      <span className="w-4 h-4 sm:w-5 sm:h-5 inline-block"><ChevronLeftIcon /></span>
+                      <span className="hidden sm:inline">Show Progress</span>
                     </>
                   )}
                 </button>
@@ -690,19 +705,40 @@ const AnalyticsPage: React.FC = () => {
       {/* Process Visualization Panel */}
       <AnimatePresence>
         {showProcessPanel && (
-          <motion.div
-            initial={{ x: 320 }}
-            animate={{ x: 0 }}
-            exit={{ x: 320 }}
-            transition={{ type: "spring", damping: 25, stiffness: 200 }}
-            className="fixed right-0 top-0 h-full w-80 bg-gray-800 border-l border-gray-700 shadow-2xl z-50 flex flex-col"
-          >
-            <div className="p-4 border-b border-gray-700">
-              <h2 className="text-lg font-semibold text-white">LangGraph Process</h2>
-              <p className="text-sm text-gray-400">Real-time workflow visualization</p>
+          <>
+            {/* Mobile Backdrop */}
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.2 }}
+              className="fixed inset-0 bg-black/50 backdrop-blur-sm z-40 md:hidden"
+              onClick={() => setShowProcessPanel(false)}
+            />
+            {/* Panel */}
+            <motion.div
+              initial={{ x: '100%' }}
+              animate={{ x: 0 }}
+              exit={{ x: '100%' }}
+              transition={{ type: "spring", damping: 25, stiffness: 200 }}
+              className="fixed inset-y-0 right-0 w-full md:w-80 max-w-sm md:max-w-none bg-gray-800 md:border-l border-gray-700 shadow-2xl z-50 flex flex-col"
+            >
+            {/* Panel Header */}
+            <div className="p-4 sm:p-6 border-b border-gray-700 flex items-center justify-between">
+              <div>
+                <h2 className="text-lg sm:text-xl font-semibold text-white">LangGraph Process</h2>
+                <p className="text-sm text-gray-400">Real-time workflow visualization</p>
+              </div>
+              {/* Mobile Close Button */}
+              <button 
+                onClick={() => setShowProcessPanel(false)}
+                className="md:hidden p-2 hover:bg-gray-700 rounded-lg transition-colors"
+              >
+                <span className="w-5 h-5 text-gray-400 block">✕</span>
+              </button>
             </div>
             
-            <div className="flex-1 overflow-auto p-4">
+            <div className="flex-1 overflow-auto p-4 sm:p-6">
               <div className="relative">
                 {processSteps.length > 1 && (
                   <div className="absolute left-3 top-7 bottom-7 w-1 bg-gradient-to-b from-blue-500/60 via-purple-500/60 to-pink-500/60 rounded-full opacity-40" />
@@ -767,7 +803,8 @@ const AnalyticsPage: React.FC = () => {
                 </div>
               </div>
             </div>
-          </motion.div>
+            </motion.div>
+          </>
         )}
       </AnimatePresence>
       </div>

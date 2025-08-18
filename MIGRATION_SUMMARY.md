@@ -137,11 +137,49 @@ ELEVEN_LABS_VOICE_ID=your_voice_id
 ### Frontend
 No Gemini API key needed in frontend anymore - all handled by backend.
 
+## Authentication Architecture Migration (2025-01-18)
+
+### 1. Config Service Implementation
+- **Created `services/config.ts`** - Centralized environment variable access
+  - `getBackendUrl()` - Backend URL configuration
+  - `getSupabaseUrl()` - Supabase URL configuration  
+  - `getSupabaseAnonKey()` - Supabase anonymous key
+  - `getAppUrl()` - Application URL for OAuth redirects
+
+### 2. Analytics Authentication Fix
+- **Updated Analytics Components** - Fixed direct API calls without auth
+  - `AnalyticsPage.tsx` - Now uses `apiService.streamWithAuth()`
+  - `AnalyticsPageSplitScreen.tsx` - Now uses `apiService.streamWithAuth()`
+  - `AnalyticsPage_backup.tsx` - Now uses `apiService.streamWithAuth()`
+  - **Removed**: Direct `fetchEventSource` calls bypassing authentication
+  - **Added**: Proper JWT token handling and rate limiting
+
+### 3. Environment Variable Centralization
+- **Updated Service Layer** - All components now use config service
+  - `Chat.tsx` - Uses `configService.getBackendUrl()`
+  - `auth.ts` - Uses config service for all Supabase variables
+  - `apiService.ts` - Uses config service for backend URL
+  - **Result**: Single source of truth for environment variables
+
+### 4. Authentication Flow Improvements
+- **Rate Limiting**: Proper guest (5/day) vs authenticated (20/day) limits
+- **Error Handling**: Clear auth prompts when sign-in required
+- **JWT Validation**: Backend validates Supabase tokens properly
+- **Streaming Auth**: All SSE endpoints now include authentication headers
+
+### 5. Architecture Benefits
+- **No Breaking Changes**: Preserved existing Supabase frontend client
+- **Better Security**: All API calls authenticated properly
+- **Centralized Config**: Easier environment variable management
+- **Consistent Auth**: Unified authentication across all components
+
 ## Testing Status
 - ✅ Backend endpoints created and configured
 - ✅ Frontend service integration completed  
 - ✅ Audio player component with controls implemented
 - ✅ No-stream buffering configured
+- ✅ Authentication architecture fixed and centralized
+- ✅ Analytics components now properly authenticated
 - ⏳ End-to-end testing pending (requires API keys and server startup)
 
 ## Next Steps for Testing

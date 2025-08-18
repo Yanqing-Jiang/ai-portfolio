@@ -11,6 +11,7 @@ import { fetchEventSource } from '@microsoft/fetch-event-source';
 import { AuthModal } from './AuthModal';
 import { authService, type AuthState } from '../services/auth';
 import { apiService, handleApiError, type UsageStats } from '../services/apiService';
+import { configService } from '../services/config';
 
 interface ChatProps {
   project: Project;
@@ -32,7 +33,6 @@ const GOGGINS_IMG_URL = 'https://yanqinghot.blob.core.windows.net/public-access/
 declare global {
   interface ImportMeta {
     env: {
-      VITE_BACKEND_URL?: string;
       [key: string]: any;
     };
   }
@@ -61,7 +61,7 @@ const Chat: React.FC<ChatProps> = ({ project }) => {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const isGogginsProject = projectId === 'goggins-gpt';
-  const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
+  const backendUrl = configService.getBackendUrl();
 
   // Note: TTS is now handled by the AudioPlayer component
 

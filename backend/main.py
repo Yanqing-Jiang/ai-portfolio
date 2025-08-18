@@ -731,7 +731,7 @@ async def get_usage_stats(request: Request):
 # -------------------- Analytics Endpoints --------------------
 
 @app.get("/api/analytics/stream")
-async def analytics_stream_endpoint(query: str, request: Request):
+async def analytics_stream_endpoint(query: str, request: Request, _: None = Depends(smart_rate_limit)):
     """Stream analytics results with LangGraph workflow visualization"""
     
     async def generate_analytics_stream():

@@ -1,7 +1,8 @@
 import { createClient } from '@supabase/supabase-js'
+import { configService } from './config'
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
+const supabaseUrl = configService.getSupabaseUrl()
+const supabaseAnonKey = configService.getSupabaseAnonKey()
 
 if (!supabaseUrl || !supabaseAnonKey) {
   throw new Error('Missing Supabase environment variables. Please set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in your .env file.')
@@ -189,7 +190,7 @@ class AuthService {
 
   private getRedirectUrl(): string {
     // Get the correct URL based on environment
-    let url = import.meta.env.VITE_APP_URL ?? // Production URL from env
+    let url = configService.getAppUrl() ?? // Production URL from env
               window.location.origin ?? // Current origin fallback
               'http://localhost:3000' // Development fallback
     

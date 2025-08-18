@@ -1,7 +1,5 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
 ## Development Commands
 
 ### Frontend Development
@@ -11,12 +9,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Install dependencies**: `npm install`
 
 ### Backend Development
-- **Install Python dependencies**: `cd backend && pip install -r requirements.txt`
-- **Start backend server**: `cd backend && uvicorn main:app --reload` (runs on localhost:8000)
-- **Alternative start**: `cd backend && python main.py`
+- **Install Python dependencies**: 
+  1. `cd backend`
+  2. `pip install -r requirements.txt`
+- **Start backend server**: 
+  1. `cd backend`
+  2. `uvicorn main:app --reload` (runs on localhost:8000)
+- **Alternative start**: 
+  1. `cd backend`
+  2. `python main.py`
 
 ### Full Stack Development
-1. Start backend: `cd backend && uvicorn main:app --reload`
+1. Start backend: 
+   - `cd backend`
+   - `uvicorn main:app --reload`
 2. Start frontend: `npm run dev`
 3. Access application at http://localhost:5173
 
@@ -48,10 +54,11 @@ This is a full-stack AI-powered portfolio application with a React frontend and 
 ## Code Architecture
 
 ### Frontend-Backend Communication
-- **Authentication**: Supabase JWT tokens in Authorization headers
+- **Authentication**: Supabase JWT tokens in Authorization headers via `apiService.streamWithAuth()`
 - **Rate Limiting**: Guest users (5/day), authenticated users (20/day)
-- **Streaming**: Server-Sent Events (SSE) for real-time AI responses
+- **Streaming**: Server-Sent Events (SSE) for real-time AI responses with proper auth
 - **Error Handling**: Unified error responses with auth prompts
+- **Config Service**: Centralized environment variable management via `services/config.ts`
 
 ### AI Integration
 - **Research Agent**: Uses LangChain + OpenAI for web research
@@ -98,12 +105,21 @@ ELEVEN_LABS_VOICE_ID=your_voice_id
 ### Component Structure
 - `LandingPage.tsx`: Portfolio homepage with project showcase
 - `ProjectView.tsx`: Individual project detail pages
-- `Chat.tsx`: AI chat interface with multiple agents
+- `Chat.tsx`: AI chat interface with multiple agents (uses config service)
 - `Sidebar.tsx`: Navigation and project browser
-- `AnalyticsPage.tsx`: SQL analytics and data visualization
+- `AnalyticsPage.tsx`: SQL analytics and data visualization (uses authenticated streaming)
+
+### Service Layer
+- `services/config.ts`: Centralized environment variable access
+- `services/auth.ts`: Supabase authentication (uses config service)
+- `services/apiService.ts`: HTTP client with authentication (uses config service)
+- `services/backendGeminiService.ts`: Backend Gemini API integration
 
 ### Recent Migration Notes
-- Gemini functionality moved from frontend to backend (see MIGRATION_SUMMARY.md)
+- **Gemini Migration**: Moved from frontend to backend (see MIGRATION_SUMMARY.md)
+- **Authentication Fix**: All API calls now properly authenticated via `apiService.streamWithAuth()`
+- **Config Service**: Environment variables centralized in `services/config.ts`
+- **Analytics Security**: Fixed direct API calls that bypassed authentication
 - Uses latest Gemini 2.5 Flash model via Python SDK
 - Enhanced audio player with full controls for TTS
 - Removed unused icon components to reduce bundle size

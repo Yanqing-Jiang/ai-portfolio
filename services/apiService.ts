@@ -1,4 +1,5 @@
 import { authService } from './auth'
+import { configService } from './config'
 
 export interface ApiResponse<T = any> {
   success: boolean
@@ -20,8 +21,8 @@ class ApiService {
   private baseUrl: string
 
   constructor(baseUrl?: string) {
-    // Use environment variable first, then provided baseUrl, then fallback
-    this.baseUrl = import.meta.env.VITE_BACKEND_URL || baseUrl || 'http://localhost:8000'
+    // Use config service first, then provided baseUrl, then fallback
+    this.baseUrl = configService.getBackendUrl() || baseUrl || 'http://localhost:8000'
   }
 
   private async makeRequest<T>(
