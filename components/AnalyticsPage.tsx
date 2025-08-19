@@ -499,7 +499,7 @@ Result:
         {/* Summary section removed per request */}
 
         {/* Main Content Area */}
-        <div className="flex-1 overflow-auto p-4 sm:p-6 lg:p-8 xl:p-12 pb-6 bg-gray-900">
+        <div className="flex-1 overflow-auto p-4 sm:p-6 lg:p-8 xl:p-12 pb-32 md:pb-6 bg-gray-900">
           <div className="w-full max-w-5xl mx-auto space-y-4 sm:space-y-6 overflow-hidden">
             
             {/* Chart Display with ECharts (guarded by error boundary) */}
@@ -656,8 +656,8 @@ Result:
           </div>
         </div>
 
-        {/* Bottom Chat/Input Bar (sticky within content area to avoid covering sidebar/menu) */}
-        <div className="sticky bottom-0 bg-gray-800 border-t border-gray-700">
+        {/* Bottom Chat/Input Bar (fixed position on mobile, sticky on desktop) */}
+        <div className="fixed md:sticky bottom-0 left-0 right-0 md:left-auto md:right-auto bg-gray-800/95 backdrop-blur-sm border-t border-gray-700 z-30">
           {/* Status + Error */}
           {(isLoading || currentStatus !== 'Ready to analyze financial data...' || error) && (
             <div className="px-4 sm:px-6 md:px-8 py-2 sm:py-3 border-b border-gray-700">
