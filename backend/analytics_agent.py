@@ -1066,16 +1066,39 @@ Sample Data Points:
                 }
             }
             
-            print("[WORKFLOW] Starting ECharts agent (concurrent with analysis)...")
+            # Generate chart FIRST before starting analysis stream
+            print("[WORKFLOW] Starting ECharts agent...")
+            yield {
+                "event": "status",
+                "data": {
+                    "step": "chart_generation",
+                    "message": "📊 Generating interactive chart...",
+                    "thinking": "Creating ECharts visualization"
+                }
+            }
+            
             print(f"[WORKFLOW] Passing data to ECharts agent: {len(state.get('data', []))} rows")
-
-            # Prepare analysis prompt and start streaming task immediately
+            chart_state = await self._echarts_agent(state)
+            print(f"[WORKFLOW] ECharts agent completed with step: {chart_state.get('step')}")
+            
+            if chart_state.get("errors"):
+                print(f"[WORKFLOW ERROR] ECharts agent errors: {chart_state['errors']}")
+                yield {"event": "errors", "data": {"errors": chart_state["errors"]}}
+                return
+            
+            # Send chart immediately after generation
+            if chart_state.get("chart_spec"):
+                print(f"[WORKFLOW] Sending chart spec with keys: {list(chart_state['chart_spec'].keys())}")
+                yield {"event": "chart_generated", "data": {"chart_spec": chart_state["chart_spec"]}}
+                state.update(chart_state)  # Update state with chart info
+            
+            # NOW start analysis streaming
             if not state.get("data"):
                 print("[WORKFLOW ERROR] No data available for analysis")
                 yield {"event": "errors", "data": {"errors": ["No data available for analysis"]}}
                 return
 
-            print(f"[WORKFLOW] Building analysis prompt directly from SQL and data rows: {len(state['data'])} rows")
+            print(f"[WORKFLOW] Building analysis prompt from {len(state['data'])} data rows")
             try:
                 data_json = json.dumps(state["data"], default=str)
             except Exception:
@@ -1111,63 +1134,15 @@ Guidelines:
                 }
             }
 
-            # Queue to collect streaming chunks
-            analysis_queue: asyncio.Queue = asyncio.Queue()
-            analysis_done = False
-
-            async def _run_analysis_stream():
-                full_text = ""
-                async for chunk in self.streaming_llm.astream([SystemMessage(content=analysis_prompt)]):
-                    if hasattr(chunk, 'content') and chunk.content:
-                        full_text += chunk.content
-                        await analysis_queue.put({"type": "chunk", "text": chunk.content})
-                await analysis_queue.put({"type": "final", "text": full_text})
-
-            analysis_task = asyncio.create_task(_run_analysis_stream())
-
-            # Start chart generation concurrently
-            echarts_task = asyncio.create_task(self._echarts_agent(state))
-
-            # Interleave: drain analysis chunks while chart builds
-            while not echarts_task.done():
-                try:
-                    item = await asyncio.wait_for(analysis_queue.get(), timeout=0.05)
-                    if item["type"] == "chunk":
-                        yield {"event": "analysis_streaming", "data": {"partial_analysis": item["text"]}}
-                    elif item["type"] == "final":
-                        # Hold final until after chart is sent
-                        analysis_done = True
-                        final_text = item["text"]
-                        # Store in variable to send later
-                        state["_final_analysis_text"] = final_text
-                        break
-                except asyncio.TimeoutError:
-                    pass
-
-            # Finish chart and emit
-            state = await echarts_task
-            print(f"[WORKFLOW] ECharts agent completed with step: {state.get('step')}")
-            if state.get("errors"):
-                print(f"[WORKFLOW ERROR] ECharts agent errors: {state['errors']}")
-                yield {"event": "errors", "data": {"errors": state["errors"]}}
-                return
-            yield {"event": "chart_generated", "data": {"chart_spec": state["chart_spec"]}}
-
-            # Continue draining analysis stream until complete
-            while True:
-                try:
-                    item = await asyncio.wait_for(analysis_queue.get(), timeout=0.2)
-                    if item["type"] == "chunk":
-                        yield {"event": "analysis_streaming", "data": {"partial_analysis": item["text"]}}
-                    elif item["type"] == "final":
-                        yield {"event": "analysis_complete", "data": {"analysis": item["text"]}}
-                        break
-                except asyncio.TimeoutError:
-                    if analysis_task.done():
-                        # If task finished but no final captured (edge), break
-                        if analysis_done and state.get("_final_analysis_text"):
-                            yield {"event": "analysis_complete", "data": {"analysis": state["_final_analysis_text"]}}
-                        break
+            # Stream analysis directly without concurrency
+            full_analysis = ""
+            async for chunk in self.streaming_llm.astream([SystemMessage(content=analysis_prompt)]):
+                if hasattr(chunk, 'content') and chunk.content:
+                    full_analysis += chunk.content
+                    yield {"event": "analysis_streaming", "data": {"partial_analysis": chunk.content}}
+            
+            # Send final analysis
+            yield {"event": "analysis_complete", "data": {"analysis": full_analysis}}
             
             print("[WORKFLOW] Workflow complete!")
             # Workflow complete

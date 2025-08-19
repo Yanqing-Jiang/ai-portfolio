@@ -61,6 +61,7 @@ const AnalyticsPage: React.FC = () => {
   const [streamingText, setStreamingText] = useState(''); // kept for UI; now updated without duplication
   const [error, setError] = useState('');
   const [useAltChart, setUseAltChart] = useState(false);
+  const [chartRetryCount, setChartRetryCount] = useState(0);
   
   const abortControllerRef = useRef<AbortController | null>(null);
 
@@ -83,7 +84,9 @@ Result:
   const isValidChartSpec = (spec: any) => {
     try {
       if (!spec || typeof spec !== 'object') return false;
-      if (!Array.isArray(spec.series)) return false;
+      // More permissive validation - allow both series array and other chart types
+      if (spec.series && !Array.isArray(spec.series)) return false;
+      // Also accept chart specs without series (like pie charts, etc.)
       return true;
     } catch {
       return false;
@@ -227,6 +230,7 @@ Result:
     // Clear previous steps; show in real-time as they start
     setProcessSteps([]);
     setUseAltChart(false);
+    setChartRetryCount(0);
     setDataSample(null);
 
     // Create new AbortController for this request
@@ -305,8 +309,19 @@ Result:
                     console.log('[FRONTEND DEBUG] Received chart spec keys:', Object.keys(eventData.chart_spec || {}));
                   } catch (e) {
                     console.error('Chart spec parse error:', e);
-                    setUseAltChart(true);
-                    updateStepStatus('chart', 'error');
+                    // Add retry logic instead of immediate fallback
+                    if (chartRetryCount < 2) {
+                      console.log(`[FRONTEND DEBUG] Chart retry ${chartRetryCount + 1}/2`);
+                      setChartRetryCount(prev => prev + 1);
+                      // Retry after a short delay
+                      setTimeout(() => {
+                        setChartSpec(eventData.chart_spec);
+                        setUseAltChart(false);
+                      }, 100);
+                    } else {
+                      setUseAltChart(true);
+                      updateStepStatus('chart', 'error');
+                    }
                   }
                 }
                 break;
@@ -448,7 +463,7 @@ Result:
       <div className={`flex-1 flex flex-col transition-all duration-300 overflow-hidden ${showProcessPanel ? 'md:mr-80' : ''}`}>
         {/* Header */}
         <div className="bg-gray-800 border-b border-gray-700">
-          <div className="w-full max-w-6xl mx-auto flex flex-col md:flex-row items-center gap-4 sm:gap-6 p-4 sm:p-6 md:p-8 overflow-hidden">
+          <div className="w-full max-w-5xl mx-auto flex flex-col md:flex-row items-center gap-4 sm:gap-6 p-4 sm:p-6 lg:p-8 xl:p-12 overflow-hidden">
             {/* Left: Text */}
             <div className="flex-1 text-center md:text-left">
               <h1 className="text-2xl sm:text-3xl md:text-4xl font-bold text-white">Next Gen Analytics (SQL)</h1>
@@ -470,8 +485,8 @@ Result:
                 ))}
               </div>
             </div>
-            {/* Right: Image */}
-            <div className="w-full md:w-1/3 shrink-0 min-w-0">
+            {/* Right: Image - Hidden on mobile */}
+            <div className="hidden md:block w-full md:w-1/3 shrink-0 min-w-0">
               <img
                 src="https://yanqinghot.blob.core.windows.net/public-access/next-gen-sql.png"
                 alt="Next Gen Analytics (SQL)"
@@ -484,8 +499,8 @@ Result:
         {/* Summary section removed per request */}
 
         {/* Main Content Area */}
-        <div className="flex-1 overflow-auto p-4 sm:p-6 pb-6 bg-gray-900">
-          <div className="w-full max-w-6xl mx-auto space-y-4 sm:space-y-6 overflow-hidden">
+        <div className="flex-1 overflow-auto p-4 sm:p-6 lg:p-8 xl:p-12 pb-6 bg-gray-900">
+          <div className="w-full max-w-5xl mx-auto space-y-4 sm:space-y-6 overflow-hidden">
             
             {/* Chart Display with ECharts (guarded by error boundary) */}
             {chartSpec && !useAltChart && (
@@ -562,12 +577,29 @@ Result:
                       Download CSV
                     </button>
                   </div>
-                  <ChartErrorBoundary onError={() => setUseAltChart(true)}>
+                  <ChartErrorBoundary key={`chart-${chartRetryCount}-${JSON.stringify(chartSpec)?.substring(0,50)}`} onError={(error) => {
+                    console.log('[FRONTEND DEBUG] Chart error boundary triggered:', error);
+                    // Only switch to alt chart after multiple failures
+                    if (chartRetryCount >= 1) {
+                      setUseAltChart(true);
+                    } else {
+                      // First error - increment retry count and try again
+                      setChartRetryCount(prev => prev + 1);
+                      setTimeout(() => {
+                        // Force re-render by updating chartSpec
+                        setChartSpec(current => ({ ...current }));
+                      }, 200);
+                    }
+                  }}>
                     <EChartsReact 
                       option={withLightTheme(chartSpec)} 
                       style={{ height: 'calc(100% - 36px)', width: '100%' }} 
-                      opts={{ renderer: 'canvas' }} 
-                      onChartReady={(instance) => { (window as any)._echarts_instance_ = instance; }}
+                      opts={{ renderer: 'canvas', devicePixelRatio: window.devicePixelRatio }} 
+                      onChartReady={(instance) => { 
+                        (window as any)._echarts_instance_ = instance;
+                        // Small delay to ensure proper initialization
+                        setTimeout(() => instance.resize(), 100);
+                      }}
                     />
                   </ChartErrorBoundary>
                 </div>
@@ -629,7 +661,7 @@ Result:
           {/* Status + Error */}
           {(isLoading || currentStatus !== 'Ready to analyze financial data...' || error) && (
             <div className="px-4 sm:px-6 md:px-8 py-2 sm:py-3 border-b border-gray-700">
-              <div className="w-full max-w-6xl mx-auto flex items-center gap-3 sm:gap-4 overflow-hidden">
+              <div className="w-full max-w-5xl mx-auto flex items-center gap-3 sm:gap-4 overflow-hidden">
                 {isLoading && (
                   <div className="animate-spin h-4 w-4 sm:h-5 sm:w-5 border-2 border-blue-400 rounded-full border-t-transparent" />
                 )}
@@ -640,8 +672,8 @@ Result:
           )}
 
           {/* Prompts and Controls */}
-          <div className="px-4 sm:px-6 md:px-8 py-3 sm:py-4">
-            <div className="w-full max-w-6xl mx-auto overflow-hidden">
+          <div className="px-4 sm:px-6 lg:px-16 xl:px-24 py-3 sm:py-4">
+            <div className="w-full max-w-5xl mx-auto overflow-hidden">
               {/* Prompt chips row (scroll horizontally to the right) */}
               {!isLoading && (
                 <div className="flex gap-2 sm:gap-2.5 overflow-x-auto scrollbar-thin scrollbar-thumb-gray-600 scrollbar-track-gray-800 py-1 sm:py-2 -mx-2 sm:-mx-1 px-2 sm:px-1 max-w-full">
@@ -658,46 +690,44 @@ Result:
               )}
 
               {/* Input row */}
-              <div className="mt-3 sm:mt-4 flex flex-col sm:flex-row gap-2 sm:gap-3 items-stretch sm:items-center w-full">
-              <input
-                type="text"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="Ask about financial data on semi-conductor industry"
-                className="flex-1 px-3 sm:px-4 py-3 sm:py-3.5 text-xs sm:text-sm md:text-base bg-gray-700 border border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-gray-100 placeholder-gray-400 min-h-[48px] sm:min-h-[44px] w-full min-w-0"
-                onKeyPress={(e) => e.key === 'Enter' && handleAnalyticsQuery()}
-                disabled={isLoading}
-              />
-              <div className="flex items-center gap-1 sm:gap-2 shrink-0">
+              <div className="mt-3 sm:mt-4 flex items-center gap-2 sm:gap-3 w-full">
+                <input
+                  type="text"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="Ask about financial data on NVDA, AMD, AVGO, INTC, MU, NVDA, QCOM, TXN"
+                  className="flex-1 px-4 py-3.5 text-sm md:text-base bg-gray-700/80 backdrop-blur-sm border border-gray-600/50 rounded-xl focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500/50 text-gray-100 placeholder-gray-400 min-h-[48px] shadow-lg transition-all duration-200 min-w-0"
+                  onKeyPress={(e) => e.key === 'Enter' && handleAnalyticsQuery()}
+                  disabled={isLoading}
+                />
                 <button
                   onClick={isLoading ? stopAnalysis : handleAnalyticsQuery}
                   disabled={!query.trim() && !isLoading}
-                  className={`px-3 sm:px-4 md:px-6 py-3 sm:py-3.5 text-xs sm:text-sm md:text-base rounded-lg font-medium transition-colors min-h-[48px] sm:min-h-[44px] min-w-[70px] sm:min-w-[80px] md:min-w-[96px] ${
+                  className={`px-4 sm:px-6 py-3.5 text-sm md:text-base rounded-xl font-medium transition-all duration-200 min-h-[48px] shrink-0 shadow-lg ${
                     isLoading 
-                      ? 'bg-red-600 hover:bg-red-700 text-white'
-                      : 'bg-blue-600 hover:bg-blue-700 text-white disabled:bg-gray-600 disabled:cursor-not-allowed'
+                      ? 'bg-red-600/90 hover:bg-red-600 text-white'
+                      : 'bg-blue-600/90 hover:bg-blue-600 text-white disabled:bg-gray-600/50 disabled:cursor-not-allowed'
                   }`}
                 >
                   {isLoading ? 'Stop' : 'Analyze'}
                 </button>
                 <button
                   onClick={() => setShowProcessPanel(!showProcessPanel)}
-                  className="flex items-center gap-1 sm:gap-2 px-2 sm:px-3 md:px-4 py-3 sm:py-3.5 text-xs sm:text-sm md:text-base bg-gray-700 text-gray-200 rounded-lg hover:bg-gray-600 transition-colors border border-gray-600 min-h-[48px] sm:min-h-[44px]"
+                  className="flex items-center justify-center px-3 py-3.5 text-sm bg-gray-700/80 text-gray-200 rounded-xl hover:bg-gray-600/80 transition-all duration-200 border border-gray-600/50 min-h-[48px] shrink-0 shadow-lg min-w-[48px] sm:min-w-[120px]"
                 >
                   {showProcessPanel ? (
                     <>
-                      <span className="w-4 h-4 sm:w-5 sm:h-5 inline-block"><ChevronRightIcon /></span>
-                      <span className="hidden sm:inline">Hide Progress</span>
+                      <span className="w-5 h-5 inline-block"><ChevronRightIcon /></span>
+                      <span className="hidden sm:inline ml-2">Hide Progress</span>
                     </>
                   ) : (
                     <>
-                      <span className="w-4 h-4 sm:w-5 sm:h-5 inline-block"><ChevronLeftIcon /></span>
-                      <span className="hidden sm:inline">Show Progress</span>
+                      <span className="w-5 h-5 inline-block"><ChevronLeftIcon /></span>
+                      <span className="hidden sm:inline ml-2">Show Progress</span>
                     </>
                   )}
                 </button>
               </div>
-            </div>
             </div>
         </div>
       </div>
