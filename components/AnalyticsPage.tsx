@@ -463,22 +463,22 @@ Result:
       <div className={`flex-1 flex flex-col transition-all duration-300 overflow-hidden ${showProcessPanel ? 'md:mr-80' : ''}`}>
         {/* Header */}
         <div className="bg-gray-800 border-b border-gray-700">
-          <div className="w-full max-w-5xl mx-auto flex flex-col md:flex-row items-center gap-4 sm:gap-6 p-4 sm:p-6 lg:p-8 xl:p-12 overflow-hidden">
+          <div className="w-full max-w-5xl mx-auto flex flex-col md:flex-row items-center gap-3 sm:gap-4 md:gap-6 p-3 sm:p-4 md:p-6 lg:p-8 overflow-hidden">
             {/* Left: Text */}
             <div className="flex-1 text-center md:text-left">
-              <h1 className="text-2xl sm:text-3xl md:text-4xl font-bold text-white">Next Gen Analytics (SQL)</h1>
-              {/* Feature bullets */}
-              <ul className="mt-3 sm:mt-4 text-gray-300 text-sm sm:text-base space-y-1 sm:space-y-1.5">
+              <h1 className="text-xl sm:text-2xl md:text-3xl lg:text-4xl font-bold text-white">Next Gen Analytics (SQL)</h1>
+              {/* Feature bullets - More compact on mobile */}
+              <ul className="mt-2 sm:mt-3 md:mt-4 text-gray-300 text-xs sm:text-sm md:text-base space-y-0.5 sm:space-y-1 md:space-y-1.5">
                 <li>• Tired of finding what you need on a dashboard? try ask questions directly</li>
                 <li>• Automated chart generation with streaming data analysis</li>
-                <li>• Semi-conductor industry tickers for AMD, AVGO, INTC, MU, NVDA, QCOM, TXN</li>
+                <li className="hidden sm:block">• Semi-conductor industry tickers for AMD, AVGO, INTC, MU, NVDA, QCOM, TXN</li>
               </ul>
-              {/* Tech tags/pills */}
-              <div className="mt-3 sm:mt-4 flex flex-wrap gap-2 sm:gap-2.5 justify-center md:justify-start">
+              {/* Tech tags/pills - More compact on mobile */}
+              <div className="mt-2 sm:mt-3 md:mt-4 flex flex-wrap gap-1.5 sm:gap-2 md:gap-2.5 justify-center md:justify-start">
                 {['Agentic Workflow','SQL Agent','Charting Agent','Context Engineering'].map((tag) => (
                   <span
                     key={tag}
-                    className="px-3 py-1 sm:py-1.5 rounded-full bg-gray-700 text-gray-200 text-xs sm:text-sm border border-gray-600 shadow-inner"
+                    className="px-2 sm:px-3 py-0.5 sm:py-1 md:py-1.5 rounded-full bg-gray-700 text-gray-200 text-[10px] sm:text-xs md:text-sm border border-gray-600 shadow-inner"
                   >
                     {tag}
                   </span>
@@ -499,7 +499,7 @@ Result:
         {/* Summary section removed per request */}
 
         {/* Main Content Area */}
-        <div className="flex-1 overflow-auto p-4 sm:p-6 lg:p-8 xl:p-12 pb-32 md:pb-6 bg-gray-900">
+        <div className="flex-1 overflow-auto p-4 sm:p-6 lg:p-8 pb-32 md:pb-6 bg-gray-900">
           <div className="w-full max-w-5xl mx-auto space-y-4 sm:space-y-6 overflow-hidden">
             
             {/* Chart Display with ECharts (guarded by error boundary) */}
@@ -672,7 +672,7 @@ Result:
           )}
 
           {/* Prompts and Controls */}
-          <div className="px-4 sm:px-6 lg:px-16 xl:px-24 py-3 sm:py-4">
+          <div className="px-4 sm:px-6 lg:px-8 py-3 sm:py-4">
             <div className="w-full max-w-5xl mx-auto overflow-hidden">
               {/* Prompt chips row (scroll horizontally to the right) */}
               {!isLoading && (
