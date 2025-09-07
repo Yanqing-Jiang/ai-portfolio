@@ -1,0 +1,182 @@
+# Chart Configuration System
+themes:
+  light:
+    name: "Light Theme"
+    description: "Clean light theme for professional presentations"
+    
+    colors:
+      background: "#ffffff"
+      text_primary: "#333333"
+      text_secondary: "#555555"
+      border: "#dddddd"
+      grid: "#eeeeee"
+      
+    chart_colors:
+      primary_palette: ["#5470C6", "#91CC75", "#FAC858", "#EE6666", "#73C0DE"]
+      secondary_palette: ["#3BA272", "#FC8452", "#9A60B4", "#EA7CCC", "#91CC75"]
+      company_specific:
+        NVDA: "#76B900"    # Nvidia green
+        AMD: "#ED1C24"     # AMD red
+        INTC: "#0071C5"    # Intel blue
+        MU: "#0033A0"      # Micron blue
+        QCOM: "#3253DC"    # Qualcomm blue
+        AVGO: "#FF6600"    # Broadcom orange
+        TXN: "#CC0000"     # TI red
+        
+  dark:
+    name: "Dark Theme"
+    description: "Modern dark theme for presentations"
+    
+    colors:
+      background: "#1a1a1a"
+      text_primary: "#ffffff"
+      text_secondary: "#cccccc"
+      border: "#444444"
+      grid: "#333333"
+
+# Chart type configurations
+chart_types:
+  time_series_line:
+    type: "line"
+    name: "Time Series Line Chart"
+    description: "Best for showing trends over time"
+    
+    default_options:
+      smooth: true
+      symbol: "circle"
+      symbolSize: 6
+      connectNulls: false
+      lineStyle:
+        width: 2
+      areaStyle:
+        opacity: 0.06
+        
+  time_series_bar:
+    type: "bar"
+    name: "Time Series Bar Chart"
+    description: "Good for discrete time periods and comparisons"
+    
+    default_options:
+      barWidth: "60%"
+      label:
+        show: true
+        position: "top"
+        
+  comparison_bar:
+    type: "bar"
+    name: "Comparison Bar Chart"
+    description: "Perfect for comparing values across companies or metrics"
+    
+    default_options:
+      barGap: "20%"
+      barCategoryGap: "40%"
+      label:
+        show: true
+        position: "top"
+
+# Layout configurations
+layouts:
+  default:
+    title:
+      left: "center"
+      top: "5%"
+      textStyle:
+        fontSize: 18
+        fontWeight: "bold"
+        fontFamily: "Inter, ui-sans-serif, system-ui"
+        
+    legend:
+      top: "10%"
+      left: "center"
+      orient: "horizontal"
+      itemGap: 20
+      
+    grid:
+      left: "3%"
+      right: "4%"
+      bottom: "3%"
+      top: "20%"
+      containLabel: true
+      
+    tooltip:
+      trigger: "axis"
+      axisPointer:
+        type: "cross"
+
+# Formatting rules based on data types
+formatting:
+  currency:
+    format_millions_usd:
+      axis_formatter: |
+        function(value) {
+          if (value >= 1000) return '$' + (value/1000).toFixed(1) + 'B';
+          if (value >= 1) return '$' + value.toFixed(1) + 'M';
+          if (value >= 0.1) return '$' + (value * 1000).toFixed(0) + 'K';
+          return '$' + (value * 1000000).toFixed(0);
+        }
+      tooltip_formatter: |
+        function(value) {
+          if (value >= 1000) return '$' + (value/1000).toFixed(2) + 'B';
+          return '$' + value.toFixed(0) + 'M';
+        }
+        
+  percentage:
+    format_percent:
+      axis_formatter: |
+        function(value) {
+          return (value * 100).toFixed(0) + '%';
+        }
+      tooltip_formatter: |
+        function(value) {
+          return (value * 100).toFixed(1) + '%';
+        }
+
+# Chart title generation rules
+title_patterns:
+  market_share:
+    single_company: "{company_name} Market Share - Last {years} Years"
+    all_companies: "Semiconductor Market Share - Last {years} Years"
+  margins:
+    vs_peers: "{company_name} Margins vs Peers - Last {years} Years"
+    single_company: "{company_name} Profit Margins - {period} Analysis"
+  margin_growth:
+    vs_peers: "{company_name} Margin Expansion vs Peers - Last {years} Years"
+  growth:
+    revenue_growth: "{company_name} Revenue Growth - {period} Analysis"
+    multi_company: "Revenue Growth Comparison - {companies}"
+  rnd:
+    intensity: "{company_name} R&D Intensity vs Peers - Last {years} Years"
+    spending: "R&D Spending Analysis - {companies}"
+  generic:
+    time_series: "{metric} - Time Series Analysis"
+    comparison: "{metric} - Company Comparison"
+
+# Animation settings
+animations:
+  default:
+    animation: true
+    animationDuration: 1000
+    animationEasing: "cubicOut"
+    
+  fast:
+    animation: true
+    animationDuration: 500
+    animationEasing: "linear"
+
+# Interactive features
+interactivity:
+  brush:
+    enabled: true
+    
+  zoom:
+    enabled: true
+    zoomOnMouseWheel: true
+    moveOnMouseMove: true
+    
+  data_view:
+    enabled: true
+    
+  download:
+    enabled: true
+    formats: ["png", "svg"]
+
