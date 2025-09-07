@@ -1,0 +1,457 @@
+# SQL Query Templates Configuration
+query_patterns:
+  market_share_single:
+    name: "Market Share Analysis - Single Company"
+    description: "Calculate market share for one company vs total market"
+    keywords: 
+      - "market share"
+      - "market position"
+      - "share of market"
+    
+    sql_template: |
+      WITH market_revenue AS (
+        SELECT 
+          {select_clause},
+          SUM(value) AS total_market_revenue
+        FROM comp_financials
+        WHERE 
+          metric = 'Revenue'
+          AND ticker IN ('AMD','AVGO','INTC','MU','NVDA','QCOM','TXN')
+          AND calendar_quarter_num IS NOT NULL
+          AND calendar_year >= EXTRACT(YEAR FROM CURRENT_DATE) - {years_back}
+          AND value IS NOT NULL
+        GROUP BY {group_by_clause}
+      ),
+      company_revenue AS (
+        SELECT 
+          ticker,
+          {select_clause},
+          SUM(value) AS company_revenue
+        FROM comp_financials
+        WHERE 
+          metric = 'Revenue'
+          AND ticker = '{target_ticker}'
+          AND calendar_quarter_num IS NOT NULL
+          AND calendar_year >= EXTRACT(YEAR FROM CURRENT_DATE) - {years_back}
+          AND value IS NOT NULL
+        GROUP BY ticker, {group_by_clause}
+      )
+      SELECT 
+        cr.ticker,
+        cr.{select_clause},
+        cr.company_revenue,
+        mr.total_market_revenue,
+        (cr.company_revenue / mr.total_market_revenue) * 100.0 AS market_share_percent
+      FROM company_revenue cr
+      JOIN market_revenue mr ON {join_clause}
+      ORDER BY {order_by_clause}
+      LIMIT 500;
+      
+  market_share_all:
+    name: "Market Share Analysis - All Companies"
+    description: "Calculate market share for all companies"
+    keywords: 
+      - "all market share"
+      - "market share comparison"
+      - "all companies market share"
+    
+    sql_template: |
+      WITH market_revenue AS (
+        SELECT 
+          {select_clause},
+          SUM(value) AS total_market_revenue
+        FROM comp_financials
+        WHERE 
+          metric = 'Revenue'
+          AND ticker IN ('AMD','AVGO','INTC','MU','NVDA','QCOM','TXN')
+          AND calendar_quarter_num IS NOT NULL
+          AND calendar_year >= EXTRACT(YEAR FROM CURRENT_DATE) - {years_back}
+          AND value IS NOT NULL
+        GROUP BY {group_by_clause}
+      ),
+      company_revenues AS (
+        SELECT 
+          ticker,
+          {select_clause},
+          SUM(value) AS company_revenue
+        FROM comp_financials
+        WHERE 
+          metric = 'Revenue'
+          AND ticker IN ('AMD','AVGO','INTC','MU','NVDA','QCOM','TXN')
+          AND calendar_quarter_num IS NOT NULL
+          AND calendar_year >= EXTRACT(YEAR FROM CURRENT_DATE) - {years_back}
+          AND value IS NOT NULL
+        GROUP BY ticker, {group_by_clause}
+      )
+      SELECT 
+        cr.ticker,
+        cr.{select_clause},
+        cr.company_revenue,
+        mr.total_market_revenue,
+        (cr.company_revenue / mr.total_market_revenue) * 100.0 AS market_share_percent
+      FROM company_revenues cr
+      JOIN market_revenue mr ON {join_clause}
+      ORDER BY {order_by_clause}, market_share_percent DESC
+      LIMIT 500;
+
+  margins_vs_peers:
+    name: "Profit Margins vs Industry Average"
+    description: "Compare profit margins against industry average"
+    keywords: 
+      - "margin"
+      - "profit margin"
+      - "peer comparison"
+      - "vs peers"
+      - "industry average"
+      - "average"
+      - "mean"
+      - "compare to average"
+      - "vs average"
+      
+    sql_template: |
+      WITH quarterly_financials AS (
+        SELECT 
+          ticker,
+          calendar_year,
+          calendar_quarter_num,
+          metric,
+          value
+        FROM comp_financials
+        WHERE 
+          calendar_quarter_num IS NOT NULL
+          AND ticker IN ('AMD','AVGO','INTC','MU','NVDA','QCOM','TXN')
+          AND metric IN ('Revenue', 'Gross Profit', 'Operating Income', 'Net Income')
+          AND calendar_year >= EXTRACT(YEAR FROM CURRENT_DATE) - {years_back}
+          AND value IS NOT NULL
+      ),
+      annual_aggregates AS (
+        SELECT 
+          ticker,
+          calendar_year,
+          SUM(CASE WHEN metric = 'Revenue' THEN value END) AS revenue,
+          SUM(CASE WHEN metric = 'Gross Profit' THEN value END) AS gross_profit,
+          SUM(CASE WHEN metric = 'Operating Income' THEN value END) AS operating_income,
+          SUM(CASE WHEN metric = 'Net Income' THEN value END) AS net_income
+        FROM quarterly_financials
+        GROUP BY ticker, calendar_year
+        HAVING SUM(CASE WHEN metric = 'Revenue' THEN value END) > 0
+      ),
+      margins AS (
+        SELECT 
+          ticker,
+          calendar_year,
+          revenue,
+          (gross_profit / revenue) * 100.0 AS gross_margin,
+          (operating_income / revenue) * 100.0 AS operating_margin,
+          (net_income / revenue) * 100.0 AS net_margin
+        FROM annual_aggregates
+        WHERE revenue > 0
+      ),
+      peer_averages AS (
+        SELECT 
+          calendar_year,
+          AVG(CASE WHEN ticker != '{target_ticker}' THEN gross_margin END) AS peer_avg_gross_margin,
+          AVG(CASE WHEN ticker != '{target_ticker}' THEN operating_margin END) AS peer_avg_operating_margin,
+          AVG(CASE WHEN ticker != '{target_ticker}' THEN net_margin END) AS peer_avg_net_margin
+        FROM margins
+        GROUP BY calendar_year
+      )
+      SELECT 
+        m.calendar_year,
+        m.ticker,
+        m.gross_margin AS company_gross_margin,
+        m.operating_margin AS company_operating_margin,
+        m.net_margin AS company_net_margin,
+        p.peer_avg_gross_margin,
+        p.peer_avg_operating_margin,
+        p.peer_avg_net_margin
+      FROM margins m
+      JOIN peer_averages p ON m.calendar_year = p.calendar_year
+      WHERE m.ticker = '{target_ticker}'
+      ORDER BY m.calendar_year
+      LIMIT 500;
+
+  margin_growth_vs_peers:
+    name: "Margin Growth (pp) vs Industry Average"
+    description: "Year-over-year change in margins (percentage points) compared to industry average"
+    keywords:
+      - "margin growth"
+      - "growth in margin"
+      - "margin expansion"
+      - "change in margin"
+      - "industry average"
+      - "vs peers"
+      - "compare"
+      - "vs average"
+      - "compare to industry"
+    sql_template: |
+      WITH q AS (
+        SELECT * FROM comp_financials
+        WHERE calendar_quarter_num IS NOT NULL
+          AND ticker IN ('AMD','AVGO','INTC','MU','NVDA','QCOM','TXN')
+          AND metric IN ('Revenue','Gross Profit','Operating Income','Net Income')
+          AND calendar_year >= EXTRACT(YEAR FROM CURRENT_DATE) - {years_back}
+      ), yr AS (
+        SELECT
+          ticker,
+          calendar_year,
+          SUM(CASE WHEN metric='Revenue' THEN value END) AS rev,
+          SUM(CASE WHEN metric='Gross Profit' THEN value END) AS gp,
+          SUM(CASE WHEN metric='Operating Income' THEN value END) AS op,
+          SUM(CASE WHEN metric='Net Income' THEN value END) AS ni
+        FROM q
+        GROUP BY ticker, calendar_year
+        HAVING SUM(CASE WHEN metric='Revenue' THEN value END) > 0
+      ), margins AS (
+        SELECT
+          ticker,
+          calendar_year,
+          (gp/NULLIF(rev,0))*100.0 AS gross_margin,
+          (op/NULLIF(rev,0))*100.0 AS operating_margin,
+          (ni/NULLIF(rev,0))*100.0 AS net_margin
+        FROM yr
+      ), growth AS (
+        SELECT
+          ticker,
+          calendar_year,
+          (gross_margin - LAG(gross_margin, 1) OVER (PARTITION BY ticker ORDER BY calendar_year)) AS gross_margin_change_pp,
+          (operating_margin - LAG(operating_margin, 1) OVER (PARTITION BY ticker ORDER BY calendar_year)) AS operating_margin_change_pp,
+          (net_margin - LAG(net_margin, 1) OVER (PARTITION BY ticker ORDER BY calendar_year)) AS net_margin_change_pp
+        FROM margins
+      ), peer_avg AS (
+        SELECT
+          calendar_year,
+          AVG(CASE WHEN ticker <> '{target_ticker}' THEN gross_margin_change_pp END) AS peer_avg_gross_margin_change_pp,
+          AVG(CASE WHEN ticker <> '{target_ticker}' THEN operating_margin_change_pp END) AS peer_avg_operating_margin_change_pp,
+          AVG(CASE WHEN ticker <> '{target_ticker}' THEN net_margin_change_pp END) AS peer_avg_net_margin_change_pp
+        FROM growth
+        GROUP BY calendar_year
+      )
+      SELECT
+        g.calendar_year,
+        '{target_ticker}'::text AS ticker,
+        g.gross_margin_change_pp AS company_gross_margin_change_pp,
+        g.operating_margin_change_pp AS company_operating_margin_change_pp,
+        g.net_margin_change_pp AS company_net_margin_change_pp,
+        p.peer_avg_gross_margin_change_pp,
+        p.peer_avg_operating_margin_change_pp,
+        p.peer_avg_net_margin_change_pp
+      FROM growth g
+      JOIN peer_avg p USING (calendar_year)
+      WHERE g.ticker = '{target_ticker}'
+      ORDER BY g.calendar_year
+      LIMIT 500;
+
+  revenue_growth_analysis:
+    name: "Revenue Growth vs Industry Average"
+    description: "Analyze revenue growth patterns compared to industry average"
+    keywords:
+      - "growth"
+      - "revenue growth"
+      - "growing"
+      - "growth rate"
+      - "industry average"
+      - "average"
+      - "mean"
+      - "compare to average"
+      - "vs average"
+      
+    sql_template: |
+      WITH quarterly_revenue AS (
+        SELECT 
+          ticker,
+          calendar_year,
+          calendar_quarter_num,
+          calendar_quarter,
+          SUM(value) AS quarterly_revenue,
+          calendar_year * 100 + calendar_quarter_num AS period_id
+        FROM comp_financials
+        WHERE 
+          metric = 'Revenue'
+          AND ticker IN ('AMD','AVGO','INTC','MU','NVDA','QCOM','TXN')
+          AND calendar_quarter_num IS NOT NULL
+          AND calendar_year >= EXTRACT(YEAR FROM CURRENT_DATE) - {years_back}
+          AND value IS NOT NULL
+        GROUP BY ticker, calendar_year, calendar_quarter_num, calendar_quarter
+      ),
+      growth_calculations AS (
+        SELECT 
+          ticker,
+          calendar_year,
+          calendar_quarter_num,
+          calendar_quarter,
+          quarterly_revenue,
+          LAG(quarterly_revenue, 1) OVER (
+            PARTITION BY ticker 
+            ORDER BY period_id
+          ) AS prev_quarter_revenue,
+          LAG(quarterly_revenue, 4) OVER (
+            PARTITION BY ticker 
+            ORDER BY period_id
+          ) AS same_quarter_prev_year,
+          CASE 
+            WHEN LAG(quarterly_revenue, 1) OVER (
+              PARTITION BY ticker 
+              ORDER BY period_id
+            ) > 0 
+            THEN ((quarterly_revenue - LAG(quarterly_revenue, 1) OVER (
+              PARTITION BY ticker 
+              ORDER BY period_id
+            )) / LAG(quarterly_revenue, 1) OVER (
+              PARTITION BY ticker 
+              ORDER BY period_id
+            )) * 100.0
+            ELSE NULL 
+          END AS qoq_growth_percent,
+          CASE 
+            WHEN LAG(quarterly_revenue, 4) OVER (
+              PARTITION BY ticker 
+              ORDER BY period_id
+            ) > 0 
+            THEN ((quarterly_revenue - LAG(quarterly_revenue, 4) OVER (
+              PARTITION BY ticker 
+              ORDER BY period_id
+            )) / LAG(quarterly_revenue, 4) OVER (
+              PARTITION BY ticker 
+              ORDER BY period_id
+            )) * 100.0
+            ELSE NULL 
+          END AS yoy_growth_percent
+        FROM quarterly_revenue
+      )
+      SELECT 
+        ticker,
+        calendar_year,
+        calendar_quarter_num,
+        calendar_quarter,
+        quarterly_revenue,
+        qoq_growth_percent,
+        yoy_growth_percent
+      FROM growth_calculations
+      WHERE ticker IN ('AMD','AVGO','INTC','MU','NVDA','QCOM','TXN')
+      ORDER BY ticker, calendar_year, calendar_quarter_num
+      LIMIT 500;
+
+  rnd_intensity_vs_peers:
+    name: "R&D Intensity vs Industry Average"
+    description: "Compare R&D spending intensity against industry average"
+    keywords: 
+      - "r&d"
+      - "research and development"
+      - "r&d intensity"
+      - "r&d spending"
+      - "r&d expense"
+      - "industry average"
+      - "average"
+      - "mean"
+      - "compare to average"
+      - "vs average"
+      
+    sql_template: |
+      WITH quarterly_data AS (
+        SELECT 
+          ticker,
+          calendar_year,
+          calendar_quarter_num,
+          metric,
+          value
+        FROM comp_financials
+        WHERE 
+          calendar_quarter_num IS NOT NULL
+          AND ticker IN ('AMD','AVGO','INTC','MU','NVDA','QCOM','TXN')
+          AND metric IN ('Revenue', 'R&D Expense')
+          AND calendar_year >= EXTRACT(YEAR FROM CURRENT_DATE) - {years_back}
+          AND value IS NOT NULL
+      ),
+      annual_aggregates AS (
+        SELECT 
+          ticker,
+          calendar_year,
+          SUM(CASE WHEN metric = 'Revenue' THEN value END) AS revenue,
+          SUM(CASE WHEN metric = 'R&D Expense' THEN value END) AS rnd_expense
+        FROM quarterly_data
+        GROUP BY ticker, calendar_year
+        HAVING SUM(CASE WHEN metric = 'Revenue' THEN value END) > 0
+      ),
+      rnd_intensity AS (
+        SELECT 
+          ticker,
+          calendar_year,
+          revenue,
+          rnd_expense,
+          (rnd_expense / revenue) * 100.0 AS rnd_intensity_percent
+        FROM annual_aggregates
+        WHERE revenue > 0 AND rnd_expense IS NOT NULL
+      ),
+      peer_benchmarks AS (
+        SELECT 
+          calendar_year,
+          AVG(CASE WHEN ticker != '{target_ticker}' THEN rnd_intensity_percent END) AS peer_avg_rnd_intensity
+        FROM rnd_intensity
+        GROUP BY calendar_year
+      )
+      SELECT 
+        ri.calendar_year,
+        ri.ticker,
+        ri.revenue,
+        ri.rnd_expense,
+        ri.rnd_intensity_percent AS company_rnd_intensity,
+        pb.peer_avg_rnd_intensity,
+        ri.rnd_intensity_percent - pb.peer_avg_rnd_intensity AS rnd_intensity_vs_peers
+      FROM rnd_intensity ri
+      JOIN peer_benchmarks pb ON ri.calendar_year = pb.calendar_year
+      WHERE ri.ticker = '{target_ticker}'
+      ORDER BY ri.calendar_year
+      LIMIT 500;
+
+  rnd_expense_vs_peers:
+    name: "R&D Expense vs Industry Average"
+    description: "Compare absolute R&D expense against peer average"
+    keywords:
+      - "r&d expense"
+      - "rnd expense"
+      - "research and development expense"
+      - "expense vs average"
+      - "expense compare"
+      - "spending vs average"
+      - "spending compare"
+      - "industry average"
+      - "vs peers"
+      - "compare"
+    sql_template: |
+      WITH q AS (
+        SELECT * FROM comp_financials
+        WHERE calendar_quarter_num IS NOT NULL
+          AND ticker IN ('AMD','AVGO','INTC','MU','NVDA','QCOM','TXN')
+          AND metric IN ('R&D Expense')
+          AND calendar_year >= EXTRACT(YEAR FROM CURRENT_DATE) - {years_back}
+      ), yr AS (
+        SELECT
+          ticker,
+          calendar_year,
+          SUM(value) AS rnd_expense
+        FROM q
+        GROUP BY ticker, calendar_year
+      ), peer_avg AS (
+        SELECT
+          calendar_year,
+          AVG(CASE WHEN ticker <> '{target_ticker}' THEN rnd_expense END) AS peer_avg_rnd_expense
+        FROM yr
+        GROUP BY calendar_year
+      )
+      SELECT
+        y.calendar_year,
+        '{target_ticker}'::text AS ticker,
+        y.rnd_expense AS company_rnd_expense,
+        p.peer_avg_rnd_expense
+      FROM yr y
+      JOIN peer_avg p USING (calendar_year)
+      WHERE y.ticker = '{target_ticker}'
+      ORDER BY y.calendar_year
+      LIMIT 500;
+
+# Template variables
+template_variables:
+  default_companies: ["AMD", "AVGO", "INTC", "MU", "NVDA", "QCOM", "TXN"]
+  default_years_back: 5
+  default_target_ticker: "NVDA"

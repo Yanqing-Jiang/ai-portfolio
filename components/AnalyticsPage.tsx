@@ -1,6 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-// ECharts removed; using Vega-Lite
+// Using ECharts for visualization
 import { ChevronLeftIcon } from './icons/ChevronLeftIcon';
 import { ChevronRightIcon } from './icons/ChevronRightIcon';
 import EChartsReact from 'echarts-for-react';
@@ -129,15 +129,42 @@ Result:
     };
     option.animation = true;
 
-    // Axis formatting: percent vs currency based on series meta
+    // Axis formatting: percent vs currency based on series meta, with heuristics fallback
     const percentSeries = new Set<string>(Object.entries((spec.meta?.seriesValueType || {}))
       .filter(([_, v]) => v === 'percent')
       .map(([k]) => k));
-    const usesPercent = Object.keys(spec.meta?.seriesValueType || {}).some((k) => percentSeries.has(k));
+    const includedColumns: string[] = spec.meta?.includedColumns || spec.meta?.defaultColumns || [];
+    const metaChartValueType = (spec.meta?.chartValueType || '').toLowerCase();
+    const isPercentyName = (name: string) => {
+      const n = (name || '').toLowerCase();
+      return (
+        n.includes('share') || n.includes('ratio') || n.includes('margin') ||
+        n.includes('pct') || n.includes('percent') || n.includes('growth') || n.includes('qoq')
+      );
+    };
+    const includedPercent = Array.isArray(includedColumns) && includedColumns.some(isPercentyName);
+    const usesPercent = metaChartValueType === 'percent' || (percentSeries.size > 0) || includedPercent;
 
-    const formatPercent = (v: any) => {
+    const chartIsPercent = metaChartValueType === 'percent';
+    const formatPercent = (v: any, seriesName?: string) => {
       const num = typeof v === 'number' ? v : Number(v);
-      if (Number.isFinite(num)) return `${(num * 100).toFixed(0)}%`;
+      if (Number.isFinite(num)) {
+        // Check if backend provided specific format info for this series
+        const percentFormat = spec.meta?.seriesPercentFormat?.[seriesName || ''];
+        
+        if (percentFormat === 'pre_multiplied' || chartIsPercent) {
+          // Value is already in 0-100 range (e.g., 53.4 for 53.4%)
+          return `${num.toFixed(1)}%`;
+        } else if (percentFormat === 'decimal') {
+          // Value is in 0-1 range (e.g., 0.534 for 53.4%)
+          return `${(num * 100).toFixed(1)}%`;
+        } else {
+          // Fallback: If value is already in percentage format (> 1), display as-is
+          // If value is in decimal format (0-1), multiply by 100
+          const percentValue = num > 1 ? num : num * 100;
+          return `${percentValue.toFixed(1)}%`;
+        }
+      }
       return v;
     };
     const formatCurrency0 = (v: any) => {
@@ -166,7 +193,12 @@ Result:
     });
     const normalizeYAxis = (ax: any) => ({
       ...(ax || {}),
-      axisLabel: { ...((ax || {}).axisLabel || {}), color: '#555555', formatter: (ax?.axisLabel?.formatter ?? axisFormatter) },
+      // Always use smart formatter unless backend explicitly sends a function
+      axisLabel: {
+        ...((ax || {}).axisLabel || {}),
+        color: '#555555',
+        formatter: (typeof (ax?.axisLabel?.formatter) === 'function') ? ax.axisLabel.formatter : axisFormatter,
+      },
       axisLine: {
         ...((ax || {}).axisLine || {}),
         lineStyle: { ...(((ax || {}).axisLine || {}).lineStyle || {}), color: '#cccccc' },
@@ -189,9 +221,10 @@ Result:
       const name = list[0]?.axisValueLabel ?? list[0]?.name ?? '';
       const lines = [name];
       for (const p of list) {
-        const isPercent = percentSeries.has(p.seriesName);
+        const isSingleSeries = Array.isArray(option.series) && option.series.length === 1;
+        const isPercent = percentSeries.has(p.seriesName) || (includedPercent && isSingleSeries);
         const val = p.value;
-        const formatted = isPercent ? formatPercent(val) : formatCurrency0(val);
+        const formatted = isPercent ? formatPercent(val, p.seriesName) : formatCurrency0(val);
         lines.push(`${p.marker || ''} ${p.seriesName}: ${formatted}`);
       }
       return lines.join('<br/>');
@@ -204,7 +237,11 @@ Result:
           show: true,
           position: 'top',
           color: '#444',
-          formatter: (params: any) => (percentSeries.has(params.seriesName) ? formatPercent(params.value) : formatCurrency0(params.value)),
+          formatter: (params: any) => {
+            const isSingleSeries = Array.isArray(option.series) && option.series.length === 1;
+            const isPercent = percentSeries.has(params.seriesName) || (includedPercent && isSingleSeries);
+            return isPercent ? formatPercent(params.value, params.seriesName) : formatCurrency0(params.value);
+          },
         },
         smooth: true,
         lineStyle: { ...(s.lineStyle || {}), width: 2 },
@@ -453,9 +490,9 @@ Result:
 
   const suggestedQueries = [
     'Nvidia market share in the past 5 years?',
-    "How's Nvidia margin growth compare to peers?",
-    'How is NVDA R&D expense compare',
-    'How fast is NVDA growing vs peers?'
+    "How's Nvidia margin growth compare to industry average?",
+    'How is NVDA R&D expense compare to industry average',
+    'How fast is NVDA growing vs industry average?'
   ];
 
   return (
@@ -520,24 +557,29 @@ Result:
                         className="bg-gray-100 border border-gray-300 rounded px-2 sm:px-3 py-1 sm:py-1.5 text-sm sm:text-base min-h-[32px] sm:min-h-[36px]"
                         onChange={(e) => {
                           const selected = e.target.value
-                          // Toggle legend selection by series name match
                           const instance = (window as any)._echarts_instance_;
                           if (instance) {
                             const current = instance.getOption();
                             const legend = current.legend && current.legend[0];
                             if (legend && legend.data) {
                               const selectedMap: any = legend.selected || {};
-                              // Turn all off first, then enable chosen series
+                              
+                              // Metric grouping: show all companies for the selected metric
                               legend.data.forEach((name: string) => selectedMap[name] = false);
-                              // Try to find matching by suffix after dash as well
-                              const target = legend.data.find((name: string) => name === selected || name.endsWith(' - ' + selected));
-                              if (target) selectedMap[target] = true;
+                              legend.data.forEach((name: string) => {
+                                // Show series that end with the selected metric name
+                                if (name.endsWith(' - ' + selected)) {
+                                  selectedMap[name] = true;
+                                }
+                              });
+                              
                               instance.setOption({ legend: [{ selected: selectedMap }] });
                             }
                           }
                         }}
                         defaultValue={((chartSpec.meta?.defaultColumns || []).map((c: string) => c.replace(/_/g, ' ').replace(/\b\w/g, (m: string) => m.toUpperCase())))[0]}
                       >
+                        {/* Always show metrics */}
                         {(chartSpec.meta?.includedColumns || []).map((c: string) => {
                           const label = c.replace(/_/g, ' ').replace(/\b\w/g, (m: string) => m.toUpperCase());
                           return <option key={c} value={label}>{label}</option>;

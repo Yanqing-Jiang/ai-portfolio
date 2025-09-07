@@ -1,0 +1,212 @@
+# Financial Metrics Configuration
+categories:
+  income_statement:
+    name: "Income Statement"
+    description: "Revenue, expenses, and profitability metrics"
+    
+  balance_sheet:
+    name: "Balance Sheet"
+    description: "Assets, liabilities, and equity metrics"
+    
+  cash_flow:
+    name: "Cash Flow Statement"
+    description: "Operating, investing, and financing cash flows"
+    
+  ratios:
+    name: "Financial Ratios"
+    description: "Calculated ratios and percentages"
+    derived: true
+
+# Base metrics (stored in database)
+metrics:
+  revenue:
+    name: "Revenue"
+    database_name: "Revenue"
+    aliases: 
+      - "revenue"
+      - "sales" 
+      - "net sales"
+      - "total revenue"
+    category: "income_statement"
+    unit: "currency"
+    aggregation: "sum"
+    description: "Total revenue from operations"
+    format: "millions_usd"
+    
+  gross_profit:
+    name: "Gross Profit"
+    database_name: "Gross Profit"
+    aliases: 
+      - "gross profit"
+      - "gp"
+    category: "income_statement"
+    unit: "currency"
+    aggregation: "sum"
+    description: "Revenue minus cost of goods sold"
+    format: "millions_usd"
+    
+  operating_income:
+    name: "Operating Income"
+    database_name: "Operating Income"
+    aliases: 
+      - "operating income"
+      - "operating profit"
+      - "ebit"
+    category: "income_statement"
+    unit: "currency"
+    aggregation: "sum"
+    description: "Profit from core business operations"
+    format: "millions_usd"
+    
+  net_income:
+    name: "Net Income"
+    database_name: "Net Income"
+    aliases: 
+      - "net income"
+      - "net profit"
+      - "earnings"
+    category: "income_statement"
+    unit: "currency"
+    aggregation: "sum"
+    description: "Final profit after all expenses and taxes"
+    format: "millions_usd"
+    
+  rnd_expense:
+    name: "R&D Expense"
+    database_name: "R&D Expense"
+    aliases: 
+      - "r&d expense"
+      - "rnd"
+      - "r and d"
+      - "research and development"
+    category: "income_statement"
+    unit: "currency"
+    aggregation: "sum"
+    description: "Research and development spending"
+    format: "millions_usd"
+    importance: "high"
+    
+  total_assets:
+    name: "Total Assets"
+    database_name: "Total Assets"
+    aliases: 
+      - "total assets"
+      - "assets"
+    category: "balance_sheet"
+    unit: "currency"
+    aggregation: "last"
+    description: "All company assets"
+    format: "millions_usd"
+    
+  cash_and_equivalents:
+    name: "Cash & Equivalents"
+    database_name: "Cash & Equiv."
+    aliases: 
+      - "cash & equiv."
+      - "cash and equivalents"
+      - "cash"
+    category: "balance_sheet"
+    unit: "currency"
+    aggregation: "last"
+    description: "Cash and short-term liquid investments"
+    format: "millions_usd"
+    
+  operating_cash_flow:
+    name: "Operating Cash Flow"
+    database_name: "CFO"
+    aliases: 
+      - "cfo"
+      - "operating cash flow"
+      - "cash from operations"
+    category: "cash_flow"
+    unit: "currency"
+    aggregation: "sum"
+    description: "Cash generated from operations"
+    format: "millions_usd"
+    importance: "high"
+    
+  capital_expenditures:
+    name: "Capital Expenditures"
+    database_name: "CapEx"
+    aliases: 
+      - "capex"
+      - "capital expenditures"
+      - "capital spending"
+    category: "cash_flow"
+    unit: "currency"
+    aggregation: "sum"
+    description: "Investments in property, plant, and equipment"
+    format: "millions_usd"
+    importance: "high"
+
+# Derived metrics (calculated on-the-fly)
+derived_metrics:
+  gross_margin:
+    name: "Gross Margin"
+    formula: "gross_profit / revenue"
+    dependencies: ["gross_profit", "revenue"]
+    unit: "percentage"
+    description: "Gross profit as percentage of revenue"
+    format: "percentage"
+    category: "ratios"
+    
+  operating_margin:
+    name: "Operating Margin"
+    formula: "operating_income / revenue"
+    dependencies: ["operating_income", "revenue"]
+    unit: "percentage"
+    description: "Operating income as percentage of revenue"
+    format: "percentage"
+    category: "ratios"
+    
+  net_margin:
+    name: "Net Margin"
+    formula: "net_income / revenue"
+    dependencies: ["net_income", "revenue"]
+    unit: "percentage"
+    description: "Net income as percentage of revenue"
+    format: "percentage"
+    category: "ratios"
+    
+  rnd_intensity:
+    name: "R&D Intensity"
+    formula: "rnd_expense / revenue"
+    dependencies: ["rnd_expense", "revenue"]
+    unit: "percentage"
+    description: "R&D expense as percentage of revenue"
+    format: "percentage"
+    category: "ratios"
+    importance: "high"
+    
+  free_cash_flow:
+    name: "Free Cash Flow"
+    formula: "operating_cash_flow - capital_expenditures"
+    dependencies: ["operating_cash_flow", "capital_expenditures"]
+    unit: "currency"
+    description: "Cash available after capital investments"
+    format: "millions_usd"
+    category: "cash_flow"
+    importance: "high"
+
+# Metric synonyms for natural language processing
+synonyms:
+  "opex": "SG&A"
+  "capex": "CapEx"
+  "cash": "Cash & Equiv."
+  "margins": ["gross_margin", "operating_margin", "net_margin"]
+  "profitability": ["gross_margin", "operating_margin", "net_margin"]
+  "growth": "revenue"
+  "earnings": "net_income"
+
+# Display formatting
+formatting:
+  currency:
+    millions_usd:
+      prefix: "$"
+      suffix: "M"
+      decimals: 0
+      
+  percentage:
+    decimals: 1
+    suffix: "%"
+    multiplier: 100

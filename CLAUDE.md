@@ -1,4 +1,11 @@
-# CLAUDE.md
+## Ground rules
+- Understand first, change second. If you're not confident on the task, ask the user questions for clarification. 
+- Before any edit: read the entire target function and its direct call sites.
+- After reading, produce an **Understanding Summary** with bullets:
+  - Inputs/outputs & types; invariants; side effects
+- Then propose a **Plan of Changes**:
+  - summary of changes step by step, benefit of these changes. 
+- Only then write code. Prefer surgical diffs that preserve behavior unless asked to refactor.
 
 ## Development Commands
 
@@ -14,7 +21,8 @@
   2. `pip install -r requirements.txt`
 - **Start backend server**: 
   1. `cd backend`
-  2. `uvicorn main:app --reload` (runs on localhost:8000)
+  2. `uvicorn main:app` (runs on localhost:8000, shows all debug output)
+  3. Or use `uvicorn main:app --reload` for auto-reload (but debug output won't show)
 - **Alternative start**: 
   1. `cd backend`
   2. `python main.py`
@@ -22,7 +30,7 @@
 ### Full Stack Development
 1. Start backend: 
    - `cd backend`
-   - `uvicorn main:app --reload`
+   - `uvicorn main:app`
 2. Start frontend: `npm run dev`
 3. Access application at http://localhost:5173
 

@@ -1,0 +1,147 @@
+# Companies Registry Configuration
+industries:
+  semiconductor:
+    name: "Semiconductor & Technology Hardware"
+    description: "Companies in semiconductor, chip design, and hardware technology"
+    
+companies:
+  semiconductor:
+    - ticker: "NVDA"
+      name: "Nvidia Corporation"
+      short_name: "Nvidia"
+      aliases: 
+        - "nvidia"
+        - "nvda"
+        - "nvidia corp"
+        - "nvidia corporation"
+      sector: "semiconductor"
+      industry: "gpu_ai_chips"
+      description: "Graphics processors, AI accelerators, and data center solutions"
+      market_cap_tier: "large"
+      default_selection: true
+      priority: 1
+      
+    - ticker: "AMD"
+      name: "Advanced Micro Devices, Inc."
+      short_name: "AMD"
+      aliases:
+        - "amd"
+        - "advanced micro devices"
+        - "advanced micro"
+        - "amd inc"
+      sector: "semiconductor"
+      industry: "cpu_gpu"
+      description: "CPUs, GPUs, and data processing solutions"
+      market_cap_tier: "large"
+      default_selection: true
+      priority: 2
+      
+    - ticker: "INTC"
+      name: "Intel Corporation"
+      short_name: "Intel"
+      aliases:
+        - "intel"
+        - "intc"
+        - "intel corp"
+        - "intel corporation"
+      sector: "semiconductor"
+      industry: "cpu_processors"
+      description: "Microprocessors, chipsets, and semiconductor products"
+      market_cap_tier: "large"
+      default_selection: true
+      priority: 3
+      
+    - ticker: "MU"
+      name: "Micron Technology, Inc."
+      short_name: "Micron"
+      aliases:
+        - "micron"
+        - "mu"
+        - "micron technology"
+        - "micron tech"
+      sector: "semiconductor"
+      industry: "memory_storage"
+      description: "Memory and storage solutions (DRAM, NAND flash)"
+      market_cap_tier: "large"
+      default_selection: true
+      priority: 4
+      
+    - ticker: "QCOM"
+      name: "QUALCOMM Incorporated"
+      short_name: "Qualcomm"
+      aliases:
+        - "qualcomm"
+        - "qcom"
+        - "qualcomm inc"
+        - "qualcomm incorporated"
+      sector: "semiconductor"
+      industry: "wireless_mobile"
+      description: "Wireless technology, 5G, mobile processors"
+      market_cap_tier: "large"
+      default_selection: true
+      priority: 5
+      
+    - ticker: "AVGO"
+      name: "Broadcom Inc."
+      short_name: "Broadcom"
+      aliases:
+        - "broadcom"
+        - "avgo"
+        - "broadcom inc"
+        - "broadcom limited"
+      sector: "semiconductor"
+      industry: "infrastructure_software"
+      description: "Semiconductor and infrastructure software solutions"
+      market_cap_tier: "large"
+      default_selection: true
+      priority: 6
+      
+    - ticker: "TXN"
+      name: "Texas Instruments Incorporated"
+      short_name: "Texas Instruments"
+      aliases:
+        - "texas instruments"
+        - "txn"
+        - "ti"
+        - "texas instruments inc"
+        - "texas instruments incorporated"
+      sector: "semiconductor"
+      industry: "analog_embedded"
+      description: "Analog and embedded processing semiconductors"
+      market_cap_tier: "large"
+      default_selection: true
+      priority: 7
+
+# Selection rules
+selection_rules:
+  default_companies:
+    tickers: ["NVDA", "AMD", "INTC", "MU", "QCOM", "AVGO", "TXN"]
+    reason: "Top 7 semiconductor companies by market cap and relevance"
+    
+  peer_groups:
+    gpu_focused:
+      tickers: ["NVDA", "AMD"]
+      description: "GPU and graphics-focused companies"
+      
+    cpu_focused:
+      tickers: ["INTC", "AMD"]
+      description: "CPU and processor-focused companies"
+      
+    memory_focused:
+      tickers: ["MU"]
+      description: "Memory and storage specialists"
+      
+    mobile_focused:
+      tickers: ["QCOM", "AVGO"]
+      description: "Mobile and wireless technology"
+
+# Display preferences
+display:
+  company_colors:
+    NVDA: "#76B900"    # Nvidia green
+    AMD: "#ED1C24"     # AMD red
+    INTC: "#0071C5"    # Intel blue
+    MU: "#0033A0"      # Micron blue
+    QCOM: "#3253DC"    # Qualcomm blue
+    AVGO: "#FF6600"    # Broadcom orange
+    TXN: "#CC0000"     # TI red
