@@ -2,6 +2,7 @@
 from typing import AsyncGenerator, Dict, Any, Optional, List
 import time
 import uuid
+import asyncio
 from datetime import datetime
 from langgraph.graph import StateGraph, END
 from .types import WorkflowState, SQLResultModel, ChartSpecModel, ValidationError, IntentModel, QueryPlanModel, ClarifyAnswerModel, ClarifyRequestModel
@@ -12,7 +13,7 @@ from .db import execute
 from .charting import build_chart_spec, plan_chart_rule_based
 from .analysis import summarize, stream_insights_llm
 from .sql_validate import validate_sql
-from .clarify import detect_missing_slots, merge_answers, wait_for_answer_blocking, compute_required_clarifications, validate_clarification_answer
+from .clarify import detect_missing_slots, merge_answers, wait_for_answer_blocking, compute_required_clarifications, validate_clarification_answer, get_validation_error_message
 
 
 def _generate_chart_design(intent_key: Optional[str], plan: QueryPlanModel, data: List[Dict[str, Any]], spec: Dict[str, Any]) -> Dict[str, Any]:
@@ -199,83 +200,114 @@ class AnalyticsMemoryWorkflow:
             rounds = 0
 
             while official_clarifications and rounds < 3:
-                answers: list[ClarifyAnswerModel] = []
+                # Process one clarification at a time
+                slot_request = official_clarifications[0]  # Take the first (most important) clarification
                 
-                for slot_request in official_clarifications:
-                    # Emit clarification request
+                print(f"[WORKFLOW] Emitting single clarification request for slot: {slot_request.slot}")
+                
+                # Send single clarification request
+                yield {
+                    "event": "clarification_request", 
+                    "data": {
+                        "session_id": session_id,
+                        "request_id": slot_request.request_id,
+                        "slot": slot_request.slot,
+                        "question": slot_request.question,
+                        "type": slot_request.type,
+                        "options": slot_request.options,
+                        "default": slot_request.default,
+                        "proposed": slot_request.proposed,
+                        "proposed_confidence": slot_request.proposed_confidence,
+                        "reason": slot_request.reason,
+                        "required": slot_request.required,
+                        "round": rounds + 1,
+                        "ts": datetime.utcnow().isoformat()
+                    }
+                }
+                
+                # Wait for single answer with timeout
+                print(f"[WORKFLOW] Waiting for answer to slot {slot_request.slot}, request {slot_request.request_id}")
+                try:
+                    answer = await asyncio.wait_for(
+                        wait_for_answer_blocking(session_id, slot_request.request_id),
+                        timeout=60.0  # 60 second timeout
+                    )
+                except asyncio.TimeoutError:
+                    print(f"[WORKFLOW] Timeout waiting for answer to slot {slot_request.slot}")
+                    # Emit timeout event
                     yield {
-                        "event": "clarification_request", 
+                        "event": "clarification_timeout",
                         "data": {
-                            "session_id": session_id,
                             "request_id": slot_request.request_id,
                             "slot": slot_request.slot,
-                            "question": slot_request.question,
-                            "type": slot_request.type,
-                            "options": slot_request.options,
-                            "default": slot_request.default,
-                            "proposed": slot_request.proposed,
-                            "proposed_confidence": slot_request.proposed_confidence,
-                            "reason": slot_request.reason,
-                            "required": slot_request.required,
+                            "message": f"Timeout waiting for {slot_request.slot} clarification. Using default value.",
                             "ts": datetime.utcnow().isoformat()
                         }
                     }
-                    
-                    # Wait for answer
-                    answer = await wait_for_answer_blocking(session_id, slot_request.request_id)
-                    
-                    if answer:
-                        # Validate answer using the new validation function (bool)
-                        is_valid = validate_clarification_answer(answer, slot_request)
-                        if is_valid:
-                            answers.append(answer)
-                            yield {
-                                "event": "clarification_ack",
-                                "data": {
-                                    "session_id": session_id,
-                                    "request_id": slot_request.request_id,
-                                    "slot": slot_request.slot,
-                                    "accepted": True,
-                                    "value": answer.value,
-                                    "ts": datetime.utcnow().isoformat()
-                                }
-                            }
-                        else:
-                            # Invalid answer, emit error and continue
-                            yield {
-                                "event": "clarification_error",
-                                "data": {
-                                    "request_id": slot_request.request_id,
-                                    "slot": slot_request.slot,
-                                    "message": f"Invalid value for {slot_request.slot}: {answer.value}",
-                                    "ts": datetime.utcnow().isoformat()
-                                }
-                            }
-
-                # Merge answers back into intent and plan
-                if answers:
-                    intent, provisional_plan, merge_assumptions = await merge_answers(intent, provisional_plan, answers, CONFIGS.__dict__)
-                    assumptions.extend(merge_assumptions)
+                    # Use default value if available, otherwise skip this clarification
+                    if slot_request.default:
+                        from .types import ClarifyAnswerModel
+                        answer = ClarifyAnswerModel(
+                            session_id=session_id,
+                            request_id=slot_request.request_id,
+                            slot=slot_request.slot,
+                            value=slot_request.default,
+                            ts=datetime.utcnow().isoformat()
+                        )
+                    else:
+                        # Skip this clarification
+                        official_clarifications.pop(0)
+                        continue
                 
-                # Emit clarification complete for this round
-                clarify_elapsed = int((time.time() - clarify_start) * 1000)
-                yield {
-                    "event": "clarification_complete",
-                    "data": {
-                        "step": "clarification",
-                        "ts": datetime.utcnow().isoformat(),
-                        "elapsed_ms": clarify_elapsed,
-                        "assumptions": assumptions,
-                        "clarifications_count": len(answers)
-                    }
-                }
+                if answer:
+                    # Validate answer using the new validation function (bool)
+                    is_valid = validate_clarification_answer(answer, slot_request)
+                    if is_valid:
+                        print(f"[WORKFLOW] Accepted answer for slot {slot_request.slot}: {answer.value}")
+                        
+                        # Emit acknowledgment for the received answer
+                        yield {
+                            "event": "clarification_ack",
+                            "data": {
+                                "session_id": session_id,
+                                "request_id": slot_request.request_id,
+                                "slot": slot_request.slot,
+                                "answer": answer.value,
+                                "ts": datetime.utcnow().isoformat()
+                            }
+                        }
+                        
+                        # Merge single answer back into intent and plan
+                        intent, provisional_plan, merge_assumptions = await merge_answers(intent, provisional_plan, [answer], CONFIGS.__dict__)
+                        assumptions.extend(merge_assumptions)
+                        print(f"[WORKFLOW] Merged answer with assumptions: {merge_assumptions}")
+                        
+                        # Re-select template after this answer
+                        template = choose_template(intent, provisional_plan, CONFIGS.__dict__)
 
-                # Re-select template after each round
-                template = choose_template(intent, provisional_plan, CONFIGS.__dict__)
-
-                # Recompute missing slots for the next round
-                official_clarifications = compute_required_clarifications(intent, provisional_plan, template, CONFIGS.__dict__)
-                rounds += 1
+                        # Remove the answered clarification from the list and proceed to next
+                        official_clarifications = official_clarifications[1:]
+                        rounds += 1
+                        
+                    else:
+                        # Invalid answer, emit detailed error message
+                        error_message = get_validation_error_message(answer, slot_request)
+                        print(f"[WORKFLOW] Invalid answer for slot {slot_request.slot}: {answer.value}")
+                        yield {
+                            "event": "clarification_error",
+                            "data": {
+                                "request_id": slot_request.request_id,
+                                "slot": slot_request.slot,
+                                "message": error_message or f"Invalid value for {slot_request.slot}: {answer.value}",
+                                "ts": datetime.utcnow().isoformat()
+                            }
+                        }
+                        # Remove this clarification from the list and continue
+                        official_clarifications = official_clarifications[1:]
+                else:
+                    # No answer received, skip this clarification
+                    print(f"[WORKFLOW] No answer received for slot {slot_request.slot}")
+                    official_clarifications = official_clarifications[1:]
 
             # Emit intent_resolved after clarifications complete
             yield {
@@ -299,12 +331,15 @@ class AnalyticsMemoryWorkflow:
         plan = provisional_plan
         
         # 6) Emit Final Plan and Template Events
+        current_time = time.time()
+        elapsed_ms = int((current_time - workflow_start) * 1000)
+        
         yield {
             "event": "plan_built",
             "data": {
                 "step": "plan_generation", 
                 "ts": datetime.utcnow().isoformat(),
-                "elapsed_ms": 0,  # Already computed during provisional phase
+                "elapsed_ms": elapsed_ms,
                 "plan": {
                     "metrics": plan.metrics,
                     "derived_metrics": plan.derived_metrics,

@@ -26,6 +26,8 @@ class SessionStore:
             self.answers[session_id][answer.request_id] = answer
             self.expires[session_id] = time.time() + self.ttl_seconds
             
+            print(f"[CLARIFY] Stored answer for session {session_id}, request {answer.request_id}: slot={answer.slot}, value={answer.value}")
+            
             # Notify waiting workflow
             async with self.conditions[session_id]:
                 self.conditions[session_id].notify_all()
@@ -401,8 +403,16 @@ async def merge_answers(
                 plan.comparison = 'vs_avg'
             elif 'single' in comp_str:
                 plan.comparison = 'single'
+                # Update intent key to trigger company requirement
+                if 'market_share' in (intent.intent_key or ''):
+                    intent.intent_key = 'market_share_single'
+                    assumptions.append("Updated intent to market_share_single for company selection")
             elif 'all' in comp_str:
                 plan.comparison = 'all'
+                # Update intent key for all companies analysis
+                if 'market_share' in (intent.intent_key or ''):
+                    intent.intent_key = 'market_share_all'
+                    assumptions.append("Updated intent to market_share_all")
             assumptions.append(f"Using comparison: {plan.comparison}")
         
         elif slot == 'metrics':
@@ -490,6 +500,17 @@ def compute_required_clarifications(
                 proposed_confidence=0.0
             ))
     
+    # Sort clarifications by priority: comparison > company > granularity > timeframe > metrics
+    priority_map = {
+        'comparison': 1,
+        'company': 2, 
+        'granularity': 3,
+        'timeframe': 4,
+        'metrics': 5
+    }
+    
+    clarifications.sort(key=lambda c: priority_map.get(c.slot, 999))
+    
     return clarifications
 
 
@@ -508,3 +529,20 @@ def validate_clarification_answer(answer: ClarifyAnswerModel, request: ClarifyRe
                 return False
     
     return True
+
+
+def get_validation_error_message(answer: ClarifyAnswerModel, request: ClarifyRequestModel) -> Optional[str]:
+    """Get detailed error message for invalid clarification answers."""
+    if request.type == 'single' and answer.value not in request.options:
+        # Check if it's a display format (e.g., "NVDA (Nvidia)")
+        display_values = [opt.split('(')[0].strip() if '(' in opt else opt for opt in request.options]
+        if answer.value not in display_values:
+            return f"Invalid choice '{answer.value}'. Please select one of: {', '.join(request.options)}"
+    elif request.type == 'multi':
+        if not isinstance(answer.value, list):
+            return f"Expected a list for multi-select, but got {type(answer.value).__name__}"
+        invalid_values = [val for val in answer.value if val not in request.options]
+        if invalid_values:
+            return f"Invalid choices: {', '.join(invalid_values)}. Valid options are: {', '.join(request.options)}"
+    
+    return None

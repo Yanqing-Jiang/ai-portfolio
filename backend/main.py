@@ -18,7 +18,7 @@ from gemini_service import gemini_service
 from rate_limiter import init_rate_limiter, smart_rate_limit, get_user_usage, who_am_i
 from analytics_agent import create_analytics_workflow
 from analytics_memory.workflow import analytics_memory_workflow
-from analytics_memory.clarify import SessionStore
+from analytics_memory.clarify import put_answer
 from analytics_memory.types import ClarifyAnswerModel
 
 from langchain.callbacks.base import BaseCallbackHandler
@@ -30,8 +30,7 @@ load_dotenv(dotenv_path=env_path, override=False)
 
 app = FastAPI()
 
-# Initialize session store for analytics memory
-session_store = SessionStore()
+# Use the global session store from analytics_memory.clarify
 
 # Initialize rate limiter on startup
 @app.on_event("startup")
@@ -131,8 +130,6 @@ async def research_stream_endpoint(query: str, request: Request):
             chunk_count = 0
             in_final_response = False
             final_response_message_sent = False
-            last_heartbeat = asyncio.get_event_loop().time()
-            
             for chunk in run_research_agent_stream(query):
                 if chunk:
                     try:
@@ -168,12 +165,7 @@ async def research_stream_endpoint(query: str, request: Request):
                         await asyncio.sleep(0)  # Flush event loop immediately after each chunk
                         chunk_count += 1
                         
-                        # Send heartbeat every 15 seconds to prevent timeouts
-                        current_time = asyncio.get_event_loop().time()
-                        if current_time - last_heartbeat > 15:
-                            yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
-                            await asyncio.sleep(0)
-                            last_heartbeat = current_time
+                        # Removed heartbeat logic
                         
                         # Prevent too many chunks
                         if chunk_count > 5000:
@@ -231,7 +223,7 @@ async def resume_search_stream_endpoint(query: str, request: Request, chat_histo
             # Run the resume agent with streaming
             chunk_count = 0
             in_final_response = False
-            last_heartbeat = asyncio.get_event_loop().time()
+            # Removed heartbeat tracking
             
             for chunk in run_resume_agent_stream(query, parsed_history):
                 if chunk:
@@ -267,12 +259,7 @@ async def resume_search_stream_endpoint(query: str, request: Request, chat_histo
                         await asyncio.sleep(0)  # Flush event loop immediately after each chunk
                         chunk_count += 1
                         
-                        # Send heartbeat every 15 seconds to prevent timeouts
-                        current_time = asyncio.get_event_loop().time()
-                        if current_time - last_heartbeat > 15:
-                            yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
-                            await asyncio.sleep(0)
-                            last_heartbeat = current_time
+                        # Removed heartbeat logic
                         
                         # Prevent too many chunks
                         if chunk_count > 1000:
@@ -761,7 +748,7 @@ async def analytics_stream_endpoint(query: str, request: Request, _: None = Depe
             print("[MAIN] Analytics workflow created successfully")
             
             chunk_count = 0
-            last_heartbeat = asyncio.get_event_loop().time()
+            # Removed heartbeat tracking
             
             print("[MAIN] Starting workflow stream...")
             # Stream analytics workflow
@@ -773,13 +760,7 @@ async def analytics_stream_endpoint(query: str, request: Request, _: None = Depe
                         await asyncio.sleep(0)
                         chunk_count += 1
                         
-                        # Send heartbeat every 15 seconds
-                        current_time = asyncio.get_event_loop().time()
-                        if current_time - last_heartbeat > 15:
-                            print("[MAIN] Sending heartbeat...")
-                            yield f"data: {json.dumps({'event': 'heartbeat', 'data': {}})}\n\n"
-                            await asyncio.sleep(0)
-                            last_heartbeat = current_time
+                        # Removed heartbeat logic for analytics memory
                         
                         # Safety limit
                         if chunk_count > 1000:
@@ -871,11 +852,16 @@ async def analytics_memory_stream_endpoint(query: str, request: Request, session
 
 @app.post("/api/analytics/memory/clarify")
 async def analytics_memory_clarify_endpoint(answer: ClarifyAnswerModel, _: None = Depends(smart_rate_limit)):
-    """Handle clarification responses from the frontend"""
+    """Handle single clarification response from the frontend"""
     try:
         print(f"[MAIN] Received clarification answer: {answer}")
-        await session_store.put_answer(answer)
+        await put_answer(answer)
         return {"status": "success", "message": "Clarification answer received"}
     except Exception as e:
         print(f"[MAIN] Error handling clarification: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)

@@ -7,32 +7,6 @@
   - summary of changes step by step, benefit of these changes. 
 - Only then write code. Prefer surgical diffs that preserve behavior unless asked to refactor.
 
-## Development Commands
-
-### Frontend Development
-- **Start development server**: `npm run dev` (runs on localhost:5173)
-- **Build for production**: `npm run build`
-- **Preview production build**: `npm preview`
-- **Install dependencies**: `npm install`
-
-### Backend Development
-- **Install Python dependencies**: 
-  1. `cd backend`
-  2. `pip install -r requirements.txt`
-- **Start backend server**: 
-  1. `cd backend`
-  2. `uvicorn main:app` (runs on localhost:8000, shows all debug output)
-  3. Or use `uvicorn main:app --reload` for auto-reload (but debug output won't show)
-- **Alternative start**: 
-  1. `cd backend`
-  2. `python main.py`
-
-### Full Stack Development
-1. Start backend: 
-   - `cd backend`
-   - `uvicorn main:app`
-2. Start frontend: `npm run dev`
-3. Access application at http://localhost:5173
 
 ## Architecture Overview
 
@@ -153,6 +127,39 @@ ELEVEN_LABS_VOICE_ID=your_voice_id
 - Removed unused icon components to reduce bundle size
 
 ## Development Workflow
+
+### Development Commands
+
+#### Frontend Development
+- **Start development server**: `npm run dev` (runs on localhost:5173)
+- **Build for production**: `npm run build`
+- **Preview production build**: `npm preview`
+- **Install dependencies**: `npm install`
+
+#### Backend Development
+- **Install Python dependencies**: 
+  1. `cd backend`
+  2. `pip install -r requirements.txt`
+- **Start backend server**: 
+  1. `cd backend`
+  2. `uvicorn main:app` (runs on localhost:8000, shows all debug output)
+  3. Or use `uvicorn main:app --reload` for auto-reload (but debug output won't show)
+- **Alternative start**: 
+  1. `cd backend`
+  2. `python main.py`
+
+#### Full Stack Development
+1. Start backend: 
+   - `cd backend`
+   - `uvicorn main:app`
+2. Start frontend: `npm run dev`
+3. Access application at http://localhost:5173
+
+### Git Sync Rules
+- **NEVER modify local .env files** when syncing from GitHub
+- Local .env files contain sensitive API keys and environment-specific configurations
+- If .env template changes are needed, update the documentation section instead
+- Always preserve existing local environment configurations
 
 ### Adding New Features
 1. Frontend changes go in appropriate `/components` or `/services`
