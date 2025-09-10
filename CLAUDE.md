@@ -52,11 +52,30 @@ This is a full-stack AI-powered portfolio application with a React frontend and 
 - **Rate Limiting**: Redis-based with in-memory fallback
 
 ### Key API Endpoints
+
+#### Analytics Endpoints (Completely Separated)
+- **Analytics SQL** (`/api/analytics/stream`)
+  - LangGraph SQL workflow for financial analytics
+  - Direct SQL generation and execution
+  - Real-time streaming with chart generation
+  - No clarifications, direct query processing
+  
+- **Analytics Memory** (`/api/analytics/memory/stream`)
+  - LangGraph memory pipeline with intelligent clarifications
+  - Advanced intent detection and query planning
+  - Conversational clarifications for ambiguous queries
+  - Session-based memory management
+  
+- **Memory Clarifications** (`/api/analytics/memory/clarify`)
+  - Handle user responses to clarification requests
+  - Session-based clarification tracking
+  - Supports single/multi/free-form responses
+
+#### Other Endpoints
 - `/api/research/stream` - Research agent with web search
 - `/api/resume-search/stream` - Resume-specific queries
 - `/api/gemini/chat/*` - Gemini AI chat sessions
 - `/api/tts` - Text-to-speech generation
-- `/api/analytics/stream` - Analytics with SQL capabilities
 - `/api/rate-limit/*` - Usage tracking and limits
 
 ## Code Architecture
@@ -115,7 +134,8 @@ ELEVEN_LABS_VOICE_ID=your_voice_id
 - `ProjectView.tsx`: Individual project detail pages
 - `Chat.tsx`: AI chat interface with multiple agents (uses config service)
 - `Sidebar.tsx`: Navigation and project browser
-- `AnalyticsPage.tsx`: SQL analytics and data visualization (uses authenticated streaming)
+- `AnalyticsPage.tsx`: SQL analytics and data visualization (direct SQL workflow)
+- `AnalyticsMemoryPage.tsx`: Memory analytics with clarifications (memory pipeline)
 
 ### Service Layer
 - `services/config.ts`: Centralized environment variable access

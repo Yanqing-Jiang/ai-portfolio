@@ -2,6 +2,7 @@ import React from 'react';
 import type { Project } from '../types';
 import Chat from './Chat';
 import AnalyticsPage from './AnalyticsPage';
+import AnalyticsMemoryPage from './AnalyticsMemoryPage';
 // @ts-ignore
 import { Helmet } from 'react-helmet-async';
 
@@ -23,6 +24,23 @@ const ProjectView: React.FC<ProjectViewProps> = ({ project }) => {
           <link rel="canonical" href={`https://ai.jiangyanqing.com/project/${project.id}`} />
         </Helmet>
         <AnalyticsPage />
+      </>
+    );
+  }
+
+  // Special handling for analytics memory project - render fullscreen
+  if (project.id === 'next-gen-analytics-memory') {
+    return (
+      <>
+        <Helmet>
+          <title>{`${project.title} – Yanqing Jiang | AI ML Portfolio`}</title>
+          <meta name="description" content={project.description.slice(0, 160)} />
+          <meta name="keywords" content={project.technologies.join(', ')} />
+          <meta name="author" content="Yanqing Jiang" />
+          <meta name="robots" content="index, follow" />
+          <link rel="canonical" href={`https://ai.jiangyanqing.com/project/${project.id}`} />
+        </Helmet>
+        <AnalyticsMemoryPage />
       </>
     );
   }

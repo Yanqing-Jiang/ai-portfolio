@@ -6,6 +6,54 @@ export const PROJECT_DATA: ProjectYear[] = [
     subtitle: '(Agentic AI & Autonomous Trading)',
     projects: [
       {
+        id: 'next-gen-analytics-memory',
+        title: 'Next Gen Analytics (Memory)',
+        description: `• Advanced conversational AI analytics with memory and clarification capabilities.\n• Uses LangGraph agents with sophisticated intent detection, SQL generation, and interactive clarifications.\n• Real-time streaming with persistent conversation history and context-aware follow-ups.\n\nResult:\n\n• Intelligent clarification system that remembers user choices and context.\n• Conversational analytics interface with inline clarifications instead of modal dialogs.\n• Progressive results display with chat-based interaction patterns.`,
+        technologies: ['LangGraph', 'Memory Pipeline', 'Conversational AI', 'Intent Detection', 'Context Engineering', 'FastAPI', 'PostgreSQL'],
+        systemInstruction: `You are the AI assistant for **Next Gen Analytics (Memory)**. You have full knowledge of the project described below. Use this embedded reference to answer questions with detail and accuracy. Quote or paraphrase the content to explain features, tech stack, workflow and technical implementation.
+
++--------------------
+EMBEDDED PROJECT DOC
+🔧 Tech Stack
+Frontend: React, TypeScript, ECharts for interactive visualizations
+Backend: Python, FastAPI, LangGraph for agent orchestration with memory pipeline
+Database: Supabase (PostgreSQL) with comp_financials table
+LLM: OpenAI API (GPT-4o-mini) for intent detection, SQL generation and analysis
+Agent Coordination: LangGraph state machine with memory and clarification workflow
+Memory System: Session-based conversation persistence with context awareness
+
+📘 Memory Pipeline Features
+• Intent Detection with Clarifications: Advanced intent analysis with interactive clarification requests
+• Conversation Memory: Persistent chat history across sessions with localStorage backup
+• Context Engineering: Smart context retention for follow-up queries and iterative analysis
+• Inline Clarifications: Chat-based clarification system replacing modal dialogs
+• Progressive Results: Streaming results directly into conversational interface
+
+🔄 Enhanced Agent Workflow
+1. Intent Detection Agent: Analyzes user query and determines clarification needs
+2. Clarification Engine: Generates interactive questions for ambiguous requests
+3. Memory Agent: Maintains conversation context and session state
+4. SQL Agent: Generates optimized queries using clarified intent and context
+5. ECharts Agent: Creates visualizations based on results and conversation history
+6. Analysis Agent: Provides contextual insights referencing previous interactions
+
+✨ Key Innovations
+• Conversational clarification system with inline chat interface
+• Session persistence with conversation turn tracking
+• Context-aware follow-up query handling
+• Progressive result streaming into chat messages
+• Memory-enhanced SQL generation using conversation history
+• Interactive choice buttons replacing modal interruptions
++--------------------`,
+        defaultPrompts: [
+          'Analyze NVDA market share trends and compare with previous quarters',
+          'Show me AMD vs INTC margins - how do they compare to our last analysis?',
+          'What clarification features help with ambiguous financial queries?',
+        ],
+        coverUrl: 'https://yanqinghot.blob.core.windows.net/public-access/next-gen-memory.png',
+        imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/next-gen-memory.png'
+      },
+      {
         id: 'agentic-trade-bot',
         title: 'Agentic Trading Bot',
         // Medium link first line so it appears on top of detail page
