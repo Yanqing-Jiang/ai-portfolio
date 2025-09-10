@@ -6,6 +6,7 @@ import EChartsReact from 'echarts-for-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { apiService } from '../services/apiService';
+import { STEP_NAME, STEP_ORDER } from '../constants/analytics';
 import { configService } from '../services/config';
 
 // Error boundary to prevent full-app crash on chart render failures
@@ -41,7 +42,20 @@ interface ClarifyRequest {
   proposed_confidence?: number;
   reason?: string;
   required: boolean;
-  timeout_ms?: number;
+}
+
+
+// Chat history interfaces
+interface ChatMessage {
+  id: string;
+  type: 'user' | 'clarification' | 'result';
+  content: string;
+  timestamp: string;
+  clarifications?: ClarifyRequest[];
+  answers?: Record<string, any>;
+  analysis?: string;
+  chartSpec?: any;
+  sqlQuery?: string;
 }
 
 interface ClarifyAnswer {
@@ -62,37 +76,14 @@ interface ProcessStep {
   timestamp?: string;
 }
 
-const STEP_NAME: Record<string, string> = {
-  intent_detection: 'Intent Detection',
-  plan_generation: 'Query Planning',
-  template_selection: 'Template Selection',
-  clarification: 'Requirements Clarification',
-  sql_compilation: 'SQL Compilation',
-  sql_validation: 'SQL Validation',
-  sql_execution: 'Data Retrieval',
-  chart_generation: 'Chart Generation',
-  analysis_generation: 'Analysis Generation',
-};
 
-const STEP_ORDER = [
-  'intent_detection',
-  'plan_generation',
-  'template_selection',
-  'clarification',
-  'sql_compilation',
-  'sql_validation',
-  'sql_execution',
-  'chart_generation',
-  'analysis_generation',
-];
-
-// Inline clarification component (replaces modal)
-const ClarifyInline: React.FC<{
-  request: ClarifyRequest;
+// Inline clarification component styled for dark theme
+const ClarificationOptions: React.FC<{
+  clarification: ClarifyRequest;
   onSubmit: (value: any) => Promise<void>;
   disabled?: boolean;
-}> = ({ request, onSubmit, disabled }) => {
-  const [selectedValue, setSelectedValue] = useState<any>(request.proposed ?? request.default);
+}> = ({ clarification, onSubmit, disabled }) => {
+  const [selectedValue, setSelectedValue] = useState<any>(clarification.proposed ?? clarification.default);
   const [submitting, setSubmitting] = useState(false);
 
   const doSubmit = async (value: any) => {
@@ -106,31 +97,45 @@ const ClarifyInline: React.FC<{
   };
 
   return (
-    <div className="bg-blue-50 border border-blue-200 text-blue-900 rounded-lg p-3 sm:p-4">
-      <div className="text-sm font-medium">{request.question}</div>
-      {request.reason && <div className="text-xs text-blue-700 mt-1">{request.reason}</div>}
+    <div className="mt-3 space-y-3">
+      {clarification.reason && (
+        <div className="text-xs text-gray-400 bg-gray-800/50 rounded-lg px-2 py-1">
+          💡 {clarification.reason}
+        </div>
+      )}
 
-      <div className="mt-3 space-y-2">
-        {request.type === 'single' && (
+      <div className="space-y-2">
+        {clarification.type === 'single' && (
           <div className="flex flex-wrap gap-2">
-            {request.options.map((opt) => (
+            {clarification.options.map((opt) => (
               <button
                 key={opt}
                 onClick={() => setSelectedValue(opt)}
-                className={`px-3 py-1.5 rounded-full border text-sm ${selectedValue === opt ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-blue-900 border-blue-300'}`}
+                className={`px-3 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${
+                  selectedValue === opt 
+                    ? 'bg-blue-600 text-white hover:bg-blue-700' 
+                    : 'bg-gray-700 text-gray-200 hover:bg-gray-600 border border-gray-600'
+                }`}
               >
                 {opt}
               </button>
             ))}
           </div>
         )}
-        {request.type === 'multi' && (
-          <div className="flex flex-col gap-1">
-            {request.options.map((opt) => {
+        {clarification.type === 'multi' && (
+          <div className="space-y-2">
+            {clarification.options.map((opt) => {
               const arr: any[] = Array.isArray(selectedValue) ? selectedValue : [];
               const checked = arr.includes(opt);
               return (
-                <label key={opt} className="inline-flex items-center gap-2 text-sm">
+                <label 
+                  key={opt} 
+                  className={`flex items-center gap-3 p-2 rounded-lg cursor-pointer transition-all duration-200 ${
+                    checked 
+                      ? 'bg-gray-700/50 border border-gray-600' 
+                      : 'bg-gray-800/30 hover:bg-gray-700/30'
+                  }`}
+                >
                   <input
                     type="checkbox"
                     checked={checked}
@@ -138,39 +143,134 @@ const ClarifyInline: React.FC<{
                       if (e.target.checked) setSelectedValue([...arr, opt]);
                       else setSelectedValue(arr.filter((v) => v !== opt));
                     }}
+                    className="w-4 h-4 text-blue-600 rounded border-gray-500 focus:ring-blue-500 focus:ring-2 bg-gray-700"
                   />
-                  <span>{opt}</span>
+                  <span className="text-sm text-gray-200">{opt}</span>
                 </label>
               );
             })}
           </div>
         )}
-        {request.type === 'free' && (
+        {clarification.type === 'free' && (
           <input
             type="text"
             value={selectedValue ?? ''}
             onChange={(e) => setSelectedValue(e.target.value)}
-            className="w-full px-3 py-2 border rounded-md text-sm"
+            className="w-full px-3 py-2 border border-gray-600 rounded-lg text-sm bg-gray-700 text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 placeholder-gray-400"
             placeholder="Type your answer..."
           />
         )}
       </div>
 
-      <div className="mt-3 flex gap-2">
+      <div className="flex gap-2">
         <button
           onClick={() => doSubmit(selectedValue)}
           disabled={submitting || disabled}
-          className="px-3 py-2 rounded-md bg-blue-600 text-white text-sm disabled:opacity-50"
+          className="flex-1 px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200"
         >
-          {submitting ? 'Submitting…' : 'Continue'}
+          {submitting ? (
+            <div className="flex items-center justify-center gap-2">
+              <div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+              Sending...
+            </div>
+          ) : (
+            'Submit'
+          )}
         </button>
         <button
-          onClick={() => doSubmit(request.default)}
+          onClick={() => doSubmit(clarification.default)}
           disabled={submitting || disabled}
-          className="px-3 py-2 rounded-md bg-white border border-blue-300 text-blue-900 text-sm"
+          className="px-3 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-200 text-sm font-medium transition-all duration-200 disabled:opacity-50"
         >
-          Use Default
+          Default
         </button>
+      </div>
+    </div>
+  );
+};
+
+
+// Chat history display component
+const ChatHistory: React.FC<{
+  messages: ChatMessage[];
+  isLoading?: boolean;
+}> = ({ messages, isLoading }) => {
+  if (messages.length === 0) return null;
+
+  return (
+    <div className="bg-gray-900 py-4 mb-6">
+      <div className="space-y-4 max-h-96 overflow-y-auto">
+        {messages.map((message) => (
+          <div key={message.id} className={`flex ${message.type === 'user' ? 'justify-end' : 'justify-start'}`}>
+            <div className={`max-w-[80%] ${message.type === 'user' ? 'order-2' : 'order-1'}`}>
+              {/* Message bubble */}
+              <div className={`rounded-2xl px-4 py-3 transition-all hover:shadow-sm ${
+                message.type === 'user' 
+                  ? 'bg-gray-800 text-gray-100 rounded-br-md' 
+                  : 'bg-gray-800/50 text-gray-100 rounded-bl-md'
+              }`}>
+                <div className="text-sm leading-relaxed">{message.content}</div>
+                {message.answers && Object.keys(message.answers).length > 0 && (
+                  <div className={`text-xs mt-2 ${
+                    message.type === 'user' ? 'text-blue-100' : 'text-gray-400'
+                  }`}>
+                    Answered: {Object.entries(message.answers).map(([k, v]) => `${k}: ${v}`).join(', ')}
+                  </div>
+                )}
+                {message.clarifications && message.clarifications.length > 0 && (
+                  <ClarificationOptions 
+                    clarification={message.clarifications[0]} 
+                    onSubmit={async (val) => submitClarification(val, message.clarifications![0])}
+                    disabled={isLoading === false}
+                  />
+                )}
+              </div>
+              
+              {/* Timestamp only */}
+              <div className={`flex items-center gap-2 mt-1 px-1 ${
+                message.type === 'user' ? 'justify-end' : 'justify-start'
+              }`}>
+                <span className="text-xs text-gray-500">
+                  {new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </span>
+              </div>
+            </div>
+            
+            {/* Avatar */}
+            <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${
+              message.type === 'user' 
+                ? 'bg-gray-700 text-gray-300 order-3 ml-2' 
+                : 'bg-gray-700/50 text-gray-400 order-0 mr-2'
+            }`}>
+              {message.type === 'user' ? '👤' : '🤖'}
+            </div>
+          </div>
+        ))}
+        
+        {isLoading && (
+          <div className="flex justify-start">
+            <div className="max-w-[80%] order-1">
+              <div className="bg-gray-800/50 text-gray-100 rounded-2xl rounded-bl-md px-4 py-3 transition-all">
+                <div className="flex items-center gap-2">
+                  <div className="flex space-x-1">
+                    <div className="w-2 h-2 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
+                    <div className="w-2 h-2 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
+                    <div className="w-2 h-2 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
+                  </div>
+                  <span className="text-sm text-gray-300">Analyzing...</span>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 mt-1 px-1 justify-start">
+                <span className="text-xs text-gray-500">
+                  {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </span>
+              </div>
+            </div>
+            <div className="w-8 h-8 rounded-full bg-gray-600 text-gray-300 flex items-center justify-center flex-shrink-0 order-0 mr-2">
+              🤖
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -192,6 +292,8 @@ const AnalyticsMemoryPage: React.FC = () => {
   const [chartRetryCount, setChartRetryCount] = useState(0);
   const [sessionId, setSessionId] = useState<string>('');
   const [pendingClarification, setPendingClarification] = useState<ClarifyRequest | null>(null);
+  const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
+  const [currentAnalysisId, setCurrentAnalysisId] = useState<string | null>(null);
 
   const abortControllerRef = useRef<AbortController | null>(null);
 
@@ -222,6 +324,21 @@ Result:
   };
 
   const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+  // Chat history management
+  const addChatMessage = (message: Omit<ChatMessage, 'id' | 'timestamp'>) => {
+    const newMessage: ChatMessage = {
+      ...message,
+      id: Date.now().toString(),
+      timestamp: new Date().toISOString(),
+    };
+    setChatHistory(prev => [...prev, newMessage]);
+    return newMessage.id;
+  };
+
+  const updateChatMessage = (id: string, updates: Partial<ChatMessage>) => {
+    setChatHistory(prev => prev.map(msg => msg.id === id ? { ...msg, ...updates } : msg));
+  };
 
   // Apply light theme overrides and smart formatting to chart options
   const withLightTheme = (spec: any) => {
@@ -400,17 +517,18 @@ Result:
     });
   };
 
-  const simulatePreSteps = async () => {
-    // Pre-steps simulation for better UX
-    await sleep(100);
-    updateStepStatus('intent_detection', 'in_progress', ['Analyzing query intent...']);
-    await sleep(100);
-    updateStepStatus('intent_detection', 'completed', ['Intent detected']);
-    await sleep(100);
-    updateStepStatus('plan_generation', 'in_progress', ['Planning query execution...']);
-    await sleep(100);
-    updateStepStatus('plan_generation', 'completed', ['Query plan ready']);
-  };
+  // Removed simulatePreSteps - let server events drive all step status updates
+  // const simulatePreSteps = async () => {
+  //   // Pre-steps simulation for better UX
+  //   await sleep(100);
+  //   updateStepStatus('intent_detection', 'in_progress', ['Analyzing query intent...']);
+  //   await sleep(100);
+  //   updateStepStatus('intent_detection', 'completed', ['Intent detected']);
+  //   await sleep(100);
+  //   updateStepStatus('plan_generation', 'in_progress', ['Planning query execution...']);
+  //   await sleep(100);
+  //   updateStepStatus('plan_generation', 'completed', ['Query plan ready']);
+  // };
 
   const stopAnalysis = () => {
     if (abortControllerRef.current) abortControllerRef.current.abort();
@@ -430,23 +548,23 @@ Result:
         value,
         ts: new Date().toISOString(),
       };
-      const resp = await fetch(`${configService.getBackendUrl()}/api/analytics/memory/clarify`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(answer),
-      });
-      if (!resp.ok) {
-        const j = await resp.json().catch(() => ({} as any));
-        throw new Error(j.error || `HTTP ${resp.status}`);
-      }
+      await apiService.post('/api/analytics/memory/clarify', answer);
       setPendingClarification(null);
     } catch (e: any) {
       setError(`Failed to submit clarification: ${e?.message || e}`);
     }
   };
 
+
   const handleAnalyticsQuery = async () => {
     if (!query.trim() || isLoading) return;
+    
+    // Add user query to chat history
+    const userMessageId = addChatMessage({
+      type: 'user',
+      content: query.trim(),
+    });
+    
     setIsLoading(true);
     setError('');
     setChartSpec(null);
@@ -460,12 +578,15 @@ Result:
     setPendingClarification(null);
     abortControllerRef.current = new AbortController();
 
-    // Simulate pre-steps with brief delays for modern UX
-    simulatePreSteps();
+    // Store the current query for result association
+    const currentQuery = query.trim();
+    setQuery(''); // Clear input after starting analysis
+
+    // Let server events drive all step status updates
 
     try {
       await apiService.streamWithAuth(
-        `/api/analytics/memory/stream?query=${encodeURIComponent(query)}${sessionId ? `&session_id=${sessionId}` : ''}`,
+        `/api/analytics/memory/stream?query=${encodeURIComponent(currentQuery)}${sessionId ? `&session_id=${sessionId}` : ''}`,
         (data) => {
           try {
             console.log('[MEMORY DEBUG] Received event:', data.event || data.type, data);
@@ -497,17 +618,28 @@ Result:
                 setPendingClarification(eventData as ClarifyRequest);
                 updateStepStatus('clarification', 'in_progress', [eventData.question]);
                 setCurrentStatus(`Clarification needed: ${eventData.question}`);
+                // Add clarification question with options to chat history
+                addChatMessage({
+                  type: 'clarification',
+                  content: eventData.question,
+                  clarifications: [eventData as ClarifyRequest],
+                });
                 break;
+                
                 
               case 'clarification_ack':
                 setPendingClarification(null);
-                updateStepStatus('clarification', 'completed');
+                // Add user answer to chat history as user message
+                addChatMessage({
+                  type: 'user',
+                  content: `${eventData.answer}`,
+                });
+                updateStepStatus('clarification', 'in_progress', ['Processing your answer...']);
+                setCurrentStatus('Processing your clarification answer...');
                 break;
                 
-              case 'clarification_timeout':
-                setPendingClarification(null);
-                updateStepStatus('clarification', 'completed', ['Timed out; using default']);
-                break;
+                
+              // Removed timeout handling
                 
               case 'plan_built':
                 updateStepStatus('plan_generation', 'completed', [], { plan: eventData.plan }, eventData.elapsed_ms);
@@ -623,15 +755,21 @@ Result:
               case 'workflow_complete':
                 setCurrentStatus('Analytics memory workflow completed!');
                 setIsLoading(false);
+                // Add result to chat history
+                addChatMessage({
+                  type: 'result',
+                  content: 'Analysis completed! Here are your results:',
+                  analysis: analysis,
+                  chartSpec: chartSpec,
+                  sqlQuery: sqlQuery,
+                });
                 break;
                 
               case 'done':
                 setIsLoading(false);
                 break;
                 
-              case 'heartbeat':
-                console.log('[MEMORY DEBUG] Heartbeat received');
-                break;
+              // Removed heartbeat handling
             }
           } catch (e) {
             console.error('Error parsing SSE data:', e);
@@ -689,13 +827,8 @@ Result:
 
         <div className="flex-1 overflow-auto p-4 sm:p-6 lg:p-8 pb-32 md:pb-6 bg-gray-900">
           <div className="w-full max-w-5xl mx-auto space-y-4 sm:space-y-6">
-            {pendingClarification && (
-              <ClarifyInline
-                request={pendingClarification}
-                onSubmit={async (val) => submitClarification(val, pendingClarification)}
-                disabled={isLoading === false}
-              />
-            )}
+            <ChatHistory messages={chatHistory} isLoading={isLoading} />
+
 
             {chartSpec && !useAltChart && (
               <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="bg-gray-800 border border-gray-700 rounded-xl shadow-2xl p-4 sm:p-6 md:p-8">
@@ -767,7 +900,7 @@ Result:
                   type="text"
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
-                  placeholder={pendingClarification ? 'Please answer the clarification above to continue…' : 'Ask about NVDA, AMD, AVGO, INTC, MU, QCOM, TXN'}
+                  placeholder={pendingClarification ? 'Please answer the clarification question above to continue…' : 'Ask about NVDA, AMD, AVGO, INTC, MU, QCOM, TXN'}
                   className="flex-1 px-4 py-3.5 text-sm md:text-base bg-gray-700/80 backdrop-blur-sm border border-gray-600/50 rounded-xl focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500/50 text-gray-100 placeholder-gray-400 min-h-[48px] shadow-lg"
                   onKeyDown={(e) => e.key === 'Enter' && handleAnalyticsQuery()}
                   disabled={isLoading || !!pendingClarification}
