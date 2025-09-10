@@ -17,6 +17,9 @@ from tts import get_voice_bytes
 from gemini_service import gemini_service
 from rate_limiter import init_rate_limiter, smart_rate_limit, get_user_usage, who_am_i
 from analytics_agent import create_analytics_workflow
+from analytics_memory.workflow import analytics_memory_workflow
+from analytics_memory.clarify import SessionStore
+from analytics_memory.types import ClarifyAnswerModel
 
 from langchain.callbacks.base import BaseCallbackHandler
 from typing import List, Tuple, Optional
@@ -26,6 +29,9 @@ env_path = Path(__file__).resolve().parent / ".env"
 load_dotenv(dotenv_path=env_path, override=False)
 
 app = FastAPI()
+
+# Initialize session store for analytics memory
+session_store = SessionStore()
 
 # Initialize rate limiter on startup
 @app.on_event("startup")
@@ -814,3 +820,62 @@ async def analytics_stream_endpoint(query: str, request: Request, _: None = Depe
             "X-Accel-Buffering": "no",
         }
     )
+
+@app.get("/api/analytics/memory/stream")
+async def analytics_memory_stream_endpoint(query: str, request: Request, session_id: Optional[str] = None, _: None = Depends(smart_rate_limit)):
+    """Stream analytics memory results with conversational clarifications"""
+    
+    # Generate a session ID if not provided
+    if not session_id:
+        session_id = str(uuid.uuid4())
+    
+    async def generate_analytics_memory_stream():
+        try:
+            print(f"[MAIN] Starting analytics memory stream for query: {query[:100]}...")
+            print(f"[MAIN] Session ID: {session_id}")
+            
+            # Run the analytics memory workflow 
+            async for event in analytics_memory_workflow(
+                query=query,
+                session_id=session_id
+            ):
+                # Convert the event to SSE format
+                event_data = json.dumps(event, default=str)
+                
+                # Yield the SSE event
+                yield f"data: {event_data}\n\n"
+                await asyncio.sleep(0)  # Allow other tasks to run
+                
+        except Exception as e:
+            print(f"[MAIN] Analytics memory stream error: {str(e)}")
+            error_event = {
+                "event": "error",
+                "data": {
+                    "error": str(e),
+                    "ts": _DateTime.utcnow().isoformat()
+                }
+            }
+            yield f"data: {json.dumps(error_event)}\n\n"
+            await asyncio.sleep(0)
+    
+    return StreamingResponse(
+        generate_analytics_memory_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "Access-Control-Allow-Origin": "*", 
+            "X-Accel-Buffering": "no",
+        }
+    )
+
+@app.post("/api/analytics/memory/clarify")
+async def analytics_memory_clarify_endpoint(answer: ClarifyAnswerModel, _: None = Depends(smart_rate_limit)):
+    """Handle clarification responses from the frontend"""
+    try:
+        print(f"[MAIN] Received clarification answer: {answer}")
+        await session_store.put_answer(answer)
+        return {"status": "success", "message": "Clarification answer received"}
+    except Exception as e:
+        print(f"[MAIN] Error handling clarification: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
