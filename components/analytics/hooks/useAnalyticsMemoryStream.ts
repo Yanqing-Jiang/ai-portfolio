@@ -125,8 +125,18 @@ export const useAnalyticsMemoryStream = () => {
           break;
           
         case 'sql_compiled':
-          stepsHook.updateStepStatus('sql_compilation', 'completed', [], { sql: eventData.sql }, eventData.elapsed_ms);
-          setSqlQuery(eventData.sql);
+          // Compilation stats only; SQL text arrives in 'sql_generated'
+          stepsHook.updateStepStatus('sql_compilation', 'completed', [], {
+            sql_length: eventData.sql_length,
+            template_used: eventData.template_used,
+          }, eventData.elapsed_ms);
+          break;
+
+        case 'sql_generated':
+          if (typeof eventData.sql === 'string') {
+            setSqlQuery(eventData.sql);
+          }
+          stepsHook.updateStepStatus('sql_validation', 'completed', [], { sql: eventData.sql }, eventData.elapsed_ms);
           break;
           
         case 'execution_stats':
@@ -149,12 +159,22 @@ export const useAnalyticsMemoryStream = () => {
           break;
           
         case 'analysis_streaming':
-          setStreamingText(prev => prev + eventData.text);
+          {
+            const chunk: string =
+              typeof eventData?.partial_analysis === 'string'
+                ? eventData.partial_analysis
+                : typeof eventData?.delta === 'string'
+                ? eventData.delta
+                : typeof eventData?.text === 'string'
+                ? eventData.text
+                : ''
+            if (chunk) setStreamingText(prev => prev + chunk)
+          }
           stepsHook.updateStepStatus('analysis_generation', 'in_progress', ['Generating financial analysis...']);
           break;
           
         case 'analysis_complete':
-          const finalAnalysis = eventData.text || streamingText;
+          const finalAnalysis = eventData.analysis || streamingText;
           setAnalysis(finalAnalysis);
           setStreamingText('');
           stepsHook.updateStepStatus('analysis_generation', 'completed', [], { analysis: finalAnalysis }, eventData.elapsed_ms);
