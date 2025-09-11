@@ -113,7 +113,8 @@ class AnalyticsWorkflow:
             add_candidate('market_share_single', has_market_share, 8)
             add_candidate('margin_growth_vs_peers', has_margin and has_growth and (has_compare or has_average), 9)
             add_candidate('margins_vs_peers', has_margin and (has_compare or has_average), 7)
-            add_candidate('revenue_growth_analysis', has_growth and (has_compare or has_average or 'vs' in q_lower), 7)
+            # Treat single-company revenue growth even without explicit compare keywords
+            add_candidate('revenue_growth_analysis', has_growth, 7)
             add_candidate('rnd_expense_vs_peers', has_rnd and has_expense and (has_compare or has_average), 6)
             add_candidate('rnd_intensity_vs_peers', has_rnd and (('intensity' in q_lower) or (has_compare or has_average)), 5)
 

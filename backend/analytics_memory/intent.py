@@ -66,18 +66,36 @@ def _heuristic_intent(query: str, configs: Dict[str, Any]) -> IntentModel:
     
     intent_key: Optional[str] = None
     if "market share" in q:
-        intent_key = "market_share_single"
-        if "all" in q:
+        # Prefer market_share_all when no specific company is detected
+        if "all" in q or ("every" in q or "each" in q):
+            intent_key = "market_share_all"
+        elif detected_company:
+            # Only use single if we have a specific company
+            intent_key = "market_share_single"
+        else:
+            # No company specified - default to market_share_all (shows all companies)
             intent_key = "market_share_all"
     elif "margin" in q and ("peer" in q or "average" in q or "vs" in q):
-        intent_key = "margins_vs_peers"
-    elif "growth" in q:
-        intent_key = "revenue_growth_analysis"
-    elif "r&d" in q or "rnd" in q:
-        if "expense" in q:
-            intent_key = "rnd_expense_vs_peers"
+        # margins_vs_peers requires company - only set if we have one
+        if detected_company:
+            intent_key = "margins_vs_peers"
         else:
-            intent_key = "rnd_intensity_vs_peers"
+            intent_key = None  # Trigger clarification
+    elif "growth" in q:
+        # Check for vs industry average patterns
+        if any(phrase in q for phrase in ["vs industry", "vs average", "compare industry", "industry average", "vs peers"]):
+            intent_key = "revenue_growth_vs_avg"
+        else:
+            intent_key = "revenue_growth_analysis"
+    elif "r&d" in q or "rnd" in q:
+        # R&D intents require company - only set if we have one
+        if detected_company:
+            if "expense" in q:
+                intent_key = "rnd_expense_vs_peers"
+            else:
+                intent_key = "rnd_intensity_vs_peers"
+        else:
+            intent_key = None  # Trigger clarification
 
     slots = {
         "tickers": _default_tickers(configs),
@@ -181,8 +199,9 @@ def detect_intent_llm(query: str, configs: Dict[str, Any]) -> IntentModel:
         if tf:
             res.slots_detected["timeframe"] = tf
 
-        # Granularity: infer if missing
-        if not res.slots_detected.get("granularity"):
+        # Granularity: infer if missing or invalid
+        current_granularity = res.slots_detected.get("granularity")
+        if not current_granularity or current_granularity not in ["annual", "quarterly"]:
             if any(k in text for k in ["quarter", "qoq", "q1", "q2", "q3", "q4"]):
                 res.slots_detected["granularity"] = "quarterly"
             else:
@@ -237,12 +256,15 @@ Rules:
 4. Be conservative with clarifications_suggested - only when truly required
 
 Known intent patterns and their slot requirements:
-- market_share_single: requires company
-- market_share_all: no company needed
+- market_share_single: requires company (if no company specified, suggest clarification)
+- market_share_all: no company needed (use when "all" companies or no specific company mentioned)
 - margins_vs_peers: requires company
 - revenue_growth_analysis: company optional
+- revenue_growth_vs_avg: company optional
 - rnd_intensity_vs_peers: requires company
-- rnd_expense_vs_peers: requires company"""
+- rnd_expense_vs_peers: requires company
+
+Important: For "market share" queries without a specific company, prefer clarification over assumptions."""
 
     content = f"""Available intents: {intents_cfg}
 Companies (tickers/aliases): {companies}
@@ -319,8 +341,9 @@ Identify the intent and any missing required slots."""
         if tf:
             res.slots_detected["timeframe"] = tf
 
-        # Granularity: infer if missing
-        if not res.slots_detected.get("granularity"):
+        # Granularity: infer if missing or invalid
+        current_granularity = res.slots_detected.get("granularity")
+        if not current_granularity or current_granularity not in ["annual", "quarterly"]:
             if any(k in text for k in ["quarter", "qoq", "q1", "q2", "q3", "q4"]):
                 res.slots_detected["granularity"] = "quarterly"
             else:
