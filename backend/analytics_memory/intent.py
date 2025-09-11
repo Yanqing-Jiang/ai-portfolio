@@ -126,8 +126,17 @@ def detect_intent_llm(query: str, configs: Dict[str, Any]) -> IntentModel:
             HumanMessage(content=content),
         ])
 
-        # Ensure dict exists
-        res.slots_detected = dict(res.slots_detected or {})
+        # Ensure dict exists with robust type checking
+        if isinstance(res.slots_detected, dict):
+            res.slots_detected = res.slots_detected
+        elif isinstance(res.slots_detected, (list, tuple)):
+            try:
+                res.slots_detected = dict(res.slots_detected) if res.slots_detected else {}
+            except (ValueError, TypeError):
+                logger.warning(f"Invalid slots_detected format: {res.slots_detected}")
+                res.slots_detected = {}
+        else:
+            res.slots_detected = {}
 
         # Company: scan tokens for alias/ticker if missing
         if not res.slots_detected.get("company"):
@@ -148,7 +157,12 @@ def detect_intent_llm(query: str, configs: Dict[str, Any]) -> IntentModel:
                 logger.info("Post-processed company: %s", detected)
 
         # Timeframe: parse years/quarters and clamp to bounds if needed
-        tf = dict(res.slots_detected.get("timeframe") or {})
+        tf_raw = res.slots_detected.get("timeframe") or {}
+        if isinstance(tf_raw, dict):
+            tf = tf_raw
+        else:
+            logger.warning(f"Invalid timeframe format: {tf_raw}")
+            tf = {}
         text = (query or "").lower()
         years_m = re.search(r"(past|last)\s+(\d{1,2})\s+years?", text)
         quarters_m = re.search(r"(past|last)\s+(\d{1,2})\s+quarters?", text)
@@ -243,8 +257,17 @@ Identify the intent and any missing required slots."""
             HumanMessage(content=content),
         ])
 
-        # Ensure dict exists
-        res.slots_detected = dict(res.slots_detected or {})
+        # Ensure dict exists with robust type checking
+        if isinstance(res.slots_detected, dict):
+            res.slots_detected = res.slots_detected
+        elif isinstance(res.slots_detected, (list, tuple)):
+            try:
+                res.slots_detected = dict(res.slots_detected) if res.slots_detected else {}
+            except (ValueError, TypeError):
+                logger.warning(f"Invalid slots_detected format: {res.slots_detected}")
+                res.slots_detected = {}
+        else:
+            res.slots_detected = {}
 
         # Apply existing deterministic post-processing
         # Company: scan tokens for alias/ticker if missing
@@ -272,7 +295,12 @@ Identify the intent and any missing required slots."""
                 ]
 
         # Timeframe: parse years/quarters and clamp to bounds if needed
-        tf = dict(res.slots_detected.get("timeframe") or {})
+        tf_raw = res.slots_detected.get("timeframe") or {}
+        if isinstance(tf_raw, dict):
+            tf = tf_raw
+        else:
+            logger.warning(f"Invalid timeframe format: {tf_raw}")
+            tf = {}
         text = (query or "").lower()
         years_m = re.search(r"(past|last)\s+(\d{1,2})\s+years?", text)
         quarters_m = re.search(r"(past|last)\s+(\d{1,2})\s+quarters?", text)

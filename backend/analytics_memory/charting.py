@@ -4,6 +4,37 @@ from typing import Dict, Any, List, Optional
 from .types import ChartPlanModel
 from .config import CONFIGS
 
+# Intent-based chart titles
+INTENT_TITLES = {
+    'market_share_single': 'Market Share Analysis',
+    'market_share_all': 'Market Share Comparison', 
+    'margins_vs_peers': 'Margin Comparison vs Industry',
+    'margin_growth_vs_peers': 'Margin Growth vs Industry',
+    'revenue_growth_analysis': 'Revenue Growth Analysis',
+    'rnd_intensity_vs_peers': 'R&D Intensity vs Industry',
+    'rnd_expense_vs_peers': 'R&D Expense vs Industry'
+}
+
+def _generate_descriptive_title(intent_key: Optional[str], primary_metrics: List[str]) -> str:
+    """Generate a descriptive chart title based on intent and metrics."""
+    if not intent_key:
+        return 'Financial Analytics'
+    
+    base_title = INTENT_TITLES.get(intent_key, 'Financial Analytics')
+    
+    # Enhance title with primary metrics if available
+    if primary_metrics:
+        # Get the first primary metric and make it readable
+        metric = primary_metrics[0].replace('_', ' ').title()
+        if 'Growth' in base_title and 'Growth' in metric:
+            return base_title  # Avoid redundancy
+        elif 'Margin' in base_title and 'Margin' in metric:
+            return base_title  # Avoid redundancy
+        else:
+            return f'{base_title} - {metric}'
+    
+    return base_title
+
 
 def _detect_primary_series(intent_key: Optional[str], available_slugs: List[str]) -> List[str]:
     """Detect primary series based on intent type using data column slugs."""
@@ -55,7 +86,8 @@ def plan_chart_rule_based(data: List[Dict[str, Any]], query: str) -> ChartPlanMo
     # Simple heuristics: if time columns exist -> line chart
     chart_type = 'line'
     if not data:
-        return ChartPlanModel(chart_type=chart_type, title='Analytics', series=[])
+        title = _generate_descriptive_title(intent_key, [])
+    return ChartPlanModel(chart_type=chart_type, title=title, series=[])
     cols = list(data[0].keys())
     has_time = any(c in cols for c in ['calendar_year', 'calendar_quarter'])
     if not has_time:
@@ -119,7 +151,11 @@ def plan_chart_rule_based(data: List[Dict[str, Any]], query: str) -> ChartPlanMo
             vtype = 'percent' if any(k in c.lower() for k in ['margin', 'share', 'ratio', 'growth', 'percent', 'pct']) else 'number'
             series.append({'name': c.replace('_', ' ').title(), 'data_column': c, 'value_type': vtype})
     
-    return ChartPlanModel(chart_type=chart_type, x_axis={'field': x_field, 'type': 'category'}, title='Analytics', series=series)
+    # Generate descriptive title based on intent and detected metrics
+    primary_metrics = _detect_primary_series(intent_key, [s.get('source_column', '') for s in series])
+    title = _generate_descriptive_title(intent_key, primary_metrics)
+    
+    return ChartPlanModel(chart_type=chart_type, x_axis={'field': x_field, 'type': 'category'}, title=title, series=series)
 
 
 def build_chart_spec(data: List[Dict[str, Any]], chart_plan: Dict[str, Any], charts_cfg: Dict[str, Any], 
@@ -233,7 +269,7 @@ def build_chart_spec(data: List[Dict[str, Any]], chart_plan: Dict[str, Any], cha
             default_selected[t] = False
 
         spec_stack = {
-            'title': {'left': 'center', 'top': '5%', 'text': chart_plan.get('title') or 'Analytics'},
+            'title': {'left': 'center', 'top': '5%', 'text': chart_plan.get('title') or 'Financial Analytics'},
             'tooltip': {'trigger': 'axis', 'axisPointer': {'type': 'cross'}},
             'legend': {'top': '10%', 'left': 'center', 'data': legend_order + rest_tickers, 'selected': default_selected},
             'grid': {'left': '3%', 'right': '8%', 'bottom': '3%', 'top': '20%', 'containLabel': True},
@@ -405,7 +441,7 @@ def build_chart_spec(data: List[Dict[str, Any]], chart_plan: Dict[str, Any], cha
                     })
                 break
 
-    title_text = chart_plan.get('title') or 'Analytics'
+    title_text = chart_plan.get('title') or 'Financial Analytics'
     spec = {
         'title': {'left': 'center', 'top': '5%', 'text': title_text},
         'tooltip': {
