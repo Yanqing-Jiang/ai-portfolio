@@ -15,6 +15,7 @@ import { configService } from '../services/config';
 
 interface ChatProps {
   project: Project;
+  onFirstMessage?: () => void;
 }
 
 const GOGGINS_SYSTEM_INSTRUCTION = 
@@ -38,7 +39,7 @@ declare global {
   }
 }
 
-const Chat: React.FC<ChatProps> = ({ project }) => {
+const Chat: React.FC<ChatProps> = ({ project, onFirstMessage }) => {
   const { systemInstruction, id: projectId, defaultPrompts } = project;
   const [chat, setChat] = useState<BackendGeminiService | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -47,6 +48,7 @@ const Chat: React.FC<ChatProps> = ({ project }) => {
   const [isGogginsMode, setIsGogginsMode] = useState(false);
   const [agentStatus, setAgentStatus] = useState<string>('');
   const [showAgentStatus, setShowAgentStatus] = useState(false);
+  const [hasUserSentMessage, setHasUserSentMessage] = useState(false);
   const gogginsAudioRef = useRef<{ playAudio: (text: string) => void; stop: () => void } | null>(null);
   // Remove all steps/progress state and rendering
   
@@ -187,6 +189,12 @@ const Chat: React.FC<ChatProps> = ({ project }) => {
 
   const sendMessage = useCallback(async (messageText: string) => {
     if (!messageText.trim() || isLoading) return;
+
+    // Call onFirstMessage callback if this is the first user message
+    if (!hasUserSentMessage && onFirstMessage) {
+      onFirstMessage();
+      setHasUserSentMessage(true);
+    }
 
     const userMessage: ChatMessage = {
       id: Date.now().toString(),
@@ -464,7 +472,7 @@ const Chat: React.FC<ChatProps> = ({ project }) => {
       );
       setIsLoading(false);
     }
-  }, [chat, isLoading, projectId, isGogginsProject, isGogginsMode, backendUrl]);
+  }, [chat, isLoading, projectId, isGogginsProject, isGogginsMode, backendUrl, hasUserSentMessage, onFirstMessage]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();

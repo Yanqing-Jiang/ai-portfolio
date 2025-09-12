@@ -1,5 +1,6 @@
 // Shared constants for analytics pages
 
+// Memory pipeline steps (with clarifications)
 export const STEP_NAME: Record<string, string> = {
   intent_detection: 'Intent Detection',
   plan_generation: 'Query Planning',
@@ -22,4 +23,21 @@ export const STEP_ORDER = [
   'sql_execution',
   'chart_generation',
   'analysis_generation',
+];
+
+// SQL pipeline steps (direct workflow)
+export const STEP_NAME_SQL: Record<string, string> = {
+  table: 'Table Selection',
+  schema: 'Schema Analysis',
+  sql: 'SQL Generation',
+  chart: 'Chart Creation',
+  analysis: 'Analysis Generation',
+};
+
+export const STEP_ORDER_SQL = [
+  'table',
+  'schema',
+  'sql',
+  'chart',
+  'analysis',
 ];

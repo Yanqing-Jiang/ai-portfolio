@@ -11,6 +11,7 @@ INTENT_TITLES = {
     'margins_vs_peers': 'Margin Comparison vs Industry',
     'margin_growth_vs_peers': 'Margin Growth vs Industry',
     'revenue_growth_analysis': 'Revenue Growth Analysis',
+    'revenue_growth_vs_avg': 'Revenue Growth vs Industry Average',
     'rnd_intensity_vs_peers': 'R&D Intensity vs Industry',
     'rnd_expense_vs_peers': 'R&D Expense vs Industry'
 }
@@ -47,6 +48,7 @@ def _detect_primary_series(intent_key: Optional[str], available_slugs: List[str]
         'margins_vs_peers': ['gross_margin', 'operating_margin', 'net_margin'],
         'margin_growth_vs_peers': ['gross_margin_change_pp', 'operating_margin_change_pp', 'net_margin_change_pp'],
         'revenue_growth_analysis': ['qoq_growth_percent', 'yoy_growth_percent'],
+        'revenue_growth_vs_avg': ['company_yoy_growth_percent', 'industry_avg_yoy_growth_percent'],
         'rnd_intensity_vs_peers': ['company_rnd_intensity', 'rnd_intensity_percent'],
         'rnd_expense_vs_peers': ['company_rnd_expense']
     }
@@ -82,12 +84,12 @@ def _assign_series_axes(series_list: List[Dict[str, Any]]) -> Dict[str, str]:
     return axis_assignment
 
 
-def plan_chart_rule_based(data: List[Dict[str, Any]], query: str) -> ChartPlanModel:
+def plan_chart_rule_based(data: List[Dict[str, Any]], query: str, intent_key: str = None) -> ChartPlanModel:
     # Simple heuristics: if time columns exist -> line chart
     chart_type = 'line'
     if not data:
         title = _generate_descriptive_title(intent_key, [])
-    return ChartPlanModel(chart_type=chart_type, title=title, series=[])
+        return ChartPlanModel(chart_type=chart_type, title=title, series=[])
     cols = list(data[0].keys())
     has_time = any(c in cols for c in ['calendar_year', 'calendar_quarter'])
     if not has_time:

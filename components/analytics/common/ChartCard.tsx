@@ -7,6 +7,7 @@ import { downloadCsv, extractDataFromChartSpec } from '../utils';
 
 export const ChartCard: React.FC<ChartCardProps> = ({
   chartSpec,
+  dataSample,
   useAltChart = false,
   height = 'h-[280px] sm:h-[360px] md:h-[440px] lg:h-[520px]',
   onError,

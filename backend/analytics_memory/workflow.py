@@ -431,7 +431,12 @@ class AnalyticsMemoryWorkflow:
         yield {"event": "status", "data": {"step": "sql_execution", "message": "Executing query...", "ts": datetime.utcnow().isoformat()}}
         
         exec_start = time.time()
-        data = await execute(sql)
+        try:
+            data = await execute(sql)
+        except Exception as e:
+            # Emit a clear error event on DB failures/timeouts
+            yield {"event": "errors", "data": {"errors": [str(e)], "step": "sql_execution"}}
+            return
         exec_elapsed = int((time.time() - exec_start) * 1000)
         
         try:
@@ -459,7 +464,7 @@ class AnalyticsMemoryWorkflow:
         yield {"event": "status", "data": {"step": "chart_generation", "message": "Planning chart...", "ts": datetime.utcnow().isoformat()}}
         
         chart_start = time.time()
-        chart_plan = plan_chart_rule_based(data, query)
+        chart_plan = plan_chart_rule_based(data, query, intent.intent_key)
         # Pass intent and comparison to the chart builder for intent-specific layouts
         spec = build_chart_spec(
             data,

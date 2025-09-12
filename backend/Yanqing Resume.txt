@@ -15,10 +15,9 @@ Pre-AI website: www.jiangyanqing.com
 *Amazon Sales Team, Seattle, WA*  
 **Jul 2024 – Present**
 
-- Lead development of marketing analytics products for the Highest Growth team in P&G
+- Lead development of analytics products for the Highest Growth team in P&G
 - Optimized shopper targeting strategies, increasing search-to-purchase conversion by 50% YoY and increase "Buy x Get y" 5 yearly scale campaign sales by 20%.
-- Deployed ML algorithms to reduce search cost by 10% while driving sales growth.
-- Architected 100+ A/B tests and hypothesis-driven analytic insights.
+- Deployed ML algorithms to reduce cost by 10% while driving sales growth.
 
 ---
 

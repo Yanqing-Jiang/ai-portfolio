@@ -1,7 +1,7 @@
 import React from 'react';
 
 interface ChartErrorBoundaryProps {
-  onError: (error: unknown) => void;
+  onError?: (error: unknown) => void;
   children: React.ReactNode;
 }
 
@@ -20,7 +20,9 @@ export class ChartErrorBoundary extends React.Component<ChartErrorBoundaryProps,
   }
 
   componentDidCatch(error: Error) {
-    this.props.onError(error);
+    if (typeof this.props.onError === 'function') {
+      this.props.onError(error);
+    }
   }
 
   render() {

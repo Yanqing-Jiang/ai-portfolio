@@ -20,6 +20,7 @@ export interface ChatMessage {
   analysis?: string;
   chartSpec?: any;
   sqlQuery?: string;
+  dataSample?: any[];
 }
 
 export interface ClarifyRequest {
@@ -50,12 +51,15 @@ export interface HeaderProps {
   description: string;
   technologies: string[];
   imageUrl?: string;
-  showProcessPanel: boolean;
-  onToggleProcess: () => void;
+  showProcessPanel?: boolean;
+  onToggleProcess?: () => void;
+  isCollapsed?: boolean;
+  onToggleCollapse?: () => void;
 }
 
 export interface ChartCardProps {
   chartSpec: any;
+  dataSample?: any[] | null;
   useAltChart?: boolean;
   height?: string;
   onError?: (error: any) => void;

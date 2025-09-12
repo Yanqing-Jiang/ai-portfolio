@@ -3,4 +3,5 @@ export * from './types';
 export * from './utils';
 export * from './common';
 export * from './memory';
+export * from './sql';
 export * from './hooks';
