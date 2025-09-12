@@ -1,0 +1,250 @@
+import asyncio
+from fastapi import FastAPI, Request, Depends, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse, Response, JSONResponse
+from pydantic import BaseModel
+from dotenv import load_dotenv
+from pathlib import Path
+import os
+import json
+from datetime import date as _Date, datetime as _DateTime
+import uuid
+
+
+from research_agent import run_research_agent, run_research_agent_stream
+from resume_agent import run_resume_agent, run_resume_agent_stream
+from tts import get_voice_bytes
+from gemini_service import gemini_service
+from rate_limiter import init_rate_limiter, smart_rate_limit, get_user_usage, who_am_i
+from analytics_agent import create_analytics_workflow
+from analytics_memory.workflow import analytics_memory_workflow
+from analytics_memory.clarify import put_answer
+from analytics_memory.types import ClarifyAnswerModel
+
+from langchain.callbacks.base import BaseCallbackHandler
+from typing import List, Tuple, Optional
+
+# Always load the .env file located in the backend directory (same folder as this file)
+env_path = Path(__file__).resolve().parent / ".env"
+load_dotenv(dotenv_path=env_path, override=False)
+
+app = FastAPI()
+
+# Use the global session store from analytics_memory.clarify
+
+# Initialize rate limiter on startup
+@app.on_event("startup")
+async def startup_event():
+    await init_rate_limiter()
+
+# Allow CORS for local frontend dev
+origins = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "*"
+]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+class ResearchRequest(BaseModel):
+    query: str
+    chat_history: List[Tuple[str, str]] = []
+
+# Request model for TTS
+class TTSRequest(BaseModel):
+    text: str
+
+# Request models for Gemini API
+class GeminiChatRequest(BaseModel):
+    system_instruction: str
+
+class GeminiMessageRequest(BaseModel):
+    message: str
+    session_id: str
+
+# Request model for streaming TTS
+class TTSStreamRequest(BaseModel):
+    text: str
+    session_id: Optional[str] = None
+
+# In-memory chat sessions storage
+chat_sessions = {}
+
+class StreamingCallbackHandler(BaseCallbackHandler):
+    def __init__(self):
+        self.steps = []
+
+    def on_tool_start(self, tool, input_str, **kwargs):
+        step = f"🔍 Running {tool.name}..."
+        self.steps.append(step)
+        return step
+
+    def on_tool_end(self, output, **kwargs):
+        step = "✅ Tool completed"
+        self.steps.append(step)
+        return step
+
+    def on_text(self, text, **kwargs):
+        self.steps.append(text)
+        return text
+
+    def on_llm_start(self, serialized, prompts, **kwargs):
+        step = "🤖 Thinking..."
+        self.steps.append(step)
+        return step
+
+class StepCollectorCallbackHandler(BaseCallbackHandler):
+    def __init__(self):
+        self.steps = []
+
+    def on_tool_start(self, tool, input_str, **kwargs):
+        self.steps.append(f"Running tool: {tool.name} with input: {input_str}")
+
+    def on_tool_end(self, output, **kwargs):
+        self.steps.append(f"Tool output: {output}")
+
+    def on_text(self, text, **kwargs):
+        self.steps.append(f"Agent: {text}")
+
+@app.post("/api/research")
+def research_endpoint(request: ResearchRequest):
+    result = run_research_agent(request.query)
+    return result  # returns both 'answer' and 'steps'
+
+@app.get("/api/research/stream")
+async def research_stream_endpoint(query: str, request: Request):
+    async def generate_stream():
+        try:
+            # Send initial status
+            yield f"data: {json.dumps({'type': 'status', 'message': '🔎 Starting research agent...', 'replace': False})}\n\n"
+            await asyncio.sleep(0)  # Flush event loop
+            
+            # Run the research agent with streaming
+            chunk_count = 0
+            in_final_response = False
+            final_response_message_sent = False
+            for chunk in run_research_agent_stream(query):
+                if chunk:
+                    try:
+                        # Handle special status replacement messages
+                        if chunk.startswith("STATUS_REPLACE:"):
+                            status_message = chunk[15:]  # Remove "STATUS_REPLACE:" prefix
+                            yield f"data: {json.dumps({'type': 'status', 'message': status_message, 'replace': True})}\n\n"
+                            await asyncio.sleep(0)  # Flush event loop
+                            continue
+                        
+                        # Handle status update messages (append to status)
+                        if chunk.startswith("STATUS_UPDATE:"):
+                            status_message = chunk[14:]  # Remove "STATUS_UPDATE:" prefix
+                            yield f"data: {json.dumps({'type': 'status', 'message': status_message, 'replace': False})}\n\n"
+                            await asyncio.sleep(0)  # Flush event loop
+                            continue
+                        
+                        # Handle final response marker
+                        if chunk == "FINAL_RESPONSE_START":
+                            in_final_response = True
+                            # Only send the message once
+                            if not final_response_message_sent:
+                                yield f"data: {json.dumps({'type': 'status', 'message': '✅ Research complete, generating final response...', 'replace': True})}\n\n"
+                                await asyncio.sleep(0)  # Flush event loop
+                                final_response_message_sent = True
+                            continue
+                        
+                        # (Optional) Previously truncated long chunks; keep full chunk to avoid losing data
+                        
+                        # Determine chunk type based on content and mode
+                        chunk_type = 'response' if in_final_response else 'chunk'
+                        yield f"data: {json.dumps({'type': chunk_type, 'text': chunk})}\n\n"
+                        await asyncio.sleep(0)  # Flush event loop immediately after each chunk
+                        chunk_count += 1
+                        
+                        # Removed heartbeat logic
+                        
+                        # Prevent too many chunks
+                        if chunk_count > 5000:
+                            yield f"data: {json.dumps({'type': 'status', 'message': '⚠️ Response truncated due to length', 'replace': True})}\n\n"
+                            await asyncio.sleep(0)
+                            break
+                            
+                    except Exception as chunk_error:
+                        # Handle individual chunk errors
+                        yield f"data: {json.dumps({'type': 'error', 'message': f'Chunk error: {str(chunk_error)}'})}\n\n"
+                        await asyncio.sleep(0)
+                        break
+            
+            # Send completion signal
+            yield f"data: {json.dumps({'type': 'done'})}\n\n"
+            await asyncio.sleep(0)  # Final flush
+            
+        except GeneratorExit:
+            # Client disconnected
+            return
+        except Exception as e:
+            try:
+                error_msg = f"Error during research: {str(e)}"
+                yield f"data: {json.dumps({'type': 'error', 'message': error_msg})}\n\n"
+                await asyncio.sleep(0)
+            except:
+                # If we can't even send the error, just return
+                return
+    
+    return StreamingResponse(
+        generate_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "Access-Control-Allow-Origin": "*",
+            "X-Accel-Buffering": "no",  # Disable nginx buffering
+        }
+    )
+
+@app.get("/api/resume-search/stream")
+async def resume_search_stream_endpoint(query: str, request: Request, chat_history: str = "[]"):
+    # Parse chat_history from JSON string
+    try:
+        parsed_history = json.loads(chat_history) if chat_history else []
+    except json.JSONDecodeError:
+        parsed_history = []
+    
+    async def generate_stream():
+        try:
+            # Send initial status
+            yield f"data: {json.dumps({'type': 'status', 'message': '📄 Starting resume search...', 'replace': False})}\n\n"
+            await asyncio.sleep(0)  # Flush event loop
+            
+            # Run the resume agent with streaming
+            chunk_count = 0
+            in_final_response = False
+            # Removed heartbeat tracking
+            
+            for chunk in run_resume_agent_stream(query, parsed_history):
+                if chunk:
+                    try:
+                        # Handle special status replacement messages
+                        if chunk.startswith("STATUS_REPLACE:"):
+                            status_message = chunk[15:]  # Remove "STATUS_REPLACE:" prefix
+                            yield f"data: {json.dumps({'type': 'status', 'message': status_message, 'replace': True})}\n\n"
+                            await asyncio.sleep(0)  # Flush event loop
+                            continue
+                        
+                        # Handle status update messages (append to status)
+                        if chunk.startswith("STATUS_UPDATE:"):
+                            status_message = chunk[14:]  # Remove "STATUS_UPDATE:" prefix
+                            yield f"data: {json.dumps({'type': 'status', 'message': status_message, 'replace': False})}\n\n"
+                            await asyncio.sleep(0)  # Flush event loop
+                            continue
+                        
+                        # Handle final response marker
+                        if chunk == "FINAL_RESPONSE_START":
+                            in_final_response = True
+                            yield f"data: {json.dumps({'type': 'status', 'message': '✅ Resume search complete, generating final response...', 'replace': True})}\n\n"
+                            await asyncio.sleep(0)  # Flush event loop
+                            continue

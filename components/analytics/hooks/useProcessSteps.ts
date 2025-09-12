@@ -2,8 +2,16 @@ import { useState } from 'react';
 import { ProcessStep } from '../types';
 import { STEP_NAME, STEP_ORDER } from '../../../constants/analytics';
 
-export const useProcessSteps = () => {
+interface StepConfig {
+  stepNames?: Record<string, string>;
+  stepOrder?: string[];
+}
+
+export const useProcessSteps = (config?: StepConfig) => {
   const [processSteps, setProcessSteps] = useState<ProcessStep[]>([]);
+  
+  const stepNames = config?.stepNames || STEP_NAME;
+  const stepOrder = config?.stepOrder || STEP_ORDER;
 
   const updateStepStatus = (
     stepId: string,
@@ -33,7 +41,7 @@ export const useProcessSteps = () => {
         ...prev,
         {
           id: stepId,
-          name: STEP_NAME[stepId] || stepId,
+          name: stepNames[stepId] || stepId,
           status,
           thinking,
           details,
@@ -41,7 +49,7 @@ export const useProcessSteps = () => {
           timestamp,
         },
       ];
-      next.sort((a, b) => STEP_ORDER.indexOf(a.id) - STEP_ORDER.indexOf(b.id));
+      next.sort((a, b) => stepOrder.indexOf(a.id) - stepOrder.indexOf(b.id));
       return next;
     });
   };

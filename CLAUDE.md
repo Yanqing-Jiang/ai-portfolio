@@ -2,10 +2,7 @@
 - Understand first, change second. If you're not confident on the task, ask the user questions for clarification. 
 - Before any edit: read the entire target function and its direct call sites.
 - After reading, produce an **Understanding Summary** with bullets:
-  - Inputs/outputs & types; invariants; side effects
-- Then propose a **Plan of Changes**:
-  - summary of changes step by step, benefit of these changes. 
-- Only then write code. Prefer surgical diffs that preserve behavior unless asked to refactor.
+- Prefer surgical diffs that preserve behavior unless asked to refactor.
 
 
 ## Architecture Overview

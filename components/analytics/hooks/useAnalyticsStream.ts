@@ -16,18 +16,23 @@ export const useAnalyticsStream = () => {
     setError('');
     abortControllerRef.current = new AbortController();
 
+    const handleError = (error: string, needsAuth?: boolean) => {
+      setError(error);
+      setCurrentStatus(`Error: ${error}`);
+    };
+
     try {
       await apiService.streamWithAuth(
         endpoint,
         onEvent,
+        handleError,
+        onComplete,
         abortControllerRef.current.signal
       );
-      onComplete?.();
     } catch (e: any) {
       if (e.name !== 'AbortError') {
         const errorMsg = e?.message || e || 'Analytics stream failed';
-        setError(errorMsg);
-        setCurrentStatus(`Error: ${errorMsg}`);
+        handleError(errorMsg);
       }
     } finally {
       setIsLoading(false);

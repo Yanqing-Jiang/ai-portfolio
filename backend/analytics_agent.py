@@ -1705,15 +1705,18 @@ Sample Data Points:
                 yield {"event": "errors", "data": {"errors": ["No data available for analysis"]}}
                 return
 
-            print(f"[WORKFLOW] Building analysis prompt from {len(state['data'])} data rows")
+            total_rows = len(state['data'])
+            max_rows_for_llm = int(os.getenv('ANALYTICS_MAX_ROWS_FOR_LLM', '200'))
+            preview_rows = state['data'][:max_rows_for_llm]
+            print(f"[WORKFLOW] Building analysis prompt from {total_rows} rows (previewing {len(preview_rows)})")
             try:
-                data_json = json.dumps(state["data"], default=str)
+                data_json = json.dumps(preview_rows, default=str)
             except Exception:
                 # Fallback if any non-serializable value sneaks in
-                data_json = json.dumps([{k: str(v) for k, v in row.items()} for row in state["data"]])
+                data_json = json.dumps([{k: str(v) for k, v in row.items()} for row in preview_rows])
 
             analysis_prompt = f"""
-You are a financial analyst. Analyze the user's question using the SQL and raw data rows below. 
+You are a financial analyst. Analyze the user's question using the SQL and a preview of the data below.
 
 USER QUESTION:
 {state['query']}
@@ -1721,12 +1724,14 @@ USER QUESTION:
 SQL USED:
 {state.get('sql', '')}
 
-DATA ROWS (JSON):
+ROW COUNT: {total_rows}
+PREVIEW COUNT: {len(preview_rows)} (showing only the first rows)
+DATA PREVIEW (JSON):
 {data_json}
 
 Guidelines:
 - Focus on the user's intent; interpret what the measures represent based on the SQL (e.g., market_share, net_margin, QoQ growth).
-- when there are multiple metrics, provide a summary of the metrics and their relationships.
+- When multiple metrics are present, summarize the relationships.
 - Use specific numbers, years/quarters, and compare to peers where applicable.
 - Be concise and avoid restating the SQL.
 """

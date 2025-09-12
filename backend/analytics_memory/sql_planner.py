@@ -26,6 +26,9 @@ def plan_sql_rule_based(intent: IntentModel, configs: Dict[str, Any]) -> QueryPl
     elif intent.intent_key == 'revenue_growth_analysis':
         metrics = ['Revenue']
         comparison = 'single'
+    elif intent.intent_key == 'revenue_growth_vs_avg':
+        metrics = ['Revenue']
+        comparison = 'vs_avg'
     elif intent.intent_key == 'rnd_intensity_vs_peers':
         metrics = ['Revenue', 'R&D Expense']
         derived = ['rnd_intensity']
@@ -37,7 +40,13 @@ def plan_sql_rule_based(intent: IntentModel, configs: Dict[str, Any]) -> QueryPl
         metrics = ['Revenue']
 
     years_back = (intent.slots_detected.get('timeframe') or {}).get('years_back', 4)
-    granularity = intent.slots_detected.get('granularity') or 'annual'
+    raw_granularity = intent.slots_detected.get('granularity')
+    # Ensure granularity is always a valid enum value
+    granularity = 'annual'  # default
+    if raw_granularity in ['annual', 'quarterly']:
+        granularity = raw_granularity
+    elif raw_granularity and ('quarter' in raw_granularity.lower() or 'q1' in raw_granularity.lower()):
+        granularity = 'quarterly'
     plan = QueryPlanModel(
         metrics=metrics,
         derived_metrics=derived,

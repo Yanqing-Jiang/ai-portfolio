@@ -332,6 +332,91 @@ query_patterns:
       ORDER BY ticker, calendar_year, calendar_quarter_num
       LIMIT 500;
 
+  revenue_growth_vs_avg:
+    name: "Revenue Growth vs Industry Average Comparison"
+    description: "Compare company revenue growth against industry average excluding the target company"
+    keywords:
+      - "growth vs industry"
+      - "growth vs average"
+      - "growth compare industry"
+      - "growing vs average"
+      - "growth rate vs industry"
+      - "vs industry average"
+      - "compare to industry"
+      - "vs peers growth"
+    sql_template: |
+      WITH quarterly_revenue AS (
+        SELECT 
+          ticker,
+          calendar_year,
+          calendar_quarter_num,
+          calendar_quarter,
+          SUM(value) AS quarterly_revenue,
+          calendar_year * 100 + calendar_quarter_num AS period_id
+        FROM comp_financials
+        WHERE 
+          metric = 'Revenue'
+          AND ticker IN ('AMD','AVGO','INTC','MU','NVDA','QCOM','TXN')
+          AND calendar_quarter_num IS NOT NULL
+          AND calendar_year >= EXTRACT(YEAR FROM CURRENT_DATE) - {years_back}
+          AND value IS NOT NULL
+        GROUP BY ticker, calendar_year, calendar_quarter_num, calendar_quarter
+      ),
+      growth_calculations AS (
+        SELECT 
+          ticker,
+          calendar_year,
+          calendar_quarter_num,
+          calendar_quarter,
+          quarterly_revenue,
+          LAG(quarterly_revenue, 4) OVER (
+            PARTITION BY ticker 
+            ORDER BY period_id
+          ) AS same_quarter_prev_year,
+          CASE 
+            WHEN LAG(quarterly_revenue, 4) OVER (
+              PARTITION BY ticker 
+              ORDER BY period_id
+            ) > 0 
+            THEN ((quarterly_revenue - LAG(quarterly_revenue, 4) OVER (
+              PARTITION BY ticker 
+              ORDER BY period_id
+            )) / LAG(quarterly_revenue, 4) OVER (
+              PARTITION BY ticker 
+              ORDER BY period_id
+            )) * 100.0
+            ELSE NULL 
+          END AS yoy_growth_percent
+        FROM quarterly_revenue
+      ),
+      industry_averages AS (
+        SELECT 
+          calendar_year,
+          calendar_quarter_num,
+          calendar_quarter,
+          AVG(CASE WHEN ticker != '{target_ticker}' THEN yoy_growth_percent END) AS industry_avg_yoy_growth_percent
+        FROM growth_calculations
+        WHERE yoy_growth_percent IS NOT NULL
+        GROUP BY calendar_year, calendar_quarter_num, calendar_quarter
+      )
+      SELECT 
+        gc.ticker,
+        gc.calendar_year,
+        gc.calendar_quarter_num,
+        gc.calendar_quarter,
+        gc.quarterly_revenue,
+        gc.yoy_growth_percent AS company_yoy_growth_percent,
+        ia.industry_avg_yoy_growth_percent
+      FROM growth_calculations gc
+      JOIN industry_averages ia ON 
+        gc.calendar_year = ia.calendar_year 
+        AND gc.calendar_quarter_num = ia.calendar_quarter_num
+        AND gc.calendar_quarter = ia.calendar_quarter
+      WHERE gc.ticker = '{target_ticker}' 
+        AND gc.yoy_growth_percent IS NOT NULL
+      ORDER BY gc.calendar_year, gc.calendar_quarter_num
+      LIMIT 500;
+
   rnd_intensity_vs_peers:
     name: "R&D Intensity vs Industry Average"
     description: "Compare R&D spending intensity against industry average"

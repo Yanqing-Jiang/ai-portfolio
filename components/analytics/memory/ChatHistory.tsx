@@ -1,6 +1,8 @@
 import React from 'react';
 import { ChatHistoryProps } from '../types';
 import { ClarificationOptions } from './ClarificationOptions';
+import { ChartCard, AnalysisCard, SqlCard, CollapsibleSection } from '../common';
+import { isValidChartSpec } from '../utils';
 
 export const ChatHistory: React.FC<ChatHistoryProps> = ({ 
   messages, 
@@ -16,24 +18,63 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
           <div key={message.id} className={`flex ${message.type === 'user' ? 'justify-end' : 'justify-start'}`}>
             <div className={`max-w-[80%] ${message.type === 'user' ? 'order-2' : 'order-1'}`}>
               {/* Message bubble */}
-              <div className={`rounded-2xl px-4 py-3 transition-all hover:shadow-sm ${
+              <div className={`transition-all hover:shadow-sm ${
                 message.type === 'user' 
-                  ? 'bg-gray-800 text-gray-100 rounded-br-md' 
-                  : 'bg-gray-800/50 text-gray-100 rounded-bl-md'
+                  ? 'bg-gray-800 text-gray-100 rounded-2xl rounded-br-md px-4 py-3' 
+                  : message.type === 'result'
+                    ? 'bg-gray-800/30 text-gray-100 rounded-2xl rounded-bl-md p-2'
+                    : 'bg-gray-800/50 text-gray-100 rounded-2xl rounded-bl-md px-4 py-3'
               }`}>
-                <div className="text-sm leading-relaxed">{message.content}</div>
-                {message.answers && Object.keys(message.answers).length > 0 && (
-                  <div className={`text-xs mt-2 ${
-                    message.type === 'user' ? 'text-blue-100' : 'text-gray-400'
-                  }`}>
-                    Answered: {Object.entries(message.answers).map(([k, v]) => `${k}: ${v}`).join(', ')}
+                <div className={message.type === 'result' ? 'px-2 py-1' : ''}>
+                  <div className="text-sm leading-relaxed">{message.content}</div>
+                  {message.answers && Object.keys(message.answers).length > 0 && (
+                    <div className={`text-xs mt-2 ${
+                      message.type === 'user' ? 'text-blue-100' : 'text-gray-400'
+                    }`}>
+                      Answered: {Object.entries(message.answers).map(([k, v]) => `${k}: ${v}`).join(', ')}
+                    </div>
+                  )}
+                  {message.clarifications && message.clarifications.length > 0 && onSubmitClarification && (
+                    <ClarificationOptions 
+                      clarification={message.clarifications[0]} 
+                      onSubmit={async (val) => onSubmitClarification(val, message.clarifications![0])}
+                    />
+                  )}
+                </div>
+                
+                {/* Embedded Rich Content for Result Messages */}
+                {message.type === 'result' && (
+                  <div className="mt-3 space-y-4">
+                    {/* Chart Display */}
+                    {message.chartSpec && isValidChartSpec(message.chartSpec) && (
+                      <div className="rounded-xl overflow-hidden border border-gray-700">
+                        <ChartCard
+                          chartSpec={message.chartSpec}
+                          dataSample={message.dataSample}
+                          enableDropdown={true}
+                          enableCsvDownload={true}
+                        />
+                      </div>
+                    )}
+                    
+                    {/* Analysis Display */}
+                    {message.analysis && (
+                      <div className="rounded-xl overflow-hidden">
+                        <AnalysisCard analysis={message.analysis} />
+                      </div>
+                    )}
+                    
+                    {/* SQL Query Display (Collapsible) */}
+                    {message.sqlQuery && (
+                      <CollapsibleSection 
+                        title="Generated SQL Query" 
+                        defaultOpen={false}
+                        className="bg-gray-800/50"
+                      >
+                        <SqlCard sqlQuery={message.sqlQuery} />
+                      </CollapsibleSection>
+                    )}
                   </div>
-                )}
-                {message.clarifications && message.clarifications.length > 0 && onSubmitClarification && (
-                  <ClarificationOptions 
-                    clarification={message.clarifications[0]} 
-                    onSubmit={async (val) => onSubmitClarification(val, message.clarifications![0])}
-                  />
                 )}
               </div>
               

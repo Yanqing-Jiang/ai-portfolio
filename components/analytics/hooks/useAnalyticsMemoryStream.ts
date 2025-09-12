@@ -13,6 +13,21 @@ export const useAnalyticsMemoryStream = () => {
   const [sqlQuery, setSqlQuery] = useState('');
   const [dataSample, setDataSample] = useState<any[] | null>(null);
   const [streamingText, setStreamingText] = useState('');
+  
+  // Ref to accumulate workflow data throughout the stream to avoid async state issues
+  const workflowDataRef = useRef<{
+    chartSpec: any;
+    analysis: string;
+    sqlQuery: string;
+    dataSample: any[] | null;
+    streamingText: string;
+  }>({
+    chartSpec: null,
+    analysis: '',
+    sqlQuery: '',
+    dataSample: null,
+    streamingText: ''
+  });
 
   const streamHook = useAnalyticsStream();
   const stepsHook = useProcessSteps();
@@ -59,14 +74,19 @@ export const useAnalyticsMemoryStream = () => {
       content: query.trim(),
     });
     
-    // Reset state
-    setChartSpec(null);
-    setAnalysis('');
-    setSqlQuery('');
+    // Reset only temporary state for new query (keep results in chat history)
     setStreamingText('');
-    setDataSample(null);
     setPendingClarification(null);
     stepsHook.resetSteps();
+    
+    // Reset workflow data ref for new query
+    workflowDataRef.current = {
+      chartSpec: null,
+      analysis: '',
+      sqlQuery: '',
+      dataSample: null,
+      streamingText: ''
+    };
 
     const endpoint = `/api/analytics/memory/stream?query=${encodeURIComponent(query.trim())}${sessionId ? `&session_id=${sessionId}` : ''}`;
 
@@ -135,6 +155,7 @@ export const useAnalyticsMemoryStream = () => {
         case 'sql_generated':
           if (typeof eventData.sql === 'string') {
             setSqlQuery(eventData.sql);
+            workflowDataRef.current.sqlQuery = eventData.sql;
           }
           stepsHook.updateStepStatus('sql_validation', 'completed', [], { sql: eventData.sql }, eventData.elapsed_ms);
           break;
@@ -146,6 +167,7 @@ export const useAnalyticsMemoryStream = () => {
         case 'data_retrieved':
           if (Array.isArray(eventData.sample_data)) {
             setDataSample(eventData.sample_data);
+            workflowDataRef.current.dataSample = eventData.sample_data;
             stepsHook.updateStepStatus('sql_execution', 'completed', [], { 
               rowCount: eventData.row_count,
               sampleData: eventData.sample_data 
@@ -155,6 +177,7 @@ export const useAnalyticsMemoryStream = () => {
           
         case 'chart_generated':
           setChartSpec(eventData.chart_spec);
+          workflowDataRef.current.chartSpec = eventData.chart_spec;
           stepsHook.updateStepStatus('chart_generation', 'completed', [], { chart_spec: eventData.chart_spec }, eventData.elapsed_ms);
           break;
           
@@ -168,15 +191,23 @@ export const useAnalyticsMemoryStream = () => {
                 : typeof eventData?.text === 'string'
                 ? eventData.text
                 : ''
-            if (chunk) setStreamingText(prev => prev + chunk)
+            if (chunk) {
+              setStreamingText(prev => {
+                const newText = prev + chunk;
+                workflowDataRef.current.streamingText = newText;
+                return newText;
+              });
+            }
           }
           stepsHook.updateStepStatus('analysis_generation', 'in_progress', ['Generating financial analysis...']);
           break;
           
         case 'analysis_complete':
-          const finalAnalysis = eventData.analysis || streamingText;
+          const finalAnalysis = eventData.analysis || workflowDataRef.current.streamingText;
           setAnalysis(finalAnalysis);
+          workflowDataRef.current.analysis = finalAnalysis;
           setStreamingText('');
+          workflowDataRef.current.streamingText = '';
           stepsHook.updateStepStatus('analysis_generation', 'completed', [], { analysis: finalAnalysis }, eventData.elapsed_ms);
           break;
           
@@ -185,9 +216,10 @@ export const useAnalyticsMemoryStream = () => {
           addChatMessage({
             type: 'result',
             content: 'Analysis completed! Here are your results:',
-            analysis: analysis,
-            chartSpec: chartSpec,
-            sqlQuery: sqlQuery,
+            analysis: workflowDataRef.current.analysis || workflowDataRef.current.streamingText,
+            chartSpec: workflowDataRef.current.chartSpec,
+            sqlQuery: workflowDataRef.current.sqlQuery,
+            dataSample: workflowDataRef.current.dataSample,
           });
           break;
           
@@ -219,6 +251,15 @@ export const useAnalyticsMemoryStream = () => {
     setSqlQuery('');
     setDataSample(null);
     setStreamingText('');
+    
+    // Reset workflow data ref
+    workflowDataRef.current = {
+      chartSpec: null,
+      analysis: '',
+      sqlQuery: '',
+      dataSample: null,
+      streamingText: ''
+    };
   };
 
   return {
