@@ -67,14 +67,14 @@ def _generate_chart_design(intent_key: Optional[str], plan: QueryPlanModel, data
     elif intent_key in ['margins_vs_peers', 'margin_growth_vs_peers']:
         design.update({
             'measure': ['gross_margin', 'operating_margin', 'net_margin'] if 'margins_vs_peers' in intent_key 
-                      else ['gross_margin_change_pp', 'operating_margin_change_pp', 'net_margin_change_pp'],
+                      else ['company_gross_margin_change_pp', 'company_operating_margin_change_pp', 'company_net_margin_change_pp', 'peer_avg_gross_margin_change_pp', 'peer_avg_operating_margin_change_pp', 'peer_avg_net_margin_change_pp'],
             'y_axis': {'type': 'percent_only'},
             'defaultLegendSelection': {
                 'operating_margin': True,
                 'net_margin': True
             } if 'margins_vs_peers' in intent_key else {
-                'operating_margin_change_pp': True,
-                'net_margin_change_pp': True
+                'company_operating_margin_change_pp': True,
+                'company_net_margin_change_pp': True
             }
         })
         
@@ -116,6 +116,7 @@ class AnalyticsMemoryWorkflow:
         if not session_id:
             session_id = str(uuid.uuid4())
         
+        
         # Emit session ID for frontend tracking
         yield {
             "event": "session_started",
@@ -129,7 +130,7 @@ class AnalyticsMemoryWorkflow:
         yield {"event": "status", "data": {"step": "intent_detection", "message": "Detecting intent...", "ts": now}}
         
         intent_start = time.time()
-        intent: IntentModel = detect_intent_with_clarifications(query, CONFIGS.__dict__)
+        intent: IntentModel = detect_intent_with_clarifications(query, CONFIGS.__dict__, session_id=session_id)
         # Store original query for clarification engine
         intent.slots_detected['original_query'] = query
         intent_elapsed = int((time.time() - intent_start) * 1000)
@@ -143,6 +144,9 @@ class AnalyticsMemoryWorkflow:
         # 4) Early Clarification Computation
         clarify_start = time.time()
         official_clarifications = compute_required_clarifications(intent, provisional_plan, template, CONFIGS.__dict__)
+        
+        # Track answered slots throughout the session to prevent duplicates
+        all_answered_slots = set()
 
         # Decision point: emit intent_draft or intent_decided
         clarifications_needed = len(official_clarifications) > 0
@@ -165,7 +169,7 @@ class AnalyticsMemoryWorkflow:
                         "possible_intents": intent.possible_intents,
                         "intent_reasoning": intent.intent_reasoning,
                     },
-                    "model": "gpt-4o-mini-2024-07-18",
+                    "model": "gpt-5-mini-2025-08-07",
                     "company": self._get_company_display(intent, provisional_plan),
                     "granularity": intent.slots_detected.get('granularity', 'annual'),
                     "years_back": intent.slots_detected.get('timeframe', {}).get('years_back', 4),
@@ -186,7 +190,7 @@ class AnalyticsMemoryWorkflow:
                         "slots_detected": intent.slots_detected,
                         "assumptions": intent.assumptions,
                     },
-                    "model": "gpt-4o-mini-2024-07-18",
+                    "model": "gpt-5-mini-2025-08-07",
                     "company": self._get_company_display(intent, provisional_plan),
                     "granularity": intent.slots_detected.get('granularity', 'annual'),
                     "years_back": intent.slots_detected.get('timeframe', {}).get('years_back', 4),
@@ -203,7 +207,6 @@ class AnalyticsMemoryWorkflow:
                 # Process one clarification at a time
                 slot_request = official_clarifications[0]  # Take the first (most important) clarification
                 
-                print(f"[WORKFLOW] Emitting single clarification request for slot: {slot_request.slot}")
                 
                 # Send single clarification request
                 yield {
@@ -226,14 +229,12 @@ class AnalyticsMemoryWorkflow:
                 }
                 
                 # Wait for single answer with timeout
-                print(f"[WORKFLOW] Waiting for answer to slot {slot_request.slot}, request {slot_request.request_id}")
                 try:
                     answer = await asyncio.wait_for(
                         wait_for_answer_blocking(session_id, slot_request.request_id),
                         timeout=60.0  # 60 second timeout
                     )
                 except asyncio.TimeoutError:
-                    print(f"[WORKFLOW] Timeout waiting for answer to slot {slot_request.slot}")
                     # Emit timeout event
                     yield {
                         "event": "clarification_timeout",
@@ -263,7 +264,6 @@ class AnalyticsMemoryWorkflow:
                     # Validate answer using the new validation function (bool)
                     is_valid = validate_clarification_answer(answer, slot_request)
                     if is_valid:
-                        print(f"[WORKFLOW] Accepted answer for slot {slot_request.slot}: {answer.value}")
                         
                         # Emit acknowledgment for the received answer
                         yield {
@@ -280,19 +280,39 @@ class AnalyticsMemoryWorkflow:
                         # Merge single answer back into intent and plan
                         intent, provisional_plan, merge_assumptions = await merge_answers(intent, provisional_plan, [answer], CONFIGS.__dict__)
                         assumptions.extend(merge_assumptions)
-                        print(f"[WORKFLOW] Merged answer with assumptions: {merge_assumptions}")
                         
                         # Re-select template after this answer
                         template = choose_template(intent, provisional_plan, CONFIGS.__dict__)
 
-                        # Remove the answered clarification from the list and proceed to next
-                        official_clarifications = official_clarifications[1:]
+                        # Re-compute clarifications after intent/plan changes
+                        new_clarifications = compute_required_clarifications(intent, provisional_plan, template, CONFIGS.__dict__)
+                        
+                        # Remove the answered clarification from original list
+                        remaining_original = official_clarifications[1:]
+                        
+                        # Track this answer in session history
+                        all_answered_slots.add(answer.slot)
+                        
+                        # Combine new clarifications with remaining original ones (avoid duplicates)
+                        combined_requests = []
+                        
+                        # Add new clarifications first (higher priority), skip already answered in session
+                        for new_req in new_clarifications:
+                            if new_req.slot not in all_answered_slots:
+                                combined_requests.append(new_req)
+                        
+                        # Add remaining original clarifications (skip answered and duplicates)
+                        for orig_req in remaining_original:
+                            if (orig_req.slot not in all_answered_slots and 
+                                not any(c.slot == orig_req.slot for c in combined_requests)):
+                                combined_requests.append(orig_req)
+                        
+                        official_clarifications = combined_requests
                         rounds += 1
                         
                     else:
                         # Invalid answer, emit detailed error message
                         error_message = get_validation_error_message(answer, slot_request)
-                        print(f"[WORKFLOW] Invalid answer for slot {slot_request.slot}: {answer.value}")
                         yield {
                             "event": "clarification_error",
                             "data": {
@@ -306,7 +326,6 @@ class AnalyticsMemoryWorkflow:
                         official_clarifications = official_clarifications[1:]
                 else:
                     # No answer received, skip this clarification
-                    print(f"[WORKFLOW] No answer received for slot {slot_request.slot}")
                     official_clarifications = official_clarifications[1:]
 
             # Emit intent_resolved after clarifications complete
@@ -382,9 +401,87 @@ class AnalyticsMemoryWorkflow:
         try:
             sql = compile_sql_from_plan(plan, intent, CONFIGS.__dict__, template)
         except ValueError as ve:
-            # Handle company requirement validation errors
-            yield {"event": "errors", "data": {"errors": [str(ve)]}}
-            return
+            # Handle company requirement validation errors by requesting clarification
+            error_msg = str(ve)
+            if "This query requires specifying a company" in error_msg:
+                # Create company clarification request
+                companies_config = CONFIGS.companies.get('companies', {}).get('semiconductor', [])
+                company_options = [{"value": c["ticker"], "label": f"{c['ticker']} ({c['short_name']})"} for c in companies_config[:7]]
+
+                clarification_request = ClarifyRequestModel(
+                    session_id=session_id,
+                    request_id=f"company_req_{int(time.time() * 1000)}",
+                    slot="company",
+                    question="Which company would you like to analyze?",
+                    type="single_choice",
+                    options=company_options,
+                    required=True,
+                    reason="Market share analysis requires specifying a company"
+                )
+
+                # Emit clarification request
+                yield {
+                    "event": "clarification_request",
+                    "data": {
+                        "session_id": session_id,
+                        "request_id": clarification_request.request_id,
+                        "slot": clarification_request.slot,
+                        "question": clarification_request.question,
+                        "type": clarification_request.type,
+                        "options": clarification_request.options,
+                        "required": clarification_request.required,
+                        "reason": clarification_request.reason,
+                        "ts": datetime.utcnow().isoformat()
+                    }
+                }
+
+                # Wait for clarification response
+                try:
+                    answer = await asyncio.wait_for(
+                        wait_for_answer_blocking(session_id, clarification_request.request_id),
+                        timeout=60.0
+                    )
+
+                    if answer and answer.value:
+                        # Emit acknowledgment
+                        yield {
+                            "event": "clarification_ack",
+                            "data": {
+                                "session_id": session_id,
+                                "request_id": clarification_request.request_id,
+                                "slot": clarification_request.slot,
+                                "answer": answer.value,
+                                "ts": datetime.utcnow().isoformat()
+                            }
+                        }
+
+                        # Update intent with selected company
+                        intent.slots_detected["company"] = answer.value
+
+                        # Retry SQL compilation with selected company
+                        try:
+                            sql = compile_sql_from_plan(plan, intent, CONFIGS.__dict__, template)
+                        except ValueError as retry_ve:
+                            yield {"event": "errors", "data": {"errors": [str(retry_ve)]}}
+                            return
+                    else:
+                        yield {"event": "errors", "data": {"errors": ["No company selected"]}}
+                        return
+
+                except asyncio.TimeoutError:
+                    yield {
+                        "event": "clarification_timeout",
+                        "data": {
+                            "request_id": clarification_request.request_id,
+                            "message": "Timeout waiting for company selection",
+                            "ts": datetime.utcnow().isoformat()
+                        }
+                    }
+                    return
+            else:
+                # Non-company related ValueError, emit as error
+                yield {"event": "errors", "data": {"errors": [str(ve)]}}
+                return
         compile_elapsed = int((time.time() - compile_start) * 1000)
         
         yield {
@@ -505,7 +602,7 @@ class AnalyticsMemoryWorkflow:
         
         analysis_start = time.time()
         full_analysis = ""
-        async for text in stream_insights_llm(data, sql, query):
+        async for text in stream_insights_llm(data, sql, query, session_id=session_id):
             if text:
                 full_analysis += text
                 yield {"event": "analysis_streaming", "data": {"partial_analysis": text}}

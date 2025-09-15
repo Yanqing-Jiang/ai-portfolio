@@ -13,9 +13,13 @@ def validate_sql(sql: str, allowed_tables: List[str], max_limit: int, granularit
         return False, [f"SQL parse error: {e}"]
 
     # Handle WITH queries - get the root SELECT
-    root_select = expr.this if isinstance(expr, exp.With) else expr
+    if isinstance(expr, exp.With):
+        # For WITH (CTE) queries, check the final SELECT statement
+        root_select = expr.this  # The main query after WITH clause
+    else:
+        root_select = expr
     
-    # Only SELECT queries allowed
+    # Only SELECT queries allowed (including WITH...SELECT)
     if not isinstance(root_select, exp.Select):
         issues.append('Only SELECT queries are allowed')
 

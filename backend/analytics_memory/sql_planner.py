@@ -39,7 +39,9 @@ def plan_sql_rule_based(intent: IntentModel, configs: Dict[str, Any]) -> QueryPl
     else:
         metrics = ['Revenue']
 
-    years_back = (intent.slots_detected.get('timeframe') or {}).get('years_back', 4)
+    # Defensive guard against non-dict timeframe values
+    tf = intent.slots_detected.get('timeframe')
+    years_back = tf.get('years_back', 4) if isinstance(tf, dict) else 4
     raw_granularity = intent.slots_detected.get('granularity')
     # Ensure granularity is always a valid enum value
     granularity = 'annual'  # default

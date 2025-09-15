@@ -4,9 +4,15 @@ import { apiService } from '../../../services/apiService';
 import { useAnalyticsStream } from './useAnalyticsStream';
 import { useProcessSteps } from './useProcessSteps';
 
-export const useAnalyticsMemoryStream = () => {
+export const useAnalyticsMemoryStream = (mode: 'memory' | 'supervisor' = 'memory') => {
   const [sessionId, setSessionId] = useState<string>('');
   const [pendingClarification, setPendingClarification] = useState<ClarifyRequest | null>(null);
+  const [supervisorState, setSupervisorState] = useState<{
+    plan?: any;
+    requiresApproval?: boolean;
+    approvalPending?: boolean;
+    currentSessionId?: string;
+  }>({});
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
   const [chartSpec, setChartSpec] = useState<any>(null);
   const [analysis, setAnalysis] = useState('');
@@ -66,7 +72,14 @@ export const useAnalyticsMemoryStream = () => {
   };
 
   const handleQuery = async (query: string) => {
-    if (!query.trim() || streamHook.isLoading) return;
+    if (!query.trim()) return;
+    
+    // Stop any existing stream before starting a new one
+    if (streamHook.isLoading) {
+      streamHook.stopStream();
+      // Wait a brief moment for the stream to be properly closed
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
     
     // Add user query to chat history
     addChatMessage({
@@ -88,7 +101,11 @@ export const useAnalyticsMemoryStream = () => {
       streamingText: ''
     };
 
-    const endpoint = `/api/analytics/memory/stream?query=${encodeURIComponent(query.trim())}${sessionId ? `&session_id=${sessionId}` : ''}`;
+    const baseEndpoint = mode === 'supervisor' 
+      ? `/api/analytics/memory/supervisor/stream`
+      : `/api/analytics/memory/stream`;
+    
+    const endpoint = `${baseEndpoint}?query=${encodeURIComponent(query.trim())}${sessionId ? `&session_id=${sessionId}` : ''}`;
 
     await streamHook.startStream(endpoint, (data) => {
       const eventType = data.event || data.type;
@@ -211,8 +228,79 @@ export const useAnalyticsMemoryStream = () => {
           stepsHook.updateStepStatus('analysis_generation', 'completed', [], { analysis: finalAnalysis }, eventData.elapsed_ms);
           break;
           
+        // ===== SUPERVISOR MODE EVENTS =====
+        case 'planning_proposed':
+          setSupervisorState(prev => ({ ...prev, plan: eventData }));
+          stepsHook.updateStepStatus('planning', 'completed', [eventData.plan]);
+          streamHook.setCurrentStatus('Plan proposed by supervisor agent');
+          addChatMessage({
+            type: 'assistant',
+            content: `📋 **Plan Proposed:**\n${eventData.plan}\n\n**Steps:** ${eventData.steps?.length || 0} tools planned\n**Requires Approval:** ${eventData.requires_approval ? 'Yes' : 'No'}`,
+          });
+          break;
+
+        case 'approval_required':
+          setSupervisorState(prev => ({ 
+            ...prev, 
+            requiresApproval: true, 
+            approvalPending: true,
+            currentSessionId: eventData.session_id 
+          }));
+          stepsHook.updateStepStatus('approval', 'in_progress', ['Waiting for user approval']);
+          streamHook.setCurrentStatus('Plan requires approval - please review and approve');
+          addChatMessage({
+            type: 'approval_request',
+            content: '🔒 **Approval Required** - This plan includes SQL execution which requires your approval.',
+            approvalSessionId: eventData.session_id,
+            previewSql: eventData.preview_sql,
+            applyTargets: eventData.apply_targets,
+          });
+          break;
+          
+        case 'approval_auto_granted':
+        case 'approval_granted':
+          setSupervisorState(prev => ({ ...prev, approvalPending: false }));
+          stepsHook.updateStepStatus('approval', 'completed', ['Auto-approved for demo']);
+          streamHook.setCurrentStatus('Plan approved - executing tools...');
+          addChatMessage({
+            type: 'assistant',
+            content: '✅ **Plan Approved** - Proceeding with tool execution',
+          });
+          break;
+          
+        case 'tool_start':
+          stepsHook.updateStepStatus('tool_execution', 'in_progress', [`Executing: ${eventData.tool}`]);
+          streamHook.setCurrentStatus(`Executing tool: ${eventData.tool}`);
+          break;
+          
+        case 'tool_end':
+          // Tool completed - keep execution phase active until all tools done
+          stepsHook.updateStepStatus('tool_execution', 'in_progress', [`Completed: ${eventData.tool}`]);
+          break;
+          
+        case 'tool_error':
+          stepsHook.updateStepStatus('tool_execution', 'error', [`Error in ${eventData.tool}: ${eventData.error}`]);
+          streamHook.setCurrentStatus(`Tool error: ${eventData.error}`);
+          addChatMessage({
+            type: 'assistant',
+            content: `⚠️ **Tool Error:** ${eventData.tool} - ${eventData.error}`,
+          });
+          break;
+          
+        case 'final_summary':
+          stepsHook.updateStepStatus('finalization', 'completed', ['Workflow summary generated']);
+          streamHook.setCurrentStatus('Supervisor workflow completed!');
+          addChatMessage({
+            type: 'assistant',
+            content: `📊 **Final Summary:**\n\n**SQL:** ${eventData.sql_summary}\n**Chart:** ${eventData.chart_summary}\n\n**Key Findings:**\n${eventData.key_findings?.map((f: string) => `• ${f}`).join('\n') || 'No findings available'}`,
+          });
+          break;
+
         case 'workflow_complete':
-          streamHook.setCurrentStatus('Analytics memory workflow completed!');
+          const statusMessage = mode === 'supervisor' 
+            ? 'Claude Code supervisor workflow completed!'
+            : 'Analytics memory workflow completed!';
+          streamHook.setCurrentStatus(statusMessage);
           addChatMessage({
             type: 'result',
             content: 'Analysis completed! Here are your results:',
@@ -238,6 +326,16 @@ export const useAnalyticsMemoryStream = () => {
   const stopAnalysis = () => {
     streamHook.stopStream();
     stepsHook.stopInProgressSteps();
+  };
+
+  const approveWorkflow = async (sessionId: string) => {
+    try {
+      const response = await apiService.post('/api/analytics/memory/supervisor/approve', { session_id: sessionId });
+      console.log('Approval submitted:', response);
+    } catch (error) {
+      console.error('Failed to submit approval:', error);
+      streamHook.setError('Failed to submit approval');
+    }
   };
 
   const resetAll = () => {
@@ -281,6 +379,9 @@ export const useAnalyticsMemoryStream = () => {
     // Process steps
     processSteps: stepsHook.processSteps,
     
+    // Supervisor state
+    supervisorState,
+    
     // Actions
     handleQuery,
     submitClarification,
@@ -288,5 +389,6 @@ export const useAnalyticsMemoryStream = () => {
     resetAll,
     addChatMessage,
     updateChatMessage,
+    approveWorkflow,
   };
 };

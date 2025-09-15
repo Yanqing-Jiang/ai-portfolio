@@ -126,6 +126,7 @@ class ApiService {
         },
         signal,
       })
+      
 
       // Handle rate limiting before starting stream
       if (response.status === 401) {
@@ -154,6 +155,7 @@ class ApiService {
         onError?.('Failed to get response stream')
         return
       }
+      
 
       const decoder = new TextDecoder()
       let buffer = ''
@@ -166,6 +168,7 @@ class ApiService {
             onComplete?.()
             break
           }
+          
 
           buffer += decoder.decode(value, { stream: true })
           const lines = buffer.split('\n')

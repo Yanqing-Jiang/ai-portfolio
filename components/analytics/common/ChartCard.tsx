@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import EChartsReact from 'echarts-for-react';
 import { ChartCardProps } from '../types';
 import { ChartErrorBoundary } from './ChartErrorBoundary';
@@ -15,6 +15,7 @@ export const ChartCard: React.FC<ChartCardProps> = ({
   enableCsvDownload = false
 }) => {
   const [chartRetryCount, setChartRetryCount] = useState(0);
+  const chartRef = useRef<any>(null);
 
   const handleChartError = (error: any) => {
     console.log('[ChartCard] Chart error boundary triggered:', error);
@@ -30,18 +31,42 @@ export const ChartCard: React.FC<ChartCardProps> = ({
   };
 
   const handleMetricChange = (selectedMetric: string) => {
-    const instance = (window as any)._echarts_instance_;
+    const instance = chartRef.current;
     if (instance) {
       const current = instance.getOption();
       const legend = current.legend && current.legend[0];
       if (legend && legend.data) {
         const selectedMap: any = legend.selected || {};
         
-        // Metric grouping: show all companies for the selected metric
+        // Hide all series first
         legend.data.forEach((name: string) => selectedMap[name] = false);
+        
+        // Show series based on selection
         legend.data.forEach((name: string) => {
-          // Show series that end with the selected metric name
+          const nameLower = name.toLowerCase();
+          const selectedLower = selectedMetric.toLowerCase();
+          
+          // Handle different series name patterns
           if (name.endsWith(' - ' + selectedMetric)) {
+            // Standard pattern: "Company - Metric"
+            selectedMap[name] = true;
+          } else if (selectedLower === 'yoy growth' && nameLower.includes('yoy growth')) {
+            // Revenue growth pattern: show both company and industry average
+            selectedMap[name] = true;
+          } else if (selectedLower === 'company' && nameLower.includes(' - yoy growth') && !nameLower.includes('industry')) {
+            // Show only company data for revenue growth
+            selectedMap[name] = true;
+          } else if (selectedLower === 'industry average' && nameLower.includes('industry average')) {
+            // Show only industry average data
+            selectedMap[name] = true;
+          } else if (selectedLower.includes('margin change') && nameLower.includes('margin change')) {
+            // Margin growth pattern: show both company and industry average
+            selectedMap[name] = true;
+          } else if (selectedLower === 'company' && nameLower.includes(' - ') && nameLower.includes('margin change') && !nameLower.includes('industry')) {
+            // Show only company data for margin growth
+            selectedMap[name] = true;
+          } else if (selectedLower === 'industry average' && nameLower.includes('industry average') && nameLower.includes('margin change')) {
+            // Show only industry average data for margin growth
             selectedMap[name] = true;
           }
         });
@@ -106,7 +131,7 @@ export const ChartCard: React.FC<ChartCardProps> = ({
             }} 
             opts={{ renderer: 'canvas', devicePixelRatio: window.devicePixelRatio || 1 }} 
             onChartReady={(instance) => { 
-              (window as any)._echarts_instance_ = instance;
+              chartRef.current = instance;
               // Small delay to ensure proper initialization
               setTimeout(() => instance.resize(), 100);
             }}

@@ -18,6 +18,7 @@ fastapi-limiter
 redis
 supabase
 python-jose[cryptography]
+openai>=1.54.0
 # Analytics SQL Project Dependencies
 langgraph
 psycopg2-binary

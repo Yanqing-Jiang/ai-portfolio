@@ -7,7 +7,9 @@ import { isValidChartSpec } from '../utils';
 export const ChatHistory: React.FC<ChatHistoryProps> = ({ 
   messages, 
   isLoading, 
-  onSubmitClarification 
+  onSubmitClarification,
+  onApproveWorkflow,
+  processSteps = []
 }) => {
   if (messages.length === 0) return null;
 
@@ -71,7 +73,64 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
                         defaultOpen={false}
                         className="bg-gray-800/50"
                       >
-                        <SqlCard sqlQuery={message.sqlQuery} />
+                        <SqlCard sqlQuery={message.sqlQuery} compact={true} />
+                      </CollapsibleSection>
+                    )}
+                    
+                    {/* Thinking Process Display (Collapsible) */}
+                    {processSteps.length > 0 && (
+                      <CollapsibleSection 
+                        title="Thinking (internal)" 
+                        defaultOpen={false}
+                        className="bg-gray-800/30"
+                      >
+                        <div className="space-y-2 p-2">
+                          {processSteps.map((step) => (
+                            <div key={step.id} className="flex items-start gap-3 text-sm">
+                              {/* Status indicator */}
+                              <div className="flex-shrink-0 mt-1">
+                                {step.status === 'completed' && (
+                                  <div className="w-2 h-2 bg-green-400 rounded-full"></div>
+                                )}
+                                {step.status === 'in_progress' && (
+                                  <div className="w-2 h-2 bg-blue-400 rounded-full animate-pulse"></div>
+                                )}
+                                {step.status === 'error' && (
+                                  <div className="w-2 h-2 bg-red-400 rounded-full"></div>
+                                )}
+                                {step.status === 'pending' && (
+                                  <div className="w-2 h-2 bg-gray-500 rounded-full"></div>
+                                )}
+                              </div>
+                              
+                              {/* Step content */}
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-gray-300 font-medium">{step.name}</span>
+                                  {step.elapsed_ms && (
+                                    <span className="text-xs text-gray-500">
+                                      ({step.elapsed_ms}ms)
+                                    </span>
+                                  )}
+                                </div>
+                                {step.thinking.length > 0 && (
+                                  <div className="text-gray-400 text-xs mt-1">
+                                    {step.thinking[step.thinking.length - 1]}
+                                  </div>
+                                )}
+                                {step.details && Object.keys(step.details).length > 0 && (
+                                  <div className="text-gray-500 text-xs mt-1">
+                                    {Object.entries(step.details).map(([key, value]) => (
+                                      <span key={key} className="mr-3">
+                                        {key}: {typeof value === 'object' ? JSON.stringify(value).slice(0, 50) + '...' : String(value)}
+                                      </span>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
                       </CollapsibleSection>
                     )}
                   </div>

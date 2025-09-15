@@ -12,7 +12,7 @@ export interface ProcessStep {
 
 export interface ChatMessage {
   id: string;
-  type: 'user' | 'clarification' | 'result';
+  type: 'user' | 'clarification' | 'result' | 'assistant' | 'approval_request';
   content: string;
   timestamp: string;
   clarifications?: ClarifyRequest[];
@@ -21,6 +21,10 @@ export interface ChatMessage {
   chartSpec?: any;
   sqlQuery?: string;
   dataSample?: any[];
+  // Approval request fields
+  approvalSessionId?: string;
+  previewSql?: string;
+  applyTargets?: string[];
 }
 
 export interface ClarifyRequest {
@@ -93,6 +97,8 @@ export interface AnalysisCardProps {
 
 export interface SqlCardProps {
   sqlQuery: string;
+  compact?: boolean;
+  showCopy?: boolean;
 }
 
 export interface SuggestedQueriesProps {
@@ -110,6 +116,8 @@ export interface ChatHistoryProps {
   messages: ChatMessage[];
   isLoading?: boolean;
   onSubmitClarification?: (value: any, request: ClarifyRequest) => Promise<void>;
+  onApproveWorkflow?: (sessionId: string) => Promise<void>;
+  processSteps?: ProcessStep[];
 }
 
 // Hook State Types

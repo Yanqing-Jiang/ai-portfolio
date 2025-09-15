@@ -1629,7 +1629,6 @@ Sample Data Points:
                 granularity=None
             )
             
-            print("[WORKFLOW] Sending initial status...")
             # Stream status update
             yield {
                 "event": "status",
@@ -1640,7 +1639,6 @@ Sample Data Points:
                 }
             }
             
-            print("[WORKFLOW] Calling SQL agent...")
             # Execute SQL agent
             state = await self._sql_agent(initial_state)
             print(f"[WORKFLOW] SQL agent completed with step: {state.get('step')}")
@@ -1658,7 +1656,6 @@ Sample Data Points:
                 print(f"[WORKFLOW]   - Data keys: {list(state['data'][0].keys()) if state['data'] else 'N/A'}")
                 print(f"[WORKFLOW]   - State data type: {type(state.get('data'))}")
             
-            print("[WORKFLOW] Sending SQL result...")
             # Stream SQL result
             yield {
                 "event": "sql_generated",
@@ -1674,7 +1671,6 @@ Sample Data Points:
             }
             
             # Generate chart FIRST before starting analysis stream
-            print("[WORKFLOW] Starting ECharts agent...")
             yield {
                 "event": "status",
                 "data": {
@@ -1756,7 +1752,6 @@ Guidelines:
             # Send final analysis
             yield {"event": "analysis_complete", "data": {"analysis": full_analysis}}
             
-            print("[WORKFLOW] Workflow complete!")
             # Workflow complete
             yield {
                 "event": "workflow_complete",
