@@ -20,6 +20,7 @@ from analytics_agent import create_analytics_workflow
 from analytics_memory.workflow import analytics_memory_workflow
 from analytics_memory.clarify import put_answer
 from analytics_memory.types import ClarifyAnswerModel
+from analytics_supervisor.supervisor import supervisor_workflow
 
 from langchain.callbacks.base import BaseCallbackHandler
 from typing import List, Tuple, Optional
@@ -806,14 +807,13 @@ async def analytics_stream_endpoint(query: str, request: Request, _: None = Depe
 async def analytics_memory_stream_endpoint(query: str, request: Request, session_id: Optional[str] = None, _: None = Depends(smart_rate_limit)):
     """Stream analytics memory results with conversational clarifications"""
     
+    
     # Generate a session ID if not provided
     if not session_id:
         session_id = str(uuid.uuid4())
     
     async def generate_analytics_memory_stream():
         try:
-            print(f"[MAIN] Starting analytics memory stream for query: {query[:100]}...")
-            print(f"[MAIN] Session ID: {session_id}")
             
             # Run the analytics memory workflow 
             async for event in analytics_memory_workflow(
@@ -828,7 +828,6 @@ async def analytics_memory_stream_endpoint(query: str, request: Request, session
                 await asyncio.sleep(0)  # Allow other tasks to run
                 
         except Exception as e:
-            print(f"[MAIN] Analytics memory stream error: {str(e)}")
             error_event = {
                 "event": "error",
                 "data": {
@@ -838,6 +837,7 @@ async def analytics_memory_stream_endpoint(query: str, request: Request, session
             }
             yield f"data: {json.dumps(error_event)}\n\n"
             await asyncio.sleep(0)
+    
     
     return StreamingResponse(
         generate_analytics_memory_stream(),
@@ -850,12 +850,100 @@ async def analytics_memory_stream_endpoint(query: str, request: Request, session
         }
     )
 
+
+@app.get("/api/analytics/memory/supervisor/stream")
+async def analytics_supervisor_stream_endpoint(query: str, request: Request, session_id: Optional[str] = None, _: None = Depends(smart_rate_limit)):
+    """Stream analytics results via the single-agent Supervisor workflow.
+
+    Shares the same domain (next-gen-analytics-memory) while providing a
+    different agent UX (planning + tool events) but compatible result events.
+    
+    SQL execution requires explicit user approval - no auto-approval in production.
+    """
+
+    import uuid
+    if not session_id:
+        session_id = str(uuid.uuid4())
+
+    async def generate_supervisor_stream():
+        try:
+            async for event in supervisor_workflow(query=query, session_id=session_id):
+                yield f"data: {json.dumps(event)}\n\n"
+                await asyncio.sleep(0)
+        except Exception as e:
+            err = {"event": "errors", "data": {"errors": [str(e)], "step": "supervisor"}}
+            yield f"data: {json.dumps(err)}\n\n"
+            await asyncio.sleep(0)
+
+    return StreamingResponse(
+        generate_supervisor_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "Access-Control-Allow-Origin": "*",
+            "X-Accel-Buffering": "no",
+        }
+    )
+
+
+class SupervisorApproveRequest(BaseModel):
+    session_id: str
+
+
+@app.post("/api/analytics/memory/supervisor/approve")
+async def analytics_supervisor_approve_endpoint(req: SupervisorApproveRequest, _: None = Depends(smart_rate_limit)):
+    """Approve a pending supervisor plan for the given session.
+    
+    Body: { "session_id": "..." }
+    """
+    from analytics_supervisor.supervisor import get_active_workflow
+
+    try:
+        wf = get_active_workflow(req.session_id)
+        if not wf:
+            return JSONResponse(
+                content={"success": False, "message": "No active supervisor session found"},
+                status_code=404,
+                headers={"Access-Control-Allow-Origin": "*"}
+            )
+
+        success = wf.approve_plan(req.session_id)
+        if success:
+            return JSONResponse(
+                content={"success": True, "message": "Plan approved successfully"},
+                headers={"Access-Control-Allow-Origin": "*"}
+            )
+        else:
+            return JSONResponse(
+                content={"success": False, "message": "No pending plan for session or invalid state"},
+                status_code=409,
+                headers={"Access-Control-Allow-Origin": "*"}
+            )
+            
+    except Exception as e:
+        return JSONResponse(
+            content={"success": False, "error": str(e)},
+            status_code=500,
+            headers={"Access-Control-Allow-Origin": "*"}
+        )
+
 @app.post("/api/analytics/memory/clarify")
 async def analytics_memory_clarify_endpoint(answer: ClarifyAnswerModel, _: None = Depends(smart_rate_limit)):
-    """Handle single clarification response from the frontend"""
+    """Handle single clarification response from the frontend (supports both memory and supervisor modes)"""
     try:
         print(f"[MAIN] Received clarification answer: {answer}")
+        
+        # Try memory flow first
         await put_answer(answer)
+        
+        # Also try supervisor flow if there's an active supervisor workflow
+        from analytics_supervisor.supervisor import get_active_workflow
+        workflow = get_active_workflow(answer.session_id)
+        if workflow:
+            print(f"[MAIN] Submitting clarification to supervisor workflow: {answer.session_id}")
+            workflow.submit_clarification(answer.session_id, answer.value)
+        
         return {"status": "success", "message": "Clarification answer received"}
     except Exception as e:
         print(f"[MAIN] Error handling clarification: {str(e)}")

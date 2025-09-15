@@ -46,9 +46,9 @@ def _detect_primary_series(intent_key: Optional[str], available_slugs: List[str]
         'market_share_single': ['market_share_percent', 'share_percent'],
         'market_share_all': ['market_share_percent', 'share_percent'], 
         'margins_vs_peers': ['gross_margin', 'operating_margin', 'net_margin'],
-        'margin_growth_vs_peers': ['gross_margin_change_pp', 'operating_margin_change_pp', 'net_margin_change_pp'],
+        'margin_growth_vs_peers': ['company_gross_margin_change_pp', 'company_operating_margin_change_pp', 'company_net_margin_change_pp', 'peer_avg_gross_margin_change_pp', 'peer_avg_operating_margin_change_pp', 'peer_avg_net_margin_change_pp'],
         'revenue_growth_analysis': ['qoq_growth_percent', 'yoy_growth_percent'],
-        'revenue_growth_vs_avg': ['company_yoy_growth_percent', 'industry_avg_yoy_growth_percent'],
+        'revenue_growth_vs_avg': ['company_yoy_growth_percent', 'yoy_growth_percent', 'industry_avg_yoy_growth_percent'],
         'rnd_intensity_vs_peers': ['company_rnd_intensity', 'rnd_intensity_percent'],
         'rnd_expense_vs_peers': ['company_rnd_expense']
     }
@@ -107,8 +107,9 @@ def plan_chart_rule_based(data: List[Dict[str, Any]], query: str, intent_key: st
     
     series = []
     
-    if has_multiple_tickers:
+    if has_multiple_tickers and intent_key != 'revenue_growth_vs_avg':
         # Multi-ticker data: create one series per ticker
+        # Skip this for revenue growth comparisons which need column-based series
         # Find the primary metric to display
         primary_metric = None
         if 'market_share_percent' in cols:
@@ -151,7 +152,54 @@ def plan_chart_rule_based(data: List[Dict[str, Any]], query: str, intent_key: st
 
         for c in numeric_cols[:4]:  # cap to avoid clutter
             vtype = 'percent' if any(k in c.lower() for k in ['margin', 'share', 'ratio', 'growth', 'percent', 'pct']) else 'number'
-            series.append({'name': c.replace('_', ' ').title(), 'data_column': c, 'value_type': vtype})
+            
+            # Special naming for revenue growth comparisons
+            if intent_key == 'revenue_growth_vs_avg':
+                if 'industry_avg' in c:
+                    name = 'Industry Average - YoY Growth'
+                elif 'yoy_growth_percent' in c:
+                    # Get company ticker if available in data
+                    company_ticker = None
+                    for row in data:
+                        if row.get('ticker'):
+                            company_ticker = row['ticker']
+                            break
+                    name = f'{company_ticker} - YoY Growth' if company_ticker else 'Company - YoY Growth'
+                else:
+                    name = c.replace('_', ' ').title()
+            elif intent_key == 'margin_growth_vs_peers':
+                # Special naming for margin growth comparisons
+                if 'peer_avg' in c:
+                    if 'gross_margin' in c:
+                        name = 'Industry Average - Gross Margin Change'
+                    elif 'operating_margin' in c:
+                        name = 'Industry Average - Operating Margin Change'
+                    elif 'net_margin' in c:
+                        name = 'Industry Average - Net Margin Change'
+                    else:
+                        name = 'Industry Average - ' + c.replace('_', ' ').replace('peer avg ', '').title()
+                elif 'company_' in c:
+                    # Get company ticker if available in data
+                    company_ticker = None
+                    for row in data:
+                        if row.get('ticker'):
+                            company_ticker = row['ticker']
+                            break
+                    
+                    if 'gross_margin' in c:
+                        name = f'{company_ticker} - Gross Margin Change' if company_ticker else 'Company - Gross Margin Change'
+                    elif 'operating_margin' in c:
+                        name = f'{company_ticker} - Operating Margin Change' if company_ticker else 'Company - Operating Margin Change'
+                    elif 'net_margin' in c:
+                        name = f'{company_ticker} - Net Margin Change' if company_ticker else 'Company - Net Margin Change'
+                    else:
+                        name = f'{company_ticker} - ' + c.replace('company_', '').replace('_', ' ').title() if company_ticker else 'Company - ' + c.replace('company_', '').replace('_', ' ').title()
+                else:
+                    name = c.replace('_', ' ').title()
+            else:
+                name = c.replace('_', ' ').title()
+                
+            series.append({'name': name, 'data_column': c, 'value_type': vtype})
     
     # Generate descriptive title based on intent and detected metrics
     primary_metrics = _detect_primary_series(intent_key, [s.get('source_column', '') for s in series])
@@ -472,9 +520,13 @@ def build_chart_spec(data: List[Dict[str, Any]], chart_plan: Dict[str, Any], cha
             },
             'seriesValueType': {s['name']: ('percent' if series_axes.get(s['name']) == 'right' else 'currency') for s in series},
             # Missing metadata for frontend compatibility
-            'includedColumns': slugs,
-            'displayNames': display_names,
-            'defaultColumns': primary_slugs,
+            'includedColumns': slugs if intent_key != 'revenue_growth_vs_avg' else ['YoY Growth', 'Company', 'Industry Average'],
+            'displayNames': display_names if intent_key != 'revenue_growth_vs_avg' else {
+                'YoY Growth': 'YoY Growth', 
+                'Company': 'Company', 
+                'Industry Average': 'Industry Average'
+            },
+            'defaultColumns': primary_slugs if intent_key != 'revenue_growth_vs_avg' else ['YoY Growth'],
             'rawData': data,
             'seriesPercentFormat': {
                 slug: 'pre_multiplied' for slug in slugs if 'percent' in slug or 'share' in slug or 'margin' in slug

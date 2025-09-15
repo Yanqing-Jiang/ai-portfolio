@@ -39,7 +39,7 @@ export const CollapsibleSection: React.FC<CollapsibleSectionProps> = ({
           isOpen ? 'max-h-96 opacity-100' : 'max-h-0 opacity-0'
         }`}
       >
-        <div className="border-t border-gray-700">
+        <div className="border-t border-gray-700 overflow-y-auto max-h-96">
           {children}
         </div>
       </div>

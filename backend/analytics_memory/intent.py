@@ -3,12 +3,66 @@ import os
 import logging
 import re
 from typing import Dict, Any, Optional
-from langchain_openai import ChatOpenAI
-from langchain_core.messages import SystemMessage, HumanMessage
+from .openai_client import get_openai_client
 from .types import IntentModel
 from .sql_planner import resolve_alias_to_ticker
 
 logger = logging.getLogger(__name__)
+
+def normalize_timeframe(tf_raw: Any, query_text: str = "", configs: Dict = None) -> Dict[str, Any]:
+    """
+    Normalize timeframe from various formats to a consistent dict structure.
+    
+    Args:
+        tf_raw: Raw timeframe from LLM (could be dict, string, or None)
+        query_text: Original query text for fallback parsing
+        configs: Configuration dict for defaults
+    
+    Returns:
+        Dict with normalized timeframe structure
+    """
+    if isinstance(tf_raw, dict):
+        return tf_raw.copy()
+    
+    tf = {}
+    text = (query_text or "").lower()
+    
+    # Handle string formats like "5 years", "past 5 years", etc.
+    if isinstance(tf_raw, str):
+        tf_str = tf_raw.lower()
+        # Extract numbers from string formats
+        years_match = re.search(r"(\d{1,2})\s*years?", tf_str)
+        quarters_match = re.search(r"(\d{1,2})\s*quarters?", tf_str)
+        
+        if years_match:
+            tf["years_back"] = int(years_match.group(1))
+        elif quarters_match:
+            tf["quarters_back"] = int(quarters_match.group(1))
+    
+    # Fallback: parse from original query text
+    years_m = re.search(r"(past|last)\s+(\d{1,2})\s+years?", text)
+    quarters_m = re.search(r"(past|last)\s+(\d{1,2})\s+quarters?", text)
+    
+    if years_m and not tf.get("years_back"):
+        tf["years_back"] = int(years_m.group(2))
+    if quarters_m and not tf.get("quarters_back"):
+        tf["quarters_back"] = int(quarters_m.group(2))
+    
+    # Apply defaults and bounds
+    if configs:
+        dbq = (configs.get("database", {}) or {}).get("query_defaults", {})
+        max_years = int(dbq.get("max_years_back", 10))
+        default_years = int(dbq.get("default_years_back", 5))
+        
+        if not tf.get("years_back") and not tf.get("quarters_back"):
+            tf["years_back"] = default_years
+        
+        if tf.get("years_back"):
+            tf["years_back"] = min(max(tf["years_back"], 1), max_years)
+        if tf.get("quarters_back"):
+            tf["quarters_back"] = min(max(tf["quarters_back"], 1), max_years * 4)
+    
+    return tf
 
 # Placeholder for intent detection node (structured output to be implemented in Phase 2/3)
 def detect_intent(query: str, configs: Dict[str, Any]) -> Dict[str, Any]:
@@ -73,15 +127,20 @@ def _heuristic_intent(query: str, configs: Dict[str, Any]) -> IntentModel:
             # Only use single if we have a specific company
             intent_key = "market_share_single"
         else:
-            # No company specified - default to market_share_all (shows all companies)
-            intent_key = "market_share_all"
-    elif "margin" in q and ("peer" in q or "average" in q or "vs" in q):
-        # margins_vs_peers requires company - only set if we have one
-        if detected_company:
-            intent_key = "margins_vs_peers"
-        else:
-            intent_key = None  # Trigger clarification
-    elif "growth" in q:
+            # No company specified - use market_share_single to trigger clarification
+            # This will cause the clarification system to ask for company selection
+            intent_key = "market_share_single"
+    elif "margin" in q:
+        if "growth" in q and ("vs" in q or "average" in q or "compare" in q):
+            # Handle "margin growth vs industry average"
+            intent_key = "margin_growth_vs_peers"  # Use margin growth intent
+        elif "peer" in q or "average" in q or "vs" in q:
+            # margins_vs_peers requires company - only set if we have one
+            if detected_company:
+                intent_key = "margins_vs_peers"
+            else:
+                intent_key = None  # Trigger clarification
+    elif "growth" in q or "growing" in q:
         # Check for vs industry average patterns
         if any(phrase in q for phrase in ["vs industry", "vs average", "compare industry", "industry average", "vs peers"]):
             intent_key = "revenue_growth_vs_avg"
@@ -110,39 +169,41 @@ def _heuristic_intent(query: str, configs: Dict[str, Any]) -> IntentModel:
     return IntentModel(intent_key=intent_key, confidence=0.4 if intent_key else 0.2, slots_detected=slots)
 
 
-def detect_intent_llm(query: str, configs: Dict[str, Any]) -> IntentModel:
+def detect_intent_llm(query: str, configs: Dict[str, Any], session_id: Optional[str] = None) -> IntentModel:
     """Detect intent using a reliable structured-output LLM with deterministic
     post-processing to ensure critical slots are populated when present in the
     query text.
     """
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
+    client = get_openai_client()
+    if not client:
         return _heuristic_intent(query, configs)
-
-    # Prefer 4o-mini for function-calling; allow override for experimentation
-    model_name = os.getenv("OPENAI_INTENT_MODEL", "gpt-4o-mini-2024-07-18")
-    llm = ChatOpenAI(model=model_name, temperature=0, api_key=api_key)
 
     intents_cfg = list((configs.get("queries", {}) or {}).get("query_patterns", {}).keys())
     companies = _default_tickers(configs)
 
-    system = (
+    system_content = (
         "You classify analytics intents and extract slots. "
         "Return ONLY JSON conforming to IntentModel. "
         "Populate slots_detected with actual values from the query; omit a field if truly absent."
     )
-    content = (
+    user_content = (
         f"Known intents: {intents_cfg}.\n"
         f"Companies (tickers/aliases): {companies}.\n"
         f"User query: {query}"
     )
 
+    messages = [
+        {"role": "system", "content": system_content},
+        {"role": "user", "content": user_content}
+    ]
+
     try:
-        method = "json_schema" if model_name.startswith("gpt-5") else "function_calling"
-        res = llm.with_structured_output(IntentModel, method=method).invoke([
-            SystemMessage(content=system),
-            HumanMessage(content=content),
-        ])
+        res = client.create_structured(
+            response_model=IntentModel,
+            messages=messages,
+            session_id=session_id,
+            reasoning_effort="medium"
+        )
 
         # Ensure dict exists with robust type checking
         if isinstance(res.slots_detected, dict):
@@ -174,35 +235,19 @@ def detect_intent_llm(query: str, configs: Dict[str, Any]) -> IntentModel:
                 res.slots_detected["company"] = detected
                 logger.info("Post-processed company: %s", detected)
 
-        # Timeframe: parse years/quarters and clamp to bounds if needed
-        tf_raw = res.slots_detected.get("timeframe") or {}
-        if isinstance(tf_raw, dict):
-            tf = tf_raw
-        else:
-            logger.warning(f"Invalid timeframe format: {tf_raw}")
-            tf = {}
-        text = (query or "").lower()
-        years_m = re.search(r"(past|last)\s+(\d{1,2})\s+years?", text)
-        quarters_m = re.search(r"(past|last)\s+(\d{1,2})\s+quarters?", text)
-        if years_m and not tf.get("years_back"):
-            tf["years_back"] = int(years_m.group(2))
-        if quarters_m and not tf.get("quarters_back"):
-            tf["quarters_back"] = int(quarters_m.group(2))
-
-        dbq = (configs.get("database", {}) or {}).get("query_defaults", {})
-        max_years = int(dbq.get("max_years_back", 10))
-        default_years = int(dbq.get("default_years_back", 5))
-        if tf.get("years_back") is not None:
-            tf["years_back"] = max(1, min(int(tf["years_back"]), max_years))
-        elif tf.get("quarters_back") is None:
-            tf["years_back"] = default_years
+        # Timeframe: normalize to consistent dict structure
+        tf_raw = res.slots_detected.get("timeframe")
+        if tf_raw and not isinstance(tf_raw, dict):
+            logger.warning(f"Invalid timeframe format: {tf_raw} - attempting to normalize")
+        
+        tf = normalize_timeframe(tf_raw, query, configs)
         if tf:
             res.slots_detected["timeframe"] = tf
 
         # Granularity: infer if missing or invalid
         current_granularity = res.slots_detected.get("granularity")
         if not current_granularity or current_granularity not in ["annual", "quarterly"]:
-            if any(k in text for k in ["quarter", "qoq", "q1", "q2", "q3", "q4"]):
+            if any(k in (query or "").lower() for k in ["quarter", "qoq", "q1", "q2", "q3", "q4"]):
                 res.slots_detected["granularity"] = "quarterly"
             else:
                 res.slots_detected["granularity"] = "annual"
@@ -220,25 +265,21 @@ def detect_intent_llm(query: str, configs: Dict[str, Any]) -> IntentModel:
         return _heuristic_intent(query, configs)
 
 
-def detect_intent_with_clarifications(query: str, configs: Dict[str, Any]) -> IntentModel:
+def detect_intent_with_clarifications(query: str, configs: Dict[str, Any], session_id: Optional[str] = None) -> IntentModel:
     """Enhanced intent detection that suggests missing slots.
     
     Returns IntentModel with advisory clarification hints while maintaining
     all existing deterministic post-processing. LLM only identifies what's 
     missing - server decides how to ask.
     """
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
+    client = get_openai_client()
+    if not client:
         return _heuristic_intent(query, configs)
-
-    # Prefer 4o-mini for function-calling; allow override for experimentation  
-    model_name = os.getenv("OPENAI_INTENT_MODEL", "gpt-4o-mini-2024-07-18")
-    llm = ChatOpenAI(model=model_name, temperature=0, api_key=api_key)
 
     intents_cfg = list((configs.get("queries", {}) or {}).get("query_patterns", {}).keys())
     companies = _default_tickers(configs)
 
-    system = """You classify analytics intents and identify missing information.
+    system_content = """You classify analytics intents and identify missing information.
 
 Return JSON with:
 - intent_key: most likely intent from the known intents
@@ -260,24 +301,32 @@ Known intent patterns and their slot requirements:
 - market_share_all: no company needed (use when "all" companies or no specific company mentioned)
 - margins_vs_peers: requires company
 - revenue_growth_analysis: company optional
-- revenue_growth_vs_avg: company optional
+- revenue_growth_vs_avg: company optional (handles margin growth vs industry average)
 - rnd_intensity_vs_peers: requires company
 - rnd_expense_vs_peers: requires company
 
-Important: For "market share" queries without a specific company, prefer clarification over assumptions."""
+Important: For "market share" queries without a specific company, you MUST suggest a 'comparison' clarification to ask if they want single company analysis or all companies analysis. Do not default to market_share_all without clarification.
 
-    content = f"""Available intents: {intents_cfg}
+Note: "margin growth vs industry average" queries should use margin_growth_vs_peers intent."""
+
+    user_content = f"""Available intents: {intents_cfg}
 Companies (tickers/aliases): {companies}
 User query: {query}
 
 Identify the intent and any missing required slots."""
 
+    messages = [
+        {"role": "system", "content": system_content},
+        {"role": "user", "content": user_content}
+    ]
+
     try:
-        method = "json_schema" if model_name.startswith("gpt-5") else "function_calling"
-        res = llm.with_structured_output(IntentModel, method=method).invoke([
-            SystemMessage(content=system),
-            HumanMessage(content=content),
-        ])
+        res = client.create_structured(
+            response_model=IntentModel,
+            messages=messages,
+            session_id=session_id,
+            reasoning_effort="medium"
+        )
 
         # Ensure dict exists with robust type checking
         if isinstance(res.slots_detected, dict):
@@ -316,35 +365,19 @@ Identify the intent and any missing required slots."""
                     if c.get('slot') != 'company'
                 ]
 
-        # Timeframe: parse years/quarters and clamp to bounds if needed
-        tf_raw = res.slots_detected.get("timeframe") or {}
-        if isinstance(tf_raw, dict):
-            tf = tf_raw
-        else:
-            logger.warning(f"Invalid timeframe format: {tf_raw}")
-            tf = {}
-        text = (query or "").lower()
-        years_m = re.search(r"(past|last)\s+(\d{1,2})\s+years?", text)
-        quarters_m = re.search(r"(past|last)\s+(\d{1,2})\s+quarters?", text)
-        if years_m and not tf.get("years_back"):
-            tf["years_back"] = int(years_m.group(2))
-        if quarters_m and not tf.get("quarters_back"):
-            tf["quarters_back"] = int(quarters_m.group(2))
-
-        dbq = (configs.get("database", {}) or {}).get("query_defaults", {})
-        max_years = int(dbq.get("max_years_back", 10))
-        default_years = int(dbq.get("default_years_back", 5))
-        if tf.get("years_back") is not None:
-            tf["years_back"] = max(1, min(int(tf["years_back"]), max_years))
-        elif tf.get("quarters_back") is None:
-            tf["years_back"] = default_years
+        # Timeframe: normalize to consistent dict structure
+        tf_raw = res.slots_detected.get("timeframe")
+        if tf_raw and not isinstance(tf_raw, dict):
+            logger.warning(f"Invalid timeframe format: {tf_raw} - attempting to normalize")
+        
+        tf = normalize_timeframe(tf_raw, query, configs)
         if tf:
             res.slots_detected["timeframe"] = tf
 
         # Granularity: infer if missing or invalid
         current_granularity = res.slots_detected.get("granularity")
         if not current_granularity or current_granularity not in ["annual", "quarterly"]:
-            if any(k in text for k in ["quarter", "qoq", "q1", "q2", "q3", "q4"]):
+            if any(k in (query or "").lower() for k in ["quarter", "qoq", "q1", "q2", "q3", "q4"]):
                 res.slots_detected["granularity"] = "quarterly"
             else:
                 res.slots_detected["granularity"] = "annual"

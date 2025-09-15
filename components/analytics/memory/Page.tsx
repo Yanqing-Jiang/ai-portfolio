@@ -14,6 +14,7 @@ const MemoryAnalyticsPage: React.FC = () => {
   const [useAltChart, setUseAltChart] = useState(false);
   const [hasStartedChat, setHasStartedChat] = useState(false);
   const [isHeaderCollapsed, setIsHeaderCollapsed] = useState(false);
+  const [analysisMode, setAnalysisMode] = useState<'memory' | 'supervisor'>('memory');
 
   const {
     // State
@@ -36,7 +37,7 @@ const MemoryAnalyticsPage: React.FC = () => {
     handleQuery,
     submitClarification,
     stopAnalysis,
-  } = useAnalyticsMemoryStream();
+  } = useAnalyticsMemoryStream(analysisMode);
 
   // Project data for the analytics memory project
   const projectData = {
@@ -195,7 +196,8 @@ Result:
             <ChatHistory 
               messages={chatHistory} 
               isLoading={isLoading} 
-              onSubmitClarification={submitClarification} 
+              onSubmitClarification={submitClarification}
+              processSteps={processSteps}
             />
 
             {/* Current Analysis Streaming (temporary display) */}
@@ -247,13 +249,34 @@ Result:
                   ))}
                 </div>
               )}
+              {/* Mode Selector */}
+              <div className="mt-3 sm:mt-4 flex items-center gap-2 sm:gap-3">
+                <label className="text-sm font-medium text-gray-300 whitespace-nowrap">Analysis Mode:</label>
+                <select
+                  value={analysisMode}
+                  onChange={(e) => setAnalysisMode(e.target.value as 'memory' | 'supervisor')}
+                  disabled={isLoading}
+                  className="px-3 py-2 text-sm bg-gray-700/80 border border-gray-600/50 rounded-lg focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500/50 text-gray-100 transition-all duration-200"
+                >
+                  <option value="memory">Memory Flow</option>
+                  <option value="supervisor">Claude Code Supervisor</option>
+                </select>
+                {analysisMode === 'supervisor' && (
+                  <span className="px-2 py-1 text-xs bg-blue-600/20 text-blue-300 rounded-full border border-blue-500/30">
+                    Single-Agent
+                  </span>
+                )}
+              </div>
+              
               {/* Input row */}
               <div className="mt-3 sm:mt-4 flex items-center gap-2 sm:gap-3 w-full">
                 <input
                   type="text"
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Ask about financial data on NVDA, AMD, AVGO, INTC, MU, NVDA, QCOM, TXN"
+                  placeholder={analysisMode === 'supervisor' 
+                    ? "Ask about financial data (Claude Code Supervisor with approval gates)" 
+                    : "Ask about financial data on NVDA, AMD, AVGO, INTC, MU, NVDA, QCOM, TXN"}
                   className="flex-1 px-4 py-3.5 text-sm md:text-base bg-gray-700/80 backdrop-blur-sm border border-gray-600/50 rounded-xl focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500/50 text-gray-100 placeholder-gray-400 min-h-[48px] shadow-lg transition-all duration-200 min-w-0"
                   onKeyPress={(e) => e.key === 'Enter' && handleAnalyticsQuery()}
                   disabled={isLoading}
