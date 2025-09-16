@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 import os
 import json
 import logging
@@ -6,105 +6,96 @@ from typing import Dict, Any, Optional, AsyncGenerator, TypeVar, Type
 from pydantic import BaseModel
 import openai
 from openai import OpenAI, AsyncOpenAI
+import sys
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from unified_responses_client import get_unified_client
 
 logger = logging.getLogger(__name__)
 
 T = TypeVar('T', bound=BaseModel)
 
 class OpenAIClient:
-    """Lightweight wrapper for OpenAI Responses API with session support"""
-    
+    """Adapter for analytics_memory to use UnifiedResponsesClient with Responses API only"""
+
     def __init__(self, api_key: Optional[str] = None):
         self.api_key = api_key or os.getenv("OPENAI_API_KEY")
         if not self.api_key:
             raise ValueError("OpenAI API key not found")
-        
-        # Initialize both sync and async clients
-        self.client = OpenAI(api_key=self.api_key)
+
+        # Use unified client for Responses API
+        self.unified_client = get_unified_client()
+        if not self.unified_client:
+            raise ValueError("Failed to initialize unified responses client")
+
+        # Direct async client for responses API only
         self.async_client = AsyncOpenAI(api_key=self.api_key)
-    
+
     def _get_model_name(self, model: Optional[str] = None) -> str:
         """Get model name with fallback logic"""
         if model:
             return model
-        
+
         # Check for environment override
         env_model = os.getenv("OPENAI_INTENT_MODEL")
         if env_model:
             return env_model
-            
+
         # Use GPT-5 mini for next-gen-analytics-memory as specified in CLAUDE.md
         return "gpt-5-mini-2025-08-07"
-    
+
     def create_structured(
-        self, 
-        response_model: Type[T], 
-        messages: list[dict], 
+        self,
+        response_model: Type[T],
+        messages: list[dict],
         model: Optional[str] = None,
         session_id: Optional[str] = None,
         reasoning_effort: str = "medium",
         temperature: float = 0
     ) -> T:
-        """Create structured response with Pydantic model"""
-        model_name = self._get_model_name(model)
-        
-        # Use structured outputs with proper syntax for GPT-5 models
-        request_params = {
-            "model": model_name,
-            "messages": messages,
-            "response_format": response_model  # Direct Pydantic model for structured output
-        }
-        
-        # Only add temperature for non-GPT-5 models (GPT-5 only supports default temperature=1)
-        if not model_name.startswith("gpt-5"):
-            request_params["temperature"] = temperature
-        
+        """Create structured response with Pydantic model using responses API only"""
         try:
-            # Use parse() for structured outputs
-            response = self.client.chat.completions.parse(**request_params)
-            
-            # For structured outputs, the response is already parsed
-            return response.choices[0].message.parsed
-            
+            # Use unified client with Responses API
+            import asyncio
+            result, _ = asyncio.run(self.unified_client.create_structured(
+                response_format=response_model,
+                messages=messages,
+                reasoning_effort=reasoning_effort,
+                session_id=session_id,
+                model=self._get_model_name(model),
+                temperature=temperature
+            ))
+            return result
+
         except Exception as e:
-            logger.error(f"OpenAI structured request failed: {str(e)}")
-            # Re-raise to allow fallback handling
+            logger.error(f"Responses API structured request failed: {str(e)}")
             raise
-    
+
     async def create_structured_async(
-        self, 
-        response_model: Type[T], 
-        messages: list[dict], 
+        self,
+        response_model: Type[T],
+        messages: list[dict],
         model: Optional[str] = None,
         session_id: Optional[str] = None,
         reasoning_effort: str = "medium",
         temperature: float = 0
     ) -> T:
-        """Async version of structured response"""
-        model_name = self._get_model_name(model)
-        
-        # Use structured outputs with proper syntax for GPT-5 models
-        request_params = {
-            "model": model_name,
-            "messages": messages,
-            "response_format": response_model  # Direct Pydantic model for structured output
-        }
-        
-        # Only add temperature for non-GPT-5 models
-        if not model_name.startswith("gpt-5"):
-            request_params["temperature"] = temperature
-        
+        """Async version of structured response using responses API only"""
         try:
-            # Use parse() for structured outputs
-            response = await self.async_client.chat.completions.parse(**request_params)
-            
-            # For structured outputs, the response is already parsed
-            return response.choices[0].message.parsed
-            
+            # Use unified client with Responses API
+            result, _ = await self.unified_client.create_structured(
+                response_format=response_model,
+                messages=messages,
+                reasoning_effort=reasoning_effort,
+                session_id=session_id,
+                model=self._get_model_name(model),
+                temperature=temperature
+            )
+            return result
+
         except Exception as e:
-            logger.error(f"OpenAI async structured request failed: {str(e)}")
+            logger.error(f"Responses API async structured request failed: {str(e)}")
             raise
-    
+
     async def stream_completion(
         self,
         messages: list[dict],
@@ -112,27 +103,21 @@ class OpenAIClient:
         session_id: Optional[str] = None,
         temperature: float = 0
     ) -> AsyncGenerator[str, None]:
-        """Stream completion for analysis generation"""
-        model_name = self._get_model_name(model)
-        
-        # Prepare request params
-        request_params = {
-            "model": model_name,
-            "messages": messages,
-            "stream": True
-        }
-        
-        # Only add temperature for non-GPT-5 models
-        if not model_name.startswith("gpt-5"):
-            request_params["temperature"] = temperature
-        
+        """Stream completion for analysis generation using responses API only"""
         try:
-            stream = await self.async_client.chat.completions.create(**request_params)
-            async for chunk in stream:
-                if chunk.choices and chunk.choices[0].delta.content:
-                    yield chunk.choices[0].delta.content
+            # Use unified client with Responses API streaming
+            async for delta in self.unified_client.stream_response(
+                messages=messages,
+                reasoning_effort="low",  # Use low effort for streaming analysis
+                session_id=session_id,
+                model=self._get_model_name(model),
+                temperature=temperature
+            ):
+                if delta.content:
+                    yield delta.content
+
         except Exception as e:
-            logger.error(f"OpenAI streaming request failed: {str(e)}")
+            logger.error(f"Responses API streaming request failed: {str(e)}")
             raise
 
 
