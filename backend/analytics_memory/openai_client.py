@@ -54,17 +54,25 @@ class OpenAIClient:
     ) -> T:
         """Create structured response with Pydantic model using responses API only"""
         try:
-            # Use unified client with Responses API
+            # Use unified client with Responses API in a thread to avoid event loop conflicts
             import asyncio
-            result, _ = asyncio.run(self.unified_client.create_structured(
-                response_format=response_model,
-                messages=messages,
-                reasoning_effort=reasoning_effort,
-                session_id=session_id,
-                model=self._get_model_name(model),
-                temperature=temperature
-            ))
-            return result
+            import concurrent.futures
+
+            async def _create_structured():
+                return await self.unified_client.create_structured(
+                    response_model=response_model,
+                    messages=messages,
+                    reasoning_effort=reasoning_effort,
+                    session_id=session_id,
+                    model=self._get_model_name(model),
+                    temperature=temperature
+                )
+
+            # Run in a new event loop in a thread to avoid conflicts
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(asyncio.run, _create_structured())
+                result, _ = future.result()
+                return result
 
         except Exception as e:
             logger.error(f"Responses API structured request failed: {str(e)}")
@@ -83,7 +91,7 @@ class OpenAIClient:
         try:
             # Use unified client with Responses API
             result, _ = await self.unified_client.create_structured(
-                response_format=response_model,
+                response_model=response_model,
                 messages=messages,
                 reasoning_effort=reasoning_effort,
                 session_id=session_id,
