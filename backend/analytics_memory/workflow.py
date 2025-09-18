@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 from typing import AsyncGenerator, Dict, Any, Optional, List
 import time
 import uuid
@@ -130,7 +130,7 @@ class AnalyticsMemoryWorkflow:
         yield {"event": "status", "data": {"step": "intent_detection", "message": "Detecting intent...", "ts": now}}
         
         intent_start = time.time()
-        intent: IntentModel = detect_intent_with_clarifications(query, CONFIGS.__dict__, session_id=session_id)
+        intent: IntentModel = await asyncio.to_thread(detect_intent_with_clarifications, query, CONFIGS.__dict__, session_id=session_id)
         # Store original query for clarification engine
         intent.slots_detected['original_query'] = query
         intent_elapsed = int((time.time() - intent_start) * 1000)

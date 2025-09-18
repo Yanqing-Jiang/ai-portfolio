@@ -37,6 +37,7 @@ const MemoryAnalyticsPage: React.FC = () => {
     handleQuery,
     submitClarification,
     stopAnalysis,
+    approveWorkflow,
   } = useAnalyticsMemoryStream(analysisMode);
 
   // Project data for the analytics memory project
@@ -197,6 +198,7 @@ Result:
               messages={chatHistory} 
               isLoading={isLoading} 
               onSubmitClarification={submitClarification}
+              onApproveWorkflow={approveWorkflow}
               processSteps={processSteps}
             />
 
