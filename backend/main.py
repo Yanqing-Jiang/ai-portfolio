@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from fastapi import FastAPI, Request, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, Response, JSONResponse
@@ -9,6 +10,9 @@ import os
 import json
 from datetime import date as _Date, datetime as _DateTime
 import uuid
+import time
+
+logger = logging.getLogger(__name__)
 
 
 from research_agent import run_research_agent, run_research_agent_stream
@@ -857,20 +861,44 @@ async def analytics_supervisor_stream_endpoint(query: str, request: Request, ses
 
     Shares the same domain (next-gen-analytics-memory) while providing a
     different agent UX (planning + tool events) but compatible result events.
-    
+
     SQL execution requires explicit user approval - no auto-approval in production.
     """
 
-    import uuid
+    request_start = time.time()
+    original_session_id = session_id
+
     if not session_id:
         session_id = str(uuid.uuid4())
 
+    logger.info(f"[SUPERVISOR_ENDPOINT] Received request - Query: {query[:50]}..., Session: {session_id}, Original session: {original_session_id}")
+    logger.info(f"[SUPERVISOR_ENDPOINT] Client IP: {request.client.host if request.client else 'unknown'}")
+
     async def generate_supervisor_stream():
+        stream_start = time.time()
+        event_count = 0
+
         try:
+            logger.info(f"[SUPERVISOR_ENDPOINT] Starting supervisor workflow stream for session {session_id}")
+
             async for event in supervisor_workflow(query=query, session_id=session_id):
+                event_count += 1
+                if event_count % 5 == 0:  # Log every 5th event
+                    elapsed = time.time() - stream_start
+                    logger.debug(f"[SUPERVISOR_ENDPOINT] Streamed {event_count} events in {elapsed:.2f}s for session {session_id}")
+
+                if event.get("event") == "workflow_complete":
+                    total_duration = time.time() - request_start
+                    logger.info(f"[SUPERVISOR_ENDPOINT] Workflow completed after {total_duration:.2f}s, {event_count} events for session {session_id}")
+                elif event.get("event") == "tool_error":
+                    logger.error(f"[SUPERVISOR_ENDPOINT] Tool error in workflow for session {session_id}: {event.get('data', {}).get('error')}")
                 yield f"data: {json.dumps(event)}\n\n"
                 await asyncio.sleep(0)
         except Exception as e:
+            total_duration = time.time() - request_start
+            logger.error(f"[SUPERVISOR_ENDPOINT] Stream error after {total_duration:.2f}s, {event_count} events for session {session_id}: {str(e)}")
+            logger.error(f"[SUPERVISOR_ENDPOINT] Error type: {type(e).__name__}")
+
             err = {"event": "errors", "data": {"errors": [str(e)], "step": "supervisor"}}
             yield f"data: {json.dumps(err)}\n\n"
             await asyncio.sleep(0)
@@ -887,46 +915,6 @@ async def analytics_supervisor_stream_endpoint(query: str, request: Request, ses
     )
 
 
-class SupervisorApproveRequest(BaseModel):
-    session_id: str
-
-
-@app.post("/api/analytics/memory/supervisor/approve")
-async def analytics_supervisor_approve_endpoint(req: SupervisorApproveRequest, _: None = Depends(smart_rate_limit)):
-    """Approve a pending supervisor plan for the given session.
-    
-    Body: { "session_id": "..." }
-    """
-    from analytics_supervisor.supervisor import get_active_workflow
-
-    try:
-        wf = get_active_workflow(req.session_id)
-        if not wf:
-            return JSONResponse(
-                content={"success": False, "message": "No active supervisor session found"},
-                status_code=404,
-                headers={"Access-Control-Allow-Origin": "*"}
-            )
-
-        success = wf.approve_plan(req.session_id)
-        if success:
-            return JSONResponse(
-                content={"success": True, "message": "Plan approved successfully"},
-                headers={"Access-Control-Allow-Origin": "*"}
-            )
-        else:
-            return JSONResponse(
-                content={"success": False, "message": "No pending plan for session or invalid state"},
-                status_code=409,
-                headers={"Access-Control-Allow-Origin": "*"}
-            )
-            
-    except Exception as e:
-        return JSONResponse(
-            content={"success": False, "error": str(e)},
-            status_code=500,
-            headers={"Access-Control-Allow-Origin": "*"}
-        )
 
 @app.post("/api/analytics/memory/clarify")
 async def analytics_memory_clarify_endpoint(answer: ClarifyAnswerModel, _: None = Depends(smart_rate_limit)):

@@ -33,14 +33,10 @@ class PlanSchema(BaseModel):
     """
     Planning schema for Claude Code-style single agent supervision.
 
-    The agent proposes a plan with steps and identifies if approval is needed
-    for any side-effects (apply_execute_sql).
+    The agent proposes a plan with steps for execution.
     """
     plan: str = Field(description="Short natural-language description of the overall plan")
     steps: List[ToolStep] = Field(description="Ordered list of tool steps to execute")
-    requires_approval: bool = Field(description="True if any step requires user approval (e.g., SQL execution)")
-    apply_targets: List[str] = Field(description="List of apply tools that need approval", default_factory=list)
-    risks: List[str] = Field(description="Brief list of potential risks or side-effects", default_factory=list)
     reasoning: str = Field(description="Agent's reasoning for this plan approach")
 
     class Config:
@@ -63,30 +59,6 @@ class FinalSummarySchema(BaseModel):
     class Config:
         extra = "forbid"
 
-class ApprovalRequest(BaseModel):
-    """
-    Schema for approval requests sent to the UI.
-    """
-    session_id: str = Field(description="Session identifier")
-    plan_id: str = Field(description="Unique identifier for this plan")
-    plan: PlanSchema = Field(description="The proposed plan requiring approval")
-    apply_steps: List[ToolStep] = Field(description="Specific steps requiring approval")
-    preview_sql: Optional[str] = Field(description="Preview of SQL that will be executed", default=None)
-
-    class Config:
-        extra = "forbid"
-
-class ApprovalResponse(BaseModel):
-    """
-    Schema for approval responses from the UI.
-    """
-    session_id: str = Field(description="Session identifier")
-    plan_id: str = Field(description="Plan identifier being responded to")
-    approved: bool = Field(description="Whether the plan is approved")
-    modifications: Optional[str] = Field(description="Requested modifications if not approved", default=None)
-
-    class Config:
-        extra = "forbid"
 
 class ToolExecution(BaseModel):
     """
@@ -123,9 +95,8 @@ class WorkflowState(BaseModel):
     Enhanced internal state tracking for the supervisor workflow.
     """
     session_id: str
-    current_phase: str = Field(description="planning, approval_pending, executing, analysis, completed")
+    current_phase: str = Field(description="planning, executing, analysis, completed")
     plan: Optional[PlanSchema] = None
-    approval_granted: bool = False
     executed_tools: List[str] = Field(default_factory=list)
     execution_steps: List[ExecutionStep] = Field(default_factory=list, description="Detailed execution tracking")
     sql_executed: Optional[str] = None

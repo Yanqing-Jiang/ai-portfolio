@@ -4,10 +4,14 @@ import time
 import json
 import uuid
 import logging
+import os
 from datetime import datetime
 import asyncio
 
 logger = logging.getLogger(__name__)
+
+# Debug configuration
+SUPERVISOR_DEBUG = os.getenv('SUPERVISOR_DEBUG', 'false').lower() == 'true'
 
 from analytics_memory.sql_planner import compile_sql_from_plan
 from analytics_memory.types import ValidationError
@@ -16,7 +20,7 @@ from analytics_memory.intent import detect_intent_with_clarifications
 from analytics_memory.types import ClarifyRequestModel
 
 from .tools import SupervisorTools
-from .responses_client import get_supervisor_client
+from .responses_client import get_supervisor_client, SUPERVISOR_REASONING_EFFORT
 from .schemas import PlanSchema, FinalSummarySchema, WorkflowState, ToolExecution
 
 # Registry of active supervisor workflows keyed by session_id
@@ -38,7 +42,6 @@ class SupervisorWorkflow:
             # For development/testing without OpenAI API key
             self.client = None
         self.workflow_states: Dict[str, WorkflowState] = {}  # Session-based state tracking
-        self._approval_events: Dict[str, asyncio.Event] = {}  # Session-based approval events
         self._clarification_events: Dict[str, asyncio.Event] = {}  # Session-based clarification events
         self._pending_clarifications: Dict[str, ClarifyRequestModel] = {}  # Session-based clarification requests
 
@@ -60,74 +63,84 @@ class SupervisorWorkflow:
             started_at=now
         )
         self.workflow_states[session_id] = state
-        # Register approval event and active workflow for this session
-        self._approval_events[session_id] = asyncio.Event()
+        # Register active workflow for this session
         ACTIVE_WORKFLOWS[session_id] = self
 
         yield {"event": "session_started", "data": {"session_id": session_id, "ts": now}}
 
         try:
             # ====== PHASE 1: PLANNING ======
+            planning_start = time.time()
+            logger.info(f"[SUPERVISOR] Planning phase started for session {session_id}, query: {query[:50]}...")
             yield {"event": "status", "data": {"step": "planning", "message": "Agent planning approach...", "ts": now}}
-            
+
+            # Add streaming status during planning
+            yield {"event": "status", "data": {"step": "planning", "message": "Connecting to planning service...", "ts": datetime.utcnow().isoformat()}}
+
+            # Intermediate status updates during planning
+            def status_callback(message: str):
+                return {"event": "status", "data": {"step": "planning", "message": message, "ts": datetime.utcnow().isoformat()}}
+
+            yield status_callback("Analyzing query and building context...")
             plan = await self._planning_turn(query, session_id)
+
+            planning_duration = time.time() - planning_start
+            logger.info(f"[SUPERVISOR] Planning completed in {planning_duration:.2f}s for session {session_id}")
+            yield {"event": "status", "data": {"step": "planning", "message": f"Planning completed ({planning_duration:.1f}s)", "ts": datetime.utcnow().isoformat()}}
             state.plan = plan
-            state.current_phase = "approval_pending" if plan.requires_approval else "executing"
-            
+            state.current_phase = "executing"
+
             yield {
                 "event": "planning_proposed",
                 "data": {
                     "plan": plan.plan,
                     "steps": [step.dict() for step in plan.steps],
-                    "requires_approval": plan.requires_approval,
-                    "apply_targets": plan.apply_targets,
-                    "risks": plan.risks,
                     "reasoning": plan.reasoning,
                     "ts": now
                 }
             }
 
-            # ====== PHASE 2: APPROVAL (always required for SQL execution) ======
-            if plan.requires_approval:
-                yield {
-                    "event": "approval_required",
-                    "data": {
-                        "session_id": session_id,
-                        "apply_targets": plan.apply_targets,
-                        "preview_sql": self._get_preview_sql_if_available(plan),
-                        "ts": datetime.utcnow().isoformat()
-                    }
-                }
-                
-                # Wait for approval (handled by separate endpoint)
-                await self._wait_for_approval(session_id)
-                state.approval_granted = True
-                state.current_phase = "executing"
-                
-                yield {"event": "approval_granted", "data": {"session_id": session_id, "ts": datetime.utcnow().isoformat()}}
-
-            # ====== PHASE 3: TOOL EXECUTION ======
+            # ====== PHASE 2: TOOL EXECUTION ======
+            execution_start = time.time()
             state.current_phase = "executing"
+            logger.info(f"[SUPERVISOR] Tool execution phase started for session {session_id}")
             yield {"event": "status", "data": {"step": "execution", "message": "Executing planned tools...", "ts": datetime.utcnow().isoformat()}}
             
             # Execute tools and forward their events
             data = None
             chart_spec = None
             sql_executed = None
-            
+            tool_count = 0
+
             async for tool_event in self._execute_tools(plan, query, session_id):
+                tool_count += 1
                 if tool_event.get("event") == "data_retrieved":
                     data = tool_event["data"].get("sample_data", [])
                     sql_executed = tool_event["data"].get("sql_executed")
+                    if SUPERVISOR_DEBUG:
+                        logger.info(f"[SUPERVISOR] Data retrieved: {len(data)} rows for session {session_id}")
                 elif tool_event.get("event") == "chart_generated":
                     chart_spec = tool_event["data"].get("chart_spec")
+                    if SUPERVISOR_DEBUG:
+                        logger.info(f"[SUPERVISOR] Chart generated for session {session_id}")
+                elif tool_event.get("event") == "tool_start":
+                    if SUPERVISOR_DEBUG:
+                        logger.info(f"[SUPERVISOR] Tool started: {tool_event['data'].get('tool')} for session {session_id}")
+                elif tool_event.get("event") == "tool_end":
+                    if SUPERVISOR_DEBUG:
+                        logger.info(f"[SUPERVISOR] Tool completed: {tool_event['data'].get('tool')} for session {session_id}")
+                elif tool_event.get("event") == "tool_error":
+                    logger.error(f"[SUPERVISOR] Tool error: {tool_event['data'].get('tool')} - {tool_event['data'].get('error')} for session {session_id}")
                 yield tool_event
             
+            execution_duration = time.time() - execution_start
+            logger.info(f"[SUPERVISOR] Tool execution completed in {execution_duration:.2f}s, processed {tool_count} events for session {session_id}")
+
             state.data_retrieved = data
             state.chart_spec = chart_spec
             state.sql_executed = sql_executed
 
-            # ====== PHASE 4: ANALYSIS STREAMING ======
+            # ====== PHASE 3: ANALYSIS STREAMING ======
             state.current_phase = "analysis"
             yield {"event": "status", "data": {"step": "analysis_generation", "message": "Generating insights...", "ts": datetime.utcnow().isoformat()}}
             
@@ -153,7 +166,7 @@ class SupervisorWorkflow:
 
             yield {"event": "analysis_complete", "data": {"analysis": full_analysis}}
 
-            # ====== PHASE 5: FINALIZATION ======
+            # ====== PHASE 4: FINALIZATION ======
             state.current_phase = "completed"
             state.completed_at = datetime.utcnow().isoformat()
             
@@ -177,54 +190,64 @@ class SupervisorWorkflow:
             state.errors.append(str(e))
             yield {"event": "tool_error", "data": {"error": str(e), "step": state.current_phase}}
         finally:
-            # Cleanup active workflow, approval event, and clarification events for this session
+            # Cleanup active workflow and clarification events for this session
             ACTIVE_WORKFLOWS.pop(session_id, None)
-            self._approval_events.pop(session_id, None)
             self._clarification_events.pop(session_id, None)
             self._pending_clarifications.pop(session_id, None)
 
 
     async def _planning_turn(self, query: str, session_id: str) -> PlanSchema:
-        """Phase 1: Agent plans the approach using GPT-5 with high reasoning effort"""
-        
+        """Phase 1: Agent plans the approach using GPT-5 with configurable reasoning effort"""
+
+        planning_start = time.time()
+        logger.info(f"[PLANNING] Starting planning turn for session {session_id}")
+
         if not self.client:
-            # Fallback to deterministic plan if no OpenAI client available
+            logger.warning(f"[PLANNING] No OpenAI client available for session {session_id}, using fallback")
             return await self._fallback_planning_turn(query, session_id)
         
-        # Use GPT-5 with high reasoning effort for planning
+        # Use GPT-5 with configurable reasoning effort for planning
         system_message = """You are a Claude Code-style supervisor agent planning financial analytics workflows.
 
 Your task is to create a detailed execution plan for financial data analysis queries. You have access to these tools:
-- detect_intent: Analyze user query to extract intent and slots  
+- detect_intent: Analyze user query to extract intent and slots - ALWAYS use this first to identify missing information
 - provisional_plan: Create SQL query plan from detected intent
 - retrieve_templates_rag: Search for relevant SQL templates
+- request_clarification: Request clarification from user when information is missing or ambiguous
 - validate_sql: Validate compiled SQL for safety
-- apply_execute_sql: Execute validated SQL query (REQUIRES APPROVAL)
+- apply_execute_sql: Execute validated SQL query directly after validation
 - plan_chart: Plan visualization for the data
 - build_chart: Generate chart specification
 
-Always include these steps in order:
-1. Intent detection and clarifications
-2. Query planning 
-3. Template retrieval
-4. SQL validation
-5. SQL execution (needs approval due to side effects)
-6. Chart planning and generation
+CRITICAL: If the user query is ambiguous or missing key information, you MUST include clarification steps. For example:
+- Market share queries: Ask if they want single company analysis or all companies comparison
+- Missing company names: Ask which company to analyze
+- Missing time periods: Ask for specific timeframe
 
-Identify if the workflow requires approval (always true for SQL execution).
-List specific risks like "SQL execution on financial database" and "Potential large result sets".
-Provide clear reasoning for your approach."""
+Always include these steps in order:
+1. Intent detection (detect_intent)
+2. Clarifications (request_clarification) - IF needed based on intent detection
+3. Query planning (provisional_plan)
+4. Template retrieval (retrieve_templates_rag)
+5. SQL validation (validate_sql)
+6. SQL execution (apply_execute_sql)
+7. Chart planning and generation (plan_chart, build_chart)
+
+Provide clear reasoning for your approach and why clarifications are needed."""
 
         user_message = f"""Plan a financial analytics workflow for this user query: "{query}"
 
 Create a detailed plan that:
-1. Detects the user's intent and handles any missing information via clarifications
-2. Plans the appropriate SQL query for financial data analysis
-3. Validates the SQL for safety before execution
-4. Requires approval for SQL execution due to database side effects
-5. Generates appropriate visualizations for the results
+1. Detects the user's intent and identifies any missing or ambiguous information
+2. Requests clarifications from the user if the query is incomplete or ambiguous
+3. Plans the appropriate SQL query for financial data analysis
+4. Validates the SQL for safety before execution
+5. Executes the SQL directly after validation
+6. Generates appropriate visualizations for the results
 
-Focus on safety, validation, and user approval for database operations."""
+IMPORTANT: For ambiguous queries like "market share" without specifying single vs all companies, you MUST include clarification steps.
+
+Focus on thorough intent detection and clarification gathering upfront."""
 
         messages = [
             {"role": "system", "content": system_message},
@@ -232,27 +255,43 @@ Focus on safety, validation, and user approval for database operations."""
         ]
 
         try:
+            api_start = time.time()
+            logger.info(f"[PLANNING] Calling OpenAI API with reasoning effort= {SUPERVISOR_REASONING_EFFORT} for session {session_id}")
+            if SUPERVISOR_DEBUG:
+                logger.info(f"[PLANNING] Message count: {len(messages)}, total chars: {sum(len(str(m)) for m in messages)}")
+
+            if SUPERVISOR_DEBUG:
+                logger.debug(f"[PLANNING] Full request - Model: gpt-5-mini-2025-08-07, Reasoning: {SUPERVISOR_REASONING_EFFORT}")
+                logger.debug(f"[PLANNING] Query: {query}")
+
             plan = await self.client.planning_turn(
                 messages=messages,
                 response_format=PlanSchema,
                 session_id=session_id,
-                reasoning_effort="high"
+                reasoning_effort=SUPERVISOR_REASONING_EFFORT
             )
-            
-            # Ensure apply_execute_sql is marked as requiring approval
-            if not plan.requires_approval:
-                plan.requires_approval = True
-            if "apply_execute_sql" not in plan.apply_targets:
-                plan.apply_targets.append("apply_execute_sql")
-                
+
+            api_duration = time.time() - api_start
+            logger.info(f"[PLANNING] OpenAI API call completed in {api_duration:.2f}s for session {session_id}")
+            logger.info(f"[PLANNING] Plan generated with {len(plan.steps)} steps")
+
             return plan
             
         except Exception as e:
-            logger.error(f"GPT-5 planning failed: {str(e)}, falling back to deterministic plan")
+            planning_duration = time.time() - planning_start
+            logger.error(f"[PLANNING] GPT-5 planning failed after {planning_duration:.2f}s for session {session_id}: {str(e)}")
+            logger.error(f"[PLANNING] Error type: {type(e).__name__}, falling back to deterministic plan")
+
+            if SUPERVISOR_DEBUG:
+                logger.debug(f"[PLANNING] Full error details: {repr(e)}")
+
             return await self._fallback_planning_turn(query, session_id)
 
     async def _fallback_planning_turn(self, query: str, session_id: str) -> PlanSchema:
         """Fallback deterministic planning when GPT-5 is unavailable"""
+
+        fallback_start = time.time()
+        logger.info(f"[PLANNING] Using fallback deterministic planning for session {session_id}")
         from .schemas import ToolStep
         
         plan_steps = [
@@ -300,20 +339,23 @@ Focus on safety, validation, and user approval for database operations."""
             )
         ]
         
+        fallback_duration = time.time() - fallback_start
+        logger.info(f"[PLANNING] Fallback plan generated in {fallback_duration:.3f}s for session {session_id}")
+
         return PlanSchema(
             plan="Execute financial analytics workflow: detect intent → plan query → find templates → validate SQL → execute → visualize",
             steps=plan_steps,
-            requires_approval=True,  # SQL execution requires approval
-            apply_targets=["apply_execute_sql"],
-            risks=["SQL execution on financial database", "Potential large result sets"],
-            reasoning="Standard analytics workflow with safety validation and approval for SQL execution"
+            reasoning="Standard analytics workflow with safety validation"
         )
 
     async def _execute_tools(self, plan: PlanSchema, query: str, session_id: str):
         """Phase 3: Execute tools using proper Responses API tool calling"""
-        
+
+        execute_start = time.time()
+        logger.info(f"[TOOLS] Starting tool execution for session {session_id} with {len(plan.steps)} planned steps")
+
         if not self.client:
-            # Fallback to direct execution if no OpenAI client
+            logger.warning(f"[TOOLS] No OpenAI client available for session {session_id}, using fallback execution")
             async for event in self._fallback_execute_tools(plan, query, session_id):
                 yield event
             return
@@ -329,47 +371,65 @@ User Query: {query}
 
 Execute the tools step by step according to the plan. You have access to these tools:
 - detect_intent: Analyze user query to extract intent and slots
-- provisional_plan: Create SQL query plan from detected intent  
+- provisional_plan: Create SQL query plan from detected intent
 - retrieve_templates_rag: Search for relevant SQL templates
 - request_clarification: Request clarification from user when information is missing or ambiguous
 - validate_sql: Validate compiled SQL for safety
-- apply_execute_sql: Execute validated SQL query (REQUIRES APPROVAL - only call if approval granted)
+- apply_execute_sql: Execute validated SQL query directly after validation
 - plan_chart: Plan visualization for the data
 - build_chart: Generate chart specification
 
 Important rules:
 1. Call tools in the planned sequence
-2. If information is missing (e.g., company name), call request_clarification before proceeding
-3. Only call apply_execute_sql if approval has been granted for this session
+2. ALWAYS call detect_intent first to identify missing information
+3. If information is missing or ambiguous (e.g., market share without specifying single vs all companies), call request_clarification before proceeding
 4. Pass results from one tool to the next as needed
 5. Stop if any tool returns an error or clarification is needed
 
 Start by calling detect_intent with the user query."""
             },
             {
-                "role": "user", 
+                "role": "user",
                 "content": f"Execute the analytics plan for query: '{query}'"
             }
         ]
         
         # Get tool schemas for function calling
         tool_schemas = self.tools.get_tool_schemas()
-        
+
+        if SUPERVISOR_DEBUG:
+            logger.debug(f"[TOOLS] Tool schemas count: {len(tool_schemas)}")
+            if tool_schemas:
+                logger.debug(f"[TOOLS] First tool schema: {tool_schemas[0]}")
+                logger.debug(f"[TOOLS] First tool has 'name' field: {'name' in tool_schemas[0]}")
+                if 'function' in tool_schemas[0]:
+                    logger.debug(f"[TOOLS] First tool function has 'name': {'name' in tool_schemas[0]['function']}")
+
         # Execute tool calling loop
+        logger.info(f"[TOOLS] Starting OpenAI tool calling loop for session {session_id}")
+        loop_start = time.time()
+
         async for event in self._tool_calling_loop(messages, tool_schemas, session_id, query):
             yield event
 
+        loop_duration = time.time() - loop_start
+        execute_duration = time.time() - execute_start
+        logger.info(f"[TOOLS] Tool calling loop completed in {loop_duration:.2f}s, total execution: {execute_duration:.2f}s for session {session_id}")
+
     async def _fallback_execute_tools(self, plan: PlanSchema, query: str, session_id: str):
         """Fallback direct tool execution when OpenAI is unavailable"""
-        
+
+        fallback_start = time.time()
+        logger.info(f"[TOOLS] Starting fallback tool execution for session {session_id}")
+
         data = None
-        chart_spec = None 
+        chart_spec = None
         sql_executed = None
         
         try:
             # Step 1: Detect intent with clarifications
             yield {"event": "tool_start", "data": {"tool": "detect_intent", "args_summary": f"query: {query}", "ts": datetime.utcnow().isoformat()}}
-            intent = detect_intent_with_clarifications(query, self.tools.configs, session_id)
+            intent = await asyncio.to_thread(detect_intent_with_clarifications, query, self.tools.configs, session_id=session_id)
             yield {"event": "intent_decided", "data": intent.dict(), "ts": datetime.utcnow().isoformat()}
             yield {"event": "tool_end", "data": {"tool": "detect_intent", "output_summary": f"intent_key: {intent.intent_key}", "ts": datetime.utcnow().isoformat()}}
             
@@ -468,6 +528,13 @@ Start by calling detect_intent with the user query."""
 
     async def _execute_single_tool(self, tool_name: str, tool_args: Dict[str, Any], session_id: str):
         """Execute a single tool call"""
+
+        tool_start = time.time()
+        if SUPERVISOR_DEBUG:
+            logger.info(f"[SINGLE_TOOL] Executing {tool_name} for session {session_id}")
+
+        if SUPERVISOR_DEBUG:
+            logger.debug(f"[SINGLE_TOOL] Args for {tool_name}: {tool_args}")
         
         if tool_name == "detect_intent":
             result = self.tools.detect_intent(tool_args["query"])
@@ -503,18 +570,8 @@ Start by calling detect_intent with the user query."""
             return {"ok": ok, "issues": issues}
             
         elif tool_name == "apply_execute_sql":
-            # Additional safety check: ensure this tool is only called after validation
+            # Execute SQL directly after validation
             sql = tool_args["sql"]
-            
-            # Safety gate: ensure the workflow state indicates approval was granted
-            state = self.workflow_states.get(session_id)
-            if state and not state.approval_granted:
-                return {
-                    "success": False,
-                    "error": "SQL execution requires approval - call approve endpoint",
-                    "summary": {"error": "Approval required for SQL execution"}
-                }
-            
             result = await self.tools.apply_execute_sql(sql)
             
             # Track execution in workflow state
@@ -552,7 +609,18 @@ Start by calling detect_intent with the user query."""
             return result
             
         else:
+            logger.error(f"[SINGLE_TOOL] Unknown tool: {tool_name} for session {session_id}")
             raise ValueError(f"Unknown tool: {tool_name}")
+
+        tool_duration = time.time() - tool_start
+        if SUPERVISOR_DEBUG:
+            logger.info(f"[SINGLE_TOOL] Tool {tool_name} completed in {tool_duration:.3f}s for session {session_id}")
+
+        if 'result' in locals():
+            return result
+        else:
+            logger.warning(f"[SINGLE_TOOL] No result returned from {tool_name} for session {session_id}")
+            return None
 
     async def _finalization_turn(self, query: str, sql: str, data: List, chart_spec: Dict, analysis: str, session_id: str) -> FinalSummarySchema:
         """Phase 5: Summarize results"""
@@ -590,12 +658,6 @@ Start by calling detect_intent with the user query."""
             execution_time="< 1 minute"
         )
 
-    def _get_preview_sql_if_available(self, plan: PlanSchema) -> Optional[str]:
-        """Extract SQL preview if available from plan steps"""
-        for step in plan.steps:
-            if step.tool == "apply_execute_sql" and "sql" in step.inputs:
-                return step.inputs["sql"]
-        return None
 
     def _get_options_for_slot(self, slot: str) -> List[str]:
         """Get available options for a clarification slot"""
@@ -628,15 +690,28 @@ Start by calling detect_intent with the user query."""
 
     async def _tool_calling_loop(self, messages: List[Dict], tool_schemas: List[Dict], session_id: str, query: str):
         """Execute tool calling loop using Responses API"""
-        
+
+        loop_start = time.time()
         max_iterations = 10  # Prevent infinite loops
         data = None
         chart_spec = None
         sql_executed = None
+
+        logger.info(f"[TOOL_LOOP] Starting tool calling loop for session {session_id}, max iterations: {max_iterations}")
+        if SUPERVISOR_DEBUG:
+            logger.info(f"[TOOL_LOOP] Available tools: {[tool.get('function', {}).get('name', 'unknown') for tool in tool_schemas]}")
         
         for iteration in range(max_iterations):
+            iteration_start = time.time()
+            if SUPERVISOR_DEBUG:
+                logger.info(f"[TOOL_LOOP] Iteration {iteration + 1}/{max_iterations} for session {session_id}")
+
             try:
                 # Call the model with tools
+                api_call_start = time.time()
+                if SUPERVISOR_DEBUG:
+                    logger.info(f"[TOOL_LOOP] Calling OpenAI tool calling turn for session {session_id}")
+
                 response = await self.client.tool_calling_turn(
                     messages=messages,
                     tools=tool_schemas,
@@ -644,18 +719,30 @@ Start by calling detect_intent with the user query."""
                     session_id=session_id,
                     reasoning_effort="medium"
                 )
+
+                api_duration = time.time() - api_call_start
+                if SUPERVISOR_DEBUG:
+                    logger.info(f"[TOOL_LOOP] OpenAI API call completed in {api_duration:.2f}s for session {session_id}")
                 
                 # Check if model wants to call tools
                 if hasattr(response, 'tool_calls') and response.tool_calls:
+                    if SUPERVISOR_DEBUG:
+                        logger.info(f"[TOOL_LOOP] Model requested {len(response.tool_calls)} tool calls for session {session_id}")
                     # Execute each tool call
                     tool_results = []
                     
                     for tool_call in response.tool_calls:
+                        tool_start = time.time()
                         tool_name = tool_call.function.name
                         tool_args = json.loads(tool_call.function.arguments)
-                        
+
+                        if SUPERVISOR_DEBUG:
+                            logger.info(f"[TOOL_LOOP] Executing tool: {tool_name} for session {session_id}")
+                        if SUPERVISOR_DEBUG:
+                            logger.debug(f"[TOOL_LOOP] Tool args: {tool_args}")
+
                         yield {
-                            "event": "tool_start", 
+                            "event": "tool_start",
                             "data": {
                                 "tool": tool_name,
                                 "args_summary": str(tool_args)[:100],
@@ -697,50 +784,103 @@ Start by calling detect_intent with the user query."""
                                 # Update result to indicate clarification was handled
                                 result["clarification_resolved"] = True
                         else:
-                            # Execute tool normally
-                            result = await self._execute_single_tool(tool_name, tool_args, session_id)
+                            # Execute tool normally with enhanced error handling
+                            try:
+                                if SUPERVISOR_DEBUG:
+                                    logger.debug(f"[TOOL_EXECUTION] Executing {tool_name} with args: {json.dumps(tool_args, indent=2)}")
+                                result = await self._execute_single_tool(tool_name, tool_args, session_id)
+                                if SUPERVISOR_DEBUG:
+                                    logger.debug(f"[TOOL_EXECUTION] {tool_name} result: success={result.get('success')}, data_size={len(str(result))}")
+                            except Exception as tool_exc:
+                                logger.error(f"[TOOL_EXECUTION] Error executing {tool_name}: {str(tool_exc)}")
+                                if SUPERVISOR_DEBUG:
+                                    logger.debug(f"[TOOL_EXECUTION] Full error: {repr(tool_exc)}")
+                                result = {"success": False, "error": str(tool_exc), "tool": tool_name}
                         
-                        # Track important results
-                        if tool_name == "apply_execute_sql" and result.get("success"):
-                            data = result.get("data", [])
+                        # Track important results and emit SQL events
+                        if tool_name == "apply_execute_sql":
                             sql_executed = tool_args.get("sql")
-                            yield {
-                                "event": "data_retrieved", 
-                                "data": {
-                                    "row_count": len(data),
-                                    "sample_data": data[:3],
-                                    "sql_executed": sql_executed
+                            if result.get("success"):
+                                data = result.get("data", [])
+                                row_count = len(data)
+
+                                # Always emit SQL executed event for frontend
+                                yield {
+                                    "event": "sql_executed",
+                                    "data": {
+                                        "sql": sql_executed,
+                                        "row_count": row_count,
+                                        "success": True
+                                    }
                                 }
-                            }
+
+                                # Emit data retrieved event
+                                yield {
+                                    "event": "data_retrieved",
+                                    "data": {
+                                        "row_count": row_count,
+                                        "sample_data": data[:3] if data else [],
+                                        "sql_executed": sql_executed
+                                    }
+                                }
+
+                                # Add fallback for empty data
+                                if row_count == 0:
+                                    logger.warning(f"[TOOL_EXECUTION] SQL returned 0 rows for session {session_id}: {sql_executed}")
+                                    yield {
+                                        "event": "warning",
+                                        "data": {
+                                            "message": "No data found for the query. You may want to adjust the time period or company selection.",
+                                            "sql": sql_executed
+                                        }
+                                    }
+                            else:
+                                # SQL execution failed
+                                error_msg = result.get("error", "Unknown SQL error")
+                                logger.error(f"[TOOL_EXECUTION] SQL execution failed for session {session_id}: {error_msg}")
+                                yield {
+                                    "event": "sql_executed",
+                                    "data": {
+                                        "sql": sql_executed,
+                                        "success": False,
+                                        "error": error_msg
+                                    }
+                                }
                         elif tool_name == "build_chart":
                             chart_spec = result
                             yield {"event": "chart_generated", "data": {"chart_spec": chart_spec}}
                         
+                        tool_duration = time.time() - tool_start
+                        if SUPERVISOR_DEBUG:
+                            logger.info(f"[TOOL_LOOP] Tool {tool_name} completed in {tool_duration:.2f}s for session {session_id}")
+
                         yield {
                             "event": "tool_end",
                             "data": {
                                 "tool": tool_name,
                                 "output_summary": str(result)[:100] if result else "completed",
+                                "duration_ms": int(tool_duration * 1000),
                                 "ts": datetime.utcnow().isoformat()
                             }
                         }
                         
-                        # Add tool result to conversation
+                        # Add tool result to conversation (Responses API format)
                         tool_results.append({
                             "tool_call_id": tool_call.id,
                             "role": "tool",
                             "name": tool_name,
-                            "content": json.dumps(result)
+                            "content": [{"type": "input_text", "text": json.dumps(result)}]
                         })
                     
-                    # Add assistant message and tool results to conversation
+                    # Add assistant message and tool results to conversation (Responses API format)
+                    assistant_content = [{"type": "input_text", "text": response.content}] if response.content else []
                     messages.append({
                         "role": "assistant",
-                        "content": response.content,
+                        "content": assistant_content,
                         "tool_calls": [
                             {
                                 "id": tc.id,
-                                "type": "function", 
+                                "type": "function",
                                 "function": {"name": tc.function.name, "arguments": tc.function.arguments}
                             } for tc in response.tool_calls
                         ]
@@ -749,17 +889,32 @@ Start by calling detect_intent with the user query."""
                     
                 else:
                     # No more tool calls - workflow complete
+                    logger.info(f"[TOOL_LOOP] No more tool calls requested, workflow complete for session {session_id}")
                     break
+
+                iteration_duration = time.time() - iteration_start
+                if SUPERVISOR_DEBUG:
+                    logger.info(f"[TOOL_LOOP] Iteration {iteration + 1} completed in {iteration_duration:.2f}s for session {session_id}")
                     
             except Exception as e:
+                iteration_duration = time.time() - iteration_start
+                logger.error(f"[TOOL_LOOP] Error in iteration {iteration + 1} after {iteration_duration:.2f}s for session {session_id}: {str(e)}")
+                logger.error(f"[TOOL_LOOP] Error type: {type(e).__name__}")
+
+                if SUPERVISOR_DEBUG:
+                    logger.debug(f"[TOOL_LOOP] Full error details: {repr(e)}")
+
                 yield {"event": "tool_error", "data": {"tool": "workflow", "error": str(e)}}
                 break
+
+        total_duration = time.time() - loop_start
+        logger.info(f"[TOOL_LOOP] Tool calling loop completed after {total_duration:.2f}s for session {session_id}")
 
     async def _handle_detect_intent_with_clarifications(self, tool_args: Dict, session_id: str, query: str):
         """Handle intent detection with clarification support"""
         
         # Use the enhanced intent detection 
-        intent = detect_intent_with_clarifications(query, self.tools.configs, session_id)
+        intent = await asyncio.to_thread(detect_intent_with_clarifications, query, self.tools.configs, session_id=session_id)
         
         # Check for clarifications
         clarification_events = []
@@ -807,30 +962,6 @@ Start by calling detect_intent with the user query."""
             "clarification_events": clarification_events
         }
 
-    async def _wait_for_approval(self, session_id: str):
-        """Block until an approval signal is received for the session."""
-        evt = self._approval_events.get(session_id)
-        if not evt:
-            evt = asyncio.Event()
-            self._approval_events[session_id] = evt
-        await evt.wait()
-
-    def approve_plan(self, session_id: str) -> bool:
-        """Approve a pending plan and signal any waiters for the session."""
-        state = self.workflow_states.get(session_id)
-        evt = self._approval_events.get(session_id)
-        if state and state.current_phase == "approval_pending":
-            state.approval_granted = True
-            state.current_phase = "executing"
-            if evt and not evt.is_set():
-                evt.set()
-            return True
-        # If already executing but event not set, set it to unblock
-        if state and state.current_phase == "executing":
-            if evt and not evt.is_set():
-                evt.set()
-            return True
-        return False
 
 
 def get_active_workflow(session_id: str) -> Optional[SupervisorWorkflow]:
