@@ -86,12 +86,15 @@ class UnifiedResponsesClient:
                         segment = dict(item)
                         if segment.get("type") == "text" and "text" not in segment and "value" in segment:
                             segment["text"] = segment.pop("value")
+                        # Convert legacy "text" type to "input_text" for Responses API
+                        if segment.get("type") == "text":
+                            segment["type"] = "input_text"
                         segments.append(segment)
                     else:
-                        segments.append({"type": "text", "text": str(item)})
+                        segments.append({"type": "input_text", "text": str(item)})
             else:
                 text_value = "" if raw_content is None else str(raw_content)
-                segments = [{"type": "text", "text": text_value}]
+                segments = [{"type": "input_text", "text": text_value}]
 
             formatted.append({"role": role, "content": segments})
         return formatted
@@ -207,16 +210,13 @@ class UnifiedResponsesClient:
         messages: List[Dict[str, Any]],
         reasoning_effort: str = "medium",
         session_id: Optional[str] = None,
-        model: Optional[str] = None,
-        temperature: Optional[float] = None
+        model: Optional[str] = None
     ) -> Tuple[T, Optional[str]]:
         params: Dict[str, Any] = {
             "model": self._get_model_name(model),
             "input": self._format_messages(messages),
             "text_format": response_model,
         }
-        if temperature is not None:
-            params["temperature"] = temperature
         self._apply_reasoning(params, reasoning_effort)
         self._inject_context(params, session_id)
 
@@ -239,8 +239,7 @@ class UnifiedResponsesClient:
         tool_choice: str = "auto",
         reasoning_effort: str = "medium",
         session_id: Optional[str] = None,
-        model: Optional[str] = None,
-        temperature: Optional[float] = None
+        model: Optional[str] = None
     ) -> ResponseMessage:
         params: Dict[str, Any] = {
             "model": self._get_model_name(model),
@@ -248,8 +247,6 @@ class UnifiedResponsesClient:
             "tools": tools,
             "tool_choice": tool_choice,
         }
-        if temperature is not None:
-            params["temperature"] = temperature
         self._apply_reasoning(params, reasoning_effort)
         self._inject_context(params, session_id)
 
@@ -270,15 +267,12 @@ class UnifiedResponsesClient:
         messages: List[Dict[str, Any]],
         reasoning_effort: str = "low",
         session_id: Optional[str] = None,
-        model: Optional[str] = None,
-        temperature: Optional[float] = None
+        model: Optional[str] = None
     ) -> AsyncGenerator[ResponseDelta, None]:
         params: Dict[str, Any] = {
             "model": self._get_model_name(model),
             "input": self._format_messages(messages),
         }
-        if temperature is not None:
-            params["temperature"] = temperature
         self._apply_reasoning(params, reasoning_effort)
         self._inject_context(params, session_id)
 
@@ -315,15 +309,12 @@ class UnifiedResponsesClient:
         messages: List[Dict[str, Any]],
         reasoning_effort: str = "low",
         session_id: Optional[str] = None,
-        model: Optional[str] = None,
-        temperature: Optional[float] = None
+        model: Optional[str] = None
     ) -> Tuple[str, Optional[str]]:
         params: Dict[str, Any] = {
             "model": self._get_model_name(model),
             "input": self._format_messages(messages),
         }
-        if temperature is not None:
-            params["temperature"] = temperature
         self._apply_reasoning(params, reasoning_effort)
         self._inject_context(params, session_id)
 

@@ -1,6 +1,6 @@
 ﻿from __future__ import annotations
 from typing import Any, Dict, List, Literal, Optional, TypedDict, Union
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, ConfigDict
 
 # LangGraph-friendly state (lightweight). Pydantic models will validate node IO.
 class WorkflowState(TypedDict, total=False):
@@ -38,6 +38,7 @@ class ChartSpecModel(BaseModel):
 # ---------- Phase 2 Models ----------
 
 class IntentModel(BaseModel):
+    model_config = ConfigDict(extra='forbid', json_schema_extra={"additionalProperties": False})
     intent_key: Optional[str] = None
     confidence: float = Field(0.0, ge=0.0, le=1.0)
     slots_detected: Dict[str, Any] = Field(default_factory=dict)
@@ -130,3 +131,19 @@ class ClarifyErrorModel(BaseModel):
     request_id: str = Field(..., description="ID of the clarification request with error")
     slot: str = Field(..., description="The slot with error")
     message: str = Field(..., description="Error message")
+
+
+class QuestionAnalysisModel(BaseModel):
+    question: str = Field(..., description="The original question")
+    intent_confidence: float = Field(0.0, ge=0.0, le=1.0, description="Confidence in intent detection")
+    missing_slots: List[str] = Field(default_factory=list, description="Slots that need clarification")
+    assumptions: List[str] = Field(default_factory=list, description="Assumptions made in analysis")
+    ready_to_proceed: bool = Field(False, description="Whether we can proceed without clarification")
+
+
+class ClarificationArtifactModel(BaseModel):
+    session_id: str = Field(..., description="Session ID for this clarification")
+    pending_requests: List[ClarifyRequestModel] = Field(default_factory=list, description="Outstanding clarification requests")
+    answered_requests: List[ClarifyAnswerModel] = Field(default_factory=list, description="Completed clarification answers")
+    clarification_state: Literal['pending', 'partial', 'complete'] = Field('pending', description="State of clarification process")
+

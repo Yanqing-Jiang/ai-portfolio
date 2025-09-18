@@ -49,8 +49,7 @@ class OpenAIClient:
         messages: list[dict],
         model: Optional[str] = None,
         session_id: Optional[str] = None,
-        reasoning_effort: str = "medium",
-        temperature: float = 0
+        reasoning_effort: str = "medium"
     ) -> T:
         """Create structured response with Pydantic model using responses API only"""
         try:
@@ -64,8 +63,7 @@ class OpenAIClient:
                     messages=messages,
                     reasoning_effort=reasoning_effort,
                     session_id=session_id,
-                    model=self._get_model_name(model),
-                    temperature=temperature
+                    model=self._get_model_name(model)
                 )
 
             # Run in a new event loop in a thread to avoid conflicts
@@ -84,8 +82,7 @@ class OpenAIClient:
         messages: list[dict],
         model: Optional[str] = None,
         session_id: Optional[str] = None,
-        reasoning_effort: str = "medium",
-        temperature: float = 0
+        reasoning_effort: str = "medium"
     ) -> T:
         """Async version of structured response using responses API only"""
         try:
@@ -95,8 +92,7 @@ class OpenAIClient:
                 messages=messages,
                 reasoning_effort=reasoning_effort,
                 session_id=session_id,
-                model=self._get_model_name(model),
-                temperature=temperature
+                model=self._get_model_name(model)
             )
             return result
 
@@ -108,8 +104,7 @@ class OpenAIClient:
         self,
         messages: list[dict],
         model: Optional[str] = None,
-        session_id: Optional[str] = None,
-        temperature: float = 0
+        session_id: Optional[str] = None
     ) -> AsyncGenerator[str, None]:
         """Stream completion for analysis generation using responses API only"""
         try:
@@ -118,8 +113,7 @@ class OpenAIClient:
                 messages=messages,
                 reasoning_effort="low",  # Use low effort for streaming analysis
                 session_id=session_id,
-                model=self._get_model_name(model),
-                temperature=temperature
+                model=self._get_model_name(model)
             ):
                 if delta.content:
                     yield delta.content
