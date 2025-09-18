@@ -305,7 +305,7 @@ Known intent patterns and their slot requirements:
 - rnd_intensity_vs_peers: requires company
 - rnd_expense_vs_peers: requires company
 
-Important: For "market share" queries without a specific company, you MUST suggest a 'comparison' clarification to ask if they want single company analysis or all companies analysis. Do not default to market_share_all without clarification.
+Important: For "market share" queries, you MUST suggest a 'comparison' clarification to ask if they want single company analysis or all companies comparison, EVEN IF a company is mentioned. This helps users choose between analyzing that specific company's market share or comparing all companies including that one. Do not default to market_share_all or market_share_single without clarification.
 
 Note: "margin growth vs industry average" queries should use margin_growth_vs_peers intent."""
 
