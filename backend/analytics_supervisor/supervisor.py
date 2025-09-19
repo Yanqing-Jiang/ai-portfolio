@@ -209,10 +209,13 @@ class SupervisorWorkflow:
         # Use GPT-5 with configurable reasoning effort for planning
         system_message = """You are a Claude Code-style supervisor agent planning financial analytics workflows.
 
-Your task is to create a detailed execution plan for financial data analysis queries. You have access to these tools:
+Your task is to create a detailed execution plan for financial data analysis queries. You have access to these enhanced tools:
 - detect_intent: Analyze user query to extract intent and slots - ALWAYS use this first to identify missing information
 - provisional_plan: Create SQL query plan from detected intent
-- retrieve_templates_rag: Search for relevant SQL templates
+- retrieve_templates_rag: Search for relevant SQL templates using advanced RAG with vector embeddings and hybrid search
+- search_metrics_rag: Search for relevant financial metrics with semantic matching and synonym expansion
+- search_companies_rag: Search for companies with alias resolution and sector filtering
+- get_analytics_context_rag: Get comprehensive context including templates, metrics, companies, and related items
 - request_clarification: Request clarification from user when information is missing or ambiguous
 - validate_sql: Validate compiled SQL for safety
 - apply_execute_sql: Execute validated SQL query directly after validation
@@ -369,10 +372,13 @@ Focus on thorough intent detection and clarification gathering upfront."""
 Plan: {plan.plan}
 User Query: {query}
 
-Execute the tools step by step according to the plan. You have access to these tools:
+Execute the tools step by step according to the plan. You have access to these enhanced tools:
 - detect_intent: Analyze user query to extract intent and slots
 - provisional_plan: Create SQL query plan from detected intent
-- retrieve_templates_rag: Search for relevant SQL templates
+- retrieve_templates_rag: Search for relevant SQL templates using advanced RAG with vector embeddings and hybrid search
+- search_metrics_rag: Search for relevant financial metrics with semantic matching and synonym expansion
+- search_companies_rag: Search for companies with alias resolution and sector filtering
+- get_analytics_context_rag: Get comprehensive context including templates, metrics, companies, and related items
 - request_clarification: Request clarification from user when information is missing or ambiguous
 - validate_sql: Validate compiled SQL for safety
 - apply_execute_sql: Execute validated SQL query directly after validation
@@ -550,7 +556,34 @@ Start by calling detect_intent with the user query."""
             result = await self.tools.retrieve_templates_rag(
                 tool_args["query"],
                 tool_args.get("intent_key"),
-                tool_args.get("top_k", 3)
+                tool_args.get("top_k", 3),
+                tool_args.get("mode", "hybrid")
+            )
+            return result
+
+        elif tool_name == "search_metrics_rag":
+            result = await self.tools.search_metrics_rag(
+                tool_args["query"],
+                tool_args.get("category"),
+                tool_args.get("top_k", 5),
+                tool_args.get("include_derived", True)
+            )
+            return result
+
+        elif tool_name == "search_companies_rag":
+            result = await self.tools.search_companies_rag(
+                tool_args["query"],
+                tool_args.get("sector"),
+                tool_args.get("top_k", 5)
+            )
+            return result
+
+        elif tool_name == "get_analytics_context_rag":
+            result = await self.tools.get_analytics_context_rag(
+                tool_args["query"],
+                tool_args.get("intent_key"),
+                tool_args.get("company_filter"),
+                tool_args.get("category_filter")
             )
             return result
             
