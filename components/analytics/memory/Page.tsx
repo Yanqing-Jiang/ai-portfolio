@@ -16,6 +16,12 @@ const MemoryAnalyticsPage: React.FC = () => {
   const [isHeaderCollapsed, setIsHeaderCollapsed] = useState(false);
   const [analysisMode, setAnalysisMode] = useState<'memory' | 'supervisor'>('memory');
 
+  // Reset header to expanded state when component mounts (project navigation)
+  useEffect(() => {
+    setIsHeaderCollapsed(false);
+    setHasStartedChat(false);
+  }, []);
+
   const {
     // State
     chatHistory,

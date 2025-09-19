@@ -37,10 +37,17 @@ class ChartSpecModel(BaseModel):
 
 # ---------- Phase 2 Models ----------
 
+class TimeframeModel(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    years_back: Optional[int] = Field(default=4, ge=0, le=10)
+    start_year: Optional[int] = None
+    end_year: Optional[int] = None
+
+
 class SlotsModel(BaseModel):
     model_config = ConfigDict(extra='forbid')
     company: Optional[str] = None
-    timeframe: Optional[Dict[str, Any]] = None
+    timeframe: TimeframeModel = Field(default_factory=TimeframeModel)
     metrics: Optional[List[str]] = None
     granularity: Optional[str] = None
     tickers: Optional[List[str]] = None
@@ -51,7 +58,7 @@ class IntentModel(BaseModel):
     confidence: float = Field(0.0, ge=0.0, le=1.0)
     slots_detected: SlotsModel = Field(default_factory=SlotsModel)
     assumptions: List[str] = Field(default_factory=list)
-    
+
     # Advisory fields for early clarification detection
     clarifications_suggested: List[Dict[str, Any]] = Field(
         default_factory=list,
@@ -65,12 +72,6 @@ class IntentModel(BaseModel):
         default="",
         description="Brief 1-2 line rationale for the chosen intent"
     )
-
-
-class TimeframeModel(BaseModel):
-    years_back: Optional[int] = Field(default=4, ge=0, le=10)
-    start_year: Optional[int] = None
-    end_year: Optional[int] = None
 
 
 class QueryPlanModel(BaseModel):
