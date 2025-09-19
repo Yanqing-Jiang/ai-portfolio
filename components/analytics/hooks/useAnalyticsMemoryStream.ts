@@ -7,12 +7,7 @@ import { useProcessSteps } from './useProcessSteps';
 export const useAnalyticsMemoryStream = (mode: 'memory' | 'supervisor' = 'memory') => {
   const [sessionId, setSessionId] = useState<string>('');
   const [pendingClarification, setPendingClarification] = useState<ClarifyRequest | null>(null);
-  const [supervisorState, setSupervisorState] = useState<{
-    plan?: any;
-    requiresApproval?: boolean;
-    approvalPending?: boolean;
-    currentSessionId?: string;
-  }>({});
+  const [supervisorState, setSupervisorState] = useState<{ plan?: any }>({});
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
   const [chartSpec, setChartSpec] = useState<any>(null);
   const [analysis, setAnalysis] = useState('');
@@ -235,39 +230,10 @@ export const useAnalyticsMemoryStream = (mode: 'memory' | 'supervisor' = 'memory
           streamHook.setCurrentStatus('Plan proposed by supervisor agent');
           addChatMessage({
             type: 'assistant',
-            content: `📋 **Plan Proposed:**\n${eventData.plan}\n\n**Steps:** ${eventData.steps?.length || 0} tools planned\n**Requires Approval:** ${eventData.requires_approval ? 'Yes' : 'No'}`,
+            content: `**Plan Proposed:**\n${eventData.plan}\n\n**Steps:** ${eventData.steps?.length || 0} tools planned`,
           });
           break;
 
-        case 'approval_required':
-          setSupervisorState(prev => ({ 
-            ...prev, 
-            requiresApproval: true, 
-            approvalPending: true,
-            currentSessionId: eventData.session_id 
-          }));
-          stepsHook.updateStepStatus('approval', 'in_progress', ['Waiting for user approval']);
-          streamHook.setCurrentStatus('Plan requires approval - please review and approve');
-          addChatMessage({
-            type: 'approval_request',
-            content: '🔒 **Approval Required** - This plan includes SQL execution which requires your approval.',
-            approvalSessionId: eventData.session_id,
-            previewSql: eventData.preview_sql,
-            applyTargets: eventData.apply_targets,
-          });
-          break;
-          
-        case 'approval_auto_granted':
-        case 'approval_granted':
-          setSupervisorState(prev => ({ ...prev, approvalPending: false }));
-          stepsHook.updateStepStatus('approval', 'completed', ['Auto-approved for demo']);
-          streamHook.setCurrentStatus('Plan approved - executing tools...');
-          addChatMessage({
-            type: 'assistant',
-            content: '✅ **Plan Approved** - Proceeding with tool execution',
-          });
-          break;
-          
         case 'tool_start':
           stepsHook.updateStepStatus('tool_execution', 'in_progress', [`Executing: ${eventData.tool}`]);
           streamHook.setCurrentStatus(`Executing tool: ${eventData.tool}`);
@@ -328,16 +294,6 @@ export const useAnalyticsMemoryStream = (mode: 'memory' | 'supervisor' = 'memory
     stepsHook.stopInProgressSteps();
   };
 
-  const approveWorkflow = async (sessionId: string) => {
-    try {
-      const response = await apiService.post('/api/analytics/memory/supervisor/approve', { session_id: sessionId });
-      console.log('Approval submitted:', response);
-    } catch (error) {
-      console.error('Failed to submit approval:', error);
-      streamHook.setError('Failed to submit approval');
-    }
-  };
-
   const resetAll = () => {
     streamHook.resetState();
     stepsHook.resetSteps();
@@ -389,6 +345,6 @@ export const useAnalyticsMemoryStream = (mode: 'memory' | 'supervisor' = 'memory
     resetAll,
     addChatMessage,
     updateChatMessage,
-    approveWorkflow,
   };
 };
+

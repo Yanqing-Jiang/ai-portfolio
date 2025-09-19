@@ -6,7 +6,9 @@ import uuid
 import json
 import asyncpg
 
-from langchain_openai import OpenAIEmbeddings
+import sys
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from unified_responses_client import get_unified_client
 
 
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -67,12 +69,12 @@ async def _ensure_schema(conn: asyncpg.Connection) -> None:
         pass
 
 
-def _get_embeddings() -> Optional[OpenAIEmbeddings]:
+def _get_unified_client():
+    """Get unified client for embeddings"""
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         return None
-    # text-embedding-3-small: 1536 dims, cost-effective
-    return OpenAIEmbeddings(model="text-embedding-3-small", api_key=api_key)
+    return get_unified_client()
 
 
 def _to_pgvector_literal(vec: List[float]) -> str:
@@ -88,12 +90,15 @@ async def search_templates(query: str, intent_key: Optional[str] = None, top_k: 
     if not DATABASE_URL:
         return []
 
-    embedder = _get_embeddings()
-    if not embedder:
+    unified_client = _get_unified_client()
+    if not unified_client:
         return []
 
-    # Compute query embedding (sync API; run in thread not necessary for short calls)
-    q_emb = embedder.embed_query(query)
+    # Compute query embedding using unified client
+    q_emb_list = unified_client.create_embeddings_sync([query])
+    if not q_emb_list:
+        return []
+    q_emb = q_emb_list[0]
     q_vec = _to_pgvector_literal(q_emb)
 
     conn = await asyncpg.connect(DATABASE_URL, statement_cache_size=0, timeout=10.0, command_timeout=20.0)
@@ -141,8 +146,8 @@ async def seed_from_queries_yaml(path: str, overwrite: bool = False) -> int:
     if not patterns:
         return 0
 
-    embedder = _get_embeddings()
-    if not embedder:
+    unified_client = _get_unified_client()
+    if not unified_client:
         raise RuntimeError("OPENAI_API_KEY is required to embed templates for seeding")
 
     conn = await asyncpg.connect(DATABASE_URL, statement_cache_size=0, timeout=10.0, command_timeout=20.0)
@@ -164,7 +169,8 @@ async def seed_from_queries_yaml(path: str, overwrite: bool = False) -> int:
                 f"desc:{description}",
                 f"tags:{','.join(tags)}",
             ])
-            emb = embedder.embed_query(embed_text)
+            emb_list = unified_client.create_embeddings_sync([embed_text])
+            emb = emb_list[0] if emb_list else []
 
             tpl_id = uuid.uuid5(uuid.NAMESPACE_URL, f"{intent_key}:{name}")
             vec = _to_pgvector_literal(emb)

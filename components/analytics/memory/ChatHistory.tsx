@@ -8,7 +8,6 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
   messages, 
   isLoading, 
   onSubmitClarification,
-  onApproveWorkflow,
   processSteps = []
 }) => {
   if (messages.length === 0) return null;
@@ -44,29 +43,6 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
                   )}
                 </div>
                 
-                {message.type === 'approval_request' && onApproveWorkflow && message.approvalSessionId && (
-                  <div className="mt-3 space-y-3">
-                    {message.previewSql && (
-                      <div className="bg-gray-800/60 border border-gray-700 rounded-lg p-3">
-                        <div className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1">Preview SQL</div>
-                        <pre className="text-xs text-gray-200 font-mono whitespace-pre-wrap break-words">{message.previewSql}</pre>
-                      </div>
-                    )}
-                    {message.applyTargets && message.applyTargets.length > 0 && (
-                      <div className="text-xs text-gray-400">
-                        Applies: {message.applyTargets.join(', ')}
-                      </div>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => onApproveWorkflow(message.approvalSessionId)}
-                      disabled={isLoading}
-                      className="w-full px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium transition-all duration-200 disabled:opacity-60 disabled:cursor-not-allowed"
-                    >
-                      {isLoading ? 'Approving...' : 'Approve plan'}
-                    </button>
-                  </div>
-                )}
                 
                 {/* Embedded Rich Content for Result Messages */}
                 {message.type === 'result' && (

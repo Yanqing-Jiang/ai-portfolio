@@ -19,14 +19,14 @@ redis_pool = None
 try:
     redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
     redis_pool = redis.from_url(
-        redis_url, 
-        encoding="utf-8", 
+        redis_url,
+        encoding="utf-8",
         decode_responses=True
     )
     print(f"Redis configured with URL: {redis_url}")
 except Exception as e:
-    print(f"Warning: Redis connection failed: {e}")
-    print("Rate limiting will use in-memory fallback (development mode)")
+    print(f"Redis not available: {e}")
+    print("INFO: Rate limiting will use in-memory fallback (development mode)")
     redis_pool = None
 
 # In-memory fallback for development
@@ -228,15 +228,16 @@ async def get_user_usage(identifier: str) -> Tuple[int, int]:
 async def init_rate_limiter():
     """Initialize the rate limiter with Redis"""
     if redis_pool is None:
-        print("Warning: Redis not available, rate limiting disabled")
+        print("INFO: Redis not available, using in-memory rate limiting for development")
         return False
-    
+
     try:
         await FastAPILimiter.init(redis_pool)
-        print("Rate limiter initialized successfully")
+        print("Rate limiter initialized successfully with Redis")
         return True
     except Exception as e:
-        print(f"Warning: Failed to initialize rate limiter: {e}")
+        print(f"WARNING: Failed to initialize rate limiter: {e}")
+        print("INFO: Falling back to in-memory rate limiting")
         return False
 
 # Create a unified rate limiter
@@ -250,7 +251,8 @@ try:
     unified_rate_limiter = create_unified_rate_limiter()
     print("Unified rate limiter created successfully")
 except Exception as e:
-    print(f"Warning: Failed to create rate limiter: {e}")
+    print(f"WARNING: Failed to create rate limiter: {e}")
+    print("INFO: Rate limiting will use fallback mechanisms")
     unified_rate_limiter = None
 
 async def smart_rate_limit(request: Request):

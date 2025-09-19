@@ -862,7 +862,7 @@ async def analytics_supervisor_stream_endpoint(query: str, request: Request, ses
     Shares the same domain (next-gen-analytics-memory) while providing a
     different agent UX (planning + tool events) but compatible result events.
 
-    SQL execution requires explicit user approval - no auto-approval in production.
+    SQL execution uses built-in safety checks and runs without manual approval.
     """
 
     request_start = time.time()
@@ -941,3 +941,4 @@ async def analytics_memory_clarify_endpoint(answer: ClarifyAnswerModel, _: None 
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8001)
+

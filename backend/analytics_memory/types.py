@@ -37,11 +37,19 @@ class ChartSpecModel(BaseModel):
 
 # ---------- Phase 2 Models ----------
 
+class SlotsModel(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    company: Optional[str] = None
+    timeframe: Optional[Dict[str, Any]] = None
+    metrics: Optional[List[str]] = None
+    granularity: Optional[str] = None
+    tickers: Optional[List[str]] = None
+
 class IntentModel(BaseModel):
-    model_config = ConfigDict(extra='forbid', json_schema_extra={"additionalProperties": False})
+    model_config = ConfigDict(extra='forbid')
     intent_key: Optional[str] = None
     confidence: float = Field(0.0, ge=0.0, le=1.0)
-    slots_detected: Dict[str, Any] = Field(default_factory=dict)
+    slots_detected: SlotsModel = Field(default_factory=SlotsModel)
     assumptions: List[str] = Field(default_factory=list)
     
     # Advisory fields for early clarification detection
