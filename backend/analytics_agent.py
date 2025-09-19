@@ -10,7 +10,6 @@ import asyncpg
 import sys
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from unified_responses_client import get_unified_client
-from langgraph.graph import StateGraph, END
 
 
 class WorkflowState(TypedDict):
@@ -51,9 +50,6 @@ class AnalyticsWorkflow:
         self.unified_client = get_unified_client()
         if not self.unified_client:
             raise ValueError("Failed to initialize unified responses client")
-        
-        # Build LangGraph workflow
-        self.workflow = self._build_workflow()
         
         # Load configuration schemas
         self.configs = load_config_schemas()
@@ -806,23 +802,7 @@ class AnalyticsWorkflow:
 
         # Default: chart all candidate columns
         return candidate_columns
-    
-    def _build_workflow(self) -> StateGraph:
-        workflow = StateGraph(WorkflowState)
-        
-        # Add nodes
-        workflow.add_node("sql_agent", self._sql_agent)
-        workflow.add_node("echarts_agent", self._echarts_agent)
-        workflow.add_node("analysis_agent", self._analysis_agent)
-        
-        # Add edges
-        workflow.set_entry_point("sql_agent")
-        workflow.add_edge("sql_agent", "echarts_agent")
-        workflow.add_edge("echarts_agent", "analysis_agent")
-        workflow.add_edge("analysis_agent", END)
-        
-        return workflow.compile()
-    
+    
     async def _get_available_metrics(self) -> List[str]:
         """Query database for actual available metrics"""
         conn = None
