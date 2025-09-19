@@ -16,6 +16,12 @@ const SqlAnalyticsPage: React.FC = () => {
   const [hasStartedChat, setHasStartedChat] = useState(false);
   const [isHeaderCollapsed, setIsHeaderCollapsed] = useState(false);
 
+  // Reset header to expanded state when component mounts (project navigation)
+  useEffect(() => {
+    setIsHeaderCollapsed(false);
+    setHasStartedChat(false);
+  }, []);
+
   const {
     // State
     chartSpec,
