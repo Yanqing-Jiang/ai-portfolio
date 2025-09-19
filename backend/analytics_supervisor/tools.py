@@ -33,6 +33,8 @@ from .schemas import (
 from analytics_memory.config import CONFIGS
 
 from .template_store import search_templates
+from .rag_service import get_rag_service, SearchContext, SearchMode
+from .config_store import get_config_store, ConfigStore
 
 class SupervisorTools:
     """Thin wrappers around existing deterministic functions + RAG accessors.
@@ -46,6 +48,7 @@ class SupervisorTools:
 
     def __init__(self, configs: Optional[Dict[str, Any]] = None):
         self.configs = configs or CONFIGS.__dict__
+        self.config_store = get_config_store()
         
     @staticmethod
     def get_tool_schemas() -> List[Dict[str, Any]]:
@@ -102,22 +105,105 @@ class SupervisorTools:
             {
                 "type": "function",
                 "name": "retrieve_templates_rag",
-                "description": "Search vector store for relevant SQL templates.",
+                "description": "Search for relevant SQL templates using advanced RAG with embeddings and hybrid search.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "query": {
                             "type": "string",
-                            "description": "Query text used for semantic search"
+                            "description": "Search query for finding relevant templates"
                         },
                         "intent_key": {
                             "type": "string",
-                            "description": "Optional intent key to filter templates"
+                            "description": "Optional intent key to filter results"
                         },
                         "top_k": {
                             "type": "integer",
-                            "description": "Number of templates to retrieve",
-                            "default": 3
+                            "description": "Number of results to return (default: 3)"
+                        },
+                        "mode": {
+                            "type": "string",
+                            "description": "Search mode: 'vector_only', 'keyword_only', 'hybrid', or 'auto' (default: 'hybrid')"
+                        }
+                    },
+                    "required": ["query"],
+                    "additionalProperties": False
+                }
+            },
+            {
+                "type": "function",
+                "name": "search_metrics_rag",
+                "description": "Search for relevant financial metrics using RAG with semantic matching and synonym expansion.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Search query for finding relevant metrics"
+                        },
+                        "category": {
+                            "type": "string",
+                            "description": "Optional metric category to filter results (e.g., 'income_statement', 'ratios')"
+                        },
+                        "top_k": {
+                            "type": "integer",
+                            "description": "Number of results to return (default: 5)"
+                        },
+                        "include_derived": {
+                            "type": "boolean",
+                            "description": "Whether to include derived metrics in results (default: true)"
+                        }
+                    },
+                    "required": ["query"],
+                    "additionalProperties": False
+                }
+            },
+            {
+                "type": "function",
+                "name": "search_companies_rag",
+                "description": "Search for relevant companies using RAG with alias resolution and sector filtering.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Search query for finding relevant companies (ticker, name, or alias)"
+                        },
+                        "sector": {
+                            "type": "string",
+                            "description": "Optional sector to filter results (e.g., 'semiconductor')"
+                        },
+                        "top_k": {
+                            "type": "integer",
+                            "description": "Number of results to return (default: 5)"
+                        }
+                    },
+                    "required": ["query"],
+                    "additionalProperties": False
+                }
+            },
+            {
+                "type": "function",
+                "name": "get_analytics_context_rag",
+                "description": "Get comprehensive analytics context including templates, metrics, companies, and related items.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Query to get context for"
+                        },
+                        "intent_key": {
+                            "type": "string",
+                            "description": "Optional intent key for template filtering"
+                        },
+                        "company_filter": {
+                            "type": "string",
+                            "description": "Optional company ticker to focus on"
+                        },
+                        "category_filter": {
+                            "type": "string",
+                            "description": "Optional metric category to focus on"
                         }
                     },
                     "required": ["query"],
@@ -281,21 +367,171 @@ class SupervisorTools:
     # -------- Clarifications (blocking) --------
 
     async def retrieve_templates_rag(
-        self, query: str, intent_key: Optional[str] = None, top_k: int = 3
+        self, query: str, intent_key: Optional[str] = None, top_k: int = 3,
+        mode: str = "hybrid", context: Optional[Dict[str, Any]] = None
     ) -> List[Dict[str, Any]]:
-        """Search Supabase pgvector store for relevant SQL templates.
+        """Enhanced template retrieval using unified ConfigStore with automatic fallback coverage.
 
-        Returns a list of {id, name, intent_key, description, sql_template, distance}.
-        If vector search isn't available (no DB/API key), returns empty list.
+        Uses ConfigStore for deterministic fallback: RAG -> Template Store -> YAML -> Empty.
+        Returns enriched template results with metadata about source and fallback attempts.
         """
         try:
-            return await search_templates(query, intent_key=intent_key, top_k=top_k)
-        except Exception:
-            # Fail silent - supervisor can fallback to config templates
+            # Use ConfigStore for unified access with automatic fallback
+            result = await self.config_store.get_templates(
+                query=query,
+                intent_key=intent_key,
+                top_k=top_k,
+                mode=mode
+            )
+
+            # Add metadata for debugging and telemetry
+            for template in result.data:
+                template['_config_metadata'] = {
+                    'source': result.source.value,
+                    'query_time_ms': result.query_time_ms,
+                    'fallback_attempted': [s.value for s in result.fallback_attempted],
+                    'cache_hit': result.cache_hit
+                }
+
+            return result.data
+
+        except Exception as e:
+            # Final safety fallback
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"ConfigStore template retrieval failed: {e}")
             return []
 
     def choose_template_from_config(self, intent: IntentModel, plan: QueryPlanModel) -> Optional[Dict[str, Any]]:
         return cfg_choose_template(intent, plan, self.configs)
+
+    async def search_metrics_rag(
+        self, query: str, category: Optional[str] = None, top_k: int = 5,
+        include_derived: bool = True
+    ) -> List[Dict[str, Any]]:
+        """Search metrics using unified ConfigStore with automatic fallback coverage.
+
+        Uses ConfigStore for deterministic fallback: RAG -> YAML -> Empty.
+        Returns list of relevant metrics with metadata about source and performance.
+        """
+        try:
+            # Use ConfigStore for unified access with automatic fallback
+            result = await self.config_store.get_metrics(
+                query=query,
+                category=category,
+                top_k=top_k,
+                include_derived=include_derived
+            )
+
+            # Add metadata for debugging and telemetry
+            for metric in result.data:
+                metric['_config_metadata'] = {
+                    'source': result.source.value,
+                    'query_time_ms': result.query_time_ms,
+                    'fallback_attempted': [s.value for s in result.fallback_attempted],
+                    'cache_hit': result.cache_hit
+                }
+
+            return result.data
+
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"ConfigStore metric search failed: {e}")
+            return []
+
+    async def search_companies_rag(
+        self, query: str, sector: Optional[str] = None, top_k: int = 5
+    ) -> List[Dict[str, Any]]:
+        """Search companies using unified ConfigStore with automatic fallback coverage.
+
+        Uses ConfigStore for deterministic fallback: RAG -> YAML -> Empty.
+        Returns list of relevant companies with metadata about source and performance.
+        """
+        try:
+            # Use ConfigStore for unified access with automatic fallback
+            result = await self.config_store.get_companies(
+                query=query,
+                sector=sector,
+                top_k=top_k,
+                include_aliases=True
+            )
+
+            # Add metadata for debugging and telemetry
+            for company in result.data:
+                company['_config_metadata'] = {
+                    'source': result.source.value,
+                    'query_time_ms': result.query_time_ms,
+                    'fallback_attempted': [s.value for s in result.fallback_attempted],
+                    'cache_hit': result.cache_hit
+                }
+
+            return result.data
+
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"ConfigStore company search failed: {e}")
+            return []
+
+    async def get_analytics_context_rag(
+        self, query: str, intent_key: Optional[str] = None,
+        company_filter: Optional[str] = None, category_filter: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Get comprehensive analytics context using unified ConfigStore.
+
+        Uses ConfigStore for deterministic fallback coverage across all config types.
+        Returns templates, metrics, companies, and comprehensive metadata.
+        """
+        try:
+            # Use ConfigStore for unified context retrieval with automatic fallback
+            result = await self.config_store.get_analytics_context(
+                query=query,
+                intent_key=intent_key,
+                company_filter=company_filter,
+                category_filter=category_filter
+            )
+
+            if result.data:
+                context_data = result.data[0]  # Context is returned as single item
+
+                # Add ConfigStore metadata
+                context_data['_config_metadata'] = {
+                    'source': result.source.value,
+                    'query_time_ms': result.query_time_ms,
+                    'fallback_attempted': [s.value for s in result.fallback_attempted],
+                    'cache_hit': result.cache_hit,
+                    'success': result.success
+                }
+
+                return context_data
+            else:
+                # Empty fallback case
+                return {
+                    'templates': [],
+                    'metrics': [],
+                    'companies': [],
+                    'charts': [],
+                    'related_items': {},
+                    '_config_metadata': {
+                        'source': result.source.value,
+                        'error': result.error,
+                        'fallback_attempted': [s.value for s in result.fallback_attempted]
+                    }
+                }
+
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"ConfigStore context retrieval failed: {e}")
+            return {
+                'templates': [],
+                'metrics': [],
+                'companies': [],
+                'charts': [],
+                'related_items': {},
+                'error': str(e)
+            }
 
     # -------- SQL --------
     def validate_sql(self, sql: str, granularity: str, max_limit: Optional[int] = None):
