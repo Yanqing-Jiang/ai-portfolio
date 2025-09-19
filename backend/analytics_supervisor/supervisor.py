@@ -29,9 +29,9 @@ ACTIVE_WORKFLOWS: Dict[str, "SupervisorWorkflow"] = {}
 
 class SupervisorWorkflow:
     """
-    Claude Code-style single-agent orchestrator with planning, approval, and tool execution.
+    Claude Code-style single-agent orchestrator with planning and tool execution.
     
-    Implements the propose → approve → apply pattern with explicit side-effect gating.
+    Implements the propose-and-apply pattern with explicit side-effect gating.
     """
 
     def __init__(self):
@@ -47,7 +47,7 @@ class SupervisorWorkflow:
 
     async def events(self, query: str, session_id: Optional[str] = None) -> AsyncGenerator[Dict[str, Any], None]:
         """
-        Claude Code-style orchestration with planning → approval → execution phases.
+        Claude Code-style orchestration with planning and execution phases.
         """
         start_ts = time.time()
         now = datetime.utcnow().isoformat()
@@ -501,7 +501,7 @@ Start by calling detect_intent with the user query."""
                 yield {"event": "tool_error", "data": {"tool": "validate_sql", "error": f"Validation failed: {issues}", "ts": datetime.utcnow().isoformat()}}
                 return  # Exit early if validation fails
             
-            # Step 6: Execute SQL (requires approval)
+            # Step 6: Execute SQL after safety validation
             yield {"event": "tool_start", "data": {"tool": "apply_execute_sql", "args_summary": f"sql: {sql[:50]}...", "ts": datetime.utcnow().isoformat()}}
             result = await self._execute_single_tool("apply_execute_sql", {"sql": sql}, session_id)
             
@@ -730,7 +730,8 @@ Start by calling detect_intent with the user query."""
                         logger.info(f"[TOOL_LOOP] Model requested {len(response.tool_calls)} tool calls for session {session_id}")
                     # Execute each tool call
                     tool_results = []
-                    
+                    tool_execution_results = []  # Store original results for API submission
+
                     for tool_call in response.tool_calls:
                         tool_start = time.time()
                         tool_name = tool_call.function.name
@@ -749,7 +750,7 @@ Start by calling detect_intent with the user query."""
                                 "ts": datetime.utcnow().isoformat()
                             }
                         }
-                        
+
                         # Handle special tool cases
                         if tool_name == "detect_intent":
                             result = await self._handle_detect_intent_with_clarifications(
@@ -761,26 +762,26 @@ Start by calling detect_intent with the user query."""
                         elif tool_name == "request_clarification":
                             # Handle clarification requests
                             result = await self._execute_single_tool(tool_name, tool_args, session_id)
-                            
+
                             # If clarifications are needed, emit request and wait
                             if result.get("success") and result.get("clarifications_needed"):
                                 clarification_data = result["clarification"]
-                                
+
                                 # Store pending clarification
                                 from analytics_memory.types import ClarifyRequestModel
                                 clarify_request = ClarifyRequestModel(**clarification_data)
                                 self._pending_clarifications[session_id] = clarify_request
                                 self._clarification_events[session_id] = asyncio.Event()
-                                
+
                                 # Emit clarification request event
                                 yield {
                                     "event": "clarification_request",
                                     "data": clarification_data
                                 }
-                                
+
                                 # Wait for clarification answer
                                 await self._wait_for_clarification(session_id)
-                                
+
                                 # Update result to indicate clarification was handled
                                 result["clarification_resolved"] = True
                         else:
@@ -796,7 +797,10 @@ Start by calling detect_intent with the user query."""
                                 if SUPERVISOR_DEBUG:
                                     logger.debug(f"[TOOL_EXECUTION] Full error: {repr(tool_exc)}")
                                 result = {"success": False, "error": str(tool_exc), "tool": tool_name}
-                        
+
+                        # Store original result for API submission
+                        tool_execution_results.append(result)
+
                         # Track important results and emit SQL events
                         if tool_name == "apply_execute_sql":
                             sql_executed = tool_args.get("sql")
@@ -849,7 +853,7 @@ Start by calling detect_intent with the user query."""
                         elif tool_name == "build_chart":
                             chart_spec = result
                             yield {"event": "chart_generated", "data": {"chart_spec": chart_spec}}
-                        
+
                         tool_duration = time.time() - tool_start
                         if SUPERVISOR_DEBUG:
                             logger.info(f"[TOOL_LOOP] Tool {tool_name} completed in {tool_duration:.2f}s for session {session_id}")
@@ -863,7 +867,7 @@ Start by calling detect_intent with the user query."""
                                 "ts": datetime.utcnow().isoformat()
                             }
                         }
-                        
+
                         # Add tool result to conversation (Responses API format)
                         tool_results.append({
                             "tool_call_id": tool_call.id,
@@ -871,7 +875,28 @@ Start by calling detect_intent with the user query."""
                             "name": tool_name,
                             "content": [{"type": "input_text", "text": json.dumps(result)}]
                         })
-                    
+
+                    # Submit tool outputs to OpenAI API (FIXED)
+                    if hasattr(response, 'response_id') and response.response_id:
+                        try:
+                            tool_outputs = []
+                            for tool_call, execution_result in zip(response.tool_calls, tool_execution_results):
+                                tool_outputs.append({
+                                    "tool_call_id": tool_call.id,
+                                    "output": json.dumps(execution_result) if execution_result else "{}"
+                                })
+
+                            # Submit the tool outputs to continue the conversation
+                            await self.client.unified_client.client.responses.submit_tool_outputs(
+                                response_id=response.response_id,
+                                tool_outputs=tool_outputs
+                            )
+
+                            if SUPERVISOR_DEBUG:
+                                logger.info(f"[TOOL_LOOP] Submitted {len(tool_outputs)} tool outputs for session {session_id}")
+                        except Exception as submit_error:
+                            logger.error(f"[TOOL_LOOP] Failed to submit tool outputs for session {session_id}: {str(submit_error)}")
+
                     # Add assistant message and tool results to conversation (Responses API format)
                     assistant_content = [{"type": "input_text", "text": response.content}] if response.content else []
                     messages.append({
@@ -974,3 +999,8 @@ async def supervisor_workflow(query: str, session_id: Optional[str] = None):
     wf = SupervisorWorkflow()
     async for ev in wf.events(query, session_id):
         yield ev
+
+
+
+
+

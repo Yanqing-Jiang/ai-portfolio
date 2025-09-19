@@ -328,6 +328,38 @@ class UnifiedResponsesClient:
             logger.error("Responses API simple completion failed: %s", exc)
             raise
 
+    async def create_embeddings(
+        self,
+        texts: List[str],
+        model: str = "text-embedding-3-small"
+    ) -> List[List[float]]:
+        """Create embeddings for text using OpenAI embeddings API"""
+        try:
+            response = await self.client.embeddings.create(
+                input=texts,
+                model=model
+            )
+            return [embedding.embedding for embedding in response.data]
+        except Exception as exc:
+            logger.error("Embeddings API request failed: %s", exc)
+            raise
+
+    def create_embeddings_sync(
+        self,
+        texts: List[str],
+        model: str = "text-embedding-3-small"
+    ) -> List[List[float]]:
+        """Sync wrapper for embeddings using thread pool"""
+        import asyncio
+        import concurrent.futures
+
+        async def _create_embeddings():
+            return await self.create_embeddings(texts, model)
+
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(asyncio.run, _create_embeddings())
+            return future.result()
+
 
 # Global client instance
 _unified_client: Optional[UnifiedResponsesClient] = None

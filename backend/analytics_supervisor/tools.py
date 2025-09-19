@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 from typing import Any, Dict, List, Optional, AsyncGenerator
 import os
 import sys
@@ -306,7 +306,7 @@ class SupervisorTools:
         return await execute(sql)
 
     async def apply_execute_sql(self, sql: str) -> Dict[str, Any]:
-        """Apply tool: Execute SQL query (requires approval)
+        """Apply tool: Execute SQL query with safety checks
         
         Enforces Claude Code-style safety checks:
         - Pre-execution validation
@@ -544,6 +544,7 @@ Provide polite decline messages for off-topic queries and suggest how to rephras
             )
 
     # -------- Question Completeness Analysis --------
+
 
 
 

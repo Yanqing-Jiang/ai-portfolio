@@ -12,7 +12,7 @@ export interface ProcessStep {
 
 export interface ChatMessage {
   id: string;
-  type: 'user' | 'clarification' | 'result' | 'assistant' | 'approval_request';
+  type: 'user' | 'clarification' | 'result' | 'assistant';
   content: string;
   timestamp: string;
   clarifications?: ClarifyRequest[];
@@ -21,10 +21,6 @@ export interface ChatMessage {
   chartSpec?: any;
   sqlQuery?: string;
   dataSample?: any[];
-  // Approval request fields
-  approvalSessionId?: string;
-  previewSql?: string;
-  applyTargets?: string[];
 }
 
 export interface ClarifyRequest {
@@ -116,7 +112,6 @@ export interface ChatHistoryProps {
   messages: ChatMessage[];
   isLoading?: boolean;
   onSubmitClarification?: (value: any, request: ClarifyRequest) => Promise<void>;
-  onApproveWorkflow?: (sessionId: string) => Promise<void>;
   processSteps?: ProcessStep[];
 }
 

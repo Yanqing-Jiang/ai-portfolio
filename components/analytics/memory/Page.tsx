@@ -37,7 +37,6 @@ const MemoryAnalyticsPage: React.FC = () => {
     handleQuery,
     submitClarification,
     stopAnalysis,
-    approveWorkflow,
   } = useAnalyticsMemoryStream(analysisMode);
 
   // Project data for the analytics memory project
@@ -198,7 +197,6 @@ Result:
               messages={chatHistory} 
               isLoading={isLoading} 
               onSubmitClarification={submitClarification}
-              onApproveWorkflow={approveWorkflow}
               processSteps={processSteps}
             />
 
@@ -277,7 +275,7 @@ Result:
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                   placeholder={analysisMode === 'supervisor' 
-                    ? "Ask about financial data (Claude Code Supervisor with approval gates)" 
+                    ? "Ask about financial data (Claude Code Supervisor mode)" 
                     : "Ask about financial data on NVDA, AMD, AVGO, INTC, MU, NVDA, QCOM, TXN"}
                   className="flex-1 px-4 py-3.5 text-sm md:text-base bg-gray-700/80 backdrop-blur-sm border border-gray-600/50 rounded-xl focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500/50 text-gray-100 placeholder-gray-400 min-h-[48px] shadow-lg transition-all duration-200 min-w-0"
                   onKeyPress={(e) => e.key === 'Enter' && handleAnalyticsQuery()}

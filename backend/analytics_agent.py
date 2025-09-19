@@ -7,8 +7,9 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional, AsyncGenerator, TypedDict
 
 import asyncpg
-from langchain_openai import ChatOpenAI
-from langchain_core.messages import SystemMessage
+import sys
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+from unified_responses_client import get_unified_client
 from langgraph.graph import StateGraph, END
 
 
@@ -46,24 +47,10 @@ def load_config_schemas():
 class AnalyticsWorkflow:
     def __init__(self, database_url: str, openai_api_key: str):
         self.database_url = database_url
-        # Use gpt-4o-mini-2024-07-18 for SQL generation
-        self.llm = ChatOpenAI(
-            model="gpt-4o-mini-2024-07-18",
-            api_key=openai_api_key,
-            temperature=0,
-            max_tokens=None,
-            timeout=None,
-            max_retries=2,
-        )
-        self.streaming_llm = ChatOpenAI(
-            model="gpt-4o-mini-2024-07-18",
-            api_key=openai_api_key,
-            temperature=0,
-            max_tokens=None,
-            timeout=None,
-            max_retries=2,
-            streaming=True
-        )
+        # Use unified client with Responses API
+        self.unified_client = get_unified_client()
+        if not self.unified_client:
+            raise ValueError("Failed to initialize unified responses client")
         
         # Build LangGraph workflow
         self.workflow = self._build_workflow()
@@ -973,12 +960,24 @@ USER QUERY: {state['query']}
 Generate ONLY a valid PostgreSQL SELECT statement:
 """
 
-            print("[SQL AGENT] Calling LLM for SQL generation...")
-            
-            # Use synchronous invoke for faster SQL generation
-            response = self.llm.invoke([SystemMessage(content=schema_prompt)])
-            
-            sql_query = response.content.strip()
+            print("[SQL AGENT] Calling Responses API for SQL generation...")
+
+            # Use unified client with Responses API (sync)
+            messages = [{"role": "system", "content": schema_prompt}]
+            import asyncio
+            import concurrent.futures
+
+            async def _generate_sql():
+                response, _ = await self.unified_client.simple_completion(
+                    messages=messages,
+                    reasoning_effort="low",
+                    model="gpt-4o-mini-2024-07-18"
+                )
+                return response
+
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(asyncio.run, _generate_sql())
+                sql_query = future.result().strip()
             print(f"[SQL AGENT] Generated SQL: {sql_query[:200]}...")
             
             # Clean up SQL query
@@ -1742,12 +1741,17 @@ Guidelines:
                 }
             }
 
-            # Stream analysis directly without concurrency
+            # Stream analysis using unified client Responses API
             full_analysis = ""
-            async for chunk in self.streaming_llm.astream([SystemMessage(content=analysis_prompt)]):
-                if hasattr(chunk, 'content') and chunk.content:
-                    full_analysis += chunk.content
-                    yield {"event": "analysis_streaming", "data": {"partial_analysis": chunk.content}}
+            messages = [{"role": "system", "content": analysis_prompt}]
+            async for delta in self.unified_client.stream_response(
+                messages=messages,
+                reasoning_effort="low",
+                model="gpt-4o-mini-2024-07-18"
+            ):
+                if delta.content:
+                    full_analysis += delta.content
+                    yield {"event": "analysis_streaming", "data": {"partial_analysis": delta.content}}
             
             # Send final analysis
             yield {"event": "analysis_complete", "data": {"analysis": full_analysis}}
