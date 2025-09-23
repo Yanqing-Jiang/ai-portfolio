@@ -40,6 +40,14 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar('T', bound=BaseModel)
 
+# Supervisor reasoning effort configuration (consolidated from responses_client)
+_ALLOWED_REASONING = {"low", "medium", "high"}
+_SUPERVISOR_REASONING_ENV = os.getenv('SUPERVISOR_REASONING_EFFORT', 'low').lower() if os.getenv('SUPERVISOR_REASONING_EFFORT') else 'low'
+if _SUPERVISOR_REASONING_ENV not in _ALLOWED_REASONING:
+    logger.warning('Invalid SUPERVISOR_REASONING_EFFORT=%s, falling back to low', _SUPERVISOR_REASONING_ENV)
+    _SUPERVISOR_REASONING_ENV = 'low'
+SUPERVISOR_REASONING_EFFORT = _SUPERVISOR_REASONING_ENV
+
 
 class ResponseDelta:
     """Represents a streaming delta from the Responses API"""
@@ -401,6 +409,51 @@ class UnifiedResponsesClient:
         with concurrent.futures.ThreadPoolExecutor() as executor:
             future = executor.submit(asyncio.run, _create_embeddings())
             return future.result()
+
+    # =============== SUPERVISOR-SPECIFIC METHODS ===============
+
+    async def finalization_turn(
+        self,
+        messages: List[Dict[str, Any]],
+        response_format: Optional[Type[T]] = None,
+        session_id: Optional[str] = None,
+        reasoning_effort: str = "low",
+        model: Optional[str] = None
+    ) -> T:
+        """Supervisor-specific finalization turn with structured output"""
+        if response_format:
+            result, _ = await self.create_structured(
+                response_model=response_format,
+                messages=messages,
+                reasoning_effort=reasoning_effort,
+                session_id=session_id,
+                model=model or self._get_model_name()
+            )
+            return result
+        else:
+            content, _ = await self.simple_completion(
+                messages=messages,
+                reasoning_effort=reasoning_effort,
+                session_id=session_id,
+                model=model or self._get_model_name()
+            )
+            return content
+
+    async def stream_analysis(
+        self,
+        messages: List[Dict[str, Any]],
+        session_id: Optional[str] = None,
+        reasoning_effort: str = "low",
+        model: Optional[str] = None
+    ) -> AsyncGenerator[ResponseDelta, None]:
+        """Supervisor-specific streaming analysis"""
+        async for delta in self.stream_response(
+            messages=messages,
+            reasoning_effort=reasoning_effort,
+            session_id=session_id,
+            model=model or self._get_model_name()
+        ):
+            yield delta
 
 
 # Global client instance

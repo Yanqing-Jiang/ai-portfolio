@@ -1,6 +1,25 @@
-# Supervisor Flow Reference (Optimized)
+# Supervisor Flow Reference (Refactored & Optimized)
 
-This document describes the optimized single‑agent supervisor flow for next‑gen‑analytics‑memory. The flow runs classification and intent detection BEFORE agent involvement, with smart schema validation to minimize unnecessary clarifications. Agent is only used for tool planning and execution.
+This document describes the fully refactored and optimized single‑agent supervisor flow for next‑gen‑analytics‑memory. The flow features a streamlined 2-layer fallback architecture, centralized Redis caching, and progressive frontend rendering. Classification and intent detection run BEFORE agent involvement, with smart schema validation to minimize unnecessary clarifications.
+
+## Refactored Architecture (v2.0)
+
+### Backend Optimizations
+- **2-Layer Fallback**: Simplified from 3-layer (RAG → Template Store → YAML) to 2-layer (RAG → YAML)
+- **Centralized Caching**: Redis-based cache service with circuit breaker pattern and in-memory fallback
+- **Connection Pooling**: Enhanced PostgreSQL connection pooling with asyncpg (pool size: 5)
+- **Unified Response Client**: Consolidated supervisor-specific and general response clients
+- **Legacy Cleanup**: Removed 1,104 lines of unused code (config_loaders.py, template_store.py)
+
+### Frontend Enhancements
+- **Progressive Rendering**: 50ms debounced updates for smooth real-time streaming
+- **Chart Generation Fix**: Corrected lazy loading imports for ChartCard component
+- **Enhanced Memory Stream**: Added progressive analysis and text state management
+
+### Performance Improvements
+- **Reduced Memory Footprint**: Eliminated duplicate caching layers
+- **Faster Config Resolution**: Direct RAG-to-YAML fallback without intermediate stores
+- **Circuit Breaker**: Graceful Redis failures with automatic fallback to in-memory cache
 
 ## High‑Level Phases
 - **Classification Phase** (BEFORE Agent)
@@ -85,11 +104,45 @@ revenue_growth_analysis: requires []
 rnd_intensity_vs_peers: requires [company]
 ```
 
+## Technical Implementation Details
+
+### Cache Service Architecture
+```python
+class CacheService:
+    - Redis client with connection pooling
+    - Circuit breaker pattern (5 failure threshold)
+    - Automatic fallback to in-memory cache
+    - TTL-based cache management
+    - Async/await support for FastAPI integration
+```
+
+### Config Store (2-Layer Fallback)
+```python
+class ConfigSource(Enum):
+    RAG_SERVICE = "rag_service"     # Primary: Vector search
+    YAML_CONFIG = "yaml_config"     # Fallback: Static configs
+    EMPTY_FALLBACK = "empty_fallback"  # Final fallback
+```
+
+### Progressive Frontend Rendering
+```typescript
+// 50ms debounced updates for smooth streaming
+const scheduleProgressiveUpdate = (updates) => {
+    Object.assign(pendingUpdatesRef.current, updates);
+    updateTimeoutRef.current = setTimeout(() => {
+        // Batch updates for performance
+        applyPendingUpdates();
+    }, 50);
+};
+```
+
 ## Performance Optimizations
 - **Fast Classification**: `gpt-5-nano-2025-08-07` for 50-70% faster non-financial query handling
 - **Early Exit**: Non-financial queries exit before expensive processing
 - **Structured Validation**: Deterministic schema checking before LLM clarifications
 - **Agent Efficiency**: Agent only handles tool planning, not classification/validation
+- **Centralized Caching**: Redis cache with 15-minute TTL and circuit breaker resilience
+- **Connection Pooling**: Optimized PostgreSQL connections with asyncpg pool management
 
 ## UI/UX Improvements
 - **Side Panel**: Process visualization moved to right-side panel with show/hide toggle

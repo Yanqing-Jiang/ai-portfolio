@@ -4,7 +4,7 @@ import { ClarificationOptions } from './ClarificationOptions';
 import { AnalysisCard, SqlCard, CollapsibleSection } from '../common';
 import { isValidChartSpec } from '../utils';
 
-const ChartCard = React.lazy(() => import('../common/ChartCard')); // Lazy-load heavy chart component
+const ChartCard = React.lazy(() => import('../common/ChartCard').then(m => ({ default: m.ChartCard }))); // Lazy-load heavy chart component
 
 export const ChatHistory: React.FC<ChatHistoryProps> = ({ 
   messages, 
