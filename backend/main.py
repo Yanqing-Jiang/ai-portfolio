@@ -871,9 +871,10 @@ async def analytics_supervisor_stream_endpoint(query: str, request: Request, ses
     if not session_id:
         session_id = str(uuid.uuid4())
 
-    logger.info(f"[SUPERVISOR_ENDPOINT] Received request - Query: {query[:50]}..., Session: {session_id}, Original session: {original_session_id}")
+    logger.info(f"[SUPERVISOR_ENDPOINT] Received request - Query: {query[:50]}..., Session: {session_id}")
     logger.info(f"[SUPERVISOR_ENDPOINT] Client IP: {request.client.host if request.client else 'unknown'}")
 
+    from analytics_supervisor.supervisor import supervisor_workflow
     async def generate_supervisor_stream():
         stream_start = time.time()
         event_count = 0
@@ -926,11 +927,16 @@ async def analytics_memory_clarify_endpoint(answer: ClarifyAnswerModel, _: None 
         await put_answer(answer)
         
         # Also try supervisor flow if there's an active supervisor workflow
-        from analytics_supervisor.supervisor import get_active_workflow
+        from analytics_supervisor.supervisor import get_active_workflow, ACTIVE_WORKFLOWS
+        print(f"[CLARIFY_DEBUG] Looking for active workflow for session: {answer.session_id}")
+        print(f"[CLARIFY_DEBUG] Active workflows: {list(ACTIVE_WORKFLOWS.keys())}")
         workflow = get_active_workflow(answer.session_id)
+        print(f"[CLARIFY_DEBUG] Found workflow: {workflow is not None}")
         if workflow:
             print(f"[MAIN] Submitting clarification to supervisor workflow: {answer.session_id}")
             workflow.submit_clarification(answer.session_id, answer.value)
+        else:
+            print(f"[CLARIFY_DEBUG] No active workflow found for session {answer.session_id}")
         
         return {"status": "success", "message": "Clarification answer received"}
     except Exception as e:

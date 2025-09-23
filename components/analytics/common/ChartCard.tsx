@@ -17,6 +17,8 @@ export const ChartCard: React.FC<ChartCardProps> = ({
   const [chartRetryCount, setChartRetryCount] = useState(0);
   const chartRef = useRef<any>(null);
 
+  console.log('[ChartCard] Rendered with chartSpec:', !!chartSpec, 'useAltChart:', useAltChart);
+
   const handleChartError = (error: any) => {
     console.log('[ChartCard] Chart error boundary triggered:', error);
     if (chartRetryCount >= 1) {

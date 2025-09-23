@@ -1,26 +1,30 @@
 // Shared constants for analytics pages
 
-// Memory pipeline steps (with clarifications)
+// Memory pipeline steps (streamlined agent-forward)
 export const STEP_NAME: Record<string, string> = {
+  classify: 'Topic Classification',
   intent_detection: 'Intent Detection',
-  plan_generation: 'Query Planning',
-  template_selection: 'Template Selection',
+  tool_execution: 'Agent Tool Execution',
+  plan_and_select_template: 'Query Planning & Template Selection',
   clarification: 'Requirements Clarification',
   sql_compilation: 'SQL Compilation',
   sql_validation: 'SQL Validation',
   sql_execution: 'Data Retrieval',
+  short_financial_analysis: 'Financial Analysis',
   chart_generation: 'Chart Generation',
-  analysis_generation: 'Analysis Generation',
+  analysis_generation: 'Final Analysis',
 };
 
 export const STEP_ORDER = [
+  'classify',
   'intent_detection',
-  'plan_generation',
-  'template_selection',
+  'tool_execution',
   'clarification',
+  'plan_and_select_template',
   'sql_compilation',
   'sql_validation',
   'sql_execution',
+  'short_financial_analysis',
   'chart_generation',
   'analysis_generation',
 ];

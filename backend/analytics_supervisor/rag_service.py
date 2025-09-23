@@ -34,6 +34,14 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from unified_responses_client import get_unified_client
 
+# Import cache service from current directory
+try:
+    from .cache_service import get_cache_service
+except ImportError:
+    # Fallback for testing or missing cache service
+    def get_cache_service():
+        return None
+
 logger = logging.getLogger(__name__)
 
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -77,8 +85,7 @@ class RAGService:
     def __init__(self, connection_pool_size: int = 5):
         self.connection_pool = None
         self.pool_size = connection_pool_size
-        self.cache = {}  # Simple in-memory cache
-        self.cache_ttl = 3600  # 1 hour TTL
+        self.cache_service = get_cache_service()  # Centralized Redis cache
         self.unified_client = self._get_unified_client()
 
     def _get_unified_client(self):
@@ -113,14 +120,6 @@ class RAGService:
         """Convert vector to pgvector literal format"""
         return "[" + ",".join(f"{x:.8f}" for x in vec) + "]"
 
-    def _cache_key(self, prefix: str, query: str, **kwargs) -> str:
-        """Generate cache key for query"""
-        params = json.dumps(kwargs, sort_keys=True)
-        return f"{prefix}:{hash(query + params)}"
-
-    def _is_cache_valid(self, timestamp: float) -> bool:
-        """Check if cache entry is still valid"""
-        return time.time() - timestamp < self.cache_ttl
 
     async def _get_query_embedding(self, query: str) -> Optional[List[float]]:
         """Get embedding for query text"""
@@ -144,13 +143,16 @@ class RAGService:
         mode: SearchMode = SearchMode.HYBRID
     ) -> List[SearchResult]:
         """Search SQL templates with enhanced scoring"""
-        cache_key = self._cache_key("templates", query, intent_key=intent_key, top_k=top_k, mode=mode.value)
 
-        # Check cache
-        if cache_key in self.cache:
-            cached_time, cached_result = self.cache[cache_key]
-            if self._is_cache_valid(cached_time):
-                return cached_result
+        # Check cache first
+        if self.cache_service:
+            cached_result = await self.cache_service.get(
+                "templates", query,
+                intent_key=intent_key, top_k=top_k, mode=mode.value
+            )
+            if cached_result:
+                # Convert back to SearchResult objects
+                return [SearchResult(**item) for item in cached_result]
 
         conn = await self._get_connection()
         try:
@@ -200,9 +202,16 @@ class RAGService:
                 results.extend(keyword_results)
 
             # Cache results
-            self.cache[cache_key] = (time.time(), results)
+            final_results = results[:top_k]
+            if self.cache_service:
+                # Convert SearchResult objects to dictionaries for caching
+                cache_data = [result.__dict__ for result in final_results]
+                await self.cache_service.set(
+                    "templates", query, cache_data,
+                    intent_key=intent_key, top_k=top_k, mode=mode.value
+                )
 
-            return results[:top_k]
+            return final_results
 
         finally:
             await self._release_connection(conn)
@@ -281,12 +290,15 @@ class RAGService:
         include_derived: bool = True
     ) -> List[SearchResult]:
         """Search metrics with synonym expansion"""
-        cache_key = self._cache_key("metrics", query, category=category, top_k=top_k, include_derived=include_derived)
 
-        if cache_key in self.cache:
-            cached_time, cached_result = self.cache[cache_key]
-            if self._is_cache_valid(cached_time):
-                return cached_result
+        # Check cache first
+        if self.cache_service:
+            cached_result = await self.cache_service.get(
+                "metrics", query,
+                category=category, top_k=top_k, include_derived=include_derived
+            )
+            if cached_result:
+                return [SearchResult(**item) for item in cached_result]
 
         conn = await self._get_connection()
         try:
@@ -314,7 +326,14 @@ class RAGService:
                     seen_ids.add(result.id)
 
             final_results = unique_results[:top_k]
-            self.cache[cache_key] = (time.time(), final_results)
+
+            # Cache results
+            if self.cache_service:
+                cache_data = [result.__dict__ for result in final_results]
+                await self.cache_service.set(
+                    "metrics", query, cache_data,
+                    category=category, top_k=top_k, include_derived=include_derived
+                )
 
             return final_results
 
@@ -452,12 +471,15 @@ class RAGService:
         include_aliases: bool = True
     ) -> List[SearchResult]:
         """Search companies with alias resolution"""
-        cache_key = self._cache_key("companies", query, sector=sector, top_k=top_k, include_aliases=include_aliases)
 
-        if cache_key in self.cache:
-            cached_time, cached_result = self.cache[cache_key]
-            if self._is_cache_valid(cached_time):
-                return cached_result
+        # Check cache first
+        if self.cache_service:
+            cached_result = await self.cache_service.get(
+                "companies", query,
+                sector=sector, top_k=top_k, include_aliases=include_aliases
+            )
+            if cached_result:
+                return [SearchResult(**item) for item in cached_result]
 
         conn = await self._get_connection()
         try:
@@ -517,7 +539,14 @@ class RAGService:
                     seen_tickers.add(result.id)
 
             final_results = unique_results[:top_k]
-            self.cache[cache_key] = (time.time(), final_results)
+
+            # Cache results
+            if self.cache_service:
+                cache_data = [result.__dict__ for result in final_results]
+                await self.cache_service.set(
+                    "companies", query, cache_data,
+                    sector=sector, top_k=top_k, include_aliases=include_aliases
+                )
 
             return final_results
 
@@ -602,14 +631,10 @@ class RAGService:
                 logger.error(f"Companies search failed: {companies}")
                 companies = []
 
-            # Get related items based on primary results
-            related_items = await self._get_related_items(templates, metrics, companies)
-
             result = {
                 'templates': [result.__dict__ for result in templates],
                 'metrics': [result.__dict__ for result in metrics],
                 'companies': [result.__dict__ for result in companies],
-                'related_items': related_items,
                 'query_metadata': {
                     'query': context.query,
                     'intent_key': context.intent_key,
@@ -631,7 +656,6 @@ class RAGService:
                 'templates': [],
                 'metrics': [],
                 'companies': [],
-                'related_items': {},
                 'error': str(e)
             }
 
@@ -659,106 +683,6 @@ class RAGService:
         finally:
             await self._release_connection(conn)
 
-    async def _get_related_items(
-        self,
-        templates: List[SearchResult],
-        metrics: List[SearchResult],
-        companies: List[SearchResult]
-    ) -> Dict[str, Any]:
-        """Get items related to the primary search results"""
-        related = {
-            'suggested_charts': [],
-            'related_metrics': [],
-            'peer_companies': []
-        }
-
-        # Get suggested chart types based on metrics
-        if metrics:
-            related['suggested_charts'] = await self._get_suggested_charts(metrics)
-
-        # Get related metrics based on categories
-        if metrics:
-            related['related_metrics'] = await self._get_related_metrics(metrics)
-
-        # Get peer companies based on sector/industry
-        if companies:
-            related['peer_companies'] = await self._get_peer_companies(companies)
-
-        return related
-
-    async def _get_suggested_charts(self, metrics: List[SearchResult]) -> List[Dict[str, Any]]:
-        """Get suggested chart types based on metrics"""
-        conn = await self._get_connection()
-        try:
-            # Simple chart suggestion logic based on metric types
-            chart_suggestions = []
-
-            for metric in metrics[:3]:  # Limit to top 3 metrics
-                metric_name = metric.title.lower()
-
-                if any(word in metric_name for word in ['growth', 'trend', 'over time']):
-                    chart_suggestions.append({'type': 'time_series_line', 'reason': 'Good for showing trends over time'})
-                elif any(word in metric_name for word in ['comparison', 'vs', 'versus']):
-                    chart_suggestions.append({'type': 'bar_chart', 'reason': 'Good for comparisons'})
-                elif any(word in metric_name for word in ['share', 'percentage', 'proportion']):
-                    chart_suggestions.append({'type': 'pie_chart', 'reason': 'Good for showing proportions'})
-
-            return chart_suggestions[:2]  # Return top 2 suggestions
-
-        finally:
-            await self._release_connection(conn)
-
-    async def _get_related_metrics(self, metrics: List[SearchResult]) -> List[Dict[str, Any]]:
-        """Get metrics related to the found ones"""
-        if not metrics:
-            return []
-
-        conn = await self._get_connection()
-        try:
-            # Get metrics from same categories
-            categories = [m.content.get('category_id') for m in metrics if m.content.get('category_id')]
-
-            if not categories:
-                return []
-
-            rows = await conn.fetch("""
-                SELECT metric_id, name, description, category_id
-                FROM metrics
-                WHERE category_id = ANY($1)
-                ORDER BY importance DESC NULLS LAST
-                LIMIT 5
-            """, categories)
-
-            return [{'id': row['metric_id'], 'name': row['name'], 'category': row['category_id']} for row in rows]
-
-        finally:
-            await self._release_connection(conn)
-
-    async def _get_peer_companies(self, companies: List[SearchResult]) -> List[Dict[str, Any]]:
-        """Get peer companies based on sector/industry"""
-        if not companies:
-            return []
-
-        conn = await self._get_connection()
-        try:
-            company = companies[0]  # Use first company
-            sector = company.content.get('sector')
-
-            if not sector:
-                return []
-
-            rows = await conn.fetch("""
-                SELECT ticker, name, sector
-                FROM companies
-                WHERE sector = $1 AND ticker != $2
-                ORDER BY priority ASC NULLS LAST
-                LIMIT 5
-            """, sector, company.id)
-
-            return [{'ticker': row['ticker'], 'name': row['name'], 'sector': row['sector']} for row in rows]
-
-        finally:
-            await self._release_connection(conn)
 
     # =============== TELEMETRY ===============
 
@@ -774,8 +698,13 @@ class RAGService:
                 stats[f"{table}_count"] = count
 
             # Cache statistics
-            stats['cache_size'] = len(self.cache)
-            stats['cache_hit_ratio'] = self._calculate_cache_hit_ratio()
+            if self.cache_service:
+                cache_stats = await self.cache_service.get_stats()
+                stats['cache_stats'] = cache_stats
+                stats['cache_hit_ratio'] = cache_stats.get('redis_hit_ratio', 0.0)
+            else:
+                stats['cache_size'] = 0
+                stats['cache_hit_ratio'] = 0.0
 
             return stats
 
@@ -786,27 +715,17 @@ class RAGService:
         """Calculate cache hit ratio (simplified)"""
         # This is a simplified implementation
         # In production, you'd want to track actual hits/misses
-        return 0.75 if self.cache else 0.0
+        return 0.75 if self.cache_service else 0.0
 
     async def cleanup_cache(self) -> None:
         """Clean up expired cache entries"""
-        current_time = time.time()
-        expired_keys = []
-
-        for key, (timestamp, _) in self.cache.items():
-            if not self._is_cache_valid(timestamp):
-                expired_keys.append(key)
-
-        for key in expired_keys:
-            del self.cache[key]
-
-        logger.info(f"Cleaned up {len(expired_keys)} expired cache entries")
+        if self.cache_service:
+            await self.cache_service.cleanup_expired()
 
     async def close(self) -> None:
         """Close connection pool and cleanup resources"""
         if self.connection_pool:
             await self.connection_pool.close()
-        self.cache.clear()
 
 
 # Global RAG service instance

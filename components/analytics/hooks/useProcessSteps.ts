@@ -29,7 +29,7 @@ export const useProcessSteps = (config?: StepConfig) => {
             ? { 
                 ...s, 
                 status, 
-                thinking: thinking.length ? thinking : s.thinking, 
+                thinking: thinking.length ? [...s.thinking, ...thinking] : s.thinking, 
                 details: details ?? s.details, 
                 elapsed_ms: elapsed_ms ?? s.elapsed_ms, 
                 timestamp: timestamp ?? s.timestamp 
