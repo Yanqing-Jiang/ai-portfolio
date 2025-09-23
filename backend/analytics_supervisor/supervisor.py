@@ -20,11 +20,9 @@ from analytics_memory.intent import detect_intent_with_clarifications
 from analytics_memory.types import ClarifyRequestModel
 
 from .tools import SupervisorTools
-import sys
-import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from unified_responses_client import get_unified_client, SUPERVISOR_REASONING_EFFORT
-from .schemas import PlanSchema, FinalSummarySchema, WorkflowState
+from .schemas import FinalSummarySchema, WorkflowState
 
 # Registry of active supervisor workflows keyed by session_id
 ACTIVE_WORKFLOWS: Dict[str, "SupervisorWorkflow"] = {}
@@ -60,7 +58,7 @@ class SupervisorWorkflow:
         if not session_id:
             session_id = str(uuid.uuid4())
 
-        print(f"[SESSION_DEBUG] SUPERVISOR_WORKFLOW - Query: {query[:50]}..., Session: {session_id}, Original session: {original_session_id}")
+        logger.debug(f"SUPERVISOR_WORKFLOW - Query: {query[:50]}..., Session: {session_id}, Original session: {original_session_id}")
 
         # Initialize workflow state
         state = WorkflowState(
@@ -470,76 +468,6 @@ class SupervisorWorkflow:
         execution_duration = time.time() - execution_start
         logger.info(f"[DIRECT] Direct tool execution completed in {execution_duration:.2f}s for session {session_id}")
 
-
-    async def _execute_tools(self, plan: PlanSchema, query: str, session_id: str):
-        """Phase 3: Execute tools using proper Responses API tool calling"""
-
-        execute_start = time.time()
-        logger.info(f"[TOOLS] Starting tool execution for session {session_id} with {len(plan.steps)} planned steps")
-
-        if not self.client:
-            logger.error(f"[TOOLS] No OpenAI client available for session {session_id} - Response API required")
-            raise ValueError("OpenAI client unavailable - Response API required for tool execution")
-        
-        # Use tool-calling turn with the model to decide which tools to call
-        messages = [
-            {
-                "role": "system",
-                "content": f"""You are a Claude Code-style supervisor executing a financial analytics plan.
-
-Plan: {plan.plan}
-User Query: {query}
-
-Execute the tools step by step according to the plan. You have access to these enhanced tools:
-- classify_query_relevance: Classify if the query is financial analytics (CALL THIS FIRST; if off-topic, reply politely and STOP)
-- detect_intent: Analyze the user query to extract intent and slots (company, timeframe, granularity, comparison)
-- provisional_plan: Create SQL query plan from the resolved intent
-- retrieve_templates_rag: Search for relevant SQL templates using advanced RAG with vector embeddings and hybrid search
-- search_metrics_rag: Search for relevant financial metrics with semantic matching and synonym expansion
-- search_companies_rag: Search for companies with alias resolution and sector filtering
-- get_analytics_context_rag: Get comprehensive context including templates, metrics, companies, and related items
-- request_clarification: Request clarification from user when information is missing or ambiguous
-- validate_sql: Validate compiled SQL for safety
-- apply_execute_sql: Execute validated SQL query directly after validation
-- plan_chart: Plan visualization for the data
-- build_chart: Generate chart specification
-
-Important rules:
-1. Call tools in the planned sequence
-2. Next call detect_intent to identify missing information
-3. If information is missing or ambiguous (e.g., market share without specifying single vs all companies), call request_clarification before proceeding
-4. Then call provisional_plan to create the SQL plan once slots are resolved
-5. Pass results from one tool to the next as needed
-
-Start by calling classify_query_relevance with the user query. If the result indicates off-topic, produce the polite decline message and stop."""
-            },
-            {
-                "role": "user",
-                "content": f"Execute the analytics plan for query: '{query}'"
-            }
-        ]
-        
-        # Get tool schemas for function calling
-        tool_schemas = self.tools.get_tool_schemas()
-
-        if SUPERVISOR_DEBUG:
-            logger.debug(f"[TOOLS] Tool schemas count: {len(tool_schemas)}")
-            if tool_schemas:
-                logger.debug(f"[TOOLS] First tool schema: {tool_schemas[0]}")
-                logger.debug(f"[TOOLS] First tool has 'name' field: {'name' in tool_schemas[0]}")
-                if 'function' in tool_schemas[0]:
-                    logger.debug(f"[TOOLS] First tool function has 'name': {'name' in tool_schemas[0]['function']}")
-
-        # Execute tool calling loop
-        logger.info(f"[TOOLS] Starting OpenAI tool calling loop for session {session_id}")
-        loop_start = time.time()
-
-        async for event in self._tool_calling_loop(messages, tool_schemas, session_id, query):
-            yield event
-
-        loop_duration = time.time() - loop_start
-        execute_duration = time.time() - execute_start
-        logger.info(f"[TOOLS] Tool calling loop completed in {loop_duration:.2f}s, total execution: {execute_duration:.2f}s for session {session_id}")
 
 
     async def _execute_single_tool(self, tool_name: str, tool_args: Dict[str, Any], session_id: str):
@@ -1284,63 +1212,6 @@ Start by calling classify_query_relevance with the user query. If the result ind
         total_duration = time.time() - loop_start
         logger.info(f"[TOOL_LOOP] Tool calling loop completed after {total_duration:.2f}s for session {session_id}")
 
-    async def _handle_detect_intent_with_clarifications(self, tool_args: Dict, session_id: str, query: str):
-        """Detect intent, emit clarification events, and wait for answers.
-
-        Returns a dict with the serialized intent and any clarification events emitted.
-        """
-        intent = await asyncio.to_thread(
-            detect_intent_with_clarifications,
-            tool_args.get("query") or query,
-            self.tools.configs,
-            session_id=session_id
-        )
-
-        clarification_events = []
-        if intent.clarifications_suggested:
-            for clarification in intent.clarifications_suggested:
-                clarify_request = ClarifyRequestModel(
-                    slot=clarification.get('slot', 'unknown'),
-                    question=clarification.get('reason', 'Please provide clarification'),
-                    type='single',
-                    options=self._get_options_for_slot(clarification.get('slot')),
-                    request_id=str(uuid.uuid4()),
-                    reason=clarification.get('reason', ''),
-                    session_id=session_id
-                )
-
-                # Store and wait for clarification
-                self._pending_clarifications[session_id] = clarify_request
-                self._clarification_events[session_id] = asyncio.Event()
-
-                clarification_events.append({
-                    "event": "clarification_request",
-                    "data": clarify_request.dict()
-                })
-
-                # Wait for clarification answer
-                await self._wait_for_clarification(session_id)
-
-                # Apply clarification answer
-                if session_id in self.workflow_states:
-                    state = self.workflow_states[session_id]
-                    if hasattr(state, 'clarification_answer'):
-                        intent.slots_detected[clarify_request.slot] = state.clarification_answer
-
-                clarification_events.append({
-                    "event": "clarification_ack",
-                    "data": {"answer": getattr(self.workflow_states.get(session_id), 'clarification_answer', 'Unknown')}
-                })
-
-                # Cleanup
-                self._pending_clarifications.pop(session_id, None)
-                self._clarification_events.pop(session_id, None)
-
-        return {
-            "intent": intent.dict(),
-            "clarification_events": clarification_events
-        }
-
 
 
 def get_active_workflow(session_id: str) -> Optional[SupervisorWorkflow]:
@@ -1350,26 +1221,20 @@ def get_active_workflow(session_id: str) -> Optional[SupervisorWorkflow]:
 
 async def supervisor_workflow(query: str, session_id: Optional[str] = None):
     """Entry point for supervisor workflow"""
-    print(f"[SESSION_DEBUG] supervisor_workflow called - Query: {query[:50]}..., Session: {session_id}")
+    logger.debug(f"supervisor_workflow called - Query: {query[:50]}..., Session: {session_id}")
     try:
         wf = SupervisorWorkflow()
-        print(f"[SESSION_DEBUG] SupervisorWorkflow created successfully")
+        logger.debug(f"SupervisorWorkflow created successfully")
 
         # Ensure the workflow is registered in ACTIVE_WORKFLOWS before events start
         if session_id:
             ACTIVE_WORKFLOWS[session_id] = wf
-            print(f"[SESSION_DEBUG] Registered workflow in ACTIVE_WORKFLOWS for session {session_id}")
+            logger.debug(f"Registered workflow in ACTIVE_WORKFLOWS for session {session_id}")
 
         async for ev in wf.events(query, session_id):
             yield ev
     except Exception as e:
-        print(f"[SESSION_DEBUG] Exception in supervisor_workflow: {e}")
+        logger.error(f"Exception in supervisor_workflow: {e}")
         import traceback
         traceback.print_exc()
         raise
-
-
-
-
-
-
