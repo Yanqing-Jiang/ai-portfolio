@@ -951,7 +951,7 @@ Generate ONLY a valid PostgreSQL SELECT statement:
                 response, _ = await self.unified_client.simple_completion(
                     messages=messages,
                     reasoning_effort="low",
-                    model="gpt-4o-mini-2024-07-18"
+                    model="gpt-5-mini-2025-08-07"
                 )
                 return response
 
@@ -1727,7 +1727,7 @@ Guidelines:
             async for delta in self.unified_client.stream_response(
                 messages=messages,
                 reasoning_effort="low",
-                model="gpt-4o-mini-2024-07-18"
+                model="gpt-5-mini-2025-08-07"
             ):
                 if delta.content:
                     full_analysis += delta.content

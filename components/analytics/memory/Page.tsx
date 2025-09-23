@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { 
-  ChartCard, 
-  AnalysisCard, 
-  SqlCard 
+import {
+  AnalysisCard,
+  SqlCard,
+  ProcessPanel
 } from '../common';
 import { ChatHistory } from './';
 import { useAnalyticsMemoryStream } from '../hooks';
@@ -11,6 +11,7 @@ import { isValidChartSpec } from '../utils';
 
 const MemoryAnalyticsPage: React.FC = () => {
   const [query, setQuery] = useState('');
+  const [showProcessPanel, setShowProcessPanel] = useState(false);
   const [useAltChart, setUseAltChart] = useState(false);
   const [hasStartedChat, setHasStartedChat] = useState(false);
   const [isHeaderCollapsed, setIsHeaderCollapsed] = useState(false);
@@ -92,7 +93,7 @@ Result:
   return (
     <div className="flex h-screen bg-gray-900 text-gray-100 overflow-hidden">
       {/* Main Content */}
-      <div className="flex-1 flex flex-col overflow-hidden">
+      <div className={`flex-1 flex flex-col transition-all duration-300 overflow-hidden ${showProcessPanel ? 'md:mr-80' : ''}`}>
         {/* Enhanced Header */}
         <motion.div 
           initial={false}
@@ -122,6 +123,14 @@ Result:
                 </div>
               </div>
               <div className="flex items-center gap-2">
+                {hasStartedChat && (
+                  <button
+                    onClick={() => setShowProcessPanel(!showProcessPanel)}
+                    className="px-3 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-gray-200 rounded-lg transition-colors"
+                  >
+                    {showProcessPanel ? 'Hide' : 'Show'} Process
+                  </button>
+                )}
                 <button
                   onClick={() => setIsHeaderCollapsed(!isHeaderCollapsed)}
                   className="p-2 hover:bg-gray-700 rounded-lg transition-colors text-gray-400 hover:text-white shrink-0"
@@ -303,6 +312,15 @@ Result:
           </div>
         </div>
       </div>
+
+      {/* Process Panel */}
+      <ProcessPanel
+        steps={processSteps}
+        show={showProcessPanel}
+        onClose={() => setShowProcessPanel(false)}
+        title="Supervisor Process"
+        subtitle="Real-time workflow visualization"
+      />
 
     </div>
   );

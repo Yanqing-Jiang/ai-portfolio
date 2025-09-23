@@ -355,7 +355,7 @@ class AnalyticsMemoryWorkflow:
         yield {
             "event": "plan_built",
             "data": {
-                "step": "plan_generation", 
+                "step": "plan_and_select_template", 
                 "ts": datetime.utcnow().isoformat(),
                 "elapsed_ms": elapsed_ms,
                 "plan": {
@@ -403,17 +403,30 @@ class AnalyticsMemoryWorkflow:
             # Handle company requirement validation errors by requesting clarification
             error_msg = str(ve)
             if "This query requires specifying a company" in error_msg:
-                # Create company clarification request
-                companies_config = CONFIGS.companies.get('companies', {}).get('semiconductor', [])
-                company_options = [{"value": c["ticker"], "label": f"{c['ticker']} ({c['short_name']})"} for c in companies_config[:7]]
+                # Create company clarification request (schema-friendly)
+                companies_list = CONFIGS.companies.get('companies', {}).get('semiconductor', [])
+                # Build display options like "NVDA (Nvidia)"
+                display_options: list[str] = []
+                for comp in companies_list[:7]:
+                    try:
+                        t = comp.get('ticker')
+                        n = comp.get('short_name', comp.get('name', t))
+                        if t:
+                            display_options.append(f"{t} ({n})")
+                    except Exception:
+                        continue
+
+                # Fallback options if config missing
+                if not display_options:
+                    display_options = ['NVDA (Nvidia)', 'AMD (AMD)', 'INTC (Intel)', 'MU (Micron)']
 
                 clarification_request = ClarifyRequestModel(
-                    session_id=session_id,
                     request_id=f"company_req_{int(time.time() * 1000)}",
                     slot="company",
                     question="Which company would you like to analyze?",
-                    type="single_choice",
-                    options=company_options,
+                    type="single",
+                    options=display_options,
+                    default=display_options[0],
                     required=True,
                     reason="Market share analysis requires specifying a company"
                 )
