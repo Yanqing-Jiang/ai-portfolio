@@ -159,10 +159,18 @@ export const useAnalyticsMemoryStream = (mode: 'memory' | 'supervisor' = 'memory
 
     await streamHook.startStream(endpoint, (data) => {
       const eventType = data.event || data.type;
+      // Handle both old (heavy) and new (lightweight) event formats
       const eventData = data.data || data;
       const eventVisibility =
         typeof data.event_type === 'string' ? data.event_type : 'user';
       const isThinkingEvent = eventVisibility === 'thinking';
+
+      // For lightweight events, extract step and timing info from top level
+      const stepInfo = {
+        step: data.step || eventData.step,
+        ts: data.ts || eventData.ts,
+        elapsed_ms: data.elapsed_ms || eventData.elapsed_ms
+      };
       
       switch (eventType) {
         case 'session_started':
@@ -170,10 +178,13 @@ export const useAnalyticsMemoryStream = (mode: 'memory' | 'supervisor' = 'memory
           break;
           
         case 'status':
-          streamHook.setCurrentStatus(eventData.message || '');
-          if (eventData.step) {
-            const thinkingLogs: string[] = isThinkingEvent && eventData.message ? [eventData.message] : [];
-            stepsHook.updateStepStatus(eventData.step, 'in_progress', thinkingLogs, undefined, eventData.elapsed_ms, eventData.ts);
+        case 'progress':
+          // Handle both old 'status' and new 'progress' event types
+          const statusMessage = eventData.message || data.message || '';
+          streamHook.setCurrentStatus(statusMessage);
+          if (stepInfo.step) {
+            const thinkingLogs: string[] = isThinkingEvent && statusMessage ? [statusMessage] : [];
+            stepsHook.updateStepStatus(stepInfo.step, 'in_progress', thinkingLogs, undefined, stepInfo.elapsed_ms, stepInfo.ts);
           }
           break;
           
@@ -183,7 +194,9 @@ export const useAnalyticsMemoryStream = (mode: 'memory' | 'supervisor' = 'memory
           
         case 'intent_decided':
         case 'intent_resolved':
-          stepsHook.updateStepStatus('intent_detection', 'completed', [], eventData, eventData.elapsed_ms);
+          // Handle both old heavy format and new lightweight format
+          const intentData = eventData.intent || eventData; // Old format has nested intent, new format is flat
+          stepsHook.updateStepStatus('intent_detection', 'completed', [], intentData, stepInfo.elapsed_ms);
           break;
           
         case 'clarification_request':
@@ -212,14 +225,19 @@ export const useAnalyticsMemoryStream = (mode: 'memory' | 'supervisor' = 'memory
           
         case 'plan_built':
           // Combined planning step for streamlined agent mode
-          stepsHook.updateStepStatus('plan_and_select_template', 'in_progress', ['Plan built'], { plan: eventData.plan }, eventData.elapsed_ms);
+          // Handle both old (eventData.plan) and new (simplified) formats
+          const planData = eventData.plan || { metrics_count: eventData.metrics_count, granularity: eventData.granularity, comparison: eventData.comparison };
+          stepsHook.updateStepStatus('plan_and_select_template', 'in_progress', ['Plan built'], { plan: planData }, stepInfo.elapsed_ms);
           break;
 
         case 'template_selected':
           // Complete combined planning + selection step
+          // Handle both old (eventData.template) and new (eventData.template_id) formats
+          const templateId = eventData.template?.id || eventData.template_id;
+          const templateData = eventData.template || { id: templateId, has_template: eventData.has_template };
           stepsHook.updateStepStatus('plan_and_select_template', 'completed', [
-            eventData?.template?.id ? `Selected template: ${eventData.template.id}` : 'Template selected'
-          ], { template: eventData.template }, eventData.elapsed_ms);
+            templateId ? `Selected template: ${templateId}` : 'Template selected'
+          ], { template: templateData }, stepInfo.elapsed_ms);
           break;
           
         case 'sql_compiled':
@@ -229,33 +247,49 @@ export const useAnalyticsMemoryStream = (mode: 'memory' | 'supervisor' = 'memory
           ], {
             sql_length: eventData.sql_length,
             template_used: eventData.template_used,
-          }, eventData.elapsed_ms);
+          }, stepInfo.elapsed_ms);
           break;
 
         case 'sql_generated':
           if (typeof eventData.sql === 'string') {
             scheduleProgressiveUpdate({ sqlQuery: eventData.sql });
           }
-          stepsHook.updateStepStatus('sql_validation', 'completed', [], { sql: eventData.sql }, eventData.elapsed_ms);
+          stepsHook.updateStepStatus('sql_validation', 'completed', [], { sql: eventData.sql }, stepInfo.elapsed_ms);
           break;
           
         case 'execution_stats':
-          stepsHook.updateStepStatus('sql_execution', 'completed', [], { row_count: eventData.row_count, columns: eventData.columns }, eventData.elapsed_ms);
+          // Handle both old (eventData.columns) and new (eventData.columns_count) formats
+          const executionData = {
+            row_count: eventData.row_count,
+            columns: eventData.columns || [],
+            columns_count: eventData.columns_count || (eventData.columns ? eventData.columns.length : 0)
+          };
+          stepsHook.updateStepStatus('sql_execution', 'completed', [], executionData, stepInfo.elapsed_ms);
           break;
           
         case 'data_retrieved':
+          // Handle both old and new formats
           if (Array.isArray(eventData.sample_data)) {
             scheduleProgressiveUpdate({ dataSample: eventData.sample_data });
-            stepsHook.updateStepStatus('sql_execution', 'completed', [], {
-              rowCount: eventData.row_count,
-              sampleData: eventData.sample_data
-            });
           }
+          stepsHook.updateStepStatus('sql_execution', 'completed', [], {
+            rowCount: eventData.row_count,
+            sampleData: eventData.sample_data || []
+          });
           break;
           
         case 'chart_generated':
-          scheduleProgressiveUpdate({ chartSpec: eventData.chart_spec });
-          stepsHook.updateStepStatus('chart_generation', 'completed', [], { chart_spec: eventData.chart_spec }, eventData.elapsed_ms);
+          // Handle both old (eventData.chart_spec) and new (data.key) formats
+          let chartSpec = eventData.chart_spec;
+          if (!chartSpec && data.key === 'chart_spec') {
+            // New format: chart_spec is stored in the original data payload separately
+            // For now, we'll need to retrieve it from the actual chart_spec data if available
+            chartSpec = data.chart_spec || eventData;
+          }
+          if (chartSpec) {
+            scheduleProgressiveUpdate({ chartSpec });
+          }
+          stepsHook.updateStepStatus('chart_generation', 'completed', [], { chart_spec: chartSpec, chart_type: eventData.chart_type }, stepInfo.elapsed_ms);
           break;
           
         case 'analysis_streaming':
@@ -267,6 +301,8 @@ export const useAnalyticsMemoryStream = (mode: 'memory' | 'supervisor' = 'memory
                 ? eventData.delta
                 : typeof eventData?.text === 'string'
                 ? eventData.text
+                : typeof data?.partial_analysis === 'string' // New format: direct access
+                ? data.partial_analysis
                 : '';
             if (chunk) {
               // Progressive streaming: update immediately for each chunk
@@ -281,17 +317,18 @@ export const useAnalyticsMemoryStream = (mode: 'memory' | 'supervisor' = 'memory
           break;
           
         case 'analysis_complete':
+          // Handle both old and new formats for analysis
           const finalAnalysis =
             !isThinkingEvent
-              ? eventData.analysis || streamingText
-              : eventData.analysis;
+              ? eventData.analysis || data.analysis || streamingText
+              : eventData.analysis || data.analysis;
           if (!isThinkingEvent && typeof finalAnalysis === 'string') {
             scheduleProgressiveUpdate({ analysis: finalAnalysis });
           }
           setStreamingText('');
           setProgressiveText('');
-          stepsHook.updateStepStatus('short_financial_analysis', 'completed', ['Short financial analysis complete'], { analysis: finalAnalysis }, eventData.elapsed_ms);
-          stepsHook.updateStepStatus('analysis_generation', 'completed', [], { analysis: finalAnalysis }, eventData.elapsed_ms);
+          stepsHook.updateStepStatus('short_financial_analysis', 'completed', ['Short financial analysis complete'], { analysis: finalAnalysis, analysis_length: eventData.analysis_length }, stepInfo.elapsed_ms);
+          stepsHook.updateStepStatus('analysis_generation', 'completed', [], { analysis: finalAnalysis, analysis_length: eventData.analysis_length }, stepInfo.elapsed_ms);
           break;
 
         // Optional richer logs for agent demo
@@ -437,11 +474,13 @@ export const useAnalyticsMemoryStream = (mode: 'memory' | 'supervisor' = 'memory
           break;
 
         case 'workflow_complete':
-          const statusMessage = mode === 'supervisor' 
+          const workflowStatusMessage = mode === 'supervisor'
             ? 'Claude Code supervisor workflow completed!'
             : 'Analytics memory workflow completed!';
           const isEarlyExit = Boolean(eventData?.early_exit);
-          streamHook.setCurrentStatus(eventData?.message || statusMessage);
+          // Handle both old and new formats for completion message
+          const completionMessage = eventData?.message || (eventData.total_elapsed_ms ? `Completed in ${eventData.total_elapsed_ms}ms` : null);
+          streamHook.setCurrentStatus(completionMessage || workflowStatusMessage);
           if (!isThinkingEvent && !isEarlyExit) {
             addChatMessage({
               type: 'result',

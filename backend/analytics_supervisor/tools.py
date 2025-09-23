@@ -10,17 +10,14 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from analytics_memory.intent import (
     detect_intent_with_clarifications,
 )
-from analytics_memory.sql_planner import (
-    plan_sql_rule_based,
-    choose_template as cfg_choose_template,
-    compile_sql_from_plan,
-)
-from analytics_memory.sql_validate import validate_sql
-from analytics_memory.db import execute
-from analytics_memory.charting import (
-    build_chart_spec,
-    plan_chart_rule_based,
-)
+# Import shared functions
+from analytics_shared.sql.planner import plan_sql_rule_based, choose_template as cfg_choose_template
+from analytics_shared.sql.compiler import compile_sql_from_plan
+from analytics_shared.sql.validator import validate_sql
+from analytics_shared.database.executor import execute
+from analytics_shared.charting.planner import plan_chart_rule_based
+from analytics_shared.companies.tickers import get_ticker_list
+from analytics_memory.charting import build_chart_spec
 from analytics_memory.clarify import (
     compute_required_clarifications,
 )
@@ -403,7 +400,7 @@ class SupervisorTools:
         ]
     # -------- Intent + Planning --------
     def provisional_plan(self, intent: IntentModel) -> QueryPlanModel:
-        return plan_sql_rule_based(intent, self.configs)
+        return QueryPlanModel(**plan_sql_rule_based(intent, self.configs))
 
     def compute_clarifications(
         self, intent: IntentModel, plan: QueryPlanModel, template: Optional[Dict[str, Any]]
@@ -411,28 +408,10 @@ class SupervisorTools:
         return compute_required_clarifications(intent, plan, template, self.configs)
 
     def _load_default_tickers(self) -> List[str]:
-        tickers: set[str] = set()
-        companies_cfg = {}
-        if isinstance(self.configs, dict):
-            companies_cfg = self.configs.get("companies", {}) or {}
-        if isinstance(companies_cfg, dict):
-            selection_rules = companies_cfg.get("selection_rules", {}) or {}
-            default_companies = selection_rules.get("default_companies", {}) or {}
-            for ticker in default_companies.get("tickers", []) or []:
-                if isinstance(ticker, str):
-                    tickers.add(ticker.lower())
-            companies_by_group = companies_cfg.get("companies", {}) or {}
-            if isinstance(companies_by_group, dict):
-                for company_list in companies_by_group.values():
-                    if isinstance(company_list, list):
-                        for company in company_list:
-                            if isinstance(company, dict):
-                                ticker = company.get("ticker")
-                                if isinstance(ticker, str):
-                                    tickers.add(ticker.lower())
-        if not tickers:
-            tickers.update({"nvda", "amd", "intc", "mu", "qcom", "avgo", "txn"})
-        return list(tickers)
+        """Load default tickers using shared function."""
+        # Use shared function and convert to lowercase for backward compatibility
+        tickers = get_ticker_list(self.configs or {})
+        return [ticker.lower() for ticker in tickers]
 
     def _load_financial_keywords(self) -> List[str]:
         keywords: set[str] = set()

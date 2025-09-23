@@ -5,64 +5,13 @@ import re
 from typing import Dict, Any, Optional
 from .openai_client import get_openai_client
 from .types import IntentModel, LLMIntentModel, LLMClarificationSuggestionModel, ClarificationSuggestionModel
-from .sql_planner import resolve_alias_to_ticker
+from analytics_shared.companies.resolver import resolve_alias_to_ticker
+from analytics_shared.intent.normalization import normalize_timeframe as shared_normalize_timeframe, get_default_tickers
 
 logger = logging.getLogger(__name__)
 
-def normalize_timeframe(tf_raw: Any, query_text: str = "", configs: Dict = None) -> Dict[str, Any]:
-    """
-    Normalize timeframe from various formats to a consistent dict structure.
-    
-    Args:
-        tf_raw: Raw timeframe from LLM (could be dict, string, or None)
-        query_text: Original query text for fallback parsing
-        configs: Configuration dict for defaults
-    
-    Returns:
-        Dict with normalized timeframe structure
-    """
-    if isinstance(tf_raw, dict):
-        return tf_raw.copy()
-    
-    tf = {}
-    text = (query_text or "").lower()
-    
-    # Handle string formats like "5 years", "past 5 years", etc.
-    if isinstance(tf_raw, str):
-        tf_str = tf_raw.lower()
-        # Extract numbers from string formats
-        years_match = re.search(r"(\d{1,2})\s*years?", tf_str)
-        quarters_match = re.search(r"(\d{1,2})\s*quarters?", tf_str)
-        
-        if years_match:
-            tf["years_back"] = int(years_match.group(1))
-        elif quarters_match:
-            tf["quarters_back"] = int(quarters_match.group(1))
-    
-    # Fallback: parse from original query text
-    years_m = re.search(r"(past|last)\s+(\d{1,2})\s+years?", text)
-    quarters_m = re.search(r"(past|last)\s+(\d{1,2})\s+quarters?", text)
-    
-    if years_m and not tf.get("years_back"):
-        tf["years_back"] = int(years_m.group(2))
-    if quarters_m and not tf.get("quarters_back"):
-        tf["quarters_back"] = int(quarters_m.group(2))
-    
-    # Apply defaults and bounds
-    if configs:
-        dbq = (configs.get("database", {}) or {}).get("query_defaults", {})
-        max_years = int(dbq.get("max_years_back", 10))
-        default_years = int(dbq.get("default_years_back", 5))
-        
-        if not tf.get("years_back") and not tf.get("quarters_back"):
-            tf["years_back"] = default_years
-        
-        if tf.get("years_back"):
-            tf["years_back"] = min(max(tf["years_back"], 1), max_years)
-        if tf.get("quarters_back"):
-            tf["quarters_back"] = min(max(tf["quarters_back"], 1), max_years * 4)
-    
-    return tf
+# Use shared normalize_timeframe function
+normalize_timeframe = shared_normalize_timeframe
 
 # Placeholder for intent detection node (structured output to be implemented in Phase 2/3)
 def detect_intent(query: str, configs: Dict[str, Any]) -> Dict[str, Any]:
@@ -84,13 +33,8 @@ def detect_intent(query: str, configs: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _default_tickers(configs: Dict[str, Any]) -> list[str]:
-    return (
-        configs.get("companies", {})
-        .get("selection_rules", {})
-        .get("default_companies", {})
-        .get("tickers", ["NVDA", "AMD", "INTC", "MU", "QCOM", "AVGO", "TXN"])
-    )
+# Use shared get_default_tickers function
+_default_tickers = get_default_tickers
 
 
 def _heuristic_intent(query: str, configs: Dict[str, Any]) -> IntentModel:
