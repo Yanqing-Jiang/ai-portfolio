@@ -6,11 +6,43 @@
 
 ## Where this lives in the repo
 
-* `backend/unified_responses_client.py` — unified client for all OpenAI Responses API interactions
+* `backend/unified_responses_client.py` — **unified client for all OpenAI Responses API interactions** (consolidated from multiple clients)
 * `backend/analytics_memory/openai_client.py` — analytics memory specific client wrapper
-* `backend/analytics_supervisor/responses_client.py` — supervisor specific client wrapper
+* ~~`backend/analytics_supervisor/responses_client.py`~~ — **REMOVED** (consolidated into unified client)
 
-Keep these helpers the *only* callers of the SDKs so we get uniform logging, retries, tracing, and model switches.
+**Architecture Update (v2.0):** We've consolidated from multiple response clients to a single unified client with specialized methods for different use cases (supervisor, memory, general). This reduces code duplication and provides consistent API patterns across the system.
+
+---
+
+## Unified Client Architecture
+
+### Key Components
+
+* **`get_unified_client()`** — Factory function returning singleton client instance
+* **Supervisor Methods:** `finalization_turn()`, `stream_analysis()` with `SUPERVISOR_REASONING_EFFORT`
+* **Memory Methods:** Standard OpenAI Responses API with memory-aware session handling
+* **Centralized Caching:** Redis-based response caching with circuit breaker pattern
+* **2-Layer Config Fallback:** RAG Service → YAML configs (removed intermediate template store)
+
+### Usage Examples
+
+```python
+from unified_responses_client import get_unified_client
+
+client = get_unified_client()
+
+# Supervisor-specific calls
+response = await client.finalization_turn(
+    messages=[...],
+    response_format=SomeSchema,
+    reasoning_effort="medium"
+)
+
+# Memory-aware streaming
+async for chunk in client.stream_analysis(messages, session_id="session-123"):
+    # Handle streaming response
+    pass
+```
 
 ---
 
