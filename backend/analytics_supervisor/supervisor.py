@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 from typing import Any, Dict, AsyncGenerator, Optional, List
 import time
 import json
@@ -13,15 +13,15 @@ logger = logging.getLogger(__name__)
 # Debug configuration
 SUPERVISOR_DEBUG = os.getenv('SUPERVISOR_DEBUG', 'false').lower() == 'true'
 
-from analytics_memory.sql_planner import compile_sql_from_plan
-from analytics_memory.types import ValidationError
+DEFAULT_OFFTOPIC_MESSAGE = "I'm focused on financial analytics..."
+
 from analytics_memory.config import CONFIGS
 from analytics_memory.intent import detect_intent_with_clarifications
 from analytics_memory.types import ClarifyRequestModel
 
 from .tools import SupervisorTools
 from .responses_client import get_supervisor_client, SUPERVISOR_REASONING_EFFORT
-from .schemas import PlanSchema, FinalSummarySchema, WorkflowState, ToolExecution
+from .schemas import PlanSchema, FinalSummarySchema, WorkflowState
 
 # Registry of active supervisor workflows keyed by session_id
 ACTIVE_WORKFLOWS: Dict[str, "SupervisorWorkflow"] = {}
@@ -53,13 +53,16 @@ class SupervisorWorkflow:
         now = datetime.utcnow().isoformat()
 
         # Session bootstrap
+        original_session_id = session_id
         if not session_id:
             session_id = str(uuid.uuid4())
+
+        print(f"[SESSION_DEBUG] SUPERVISOR_WORKFLOW - Query: {query[:50]}..., Session: {session_id}, Original session: {original_session_id}")
 
         # Initialize workflow state
         state = WorkflowState(
             session_id=session_id,
-            current_phase="planning",
+            current_phase="initializing",
             started_at=now
         )
         self.workflow_states[session_id] = state
@@ -69,50 +72,233 @@ class SupervisorWorkflow:
         yield {"event": "session_started", "data": {"session_id": session_id, "ts": now}}
 
         try:
-            # ====== PHASE 1: PLANNING ======
-            planning_start = time.time()
-            logger.info(f"[SUPERVISOR] Planning phase started for session {session_id}, query: {query[:50]}...")
-            yield {"event": "status", "data": {"step": "planning", "message": "Agent planning approach...", "ts": now}}
+            # Ultra-fast guard for obvious small talk
+            if self._is_small_talk(query):
+                state.early_exit = True
+                state.current_phase = "completed"
+                ts_final = datetime.utcnow().isoformat()
+                state.completed_at = ts_final
+                logger.info(f"[SUPERVISOR] Small-talk detected; early exit for session {session_id}")
+                yield {"event": "final_answer", "event_type": "user", "data": {"message": DEFAULT_OFFTOPIC_MESSAGE, "category": "general_conversation", "is_financial": False, "ts": ts_final}}
+                yield {"event": "workflow_complete", "event_type": "thinking", "data": {"message": "Workflow completed with early exit (small talk)", "early_exit": True, "ts": ts_final, "total_elapsed_ms": int((time.time() - start_ts) * 1000)}}
+                return
 
-            # Add streaming status during planning
-            yield {"event": "status", "data": {"step": "planning", "message": "Connecting to planning service...", "ts": datetime.utcnow().isoformat()}}
+            # ====== CLASSIFICATION PHASE ======
+            state.current_phase = "classification"
+            classification_start = time.time()
 
-            # Intermediate status updates during planning
-            def status_callback(message: str):
-                return {"event": "status", "data": {"step": "planning", "message": message, "ts": datetime.utcnow().isoformat()}}
+            yield {"event": "classification_started", "data": {"ts": datetime.utcnow().isoformat(), "model": "gpt-5-nano-2025-08-07"}}
 
-            yield status_callback("Analyzing query and building context...")
-            plan = await self._planning_turn(query, session_id)
+            looks_financial = False
+            polite_message = DEFAULT_OFFTOPIC_MESSAGE
+            classification_reasoning = ""
 
-            planning_duration = time.time() - planning_start
-            logger.info(f"[SUPERVISOR] Planning completed in {planning_duration:.2f}s for session {session_id}")
-            yield {"event": "status", "data": {"step": "planning", "message": f"Planning completed ({planning_duration:.1f}s)", "ts": datetime.utcnow().isoformat()}}
-            state.plan = plan
-            state.current_phase = "executing"
+            try:
+                if self.client:
+                    classification = await self.tools._classify_topic_internal(query, self.client)
+                    classification_elapsed = int((time.time() - classification_start) * 1000)
 
-            yield {
-                "event": "planning_proposed",
-                "data": {
-                    "plan": plan.plan,
-                    "steps": [step.dict() for step in plan.steps],
-                    "reasoning": plan.reasoning,
-                    "ts": now
-                }
-            }
+                    # Extract reasoning and details
+                    topic_category = getattr(classification, "topic_category", None)
+                    confidence = getattr(classification, "confidence", 0.0)
+                    classification_reasoning = getattr(classification, "reasoning", "")
 
-            # ====== PHASE 2: TOOL EXECUTION ======
+                    yield {"event": "classification_reasoning", "data": {
+                        "thinking": classification_reasoning,
+                        "confidence": confidence,
+                        "category": topic_category,
+                        "ts": datetime.utcnow().isoformat()
+                    }}
+
+                    if topic_category == "financial_analytics":
+                        looks_financial = True
+                        yield {"event": "classification_complete", "data": {
+                            "is_financial": True,
+                            "category": topic_category,
+                            "confidence": confidence,
+                            "elapsed_ms": classification_elapsed,
+                            "ts": datetime.utcnow().isoformat()
+                        }}
+                    else:
+                        polite_message = getattr(classification, "polite_decline_message", None) or DEFAULT_OFFTOPIC_MESSAGE
+                        yield {"event": "classification_complete", "data": {
+                            "is_financial": False,
+                            "category": topic_category,
+                            "decline_message": polite_message,
+                            "elapsed_ms": classification_elapsed,
+                            "ts": datetime.utcnow().isoformat()
+                        }}
+            except Exception as classify_exc:
+                classification_elapsed = int((time.time() - classification_start) * 1000)
+                logger.warning(f"[SUPERVISOR] Classification failed for session {session_id}: {classify_exc}")
+                yield {"event": "classification_error", "data": {
+                    "error": str(classify_exc),
+                    "elapsed_ms": classification_elapsed,
+                    "ts": datetime.utcnow().isoformat()
+                }}
+
+            # Secondary guard: heuristic keyword/ticker check (no network)
+            if not looks_financial and self._looks_like_financial_query(query):
+                looks_financial = True
+                yield {"event": "classification_fallback", "data": {
+                    "method": "heuristic_keywords",
+                    "is_financial": True,
+                    "ts": datetime.utcnow().isoformat()
+                }}
+
+            if not looks_financial:
+                state.early_exit = True
+                state.current_phase = "completed"
+                ts_final = datetime.utcnow().isoformat()
+                state.completed_at = ts_final
+                logger.info(f"[SUPERVISOR] Classified query as non-financial for session {session_id}; skipping workflow.")
+                yield {"event": "final_answer", "event_type": "user", "data": {"message": polite_message, "category": "general_conversation", "is_financial": False, "ts": ts_final}}
+                yield {"event": "workflow_complete", "event_type": "thinking", "data": {"message": "Workflow completed with early exit (classification)", "early_exit": True, "ts": ts_final, "total_elapsed_ms": int((time.time() - start_ts) * 1000)}}
+                return
+
+            # ====== SMART FOLLOW-UP DETECTION ======
+            # Check if this is a follow-up query that can use cached context
+            cached_artifact = state.structured_query_artifact
+            if cached_artifact and self._is_follow_up_query(query, cached_artifact):
+                logger.info(f"[SUPERVISOR] Detected follow-up query for session {session_id} - using agent context")
+                yield {"event": "status", "data": {"step": "follow_up_detection", "message": "Detected follow-up query, using cached context...", "ts": datetime.utcnow().isoformat()}}
+
+                # Let agent determine if and how to patch the artifact
+                patched_artifact = await self._smart_patch_artifact(query, cached_artifact, session_id)
+                if patched_artifact:
+                    state.structured_query_artifact = patched_artifact
+                    state.current_phase = "executing"
+                    logger.info(f"[SUPERVISOR] Successfully patched artifact for session {session_id}, skipping intent detection")
+
+                    # Jump directly to execution with patched artifact
+                    async for event in self._execute_tools_direct(query, session_id):
+                        yield event
+                    return
+
+            # ====== INTENT DETECTION ======
+            state.current_phase = "intent_detection"
+            try:
+                yield {"event": "intent_detection_started", "data": {"ts": datetime.utcnow().isoformat()}}
+                pre_intent = await asyncio.to_thread(
+                    detect_intent_with_clarifications,
+                    query,
+                    self.tools.configs,
+                    session_id=session_id
+                )
+                yield {"event": "intent_detection_complete", "data": {
+                    "intent_key": pre_intent.intent_key,
+                    "confidence": pre_intent.confidence,
+                    "slots_detected": pre_intent.slots_detected,
+                    "ts": datetime.utcnow().isoformat()
+                }}
+
+                # ====== SCHEMA VALIDATION ======
+                state.current_phase = "schema_validation"
+                yield {"event": "schema_validation_started", "data": {"ts": datetime.utcnow().isoformat()}}
+
+                required_fields = self._get_required_fields_for_intent(pre_intent.intent_key)
+                missing_fields = self._validate_schema(pre_intent.slots_detected, required_fields)
+
+                yield {"event": "schema_validation_complete", "data": {
+                    "required_fields": required_fields,
+                    "provided_fields": list(pre_intent.slots_detected.keys()),
+                    "missing_fields": missing_fields,
+                    "validation_passed": len(missing_fields) == 0,
+                    "ts": datetime.utcnow().isoformat()
+                }}
+
+                # ====== CLARIFICATION LOOP (ONLY IF SCHEMA VALIDATION FAILS) ======
+                if missing_fields or getattr(pre_intent, 'clarifications_suggested', None):
+                    state.current_phase = "clarification"
+                    yield {"event": "clarification_needed", "data": {"missing_fields": missing_fields, "ts": datetime.utcnow().isoformat()}}
+
+                    # Use missing fields from schema validation first, then fall back to LLM suggestions
+                    clarifications_to_process = []
+
+                    # Add clarifications for missing required fields
+                    for field in missing_fields:
+                        clarifications_to_process.append({
+                            "slot": field,
+                            "reason": f"Required field '{field}' is missing for {pre_intent.intent_key} analysis"
+                        })
+
+                    # Add any additional clarifications suggested by LLM
+                    for clarification in getattr(pre_intent, 'clarifications_suggested', []):
+                        if clarification.get('slot') not in missing_fields:
+                            clarifications_to_process.append(clarification)
+
+                    for clarification in clarifications_to_process:
+                        # Get options with labels for enhanced UX (main flow only)
+                        options_with_labels = self._get_options_with_labels(clarification.get('slot'))
+                        # Extract just values for compatibility with existing schema
+                        option_values = [opt["value"] for opt in options_with_labels]
+
+                        clarify_request = ClarifyRequestModel(
+                            slot=clarification.get('slot', 'unknown'),
+                            question=clarification.get('reason', 'Please provide clarification'),
+                            type='single',
+                            options=option_values,
+                            request_id=str(uuid.uuid4()),
+                            reason=clarification.get('reason', ''),
+                            session_id=session_id
+                        )
+
+                        # Add the enhanced options with labels to the dict for frontend
+                        clarify_dict = clarify_request.dict()
+                        clarify_dict['options_with_labels'] = options_with_labels
+
+                        # Store pending clarification and emit request
+                        self._pending_clarifications[session_id] = clarify_request
+                        self._clarification_events[session_id] = asyncio.Event()
+                        yield {"event": "clarification_request", "data": clarify_dict}
+
+                        # Wait for user answer
+                        await self._wait_for_clarification(session_id)
+
+                        # Apply answer to detected intent slots
+                        s = self.workflow_states.get(session_id)
+                        if s and hasattr(s, 'clarification_answer'):
+                            pre_intent.slots_detected[clarify_request.slot] = s.clarification_answer
+                        yield {"event": "clarification_ack", "data": {"answer": getattr(self.workflow_states.get(session_id), 'clarification_answer', 'Unknown')}}
+
+                        # Cleanup
+                        self._pending_clarifications.pop(session_id, None)
+                        self._clarification_events.pop(session_id, None)
+                else:
+                    yield {"event": "clarification_skipped", "data": {"reason": "All required fields present", "ts": datetime.utcnow().isoformat()}}
+
+                # Persist resolved intent for reference
+                state.structured_query_artifact = {"intent": getattr(pre_intent, 'dict', lambda: {} )() if hasattr(pre_intent, 'dict') else {}}
+                yield {"event": "intent_finalized", "data": state.structured_query_artifact, "ts": datetime.utcnow().isoformat()}
+            except Exception as pre_exc:
+                logger.warning(f"[SUPERVISOR] Intent detection/validation failed: {pre_exc}")
+
+            # ====== AGENT TOOL PLANNING & EXECUTION ======
             execution_start = time.time()
             state.current_phase = "executing"
             logger.info(f"[SUPERVISOR] Tool execution phase started for session {session_id}")
-            yield {"event": "status", "data": {"step": "execution", "message": "Executing planned tools...", "ts": datetime.utcnow().isoformat()}}
-            
+
+            yield {"event": "tool_planning_started", "data": {
+                "message": "Agent planning tool execution strategy...",
+                "intent_key": pre_intent.intent_key if 'pre_intent' in locals() else None,
+                "ts": datetime.utcnow().isoformat()
+            }}
+
+            # Agent will decide tool selection strategy based on validated intent
+            yield {"event": "tool_selection_reasoning", "data": {
+                "available_tools": ["provisional_plan", "retrieve_templates_rag", "validate_sql", "apply_execute_sql", "plan_chart", "build_chart"],
+                "strategy": "sequential_execution_based_on_intent",
+                "ts": datetime.utcnow().isoformat()
+            }}
+
             # Execute tools and forward their events
             data = None
             chart_spec = None
             sql_executed = None
             tool_count = 0
 
-            async for tool_event in self._execute_tools(plan, query, session_id):
+            had_tool_error = False
+            async for tool_event in self._execute_tools_direct(query, session_id):
                 tool_count += 1
                 if tool_event.get("event") == "data_retrieved":
                     data = tool_event["data"].get("sample_data", [])
@@ -131,6 +317,7 @@ class SupervisorWorkflow:
                         logger.info(f"[SUPERVISOR] Tool completed: {tool_event['data'].get('tool')} for session {session_id}")
                 elif tool_event.get("event") == "tool_error":
                     logger.error(f"[SUPERVISOR] Tool error: {tool_event['data'].get('tool')} - {tool_event['data'].get('error')} for session {session_id}")
+                    had_tool_error = True
                 yield tool_event
             
             execution_duration = time.time() - execution_start
@@ -140,12 +327,24 @@ class SupervisorWorkflow:
             state.chart_spec = chart_spec
             state.sql_executed = sql_executed
 
+            # If a tool error occurred, stop workflow before analysis/finalization
+            if had_tool_error:
+                ts_final = datetime.utcnow().isoformat()
+                state.current_phase = "completed"
+                state.completed_at = ts_final
+                yield {"event": "workflow_complete", "event_type": "thinking", "data": {"message": "Workflow aborted due to tool error", "early_exit": False, "ts": ts_final, "total_elapsed_ms": int((time.time() - start_ts) * 1000)}}
+                return
+
             # ====== PHASE 3: ANALYSIS STREAMING ======
             state.current_phase = "analysis"
             yield {"event": "status", "data": {"step": "analysis_generation", "message": "Generating insights...", "ts": datetime.utcnow().isoformat()}}
             
             full_analysis = ""
-            if self.client and data:
+            if not self.client:
+                logger.error(f"[ANALYSIS] No Response API client available for session {session_id}")
+                raise ValueError("Response API client required for financial analytics")
+
+            if data:
                 try:
                     async for chunk in self.client.stream_analysis(
                         messages=[
@@ -157,12 +356,8 @@ class SupervisorWorkflow:
                             full_analysis += chunk
                             yield {"event": "analysis_streaming", "data": {"partial_analysis": chunk}}
                 except Exception as e:
-                    full_analysis = f"Analysis generation failed: {str(e)}"
-                    yield {"event": "analysis_streaming", "data": {"partial_analysis": full_analysis}}
-            else:
-                # Fallback analysis without OpenAI
-                full_analysis = f"Analysis completed for query: {query}. Retrieved {len(data) if data else 0} rows of data."
-                yield {"event": "analysis_streaming", "data": {"partial_analysis": full_analysis}}
+                    logger.error(f"[ANALYSIS] Response API failed for session {session_id}: {str(e)}")
+                    raise ValueError(f"Response API required for analysis: {str(e)}")
 
             yield {"event": "analysis_complete", "data": {"analysis": full_analysis}}
 
@@ -196,160 +391,82 @@ class SupervisorWorkflow:
             self._pending_clarifications.pop(session_id, None)
 
 
-    async def _planning_turn(self, query: str, session_id: str) -> PlanSchema:
-        """Phase 1: Agent plans the approach using GPT-5 with configurable reasoning effort"""
+    def _looks_like_financial_query(self, query: str) -> bool:
+        if not query:
+            return False
 
-        planning_start = time.time()
-        logger.info(f"[PLANNING] Starting planning turn for session {session_id}")
+        normalized = query.lower()
+
+        keywords = getattr(self.tools, "_financial_keywords", []) or []
+        for keyword in keywords:
+            if keyword and keyword in normalized:
+                return True
+
+        tickers = getattr(self.tools, "_default_tickers", []) or []
+        for ticker in tickers:
+            if not ticker:
+                continue
+            ticker_value = ticker.lower() if isinstance(ticker, str) else str(ticker).lower()
+            if ticker_value and ticker_value in normalized:
+                return True
+
+        return False
+
+    def _is_small_talk(self, query: str) -> bool:
+        if not query:
+            return False
+        q = (query or "").strip().lower()
+        if len(q) <= 2:
+            return True
+        small_phrases = {
+            "hi", "hello", "hey", "how are you", "how's it going", "sup", "good morning",
+            "good afternoon", "good evening", "thanks", "thank you", "what's up", "yo",
+            "are you there", "ping", "help", "test"
+        }
+        # Normalize punctuation
+        norm = "".join(ch for ch in q if ch.isalnum() or ch.isspace()).strip()
+        return norm in small_phrases
+
+    def _get_required_fields_for_intent(self, intent_key: str) -> List[str]:
+        """Get required fields for a given intent."""
+        intent_requirements = {
+            "market_share_single": ["company"],
+            "market_share_all": [],
+            "margins_vs_peers": ["company"],
+            "revenue_growth_analysis": [],
+            "revenue_growth_vs_avg": [],
+            "rnd_intensity_vs_peers": ["company"],
+            "rnd_expense_vs_peers": ["company"],
+            "margin_growth_vs_peers": ["company"],
+        }
+        return intent_requirements.get(intent_key, [])
+
+    def _validate_schema(self, slots_detected: Dict[str, Any], required_fields: List[str]) -> List[str]:
+        """Validate if all required fields are present in detected slots."""
+        missing_fields = []
+        for field in required_fields:
+            if field not in slots_detected or not slots_detected[field]:
+                missing_fields.append(field)
+        return missing_fields
+
+
+    async def _execute_tools_direct(self, query: str, session_id: str):
+        """Direct tool execution without separate planning phase - agent-forward approach"""
+
+        execution_start = time.time()
+        logger.info(f"[DIRECT] Starting direct tool execution for session {session_id}")
 
         if not self.client:
-            logger.warning(f"[PLANNING] No OpenAI client available for session {session_id}, using fallback")
-            return await self._fallback_planning_turn(query, session_id)
-        
-        # Use GPT-5 with configurable reasoning effort for planning
-        system_message = """You are a Claude Code-style supervisor agent planning financial analytics workflows.
+            logger.error(f"[DIRECT] No OpenAI client available for session {session_id} - Response API required")
+            raise ValueError("OpenAI client unavailable - Response API required for tool execution")
 
-Your task is to create a detailed execution plan for financial data analysis queries. You have access to these enhanced tools:
-- detect_intent: Analyze user query to extract intent and slots - ALWAYS use this first to identify missing information
-- provisional_plan: Create SQL query plan from detected intent
-- retrieve_templates_rag: Search for relevant SQL templates using advanced RAG with vector embeddings and hybrid search
-- search_metrics_rag: Search for relevant financial metrics with semantic matching and synonym expansion
-- search_companies_rag: Search for companies with alias resolution and sector filtering
-- get_analytics_context_rag: Get comprehensive context including templates, metrics, companies, and related items
-- request_clarification: Request clarification from user when information is missing or ambiguous
-- validate_sql: Validate compiled SQL for safety
-- apply_execute_sql: Execute validated SQL query directly after validation
-- plan_chart: Plan visualization for the data
-- build_chart: Generate chart specification
+        # Tool loop with agent deciding what to call
+        async for event in self._tool_calling_loop([], [], session_id, query):
+            yield event
 
-CRITICAL: If the user query is ambiguous or missing key information, you MUST include clarification steps. For example:
-- Market share queries: Ask if they want single company analysis or all companies comparison
-- Missing company names: Ask which company to analyze
-- Missing time periods: Ask for specific timeframe
+        execution_duration = time.time() - execution_start
+        logger.info(f"[DIRECT] Direct tool execution completed in {execution_duration:.2f}s for session {session_id}")
 
-Always include these steps in order:
-1. Intent detection (detect_intent)
-2. Clarifications (request_clarification) - IF needed based on intent detection
-3. Query planning (provisional_plan)
-4. Template retrieval (retrieve_templates_rag)
-5. SQL validation (validate_sql)
-6. SQL execution (apply_execute_sql)
-7. Chart planning and generation (plan_chart, build_chart)
-
-Provide clear reasoning for your approach and why clarifications are needed."""
-
-        user_message = f"""Plan a financial analytics workflow for this user query: "{query}"
-
-Create a detailed plan that:
-1. Detects the user's intent and identifies any missing or ambiguous information
-2. Requests clarifications from the user if the query is incomplete or ambiguous
-3. Plans the appropriate SQL query for financial data analysis
-4. Validates the SQL for safety before execution
-5. Executes the SQL directly after validation
-6. Generates appropriate visualizations for the results
-
-IMPORTANT: For ambiguous queries like "market share" without specifying single vs all companies, you MUST include clarification steps.
-
-Focus on thorough intent detection and clarification gathering upfront."""
-
-        messages = [
-            {"role": "system", "content": system_message},
-            {"role": "user", "content": user_message}
-        ]
-
-        try:
-            api_start = time.time()
-            logger.info(f"[PLANNING] Calling OpenAI API with reasoning effort= {SUPERVISOR_REASONING_EFFORT} for session {session_id}")
-            if SUPERVISOR_DEBUG:
-                logger.info(f"[PLANNING] Message count: {len(messages)}, total chars: {sum(len(str(m)) for m in messages)}")
-
-            if SUPERVISOR_DEBUG:
-                logger.debug(f"[PLANNING] Full request - Model: gpt-5-mini-2025-08-07, Reasoning: {SUPERVISOR_REASONING_EFFORT}")
-                logger.debug(f"[PLANNING] Query: {query}")
-
-            plan = await self.client.planning_turn(
-                messages=messages,
-                response_format=PlanSchema,
-                session_id=session_id,
-                reasoning_effort=SUPERVISOR_REASONING_EFFORT
-            )
-
-            api_duration = time.time() - api_start
-            logger.info(f"[PLANNING] OpenAI API call completed in {api_duration:.2f}s for session {session_id}")
-            logger.info(f"[PLANNING] Plan generated with {len(plan.steps)} steps")
-
-            return plan
-            
-        except Exception as e:
-            planning_duration = time.time() - planning_start
-            logger.error(f"[PLANNING] GPT-5 planning failed after {planning_duration:.2f}s for session {session_id}: {str(e)}")
-            logger.error(f"[PLANNING] Error type: {type(e).__name__}, falling back to deterministic plan")
-
-            if SUPERVISOR_DEBUG:
-                logger.debug(f"[PLANNING] Full error details: {repr(e)}")
-
-            return await self._fallback_planning_turn(query, session_id)
-
-    async def _fallback_planning_turn(self, query: str, session_id: str) -> PlanSchema:
-        """Fallback deterministic planning when GPT-5 is unavailable"""
-
-        fallback_start = time.time()
-        logger.info(f"[PLANNING] Using fallback deterministic planning for session {session_id}")
-        from .schemas import ToolStep
-        
-        plan_steps = [
-            ToolStep(
-                tool="detect_intent",
-                description="Analyze user query to extract intent and slots",
-                inputs={"query": query},
-                expected_output="Intent object with key, confidence, and slots"
-            ),
-            ToolStep(
-                tool="provisional_plan", 
-                description="Create SQL query plan from detected intent",
-                inputs={"intent": "intent_object"},
-                expected_output="Query plan with metrics and timeframe"
-            ),
-            ToolStep(
-                tool="retrieve_templates_rag",
-                description="Search for relevant SQL templates",
-                inputs={"query": query, "intent_key": "detected_intent", "top_k": 3},
-                expected_output="List of matching SQL templates"
-            ),
-            ToolStep(
-                tool="validate_sql",
-                description="Validate compiled SQL for safety",
-                inputs={"sql": "compiled_sql", "granularity": "annual"},
-                expected_output="Validation result with ok/issues"
-            ),
-            ToolStep(
-                tool="apply_execute_sql",
-                description="Execute validated SQL query",
-                inputs={"sql": "validated_sql"},
-                expected_output="Query results data"
-            ),
-            ToolStep(
-                tool="plan_chart",
-                description="Plan visualization for the data",
-                inputs={"data": "query_results", "query": query},
-                expected_output="Chart plan specification"
-            ),
-            ToolStep(
-                tool="build_chart",
-                description="Generate chart specification",
-                inputs={"data": "query_results", "chart_plan": "chart_plan"},
-                expected_output="Complete chart specification"
-            )
-        ]
-        
-        fallback_duration = time.time() - fallback_start
-        logger.info(f"[PLANNING] Fallback plan generated in {fallback_duration:.3f}s for session {session_id}")
-
-        return PlanSchema(
-            plan="Execute financial analytics workflow: detect intent → plan query → find templates → validate SQL → execute → visualize",
-            steps=plan_steps,
-            reasoning="Standard analytics workflow with safety validation"
-        )
 
     async def _execute_tools(self, plan: PlanSchema, query: str, session_id: str):
         """Phase 3: Execute tools using proper Responses API tool calling"""
@@ -358,10 +475,8 @@ Focus on thorough intent detection and clarification gathering upfront."""
         logger.info(f"[TOOLS] Starting tool execution for session {session_id} with {len(plan.steps)} planned steps")
 
         if not self.client:
-            logger.warning(f"[TOOLS] No OpenAI client available for session {session_id}, using fallback execution")
-            async for event in self._fallback_execute_tools(plan, query, session_id):
-                yield event
-            return
+            logger.error(f"[TOOLS] No OpenAI client available for session {session_id} - Response API required")
+            raise ValueError("OpenAI client unavailable - Response API required for tool execution")
         
         # Use tool-calling turn with the model to decide which tools to call
         messages = [
@@ -373,8 +488,9 @@ Plan: {plan.plan}
 User Query: {query}
 
 Execute the tools step by step according to the plan. You have access to these enhanced tools:
-- detect_intent: Analyze user query to extract intent and slots
-- provisional_plan: Create SQL query plan from detected intent
+- classify_query_relevance: Classify if the query is financial analytics (CALL THIS FIRST; if off-topic, reply politely and STOP)
+- detect_intent: Analyze the user query to extract intent and slots (company, timeframe, granularity, comparison)
+- provisional_plan: Create SQL query plan from the resolved intent
 - retrieve_templates_rag: Search for relevant SQL templates using advanced RAG with vector embeddings and hybrid search
 - search_metrics_rag: Search for relevant financial metrics with semantic matching and synonym expansion
 - search_companies_rag: Search for companies with alias resolution and sector filtering
@@ -387,12 +503,12 @@ Execute the tools step by step according to the plan. You have access to these e
 
 Important rules:
 1. Call tools in the planned sequence
-2. ALWAYS call detect_intent first to identify missing information
+2. Next call detect_intent to identify missing information
 3. If information is missing or ambiguous (e.g., market share without specifying single vs all companies), call request_clarification before proceeding
-4. Pass results from one tool to the next as needed
-5. Stop if any tool returns an error or clarification is needed
+4. Then call provisional_plan to create the SQL plan once slots are resolved
+5. Pass results from one tool to the next as needed
 
-Start by calling detect_intent with the user query."""
+Start by calling classify_query_relevance with the user query. If the result indicates off-topic, produce the polite decline message and stop."""
             },
             {
                 "role": "user",
@@ -422,115 +538,6 @@ Start by calling detect_intent with the user query."""
         execute_duration = time.time() - execute_start
         logger.info(f"[TOOLS] Tool calling loop completed in {loop_duration:.2f}s, total execution: {execute_duration:.2f}s for session {session_id}")
 
-    async def _fallback_execute_tools(self, plan: PlanSchema, query: str, session_id: str):
-        """Fallback direct tool execution when OpenAI is unavailable"""
-
-        fallback_start = time.time()
-        logger.info(f"[TOOLS] Starting fallback tool execution for session {session_id}")
-
-        data = None
-        chart_spec = None
-        sql_executed = None
-        
-        try:
-            # Step 1: Detect intent with clarifications
-            yield {"event": "tool_start", "data": {"tool": "detect_intent", "args_summary": f"query: {query}", "ts": datetime.utcnow().isoformat()}}
-            intent = await asyncio.to_thread(detect_intent_with_clarifications, query, self.tools.configs, session_id=session_id)
-            yield {"event": "intent_decided", "data": intent.dict(), "ts": datetime.utcnow().isoformat()}
-            yield {"event": "tool_end", "data": {"tool": "detect_intent", "output_summary": f"intent_key: {intent.intent_key}", "ts": datetime.utcnow().isoformat()}}
-            
-            # Check if clarifications are needed
-            if intent.clarifications_suggested:
-                # Handle clarifications - emit clarification request and wait for answer
-                for clarification in intent.clarifications_suggested:
-                    clarify_request = ClarifyRequestModel(
-                        slot=clarification.get('slot', 'unknown'),
-                        question=clarification.get('reason', 'Please provide clarification'),
-                        type='single',  # Default to single choice for supervisor mode
-                        options=self._get_options_for_slot(clarification.get('slot')),
-                        request_id=str(uuid.uuid4()),
-                        reason=clarification.get('reason', ''),
-                        session_id=session_id
-                    )
-                    
-                    # Store pending clarification
-                    self._pending_clarifications[session_id] = clarify_request
-                    self._clarification_events[session_id] = asyncio.Event()
-                    
-                    # Emit clarification request
-                    yield {
-                        "event": "clarification_request",
-                        "data": clarify_request.dict()
-                    }
-                    
-                    # Wait for clarification answer
-                    await self._wait_for_clarification(session_id)
-                    
-                    # Update intent with clarification answer
-                    if session_id in self.workflow_states:
-                        state = self.workflow_states[session_id]
-                        if hasattr(state, 'clarification_answer'):
-                            # Apply the clarification to intent slots
-                            intent.slots_detected[clarify_request.slot] = state.clarification_answer
-                    
-                    # Clean up clarification state
-                    self._pending_clarifications.pop(session_id, None)
-                    self._clarification_events.pop(session_id, None)
-                    
-                    yield {
-                        "event": "clarification_ack",
-                        "data": {"answer": getattr(self.workflow_states.get(session_id), 'clarification_answer', 'Unknown')}
-                    }
-            
-            # Step 2: Create provisional plan
-            yield {"event": "tool_start", "data": {"tool": "provisional_plan", "args_summary": f"intent: {intent.intent_key}", "ts": datetime.utcnow().isoformat()}}
-            plan_obj = self.tools.provisional_plan(intent)
-            yield {"event": "tool_end", "data": {"tool": "provisional_plan", "output_summary": f"metrics: {plan_obj.metrics}", "ts": datetime.utcnow().isoformat()}}
-            
-            # Step 3: Get template (try RAG first)
-            yield {"event": "tool_start", "data": {"tool": "retrieve_templates_rag", "args_summary": f"query: {query}", "ts": datetime.utcnow().isoformat()}}
-            templates = await self.tools.retrieve_templates_rag(query, intent.intent_key, 3)
-            template = templates[0] if templates else self.tools.choose_template_from_config(intent, plan_obj)
-            yield {"event": "tool_end", "data": {"tool": "retrieve_templates_rag", "output_summary": f"found: {len(templates)} templates", "ts": datetime.utcnow().isoformat()}}
-            
-            # Step 4: Compile SQL
-            from analytics_memory.sql_planner import compile_sql_from_plan
-            sql = compile_sql_from_plan(plan_obj, intent, self.tools.configs, template)
-            
-            # Step 5: Validate SQL
-            yield {"event": "tool_start", "data": {"tool": "validate_sql", "args_summary": f"sql length: {len(sql)}", "ts": datetime.utcnow().isoformat()}}
-            ok, issues = self.tools.validate_sql(sql, plan_obj.granularity)
-            yield {"event": "sql_validated", "data": {"validation": {"ok": ok, "issues": issues}}}
-            yield {"event": "tool_end", "data": {"tool": "validate_sql", "output_summary": f"valid: {ok}", "ts": datetime.utcnow().isoformat()}}
-            
-            if not ok:
-                yield {"event": "tool_error", "data": {"tool": "validate_sql", "error": f"Validation failed: {issues}", "ts": datetime.utcnow().isoformat()}}
-                return  # Exit early if validation fails
-            
-            # Step 6: Execute SQL after safety validation
-            yield {"event": "tool_start", "data": {"tool": "apply_execute_sql", "args_summary": f"sql: {sql[:50]}...", "ts": datetime.utcnow().isoformat()}}
-            result = await self._execute_single_tool("apply_execute_sql", {"sql": sql}, session_id)
-            
-            if result.get("success"):
-                data = result["data"]
-                sql_executed = sql
-                yield {"event": "data_retrieved", "data": {"row_count": len(data), "sample_data": data[:3], "sql_executed": sql}}
-                yield {"event": "tool_end", "data": {"tool": "apply_execute_sql", "output_summary": f"rows: {len(data)}", "ts": datetime.utcnow().isoformat()}}
-                
-                # Step 7: Plan and build chart
-                yield {"event": "tool_start", "data": {"tool": "plan_chart", "args_summary": f"data rows: {len(data)}", "ts": datetime.utcnow().isoformat()}}
-                chart_plan = self.tools.plan_chart(data, query, intent.intent_key)
-                yield {"event": "tool_end", "data": {"tool": "plan_chart", "output_summary": f"chart type: {chart_plan.chart_type if hasattr(chart_plan, 'chart_type') else 'planned'}", "ts": datetime.utcnow().isoformat()}}
-                
-                yield {"event": "tool_start", "data": {"tool": "build_chart", "args_summary": f"chart plan ready", "ts": datetime.utcnow().isoformat()}}
-                chart_spec = self.tools.build_chart(data, chart_plan, plan_obj.comparison, intent.intent_key)
-                yield {"event": "chart_generated", "data": {"chart_spec": chart_spec}}
-                yield {"event": "tool_end", "data": {"tool": "build_chart", "output_summary": "chart spec generated", "ts": datetime.utcnow().isoformat()}}
-            else:
-                yield {"event": "tool_error", "data": {"tool": "apply_execute_sql", "error": result.get("error", "SQL execution failed"), "ts": datetime.utcnow().isoformat()}}
-                
-        except Exception as e:
-            yield {"event": "tool_error", "data": {"tool": "workflow", "error": str(e), "ts": datetime.utcnow().isoformat()}}
 
     async def _execute_single_tool(self, tool_name: str, tool_args: Dict[str, Any], session_id: str):
         """Execute a single tool call"""
@@ -542,16 +549,18 @@ Start by calling detect_intent with the user query."""
         if SUPERVISOR_DEBUG:
             logger.debug(f"[SINGLE_TOOL] Args for {tool_name}: {tool_args}")
         
-        if tool_name == "detect_intent":
-            result = self.tools.detect_intent(tool_args["query"])
-            return result.dict()
-            
-        elif tool_name == "provisional_plan":
+        if tool_name == "provisional_plan":
             from analytics_memory.types import IntentModel
             intent = IntentModel(**tool_args["intent"])
             result = self.tools.provisional_plan(intent)
             return result.dict()
-            
+
+        elif tool_name == "plan_and_select_template":
+            from analytics_memory.types import IntentModel
+            intent = IntentModel(**tool_args["intent"])
+            result = self.tools.plan_and_select_template(intent)
+            return result
+
         elif tool_name == "retrieve_templates_rag":
             result = await self.tools.retrieve_templates_rag(
                 tool_args["query"],
@@ -608,14 +617,23 @@ Start by calling detect_intent with the user query."""
             result = await self.tools.apply_execute_sql(sql)
             
             # Track execution in workflow state
-            if state:
-                state.executed_tools.append("apply_execute_sql")
+            wf_state = self.workflow_states.get(session_id) if hasattr(self, 'workflow_states') else None
+            if wf_state:
+                wf_state.executed_tools.append("apply_execute_sql")
                 if result.get("success"):
-                    state.sql_executed = sql
-                    state.data_retrieved = result.get("data", [])
+                    wf_state.sql_executed = sql
+                    wf_state.data_retrieved = result.get("data", [])
             
             return result
             
+        elif tool_name == "short_financial_analysis":
+            result = self.tools.short_financial_analysis(
+                tool_args["data"],
+                tool_args["query"],
+                tool_args["sql"]
+            )
+            return result
+
         elif tool_name == "plan_chart":
             result = self.tools.plan_chart(
                 tool_args["data"],
@@ -657,68 +675,201 @@ Start by calling detect_intent with the user query."""
 
     async def _finalization_turn(self, query: str, sql: str, data: List, chart_spec: Dict, analysis: str, session_id: str) -> FinalSummarySchema:
         """Phase 5: Summarize results"""
-        
-        if self.client:
-            try:
-                messages = [
-                    {"role": "system", "content": "Summarize the analytics workflow results concisely."},
-                    {"role": "user", "content": f"Summarize results for query '{query}'. SQL: {sql}. Rows: {len(data) if data else 0}. Analysis: {analysis[:200]}..."}
-                ]
 
-                return await self.client.finalization_turn(
-                    messages=messages,
-                    response_format=FinalSummarySchema,
-                    session_id=session_id,
-                    reasoning_effort="low"
-                )
-            except Exception as e:
-                # Fallback to manual summary
-                pass
-        
-        # Fallback summary without OpenAI
-        return FinalSummarySchema(
-            sql_summary=f"Executed SQL query: {sql[:100]}..." if sql else "No SQL executed",
-            chart_summary=f"Generated chart specification" if chart_spec else "No chart generated",
-            key_findings=[
-                f"Retrieved {len(data) if data else 0} rows of data",
-                "Analytics workflow completed successfully" if data else "Workflow completed with limited data"
-            ],
-            data_summary=f"{len(data) if data else 0} rows retrieved from financial database",
-            next_questions=[
-                "Would you like to analyze a different time period?",
-                "Are there other metrics you'd like to explore?"
-            ],
-            execution_time="< 1 minute"
-        )
+        if not self.client:
+            logger.error(f"[FINALIZATION] No Response API client available for session {session_id}")
+            raise ValueError("Response API client required for finalization")
 
+        try:
+            messages = [
+                {"role": "system", "content": "Summarize the analytics workflow results concisely."},
+                {"role": "user", "content": f"Summarize results for query '{query}'. SQL: {sql}. Rows: {len(data) if data else 0}. Analysis: {analysis[:200]}..."}
+            ]
+
+            return await self.client.finalization_turn(
+                messages=messages,
+                response_format=FinalSummarySchema,
+                session_id=session_id,
+                reasoning_effort="low"
+            )
+        except Exception as e:
+            logger.error(f"[FINALIZATION] Response API failed for session {session_id}: {str(e)}")
+            raise ValueError(f"Response API required for finalization: {str(e)}")
+
+
+    def _is_follow_up_query(self, query: str, cached_artifact: Any) -> bool:
+        """Detect if query is a simple follow-up that could use cached context"""
+        query_lower = query.lower()
+
+        # Common follow-up patterns
+        follow_up_patterns = [
+            "make it", "change to", "switch to", "use", "quarterly", "annual",
+            "different company", "another company", "instead", "modify"
+        ]
+
+        # Check if query contains modification patterns and we have cached context
+        has_modification = any(pattern in query_lower for pattern in follow_up_patterns)
+        has_cached_context = cached_artifact is not None
+
+        return has_modification and has_cached_context
+
+    async def _smart_patch_artifact(self, query: str, cached_artifact: Any, session_id: str) -> Any:
+        """Use agent to intelligently patch the cached artifact based on follow-up query"""
+        if not self.client:
+            return None
+
+        try:
+            # Prepare messages for agent analysis
+            messages = [
+                {
+                    "role": "system",
+                    "content": "You are helping to modify a cached financial query artifact based on a follow-up request. Analyze the follow-up query and determine what changes need to be made to the existing artifact. Return the modified artifact as JSON."
+                },
+                {
+                    "role": "user",
+                    "content": f"Original artifact: {json.dumps(cached_artifact.dict() if hasattr(cached_artifact, 'dict') else cached_artifact)}\n\nFollow-up query: {query}\n\nPlease modify the artifact to reflect the follow-up request and return the updated JSON."
+                }
+            ]
+
+            # Use agent to determine the patch
+            response = await self.client.finalization_turn(
+                messages=messages,
+                session_id=session_id,
+                reasoning_effort="low"
+            )
+
+            if response:
+                try:
+                    # Try to parse the response as modified artifact
+                    if isinstance(response, str):
+                        patched_data = json.loads(response)
+                    else:
+                        patched_data = response
+
+                    logger.info(f"[SMART_PATCH] Successfully patched artifact for session {session_id}")
+                    return patched_data
+                except (json.JSONDecodeError, Exception) as e:
+                    logger.warning(f"[SMART_PATCH] Failed to parse agent response for session {session_id}: {e}")
+                    return None
+
+        except Exception as e:
+            logger.error(f"[SMART_PATCH] Failed to patch artifact for session {session_id}: {e}")
+            return None
+
+        return None
 
     def _get_options_for_slot(self, slot: str) -> List[str]:
-        """Get available options for a clarification slot"""
+        """Get available options for a clarification slot (backward compatible)"""
+        if not slot:
+            return []
+
+        slot = str(slot).lower()
+
         if slot == "company":
             return self.tools.configs.get("companies", {}).get("selection_rules", {}).get("default_companies", {}).get("tickers", ["NVDA", "AMD", "INTC", "MU", "QCOM", "AVGO", "TXN"])
+        if slot == "comparison":
+            # Derive comparison choices from YAML-defined intents
+            try:
+                qp = (self.tools.configs.get("queries", {}) or {}).get("query_patterns", {}) or {}
+                keys = list(qp.keys()) if isinstance(qp, dict) else []
+                opts = []
+                if any(str(k).lower().endswith("_single") for k in keys):
+                    opts.append("single")
+                if any(str(k).lower().endswith("_all") for k in keys):
+                    opts.append("all")
+                # Fallback to both if not derivable
+                return opts or ["single", "all"]
+            except Exception:
+                return ["single", "all"]
+        if slot == "granularity":
+            return ["annual", "quarterly"]
+        return []
+
+    def _get_options_with_labels(self, slot: str) -> List[dict]:
+        """Get available options with enhanced labels for better UX"""
+        if not slot:
+            return []
+
+        slot = str(slot).lower()
+
+        if slot == "company":
+            tickers = self.tools.configs.get("companies", {}).get("selection_rules", {}).get("default_companies", {}).get("tickers", ["NVDA", "AMD", "INTC", "MU", "QCOM", "AVGO", "TXN"])
+            # Company name mapping for better UX
+            company_names = {
+                "NVDA": "NVIDIA Corporation",
+                "AMD": "Advanced Micro Devices",
+                "INTC": "Intel Corporation",
+                "MU": "Micron Technology",
+                "QCOM": "Qualcomm Inc.",
+                "AVGO": "Broadcom Inc.",
+                "TXN": "Texas Instruments"
+            }
+            return [{"value": ticker, "label": company_names.get(ticker, ticker)} for ticker in tickers]
+
+        if slot == "comparison":
+            # Derive comparison choices from YAML-defined intents
+            try:
+                qp = (self.tools.configs.get("queries", {}) or {}).get("query_patterns", {}) or {}
+                keys = list(qp.keys()) if isinstance(qp, dict) else []
+                opts = []
+                if any(str(k).lower().endswith("_single") for k in keys):
+                    opts.append({"value": "single", "label": "Single Company"})
+                if any(str(k).lower().endswith("_all") for k in keys):
+                    opts.append({"value": "all", "label": "All Companies"})
+                # Fallback to both if not derivable
+                return opts or [
+                    {"value": "single", "label": "Single Company"},
+                    {"value": "all", "label": "All Companies"}
+                ]
+            except Exception:
+                return [
+                    {"value": "single", "label": "Single Company"},
+                    {"value": "all", "label": "All Companies"}
+                ]
+        if slot == "granularity":
+            return [
+                {"value": "annual", "label": "Annual Data"},
+                {"value": "quarterly", "label": "Quarterly Data"}
+            ]
         return []
 
     async def _wait_for_clarification(self, session_id: str):
         """Block until a clarification answer is received for the session."""
+        logger.info(f"[CLARIFY_DEBUG] _wait_for_clarification called for session {session_id}")
         evt = self._clarification_events.get(session_id)
         if not evt:
             evt = asyncio.Event()
             self._clarification_events[session_id] = evt
+            logger.info(f"[CLARIFY_DEBUG] Created new event for session {session_id}")
+        else:
+            logger.info(f"[CLARIFY_DEBUG] Using existing event for session {session_id}, is_set: {evt.is_set()}")
+
+        logger.info(f"[CLARIFY_DEBUG] Waiting for clarification event for session {session_id}...")
         await evt.wait()
+        logger.info(f"[CLARIFY_DEBUG] Clarification event received for session {session_id}!")
 
     def submit_clarification(self, session_id: str, answer: Any) -> bool:
         """Submit clarification answer and signal any waiters for the session."""
         state = self.workflow_states.get(session_id)
         evt = self._clarification_events.get(session_id)
-        
+
+        logger.info(f"[CLARIFY_DEBUG] submit_clarification called - session: {session_id}, answer: {answer}")
+        logger.info(f"[CLARIFY_DEBUG] state exists: {state is not None}, pending: {session_id in self._pending_clarifications}, event exists: {evt is not None}")
+
         if state and session_id in self._pending_clarifications:
             # Store the answer in the workflow state
             state.clarification_answer = answer
-            
+            logger.info(f"[CLARIFY_DEBUG] Answer stored in state: {answer}")
+
             # Signal the waiting clarification process
             if evt and not evt.is_set():
                 evt.set()
+                logger.info(f"[CLARIFY_DEBUG] Event signaled for session {session_id}")
+            else:
+                logger.warning(f"[CLARIFY_DEBUG] Event not signaled - evt: {evt is not None}, is_set: {evt.is_set() if evt else 'N/A'}")
             return True
+        else:
+            logger.warning(f"[CLARIFY_DEBUG] Clarification not processed - state: {state is not None}, pending: {session_id in self._pending_clarifications}")
         return False
 
     async def _tool_calling_loop(self, messages: List[Dict], tool_schemas: List[Dict], session_id: str, query: str):
@@ -765,6 +916,7 @@ Start by calling detect_intent with the user query."""
                     tool_results = []
                     tool_execution_results = []  # Store original results for API submission
 
+                    early_exit_triggered = False
                     for tool_call in response.tool_calls:
                         tool_start = time.time()
                         tool_name = tool_call.function.name
@@ -785,13 +937,92 @@ Start by calling detect_intent with the user query."""
                         }
 
                         # Handle special tool cases
-                        if tool_name == "detect_intent":
-                            result = await self._handle_detect_intent_with_clarifications(
-                                tool_args, session_id, query
+                        if tool_name == "classify_query_relevance":
+                            # Run classification with streaming clarification support
+                            classification_result = None
+                            try:
+                                async for cls_event in self.tools.classify_query_relevance(
+                                    tool_args.get("query") or query,
+                                    session_id
+                                ):
+                                    # Forward any SSE-style events
+                                    if isinstance(cls_event, dict) and cls_event.get("event"):
+                                        yield cls_event
+                                    else:
+                                        classification_result = cls_event
+                            except Exception as cls_exc:
+                                logger.error(f"[TOOL_EXECUTION] classify_query_relevance failed: {cls_exc}")
+                                classification_result = {"success": False, "error": str(cls_exc)}
+
+                            # Default structure for tool output submission
+                            if classification_result is None:
+                                classification_result = {"success": True, "is_financial": True}
+
+                            # Early exit if not financial
+                            if not classification_result.get("is_financial", True) and classification_result.get("early_exit", False):
+                                try:
+                                    ts_final = datetime.utcnow().isoformat()
+                                    # Update workflow state
+                                    wf_state = self.workflow_states.get(session_id)
+                                    if wf_state:
+                                        wf_state.early_exit = True
+                                        wf_state.current_phase = "completed"
+                                        wf_state.completed_at = ts_final
+
+                                    polite = classification_result.get("message") or DEFAULT_OFFTOPIC_MESSAGE
+                                    category = classification_result.get("category", "general_conversation")
+                                    yield {"event": "final_answer", "event_type": "user", "data": {"message": polite, "category": category, "is_financial": False, "ts": ts_final}}
+                                    yield {"event": "workflow_complete", "event_type": "thinking", "data": {"message": "Workflow completed with early exit (classifier)", "early_exit": True, "ts": ts_final, "total_elapsed_ms": int((time.time() - loop_start) * 1000)}}
+                                    early_exit_triggered = True
+                                except Exception as ee:
+                                    logger.error(f"[TOOL_EXECUTION] Error during early-exit handling: {ee}")
+
+                            result = classification_result
+
+                        elif tool_name == "detect_intent":
+                            # Detect intent and emit clarification requests as needed (blocking loop)
+                            intent = await asyncio.to_thread(
+                                detect_intent_with_clarifications,
+                                tool_args.get("query") or query,
+                                self.tools.configs,
+                                session_id=session_id
                             )
-                            # Emit clarification events if needed
-                            for clarification_event in result.get("clarification_events", []):
-                                yield clarification_event
+
+                            # Process clarifications sequentially
+                            if intent.clarifications_suggested:
+                                for clarification in intent.clarifications_suggested:
+                                    from analytics_memory.types import ClarifyRequestModel
+                                    clarify_request = ClarifyRequestModel(
+                                        slot=clarification.get('slot', 'unknown'),
+                                        question=clarification.get('reason', 'Please provide clarification'),
+                                        type='single',
+                                        options=self._get_options_for_slot(clarification.get('slot')),
+                                        request_id=str(uuid.uuid4()),
+                                        reason=clarification.get('reason', ''),
+                                        session_id=session_id
+                                    )
+
+                                    # Store pending clarification and emit request
+                                    self._pending_clarifications[session_id] = clarify_request
+                                    self._clarification_events[session_id] = asyncio.Event()
+                                    yield {"event": "clarification_request", "data": clarify_request.dict()}
+
+                                    # Wait for clarification answer
+                                    await self._wait_for_clarification(session_id)
+
+                                    # Apply clarification answer
+                                    state = self.workflow_states.get(session_id)
+                                    if state and hasattr(state, 'clarification_answer'):
+                                        intent.slots_detected[clarify_request.slot] = state.clarification_answer
+
+                                    yield {"event": "clarification_ack", "data": {"answer": getattr(self.workflow_states.get(session_id), 'clarification_answer', 'Unknown')}}
+
+                                    # Cleanup
+                                    self._pending_clarifications.pop(session_id, None)
+                                    self._clarification_events.pop(session_id, None)
+
+                            result = {"intent": intent.dict()}
+
                         elif tool_name == "request_clarification":
                             # Handle clarification requests
                             result = await self._execute_single_tool(tool_name, tool_args, session_id)
@@ -883,20 +1114,81 @@ Start by calling detect_intent with the user query."""
                                         "error": error_msg
                                     }
                                 }
+                        elif tool_name == "short_financial_analysis":
+                            # Emit analysis event for frontend
+                            yield {
+                                "event": "analysis_complete",
+                                "data": {
+                                    "analysis": result,
+                                    "insights": result.get("insights", []),
+                                    "summary": result.get("summary", ""),
+                                    "data_points": result.get("data_points", 0)
+                                }
+                            }
+                        elif tool_name == "plan_and_select_template":
+                            # Emit virtual tool steps for frontend compatibility
+                            yield {
+                                "event": "plan_built",
+                                "data": {
+                                    "plan": result.get("plan", {}),
+                                    "elapsed_ms": int((time.time() - tool_start) * 1000)
+                                }
+                            }
+
+                            yield {
+                                "event": "template_selected",
+                                "data": {
+                                    "template": result.get("template", {}),
+                                    "elapsed_ms": int((time.time() - tool_start) * 1000)
+                                }
+                            }
+
+                            # Emit SQL compilation events
+                            sql = result.get("sql", "")
+                            yield {
+                                "event": "sql_compiled",
+                                "data": {
+                                    "sql_length": len(sql),
+                                    "template_used": result.get("template", {}).get("name", "unknown"),
+                                    "elapsed_ms": int((time.time() - tool_start) * 1000)
+                                }
+                            }
+
+                            yield {
+                                "event": "sql_generated",
+                                "data": {
+                                    "sql": sql,
+                                    "elapsed_ms": int((time.time() - tool_start) * 1000)
+                                }
+                            }
                         elif tool_name == "build_chart":
                             chart_spec = result
                             yield {"event": "chart_generated", "data": {"chart_spec": chart_spec}}
 
                         tool_duration = time.time() - tool_start
-                        if SUPERVISOR_DEBUG:
-                            logger.info(f"[TOOL_LOOP] Tool {tool_name} completed in {tool_duration:.2f}s for session {session_id}")
+                        tool_duration_ms = int(tool_duration * 1000)
+
+                        # Enhanced observability logging with latency tracking
+                        logger.info(f"[OBSERVABILITY] Tool execution completed: "
+                                   f"session_id={session_id}, "
+                                   f"tool={tool_name}, "
+                                   f"duration_ms={tool_duration_ms}, "
+                                   f"iteration={iteration + 1}, "
+                                   f"has_result={result is not None}")
+
+                        # Update workflow state performance tracking
+                        wf_state = self.workflow_states.get(session_id)
+                        if wf_state:
+                            if not wf_state.tool_execution_duration_ms:
+                                wf_state.tool_execution_duration_ms = 0
+                            wf_state.tool_execution_duration_ms += tool_duration_ms
 
                         yield {
                             "event": "tool_end",
                             "data": {
                                 "tool": tool_name,
                                 "output_summary": str(result)[:100] if result else "completed",
-                                "duration_ms": int(tool_duration * 1000),
+                                "duration_ms": tool_duration_ms,
                                 "ts": datetime.utcnow().isoformat()
                             }
                         }
@@ -909,15 +1201,24 @@ Start by calling detect_intent with the user query."""
                             "content": [{"type": "input_text", "text": json.dumps(result)}]
                         })
 
-                    # Submit tool outputs to OpenAI API (FIXED)
+                    # Submit tool outputs to OpenAI API with enhanced observability
                     if hasattr(response, 'response_id') and response.response_id:
                         try:
                             tool_outputs = []
+                            tool_call_ids = []
                             for tool_call, execution_result in zip(response.tool_calls, tool_execution_results):
+                                tool_call_ids.append(tool_call.id)
                                 tool_outputs.append({
                                     "tool_call_id": tool_call.id,
                                     "output": json.dumps(execution_result) if execution_result else "{}"
                                 })
+
+                            # Enhanced structured logging for observability
+                            logger.info(f"[OBSERVABILITY] Tool submission for session {session_id}: "
+                                       f"response_id={response.response_id}, "
+                                       f"tool_call_ids={tool_call_ids}, "
+                                       f"outputs_count={len(tool_outputs)}, "
+                                       f"iteration={iteration + 1}")
 
                             # Submit the tool outputs to continue the conversation
                             await self.client.unified_client.client.responses.submit_tool_outputs(
@@ -925,10 +1226,18 @@ Start by calling detect_intent with the user query."""
                                 tool_outputs=tool_outputs
                             )
 
-                            if SUPERVISOR_DEBUG:
-                                logger.info(f"[TOOL_LOOP] Submitted {len(tool_outputs)} tool outputs for session {session_id}")
+                            logger.info(f"[OBSERVABILITY] Successfully submitted {len(tool_outputs)} tool outputs for session {session_id}")
+
+                            # Track cache hits for performance monitoring
+                            wf_state = self.workflow_states.get(session_id)
+                            if wf_state:
+                                wf_state.total_api_calls += 1
+
                         except Exception as submit_error:
-                            logger.error(f"[TOOL_LOOP] Failed to submit tool outputs for session {session_id}: {str(submit_error)}")
+                            logger.error(f"[OBSERVABILITY] Failed to submit tool outputs for session {session_id}: "
+                                        f"response_id={getattr(response, 'response_id', 'None')}, "
+                                        f"error={str(submit_error)}, "
+                                        f"error_type={type(submit_error).__name__}")
 
                     # Add assistant message and tool results to conversation (Responses API format)
                     assistant_content = [{"type": "input_text", "text": response.content}] if response.content else []
@@ -944,7 +1253,11 @@ Start by calling detect_intent with the user query."""
                         ]
                     })
                     messages.extend(tool_results)
-                    
+
+                    if early_exit_triggered:
+                        # Stop processing further iterations after submitting outputs
+                        break
+
                 else:
                     # No more tool calls - workflow complete
                     logger.info(f"[TOOL_LOOP] No more tool calls requested, workflow complete for session {session_id}")
@@ -969,12 +1282,17 @@ Start by calling detect_intent with the user query."""
         logger.info(f"[TOOL_LOOP] Tool calling loop completed after {total_duration:.2f}s for session {session_id}")
 
     async def _handle_detect_intent_with_clarifications(self, tool_args: Dict, session_id: str, query: str):
-        """Handle intent detection with clarification support"""
-        
-        # Use the enhanced intent detection 
-        intent = await asyncio.to_thread(detect_intent_with_clarifications, query, self.tools.configs, session_id=session_id)
-        
-        # Check for clarifications
+        """Detect intent, emit clarification events, and wait for answers.
+
+        Returns a dict with the serialized intent and any clarification events emitted.
+        """
+        intent = await asyncio.to_thread(
+            detect_intent_with_clarifications,
+            tool_args.get("query") or query,
+            self.tools.configs,
+            session_id=session_id
+        )
+
         clarification_events = []
         if intent.clarifications_suggested:
             for clarification in intent.clarifications_suggested:
@@ -987,34 +1305,34 @@ Start by calling detect_intent with the user query."""
                     reason=clarification.get('reason', ''),
                     session_id=session_id
                 )
-                
+
                 # Store and wait for clarification
                 self._pending_clarifications[session_id] = clarify_request
                 self._clarification_events[session_id] = asyncio.Event()
-                
+
                 clarification_events.append({
                     "event": "clarification_request",
                     "data": clarify_request.dict()
                 })
-                
+
                 # Wait for clarification answer
                 await self._wait_for_clarification(session_id)
-                
+
                 # Apply clarification answer
                 if session_id in self.workflow_states:
                     state = self.workflow_states[session_id]
                     if hasattr(state, 'clarification_answer'):
                         intent.slots_detected[clarify_request.slot] = state.clarification_answer
-                
+
                 clarification_events.append({
                     "event": "clarification_ack",
                     "data": {"answer": getattr(self.workflow_states.get(session_id), 'clarification_answer', 'Unknown')}
                 })
-                
+
                 # Cleanup
                 self._pending_clarifications.pop(session_id, None)
                 self._clarification_events.pop(session_id, None)
-        
+
         return {
             "intent": intent.dict(),
             "clarification_events": clarification_events
@@ -1029,9 +1347,24 @@ def get_active_workflow(session_id: str) -> Optional[SupervisorWorkflow]:
 
 async def supervisor_workflow(query: str, session_id: Optional[str] = None):
     """Entry point for supervisor workflow"""
-    wf = SupervisorWorkflow()
-    async for ev in wf.events(query, session_id):
-        yield ev
+    print(f"[SESSION_DEBUG] supervisor_workflow called - Query: {query[:50]}..., Session: {session_id}")
+    try:
+        wf = SupervisorWorkflow()
+        print(f"[SESSION_DEBUG] SupervisorWorkflow created successfully")
+
+        # Ensure the workflow is registered in ACTIVE_WORKFLOWS before events start
+        if session_id:
+            ACTIVE_WORKFLOWS[session_id] = wf
+            print(f"[SESSION_DEBUG] Registered workflow in ACTIVE_WORKFLOWS for session {session_id}")
+
+        async for ev in wf.events(query, session_id):
+            yield ev
+    except Exception as e:
+        print(f"[SESSION_DEBUG] Exception in supervisor_workflow: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
+
 
 
 

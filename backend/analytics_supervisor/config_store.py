@@ -5,6 +5,19 @@ Unified Configuration Store for Analytics System
 This module provides a unified interface for accessing all configuration data
 with deterministic fallback chains and standardized response formats.
 
+ARCHITECTURE OVERVIEW:
+┌─────────────────────────────────────────┐
+│            config_store.py              │  ← Unified interface layer
+│  (Deterministic fallback orchestration) │     with caching & monitoring
+└─────────────┬───────────────────────────┘
+              ↓ Fallback Chain
+┌─────────────────────────────────────────┐
+│  1. rag_service.py (Advanced search)    │  ← Primary: Hybrid vector + keyword
+│  2. template_store.py (SQL templates)   │  ← Secondary: Vector templates only
+│  3. YAML configs (File-based)           │  ← Tertiary: Static configuration
+│  4. Empty results (Graceful failure)    │  ← Final: Prevent crashes
+└─────────────────────────────────────────┘
+
 Fallback Chain: RAG Service → Template Store → YAML Configs → Empty Results
 
 Features:
@@ -13,6 +26,11 @@ Features:
 - Standardized result format across all sources
 - Performance monitoring and caching
 - Comprehensive error handling and logging
+
+Usage:
+    store = get_config_store()
+    templates = await store.get_templates("market share query")
+    metrics = await store.get_metrics("revenue growth")
 """
 
 from __future__ import annotations
@@ -34,42 +52,38 @@ try:
     from analytics_supervisor.template_store import search_templates
     from analytics_memory.config import CONFIGS
 except ImportError:
-    # Fallback for different import contexts
-    try:
-        from rag_service import get_rag_service, SearchContext, SearchMode, SearchResult
-        from template_store import search_templates
-        from analytics_memory.config import CONFIGS
-    except ImportError:
-        # Final fallback - create minimal mock versions for testing
-        logger.warning("Could not import some dependencies - using fallback implementations")
+    # Fallback - create minimal mock versions for testing
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.warning("Could not import dependencies - using fallback implementations")
 
-        class SearchMode:
-            HYBRID = "hybrid"
-            VECTOR_ONLY = "vector_only"
-            KEYWORD_ONLY = "keyword_only"
-            AUTO = "auto"
+    class SearchMode:
+        HYBRID = "hybrid"
+        VECTOR_ONLY = "vector_only"
+        KEYWORD_ONLY = "keyword_only"
+        AUTO = "auto"
 
-        class SearchContext:
-            def __init__(self, **kwargs):
-                for k, v in kwargs.items():
-                    setattr(self, k, v)
+    class SearchContext:
+        def __init__(self, **kwargs):
+            for k, v in kwargs.items():
+                setattr(self, k, v)
 
-        class SearchResult:
-            def __init__(self, **kwargs):
-                for k, v in kwargs.items():
-                    setattr(self, k, v)
+    class SearchResult:
+        def __init__(self, **kwargs):
+            for k, v in kwargs.items():
+                setattr(self, k, v)
 
-        def get_rag_service():
-            return None
+    def get_rag_service():
+        return None
 
-        async def search_templates(*args, **kwargs):
-            return []
+    async def search_templates(*args, **kwargs):
+        return []
 
-        class MockConfigs:
-            def __init__(self):
-                self.__dict__ = {}
+    class MockConfigs:
+        def __init__(self):
+            self.__dict__ = {}
 
-        CONFIGS = MockConfigs()
+    CONFIGS = MockConfigs()
 
 logger = logging.getLogger(__name__)
 
@@ -173,6 +187,9 @@ class ConfigStore:
         fallback_attempted = []
         last_error = None
 
+        def _elapsed_ms():
+            return max(round((time.time() - start_time) * 1000, 2), 0.01)
+
         # Check cache first
         cache_key = self._cache_key(query_type, query, **kwargs)
         if cache_key in self._cache:
@@ -191,7 +208,7 @@ class ConfigStore:
                     result = ConfigResult(
                         data=data,
                         source=ConfigSource.RAG_SERVICE,
-                        query_time_ms=round((time.time() - start_time) * 1000, 2),
+                        query_time_ms=_elapsed_ms(),
                         total_results=len(data),
                         query_info={"query": query, "type": query_type.value, **kwargs},
                         fallback_attempted=fallback_attempted
@@ -212,6 +229,8 @@ class ConfigStore:
                (source == ConfigSource.YAML_CONFIG and not self.fallback_config.enable_yaml_config):
                 continue
 
+            fallback_attempted.append(source)
+
             try:
                 if source == ConfigSource.TEMPLATE_STORE:
                     timeout = self.fallback_config.timeout_template_store_ms / 1000.0
@@ -224,7 +243,7 @@ class ConfigStore:
                     result = ConfigResult(
                         data=data,
                         source=source,
-                        query_time_ms=round((time.time() - start_time) * 1000, 2),
+                        query_time_ms=_elapsed_ms(),
                         total_results=len(data),
                         query_info={"query": query, "type": query_type.value, **kwargs},
                         fallback_attempted=fallback_attempted
@@ -236,7 +255,6 @@ class ConfigStore:
 
             except Exception as e:
                 logger.warning(f"Fallback {source.value} failed for {query_type.value}: {e}")
-                fallback_attempted.append(source)
                 last_error = str(e)
 
         # Final fallback: empty result
@@ -244,7 +262,7 @@ class ConfigStore:
         result = ConfigResult(
             data=[],
             source=ConfigSource.EMPTY_FALLBACK,
-            query_time_ms=round((time.time() - start_time) * 1000, 2),
+            query_time_ms=_elapsed_ms(),
             total_results=0,
             query_info={"query": query, "type": query_type.value, **kwargs},
             fallback_attempted=fallback_attempted,
@@ -289,38 +307,37 @@ class ConfigStore:
 
         async def yaml_query():
             try:
-                # Access YAML query patterns
-                patterns = self.yaml_configs.get('query_patterns', {})
+                # Access YAML query patterns (support both CONFIGS.queries and simplified test fixtures)
+                queries_section = self.yaml_configs.get('queries', {})
+                patterns = queries_section.get('query_patterns', {})
+                if not patterns:
+                    patterns = self.yaml_configs.get('query_patterns', {})
+
                 matches = []
+                normalized_query = query.lower()
 
                 for key, pattern in patterns.items():
                     if intent_key and key != intent_key:
                         continue
 
-                    # Simple keyword matching for YAML fallback
-                    name = pattern.get('name', key)
-                    description = pattern.get('description', '')
                     keywords = pattern.get('keywords', [])
+                    if not keywords:
+                        keywords = [pattern.get('name', ''), pattern.get('description', '')]
 
-                    query_lower = query.lower()
-                    if (query_lower in name.lower() or
-                        query_lower in description.lower() or
-                        any(query_lower in kw.lower() for kw in keywords)):
-
+                    if any(keyword and keyword.lower() in normalized_query for keyword in keywords):
                         matches.append({
-                            'id': key,
-                            'name': name,
-                            'intent_key': key,
-                            'description': description,
-                            'sql_template': pattern.get('sql_template', ''),
-                            'source_table': 'yaml_config'
+                            'id': pattern.get('id', key),
+                            'name': pattern.get('name', key.replace('_', ' ').title()),
+                            'description': pattern.get('description', ''),
+                            'sql_template': pattern.get('sql_template'),
+                            'intent_key': pattern.get('intent_key', key),
+                            'source': 'yaml_config'
                         })
 
                         if len(matches) >= top_k:
                             break
 
                 return matches
-
             except Exception:
                 return []
 
@@ -361,42 +378,47 @@ class ConfigStore:
 
         async def yaml_query():
             try:
-                # Access YAML metrics configuration
                 metrics_config = self.yaml_configs.get('metrics', {})
-                base_metrics = metrics_config.get('base_metrics', [])
+                base_metrics = []
+
+                metrics_section = metrics_config.get('metrics')
+                if isinstance(metrics_section, dict):
+                    base_metrics.extend(metrics_section.values())
+                elif isinstance(metrics_section, list):
+                    base_metrics.extend(metrics_section)
+
+                extra_base = metrics_config.get('base_metrics')
+                if isinstance(extra_base, list):
+                    base_metrics.extend(extra_base)
+
                 derived_metrics = metrics_config.get('derived_metrics', []) if include_derived else []
+                if isinstance(derived_metrics, dict):
+                    derived_values = list(derived_metrics.values())
+                else:
+                    derived_values = derived_metrics if include_derived else []
 
-                all_metrics = base_metrics + derived_metrics
+                all_metrics = base_metrics + derived_values
                 matches = []
+                normalized_query = query.lower()
 
-                query_lower = query.lower()
                 for metric in all_metrics:
-                    name = metric.get('name', '')
-                    description = metric.get('description', '')
                     aliases = metric.get('aliases', [])
+                    description = metric.get('description', '')
+                    names = [metric.get('name', ''), metric.get('metric_id', ''), metric.get('short_name', '')]
 
-                    if (query_lower in name.lower() or
-                        query_lower in description.lower() or
-                        any(query_lower in alias.lower() for alias in aliases)):
-
+                    if (
+                        any(alias and alias.lower() in normalized_query for alias in aliases)
+                        or any(name and name.lower() in normalized_query for name in names)
+                        or (description and normalized_query in description.lower())
+                    ):
                         if category and metric.get('category') != category:
                             continue
-
-                        matches.append({
-                            'metric_id': metric.get('metric_id', name),
-                            'name': name,
-                            'description': description,
-                            'category_id': metric.get('category'),
-                            'unit': metric.get('unit'),
-                            'aliases': aliases,
-                            'source_table': 'yaml_config'
-                        })
+                        matches.append(metric)
 
                         if len(matches) >= top_k:
                             break
 
                 return matches
-
             except Exception:
                 return []
 
@@ -436,51 +458,34 @@ class ConfigStore:
 
         async def yaml_query():
             try:
-                # Access YAML companies configuration
-                companies_config = self.yaml_configs.get('companies', {})
-                companies_list = []
-
-                # Handle nested structure: companies.industry contains list
-                for industry_data in companies_config.values():
-                    if isinstance(industry_data, dict):
-                        for sector_name, companies in industry_data.items():
-                            if isinstance(companies, list):
-                                companies_list.extend(companies)
+                companies_section = self.yaml_configs.get('companies', {})
+                if isinstance(companies_section.get('companies'), dict):
+                    companies_config = companies_section.get('companies', {})
+                else:
+                    companies_config = companies_section
 
                 matches = []
-                query_lower = query.lower()
+                normalized_query = query.lower()
 
-                for company in companies_list:
-                    name = company.get('name', '')
-                    short_name = company.get('short_name', '')
-                    ticker = company.get('ticker', '')
-                    aliases = company.get('aliases', []) if include_aliases else []
+                for sector, companies in companies_config.items():
+                    if isinstance(companies, dict) and 'companies' in companies:
+                        records = companies.get('companies', [])
+                    elif isinstance(companies, list):
+                        records = companies
+                    else:
+                        records = []
 
-                    if (query_lower in name.lower() or
-                        query_lower in short_name.lower() or
-                        query_lower in ticker.lower() or
-                        any(query_lower in alias.lower() for alias in aliases)):
+                    for company in records:
+                        aliases = company.get('aliases', []) + [company.get('name', ''), company.get('ticker', ''), sector]
+                        if any(alias and alias.lower() in normalized_query for alias in aliases):
+                            entry = company.copy()
+                            entry.setdefault('sector', sector)
+                            matches.append(entry)
 
-                        if sector and company.get('sector') != sector:
-                            continue
-
-                        matches.append({
-                            'ticker': ticker,
-                            'name': name,
-                            'short_name': short_name,
-                            'sector': company.get('sector'),
-                            'industry': company.get('industry'),
-                            'description': company.get('description', ''),
-                            'market_cap_tier': company.get('market_cap_tier'),
-                            'aliases': aliases,
-                            'source_table': 'yaml_config'
-                        })
-
-                        if len(matches) >= top_k:
-                            break
+                            if len(matches) >= top_k:
+                                break
 
                 return matches
-
             except Exception:
                 return []
 

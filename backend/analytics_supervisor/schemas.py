@@ -107,11 +107,26 @@ class WorkflowState(BaseModel):
     started_at: Optional[str] = None
     completed_at: Optional[str] = None
     clarification_answer: Optional[Any] = None
+    early_exit: bool = Field(default=False, description="Flag to indicate early exit for non-financial queries")
 
     # Enhanced state management
     last_successful_tool: Optional[str] = None
     failed_tools: List[str] = Field(default_factory=list)
     recovery_attempts: int = Field(default=0, description="Number of workflow recovery attempts")
+
+    # Caching fields for performance optimization
+    cached_intent: Optional[Dict[str, Any]] = Field(default=None, description="Cached intent detection result")
+    cached_plan: Optional[Dict[str, Any]] = Field(default=None, description="Cached query plan")
+    cached_template: Optional[Dict[str, Any]] = Field(default=None, description="Cached template selection")
+    cached_analysis: Optional[Dict[str, Any]] = Field(default=None, description="Cached short financial analysis")
+    tool_results_cache: Dict[str, Any] = Field(default_factory=dict, description="Cache for tool execution results")
+    session_metadata: Dict[str, Any] = Field(default_factory=dict, description="Session-specific metadata for optimization")
+
+    # Performance tracking
+    intent_detection_duration_ms: Optional[int] = None
+    tool_execution_duration_ms: Optional[int] = None
+    total_api_calls: int = Field(default=0, description="Total number of API calls made")
+    cache_hits: int = Field(default=0, description="Number of cache hits for performance tracking")
 
     class Config:
         extra = "forbid"

@@ -4,7 +4,7 @@ import logging
 import re
 from typing import Dict, Any, Optional
 from .openai_client import get_openai_client
-from .types import IntentModel
+from .types import IntentModel, LLMIntentModel, LLMClarificationSuggestionModel, ClarificationSuggestionModel
 from .sql_planner import resolve_alias_to_ticker
 
 logger = logging.getLogger(__name__)
@@ -169,6 +169,45 @@ def _heuristic_intent(query: str, configs: Dict[str, Any]) -> IntentModel:
     return IntentModel(intent_key=intent_key, confidence=0.4 if intent_key else 0.2, slots_detected=slots)
 
 
+def _llm_to_runtime_intent(llm_res: LLMIntentModel) -> IntentModel:
+    """Convert strict LLM schema to runtime IntentModel with dict slots."""
+    # Convert SlotsModel to plain dict for downstream compatibility
+    slots: Dict[str, Any] = {}
+    try:
+        slots = llm_res.slots_detected.model_dump() if hasattr(llm_res.slots_detected, "model_dump") else dict(llm_res.slots_detected)
+    except Exception:
+        slots = {}
+
+    # Map clarification suggestions
+    clar_suggestions: list[ClarificationSuggestionModel] = []
+    for c in getattr(llm_res, "clarifications_suggested", []) or []:
+        try:
+            clar_suggestions.append(
+                ClarificationSuggestionModel(
+                    slot=c.slot,
+                    reason=c.reason,
+                    question=c.question,
+                    type=c.type,
+                    options=c.options,
+                    proposed=c.proposed,
+                    proposed_confidence=c.proposed_confidence,
+                )
+            )
+        except Exception:
+            # Skip invalid suggestion entries gracefully
+            continue
+
+    return IntentModel(
+        intent_key=llm_res.intent_key,
+        confidence=llm_res.confidence,
+        slots_detected=slots,
+        assumptions=list(getattr(llm_res, "assumptions", []) or []),
+        clarifications_suggested=clar_suggestions,
+        possible_intents=list(getattr(llm_res, "possible_intents", []) or []),
+        intent_reasoning=getattr(llm_res, "intent_reasoning", "") or "",
+    )
+
+
 def detect_intent_llm(query: str, configs: Dict[str, Any], session_id: Optional[str] = None) -> IntentModel:
     """Detect intent using a reliable structured-output LLM with deterministic
     post-processing to ensure critical slots are populated when present in the
@@ -198,24 +237,15 @@ def detect_intent_llm(query: str, configs: Dict[str, Any], session_id: Optional[
     ]
 
     try:
-        res = client.create_structured(
-            response_model=IntentModel,
+        llm_res = client.create_structured(
+            response_model=LLMIntentModel,
             messages=messages,
             session_id=session_id,
             reasoning_effort="medium"
         )
 
-        # Ensure dict exists with robust type checking
-        if isinstance(res.slots_detected, dict):
-            res.slots_detected = res.slots_detected
-        elif isinstance(res.slots_detected, (list, tuple)):
-            try:
-                res.slots_detected = dict(res.slots_detected) if res.slots_detected else {}
-            except (ValueError, TypeError):
-                logger.warning(f"Invalid slots_detected format: {res.slots_detected}")
-                res.slots_detected = {}
-        else:
-            res.slots_detected = {}
+        # Convert to runtime model with dict slots
+        res = _llm_to_runtime_intent(llm_res)
 
         # Company: scan tokens for alias/ticker if missing
         if not res.slots_detected.get("company"):
@@ -305,7 +335,7 @@ Known intent patterns and their slot requirements:
 - rnd_intensity_vs_peers: requires company
 - rnd_expense_vs_peers: requires company
 
-Important: For "market share" queries, you MUST suggest a 'comparison' clarification to ask if they want single company analysis or all companies comparison, EVEN IF a company is mentioned. This helps users choose between analyzing that specific company's market share or comparing all companies including that one. Do not default to market_share_all or market_share_single without clarification.
+Important: For "market share" queries, only suggest a 'comparison' clarification if it's ambiguous whether they want single company analysis or all companies comparison. If a specific company is mentioned (e.g., "Nvidia market share"), default to market_share_single. Only ask for clarification when the query is genuinely ambiguous (e.g., "market share trends" without specifying a company).
 
 Note: "margin growth vs industry average" queries should use margin_growth_vs_peers intent."""
 
@@ -321,24 +351,15 @@ Identify the intent and any missing required slots."""
     ]
 
     try:
-        res = client.create_structured(
-            response_model=IntentModel,
+        llm_res = client.create_structured(
+            response_model=LLMIntentModel,
             messages=messages,
             session_id=session_id,
             reasoning_effort="medium"
         )
 
-        # Ensure dict exists with robust type checking
-        if isinstance(res.slots_detected, dict):
-            res.slots_detected = res.slots_detected
-        elif isinstance(res.slots_detected, (list, tuple)):
-            try:
-                res.slots_detected = dict(res.slots_detected) if res.slots_detected else {}
-            except (ValueError, TypeError):
-                logger.warning(f"Invalid slots_detected format: {res.slots_detected}")
-                res.slots_detected = {}
-        else:
-            res.slots_detected = {}
+        # Convert to runtime model with dict slots
+        res = _llm_to_runtime_intent(llm_res)
 
         # Apply existing deterministic post-processing
         # Company: scan tokens for alias/ticker if missing
@@ -360,10 +381,12 @@ Identify the intent and any missing required slots."""
                 logger.info("Post-processed company: %s", detected)
                 
                 # Remove company from clarifications_suggested if we found it
+                # Also remove comparison clarifications since we have a specific company
                 res.clarifications_suggested = [
-                    c for c in res.clarifications_suggested 
-                    if c.get('slot') != 'company'
+                    c for c in res.clarifications_suggested
+                    if c.get('slot') not in ['company', 'comparison']  # Remove both company and comparison clarifications
                 ]
+                logger.info("Post-processed clarifications after company detection: %d remaining", len(res.clarifications_suggested))
 
         # Timeframe: normalize to consistent dict structure
         tf_raw = res.slots_detected.get("timeframe")
@@ -390,6 +413,15 @@ Identify the intent and any missing required slots."""
             res.slots_detected.get("timeframe"),
             len(res.clarifications_suggested)
         )
+
+        # Debug: Log clarification details
+        for i, clarification in enumerate(res.clarifications_suggested):
+            logger.info(
+                "Clarification %d: slot=%s, reason=%s",
+                i,
+                clarification.get('slot', 'unknown'),
+                clarification.get('reason', 'no reason')
+            )
         return res
     except Exception as e:
         logger.error("Enhanced Intent Detection FAILED: %s, falling back to heuristic", str(e))

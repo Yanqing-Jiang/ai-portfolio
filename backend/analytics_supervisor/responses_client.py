@@ -1,3 +1,33 @@
+"""
+Supervisor-Specific OpenAI Responses API Client
+
+This module provides a specialized wrapper around the unified OpenAI client
+specifically for the analytics supervisor workflow with Claude Code-style supervision.
+
+ARCHITECTURE ROLE:
+┌─────────────────────────────────────────┐
+│         responses_client.py             │  ← Supervisor-specific wrapper
+│    (Reasoning, tool calling, Claude     │     with workflow optimization
+│     Code supervision features)          │
+└─────────────┬───────────────────────────┘
+              ↓ uses
+┌─────────────────────────────────────────┐
+│      unified_responses_client.py        │  ← Base OpenAI API client
+│   (Core API access, session mgmt)       │     shared across application
+└─────────────────────────────────────────┘
+
+Key Features:
+- Reasoning effort configuration (low/medium/high) for GPT-5 models
+- Supervisor-specific tool calling and workflow management
+- Claude Code-style supervision patterns
+- Delegates message formatting to unified client (avoids duplication)
+- Error handling optimized for supervisor use cases
+
+Usage:
+    client = get_supervisor_client()
+    response = await client.create_structured_response(messages, SomeSchema)
+"""
+
 from __future__ import annotations
 import logging
 import os
@@ -19,10 +49,10 @@ SUPERVISOR_DEBUG = os.getenv('SUPERVISOR_DEBUG', 'false').lower() == 'true'
 
 # Reasoning effort configuration
 _ALLOWED_REASONING = {"low", "medium", "high"}
-_SUPERVISOR_REASONING_ENV = os.getenv('SUPERVISOR_REASONING_EFFORT', 'medium').lower() if os.getenv('SUPERVISOR_REASONING_EFFORT') else 'medium'
+_SUPERVISOR_REASONING_ENV = os.getenv('SUPERVISOR_REASONING_EFFORT', 'low').lower() if os.getenv('SUPERVISOR_REASONING_EFFORT') else 'low'
 if _SUPERVISOR_REASONING_ENV not in _ALLOWED_REASONING:
-    logger.warning('Invalid SUPERVISOR_REASONING_EFFORT=%s, falling back to medium', _SUPERVISOR_REASONING_ENV)
-    _SUPERVISOR_REASONING_ENV = 'medium'
+    logger.warning('Invalid SUPERVISOR_REASONING_EFFORT=%s, falling back to low', _SUPERVISOR_REASONING_ENV)
+    _SUPERVISOR_REASONING_ENV = 'low'
 SUPERVISOR_REASONING_EFFORT = _SUPERVISOR_REASONING_ENV
 
 T = TypeVar('T', bound=BaseModel)
@@ -49,32 +79,22 @@ class SupervisorResponsesClient:
         return "gpt-5-mini-2025-08-07"  # Default supervisor reasoning model
 
     def _format_messages(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        formatted: List[Dict[str, Any]] = []
-        for message in messages or []:
-            role = message.get("role")
-            raw_content = message.get("content")
-            if isinstance(raw_content, list):
-                segments: List[Dict[str, Any]] = []
-                for item in raw_content:
-                    if isinstance(item, dict) and item.get("type"):
-                        segment = dict(item)
-                        if segment.get("type") == "text" and "text" not in segment and "value" in segment:
-                            segment["text"] = segment.pop("value")
-                        # Convert legacy "text" type to "input_text" for Responses API
-                        if segment.get("type") == "text":
-                            segment["type"] = "input_text"
-                        segments.append(segment)
-                    else:
-                        segments.append({"type": "input_text", "text": str(item)})
-            else:
-                text_value = "" if raw_content is None else str(raw_content)
-                segments = [{"type": "input_text", "text": text_value}]
+        """Format messages using unified client's implementation"""
+        if self.unified_client:
+            return self.unified_client._format_messages(messages)
+        # Fallback for when unified client is not available
+        return messages or []
 
-            formatted.append({"role": role, "content": segments})
-        return formatted
+    def _supports_reasoning(self, model: Optional[str]) -> bool:
+        override = os.getenv("OPENAI_REASONING_MODELS")
+        if override:
+            allowed = {m.strip() for m in override.split(',') if m.strip()}
+            return model in allowed
+        return bool(model and model.lower().startswith('o'))
 
     def _apply_reasoning(self, params: Dict[str, Any], effort: Optional[str]) -> None:
-        if effort:
+        model_name = params.get("model") if isinstance(params, dict) else None
+        if effort and self._supports_reasoning(model_name):
             params["reasoning"] = {"effort": effort}
 
     def _extract_output_text(self, response: Any) -> str:
@@ -123,64 +143,6 @@ class SupervisorResponsesClient:
 
         raise ValueError('Parsed content not found in Responses payload')
 
-    async def planning_turn(
-        self,
-        messages: List[Dict[str, Any]],
-        response_format: Type[T],
-        session_id: Optional[str] = None,
-        reasoning_effort: str = SUPERVISOR_REASONING_EFFORT
-    ) -> T:
-        planning_start = time.time()
-        logger.info(f"[SUPERVISOR_CLIENT] Starting planning turn for session {session_id or 'no-session'}")
-        logger.info(f"[SUPERVISOR_CLIENT] Model: {self._get_model_name()}, reasoning effort: {reasoning_effort}")
-        logger.info(f"[SUPERVISOR_CLIENT] Message count: {len(messages)}, response format: {response_format.__name__}")
-
-        if SUPERVISOR_DEBUG:
-            total_chars = sum(len(str(m)) for m in messages)
-            logger.debug(f"[SUPERVISOR_CLIENT] Total message chars: {total_chars}")
-
-        try:
-            if self.unified_client:
-                api_start = time.time()
-                logger.info(f"[SUPERVISOR_CLIENT] Calling unified client for session {session_id or 'no-session'}")
-
-                result, response_id = await self.unified_client.create_structured(
-                    response_model=response_format,
-                    messages=messages,
-                    reasoning_effort=reasoning_effort,
-                    session_id=session_id,
-                    model=self._get_model_name()
-                )
-
-                api_duration = time.time() - api_start
-                total_duration = time.time() - planning_start
-                logger.info(f"[SUPERVISOR_CLIENT] Unified client call completed in {api_duration:.2f}s, total: {total_duration:.2f}s for session {session_id or 'no-session'}")
-                logger.info(f"[SUPERVISOR_CLIENT] Response ID: {response_id}")
-
-                return result
-
-            if not self.async_client:
-                raise RuntimeError("Async OpenAI client unavailable")
-
-            params: Dict[str, Any] = {
-                "model": self._get_model_name(),
-                "input": self._format_messages(messages),
-                "text_format": response_format,
-            }
-            self._apply_reasoning(params, reasoning_effort)
-            response = await self.async_client.responses.parse(**params)
-            return self._extract_parsed_model(response)
-
-        except Exception as exc:
-            total_duration = time.time() - planning_start
-            logger.error(f"[SUPERVISOR_CLIENT] Planning turn failed after {total_duration:.2f}s for session {session_id or 'no-session'}: {exc}")
-            logger.error(f"[SUPERVISOR_CLIENT] Error type: {type(exc).__name__}")
-
-            if SUPERVISOR_DEBUG:
-                logger.debug(f"[SUPERVISOR_CLIENT] Full error details: {repr(exc)}")
-
-            raise
-
     async def tool_calling_turn(
         self,
         messages: List[Dict[str, Any]],
@@ -218,7 +180,7 @@ class SupervisorResponsesClient:
                 logger.info(f"[SUPERVISOR_CLIENT] Tool calling completed in {api_duration:.2f}s, total: {total_duration:.2f}s for session {session_id or 'no-session'}")
                 logger.info(f"[SUPERVISOR_CLIENT] Response contains {tool_calls_count} tool calls")
 
-                return {"content": response.content, "tool_calls": response.tool_calls}
+                return response
 
             if not self.async_client:
                 raise RuntimeError("Async OpenAI client unavailable")
@@ -231,10 +193,12 @@ class SupervisorResponsesClient:
             }
             self._apply_reasoning(params, reasoning_effort)
             response = await self.async_client.responses.create(**params)
-            return {
-                "content": self._extract_output_text(response),
-                "tool_calls": getattr(response, "tool_calls", [])
-            }
+            from unified_responses_client import ResponseMessage
+            return ResponseMessage(
+                content=self._extract_output_text(response),
+                tool_calls=getattr(response, "tool_calls", []),
+                response_id=getattr(response, "id", None)
+            )
 
         except Exception as exc:
             total_duration = time.time() - tool_call_start
