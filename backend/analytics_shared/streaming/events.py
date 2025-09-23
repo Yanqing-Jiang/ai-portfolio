@@ -5,7 +5,7 @@ Provides efficient, minimal-payload event streaming for analytics workflows.
 Reduces event size by 90% compared to heavy payload systems.
 """
 
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 from datetime import datetime
 import time
 
@@ -24,15 +24,20 @@ class StreamEvent:
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         result = {
-            "type": self.type,
-            "step": self.step,
-            "ts": self.timestamp
+            "event": self.type,
+            "data": {
+                "step": self.step,
+                "ts": self.timestamp
+            }
         }
 
         if self.data is not None:
-            result["data"] = self.data
+            if isinstance(self.data, dict):
+                result["data"].update(self.data)
+            else:
+                result["data"]["payload"] = self.data
         if self.message is not None:
-            result["msg"] = self.message
+            result["data"]["message"] = self.message
 
         return result
 
@@ -180,11 +185,98 @@ class EventEmitter:
         Returns:
             Clarification acknowledgment event dictionary
         """
-        return StreamEvent("clarify", "ack", data={
+        return StreamEvent("clarification_ack", "clarification", data={
             "session_id": session_id,
             "request_id": request_id,
             "answer": answer
         }).to_dict()
+
+    @staticmethod
+    def intent_draft(confidence: float, clarifications_needed: bool = True, clarifications_count: int = 0) -> Dict[str, Any]:
+        """
+        Emit an intent draft event (clarifications needed).
+
+        Args:
+            confidence: Intent confidence score
+            clarifications_needed: Whether clarifications are needed
+            clarifications_count: Number of clarifications required
+
+        Returns:
+            Intent draft event dictionary
+        """
+        return StreamEvent("intent_draft", "intent_detection", data={
+            "confidence": confidence,
+            "clarifications_needed": clarifications_needed,
+            "clarifications_count": clarifications_count
+        }).to_dict()
+
+    @staticmethod
+    def intent_decided(key: str, confidence: float, clarifications_needed: bool = False) -> Dict[str, Any]:
+        """
+        Emit an intent decided event (no clarifications needed).
+
+        Args:
+            key: Intent key
+            confidence: Intent confidence score
+            clarifications_needed: Whether clarifications are needed
+
+        Returns:
+            Intent decided event dictionary
+        """
+        return StreamEvent("intent_decided", "intent_detection", data={
+            "key": key,
+            "confidence": confidence,
+            "clarifications_needed": clarifications_needed
+        }).to_dict()
+
+    @staticmethod
+    def intent_resolved(key: str, confidence: float, rounds: int = 0) -> Dict[str, Any]:
+        """
+        Emit an intent resolved event (after clarifications).
+
+        Args:
+            key: Intent key
+            confidence: Intent confidence score
+            rounds: Number of clarification rounds
+
+        Returns:
+            Intent resolved event dictionary
+        """
+        return StreamEvent("intent_resolved", "intent_detection", data={
+            "key": key,
+            "confidence": confidence,
+            "rounds": rounds
+        }).to_dict()
+
+    @staticmethod
+    def errors(error_list: List[str], step: str = None) -> Dict[str, Any]:
+        """
+        Emit an errors event.
+
+        Args:
+            error_list: List of error messages
+            step: Optional step where errors occurred
+
+        Returns:
+            Errors event dictionary
+        """
+        data = {"errors": error_list}
+        if step:
+            data["step"] = step
+        return StreamEvent("errors", step or "unknown", data=data).to_dict()
+
+    @staticmethod
+    def sql_generated(sql: str) -> Dict[str, Any]:
+        """
+        Emit a SQL generated event.
+
+        Args:
+            sql: Generated SQL query
+
+        Returns:
+            SQL generated event dictionary
+        """
+        return StreamEvent("sql_generated", "sql_compilation", data={"sql": sql}).to_dict()
 
 
 class TimedEventEmitter(EventEmitter):

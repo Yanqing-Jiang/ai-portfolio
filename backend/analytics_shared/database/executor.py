@@ -10,8 +10,26 @@ import asyncpg
 import os
 import logging
 from typing import List, Dict, Any, Optional
+from pathlib import Path
+from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
+
+# Ensure environment variables are loaded
+def _ensure_env_loaded():
+    """Load .env file if DATABASE_URL is not already set"""
+    if not os.getenv("DATABASE_URL"):
+        # Try to find .env file in backend directory
+        backend_dir = Path(__file__).resolve().parents[2]  # Go up from analytics_shared/database/ to backend/
+        env_path = backend_dir / ".env"
+        if env_path.exists():
+            load_dotenv(dotenv_path=env_path, override=False)
+            logger.info(f"[DATABASE] Loaded environment from {env_path}")
+        else:
+            logger.warning(f"[DATABASE] .env file not found at {env_path}")
+
+# Load environment on module import
+_ensure_env_loaded()
 
 
 async def execute(sql: str) -> List[Dict[str, Any]]:
@@ -34,31 +52,45 @@ async def execute(sql: str) -> List[Dict[str, Any]]:
     """
     database_url = os.getenv("DATABASE_URL")
     if not database_url:
+        logger.error("[DATABASE] DATABASE_URL environment variable is missing")
         raise ValueError("Database not configured - DATABASE_URL environment variable is missing")
+
+    logger.info(f"[DATABASE] Executing SQL query: {sql[:100]}..." if len(sql) > 100 else f"[DATABASE] Executing SQL query: {sql}")
 
     conn = None
     try:
+        logger.debug("[DATABASE] Connecting to database...")
         conn = await asyncpg.connect(
             database_url,
             statement_cache_size=0,
             timeout=10.0,
             command_timeout=15.0,
         )
+        logger.debug("[DATABASE] Database connection established")
         try:
             await conn.execute("SET statement_timeout = '15s'")
         except Exception:
             # Ignore if the server does not support this
             pass
         # Ensure the fetch itself honors a timeout
+        import time
+        start_time = time.time()
         rows = await conn.fetch(sql, timeout=15.0)
-        return [dict(r) for r in rows]
+        execution_time = time.time() - start_time
+
+        result = [dict(r) for r in rows]
+        logger.info(f"[DATABASE] Query executed successfully: {len(result)} rows returned in {execution_time:.2f}s")
+        return result
+
     except asyncio.TimeoutError as te:
+        logger.error("[DATABASE] Query execution timeout")
         raise RuntimeError("Database execution timeout") from te
     except ValueError:
         # Re-raise our custom database configuration error
         raise
     except Exception as e:
         # Wrap other database errors with more context
+        logger.error(f"[DATABASE] Query execution failed: {str(e)}")
         raise RuntimeError(f"Database execution error: {str(e)}") from e
     finally:
         if conn:

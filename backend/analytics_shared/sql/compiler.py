@@ -5,9 +5,12 @@ Contains shared SQL compilation and template processing functions used by both
 analytics_memory and analytics_supervisor systems.
 """
 
+import logging
 from typing import Dict, Any, Optional
 from ..companies.tickers import get_ticker_list, validate_and_resolve_company, format_company_error
 from .planner import get_granularity_clauses
+
+logger = logging.getLogger(__name__)
 
 
 def compile_sql_from_plan(plan: Dict[str, Any], intent: Dict[str, Any], configs: Dict[str, Any], template: Optional[Dict[str, Any]]) -> str:
@@ -26,6 +29,14 @@ def compile_sql_from_plan(plan: Dict[str, Any], intent: Dict[str, Any], configs:
     Raises:
         ValueError: If required company is missing or invalid
     """
+    intent_key = intent.get('intent_key') if isinstance(intent, dict) else getattr(intent, 'intent_key', None)
+    logger.info(f"[SQL_COMPILER] Starting compilation for intent: {intent_key}")
+
+    if template:
+        template_id = template.get('name', 'unknown')
+        logger.info(f"[SQL_COMPILER] Using template: {template_id}")
+    else:
+        logger.info("[SQL_COMPILER] No template provided, using generic compilation")
     # Get ticker list and build ticker list string
     tickers = get_ticker_list(configs)
     ticker_list = "'" + "','".join(tickers) + "'"
@@ -66,7 +77,12 @@ def compile_sql_from_plan(plan: Dict[str, Any], intent: Dict[str, Any], configs:
         sql = sql.replace('{order_by_clause}', order_by_clause)
         sql = sql.replace("('AMD','AVGO','INTC','MU','NVDA','QCOM','TXN')", f"({ticker_list})")
         # Remove trailing semicolons to be consistent with executor
-        return sql.strip().rstrip(';')
+        final_sql = sql.strip().rstrip(';')
+
+        logger.info(f"[SQL_COMPILER] Compilation complete. SQL length: {len(final_sql)} characters")
+        logger.debug(f"[SQL_COMPILER] Generated SQL: {final_sql}")
+
+        return final_sql
 
     # Fallback: Generic SQL builder for Revenue queries (quarterly/annual)
     # This is used when no specific template is found for the intent
