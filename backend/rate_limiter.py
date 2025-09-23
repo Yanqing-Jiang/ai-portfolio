@@ -16,18 +16,26 @@ load_dotenv(dotenv_path=env_path, override=False)
 
 # Redis connection - with error handling
 redis_pool = None
-try:
-    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-    redis_pool = redis.from_url(
-        redis_url,
-        encoding="utf-8",
-        decode_responses=True
-    )
-    print(f"Redis configured with URL: {redis_url}")
-except Exception as e:
-    print(f"Redis not available: {e}")
-    print("INFO: Rate limiting will use in-memory fallback (development mode)")
+
+# Check if rate limiting is disabled first
+disable_rate_limit = os.getenv("DISABLE_RATE_LIMIT", "false").lower() == "true"
+
+if disable_rate_limit:
+    print("INFO: Rate limiting disabled via DISABLE_RATE_LIMIT=true")
     redis_pool = None
+else:
+    try:
+        redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+        redis_pool = redis.from_url(
+            redis_url,
+            encoding="utf-8",
+            decode_responses=True
+        )
+        print(f"Redis configured with URL: {redis_url}")
+    except Exception as e:
+        print(f"Redis not available: {e}")
+        print("INFO: Rate limiting will use in-memory fallback (development mode)")
+        redis_pool = None
 
 # In-memory fallback for development
 in_memory_usage = {}
