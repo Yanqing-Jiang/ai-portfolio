@@ -20,7 +20,10 @@ from analytics_memory.intent import detect_intent_with_clarifications
 from analytics_memory.types import ClarifyRequestModel
 
 from .tools import SupervisorTools
-from .responses_client import get_supervisor_client, SUPERVISOR_REASONING_EFFORT
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from unified_responses_client import get_unified_client, SUPERVISOR_REASONING_EFFORT
 from .schemas import PlanSchema, FinalSummarySchema, WorkflowState
 
 # Registry of active supervisor workflows keyed by session_id
@@ -37,7 +40,7 @@ class SupervisorWorkflow:
     def __init__(self):
         self.tools = SupervisorTools(CONFIGS.__dict__)
         try:
-            self.client = get_supervisor_client()
+            self.client = get_unified_client()
         except ValueError:
             # For development/testing without OpenAI API key
             self.client = None
@@ -1221,7 +1224,7 @@ Start by calling classify_query_relevance with the user query. If the result ind
                                        f"iteration={iteration + 1}")
 
                             # Submit the tool outputs to continue the conversation
-                            await self.client.unified_client.client.responses.submit_tool_outputs(
+                            await self.client.client.responses.submit_tool_outputs(
                                 response_id=response.response_id,
                                 tool_outputs=tool_outputs
                             )

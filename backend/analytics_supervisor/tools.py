@@ -915,10 +915,13 @@ class SupervisorTools:
         """
         import uuid
         from analytics_memory.types import ClarifyRequestModel, IntentModel
-        from .responses_client import get_supervisor_client
+        import sys
+        import os
+        sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from unified_responses_client import get_unified_client
 
         try:
-            client = get_supervisor_client()
+            client = get_unified_client()
             if not client:
                 # Fail fast - no fallback
                 yield {
@@ -1080,7 +1083,7 @@ Provide a short polite decline message for off-topic queries and suggest how to 
         ]
 
         # Use gpt-5-nano-2025-08-07 for fast classification
-        result, _ = await client.unified_client.create_structured(
+        result, _ = await client.create_structured(
             response_model=OffTopicClassifierSchema,
             messages=messages,
             model="gpt-5-nano-2025-08-07",  # Fast nano model for classification

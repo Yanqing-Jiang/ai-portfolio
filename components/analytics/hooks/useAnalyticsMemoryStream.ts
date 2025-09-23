@@ -15,7 +15,21 @@ export const useAnalyticsMemoryStream = (mode: 'memory' | 'supervisor' = 'memory
   const [dataSample, setDataSample] = useState<any[] | null>(null);
   const [streamingText, setStreamingText] = useState('');
   
-  // Ref to accumulate workflow data throughout the stream to avoid async state issues
+  // Progressive rendering: update state immediately instead of accumulating in refs
+  const [progressiveAnalysis, setProgressiveAnalysis] = useState('');
+  const [progressiveText, setProgressiveText] = useState('');
+
+  // Ref for debouncing rapid updates
+  const updateTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const pendingUpdatesRef = useRef<{
+    analysis?: string;
+    streamingText?: string;
+    chartSpec?: any;
+    sqlQuery?: string;
+    dataSample?: any[];
+  }>({});
+
+  // Workflow data ref for result accumulation
   const workflowDataRef = useRef<{
     chartSpec: any;
     analysis: string;
@@ -32,6 +46,48 @@ export const useAnalyticsMemoryStream = (mode: 'memory' | 'supervisor' = 'memory
 
   const streamHook = useAnalyticsStream();
   const stepsHook = useProcessSteps();
+
+  // Progressive update function with debouncing
+  const scheduleProgressiveUpdate = (updates: Partial<typeof pendingUpdatesRef.current>) => {
+    // Merge pending updates
+    Object.assign(pendingUpdatesRef.current, updates);
+
+    // Clear existing timeout
+    if (updateTimeoutRef.current) {
+      clearTimeout(updateTimeoutRef.current);
+    }
+
+    // Schedule batched update for better performance
+    updateTimeoutRef.current = setTimeout(() => {
+      const pending = pendingUpdatesRef.current;
+
+      if (pending.analysis !== undefined) {
+        setAnalysis(pending.analysis);
+        setProgressiveAnalysis(pending.analysis);
+        workflowDataRef.current.analysis = pending.analysis;
+      }
+      if (pending.streamingText !== undefined) {
+        setStreamingText(pending.streamingText);
+        setProgressiveText(pending.streamingText);
+        workflowDataRef.current.streamingText = pending.streamingText;
+      }
+      if (pending.chartSpec !== undefined) {
+        setChartSpec(pending.chartSpec);
+        workflowDataRef.current.chartSpec = pending.chartSpec;
+      }
+      if (pending.sqlQuery !== undefined) {
+        setSqlQuery(pending.sqlQuery);
+        workflowDataRef.current.sqlQuery = pending.sqlQuery;
+      }
+      if (pending.dataSample !== undefined) {
+        setDataSample(pending.dataSample);
+        workflowDataRef.current.dataSample = pending.dataSample;
+      }
+
+      // Clear pending updates
+      pendingUpdatesRef.current = {};
+    }, 50); // 50ms debounce for smooth updates
+  };
 
   // Chat history management
   const addChatMessage = (message: Omit<ChatMessage, 'id' | 'timestamp'>) => {
@@ -84,17 +140,16 @@ export const useAnalyticsMemoryStream = (mode: 'memory' | 'supervisor' = 'memory
     
     // Reset only temporary state for new query (keep results in chat history)
     setStreamingText('');
+    setProgressiveText('');
+    setProgressiveAnalysis('');
     setPendingClarification(null);
     stepsHook.resetSteps();
-    
-    // Reset workflow data ref for new query
-    workflowDataRef.current = {
-      chartSpec: null,
-      analysis: '',
-      sqlQuery: '',
-      dataSample: null,
-      streamingText: ''
-    };
+
+    // Clear any pending updates
+    if (updateTimeoutRef.current) {
+      clearTimeout(updateTimeoutRef.current);
+    }
+    pendingUpdatesRef.current = {};
 
     const baseEndpoint = mode === 'supervisor' 
       ? `/api/analytics/memory/supervisor/stream`
@@ -179,8 +234,7 @@ export const useAnalyticsMemoryStream = (mode: 'memory' | 'supervisor' = 'memory
 
         case 'sql_generated':
           if (typeof eventData.sql === 'string') {
-            setSqlQuery(eventData.sql);
-            workflowDataRef.current.sqlQuery = eventData.sql;
+            scheduleProgressiveUpdate({ sqlQuery: eventData.sql });
           }
           stepsHook.updateStepStatus('sql_validation', 'completed', [], { sql: eventData.sql }, eventData.elapsed_ms);
           break;
@@ -191,18 +245,16 @@ export const useAnalyticsMemoryStream = (mode: 'memory' | 'supervisor' = 'memory
           
         case 'data_retrieved':
           if (Array.isArray(eventData.sample_data)) {
-            setDataSample(eventData.sample_data);
-            workflowDataRef.current.dataSample = eventData.sample_data;
-            stepsHook.updateStepStatus('sql_execution', 'completed', [], { 
+            scheduleProgressiveUpdate({ dataSample: eventData.sample_data });
+            stepsHook.updateStepStatus('sql_execution', 'completed', [], {
               rowCount: eventData.row_count,
-              sampleData: eventData.sample_data 
+              sampleData: eventData.sample_data
             });
           }
           break;
           
         case 'chart_generated':
-          setChartSpec(eventData.chart_spec);
-          workflowDataRef.current.chartSpec = eventData.chart_spec;
+          scheduleProgressiveUpdate({ chartSpec: eventData.chart_spec });
           stepsHook.updateStepStatus('chart_generation', 'completed', [], { chart_spec: eventData.chart_spec }, eventData.elapsed_ms);
           break;
           
@@ -217,9 +269,10 @@ export const useAnalyticsMemoryStream = (mode: 'memory' | 'supervisor' = 'memory
                 ? eventData.text
                 : '';
             if (chunk) {
+              // Progressive streaming: update immediately for each chunk
               setStreamingText(prev => {
                 const newText = prev + chunk;
-                workflowDataRef.current.streamingText = newText;
+                scheduleProgressiveUpdate({ streamingText: newText });
                 return newText;
               });
             }
@@ -230,14 +283,13 @@ export const useAnalyticsMemoryStream = (mode: 'memory' | 'supervisor' = 'memory
         case 'analysis_complete':
           const finalAnalysis =
             !isThinkingEvent
-              ? eventData.analysis || workflowDataRef.current.streamingText
+              ? eventData.analysis || streamingText
               : eventData.analysis;
           if (!isThinkingEvent && typeof finalAnalysis === 'string') {
-            setAnalysis(finalAnalysis);
-            workflowDataRef.current.analysis = finalAnalysis;
+            scheduleProgressiveUpdate({ analysis: finalAnalysis });
           }
           setStreamingText('');
-          workflowDataRef.current.streamingText = '';
+          setProgressiveText('');
           stepsHook.updateStepStatus('short_financial_analysis', 'completed', ['Short financial analysis complete'], { analysis: finalAnalysis }, eventData.elapsed_ms);
           stepsHook.updateStepStatus('analysis_generation', 'completed', [], { analysis: finalAnalysis }, eventData.elapsed_ms);
           break;
@@ -457,7 +509,15 @@ export const useAnalyticsMemoryStream = (mode: 'memory' | 'supervisor' = 'memory
     setSqlQuery('');
     setDataSample(null);
     setStreamingText('');
-    
+    setProgressiveAnalysis('');
+    setProgressiveText('');
+
+    // Clear any pending updates
+    if (updateTimeoutRef.current) {
+      clearTimeout(updateTimeoutRef.current);
+    }
+    pendingUpdatesRef.current = {};
+
     // Reset workflow data ref
     workflowDataRef.current = {
       chartSpec: null,
@@ -478,18 +538,22 @@ export const useAnalyticsMemoryStream = (mode: 'memory' | 'supervisor' = 'memory
     sqlQuery,
     dataSample,
     streamingText,
-    
+
+    // Progressive rendering state
+    progressiveAnalysis,
+    progressiveText,
+
     // Stream state
     isLoading: streamHook.isLoading,
     error: streamHook.error,
     currentStatus: streamHook.currentStatus,
-    
+
     // Process steps
     processSteps: stepsHook.processSteps,
-    
+
     // Supervisor state
     supervisorState,
-    
+
     // Actions
     handleQuery,
     submitClarification,
