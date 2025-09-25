@@ -1,389 +1,152 @@
-# OpenAI Responses API Integration Guide
+﻿# OpenAI Responses API Integration Guide
 
-> **Scope:** How we use OpenAI's **Responses API** (SDK v1.107.3+) in this codebase. This guide documents the unified approach to OpenAI API integration across the analytics system. Target model: **gpt-5-mini-2025-08-07**.
+> **Scope:** How this repository uses OpenAI's **Responses API** (Python SDK v1.107.3+) across the analytics suite. Target reasoning model: **gpt-5-mini-2025-08-07** unless explicitly overridden.
 
 ---
 
-## Where this lives in the repo
-
-* `backend/unified_responses_client.py` — **unified client for all OpenAI Responses API interactions** (consolidated from multiple clients)
-* `backend/analytics_memory/openai_client.py` — analytics memory specific client wrapper
-* ~~`backend/analytics_supervisor/responses_client.py`~~ — **REMOVED** (consolidated into unified client)
-
-**Architecture Update (v2.0):** We've consolidated from multiple response clients to a single unified client with specialized methods for different use cases (supervisor, memory, general). This reduces code duplication and provides consistent API patterns across the system.
+## Project Integration Overview
+- `backend/unified_responses_client.py` is the single gateway for Responses API access (session tracking, reasoning flags, embeddings, retries).
+- `backend/analytics_memory/openai_client.py` adapts the unified client for intent/memory pipelines with sync + async helpers.
+- `backend/analytics_shared/intent/` and `backend/analytics_supervisor/` import the unified client for structured outputs, streaming clarifications, and supervisor decisions.
+- `backend/analytics_agent.py` calls the same unified client but remains a standalone workflow; avoid touching it unless a shared front-end pathway requires it.
+- REST endpoints in `backend/main.py` surface these flows to the React front-end. No direct Responses usage exists in the front-end; all calls go through FastAPI.
 
 ---
 
 ## Unified Client Architecture
+- **Singleton access:** `get_unified_client()` returns a cached `UnifiedResponsesClient` backed by `AsyncOpenAI`.
+- **Message normalization:** `_format_messages` converts legacy content arrays to the `input_text` shape required by Responses.
+- **Session continuity:** `session_id` maps to `response_id` so follow-up questions maintain context.
+- **Reasoning controls:** `SUPERVISOR_REASONING_EFFORT` (low/medium/high) drives supervisor calls; `OPENAI_REASONING_MODELS` restricts which models receive the `reasoning` payload.
+- **Embeddings support:** `create_embeddings()` bridges vector search consumers (RAG service, analytics memory cache warmers).
+- **Streaming wrapper:** `stream_response()` yields `ResponseDelta` objects (`content`, `reasoning`, `tool_calls`) consumed by SSE endpoints.
+- **Structured outputs:** `create_structured()` and `create_structured_async()` return `(parsed_model, raw_response)` tuples for Pydantic schemas used throughout analytics flows.
 
-### Key Components
-
-* **`get_unified_client()`** — Factory function returning singleton client instance
-* **Supervisor Methods:** `finalization_turn()`, `stream_analysis()` with `SUPERVISOR_REASONING_EFFORT`
-* **Memory Methods:** Standard OpenAI Responses API with memory-aware session handling
-* **Centralized Caching:** Redis-based response caching with circuit breaker pattern
-* **2-Layer Config Fallback:** RAG Service → YAML configs (removed intermediate template store)
-
-### Usage Examples
-
+### Typical usage
 ```python
 from unified_responses_client import get_unified_client
+from analytics_shared.intent.models import IntentModel
 
 client = get_unified_client()
 
-# Supervisor-specific calls
-response = await client.finalization_turn(
-    messages=[...],
-    response_format=SomeSchema,
-    reasoning_effort="medium"
+intent, raw = await client.create_structured(
+    response_model=IntentModel,
+    messages=[{"role": "user", "content": "Show me AWS revenue vs peers."}],
+    reasoning_effort="medium",
+    session_id="intent-aws-123"
 )
-
-# Memory-aware streaming
-async for chunk in client.stream_analysis(messages, session_id="session-123"):
-    # Handle streaming response
-    pass
 ```
 
 ---
 
-## SDK install & runtime
-
-### Python
-
-```bash
-pip install --upgrade "openai>=1.107.3" pydantic>=2.7
-```
-
-**Note:** This guide is tested with OpenAI SDK v1.107.3. The Responses API is available and stable in this version.
-
+## Request Patterns (Python)
+### Structured intents & clarifications
+Used by `analytics_shared.intent.detection` and `analytics_supervisor.supervisor`.
 ```python
-from openai import OpenAI, AsyncOpenAI
-client = OpenAI()
-async_client = AsyncOpenAI()
+parsed, response = await client.create_structured(
+    response_model=ClarifyRequestModel,
+    messages=message_chain,
+    reasoning_effort="medium",
+    session_id=session_key,
+    model=os.getenv("OPENAI_INTENT_MODEL", "gpt-5-mini-2025-08-07")
+)
 ```
+* Returns the typed Pydantic model plus the raw SDK object for logging/analytics.
 
-### TypeScript / Node
-
-```bash
-npm i openai@^5
-# If you use Zod helpers for structured output, prefer zod@^3 for now
-npm i zod@^3
+### Streaming analytics answers
+Surfaced at `/api/analytics/memory/stream`.
+```python
+async for delta in client.stream_response(
+    messages=conversation,
+    session_id=session_id,
+    reasoning_effort="low"
+):
+    if delta.content:
+        yield delta.content  # forwarded to FastAPI StreamingResponse
 ```
+* Downstream SSE handlers ignore empty deltas and only push text payloads to the browser.
 
+### Tool calling inside supervisor flows
+```python
+response = await client.create_response(
+    messages=tool_prompt,
+    tools=registered_tools,
+    reasoning_effort=SUPERVISOR_REASONING_EFFORT
+)
+for item in getattr(response, "output", []) or []:
+    for content in getattr(item, "content", []) or []:
+        if content.get("type") == "tool_call":
+            await dispatch_tool_call(content)
+```
+* After running the tool, results are posted back with `client.client.responses.submit_tool_outputs(...)`.
+
+---
+
+## Request Patterns (TypeScript)
+We do not call the Responses API directly from the Vite front-end today. These examples remain for reference when building new client-side tooling.
 ```ts
 import OpenAI from "openai";
-export const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-```
+const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
----
-
-## Migration-at-a-glance (Chat Completions → Responses)
-
-* **system → instructions** (top‑level string)
-* **messages\[] → input** (string or list of role/content items)
-* **choices\[0].message.content → response.output\_text**
-* **beta.chat.completions.parse → responses.parse** (keep Pydantic/Zod schemas)
-* **streaming:** `stream=True` on `responses.create` and iterate SSE events
-
----
-
-## Models to use
-
-* **Default:** `gpt-5-mini-2025-08-07-mini-2025-08-07` (fastest/cheapest, great for most flows)
-* **Heavy reasoning:** `gpt-5-mini-2025-08-07` (enable `reasoning: { effort: "minimal" | "medium" | "high" }`)
-* Optional control: `text: { verbosity: "low" | "medium" | "high" }`
-
----
-
-## Core Patterns (Python)
-
-### 1) Standard response
-
-```python
-resp = client.responses.create(
-    model="gpt-5-mini-2025-08-07",
-    instructions="You are a precise analytics assistant.",
-    input="Summarise cohort performance in one paragraph.",
-    text={"verbosity": "low"},  # optional
-)
-print(resp.output_text)
-```
-
-### 2) Structured outputs via `responses.parse`
-
-```python
-from typing import Literal
-from pydantic import BaseModel
-
-class Insight(BaseModel):
-    headline: str
-    metric_delta: float
-    confidence: Literal["low", "medium", "high"]
-
-parsed = client.responses.parse(
-    model="gpt-5-mini-2025-08-07",
-    instructions="Extract a single KPI insight from the passage.",
-    input=[{"role": "user", "content": "GMV +7.3% WoW; CAC −12%; NPS 58."}],
-    text_format=Insight,  # returns .output_parsed as an Insight instance
-    reasoning={"effort": "minimal"},  # optional on gpt-5-mini-2025-08-07; remove if your model rejects
-)
-print(parsed.output_parsed)
-```
-
-### 3) Streaming (server‑sent events)
-
-```python
-stream = client.responses.create(
-    model="gpt-5-mini-2025-08-07",
-    instructions="Be concise.",
-    input="Explain cohort vs. rolling retention.",
-    stream=True,
-)
-for event in stream:
-    if event.type == "response.output_text.delta":
-        print(event.delta, end="")
-```
-
-### 4) Tool calling (Responses API)
-
-```python
-tools = [
-  {
-    "type": "function",
-    "name": "lookup_cohort",
-    "description": "Get metrics for a named cohort",
-    "parameters": {
-      "type": "object",
-      "properties": {"name": {"type": "string"}},
-      "required": ["name"],
-    },
-  }
-]
-resp = client.responses.create(
-    model="gpt-5-mini-2025-08-07",
-    instructions="Use tools when needed; otherwise answer directly.",
-    input="What’s the churn for the 2025-07 signup cohort?",
-    tools=tools,
-)
-for item in resp.output:
-    for content in getattr(item, "content", []) or []:
-        if getattr(content, "type", None) == "tool_call":
-            call = content  # resolve call.name + call.arguments in your runtime
-```
-
----
-
-## Core Patterns (TypeScript)
-
-### 1) Standard response
-
-```ts
 const resp = await client.responses.create({
-  model: "gpt-5-mini-2025-08-07-mini-2025-08-07",
+  model: "gpt-5-mini-2025-08-07",
   instructions: "You are a precise analytics assistant.",
   input: "Summarise cohort performance in one paragraph.",
-  text: { verbosity: "low" },
 });
 console.log(resp.output_text);
 ```
-
-### 2) Structured outputs
-
-**Option A — SDK helper (Zod)**
-
-```ts
-import { z } from "zod";
-import { zodTextFormat } from "openai/helpers/zod"; // requires zod v3 today
-
-const Insight = z.object({
-  headline: z.string(),
-  metric_delta: z.number(),
-  confidence: z.enum(["low", "medium", "high"]),
-});
-
-const parsed = await client.responses.parse({
-  model: "gpt-5-mini-2025-08-07",
-  instructions: "Extract one KPI insight.",
-  input: "GMV +7.3% WoW; CAC −12%; NPS 58.",
-  text: { format: zodTextFormat(Insight, "insight") },
-  // text: { verbosity: "low" }, // optional
-});
-console.log(parsed.output_parsed); // typed by Zod
-```
-
-**Option B — Manual JSON schema** (works with any validator)
-
-```ts
-const parsed = await client.responses.parse({
-  model: "gpt-5-mini-2025-08-07",
-  instructions: "Extract one KPI insight.",
-  input: "GMV +7.3% WoW; CAC −12%; NPS 58.",
-  text: {
-    format: {
-      type: "json_schema",
-      json_schema: {
-        name: "insight",
-        schema: {
-          type: "object",
-          additionalProperties: false,
-          properties: {
-            headline: { type: "string" },
-            metric_delta: { type: "number" },
-            confidence: { enum: ["low", "medium", "high"], type: "string" },
-          },
-          required: ["headline", "metric_delta", "confidence"],
-        },
-      },
-    },
-  },
-});
-```
-
-### 3) Streaming
-
-```ts
-const stream = await client.responses.create({
-  model: "gpt-5-mini-2025-08-07-mini-2025-08-07",
-  input: "Explain cohort vs. rolling retention.",
-  stream: true,
-});
-for await (const event of stream) {
-  if (event.type === "response.output_text.delta") process.stdout.write(event.delta);
-}
-```
+Use `openai/helpers/zod` if you need structured parsing in Node services.
 
 ---
 
-## Sessions & memory
+## Environment Configuration
+- `OPENAI_API_KEY` **(required)** for all server-side flows; requests fail fast if missing.
+- `OPENAI_MODEL` overrides the default model for generic responses.
+- `OPENAI_INTENT_MODEL` overrides analytics intent detection (otherwise defaults to GPT-5 mini).
+- `OPENAI_REASONING_MODELS` (comma-separated) opt-in list for sending `reasoning` payloads.
+- `SUPERVISOR_REASONING_EFFORT` tunes supervisor depth (`low` default).
+- `OPENAI_EMBEDDING_MODEL` (optional) for RAG utilities; falls back to the client default when unset.
 
-Prefer **Agents SDK sessions** for multi‑turn memory; for raw Responses API flows, carry a stable `session_id` in your app and store prior turns server‑side.
-
-* **Agents SDK:** `SQLiteSession` (dev) or `SQLAlchemySession` (prod) to persist conversation state; one line to reuse across runs.
-* **OpenAI‑hosted:** `OpenAIConversationsSession` to offload storage.
+Keep these values in `backend/.env`; never check secrets into version control.
 
 ---
 
-## Agents SDK quickstart (Python)
+## Error Handling & Observability
+- Log the OpenAI `response.id`, chosen model, and session key for every request (already wired in unified client).
+- Retries with jitter wrap transient failures; adjust at the unified client level if behaviour changes.
+- Cap token usage (~20k) before dispatch; analytics flows chunk or summarise payloads when necessary.
+- Structured parse failures should tighten schemas or input prompts rather than brute-force retrying.
 
+---
+
+## Async vs Sync Callers
+- Async-first: `analytics_supervisor` and `analytics_shared` call awaitable helpers directly.
+- Sync contexts (e.g., `analytics_memory/openai_client.py::create_structured`) spin up a thread + event loop to avoid `RuntimeError: asyncio.run()` within an active loop.
+- Avoid creating ad-hoc clients; always call `get_unified_client()` so session state and rate limiting remain centralized.
+
+---
+
+## Agents SDK (Optional Reference)
+We currently do not ship the Agents SDK in production, but the patterns below remain valid for experiments.
 ```python
 from agents import Agent, Runner
 
 support = Agent(
     name="SupportAgent",
-    instructions=(
-        "You are a concise support assistant. Use tools if provided."
-    ),
-    model="gpt-5-mini-2025-08-07",  # optional; otherwise set provider defaults
+    instructions="You are a concise support assistant.",
+    model="gpt-5-mini-2025-08-07",
 )
 
 result = Runner.run_sync(support, "Where is order 123-ABC?")
 print(result.final_output)
 ```
-
-### Tools
-
-```python
-from agents import function_tool
-
-@function_tool
-def lookup_order(order_id: str) -> dict:
-    """Return status and ETA for an order."""
-    ...
-
-agent = Agent("Support", tools=[lookup_order], model="gpt-5-mini-2025-08-07")
-```
-
-### Sessions (memory)
-
-```python
-from agents import SQLiteSession
-session = SQLiteSession("ticket-123")
-Runner.run_sync(agent, "User reports missing package", session=session)
-Runner.run_sync(agent, "Add a friendly apology", session=session)
-```
-
-### Handoffs & guardrails
-
-* **Handoffs:** route between agents (e.g., Support → Billing) without spaghetti code.
-* **Guardrails:** validate inputs/outputs (regex, Pydantic, or custom checks) and fail fast when contracts are broken.
+For tool integration use `agents.function_tool`; persist memory with `SQLiteSession` or `SQLAlchemySession`.
 
 ---
 
-## Error handling & observability
-
-* Log: model, `_request_id`, response ID, and your `session_id`.
-* Backoff on `RateLimitError` with jitter; centralize retries in the client layer.
-* Cap payloads to \~20k tokens; summarize/segment large inputs first.
-* If structured parse fails, prefer tightening the schema (enums, formats) over blind retries.
-
-## Async/Sync Integration
-
-**Important:** When integrating async Responses API calls in mixed async/sync contexts:
-
-* **Never use `asyncio.run()`** in an existing event loop - causes `RuntimeError`
-* **Use thread pools** for sync wrappers: `concurrent.futures.ThreadPoolExecutor`
-* **Example sync wrapper:**
-
-```python
-import asyncio
-import concurrent.futures
-
-def sync_create_structured(async_client, **kwargs):
-    async def _async_call():
-        return await async_client.create_structured(**kwargs)
-
-    with concurrent.futures.ThreadPoolExecutor() as executor:
-        future = executor.submit(asyncio.run, _async_call())
-        return future.result()
-```
-
----
-
-## Practical tips
-
-* Prefer **Responses API** for new work; Chat Completions stays for backwards‑compat.
-* Use `instructions` consistently as a short, explicit system persona.
-* Use **structured outputs** for anything your code will consume; free‑form text for human‑readables.
-* For speed‑sensitive tasks on `gpt-5-mini-2025-08-07`, set `reasoning: { effort: "minimal" }` and `text.verbosity: "low"`.
-* For TypeScript structured outputs, the Zod helper works best with zod v3 today; otherwise pass your own JSON Schema.
-
----
-
-## Appendix: Input shapes
-
-* **String:** `input="hello"`
-* **Role items:**
-
-```json
-[
-  {"role": "user", "content": "hello"}
-]
-```
-
-* **Multimodal:**
-
-```json
-[
-  {
-    "role": "user",
-    "content": [
-      {"type": "input_text", "text": "caption this"},
-      {"type": "input_image", "image_url": "https://.../image.png"}
-    ]
-  }
-]
-```
-
----
-
-## Appendix: Event types (streaming)
-
-You’ll commonly handle:
-
-* `response.output_text.delta`
-* `response.refusal.delta`
-* `response.completed`
-
----
-
-**Maintainers:** keep this file current with SDK/model updates. If a breaking change lands, update the helpers first, then examples here.
+## Practical Tips
+- Prefer the Responses API for new analytics work; legacy Chat Completions sticks around only for the research agent.
+- Keep instructions short and explicit; pair them with structured outputs whenever the backend needs to consume results.
+- Use `reasoning: { "effort": "minimal" }` and `text: { "verbosity": "low" }` for latency-sensitive paths.
+- Before modifying `analytics_agent.py`, confirm the change is required by a shared front-end experience; otherwise leave it untouched.
+- Update this guide whenever SDK versions, models, or module paths change. Touch the helper functions first, then refresh examples here.

@@ -153,7 +153,7 @@ class EventEmitter:
         Returns:
             Session start event dictionary
         """
-        return StreamEvent("session", "started", data={"session_id": session_id}).to_dict()
+        return StreamEvent("session_started", "session", data={"session_id": session_id}).to_dict()
 
     @staticmethod
     def clarification_request(session_id: str, request_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -167,10 +167,8 @@ class EventEmitter:
         Returns:
             Clarification request event dictionary
         """
-        return StreamEvent("clarify", "request", data={
-            "session_id": session_id,
-            **request_data
-        }).to_dict()
+        payload = {"session_id": session_id, **request_data}
+        return StreamEvent("clarification_request", "clarification", data=payload).to_dict()
 
     @staticmethod
     def clarification_ack(session_id: str, request_id: str, answer: Any) -> Dict[str, Any]:

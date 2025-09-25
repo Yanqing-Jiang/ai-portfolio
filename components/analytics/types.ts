@@ -1,11 +1,39 @@
 // Shared types for analytics components
 
+export interface ProcessStepDetails {
+  sql?: string;
+  template?: string;
+  template_used?: string;
+  row_count?: number;
+  rowCount?: number; // Alternative naming
+  sample_data?: any[];
+  sampleData?: any[]; // Alternative naming
+  error?: string;
+  args?: any;
+  args_summary?: string;
+  duration_ms?: number;
+  success?: boolean;
+  sql_executed?: string;
+  columns?: string[];
+  confidence?: number;
+  category?: string;
+  is_financial?: boolean;
+  intent_key?: string;
+  available_tools?: string[];
+  strategy?: string;
+  reasoning?: string;
+  tool?: string;
+  args_preview?: string;
+  result?: any;
+  sql_length?: number;
+}
+
 export interface ProcessStep {
   id: string;
   name: string;
   status: 'pending' | 'in_progress' | 'completed' | 'error' | 'stopped';
   thinking: string[];
-  details?: any;
+  details?: ProcessStepDetails;
   elapsed_ms?: number;
   timestamp?: string;
 }

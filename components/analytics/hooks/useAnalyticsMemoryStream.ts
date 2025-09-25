@@ -7,7 +7,8 @@ import { useProcessSteps } from './useProcessSteps';
 export const useAnalyticsMemoryStream = (mode: 'memory' | 'supervisor' = 'memory') => {
   const [sessionId, setSessionId] = useState<string>('');
   const [pendingClarification, setPendingClarification] = useState<ClarifyRequest | null>(null);
-  const [supervisorState, setSupervisorState] = useState<{ plan?: any }>({});
+  const [supervisorState, setSupervisorState] = useState<{ plan?: any; criteria?: any }>({});
+  const [criteria, setCriteria] = useState<any | null>(null);
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
   const [chartSpec, setChartSpec] = useState<any>(null);
   const [analysis, setAnalysis] = useState('');
@@ -36,12 +37,14 @@ export const useAnalyticsMemoryStream = (mode: 'memory' | 'supervisor' = 'memory
     sqlQuery: string;
     dataSample: any[] | null;
     streamingText: string;
+    criteria: any | null;
   }>({
     chartSpec: null,
     analysis: '',
     sqlQuery: '',
     dataSample: null,
-    streamingText: ''
+    streamingText: '',
+    criteria: null
   });
 
   const streamHook = useAnalyticsStream();
@@ -143,6 +146,8 @@ export const useAnalyticsMemoryStream = (mode: 'memory' | 'supervisor' = 'memory
     setProgressiveText('');
     setProgressiveAnalysis('');
     setPendingClarification(null);
+    setCriteria(null);
+    setSupervisorState({});
     stepsHook.resetSteps();
 
     // Clear any pending updates
@@ -406,6 +411,14 @@ export const useAnalyticsMemoryStream = (mode: 'memory' | 'supervisor' = 'memory
           }, undefined, eventData.ts);
           break;
 
+        case 'criteria_ready':
+          workflowDataRef.current.criteria = eventData;
+          setCriteria(eventData);
+          setSupervisorState(prev => ({ ...prev, criteria: eventData }));
+          stepsHook.updateStepStatus('schema_validation', 'completed', ['SQL criteria ready'], eventData, eventData.elapsed_ms, eventData.ts);
+          streamHook.setCurrentStatus('SQL criteria locked in.');
+          break;
+
         case 'clarification_needed':
           stepsHook.updateStepStatus('clarification', 'in_progress', [`Missing fields: ${eventData.missing_fields?.join(', ')}`], { missing_fields: eventData.missing_fields }, undefined, eventData.ts);
           break;
@@ -500,6 +513,7 @@ export const useAnalyticsMemoryStream = (mode: 'memory' | 'supervisor' = 'memory
               sqlQuery: '',
               dataSample: null,
               streamingText: '',
+              criteria: null,
             };
             setChartSpec(null);
             setAnalysis('');
@@ -542,6 +556,8 @@ export const useAnalyticsMemoryStream = (mode: 'memory' | 'supervisor' = 'memory
     stepsHook.resetSteps();
     setSessionId('');
     setPendingClarification(null);
+    setCriteria(null);
+    setSupervisorState({});
     setChatHistory([]);
     setChartSpec(null);
     setAnalysis('');
@@ -563,7 +579,8 @@ export const useAnalyticsMemoryStream = (mode: 'memory' | 'supervisor' = 'memory
       analysis: '',
       sqlQuery: '',
       dataSample: null,
-      streamingText: ''
+      streamingText: '',
+      criteria: null
     };
   };
 
@@ -576,6 +593,7 @@ export const useAnalyticsMemoryStream = (mode: 'memory' | 'supervisor' = 'memory
     analysis,
     sqlQuery,
     dataSample,
+    criteria,
     streamingText,
 
     // Progressive rendering state

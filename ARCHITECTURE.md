@@ -1,37 +1,38 @@
-# System Architecture
+﻿# System Architecture
 
 This is a full-stack AI-powered portfolio application with a React frontend and FastAPI backend.
 
 ## Frontend (React + TypeScript + Vite)
-- **Main App**: `App.tsx` - Router and layout management
+- **Main App**: `App.tsx` manages routing and layout
 - **Components**: Individual page components in `/components`
 - **Services**: API communication layer in `/services`
 - **Types**: TypeScript definitions in `types.ts`
 - **Constants**: Project data in `constants.ts`
 
 ## Backend (FastAPI + Python)
-- **Main API**: `backend/main.py` - FastAPI application with all endpoints
-- **AI Agents**: Specialized agents for research, resume, and analytics
-- **Services**: Gemini AI, TTS, and rate limiting services
-- **Rate Limiting**: Redis-based with in-memory fallback
+- **Main API**: `backend/main.py` exposes all FastAPI endpoints
+- **Analytics Suite**: `backend/analytics_memory`, `backend/analytics_shared`, and `backend/analytics_supervisor` form one cohesive project that shares configuration, caching, and LangGraph orchestration
+- **Standalone Analytics Agent**: `backend/analytics_agent.py` is an independent workflow that should remain untouched unless user-facing frontend changes explicitly depend on it
+- **Services**: Gemini AI, TTS, and rate limiting helpers in dedicated modules
+- **Rate Limiting**: Redis-backed with in-memory fallback
 
 ## Key API Endpoints
 
-### Analytics Endpoints (Completely Separated)
+### Analytics Endpoints (Suite-Managed)
 - **Analytics SQL** (`/api/analytics/stream`)
-  - LangGraph SQL workflow for financial analytics
+  - LangGraph SQL workflow for financial analytics driven by the analytics suite
   - Direct SQL generation and execution
   - Real-time streaming with chart generation
   - No clarifications, direct query processing
 
 - **Analytics Memory** (`/api/analytics/memory/stream`)
-  - LangGraph memory pipeline with intelligent clarifications
+  - LangGraph memory pipeline with intelligent clarifications maintained by the analytics suite
   - Advanced intent detection and query planning
   - Conversational clarifications for ambiguous queries
   - Session-based memory management
 
 - **Memory Clarifications** (`/api/analytics/memory/clarify`)
-  - Handle user responses to clarification requests
+  - Handles user responses to clarification requests
   - Session-based clarification tracking
   - Supports single/multi/free-form responses
 
@@ -45,29 +46,33 @@ This is a full-stack AI-powered portfolio application with a React frontend and 
 ## Code Architecture
 
 ### Frontend-Backend Communication
-- **Authentication**: Supabase JWT tokens in Authorization headers via `apiService.streamWithAuth()`
-- **Rate Limiting**: Guest users (5/day), authenticated users (20/day)
-- **Streaming**: Server-Sent Events (SSE) for real-time AI responses with proper auth
-- **Error Handling**: Unified error responses with auth prompts
-- **Config Service**: Centralized environment variable management via `services/config.ts`
+- **Authentication**: Supabase JWT tokens sent via `apiService.streamWithAuth()`
+- **Rate Limiting**: Guest users (5/day) vs authenticated users (20/day)
+- **Streaming**: Server-Sent Events (SSE) for real-time AI responses
+- **Error Handling**: Unified error payloads prompting auth when required
+- **Config Service**: Centralized environment management through `services/config.ts`
+
+### Analytics Suite Boundaries
+- `analytics_memory`, `analytics_shared`, and `analytics_supervisor` share state, prompts, and utilities; update them together to preserve workflow guarantees
+- `analytics_agent.py` is completely separate from the suite and should only change if a widely used frontend feature makes it necessary
 
 ### AI Integration
-- **Research Agent**: Uses LangChain + OpenAI for web research
-- **Resume Agent**: Processes resume queries with vector search
-- **Gemini Chat**: Backend-hosted Gemini 2.5 Flash for conversations
-- **Analytics Agent**: LangGraph workflow for SQL analytics
+- **Research Agent**: LangChain + OpenAI for web research
+- **Resume Agent**: Vector-backed resume queries
+- **Gemini Chat**: Backend-hosted Gemini 2.5 Flash conversations
+- **Analytics Suite**: Cohesive LangGraph workflows spanning memory, shared tooling, and supervisor orchestration
 
 ### Authentication Flow
 1. Frontend: Supabase Auth for user sign-in
-2. Backend: JWT validation using Supabase secret
+2. Backend: JWT validation using the Supabase secret
 3. Rate limiting applied based on authentication status
 
 ## Development Commands
 
 ### Frontend Development
-- **Start development server**: `npm run dev` (runs on localhost:5173)
+- **Start development server**: `npm run dev` (http://localhost:5173)
 - **Build for production**: `npm run build`
-- **Preview production build**: `npm preview`
+- **Preview production build**: `npm run preview`
 - **Install dependencies**: `npm install`
 
 ### Backend Development
@@ -76,8 +81,8 @@ This is a full-stack AI-powered portfolio application with a React frontend and 
   2. `pip install -r requirements.txt`
 - **Start backend server**:
   1. `cd backend`
-  2. `uvicorn main:app` (runs on localhost:8000, shows all debug output)
-  3. Or use `uvicorn main:app --reload` for auto-reload (but debug output won't show)
+  2. `uvicorn main:app`
+  3. Use `uvicorn main:app --reload` for auto-reload during development
 - **Alternative start**:
   1. `cd backend`
   2. `python main.py`
@@ -87,13 +92,13 @@ This is a full-stack AI-powered portfolio application with a React frontend and 
    - `cd backend`
    - `uvicorn main:app`
 2. Start frontend: `npm run dev`
-3. Access application at http://localhost:5173
+3. Access the application at http://localhost:5173
 
 ## Git Sync Rules
-- **NEVER modify local .env files** when syncing from GitHub
-- Local .env files contain sensitive API keys and environment-specific configurations
-- If .env template changes are needed, update the documentation section instead
-- Always preserve existing local environment configurations
+- **Do not overwrite local `.env` files** when syncing from GitHub
+- `.env` files contain sensitive API keys and environment-specific configuration
+- If `.env` templates require updates, adjust documentation rather than committed secrets
+- Preserve existing local environment settings
 
 ## Adding New Features
 1. Frontend changes go in appropriate `/components` or `/services`

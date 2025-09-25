@@ -1,6 +1,18 @@
 ﻿from __future__ import annotations
 from typing import Any, Dict, List, Literal, Optional, TypedDict, Union
 from pydantic import BaseModel, Field, ValidationError, ConfigDict
+from analytics_shared.intent import (
+    ClarifyAnswerModel,
+    ClarificationSuggestionModel,
+    ClarifyRequestModel,
+    IntentModel,
+    LLMClarificationSuggestionModel,
+    LLMIntentModel,
+    PossibleIntentModel,
+    SlotsModel,
+    TimeframeModel,
+)
+
 
 # LangGraph-friendly state (lightweight). Pydantic models will validate node IO.
 class WorkflowState(TypedDict, total=False):
@@ -37,122 +49,12 @@ class ChartSpecModel(BaseModel):
 
 # ---------- Phase 2 Models ----------
 
-class TimeframeModel(BaseModel):
-    model_config = ConfigDict(extra='forbid')
-    years_back: Optional[int] = Field(default=4, ge=0, le=10)
-    start_year: Optional[int] = None
-    end_year: Optional[int] = None
-
-
-
-class SlotsModel(BaseModel):
-    model_config = ConfigDict(extra='forbid')
-    company: Optional[str] = None
-    timeframe: TimeframeModel = Field(default_factory=TimeframeModel)
-    metrics: Optional[List[str]] = None
-    granularity: Optional[str] = None
-    tickers: Optional[List[str]] = None
-
-
-
-class ClarificationSuggestionModel(BaseModel):
-    model_config = ConfigDict(extra='forbid')
-    slot: str = Field(..., description="Slot identifier that needs clarification")
-    reason: str = Field(..., description="Why this clarification is required")
-    question: Optional[str] = Field(default=None, description="Optional natural language prompt to show the user")
-    type: Optional[Literal['single', 'multi', 'free']] = Field(default=None, description="Preferred clarification input type")
-    options: List[str] = Field(default_factory=list, description="Suggested options when using single/multi input types")
-    # Limit proposed types to JSON-serializable primitives for schema friendliness
-    proposed: Optional[Any] = Field(default=None, description="LLM-proposed value for this slot (string, number, boolean, or list of strings)")
-    proposed_confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0, description="Confidence in the proposed value")
-
-    def get(self, key: str, default: Any = None) -> Any:
-        return getattr(self, key, default)
-
-    def __getitem__(self, key: str) -> Any:
-        return getattr(self, key)
-
-
-class PossibleIntentModel(BaseModel):
-    model_config = ConfigDict(extra='forbid')
-    intent_key: str = Field(..., description="Alternative intent key that could match the query")
-    confidence: float = Field(..., ge=0.0, le=1.0, description="Confidence that this alternative intent is correct")
-
-    def get(self, key: str, default: Any = None) -> Any:
-        return getattr(self, key, default)
-
-    def __getitem__(self, key: str) -> Any:
-        return getattr(self, key)
-
-
-class IntentModel(BaseModel):
-    model_config = ConfigDict(extra='forbid')
-    intent_key: Optional[str] = None
-    confidence: float = Field(0.0, ge=0.0, le=1.0)
-    # Keep a flexible dict at runtime for downstream code paths
-    slots_detected: Dict[str, Any] = Field(default_factory=dict, description="Resolved slot values extracted from the query")
-    assumptions: List[str] = Field(default_factory=list)
-
-    # Advisory fields for early clarification detection
-    clarifications_suggested: List[ClarificationSuggestionModel] = Field(
-        default_factory=list,
-        description="Lightweight hints describing which slots require clarification"
-    )
-    possible_intents: List[PossibleIntentModel] = Field(
-        default_factory=list,
-        description="Alternative interpretations with confidence scores"
-    )
-    intent_reasoning: str = Field(
-        default="",
-        description="Brief 1-2 line rationale for the chosen intent"
-    )
-
-
-# ---------- LLM-safe Structured Output Models ----------
-
-class LLMClarificationSuggestionModel(BaseModel):
-    model_config = ConfigDict(extra='forbid')
-    slot: str = Field(..., description="Slot identifier that needs clarification")
-    reason: str = Field(..., description="Why this clarification is required")
-    question: Optional[str] = Field(default=None, description="Optional natural language prompt to show the user")
-    type: Optional[Literal['single', 'multi', 'free']] = Field(default=None, description="Preferred clarification input type")
-    options: List[str] = Field(default_factory=list, description="Suggested options when using single/multi input types")
-    # Constrain proposed to simple JSON primitives for Responses API schema
-    proposed: Optional[Union[str, int, float, bool, List[str]]] = Field(default=None, description="LLM-proposed value for this slot")
-    proposed_confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0, description="Confidence in the proposed value")
-
-
-class LLMIntentModel(BaseModel):
-    """Strict, schema-friendly model for Responses API parsing.
-
-    This is converted to the runtime IntentModel used by the workflow.
-    """
-    model_config = ConfigDict(extra='forbid')
-    intent_key: Optional[str] = None
-    confidence: float = Field(0.0, ge=0.0, le=1.0)
-    slots_detected: SlotsModel = Field(default_factory=SlotsModel, description="Resolved slot values extracted from the query")
-    assumptions: List[str] = Field(default_factory=list)
-
-    clarifications_suggested: List[LLMClarificationSuggestionModel] = Field(
-        default_factory=list,
-        description="Lightweight hints describing which slots require clarification"
-    )
-    possible_intents: List[PossibleIntentModel] = Field(
-        default_factory=list,
-        description="Alternative interpretations with confidence scores"
-    )
-    intent_reasoning: str = Field(
-        default="",
-        description="Brief 1-2 line rationale for the chosen intent"
-    )
-
-
 class QueryPlanModel(BaseModel):
     metrics: List[str] = Field(default_factory=list)
     derived_metrics: List[str] = Field(default_factory=list)
     timeframe: TimeframeModel = Field(default_factory=TimeframeModel)
     granularity: Literal['annual', 'quarterly'] = 'annual'
-    comparison: Optional[str] = None  # 'vs_peers'|'vs_avg'|'single'|'all'
+    comparison: Optional[str] = None
     group_by: List[str] = Field(default_factory=list)
     filters: Dict[str, Any] = Field(default_factory=dict)
     limit: int = 500
@@ -184,29 +86,6 @@ class ChartPlanModel(BaseModel):
     series: List[ChartSeriesModel] = Field(default_factory=list)
     title: str = 'Analytics'
     highlight_rules: List[Dict[str, Any]] = Field(default_factory=list)
-
-
-# ---------- Phase 3 Clarification Models ----------
-
-class ClarifyRequestModel(BaseModel):
-    slot: str = Field(..., description="The slot name needing clarification")
-    question: str = Field(..., description="The question to ask the user")
-    type: Literal['single', 'multi', 'free'] = Field(..., description="Type of input expected")
-    options: List[str] = Field(default_factory=list, description="Available options for single/multi selection")
-    default: Optional[Any] = None
-    reason: str = Field(default="", description="Why this slot needs clarification")
-    required: bool = Field(True, description="Whether this slot is required")
-    request_id: str = Field(..., description="Unique ID for this clarification request")
-    proposed: Optional[Any] = Field(None, description="LLM-proposed value")
-    proposed_confidence: float = Field(0.0, ge=0.0, le=1.0, description="Confidence in proposed value")
-
-
-class ClarifyAnswerModel(BaseModel):
-    session_id: str = Field(..., description="Session ID for this analytics session")
-    request_id: str = Field(..., description="ID of the clarification request being answered")
-    slot: str = Field(..., description="The slot being answered")
-    value: Any = Field(..., description="The user's answer")
-    ts: str = Field(..., description="Timestamp of the answer")
 
 
 class ClarifyErrorModel(BaseModel):

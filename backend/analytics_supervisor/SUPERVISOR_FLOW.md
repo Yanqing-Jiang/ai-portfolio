@@ -1,152 +1,107 @@
-# Supervisor Flow Reference (Refactored & Optimized)
+# Supervisor Flow Reference (v2.4)
 
-This document describes the fully refactored and optimized single‑agent supervisor flow for next‑gen‑analytics‑memory. The flow features a streamlined 2-layer fallback architecture, centralized Redis caching, and progressive frontend rendering. Classification and intent detection run BEFORE agent involvement, with smart schema validation to minimize unnecessary clarifications.
+The supervisor orchestrates every analytics query by preparing intent, validating required slots, and either running a deterministic SQL fast lane or delegating to an OpenAI tool loop. This document captures the current control flow, event surface, and integration points for the refactored pipeline.
 
-## Refactored Architecture (v2.0)
+**LATEST UPDATE**
+- Added a fast-lane SQL pipeline gated by the `FAST_LANE_SQL` environment variable; successful runs skip the agent loop entirely.
+- Moved classification to a keyword-based sieve and introduced an in-process intent cache (60 s TTL) ahead of `detect_intent_fast_async`.
+- `criteria_ready` is now emitted for every session, immediately exposing the finalised `SqlCriteriaModel` to the frontend.
+- Normalised SSE events between fast-lane and agent paths (`plan_built`, `sql_generated`, `chart_generated`, etc.).
 
-### Backend Optimizations
-- **2-Layer Fallback**: Simplified from 3-layer (RAG → Template Store → YAML) to 2-layer (RAG → YAML)
-- **Centralized Caching**: Redis-based cache service with circuit breaker pattern and in-memory fallback
-- **Connection Pooling**: Enhanced PostgreSQL connection pooling with asyncpg (pool size: 5)
-- **Unified Response Client**: Consolidated supervisor-specific and general response clients
-- **Legacy Cleanup**: Removed 1,104 lines of unused code (config_loaders.py, template_store.py)
+---
 
-### Frontend Enhancements
-- **Progressive Rendering**: 50ms debounced updates for smooth real-time streaming
-- **Chart Generation Fix**: Corrected lazy loading imports for ChartCard component
-- **Enhanced Memory Stream**: Added progressive analysis and text state management
+## High-level phases
 
-### Performance Improvements
-- **Reduced Memory Footprint**: Eliminated duplicate caching layers
-- **Faster Config Resolution**: Direct RAG-to-YAML fallback without intermediate stores
-- **Circuit Breaker**: Graceful Redis failures with automatic fallback to in-memory cache
+1. **Session bootstrap**  
+   - Create/restore `session_id`, allocate `WorkflowState`, and emit `session_started`.
 
-## High‑Level Phases
-- **Classification Phase** (BEFORE Agent)
-  - Small‑talk guard for obvious non-queries
-  - Fast classification using `gpt-5-nano-2025-08-07` model
-  - Heuristic keyword/ticker fallback for reliability
-  - Off‑topic queries get polite decline and exit early
+2. **Conversation guards**  
+   - `_is_small_talk` returns early with `workflow_complete` for greetings/small talk.  
+   - `_looks_financial` runs a low-cost keyword sieve; non-financial queries reply with the default decline message.
 
-- **Intent Detection Phase** (BEFORE Agent)
-  - `detect_intent_with_clarifications` extracts intent and slots
-  - Enhanced logic prevents unnecessary clarifications for specific companies
-  - Post-processing adds missing companies from query text
+3. **Intent cache lookup**  
+   - Lowercased query key stored in `INTENT_CACHE` for 60 seconds. Cache hits emit `intent_detection_started` with `cache_hit=True` and reuse the saved payload.
 
-- **Schema Validation Phase** (BEFORE Agent)
-  - Validates required fields for detected intent using structured schema
-  - Only requests clarifications for genuinely missing required fields
-  - Skips clarification loop if all required fields are present
+4. **Intent detection & schema validation**  
+   - `detect_intent_with_clarifications_async` delegates to `detect_intent_fast_async` (heuristic-first, single LLM call when required).  
+   - Emits: `intent_detection_started`, `intent_detection_complete`, `schema_validation_started`.  
+   - Schema requirements derived from intent metadata. Missing slots trigger `clarification_loop_start` → `clarification_request`/`clarification_acknowledged` → `clarification_loop_complete`.  
+   - `criteria_ready` streams the `SqlCriteriaModel` (with timestamp) after consolidation.
 
-- **Agent Tool Planning & Execution** (AFTER Validation)
-  - Agent receives complete, validated intent with all required fields
-  - Agent focuses on tool selection and execution strategy
-  - Sequential execution: `provisional_plan` → `retrieve_templates_rag` → `validate_sql` → `apply_execute_sql` → `plan_chart` → `build_chart`
+5. **Fast-lane SQL (optional)**  
+   - Enabled when `FAST_LANE_SQL` ≠ `false` and validation confirms all required slots.  
+   - `_run_fast_lane_sql` performs:
+     - `plan_and_select_template` → emits `plan_built`, `template_selected`, `sql_compiled`, `sql_generated`.
+     - `validate_sql` → emits `sql_validated` (inside fast-lane payload) or warns + falls back to agent loop.
+     - `apply_execute_sql` → emits `sql_executed`, `data_retrieved`.
+     - `plan_chart`/`build_chart` → emits `chart_planned`, `chart_generated`.
+     - `short_financial_analysis` → emits `analysis_complete`.
+   - On success, the workflow skips the tool loop and proceeds directly to analysis/finalisation events.
 
-- **Analysis + Finalization**
-  - Streaming analysis and final summary via the Responses API
+6. **Agent tool loop (fallback)**  
+   - Triggered when the fast lane is disabled or fails validation/SQL execution.  
+   - Emits `tool_planning_started` followed by `tool_selection_reasoning` with the proposed strategy.  
+   - `_execute_tools_direct` runs the OpenAI Responses loop, yielding `tool_selected`, `tool_start`, `tool_end`, and streaming tool outputs (`sql_generated`, `sql_executed`, etc.).  
+   - `WorkflowState` tracks executed tools, retrieved data, chart specs, and analysis artefacts.
 
-## Optimized Flow Order
-1. **Classification**: `gpt-5-nano-2025-08-07` classification (fast, lightweight)
-2. **Intent Detection**: LLM-based intent extraction with smart clarification logic
-3. **Schema Validation**: Structured validation of required fields
-4. **Clarification**: Only if schema validation fails
-5. **Agent Planning**: Agent receives validated intent and plans tool execution
-6. **Tool Execution**: Agent executes tools sequentially
-7. **Analysis**: Streaming financial analysis
-8. **Finalization**: Summary and completion
+7. **Analysis & finalisation**  
+   - Streams `analysis_streaming` chunks, then `analysis_complete`.  
+   - `_finalization_turn` produces `final_summary`.  
+   - `workflow_complete` closes the session, including total elapsed time.
 
-## Enhanced Events (SSE)
+---
 
-### Classification Events
-- `classification_started`: Classification phase begins with model info
-- `classification_reasoning`: Real-time classification thinking/confidence
-- `classification_complete`: Classification result with confidence scores
-- `classification_error`: Classification failures with error details
-- `classification_fallback`: Heuristic fallback activation
+## Event timeline snapshot
 
-### Intent Detection Events
-- `intent_detection_started`: Intent detection phase begins
-- `intent_detection_complete`: Intent extracted with confidence and slots
-- `intent_finalized`: Intent and schema validation complete
+| Phase | Key SSE events |
+|-------|----------------|
+| Guardrail | `session_started`, `classification_started`, `classification_reasoning`, `classification_complete`, `classification_fallback` |
+| Intent | `intent_detection_started`, `intent_detection_complete`, `schema_validation_started`, `schema_validation_complete`, `criteria_ready` |
+| Clarifications | `clarification_loop_start`, `clarification_request`, `clarification_acknowledged`, `clarification_loop_complete`, `clarification_skipped` |
+| Fast lane (if used) | `plan_built`, `template_selected`, `sql_compiled`, `sql_generated`, `sql_executed`, `data_retrieved`, `chart_planned`, `chart_generated`, `analysis_complete` |
+| Agent loop | `tool_planning_started`, `tool_selection_reasoning`, `tool_selected`, `tool_start`, `tool_end`, `tool_error`, plus the same SQL/chart/analysis events emitted by the tools |
+| Finale | `analysis_streaming`, `analysis_complete`, `final_summary`, `workflow_complete` |
 
-### Schema Validation Events
-- `schema_validation_started`: Schema validation begins
-- `schema_validation_complete`: Validation results with missing fields
-- `clarification_needed`: Lists missing required fields
-- `clarification_skipped`: All fields present, no clarification needed
+Both execution paths produce identical downstream events, allowing the frontend to stay agnostic to the chosen strategy.
 
-### Agent Planning Events
-- `tool_planning_started`: Agent planning phase begins
-- `tool_selection_reasoning`: Agent's tool selection strategy
+---
 
-### Execution Events
-- `tool_start`, `tool_end`, `tool_error`: Tool execution lifecycle
-- `sql_executed`, `data_retrieved`, `chart_generated`: Data pipeline
-- `analysis_streaming`, `analysis_complete`: Real-time analysis
+## Component interactions
 
-### Completion Events
-- `final_summary`, `workflow_complete`: Workflow completion
-
-## Smart Clarification Logic
-
-### Reduced Clarifications
-- **Market Share Queries**: No longer asks "single vs all" when company is specified
-- **Schema-Driven**: Only requests clarifications for truly missing required fields
-- **Post-Processing**: Automatically detects companies from query text
-
-### Intent Requirements
 ```
-market_share_single: requires [company]
-market_share_all: requires []
-margins_vs_peers: requires [company]
-revenue_growth_analysis: requires []
-rnd_intensity_vs_peers: requires [company]
+Query
+ ├─ Small talk / financial sieve
+ ├─ INTENT_CACHE HIT?
+ │    └─ yes → reuse cached intent
+ └─ detect_intent_with_clarifications_async (heuristic-first)
+        ├─ Clarification loop (if required)
+        └─ intent_to_sql_criteria → criteria_ready
+             ↓
+     FAST_LANE_SQL enabled?
+        ├─ yes → _run_fast_lane_sql → analysis/finalisation
+        └─ no  → OpenAI tool loop (_execute_tools_direct)
 ```
 
-## Technical Implementation Details
+`SupervisorTools` continues to wrap deterministic helpers (`plan_and_select_template`, `validate_sql`, `apply_execute_sql`, `plan_chart`, `build_chart`, `short_financial_analysis`). The fast lane and the agent loop share these implementations to keep behaviour identical.
 
-### Cache Service Architecture
-```python
-class CacheService:
-    - Redis client with connection pooling
-    - Circuit breaker pattern (5 failure threshold)
-    - Automatic fallback to in-memory cache
-    - TTL-based cache management
-    - Async/await support for FastAPI integration
-```
+---
 
-### Config Store (2-Layer Fallback)
-```python
-class ConfigSource(Enum):
-    RAG_SERVICE = "rag_service"     # Primary: Vector search
-    YAML_CONFIG = "yaml_config"     # Fallback: Static configs
-    EMPTY_FALLBACK = "empty_fallback"  # Final fallback
-```
+## Configuration & tuning
 
-### Progressive Frontend Rendering
-```typescript
-// 50ms debounced updates for smooth streaming
-const scheduleProgressiveUpdate = (updates) => {
-    Object.assign(pendingUpdatesRef.current, updates);
-    updateTimeoutRef.current = setTimeout(() => {
-        // Batch updates for performance
-        applyPendingUpdates();
-    }, 50);
-};
-```
+- `FAST_LANE_SQL` – enable/disable the deterministic pipeline (default `true`).
+- `INTENT_CACHE_TTL` – duration (seconds) for cached intents (default `60`).
+- Shared configuration (`analytics_memory.config.CONFIGS`) supplies default tickers, intent patterns, SQL limits, and chart settings.
 
-## Performance Optimizations
-- **Fast Classification**: `gpt-5-nano-2025-08-07` for 50-70% faster non-financial query handling
-- **Early Exit**: Non-financial queries exit before expensive processing
-- **Structured Validation**: Deterministic schema checking before LLM clarifications
-- **Agent Efficiency**: Agent only handles tool planning, not classification/validation
-- **Centralized Caching**: Redis cache with 15-minute TTL and circuit breaker resilience
-- **Connection Pooling**: Optimized PostgreSQL connections with asyncpg pool management
+---
 
-## UI/UX Improvements
-- **Side Panel**: Process visualization moved to right-side panel with show/hide toggle
-- **Real-time Updates**: Enhanced SSE events provide detailed progress tracking
-- **Clean Chat**: Removed embedded thinking panels from message bubbles
-- **Timing Metrics**: All phases include elapsed time measurements
+## Frontend implications
 
+- The Process Panel should treat `schema_validation` as complete once `criteria_ready` arrives (even if the agent loop will run afterwards).
+- Fast-lane sessions stream the same `sql_*`, `chart_*`, and `analysis_*` events, so UI components can remain mode-agnostic.
+- `supervisorState` may now contain `criteria`, enabling criteria cards or debug surfaces to render the extracted slots immediately.
+
+---
+
+## Summary
+
+The supervisor now prioritises deterministic execution for well-posed queries while preserving the rich agent experience for exploratory requests. Intent caching, the keyword sieve, and the fast-lane SQL path collectively reduce latency, and the harmonised event surface ensures the frontend stays responsive regardless of which path completes the workflow.
