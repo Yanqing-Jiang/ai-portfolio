@@ -115,21 +115,30 @@ export const ProcessNode = memo<ProcessNodeProps>(({ data, selected }) => {
         variants={nodeVariants}
         animate={animationState}
         className={`
-          relative bg-gray-800 border-2 rounded-xl p-4 min-w-[220px]
+          relative rounded-xl p-4 min-w-[220px] overflow-hidden
           ${canExpand ? 'cursor-pointer' : 'cursor-default'}
           ${selected ? 'border-blue-400' : 'border-gray-600'}
-          ${hasError ? 'border-red-500' : isActive ? 'border-blue-400' : isCompleted ? 'border-green-400' : ''}
+          ${hasError ?
+            'border-red-500 bg-gradient-to-br from-red-900/30 via-gray-800 to-gray-900 border-2' :
+            isActive ?
+            'border-blue-400 bg-gradient-to-br from-blue-900/40 via-gray-800 to-gray-900 border-2' :
+            isCompleted ?
+            'border-green-400 bg-gradient-to-br from-emerald-900/30 via-gray-800 to-gray-900 border-2' :
+            'border-gray-600 bg-gradient-to-br from-gray-800 to-gray-900 border backdrop-blur-sm'
+          }
         `}
         onClick={toggleExpand}
-        whileHover={canExpand ? { scale: 1.02 } : undefined}
+        whileHover={canExpand ? { scale: 1.02, y: -2 } : undefined}
         style={{
-          backgroundImage: isActive
-            ? `linear-gradient(135deg, ${color}20 0%, transparent 100%)`
-            : undefined,
+          boxShadow: isActive ? `0 8px 32px ${color}40, 0 0 0 1px ${color}20` :
+                     isCompleted ? '0 8px 32px rgba(34, 197, 94, 0.3), 0 0 0 1px rgba(34, 197, 94, 0.2)' :
+                     hasError ? '0 8px 32px rgba(239, 68, 68, 0.3), 0 0 0 1px rgba(239, 68, 68, 0.2)' :
+                     'none'
         }}
       >
         {isActive && (
           <div className="absolute inset-0 pointer-events-none">
+            {/* Enhanced multi-layer animations */}
             <PulseAnimation color={color} size={220} speed={0.8} className="absolute -inset-2" />
             <GlowAnimation
               color={color}
@@ -139,6 +148,57 @@ export const ProcessNode = memo<ProcessNodeProps>(({ data, selected }) => {
               className="absolute -inset-4"
             />
             <RippleAnimation color={color} size={180} speed={1.5} className="absolute inset-6" />
+
+            {/* Particle flow effect */}
+            <div className="absolute inset-0">
+              {[...Array(6)].map((_, i) => (
+                <motion.div
+                  key={i}
+                  className="absolute w-1 h-1 bg-white rounded-full opacity-60"
+                  animate={{
+                    x: [0, Math.cos(i * 60 * Math.PI / 180) * 60, Math.cos(i * 60 * Math.PI / 180) * 100],
+                    y: [0, Math.sin(i * 60 * Math.PI / 180) * 60, Math.sin(i * 60 * Math.PI / 180) * 100],
+                    opacity: [0, 0.8, 0],
+                    scale: [0, 1, 0]
+                  }}
+                  transition={{
+                    duration: 2,
+                    repeat: Infinity,
+                    delay: i * 0.3,
+                    ease: "easeOut"
+                  }}
+                  style={{
+                    left: '50%',
+                    top: '50%',
+                    transform: 'translate(-50%, -50%)'
+                  }}
+                />
+              ))}
+            </div>
+
+            {/* Neural network connections */}
+            <svg className="absolute inset-0 w-full h-full" viewBox="0 0 220 220">
+              {[...Array(4)].map((_, i) => (
+                <motion.path
+                  key={i}
+                  d={`M${110 + Math.cos(i * 90 * Math.PI / 180) * 50} ${110 + Math.sin(i * 90 * Math.PI / 180) * 50} L${110 + Math.cos(i * 90 * Math.PI / 180) * 80} ${110 + Math.sin(i * 90 * Math.PI / 180) * 80}`}
+                  stroke={color}
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  opacity="0.6"
+                  animate={{
+                    pathLength: [0, 1, 0],
+                    opacity: [0.3, 0.8, 0.3]
+                  }}
+                  transition={{
+                    duration: 1.5,
+                    repeat: Infinity,
+                    delay: i * 0.2,
+                    ease: "easeInOut"
+                  }}
+                />
+              ))}
+            </svg>
           </div>
         )}
 
@@ -149,41 +209,121 @@ export const ProcessNode = memo<ProcessNodeProps>(({ data, selected }) => {
         ) : null}
 
         {(isActive || isCompleted) && (
-          <div className="absolute -top-2 -left-2 w-8 h-8 z-10">
-            <svg className="w-8 h-8 transform -rotate-90" viewBox="0 0 32 32">
-              <circle cx="16" cy="16" r="14" fill="none" stroke="rgba(255,255,255,0.1)" strokeWidth="2" />
+          <div className="absolute -top-2 -left-2 w-10 h-10 z-10">
+            <svg className="w-10 h-10 transform -rotate-90" viewBox="0 0 40 40">
+              {/* Background circle */}
+              <circle cx="20" cy="20" r="16" fill="none" stroke="rgba(255,255,255,0.1)" strokeWidth="2" />
+
+              {/* Animated progress ring */}
               <motion.circle
-                cx="16"
-                cy="16"
-                r="14"
+                cx="20"
+                cy="20"
+                r="16"
                 fill="none"
                 stroke={isCompleted ? '#10b981' : color}
-                strokeWidth="2"
+                strokeWidth="2.5"
                 strokeLinecap="round"
-                strokeDasharray="87.96"
+                strokeDasharray="100.53"
                 variants={ringVariants}
                 animate={isActive ? 'processing' : 'completed'}
+                filter={`drop-shadow(0 0 4px ${isCompleted ? '#10b981' : color}40)`}
               />
+
+              {/* Inner pulsing dot for active state */}
+              {isActive && (
+                <motion.circle
+                  cx="20"
+                  cy="20"
+                  r="3"
+                  fill={color}
+                  animate={{
+                    r: [3, 5, 3],
+                    opacity: [0.8, 0.4, 0.8]
+                  }}
+                  transition={{
+                    duration: 1.5,
+                    repeat: Infinity,
+                    ease: "easeInOut"
+                  }}
+                />
+              )}
+
+              {/* Success checkmark */}
+              {isCompleted && (
+                <motion.path
+                  d="M14 20l3 3 6-6"
+                  fill="none"
+                  stroke="#ffffff"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  initial={{ pathLength: 0 }}
+                  animate={{ pathLength: 1 }}
+                  transition={{ duration: 0.5, delay: 0.3 }}
+                />
+              )}
             </svg>
           </div>
         )}
 
         <div className="flex items-start justify-between">
           <div className="flex-1">
-            <div className="flex items-center gap-2 mb-1">
-              <span className="text-xs font-semibold uppercase tracking-wide text-gray-300">{statusLabel}</span>
-              <h3 className="text-sm font-semibold text-white truncate">{step.name}</h3>
+            <div className="flex items-center gap-3 mb-2">
+              <motion.span
+                className={`
+                  text-xs font-bold uppercase tracking-wider px-2 py-1 rounded-full
+                  ${hasError ? 'bg-red-500/20 text-red-300 border border-red-500/30' :
+                    isCompleted ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' :
+                    isActive ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30' :
+                    'bg-gray-500/20 text-gray-300 border border-gray-500/30'
+                  }
+                `}
+                animate={isActive ? {
+                  boxShadow: [`0 0 0 0 ${color}40`, `0 0 0 4px ${color}20`, `0 0 0 0 ${color}40`]
+                } : {}}
+                transition={isActive ? {
+                  duration: 2,
+                  repeat: Infinity,
+                  ease: "easeInOut"
+                } : {}}
+              >
+                {statusLabel}
+              </motion.span>
+              <h3 className="text-sm font-semibold text-white truncate flex-1">{step.name}</h3>
             </div>
 
-            <div className="flex items-center gap-2 mb-2">
-              <span
-                className="px-2 py-1 text-xs rounded-full text-white font-medium"
-                style={{ backgroundColor: `${color}33`, border: `1px solid ${color}` }}
+            <div className="flex items-center gap-2 mb-3">
+              <motion.span
+                className="px-3 py-1 text-xs rounded-full text-white font-medium backdrop-blur-sm"
+                style={{
+                  backgroundColor: `${color}40`,
+                  border: `1px solid ${color}60`,
+                  boxShadow: `0 2px 8px ${color}20`
+                }}
+                animate={isActive ? {
+                  scale: [1, 1.05, 1],
+                  boxShadow: [`0 2px 8px ${color}20`, `0 4px 16px ${color}40`, `0 2px 8px ${color}20`]
+                } : {}}
+                transition={isActive ? {
+                  duration: 2,
+                  repeat: Infinity,
+                  ease: "easeInOut"
+                } : {}}
               >
                 {phase}
-              </span>
+              </motion.span>
               {confidencePercentage !== null && (
-                <span className="text-xs text-gray-400">{confidencePercentage}% conf</span>
+                <motion.div className="flex items-center gap-1">
+                  <span className="text-xs text-gray-400">{confidencePercentage}%</span>
+                  <div className="w-12 h-1.5 bg-gray-700 rounded-full overflow-hidden">
+                    <motion.div
+                      className="h-full bg-gradient-to-r from-blue-400 to-blue-600 rounded-full"
+                      initial={{ width: 0 }}
+                      animate={{ width: `${confidencePercentage}%` }}
+                      transition={{ duration: 1, delay: 0.5, ease: "easeOut" }}
+                    />
+                  </div>
+                </motion.div>
               )}
             </div>
 

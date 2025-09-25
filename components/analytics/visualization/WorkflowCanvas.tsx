@@ -196,15 +196,22 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({ steps, className, 
           id: `${current.id}-${next.id}`,
           source: current.id,
           target: next.id,
-          animated: next.status === 'in_progress',
+          animated: next.status === 'in_progress' || current.status === 'completed',
           style: {
-            stroke: current.status === 'completed' ? '#10b981' : '#6b7280',
-            strokeWidth: 2,
-            strokeDasharray: next.status === 'in_progress' ? '5,5' : undefined,
+            stroke: current.status === 'completed' ? '#10b981' :
+                   next.status === 'in_progress' ? '#3b82f6' : '#6b7280',
+            strokeWidth: next.status === 'in_progress' ? 3 :
+                        current.status === 'completed' ? 2.5 : 2,
+            strokeDasharray: next.status === 'in_progress' ? '8,4' : undefined,
+            filter: next.status === 'in_progress' ?
+                   'drop-shadow(0 0 6px rgba(59, 130, 246, 0.6))' :
+                   current.status === 'completed' ?
+                   'drop-shadow(0 0 4px rgba(16, 185, 129, 0.4))' : 'none',
           },
           markerEnd: {
             type: 'arrowclosed',
-            color: current.status === 'completed' ? '#10b981' : '#6b7280',
+            color: current.status === 'completed' ? '#10b981' :
+                  next.status === 'in_progress' ? '#3b82f6' : '#6b7280',
           },
           className: next.status === 'in_progress' ? 'animate-pulse' : undefined,
         });
