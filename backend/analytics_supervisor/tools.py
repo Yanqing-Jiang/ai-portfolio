@@ -1,15 +1,13 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 from typing import Any, Dict, List, Optional, AsyncGenerator
 import os
 import sys
 import logging
 import asyncio
+import re
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from analytics_memory.intent import (
-    detect_intent_with_clarifications,
-)
 # Import shared functions
 from analytics_shared.sql.planner import plan_sql_rule_based, choose_template as cfg_choose_template
 from analytics_shared.sql.compiler import compile_sql_from_plan
@@ -17,6 +15,7 @@ from analytics_shared.sql.validator import validate_sql
 from analytics_shared.database.executor import execute
 from analytics_shared.charting.planner import plan_chart_rule_based
 from analytics_shared.companies.tickers import get_ticker_list
+from analytics_shared.streaming.events import EventEmitter
 from analytics_memory.charting import build_chart_spec
 from analytics_memory.clarify import (
     compute_required_clarifications,
@@ -25,9 +24,6 @@ from analytics_memory.types import (
     IntentModel,
     QueryPlanModel,
     ClarifyRequestModel,
-)
-from .schemas import (
-    OffTopicClassifierSchema,
 )
 from analytics_memory.config import CONFIGS
 
@@ -48,46 +44,10 @@ class SupervisorTools:
     def __init__(self, configs: Optional[Dict[str, Any]] = None):
         self.configs = configs or CONFIGS.__dict__
         self.config_store = get_config_store()
-        self._default_tickers = self._load_default_tickers()
-        self._financial_keywords = self._load_financial_keywords()
-        
     @staticmethod
     def get_tool_schemas() -> List[Dict[str, Any]]:
         """Return all tool schemas for OpenAI function calling"""
         return [
-            {
-                "type": "function",
-                "name": "classify_query_relevance",
-                "description": "Classify if query is about financial analytics before processing. CALL THIS FIRST for off-topic guard.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "query": {
-                            "type": "string",
-                            "description": "User query to classify for topic relevance"
-                        }
-                    },
-                    "required": ["query"],
-                    "additionalProperties": False
-                }
-            },
-            {
-                "type": "function",
-                "name": "detect_intent",
-                "description": "Detect user intent and extract slots from query (company, timeframe, granularity, comparison).",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "query": {
-                            "type": "string",
-                            "description": "User query to analyze"
-                        }
-                    },
-                    "required": ["query"],
-                    "additionalProperties": False
-                }
-            },
-            
             {
                 "type": "function",
                 "name": "provisional_plan",
@@ -407,81 +367,9 @@ class SupervisorTools:
     ) -> List[ClarifyRequestModel]:
         return compute_required_clarifications(intent, plan, template, self.configs)
 
-    def _load_default_tickers(self) -> List[str]:
-        """Load default tickers using shared function."""
-        # Use shared function and convert to lowercase for backward compatibility
-        tickers = get_ticker_list(self.configs or {})
-        return [ticker.lower() for ticker in tickers]
-
-    def _load_financial_keywords(self) -> List[str]:
-        keywords: set[str] = set()
-        queries_cfg = {}
-        metrics_cfg = {}
-        if isinstance(self.configs, dict):
-            queries_cfg = self.configs.get("queries", {}) or {}
-            metrics_cfg = self.configs.get("metrics", {}) or {}
-
-        if isinstance(queries_cfg, dict):
-            patterns = queries_cfg.get("query_patterns", {}) or {}
-            if isinstance(patterns, dict):
-                for pattern in patterns.values():
-                    if isinstance(pattern, dict):
-                        name = pattern.get("name")
-                        if isinstance(name, str):
-                            keywords.add(name.lower())
-                        for kw in pattern.get("keywords", []) or []:
-                            if isinstance(kw, str):
-                                keywords.add(kw.lower())
-
-        if isinstance(metrics_cfg, dict):
-            for section_name in ("metrics", "derived_metrics"):
-                section = metrics_cfg.get(section_name, {}) or {}
-                if isinstance(section, dict):
-                    for metric in section.values():
-                        if isinstance(metric, dict):
-                            name = metric.get("name")
-                            if isinstance(name, str):
-                                keywords.add(name.lower())
-                            for alias in metric.get("aliases", []) or []:
-                                if isinstance(alias, str):
-                                    keywords.add(alias.lower())
-
-        keywords.update(
-            {
-                "financial",
-                "finance",
-                "revenue",
-                "sales",
-                "profit",
-                "earnings",
-                "eps",
-                "margin",
-                "margins",
-                "operating",
-                "net income",
-                "gross",
-                "market share",
-                "share",
-                "growth",
-                "forecast",
-                "guidance",
-                "cash",
-                "expense",
-                "spending",
-                "vs",
-                "compare",
-                "comparison",
-                "benchmark",
-                "industry",
-                "peer",
-                "stock",
-                "ticker",
-                "valuation",
-            }
-        )
-        return list(keywords)
-
-
+    
+    
+    
     # -------- Clarifications (blocking) --------
 
     async def retrieve_templates_rag(
@@ -884,244 +772,11 @@ class SupervisorTools:
             }
 
     # -------- Unified Query Processing --------
-    async def classify_query_relevance(self, query: str, session_id: str) -> AsyncGenerator[Dict[str, Any], None]:
-        """
-        Unified entry point that handles:
-        1. Query classification (financial vs non-financial)
-        2. Intent detection (if financial)
-        3. Multi-step clarification loop (if needed)
-        4. Returns complete result or early exit
-        """
-        import uuid
-        from analytics_memory.types import ClarifyRequestModel, IntentModel
-        import sys
-        import os
-        sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from unified_responses_client import get_unified_client
 
-        try:
-            client = get_unified_client()
-            if not client:
-                # Fail fast - no fallback
-                yield {
-                    "error": "OpenAI client unavailable. Financial analytics requires AI services.",
-                    "early_exit": True,
-                    "is_financial": False
-                }
-                return
-
-            # Step 1: Classification
-            classification = await self._classify_topic_internal(query, client)
-
-            if classification.topic_category != "financial_analytics":
-                # Early exit for non-financial queries
-                yield {
-                    "is_financial": False,
-                    "category": classification.topic_category,
-                    "message": classification.polite_decline_message or "I'm specialized in financial analytics. How can I help you analyze financial data?",
-                    "complete": True,
-                    "early_exit": True
-                }
-                return
-
-            # Step 2: Intent Detection (internal)
-            intent = await self._detect_intent_internal(query, session_id, client)
-
-            # Step 3: Multi-Step Clarification Loop
-            if intent.clarifications_suggested:
-                # Start clarification loop
-                all_clarifications = []
-                clarification_answers = {}
-
-                # Emit start of clarification loop
-                yield {
-                    "event": "clarification_loop_start",
-                    "data": {
-                        "total_clarifications": len(intent.clarifications_suggested),
-                        "session_id": session_id
-                    }
-                }
-
-                # Process each clarification sequentially
-                for idx, clarification in enumerate(intent.clarifications_suggested):
-                    clarify_request = ClarifyRequestModel(
-                        slot=clarification.get('slot', 'unknown'),
-                        question=clarification.get('reason', 'Please provide clarification'),
-                        type='single',  # Default type
-                        options=self._get_options_for_slot(clarification.get('slot')),
-                        request_id=str(uuid.uuid4()),
-                        reason=clarification.get('reason', ''),
-                        session_id=session_id
-                    )
-
-                    # Emit clarification request to frontend
-                    yield {
-                        "event": "clarification_request",
-                        "data": {
-                            **clarify_request.dict(),
-                            "question_number": idx + 1,
-                            "total_questions": len(intent.clarifications_suggested),
-                            "progress": f"{idx + 1}/{len(intent.clarifications_suggested)}"
-                        }
-                    }
-
-                    # Wait for user answer with timeout
-                    answer_value = await self._wait_for_clarification_answer(session_id, clarify_request, timeout=30.0)
-
-                    if answer_value is not None:
-                        clarification_answers[clarify_request.slot] = answer_value
-
-                        # Apply answer to intent immediately
-                        intent.slots_detected[clarify_request.slot] = answer_value
-
-                        # Emit clarification acknowledged
-                        yield {
-                            "event": "clarification_acknowledged",
-                            "data": {
-                                "slot": clarify_request.slot,
-                                "answer": answer_value,
-                                "question_number": idx + 1,
-                                "remaining": len(intent.clarifications_suggested) - idx - 1
-                            }
-                        }
-                    else:
-                        # Timeout or error - use default if available
-                        default_value = self._get_default_for_slot(clarify_request.slot)
-                        if default_value:
-                            intent.slots_detected[clarify_request.slot] = default_value
-                            clarification_answers[clarify_request.slot] = default_value
-
-                    all_clarifications.append({
-                        "slot": clarify_request.slot,
-                        "answer": clarification_answers.get(clarify_request.slot)
-                    })
-
-                # Emit end of clarification loop
-                yield {
-                    "event": "clarification_loop_complete",
-                    "data": {
-                        "total_answered": len(all_clarifications),
-                        "clarifications": all_clarifications,
-                        "resolved_intent": intent.dict()
-                    }
-                }
-
-                resolved_intent = intent
-            else:
-                resolved_intent = intent
-                all_clarifications = []
-
-            # Return complete analysis with all clarifications resolved
-            yield {
-                "is_financial": True,
-                "category": "financial_analytics",
-                "intent": resolved_intent.dict(),
-                "complete": True,
-                "early_exit": False,
-                "clarifications_resolved": len(all_clarifications),
-                "clarification_details": all_clarifications
-            }
-
-        except Exception as e:
-            logger.error(f"Error in classify_query_relevance: {str(e)}")
-            yield {
-                "error": f"Classification failed: {str(e)}",
-                "early_exit": True,
-                "is_financial": False
-            }
-
+    
     # -------- Internal Methods for Unified Processing --------
 
-    async def _classify_topic_internal(self, query: str, client) -> OffTopicClassifierSchema:
-        """Internal classification logic using fast nano model"""
-        system_prompt = """You classify user queries to determine if they are about financial analytics.
-
-Financial analytics queries include:
-- Company financial performance (revenue, profit, growth)
-- Market share analysis
-- Stock prices and trends
-- Financial ratios and metrics
-- Competitor analysis
-- Industry benchmarking
-- Revenue forecasting
-- Cost analysis
-
-Off-topic queries include:
-- General conversation ("hello", "how are you")
-- Technical support for software/hardware
-- Personal questions
-- Non-financial business questions
-- Academic questions not related to finance
-- Entertainment or lifestyle topics
-
-Provide a short polite decline message for off-topic queries and suggest how to rephrase."""
-
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"Classify this query: '{query}'"}
-        ]
-
-        # Use gpt-5-nano-2025-08-07 for fast classification
-        result, _ = await client.create_structured(
-            response_model=OffTopicClassifierSchema,
-            messages=messages,
-            model="gpt-5-nano-2025-08-07",  # Fast nano model for classification
-            reasoning_effort="low"  # Fast classification
-        )
-
-        return result
-
-    async def _detect_intent_internal(self, query: str, session_id: str, client) -> IntentModel:
-        """Internal intent detection - reuses existing logic"""
-        from analytics_memory.intent import detect_intent_with_clarifications
-
-        # Use existing intent detection with clarifications
-        intent = await asyncio.to_thread(
-            detect_intent_with_clarifications,
-            query,
-            self.configs,
-            session_id=session_id
-        )
-        return intent
-
-    async def _wait_for_clarification_answer(self, session_id: str, clarify_request: ClarifyRequestModel, timeout: float = 30.0) -> Optional[Any]:
-        """Wait for clarification answer with timeout"""
-        # Store pending clarification (using supervisor's state management)
-        from analytics_supervisor.supervisor import get_active_workflow
-
-        workflow = get_active_workflow(session_id)
-        if not workflow:
-            logger.error(f"No active workflow found for session {session_id}")
-            return None
-
-        # Store clarification and wait
-        workflow._pending_clarifications[session_id] = clarify_request
-        workflow._clarification_events[session_id] = asyncio.Event()
-
-        try:
-            await asyncio.wait_for(
-                workflow._clarification_events[session_id].wait(),
-                timeout=timeout
-            )
-
-            # Get the answer
-            state = workflow.workflow_states.get(session_id)
-            if state and hasattr(state, 'clarification_answer'):
-                answer = state.clarification_answer
-                # Clear the answer for next question
-                delattr(state, 'clarification_answer')
-                return answer
-
-        except asyncio.TimeoutError:
-            logger.warning(f"Clarification timeout for session {session_id}, slot {clarify_request.slot}")
-            return None
-        finally:
-            # Cleanup
-            workflow._pending_clarifications.pop(session_id, None)
-            workflow._clarification_events.pop(session_id, None)
-
-        return None
-
+    
     def _get_default_for_slot(self, slot: str) -> Optional[Any]:
         """Get default value for a clarification slot"""
         defaults = {
@@ -1132,7 +787,38 @@ Provide a short polite decline message for off-topic queries and suggest how to 
         }
         return defaults.get(slot)
 
-    # -------- Question Completeness Analysis --------
+    def _get_options_for_slot(self, slot: str) -> List[str]:
+        """Get available options for a clarification slot (backward compatible)"""
+        if not slot:
+            return []
+
+        slot = str(slot).lower()
+
+        if slot == "company":
+            return self.configs.get("companies", {}).get("selection_rules", {}).get("default_companies", {}).get("tickers", ["NVDA", "AMD", "INTC", "MU", "QCOM", "AVGO", "TXN"])
+        if slot == "comparison":
+            # Derive comparison choices from YAML-defined intents
+            try:
+                qp = (self.configs.get("queries", {}) or {}).get("query_patterns", {}) or {}
+                keys = list(qp.keys()) if isinstance(qp, dict) else []
+                opts = []
+                if any(str(k).lower().endswith("_single") for k in keys):
+                    opts.append("single")
+                if any(str(k).lower().endswith("_all") for k in keys):
+                    opts.append("all")
+                # Fallback to both if not derivable
+                return opts or ["single", "all"]
+            except Exception:
+                return ["single", "all"]
+        if slot == "granularity":
+            return ["annual", "quarterly"]
+        return []
+
+
+
+
+
+
 
 
 

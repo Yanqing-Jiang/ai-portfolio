@@ -2,6 +2,8 @@ from __future__ import annotations
 from typing import List, Optional, Dict, Any, Literal
 from pydantic import BaseModel, Field
 
+from analytics_shared.intent import OffTopicClassifierSchema
+
 class ToolInputs(BaseModel):
     """Tool inputs - flexible schema for various tool parameters"""
     query: Optional[str] = None
@@ -117,6 +119,7 @@ class WorkflowState(BaseModel):
     # Caching fields for performance optimization
     cached_intent: Optional[Dict[str, Any]] = Field(default=None, description="Cached intent detection result")
     cached_plan: Optional[Dict[str, Any]] = Field(default=None, description="Cached query plan")
+    intent_data: Optional[Dict[str, Any]] = Field(default=None, description="Latest intent detection payload")
     cached_template: Optional[Dict[str, Any]] = Field(default=None, description="Cached template selection")
     cached_analysis: Optional[Dict[str, Any]] = Field(default=None, description="Cached short financial analysis")
     tool_results_cache: Dict[str, Any] = Field(default_factory=dict, description="Cache for tool execution results")
@@ -127,33 +130,6 @@ class WorkflowState(BaseModel):
     tool_execution_duration_ms: Optional[int] = None
     total_api_calls: int = Field(default=0, description="Total number of API calls made")
     cache_hits: int = Field(default=0, description="Number of cache hits for performance tracking")
-
-    class Config:
-        extra = "forbid"
-
-class OffTopicClassifierSchema(BaseModel):
-    """
-    Schema for classifying whether a query is relevant to financial analytics.
-
-    Used to implement early exit for off-topic queries with polite responses.
-    """
-    is_financial_query: bool = Field(description="True if query is about financial data, metrics, or analysis")
-    confidence: float = Field(description="Confidence score (0.0-1.0) in the classification", ge=0.0, le=1.0)
-    topic_category: Literal[
-        "financial_analytics",
-        "general_conversation",
-        "technical_support",
-        "personal_questions",
-        "other"
-    ] = Field(description="Category of the detected topic")
-    polite_decline_message: Optional[str] = Field(
-        description="Polite message to send if query is off-topic",
-        default=None
-    )
-    suggested_rephrase: Optional[str] = Field(
-        description="Suggestion for how to rephrase query to be financial analytics focused",
-        default=None
-    )
 
     class Config:
         extra = "forbid"

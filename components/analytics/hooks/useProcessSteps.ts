@@ -7,9 +7,33 @@ interface StepConfig {
   stepOrder?: string[];
 }
 
+const getOrderIndex = (order: string[], id: string) => {
+  const idx = order.indexOf(id);
+  return idx === -1 ? Number.MAX_SAFE_INTEGER : idx;
+};
+
+const mergeThinking = (current: string[], incoming: string[]) => {
+  if (!incoming.length) {
+    return current;
+  }
+
+  const cleaned = incoming.filter(Boolean);
+  if (!cleaned.length) {
+    return current;
+  }
+
+  const next = [...current];
+  cleaned.forEach((entry) => {
+    if (next[next.length - 1] !== entry) {
+      next.push(entry);
+    }
+  });
+  return next;
+};
+
 export const useProcessSteps = (config?: StepConfig) => {
   const [processSteps, setProcessSteps] = useState<ProcessStep[]>([]);
-  
+
   const stepNames = config?.stepNames || STEP_NAME;
   const stepOrder = config?.stepOrder || STEP_ORDER;
 
@@ -23,33 +47,49 @@ export const useProcessSteps = (config?: StepConfig) => {
   ) => {
     setProcessSteps((prev) => {
       const existing = prev.find((s) => s.id === stepId);
+
       if (existing) {
-        return prev.map((s) => 
-          s.id === stepId 
-            ? { 
-                ...s, 
-                status, 
-                thinking: thinking.length ? [...s.thinking, ...thinking] : s.thinking, 
-                details: details ?? s.details, 
-                elapsed_ms: elapsed_ms ?? s.elapsed_ms, 
-                timestamp: timestamp ?? s.timestamp 
-              } 
-            : s
-        );
+        const mergedDetails = details
+          ? { ...(existing.details ?? {}), ...details }
+          : existing.details;
+
+        return prev.map((step) => {
+          if (step.id !== stepId) {
+            return step;
+          }
+
+          return {
+            ...step,
+            status,
+            thinking: mergeThinking(step.thinking, thinking),
+            details: mergedDetails,
+            elapsed_ms: elapsed_ms ?? step.elapsed_ms,
+            timestamp: timestamp ?? step.timestamp,
+          };
+        });
       }
+
       const next: ProcessStep[] = [
         ...prev,
         {
           id: stepId,
           name: stepNames[stepId] || stepId,
           status,
-          thinking,
+          thinking: thinking.filter(Boolean),
           details,
           elapsed_ms,
           timestamp,
         },
       ];
-      next.sort((a, b) => stepOrder.indexOf(a.id) - stepOrder.indexOf(b.id));
+
+      next.sort((a, b) => {
+        const orderDiff = getOrderIndex(stepOrder, a.id) - getOrderIndex(stepOrder, b.id);
+        if (orderDiff !== 0) {
+          return orderDiff;
+        }
+        return (a.timestamp || '').localeCompare(b.timestamp || '');
+      });
+
       return next;
     });
   };
@@ -59,8 +99,8 @@ export const useProcessSteps = (config?: StepConfig) => {
   };
 
   const stopInProgressSteps = () => {
-    setProcessSteps((prev) => 
-      prev.map((s) => (s.status === 'in_progress' ? { ...s, status: 'stopped' } : s))
+    setProcessSteps((prev) =>
+      prev.map((step) => (step.status === 'in_progress' ? { ...step, status: 'stopped' } : step))
     );
   };
 

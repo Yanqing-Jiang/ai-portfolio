@@ -21,23 +21,24 @@ def normalize_timeframe(tf_raw: Any, query_text: str = "", configs: Dict = None)
     Returns:
         Dict with normalized timeframe structure
     """
-    if isinstance(tf_raw, dict):
-        return tf_raw.copy()
-
-    tf = {}
     text = (query_text or "").lower()
 
-    # Handle string formats like "5 years", "past 5 years", etc.
-    if isinstance(tf_raw, str):
-        tf_str = tf_raw.lower()
-        # Extract numbers from string formats
-        years_match = re.search(r"(\d{1,2})\s*years?", tf_str)
-        quarters_match = re.search(r"(\d{1,2})\s*quarters?", tf_str)
+    if isinstance(tf_raw, dict):
+        tf = tf_raw.copy()
+    else:
+        tf = {}
 
-        if years_match:
-            tf["years_back"] = int(years_match.group(1))
-        elif quarters_match:
-            tf["quarters_back"] = int(quarters_match.group(1))
+        # Handle string formats like "5 years", "past 5 years", etc.
+        if isinstance(tf_raw, str):
+            tf_str = tf_raw.lower()
+            # Extract numbers from string formats
+            years_match = re.search(r"(\d{1,2})\s*years?", tf_str)
+            quarters_match = re.search(r"(\d{1,2})\s*quarters?", tf_str)
+
+            if years_match:
+                tf["years_back"] = int(years_match.group(1))
+            elif quarters_match:
+                tf["quarters_back"] = int(quarters_match.group(1))
 
     # Fallback: parse from original query text
     years_m = re.search(r"(past|last)\s+(\d{1,2})\s+years?", text)

@@ -318,8 +318,8 @@ Result:
         steps={processSteps}
         show={showProcessPanel}
         onClose={() => setShowProcessPanel(false)}
-        title="Supervisor Process"
-        subtitle="Real-time workflow visualization"
+        title="Agent Thinking Process"
+        subtitle="Real-time agent reasoning & tool execution"
       />
 
     </div>

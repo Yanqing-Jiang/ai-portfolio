@@ -7,6 +7,7 @@ from datetime import datetime
 from .types import WorkflowState, SQLResultModel, ChartSpecModel, ValidationError, IntentModel, QueryPlanModel, ClarifyAnswerModel, ClarifyRequestModel
 from .config import CONFIGS
 from analytics_shared.streaming.events import EventEmitter, TimedEventEmitter
+from analytics_shared.intent import intent_to_sql_criteria
 from .intent import detect_intent, detect_intent_llm, detect_intent_with_clarifications
 from .sql_planner import compile_sql_from_plan, plan_sql_rule_based, choose_template
 from .db import execute
@@ -92,6 +93,12 @@ def _generate_chart_design(intent_key: Optional[str], plan: QueryPlanModel, data
 class AnalyticsMemoryWorkflow:
     """Phase 2 workflow that emits SSE-friendly events for the memory pipeline."""
 
+    def _looks_financial(self, query: str) -> bool:
+        q = (query or "").lower()
+        keywords = ("market share", "margin", "profit", "earnings", "revenue", "growth", "cash flow", "guidance", "quarter", "qoq", "yoy", "opex", "capex", "gross", "net income")
+        return any(keyword in q for keyword in keywords)
+
+
     def _get_company_display(self, intent: IntentModel, provisional_plan: Optional[QueryPlanModel] = None) -> str:
         """Generate smart company display based on intent and plan context."""
         company = intent.slots_detected.get('company')
@@ -110,70 +117,176 @@ class AnalyticsMemoryWorkflow:
     async def events(self, query: str, session_id: Optional[str] = None) -> AsyncGenerator[Dict[str, Any], None]:
         """Enhanced workflow with structured decision events and timing."""
         workflow_start = time.time()
-        now = datetime.utcnow().isoformat()
-        
-        # Generate session ID if not provided
+        timed_emitter = TimedEventEmitter()
+
+        # Ensure session context exists
         if not session_id:
             session_id = str(uuid.uuid4())
-        
-        
-        # Emit session ID for frontend tracking (lightweight)
+
+        # Emit session start for frontend tracking
         yield EventEmitter.session_started(session_id)
-        
-        # 1) Enhanced Intent Detection Phase with Early Clarification
-        yield EventEmitter.progress("intent_detection", "Detecting intent...")
-        
+
+        # 0) Lightweight classification phase before intent detection
+        timed_emitter.start_step("classification")
+        classification_started_ts = datetime.utcnow().isoformat()
+        yield {
+            "event": "classification_started",
+            "data": {
+                "message": "Starting query classification...",
+                "model": "heuristic-keyword-gate",
+                "ts": classification_started_ts,
+            },
+        }
+
+        looks_financial = self._looks_financial(query)
+        reasoning_message = ("Detected financial analytics keywords" if looks_financial else "No financial analytics keywords detected")
+        yield {
+            "event": "classification_reasoning",
+            "data": {
+                "thinking": reasoning_message,
+                "confidence": 0.9 if looks_financial else 0.1,
+                "category": "financial_analytics" if looks_financial else "other",
+                "ts": datetime.utcnow().isoformat(),
+            },
+        }
+
+        classification_elapsed = timed_emitter.end_step("classification")
+        classification_complete = {
+            "event": "classification_complete",
+            "data": {
+                "is_financial": looks_financial,
+                "category": "financial_analytics" if looks_financial else "other",
+                "confidence": 0.9 if looks_financial else 0.1,
+                "ts": datetime.utcnow().isoformat(),
+            },
+        }
+        if classification_elapsed:
+            classification_complete["data"]["elapsed_ms"] = classification_elapsed
+        yield classification_complete
+
+        if not looks_financial:
+            yield {
+                "event": "classification_fallback",
+                "data": {
+                    "method": "keyword_gate",
+                    "ts": datetime.utcnow().isoformat(),
+                },
+            }
+
+
+# 1) Intent Detection Phase with structured events
+        intent_progress = EventEmitter.progress("intent_detection", "Detecting intent...")
+        intent_progress["data"]["ts"] = datetime.utcnow().isoformat()
+        yield intent_progress
+
+        timed_emitter.start_step("intent_detection")
+        yield {
+            "event": "intent_detection_started",
+            "data": {
+                "message": "Analyzing query intent...",
+                "ts": datetime.utcnow().isoformat(),
+            },
+        }
+
         intent_start = time.time()
-        intent: IntentModel = await asyncio.to_thread(detect_intent_with_clarifications, query, CONFIGS.__dict__, session_id=session_id)
-        # Store original query for clarification engine
-        intent.slots_detected['original_query'] = query
-        intent_elapsed = int((time.time() - intent_start) * 1000)
+        intent: IntentModel = await asyncio.to_thread(
+            detect_intent_with_clarifications,
+            query,
+            CONFIGS.__dict__,
+            session_id=session_id,
+        )
+        intent.slots_detected["original_query"] = query
+        intent_elapsed = timed_emitter.end_step("intent_detection")
+        intent_complete = {
+            "event": "intent_detection_complete",
+            "data": {
+                "intent_key": intent.intent_key,
+                "confidence": intent.confidence,
+                "slots_detected": intent.slots_detected,
+                "ts": datetime.utcnow().isoformat(),
+                "elapsed_ms": int((time.time() - intent_start) * 1000),
+            },
+        }
+        if intent_elapsed:
+            intent_complete["data"]["elapsed_ms"] = intent_elapsed
+        yield intent_complete
 
         # 2) Provisional Plan Generation (lightweight)
-        provisional_plan: QueryPlanModel = QueryPlanModel(**plan_sql_rule_based(intent, CONFIGS.__dict__))
-        
+        provisional_plan: QueryPlanModel = QueryPlanModel(
+            **plan_sql_rule_based(intent, CONFIGS.__dict__)
+        )
+
         # 3) Provisional Template Selection
         template = choose_template(intent, provisional_plan, CONFIGS.__dict__)
-        
-        # 4) Early Clarification Computation
-        clarify_start = time.time()
-        official_clarifications = compute_required_clarifications(intent, provisional_plan, template, CONFIGS.__dict__)
-        
-        # Track answered slots throughout the session to prevent duplicates
-        all_answered_slots = set()
 
-        # Decision point: emit intent_draft or intent_decided
-        clarifications_needed = len(official_clarifications) > 0
+        # 4) Clarification computation (deduplicated)
+        official_clarifications = compute_required_clarifications(
+            intent, provisional_plan, template, CONFIGS.__dict__
+        )
+        deduped_requests: list[ClarifyRequestModel] = []
+        seen_slots: set[str] = set()
+        for request in official_clarifications:
+            if request.slot in seen_slots:
+                continue
+            seen_slots.add(request.slot)
+            deduped_requests.append(request)
+        official_clarifications = deduped_requests
+
+        all_answered_slots: set[str] = set()
+        assumptions: list[str] = []
+        rounds = 0
+
+        clarifications_needed = bool(official_clarifications)
         confidence_sufficient = (intent.confidence or 0.0) >= 0.8
-        
-        if clarifications_needed or not confidence_sufficient:
-            # Emit intent_draft - clarifications are needed (lightweight)
-            yield EventEmitter.intent_draft(
+
+        intent_status_event = (
+            EventEmitter.intent_draft(
                 confidence=intent.confidence,
                 clarifications_needed=True,
-                clarifications_count=len(official_clarifications)
+                clarifications_count=len(official_clarifications),
             )
-        else:
-            # Emit intent_decided - high confidence, no clarifications needed (lightweight)
-            yield EventEmitter.intent_decided(
+            if clarifications_needed or not confidence_sufficient
+            else EventEmitter.intent_decided(
                 key=intent.intent_key,
                 confidence=intent.confidence,
-                clarifications_needed=False
+                clarifications_needed=False,
             )
+        )
+        intent_status_event["data"]["ts"] = datetime.utcnow().isoformat()
+        if intent_elapsed:
+            intent_status_event["data"]["elapsed_ms"] = intent_elapsed
+        yield intent_status_event
 
         # 5) Clarification Phase (if needed)
         if official_clarifications:
-            yield EventEmitter.progress("clarification", "Clarifying requirements...")
-            assumptions: list[str] = []
-            rounds = 0
+            timed_emitter.start_step("clarification")
+            missing_slots = [req.slot for req in official_clarifications]
+            yield {
+                "event": "clarification_needed",
+                "data": {
+                    "missing_fields": missing_slots,
+                    "ts": datetime.utcnow().isoformat(),
+                },
+            }
+
+            clarification_progress = EventEmitter.progress(
+                "clarification", "Clarifying requirements..."
+            )
+            clarification_progress["data"]["ts"] = datetime.utcnow().isoformat()
+            yield clarification_progress
+
+            yield {
+                "event": "clarification_loop_start",
+                "data": {
+                    "total_clarifications": len(official_clarifications),
+                    "missing_slots": missing_slots,
+                    "ts": datetime.utcnow().isoformat(),
+                },
+            }
 
             while official_clarifications and rounds < 3:
-                # Process one clarification at a time
-                slot_request = official_clarifications[0]  # Take the first (most important) clarification
-                
-                
-                # Send single clarification request
-                yield EventEmitter.clarification_request(session_id, {
+                slot_request = official_clarifications[0]
+                request_payload = {
                     "request_id": slot_request.request_id,
                     "slot": slot_request.slot,
                     "question": slot_request.question,
@@ -184,151 +297,220 @@ class AnalyticsMemoryWorkflow:
                     "proposed_confidence": slot_request.proposed_confidence,
                     "reason": slot_request.reason,
                     "required": slot_request.required,
-                    "round": rounds + 1
-                })
-                
-                # Wait for single answer with timeout
+                    "round": rounds + 1,
+                    "remaining": len(official_clarifications),
+                }
+                clarification_event = EventEmitter.clarification_request(
+                    session_id, request_payload
+                )
+                clarification_event["data"]["ts"] = datetime.utcnow().isoformat()
+                yield clarification_event
+
                 try:
                     answer = await asyncio.wait_for(
                         wait_for_answer_blocking(session_id, slot_request.request_id),
-                        timeout=60.0  # 60 second timeout
+                        timeout=60.0,
                     )
                 except asyncio.TimeoutError:
-                    # Emit timeout event
-                    yield EventEmitter.progress("clarification_timeout", f"Timeout waiting for {slot_request.slot} clarification. Using default value.")
-                    # Use default value if available, otherwise skip this clarification
+                    timeout_event = EventEmitter.progress(
+                        "clarification_timeout",
+                        f"Timeout waiting for {slot_request.slot} clarification. Using default value.",
+                    )
+                    timeout_event["data"]["ts"] = datetime.utcnow().isoformat()
+                    yield timeout_event
                     if slot_request.default:
                         from .types import ClarifyAnswerModel
+
                         answer = ClarifyAnswerModel(
                             session_id=session_id,
                             request_id=slot_request.request_id,
                             slot=slot_request.slot,
                             value=slot_request.default,
-                            ts=datetime.utcnow().isoformat()
+                            ts=datetime.utcnow().isoformat(),
                         )
                     else:
-                        # Skip this clarification
                         official_clarifications.pop(0)
                         continue
-                
+
                 if answer:
-                    # Validate answer using the new validation function (bool)
                     is_valid = validate_clarification_answer(answer, slot_request)
                     if is_valid:
-                        
-                        # Emit acknowledgment for the received answer
-                        yield EventEmitter.result("clarification_ack", {
-                            "slot": slot_request.slot,
-                            "answer": answer.value
-                        })
-                        
-                        # Merge single answer back into intent and plan
-                        intent, provisional_plan, merge_assumptions = await merge_answers(intent, provisional_plan, [answer], CONFIGS.__dict__)
-                        assumptions.extend(merge_assumptions)
-                        
-                        # Re-select template after this answer
-                        template = choose_template(intent, provisional_plan, CONFIGS.__dict__)
+                        ack_event = EventEmitter.clarification_ack(
+                            session_id, slot_request.request_id, answer.value
+                        )
+                        ack_event["data"].update(
+                            {
+                                "slot": slot_request.slot,
+                                "ts": datetime.utcnow().isoformat(),
+                            }
+                        )
+                        yield ack_event
 
-                        # Re-compute clarifications after intent/plan changes
-                        new_clarifications = compute_required_clarifications(intent, provisional_plan, template, CONFIGS.__dict__)
-                        
-                        # Remove the answered clarification from original list
+                        intent, provisional_plan, merge_assumptions = await merge_answers(
+                            intent, provisional_plan, [answer], CONFIGS.__dict__
+                        )
+                        assumptions.extend(merge_assumptions)
+
+                        template = choose_template(
+                            intent, provisional_plan, CONFIGS.__dict__
+                        )
+                        new_clarifications = compute_required_clarifications(
+                            intent, provisional_plan, template, CONFIGS.__dict__
+                        )
                         remaining_original = official_clarifications[1:]
-                        
-                        # Track this answer in session history
                         all_answered_slots.add(answer.slot)
-                        
-                        # Combine new clarifications with remaining original ones (avoid duplicates)
-                        combined_requests = []
-                        
-                        # Add new clarifications first (higher priority), skip already answered in session
+
+                        combined_requests: list[ClarifyRequestModel] = []
                         for new_req in new_clarifications:
-                            if new_req.slot not in all_answered_slots:
+                            if new_req.slot not in all_answered_slots and all(
+                                new_req.slot != existing.slot for existing in combined_requests
+                            ):
                                 combined_requests.append(new_req)
-                        
-                        # Add remaining original clarifications (skip answered and duplicates)
                         for orig_req in remaining_original:
-                            if (orig_req.slot not in all_answered_slots and 
-                                not any(c.slot == orig_req.slot for c in combined_requests)):
+                            if (
+                                orig_req.slot not in all_answered_slots
+                                and all(orig_req.slot != existing.slot for existing in combined_requests)
+                            ):
                                 combined_requests.append(orig_req)
-                        
                         official_clarifications = combined_requests
                         rounds += 1
-                        
                     else:
-                        # Invalid answer, emit detailed error message
                         error_message = get_validation_error_message(answer, slot_request)
-                        yield EventEmitter.progress("clarification_error", error_message or f"Invalid value for {slot_request.slot}: {answer.value}")
-                        # Remove this clarification from the list and continue
+                        error_event = EventEmitter.progress(
+                            "clarification_error",
+                            error_message or f"Invalid value for {slot_request.slot}: {answer.value}",
+                        )
+                        error_event["data"]["ts"] = datetime.utcnow().isoformat()
+                        yield error_event
                         official_clarifications = official_clarifications[1:]
                 else:
-                    # No answer received, skip this clarification
                     official_clarifications = official_clarifications[1:]
 
-            # Emit intent_resolved after clarifications complete
-            yield EventEmitter.intent_resolved(
+            clarification_elapsed = timed_emitter.end_step("clarification")
+            resolved_event = EventEmitter.intent_resolved(
                 key=intent.intent_key,
                 confidence=intent.confidence,
-                rounds=rounds
+                rounds=rounds,
             )
+            resolved_event["data"].update(
+                {
+                    "assumptions": assumptions,
+                    "ts": datetime.utcnow().isoformat(),
+                }
+            )
+            if clarification_elapsed:
+                resolved_event["data"]["elapsed_ms"] = clarification_elapsed
+            yield resolved_event
+        else:
+            yield {
+                "event": "clarification_skipped",
+                "data": {
+                    "reason": "All required slots satisfied",
+                    "ts": datetime.utcnow().isoformat(),
+                },
+            }
 
-        # Now use the finalized intent and provisional plan as the real plan
         plan = provisional_plan
-        
-        # 6) Emit Final Plan and Template Events
-        current_time = time.time()
-        elapsed_ms = int((current_time - workflow_start) * 1000)
-        
-        yield EventEmitter.result("plan_built", {
-            "granularity": plan.granularity,
-            "comparison": plan.comparison,
-            "metrics_count": len(plan.metrics)
-        })
 
-        # Get template metadata from queries config
+        intent_finalized_event = {
+            "event": "intent_finalized",
+            "data": {
+                "intent_key": intent.intent_key,
+                "confidence": intent.confidence,
+                "assumptions": assumptions,
+                "ts": datetime.utcnow().isoformat(),
+            },
+        }
+        if rounds:
+            intent_finalized_event["data"]["clarification_rounds"] = rounds
+        yield intent_finalized_event
+
+        criteria_model = intent_to_sql_criteria(intent, CONFIGS.__dict__)
+        criteria_payload = criteria_model.dict()
+        criteria_payload["ts"] = datetime.utcnow().isoformat()
+        yield {
+            "event": "criteria_ready",
+            "data": criteria_payload,
+        }
+
+        # 6) Emit Final Plan and Template Events
+        elapsed_ms = int((time.time() - workflow_start) * 1000)
+        plan_event = EventEmitter.result(
+            "plan_built",
+            {
+                "granularity": plan.granularity,
+                "comparison": plan.comparison,
+                "metrics_count": len(plan.metrics),
+            },
+        )
+        plan_event["event"] = "plan_built"
+        plan_event["data"].update(
+            {
+                "ts": datetime.utcnow().isoformat(),
+                "elapsed_ms": elapsed_ms,
+            }
+        )
+        yield plan_event
+
         template_info = None
         if template and intent.intent_key:
-            queries_config = CONFIGS.__dict__.get('queries', {})
-            patterns = queries_config.get('query_patterns', {})
+            queries_config = CONFIGS.__dict__.get("queries", {})
+            patterns = queries_config.get("query_patterns", {})
             if intent.intent_key in patterns:
                 pattern = patterns[intent.intent_key]
                 template_info = {
                     "id": intent.intent_key,
-                    "name": pattern.get('name', intent.intent_key),
-                    "description": pattern.get('description', 'No description available')
+                    "name": pattern.get("name", intent.intent_key),
+                    "description": pattern.get(
+                        "description", "No description available"
+                    ),
                 }
-        
-        yield EventEmitter.result("template_selected", {
-            "template_id": intent.intent_key if template else None,
-            "has_template": template is not None
-        })
+
+        template_event = EventEmitter.result(
+            "template_selected",
+            {
+                "template_id": intent.intent_key if template else None,
+                "has_template": template is not None,
+            },
+        )
+        template_event["event"] = "template_selected"
+        template_event["data"]["ts"] = datetime.utcnow().isoformat()
+        if template_info:
+            template_event["data"]["template"] = template_info
+        yield template_event
 
         # 7) SQL Compilation Phase
-        yield EventEmitter.progress("sql_compilation", "Compiling SQL...")
-        
+        sql_progress = EventEmitter.progress("sql_compilation", "Compiling SQL...")
+        sql_progress["data"]["ts"] = datetime.utcnow().isoformat()
+        yield sql_progress
+
         compile_start = time.time()
         try:
             sql = compile_sql_from_plan(plan, intent, CONFIGS.__dict__, template)
         except ValueError as ve:
-            # Handle company requirement validation errors by requesting clarification
             error_msg = str(ve)
             if "This query requires specifying a company" in error_msg:
-                # Create company clarification request (schema-friendly)
-                companies_list = CONFIGS.companies.get('companies', {}).get('semiconductor', [])
-                # Build display options like "NVDA (Nvidia)"
+                companies_list = CONFIGS.companies.get("companies", {}).get(
+                    "semiconductor", []
+                )
                 display_options: list[str] = []
                 for comp in companies_list[:7]:
                     try:
-                        t = comp.get('ticker')
-                        n = comp.get('short_name', comp.get('name', t))
-                        if t:
-                            display_options.append(f"{t} ({n})")
+                        ticker_value = comp.get("ticker")
+                        display_name = comp.get(
+                            "short_name", comp.get("name", ticker_value)
+                        )
+                        if ticker_value:
+                            display_options.append(f"{ticker_value} ({display_name})")
                     except Exception:
                         continue
-
-                # Fallback options if config missing
                 if not display_options:
-                    display_options = ['NVDA (Nvidia)', 'AMD (AMD)', 'INTC (Intel)', 'MU (Micron)']
+                    display_options = [
+                        "NVDA (Nvidia)",
+                        "AMD (AMD)",
+                        "INTC (Intel)",
+                        "MU (Micron)",
+                    ]
 
                 clarification_request = ClarifyRequestModel(
                     request_id=f"company_req_{int(time.time() * 1000)}",
@@ -338,111 +520,184 @@ class AnalyticsMemoryWorkflow:
                     options=display_options,
                     default=display_options[0],
                     required=True,
-                    reason="Market share analysis requires specifying a company"
+                    reason="Market share analysis requires specifying a company",
                 )
 
-                # Emit clarification request
-                yield EventEmitter.clarification_request(session_id, {
-                    "request_id": clarification_request.request_id,
-                    "slot": clarification_request.slot,
-                    "question": clarification_request.question,
-                    "type": clarification_request.type,
-                    "options": clarification_request.options,
-                    "required": clarification_request.required,
-                    "reason": clarification_request.reason
-                })
+                company_request = EventEmitter.clarification_request(
+                    session_id,
+                    {
+                        "request_id": clarification_request.request_id,
+                        "slot": clarification_request.slot,
+                        "question": clarification_request.question,
+                        "type": clarification_request.type,
+                        "options": clarification_request.options,
+                        "default": clarification_request.default,
+                        "required": clarification_request.required,
+                        "reason": clarification_request.reason,
+                        "round": rounds + 1,
+                    },
+                )
+                company_request["data"]["ts"] = datetime.utcnow().isoformat()
+                yield company_request
 
-                # Wait for clarification response
                 try:
                     answer = await asyncio.wait_for(
-                        wait_for_answer_blocking(session_id, clarification_request.request_id),
-                        timeout=60.0
+                        wait_for_answer_blocking(
+                            session_id, clarification_request.request_id
+                        ),
+                        timeout=60.0,
                     )
-
                     if answer and answer.value:
-                        # Emit acknowledgment
-                        yield EventEmitter.result("clarification_ack", {
-                            "slot": clarification_request.slot,
-                            "answer": answer.value
-                        })
-
-                        # Update intent with selected company
+                        ack_event = EventEmitter.clarification_ack(
+                            session_id,
+                            clarification_request.request_id,
+                            answer.value,
+                        )
+                        ack_event["data"].update(
+                            {
+                                "slot": clarification_request.slot,
+                                "ts": datetime.utcnow().isoformat(),
+                            }
+                        )
+                        yield ack_event
                         intent.slots_detected["company"] = answer.value
-
-                        # Retry SQL compilation with selected company
-                        try:
-                            sql = compile_sql_from_plan(plan, intent, CONFIGS.__dict__, template)
-                        except ValueError as retry_ve:
-                            yield EventEmitter.errors([str(retry_ve)])
-                            return
+                        sql = compile_sql_from_plan(
+                            plan, intent, CONFIGS.__dict__, template
+                        )
                     else:
-                        yield EventEmitter.errors(["No company selected"])
+                        yield EventEmitter.error("clarification", "No company selected")
                         return
-
                 except asyncio.TimeoutError:
-                    yield EventEmitter.progress("clarification_timeout", "Timeout waiting for company selection")
+                    timeout_event = EventEmitter.progress(
+                        "clarification_timeout",
+                        "Timeout waiting for company selection",
+                    )
+                    timeout_event["data"]["ts"] = datetime.utcnow().isoformat()
+                    yield timeout_event
                     return
             else:
-                # Non-company related ValueError, emit as error
-                yield EventEmitter.errors([str(ve)])
+                yield EventEmitter.error("sql_compilation", str(ve))
                 return
+
         compile_elapsed = int((time.time() - compile_start) * 1000)
-        
-        yield EventEmitter.result("sql_compiled", {
-            "sql_length": len(sql),
-            "template_used": template is not None
-        })
+        sql_compiled_event = EventEmitter.result(
+            "sql_compiled",
+            {
+                "sql_length": len(sql),
+                "template_used": template is not None,
+            },
+        )
+        sql_compiled_event["event"] = "sql_compiled"
+        sql_compiled_event["data"].update(
+            {
+                "ts": datetime.utcnow().isoformat(),
+                "elapsed_ms": compile_elapsed,
+            }
+        )
+        yield sql_compiled_event
+
+        sql_generated_event = EventEmitter.sql_generated(sql)
+        sql_generated_event["data"].update(
+            {
+                "ts": datetime.utcnow().isoformat(),
+                "elapsed_ms": compile_elapsed,
+            }
+        )
+        yield sql_generated_event
 
         # 8) SQL Validation Phase
-        yield EventEmitter.progress("sql_validation", "Validating SQL...")
-        
+        validation_progress = EventEmitter.progress(
+            "sql_validation", "Validating SQL..."
+        )
+        validation_progress["data"]["ts"] = datetime.utcnow().isoformat()
+        yield validation_progress
+
         validate_start = time.time()
-        ok, issues = validate_sql(sql, allowed_tables=["comp_financials"], max_limit=CONFIGS.database.get('query_defaults', {}).get('max_limit', 10000), granularity=plan.granularity)
+        ok, issues = validate_sql(
+            sql,
+            allowed_tables=["comp_financials"],
+            max_limit=CONFIGS.database.get("query_defaults", {}).get(
+                "max_limit", 10000
+            ),
+            granularity=plan.granularity,
+        )
         validate_elapsed = int((time.time() - validate_start) * 1000)
-        
-        yield EventEmitter.result("sql_validated", {
-            "ok": ok,
-            "issues_count": len(issues) if issues else 0
-        })
-        
+        validation_event = EventEmitter.result(
+            "sql_validated",
+            {
+                "ok": ok,
+                "issues_count": len(issues) if issues else 0,
+            },
+        )
+        validation_event["event"] = "sql_validated"
+        validation_event["data"].update(
+            {
+                "ts": datetime.utcnow().isoformat(),
+                "elapsed_ms": validate_elapsed,
+            }
+        )
+        yield validation_event
+
         if not ok:
-            yield EventEmitter.errors(issues)
+            yield EventEmitter.error("sql_validation", "; ".join(issues))
             return
 
-        yield EventEmitter.sql_generated(sql)
 
         # 9) SQL Execution Phase
-        yield EventEmitter.progress("sql_execution", "Executing query...")
-        
+        execution_progress = EventEmitter.progress(
+            "sql_execution", "Executing query..."
+        )
+        execution_progress["data"]["ts"] = datetime.utcnow().isoformat()
+        yield execution_progress
+
         exec_start = time.time()
         try:
             data = await execute(sql)
-        except Exception as e:
-            # Emit a clear error event on DB failures/timeouts
-            yield EventEmitter.errors([str(e)], step="sql_execution")
+        except Exception as exec_exc:
+            error_event = EventEmitter.error("sql_execution", str(exec_exc))
+            error_event["data"]["ts"] = datetime.utcnow().isoformat()
+            yield error_event
             return
         exec_elapsed = int((time.time() - exec_start) * 1000)
-        
+
         try:
             SQLResultModel(query=sql, data=data)
         except ValidationError as ve:
-            yield EventEmitter.errors([str(ve)])
+            yield EventEmitter.error("sql_execution", str(ve))
             return
-        
-        # Emit execution statistics
-        yield EventEmitter.result("execution_stats", {
-            "row_count": len(data),
-            "columns_count": len(data[0].keys()) if data else 0
-        })
-        
-        yield EventEmitter.result("data_retrieved", {"row_count": len(data)})
+
+        execution_stats = EventEmitter.result(
+            "execution_stats",
+            {
+                "row_count": len(data),
+                "columns_count": len(data[0].keys()) if data else 0,
+            },
+        )
+        execution_stats["event"] = "execution_stats"
+        execution_stats["data"].update(
+            {
+                "ts": datetime.utcnow().isoformat(),
+                "elapsed_ms": exec_elapsed,
+            }
+        )
+        yield execution_stats
+
+        data_retrieved = EventEmitter.result(
+            "data_retrieved", {"row_count": len(data)}
+        )
+        data_retrieved["event"] = "data_retrieved"
+        data_retrieved["data"]["ts"] = datetime.utcnow().isoformat()
+        yield data_retrieved
 
         # 10) Chart Planning Phase
-        yield EventEmitter.progress("chart_generation", "Planning chart...")
-        
+        chart_progress = EventEmitter.progress(
+            "chart_generation", "Planning chart..."
+        )
+        chart_progress["data"]["ts"] = datetime.utcnow().isoformat()
+        yield chart_progress
+
         chart_start = time.time()
         chart_plan = plan_chart_rule_based(data, query, intent.intent_key)
-        # Pass intent and comparison to the chart builder for intent-specific layouts
         spec = build_chart_spec(
             data,
             chart_plan.dict(),
@@ -450,51 +705,118 @@ class AnalyticsMemoryWorkflow:
             intent_key=intent.intent_key,
             comparison=plan.comparison,
         )
-        
-        # Generate smart chart design metadata
         chart_design = _generate_chart_design(intent.intent_key, plan, data, spec)
-        spec['meta']['chartDesign'] = chart_design
-        
+        spec.setdefault("meta", {}).setdefault("chartDesign", chart_design)
         chart_elapsed = int((time.time() - chart_start) * 1000)
-        
-        yield EventEmitter.result("chart_planned", {
-            "chart_type": chart_plan.chart_type,
-            "series_count": len(chart_plan.series)
-        })
-        
+
+        chart_event = EventEmitter.result(
+            "chart_planned",
+            {
+                "chart_type": chart_plan.chart_type,
+                "series_count": len(chart_plan.series),
+            },
+        )
+        chart_event["event"] = "chart_planned"
+        chart_event["data"].update(
+            {
+                "ts": datetime.utcnow().isoformat(),
+                "elapsed_ms": chart_elapsed,
+            }
+        )
+        yield chart_event
+
         try:
             ChartSpecModel(**spec)
-            yield EventEmitter.result("chart_generated", {"chart_type": spec.get('meta', {}).get('chartDesign', {}).get('chart_type', 'unknown')}, key="chart_spec")
+            generated_chart = EventEmitter.result(
+                "chart_generated",
+                {
+                    "chart_type": spec.get("meta", {}).get("chartDesign", {}).get(
+                        "chart_type", "unknown"
+                    ),
+                    "chart_spec": spec,
+                },
+                key="chart_spec",
+            )
+            generated_chart["event"] = "chart_generated"
+            generated_chart["data"]["ts"] = datetime.utcnow().isoformat()
+            yield generated_chart
         except ValidationError as ve:
-            # Send warning but continue with raw spec - frontend can handle it
-            yield EventEmitter.progress("warning", f"Chart spec validation warning: {str(ve)}")
-            yield EventEmitter.result("chart_generated", {"chart_type": spec.get('meta', {}).get('chartDesign', {}).get('chart_type', 'unknown')}, key="chart_spec")
+            warning_event = EventEmitter.progress(
+                "warning", f"Chart spec validation warning: {str(ve)}"
+            )
+            warning_event["data"]["ts"] = datetime.utcnow().isoformat()
+            yield warning_event
+            fallback_chart = EventEmitter.result(
+                "chart_generated",
+                {
+                    "chart_type": spec.get("meta", {}).get("chartDesign", {}).get(
+                        "chart_type", "unknown"
+                    ),
+                    "chart_spec": spec,
+                },
+                key="chart_spec",
+            )
+            fallback_chart["event"] = "chart_generated"
+            fallback_chart["data"]["ts"] = datetime.utcnow().isoformat()
+            yield fallback_chart
 
         # 11) Analysis Generation Phase
-        yield EventEmitter.progress("analysis_generation", "Generating insights...")
-        
+        analysis_progress = EventEmitter.progress(
+            "analysis_generation", "Generating insights..."
+        )
+        analysis_progress["data"]["ts"] = datetime.utcnow().isoformat()
+        yield analysis_progress
+
         analysis_start = time.time()
         full_analysis = ""
-        async for text in stream_insights_llm(data, sql, query, session_id=session_id):
-            if text:
-                full_analysis += text
-                yield EventEmitter.result("analysis_streaming", {"chunk_length": len(text)}, key="partial_analysis")
-        
+        async for text_chunk in stream_insights_llm(
+            data, sql, query, session_id=session_id
+        ):
+            if text_chunk:
+                full_analysis += text_chunk
+                streaming_event = {
+                    "event": "analysis_streaming",
+                    "data": {
+                        "step": "analysis_generation",
+                        "partial_analysis": text_chunk,
+                        "chunk_length": len(text_chunk),
+                        "ts": datetime.utcnow().isoformat(),
+                    },
+                }
+                yield streaming_event
+
         analysis_elapsed = int((time.time() - analysis_start) * 1000)
-        
-        # Emit complete buffered analysis
-        yield EventEmitter.result("analysis_complete", {"analysis_length": len(full_analysis)}, key="analysis")
-        
+        analysis_complete = EventEmitter.result(
+            "analysis_complete",
+            {
+                "analysis_length": len(full_analysis),
+                "analysis": full_analysis,
+            },
+            key="analysis",
+        )
+        analysis_complete["event"] = "analysis_complete"
+        analysis_complete["data"].update(
+            {
+                "ts": datetime.utcnow().isoformat(),
+                "elapsed_ms": analysis_elapsed,
+            }
+        )
+        yield analysis_complete
+
         # Cleanup expired sessions
         from .clarify import get_session_store
+
         session_store = await get_session_store()
         await session_store.cleanup_expired()
-        
-        # Final workflow completion with total timing
+
         total_elapsed = int((time.time() - workflow_start) * 1000)
-        yield EventEmitter.result("workflow_complete", {
-            "total_elapsed_ms": total_elapsed
-        })
+        workflow_complete = EventEmitter.result(
+            "workflow_complete", {"total_elapsed_ms": total_elapsed}
+        )
+        workflow_complete["event"] = "workflow_complete"
+        workflow_complete["data"]["ts"] = datetime.utcnow().isoformat()
+        yield workflow_complete
+
 
 
 # Standalone wrapper function for main.py
@@ -503,3 +825,4 @@ async def analytics_memory_workflow(query: str, session_id: str = None, session_
     workflow_instance = AnalyticsMemoryWorkflow()
     async for event in workflow_instance.events(query, session_id):
         yield event
+
