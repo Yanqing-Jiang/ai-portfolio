@@ -6,9 +6,10 @@
 
 ## Project Integration Overview
 - `backend/unified_responses_client.py` is the single gateway for Responses API access (session tracking, reasoning flags, embeddings, retries).
-- `backend/analytics_memory/openai_client.py` adapts the unified client for intent/memory pipelines with sync + async helpers.
-- `backend/analytics_shared/intent/` and `backend/analytics_supervisor/` import the unified client for structured outputs, streaming clarifications, and supervisor decisions.
-- `backend/analytics_agent.py` calls the same unified client but remains a standalone workflow; avoid touching it unless a shared front-end pathway requires it.
+- `backend/analytics/core/openai_client.py` wraps the unified client for analytics flows, exposing sync + async helpers that preserve shared session state.
+- `backend/analytics/flows/` (planner_executor, single_agent_tools, multi_agent) orchestrate Responses prompts and stream SSE telemetry via `workflow.run_flow()`.
+- `backend/analytics/sql/` compiles YAML catalogues from `backend/config/schemas/*.yaml` to suggest, validate, and execute SQL with deterministic fallbacks when the LLM output fails checks.
+- `backend/analytics_agent.py` still calls the unified client but remains a standalone workflow; only update it when a shared front-end pathway requires the change.
 - REST endpoints in `backend/main.py` surface these flows to the React front-end. No direct Responses usage exists in the front-end; all calls go through FastAPI.
 
 ---
@@ -25,7 +26,7 @@
 ### Typical usage
 ```python
 from unified_responses_client import get_unified_client
-from analytics_shared.intent.models import IntentModel
+from analytics.core.state import IntentModel
 
 client = get_unified_client()
 
@@ -37,12 +38,21 @@ intent, raw = await client.create_structured(
 )
 ```
 
+## YAML-Guided SQL Planning
+- `analytics/sql/templates.py` loads the YAML catalogue (`backend/config/schemas/*.yaml`) listing metrics, charts, and query skeletons.
+- `analytics/flows/planner_executor.py` asks the Responses API for a candidate SQL statement via `UnifiedResponsesClient.simple_completion()` before validation.
+- `analytics/sql/validator.py` enforces catalog-driven guardrails (allowed tables/columns, limit ceilings) and falls back to `analytics/sql/compiler.py` when the LLM output fails safety checks.
+- `analytics/sql/executor.py` runs the final statement and streams `sql_generated` telemetry including whether a template fallback was required.
+- `single_agent_tools` and `multi_agent` flows wrap these planner events with `tool_call`, `agent_turn`, and `agent_reasoning` telemetry but reuse the same SQL pipeline.
+
 ---
 
 ## Request Patterns (Python)
 ### Structured intents & clarifications
-Used by `analytics_shared.intent.detection` and `analytics_supervisor.supervisor`.
+Used by `analytics.core.clarify` and `analytics.flows.planner_executor` during intent and clarification phases.
 ```python
+from analytics.core.state import ClarifyRequestModel
+
 parsed, response = await client.create_structured(
     response_model=ClarifyRequestModel,
     messages=message_chain,
@@ -54,7 +64,8 @@ parsed, response = await client.create_structured(
 * Returns the typed Pydantic model plus the raw SDK object for logging/analytics.
 
 ### Streaming analytics answers
-Surfaced at `/api/analytics/memory/stream`.
+Surfaced at `/api/analytics/memory/stream`; implemented by `analytics/flows/workflow.analytics_memory_workflow()` which wraps the planner, single-agent, and multi-agent flows.
+- Select a flow with the `flow` query parameter (`planner-executor`, `single-agent`, `multi-agent`); the legacy `mode` alias remains for backwards compatibility.
 ```python
 async for delta in client.stream_response(
     messages=conversation,
@@ -64,10 +75,14 @@ async for delta in client.stream_response(
     if delta.content:
         yield delta.content  # forwarded to FastAPI StreamingResponse
 ```
-* Downstream SSE handlers ignore empty deltas and only push text payloads to the browser.
+* Downstream SSE handlers ignore empty deltas and forward structured events to `useanalyticsMemoryStream`, which decorates them with `tool_call`, `agent_turn`, and `agent_reasoning` telemetry for the demo flows.
 
-### Tool calling inside supervisor flows
+### Tool calling inside analytics tool registries
 ```python
+from analytics.tools.registry import SupervisorTools
+
+registered_tools = SupervisorTools().get_tool_schemas()
+
 response = await client.create_response(
     messages=tool_prompt,
     tools=registered_tools,
@@ -120,8 +135,8 @@ Keep these values in `backend/.env`; never check secrets into version control.
 ---
 
 ## Async vs Sync Callers
-- Async-first: `analytics_supervisor` and `analytics_shared` call awaitable helpers directly.
-- Sync contexts (e.g., `analytics_memory/openai_client.py::create_structured`) spin up a thread + event loop to avoid `RuntimeError: asyncio.run()` within an active loop.
+- Async-first: `analytics/flows` modules call awaitable helpers directly (planner, single-agent, multi-agent).
+- Sync contexts (e.g., `analytics/core/openai_client.py::create_structured`) spin up a thread + event loop to avoid `RuntimeError: asyncio.run()` within an active loop.
 - Avoid creating ad-hoc clients; always call `get_unified_client()` so session state and rate limiting remain centralized.
 
 ---
@@ -143,6 +158,13 @@ print(result.final_output)
 For tool integration use `agents.function_tool`; persist memory with `SQLiteSession` or `SQLAlchemySession`.
 
 ---
+
+## Flow Test Coverage (2025-09-26)
+- `backend/tests/analytics/test_flow_modes_queries.py` runs stubbed planner-executor, single-agent, and multi-agent flows.
+  - "Nvidia market share in the past 5 years?" selects the `market_share_single` YAML template and streams SQL from the Responses API stub.
+  - "How's Nvidia margin growth compare to industry average?" drives the single-agent tool flow, logging `tool_call` end events with template metadata.
+  - Multi-agent mode emits `agent_turn` events (e.g., `sql_specialist`) while reusing the shared planner pipeline.
+- `backend/tests/analytics/test_legacy_modules_removed.py` guards against reintroducing the retired `analytics_memory`, `analytics_shared`, and `analytics_supervisor` packages.
 
 ## Practical Tips
 - Prefer the Responses API for new analytics work; legacy Chat Completions sticks around only for the research agent.

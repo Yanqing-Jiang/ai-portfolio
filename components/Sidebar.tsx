@@ -16,7 +16,12 @@ interface SidebarProps {
 }
 
 const Sidebar: React.FC<SidebarProps> = ({ projectData, selectedProject, onSelectProject, isSidebarOpen, onGoHome }) => {
-  const [openYears, setOpenYears] = useState<Set<number>>(() => new Set(projectData.map(p => p.year)));
+  const [openYears, setOpenYears] = useState<Set<number>>(() => {
+  const initiallyOpenYears = projectData
+    .filter(group => group.label !== 'Pre-AI Projects')
+    .map(group => group.year);
+  return new Set(initiallyOpenYears);
+});
   const [authState, setAuthState] = useState<AuthState>({ user: null, loading: true, error: null });
   const [showAuthModal, setShowAuthModal] = useState(false);
 
@@ -81,9 +86,9 @@ const Sidebar: React.FC<SidebarProps> = ({ projectData, selectedProject, onSelec
         </button>
 
         {/* Navigation with responsive typography */}
-        <nav className="flex-1 overflow-y-auto pr-1 scrollbar-thin scrollbar-track-gray-800 scrollbar-thumb-gray-600">
+        <nav className="flex-1 overflow-y-auto pr-1 sidebar-scrollbar">
           <ul className="space-y-3 sm:space-y-4">
-            {projectData.map(({ year, subtitle, projects }) => (
+            {projectData.map(({ year, subtitle, projects, label }) => (
               <li key={year}>
                 <button
                   onClick={() => toggleYear(year)}
@@ -93,7 +98,7 @@ const Sidebar: React.FC<SidebarProps> = ({ projectData, selectedProject, onSelec
                 >
                   <div className="flex items-baseline min-w-0 flex-1">
                     <span className="text-base sm:text-lg md:text-lg font-bold text-gray-300 shrink-0">
-                      {year}
+                      {label ?? year}
                     </span>
                     {subtitle && (
                       <span className="text-xs sm:text-sm text-gray-500 font-normal ml-2 truncate">

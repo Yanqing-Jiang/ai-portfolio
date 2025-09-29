@@ -1,6 +1,6 @@
-import asyncio
+﻿import asyncio
 import logging
-from fastapi import FastAPI, Request, Depends, HTTPException
+from fastapi import FastAPI, Request, Depends, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, Response, JSONResponse
 from pydantic import BaseModel
@@ -21,10 +21,9 @@ from tts import get_voice_bytes
 from gemini_service import gemini_service
 from rate_limiter import init_rate_limiter, smart_rate_limit, get_user_usage, who_am_i
 from analytics_agent import create_analytics_workflow
-from analytics_memory.workflow import analytics_memory_workflow
-from analytics_memory.clarify import put_answer
-from analytics_memory.types import ClarifyAnswerModel
-from analytics_supervisor.supervisor import supervisor_workflow
+from analytics.flows.workflow import analytics_memory_workflow
+from analytics.core.clarify import put_answer
+from analytics.core.types import ClarifyAnswerModel
 
 from langchain.callbacks.base import BaseCallbackHandler
 from typing import List, Tuple, Optional
@@ -35,7 +34,7 @@ load_dotenv(dotenv_path=env_path, override=False)
 
 app = FastAPI()
 
-# Use the global session store from analytics_memory.clarify
+# Use the global session store from analytics.core.clarify
 
 # Initialize rate limiter on startup
 @app.on_event("startup")
@@ -87,12 +86,12 @@ class StreamingCallbackHandler(BaseCallbackHandler):
         self.steps = []
 
     def on_tool_start(self, tool, input_str, **kwargs):
-        step = f"🔍 Running {tool.name}..."
+        step = f"?? Running {tool.name}..."
         self.steps.append(step)
         return step
 
     def on_tool_end(self, output, **kwargs):
-        step = "✅ Tool completed"
+        step = "? Tool completed"
         self.steps.append(step)
         return step
 
@@ -101,7 +100,7 @@ class StreamingCallbackHandler(BaseCallbackHandler):
         return text
 
     def on_llm_start(self, serialized, prompts, **kwargs):
-        step = "🤖 Thinking..."
+        step = "?? Thinking..."
         self.steps.append(step)
         return step
 
@@ -128,7 +127,7 @@ async def research_stream_endpoint(query: str, request: Request):
     async def generate_stream():
         try:
             # Send initial status
-            yield f"data: {json.dumps({'type': 'status', 'message': '🔎 Starting research agent...', 'replace': False})}\n\n"
+            yield f"data: {json.dumps({'type': 'status', 'message': '?? Starting research agent...', 'replace': False})}\n\n"
             await asyncio.sleep(0)  # Flush event loop
             
             # Run the research agent with streaming
@@ -157,7 +156,7 @@ async def research_stream_endpoint(query: str, request: Request):
                             in_final_response = True
                             # Only send the message once
                             if not final_response_message_sent:
-                                yield f"data: {json.dumps({'type': 'status', 'message': '✅ Research complete, generating final response...', 'replace': True})}\n\n"
+                                yield f"data: {json.dumps({'type': 'status', 'message': '? Research complete, generating final response...', 'replace': True})}\n\n"
                                 await asyncio.sleep(0)  # Flush event loop
                                 final_response_message_sent = True
                             continue
@@ -174,7 +173,7 @@ async def research_stream_endpoint(query: str, request: Request):
                         
                         # Prevent too many chunks
                         if chunk_count > 5000:
-                            yield f"data: {json.dumps({'type': 'status', 'message': '⚠️ Response truncated due to length', 'replace': True})}\n\n"
+                            yield f"data: {json.dumps({'type': 'status', 'message': '?? Response truncated due to length', 'replace': True})}\n\n"
                             await asyncio.sleep(0)
                             break
                             
@@ -222,7 +221,7 @@ async def resume_search_stream_endpoint(query: str, request: Request, chat_histo
     async def generate_stream():
         try:
             # Send initial status
-            yield f"data: {json.dumps({'type': 'status', 'message': '📄 Starting resume search...', 'replace': False})}\n\n"
+            yield f"data: {json.dumps({'type': 'status', 'message': '?? Starting resume search...', 'replace': False})}\n\n"
             await asyncio.sleep(0)  # Flush event loop
             
             # Run the resume agent with streaming
@@ -250,7 +249,7 @@ async def resume_search_stream_endpoint(query: str, request: Request, chat_histo
                         # Handle final response marker
                         if chunk == "FINAL_RESPONSE_START":
                             in_final_response = True
-                            yield f"data: {json.dumps({'type': 'status', 'message': '✅ Resume search complete, generating final response...', 'replace': True})}\n\n"
+                            yield f"data: {json.dumps({'type': 'status', 'message': '? Resume search complete, generating final response...', 'replace': True})}\n\n"
                             await asyncio.sleep(0)  # Flush event loop
                             continue
                         
@@ -268,7 +267,7 @@ async def resume_search_stream_endpoint(query: str, request: Request, chat_histo
                         
                         # Prevent too many chunks
                         if chunk_count > 1000:
-                            yield f"data: {json.dumps({'type': 'status', 'message': '⚠️ Response truncated due to length', 'replace': True})}\n\n"
+                            yield f"data: {json.dumps({'type': 'status', 'message': '?? Response truncated due to length', 'replace': True})}\n\n"
                             await asyncio.sleep(0)
                             break
                             
@@ -383,7 +382,7 @@ async def stream_tts_audio(session_id: str, text: str):
     async def generate_audio_stream():
         try:
             # Send initial status
-            yield f"data: {json.dumps({'type': 'status', 'message': '🎵 Generating speech...', 'session_id': session_id})}\n\n"
+            yield f"data: {json.dumps({'type': 'status', 'message': '?? Generating speech...', 'session_id': session_id})}\n\n"
             await asyncio.sleep(0)
             
             total_chunks = 0
@@ -550,7 +549,7 @@ async def gemini_chat_stream(session_id: str, message: str, request: Request):
     async def generate_stream():
         try:
             # Send initial status
-            yield f"data: {json.dumps({'type': 'status', 'message': '🤖 Gemini is thinking...', 'replace': False})}\n\n"
+            yield f"data: {json.dumps({'type': 'status', 'message': '?? Gemini is thinking...', 'replace': False})}\n\n"
             await asyncio.sleep(0)
             
             chunk_count = 0
@@ -576,7 +575,7 @@ async def gemini_chat_stream(session_id: str, message: str, request: Request):
                         
                         # Prevent too many chunks (safety)
                         if chunk_count > 10000:
-                            yield f"data: {json.dumps({'type': 'status', 'message': '⚠️ Response truncated due to length', 'replace': True})}\n\n"
+                            yield f"data: {json.dumps({'type': 'status', 'message': '?? Response truncated due to length', 'replace': True})}\n\n"
                             await asyncio.sleep(0)
                             break
                             
@@ -808,21 +807,31 @@ async def analytics_stream_endpoint(query: str, request: Request, _: None = Depe
     )
 
 @app.get("/api/analytics/memory/stream")
-async def analytics_memory_stream_endpoint(query: str, request: Request, session_id: Optional[str] = None, _: None = Depends(smart_rate_limit)):
+async def analytics_memory_stream_endpoint(
+    query: str,
+    request: Request,
+    session_id: Optional[str] = None,
+    flow: Optional[str] = Query(default=None, description="Flow name (planner-executor | single-agent | multi-agent)"),
+    _: None = Depends(smart_rate_limit),
+):
     """Stream analytics memory results with conversational clarifications"""
-    
-    
+    legacy_mode = request.query_params.get('mode')
+    requested_flow_raw = (flow or legacy_mode or '').strip() if (flow or legacy_mode) else ''
+    selected_flow = requested_flow_raw.lower() or None
+
     # Generate a session ID if not provided
     if not session_id:
         session_id = str(uuid.uuid4())
     
     async def generate_analytics_memory_stream():
         try:
-            
+            logger.info(f"[ANALYTICS_MEMORY] Starting stream - flow={selected_flow or 'default'} session={session_id}")
+
             # Run the analytics memory workflow 
             async for event in analytics_memory_workflow(
                 query=query,
-                session_id=session_id
+                session_id=session_id,
+                flow=selected_flow,
             ):
                 # Convert the event to SSE format
                 event_data = json.dumps(event, default=str)
@@ -855,96 +864,24 @@ async def analytics_memory_stream_endpoint(query: str, request: Request, session
     )
 
 
-@app.get("/api/analytics/memory/supervisor/stream")
-async def analytics_supervisor_stream_endpoint(query: str, request: Request, session_id: Optional[str] = None, _: None = Depends(smart_rate_limit)):
-    """Stream analytics results via the single-agent Supervisor workflow.
-
-    Shares the same domain (next-gen-analytics-memory) while providing a
-    different agent UX (planning + tool events) but compatible result events.
-
-    SQL execution uses built-in safety checks and runs without manual approval.
-    """
-
-    request_start = time.time()
-    original_session_id = session_id
-
-    if not session_id:
-        session_id = str(uuid.uuid4())
-
-    logger.info(f"[SUPERVISOR_ENDPOINT] Received request - Query: {query[:50]}..., Session: {session_id}")
-    logger.info(f"[SUPERVISOR_ENDPOINT] Client IP: {request.client.host if request.client else 'unknown'}")
-
-    from analytics_supervisor.supervisor import supervisor_workflow
-    async def generate_supervisor_stream():
-        stream_start = time.time()
-        event_count = 0
-
-        try:
-            logger.info(f"[SUPERVISOR_ENDPOINT] Starting supervisor workflow stream for session {session_id}")
-
-            async for event in supervisor_workflow(query=query, session_id=session_id):
-                event_count += 1
-                if event_count % 5 == 0:  # Log every 5th event
-                    elapsed = time.time() - stream_start
-                    logger.debug(f"[SUPERVISOR_ENDPOINT] Streamed {event_count} events in {elapsed:.2f}s for session {session_id}")
-
-                if event.get("event") == "workflow_complete":
-                    total_duration = time.time() - request_start
-                    logger.info(f"[SUPERVISOR_ENDPOINT] Workflow completed after {total_duration:.2f}s, {event_count} events for session {session_id}")
-                elif event.get("event") == "tool_error":
-                    logger.error(f"[SUPERVISOR_ENDPOINT] Tool error in workflow for session {session_id}: {event.get('data', {}).get('error')}")
-                yield f"data: {json.dumps(event)}\n\n"
-                await asyncio.sleep(0)
-        except Exception as e:
-            total_duration = time.time() - request_start
-            logger.error(f"[SUPERVISOR_ENDPOINT] Stream error after {total_duration:.2f}s, {event_count} events for session {session_id}: {str(e)}")
-            logger.error(f"[SUPERVISOR_ENDPOINT] Error type: {type(e).__name__}")
-
-            err = {"event": "errors", "data": {"errors": [str(e)], "step": "supervisor"}}
-            yield f"data: {json.dumps(err)}\n\n"
-            await asyncio.sleep(0)
-
-    return StreamingResponse(
-        generate_supervisor_stream(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "Access-Control-Allow-Origin": "*",
-            "X-Accel-Buffering": "no",
-        }
-    )
-
-
-
 @app.post("/api/analytics/memory/clarify")
 async def analytics_memory_clarify_endpoint(answer: ClarifyAnswerModel, _: None = Depends(smart_rate_limit)):
-    """Handle single clarification response from the frontend (supports both memory and supervisor modes)"""
+    """Handle clarification responses for analytics flows."""
     try:
-        print(f"[MAIN] Received clarification answer: {answer}")
-        
-        # Try memory flow first
+        logger.info(f"[ANALYTICS_MEMORY] Clarification answer received for session {answer.session_id}")
         await put_answer(answer)
-        
-        # Also try supervisor flow if there's an active supervisor workflow
-        from analytics_supervisor.supervisor import get_active_workflow, ACTIVE_WORKFLOWS
-        print(f"[CLARIFY_DEBUG] Looking for active workflow for session: {answer.session_id}")
-        print(f"[CLARIFY_DEBUG] Active workflows: {list(ACTIVE_WORKFLOWS.keys())}")
-        workflow = get_active_workflow(answer.session_id)
-        print(f"[CLARIFY_DEBUG] Found workflow: {workflow is not None}")
-        if workflow:
-            print(f"[MAIN] Submitting clarification to supervisor workflow: {answer.session_id}")
-            workflow.submit_clarification(answer.session_id, answer.value)
-        else:
-            print(f"[CLARIFY_DEBUG] No active workflow found for session {answer.session_id}")
-        
         return {"status": "success", "message": "Clarification answer received"}
     except Exception as e:
-        print(f"[MAIN] Error handling clarification: {str(e)}")
+        logger.error(f"[ANALYTICS_MEMORY] Clarification handling failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
+
+
+
+
 

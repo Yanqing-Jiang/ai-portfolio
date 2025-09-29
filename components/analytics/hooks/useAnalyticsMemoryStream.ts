@@ -1,13 +1,16 @@
 import { useState, useRef } from 'react';
-import { ChatMessage, ClarifyRequest, ClarifyAnswer } from '../types';
+import { ChatMessage, ClarifyRequest, ClarifyAnswer, ToolCallTelemetry, AgentTurnTelemetry, AgentReasoningTelemetry } from '../types';
 import { apiService } from '../../../services/apiService';
 import { useAnalyticsStream } from './useAnalyticsStream';
 import { useProcessSteps } from './useProcessSteps';
+import { resolveChartSpecOption } from '../utils';
 
-export const useAnalyticsMemoryStream = (mode: 'memory' | 'supervisor' = 'memory') => {
+export const useAnalyticsMemoryStream = (
+  flow: 'planner-executor' | 'single-agent' | 'multi-agent' = 'planner-executor',
+) => {
   const [sessionId, setSessionId] = useState<string>('');
   const [pendingClarification, setPendingClarification] = useState<ClarifyRequest | null>(null);
-  const [supervisorState, setSupervisorState] = useState<{ plan?: any; criteria?: any }>({});
+
   const [criteria, setCriteria] = useState<any | null>(null);
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
   const [chartSpec, setChartSpec] = useState<any>(null);
@@ -29,6 +32,10 @@ export const useAnalyticsMemoryStream = (mode: 'memory' | 'supervisor' = 'memory
     sqlQuery?: string;
     dataSample?: any[];
   }>({});
+
+  const toolTelemetryRef = useRef<ToolCallTelemetry[]>([]);
+  const agentTurnsRef = useRef<AgentTurnTelemetry[]>([]);
+  const agentReasoningRef = useRef<AgentReasoningTelemetry[]>([]);
 
   // Workflow data ref for result accumulation
   const workflowDataRef = useRef<{
@@ -92,6 +99,113 @@ export const useAnalyticsMemoryStream = (mode: 'memory' | 'supervisor' = 'memory
     }, 50); // 50ms debounce for smooth updates
   };
 
+  const recordToolCallEvent = (payload: any, meta?: { ts?: string; elapsed_ms?: number }) => {
+    if (!payload || !payload.tool || !payload.status) {
+      return;
+    }
+
+    const entry: ToolCallTelemetry = {
+      tool: payload.tool,
+      status: payload.status,
+      ts: meta?.ts || payload.ts,
+      elapsed_ms: meta?.elapsed_ms ?? payload.elapsed_ms,
+      details: payload.details,
+    };
+
+    toolTelemetryRef.current = [...toolTelemetryRef.current, entry].slice(-15);
+
+    const elapsed = meta?.elapsed_ms ?? payload.elapsed_ms;
+    const ts = meta?.ts || payload.ts;
+    const statusLabel = payload.status === 'start' ? 'started' : payload.status === 'end' ? 'completed' : payload.status;
+    const durationText = elapsed ? ` (${elapsed}ms)` : '';
+    const message = `Tool ${payload.tool} ${statusLabel}${durationText}`;
+
+    stepsHook.updateStepStatus(
+      'tool_execution',
+      'in_progress',
+      [message],
+      { tool_calls: [...toolTelemetryRef.current] },
+      elapsed,
+      ts,
+    );
+  };
+
+  const recordAgentTurnEvent = (payload: any, meta?: { ts?: string; elapsed_ms?: number }) => {
+    if (!payload || !payload.role || !payload.status) {
+      return;
+    }
+
+    const entry: AgentTurnTelemetry = {
+      role: payload.role,
+      status: payload.status,
+      ts: meta?.ts || payload.ts,
+      elapsed_ms: meta?.elapsed_ms ?? payload.elapsed_ms,
+      summary: payload.summary,
+    };
+    agentTurnsRef.current = [...agentTurnsRef.current, entry].slice(-15);
+
+    const ts = meta?.ts || payload.ts;
+    const elapsed = meta?.elapsed_ms ?? payload.elapsed_ms;
+
+    const rawSummary = payload.summary;
+    const summaryText = typeof rawSummary === 'string' ? rawSummary : rawSummary ? JSON.stringify(rawSummary) : undefined;
+    const labelParts = [`${payload.role.replace(/_/g, ' ')} ${payload.status}`];
+    if (summaryText) {
+      labelParts.push(summaryText);
+    }
+
+    const stepStatus = payload.status === 'complete' ? 'completed' : 'in_progress';
+
+    stepsHook.updateStepStatus(
+      'agent_coordination',
+      stepStatus,
+      [labelParts.join(' - ')],
+      {
+        agent_turns: [...agentTurnsRef.current],
+        agent_reasoning: [...agentReasoningRef.current],
+      },
+      elapsed,
+      ts,
+    );
+  };
+
+  const recordAgentReasoningEvent = (payload: any, meta?: { ts?: string; elapsed_ms?: number }) => {
+    if (!payload || !payload.thought) {
+      return;
+    }
+
+    const ts = meta?.ts || payload.ts;
+    const entry: AgentReasoningTelemetry = {
+      role: payload.role || 'insight_reviewer',
+      thought: payload.thought,
+      ts,
+    };
+    agentReasoningRef.current = [...agentReasoningRef.current, entry].slice(-40);
+
+    const thought = typeof payload.thought === 'string' ? payload.thought : JSON.stringify(payload.thought);
+
+    stepsHook.updateStepStatus(
+      'agent_coordination',
+      'in_progress',
+      [thought],
+      {
+        agent_turns: [...agentTurnsRef.current],
+        agent_reasoning: [...agentReasoningRef.current],
+      },
+      meta?.elapsed_ms ?? payload.elapsed_ms,
+      ts,
+    );
+
+    stepsHook.updateStepStatus(
+      'analysis_generation',
+      'in_progress',
+      [thought],
+      undefined,
+      undefined,
+      ts,
+    );
+  };
+
   // Chat history management
   const addChatMessage = (message: Omit<ChatMessage, 'id' | 'timestamp'>) => {
     const newMessage: ChatMessage = {
@@ -147,7 +261,6 @@ export const useAnalyticsMemoryStream = (mode: 'memory' | 'supervisor' = 'memory
     setProgressiveAnalysis('');
     setPendingClarification(null);
     setCriteria(null);
-    setSupervisorState({});
     stepsHook.resetSteps();
 
     // Clear any pending updates
@@ -156,11 +269,21 @@ export const useAnalyticsMemoryStream = (mode: 'memory' | 'supervisor' = 'memory
     }
     pendingUpdatesRef.current = {};
 
-    const baseEndpoint = mode === 'supervisor' 
-      ? `/api/analytics/memory/supervisor/stream`
-      : `/api/analytics/memory/stream`;
-    
-    const endpoint = `${baseEndpoint}?query=${encodeURIComponent(query.trim())}${sessionId ? `&session_id=${sessionId}` : ''}`;
+    toolTelemetryRef.current = [];
+    agentTurnsRef.current = [];
+    agentReasoningRef.current = [];
+
+    const baseEndpoint = `/api/analytics/memory/stream`;
+
+    const params = new URLSearchParams({ query: query.trim() });
+    if (sessionId) {
+      params.append('session_id', sessionId);
+    }
+    if (flow) {
+      params.append('flow', flow);
+    }
+
+    const endpoint = `${baseEndpoint}?${params.toString()}`;
 
     await streamHook.startStream(endpoint, (data) => {
       const eventType = data.event || data.type;
@@ -182,14 +305,31 @@ export const useAnalyticsMemoryStream = (mode: 'memory' | 'supervisor' = 'memory
           setSessionId(eventData.session_id);
           break;
           
+
         case 'status':
         case 'progress':
           // Handle both old 'status' and new 'progress' event types
           const statusMessage = eventData.message || data.message || '';
           streamHook.setCurrentStatus(statusMessage);
           if (stepInfo.step) {
-            const thinkingLogs: string[] = isThinkingEvent && statusMessage ? [statusMessage] : [];
-            stepsHook.updateStepStatus(stepInfo.step, 'in_progress', thinkingLogs, undefined, stepInfo.elapsed_ms, stepInfo.ts);
+            const thinkingLogs: string[] = [];
+            if (isThinkingEvent && statusMessage) {
+              thinkingLogs.push(statusMessage);
+            }
+            if (eventData.code) {
+              const codeTag = statusMessage ? `${statusMessage} [${eventData.code}]` : `Code: ${eventData.code}`;
+              if (!thinkingLogs.includes(codeTag)) {
+                thinkingLogs.push(codeTag);
+              }
+            }
+            const detailPayload = eventData.code || eventData.attempt
+              ? {
+                  code: eventData.code,
+                  attempt: eventData.attempt,
+                  message: statusMessage,
+                }
+              : undefined;
+            stepsHook.updateStepStatus(stepInfo.step, 'in_progress', thinkingLogs, detailPayload, stepInfo.elapsed_ms, stepInfo.ts);
           }
           break;
           
@@ -201,11 +341,13 @@ export const useAnalyticsMemoryStream = (mode: 'memory' | 'supervisor' = 'memory
         case 'intent_resolved':
           // Handle both old heavy format and new lightweight format
           const intentData = eventData.intent || eventData; // Old format has nested intent, new format is flat
-          stepsHook.updateStepStatus('intent_detection', 'completed', [], intentData, stepInfo.elapsed_ms);
+          stepsHook.updateStepStatus('intent_detection', 'completed', [], intentData, stepInfo.elapsed_ms, stepInfo.ts);
+          stepsHook.updateStepStatus('clarification', 'completed', ['Clarifications resolved'], intentData, stepInfo.elapsed_ms, stepInfo.ts);
+          setPendingClarification(null);
           break;
           
         case 'clarification_request':
-          console.log('🔍 [DEBUG] Received clarification_request:', eventData);
+          console.log('?? [DEBUG] Received clarification_request:', eventData);
           setPendingClarification(eventData as ClarifyRequest);
           stepsHook.updateStepStatus('clarification', 'in_progress', [eventData.question]);
           streamHook.setCurrentStatus(`Clarification needed: ${eventData.question}`);
@@ -214,7 +356,7 @@ export const useAnalyticsMemoryStream = (mode: 'memory' | 'supervisor' = 'memory
             content: eventData.question,
             clarifications: [eventData as ClarifyRequest],
           };
-          console.log('🔍 [DEBUG] Adding clarification message:', clarificationMessage);
+          console.log('?? [DEBUG] Adding clarification message:', clarificationMessage);
           addChatMessage(clarificationMessage);
           break;
           
@@ -229,7 +371,7 @@ export const useAnalyticsMemoryStream = (mode: 'memory' | 'supervisor' = 'memory
           break;
           
         case 'plan_built':
-          // Combined planning step for streamlined agent mode
+          // Combined planning step for streamlined agent flow
           // Handle both old (eventData.plan) and new (simplified) formats
           const planData = eventData.plan || { metrics_count: eventData.metrics_count, granularity: eventData.granularity, comparison: eventData.comparison };
           stepsHook.updateStepStatus('plan_and_select_template', 'in_progress', ['Plan built'], { plan: planData }, stepInfo.elapsed_ms);
@@ -246,20 +388,77 @@ export const useAnalyticsMemoryStream = (mode: 'memory' | 'supervisor' = 'memory
           break;
           
         case 'sql_compiled':
-          // Compilation stats only; SQL text may arrive in 'sql_generated'
-          stepsHook.updateStepStatus('sql_compilation', 'completed', [
-            `SQL compiled (len: ${eventData.sql_length})`
-          ], {
-            sql_length: eventData.sql_length,
-            template_used: eventData.template_used,
-          }, stepInfo.elapsed_ms);
+          {
+            const attempt = eventData.attempt ?? 1;
+            const messages = [`SQL compiled (len: ${eventData.sql_length})`];
+            if (eventData.fallback_reason) {
+              messages.push(`Fallback: ${eventData.fallback_reason.replace(/_/g, ' ')}`);
+            }
+            stepsHook.updateStepStatus(
+              'sql_compilation',
+              'completed',
+              messages,
+              {
+                sql_length: eventData.sql_length,
+                template_used: eventData.template_used,
+                template_fallback: eventData.template_fallback,
+                fallback_reason: eventData.fallback_reason,
+                attempt,
+                llm_used: eventData.llm_used,
+              },
+              stepInfo.elapsed_ms,
+              stepInfo.ts
+            );
+            if (eventData.fallback_reason) {
+              streamHook.setCurrentStatus(`Template fallback applied: ${eventData.fallback_reason.replace(/_/g, ' ')}`);
+            }
+          }
           break;
 
         case 'sql_generated':
           if (typeof eventData.sql === 'string') {
             scheduleProgressiveUpdate({ sqlQuery: eventData.sql });
           }
-          stepsHook.updateStepStatus('sql_validation', 'completed', [], { sql: eventData.sql }, stepInfo.elapsed_ms);
+          stepsHook.updateStepStatus(
+            'sql_compilation',
+            'completed',
+            [`SQL ready (attempt ${eventData.attempt ?? 1})`],
+            {
+              sql: eventData.sql,
+              attempt: eventData.attempt,
+              llm_used: eventData.llm_used,
+              fallback_reason: eventData.fallback_reason,
+            },
+            stepInfo.elapsed_ms,
+            stepInfo.ts
+          );
+          break;
+
+
+        case 'sql_validated':
+          {
+            const attempt = eventData.attempt ?? 1;
+            const issues = Array.isArray(eventData.issues) ? eventData.issues : [];
+            const validationMessages = eventData.ok
+              ? [`SQL validation passed (attempt ${attempt})`]
+              : [issues.length ? `Validation issues: ${issues.join(', ')}` : `Validation failed (attempt ${attempt})`];
+            stepsHook.updateStepStatus(
+              'sql_validation',
+              eventData.ok ? 'completed' : 'error',
+              validationMessages,
+              {
+                ok: eventData.ok,
+                issues,
+                issues_count: eventData.issues_count,
+                attempt,
+              },
+              stepInfo.elapsed_ms,
+              stepInfo.ts
+            );
+            if (!eventData.ok) {
+              streamHook.setCurrentStatus('SQL validation issues detected; applying fallback');
+            }
+          }
           break;
           
         case 'execution_stats':
@@ -283,19 +482,35 @@ export const useAnalyticsMemoryStream = (mode: 'memory' | 'supervisor' = 'memory
           });
           break;
           
-        case 'chart_generated':
-          // Handle both old (eventData.chart_spec) and new (data.key) formats
-          let chartSpec = eventData.chart_spec;
-          if (!chartSpec && data.key === 'chart_spec') {
-            // New format: chart_spec is stored in the original data payload separately
-            // For now, we'll need to retrieve it from the actual chart_spec data if available
-            chartSpec = data.chart_spec || eventData;
+        case 'chart_generated': {
+          // Normalize chart payloads from legacy + lightweight emitters
+          const normalizedChartSpec =
+            resolveChartSpecOption(eventData) ?? resolveChartSpecOption(data);
+          const chartType =
+            eventData.chart_type ??
+            (typeof eventData.chart_spec === 'object' && eventData.chart_spec
+              ? eventData.chart_spec.chart_type
+              : undefined) ??
+            (typeof (data as any)?.chart_spec === 'object'
+              ? (data as any).chart_spec.chart_type
+              : undefined) ??
+            normalizedChartSpec?.meta?.chartDesign?.chart_type;
+
+          if (normalizedChartSpec) {
+            scheduleProgressiveUpdate({ chartSpec: normalizedChartSpec });
+          } else {
+            console.warn('[AnalyticsMemoryStream] chart_generated event without resolvable chart spec', { event: data });
           }
-          if (chartSpec) {
-            scheduleProgressiveUpdate({ chartSpec });
-          }
-          stepsHook.updateStepStatus('chart_generation', 'completed', [], { chart_spec: chartSpec, chart_type: eventData.chart_type }, stepInfo.elapsed_ms);
+
+          stepsHook.updateStepStatus(
+            'chart_generation',
+            'completed',
+            [],
+            { chart_spec: normalizedChartSpec, chart_type: chartType },
+            stepInfo.elapsed_ms
+          );
           break;
+        }
           
         case 'analysis_streaming':
           if (!isThinkingEvent) {
@@ -337,13 +552,28 @@ export const useAnalyticsMemoryStream = (mode: 'memory' | 'supervisor' = 'memory
           break;
 
         // Optional richer logs for agent demo
-        case 'rag_trace':
-          stepsHook.updateStepStatus('plan_and_select_template', 'in_progress', ['RAG retrieved candidates'], {
-            candidates: eventData.candidates,
-            selected: eventData.selected
-          }, eventData.elapsed_ms);
+
+        case 'tool_call':
+          recordToolCallEvent(eventData, { ts: stepInfo.ts, elapsed_ms: stepInfo.elapsed_ms });
           break;
 
+        case 'agent_turn':
+          recordAgentTurnEvent(eventData, { ts: stepInfo.ts, elapsed_ms: stepInfo.elapsed_ms });
+          break;
+
+        case 'agent_reasoning':
+          recordAgentReasoningEvent(eventData, { ts: stepInfo.ts, elapsed_ms: stepInfo.elapsed_ms });
+          break;
+
+        case 'catalog_trace':
+          {
+            const targetStep = eventData.tool ?? 'plan_and_select_template';
+            const notes = ['YAML catalogue lookup via ' + (eventData.tool || 'lookup')];
+            const metadata = eventData.metadata ?? {};
+            const candidates = Array.isArray(eventData.candidates) ? eventData.candidates : [];
+            stepsHook.updateStepStatus(targetStep, 'in_progress', notes, { candidates, metadata }, eventData.elapsed_ms);
+          }
+          break;
         case 'thinking_log':
           stepsHook.updateStepStatus('tool_execution', 'in_progress', [eventData.message]);
           break;
@@ -414,7 +644,6 @@ export const useAnalyticsMemoryStream = (mode: 'memory' | 'supervisor' = 'memory
         case 'criteria_ready':
           workflowDataRef.current.criteria = eventData;
           setCriteria(eventData);
-          setSupervisorState(prev => ({ ...prev, criteria: eventData }));
           stepsHook.updateStepStatus('schema_validation', 'completed', ['SQL criteria ready'], eventData, eventData.elapsed_ms, eventData.ts);
           streamHook.setCurrentStatus('SQL criteria locked in.');
           break;
@@ -425,6 +654,7 @@ export const useAnalyticsMemoryStream = (mode: 'memory' | 'supervisor' = 'memory
 
         case 'clarification_skipped':
           stepsHook.updateStepStatus('clarification', 'completed', [eventData.reason || 'Clarification not needed'], undefined, undefined, eventData.ts);
+          setPendingClarification(null);
           break;
 
         case 'intent_finalized':
@@ -445,9 +675,8 @@ export const useAnalyticsMemoryStream = (mode: 'memory' | 'supervisor' = 'memory
 
         // ===== SUPERVISOR MODE EVENTS =====
         case 'planning_proposed':
-          setSupervisorState(prev => ({ ...prev, plan: eventData }));
           stepsHook.updateStepStatus('planning', 'completed', [eventData.plan]);
-          streamHook.setCurrentStatus('Plan proposed by supervisor agent');
+          streamHook.setCurrentStatus('Plan proposed by flow coordinator');
           if (!isThinkingEvent) {
             addChatMessage({
               type: 'assistant',
@@ -471,25 +700,34 @@ export const useAnalyticsMemoryStream = (mode: 'memory' | 'supervisor' = 'memory
           streamHook.setCurrentStatus(`Tool error: ${eventData.error}`);
           addChatMessage({
             type: 'assistant',
-            content: `⚠️ **Tool Error:** ${eventData.tool} - ${eventData.error}`,
+            content: `?? **Tool Error:** ${eventData.tool} - ${eventData.error}`,
           });
           break;
           
         case 'final_summary':
           stepsHook.updateStepStatus('finalization', 'completed', ['Workflow summary generated']);
-          streamHook.setCurrentStatus('Supervisor workflow completed!');
+          const summaryStatusMessage =
+            flow === 'single-agent'
+              ? 'Single-agent tools workflow completed!'
+              : flow === 'multi-agent'
+                ? 'Multi-agent workflow completed!'
+                : 'Planner/executor workflow completed!';
+          streamHook.setCurrentStatus(summaryStatusMessage);
           if (!isThinkingEvent) {
             addChatMessage({
               type: 'assistant',
-              content: `📊 **Final Summary:**\n\n**SQL:** ${eventData.sql_summary}\n**Chart:** ${eventData.chart_summary}\n\n**Key Findings:**\n${eventData.key_findings?.map((f: string) => `• ${f}`).join('\n') || 'No findings available'}`,
+              content: `?? **Final Summary:**\n\n**SQL:** ${eventData.sql_summary}\n**Chart:** ${eventData.chart_summary}\n\n**Key Findings:**\n${eventData.key_findings?.map((f: string) => `� ${f}`).join('\n') || 'No findings available'}`,
             });
           }
           break;
 
         case 'workflow_complete':
-          const workflowStatusMessage = mode === 'supervisor'
-            ? 'Claude Code supervisor workflow completed!'
-            : 'Analytics memory workflow completed!';
+          const workflowStatusMessage =
+            flow === 'single-agent'
+              ? 'Single-agent tools workflow completed!'
+              : flow === 'multi-agent'
+                ? 'Multi-agent workflow completed!'
+                : 'Planner/executor workflow completed!';
           const isEarlyExit = Boolean(eventData?.early_exit);
           // Handle both old and new formats for completion message
           const completionMessage = eventData?.message || (eventData.total_elapsed_ms ? `Completed in ${eventData.total_elapsed_ms}ms` : null);
@@ -539,8 +777,24 @@ export const useAnalyticsMemoryStream = (mode: 'memory' | 'supervisor' = 'memory
           break;
           
         case 'error':
-          streamHook.setError(eventData.message || 'Analytics error occurred');
-          stepsHook.updateStepStatus(eventData.step || 'unknown', 'error', [eventData.message]);
+          {
+            const errorStep = eventData.step || stepInfo.step || 'unknown';
+            const errorMessage = eventData.error || eventData.message || 'Analytics error occurred';
+            const errorCodeLabel = eventData.code ? `[${eventData.code}] ` : '';
+            streamHook.setError(eventData.code ? `${eventData.code}: ${errorMessage}` : errorMessage);
+            stepsHook.updateStepStatus(
+              errorStep,
+              'error',
+              [`${errorCodeLabel}${errorMessage}`],
+              {
+                error: errorMessage,
+                code: eventData.code,
+                details: eventData.details,
+              },
+              stepInfo.elapsed_ms,
+              stepInfo.ts
+            );
+          }
           break;
       }
     });
@@ -557,7 +811,6 @@ export const useAnalyticsMemoryStream = (mode: 'memory' | 'supervisor' = 'memory
     setSessionId('');
     setPendingClarification(null);
     setCriteria(null);
-    setSupervisorState({});
     setChatHistory([]);
     setChartSpec(null);
     setAnalysis('');
@@ -572,6 +825,9 @@ export const useAnalyticsMemoryStream = (mode: 'memory' | 'supervisor' = 'memory
       clearTimeout(updateTimeoutRef.current);
     }
     pendingUpdatesRef.current = {};
+    toolTelemetryRef.current = [];
+    agentTurnsRef.current = [];
+    agentReasoningRef.current = [];
 
     // Reset workflow data ref
     workflowDataRef.current = {
@@ -609,7 +865,6 @@ export const useAnalyticsMemoryStream = (mode: 'memory' | 'supervisor' = 'memory
     processSteps: stepsHook.processSteps,
 
     // Supervisor state
-    supervisorState,
 
     // Actions
     handleQuery,
@@ -620,4 +875,9 @@ export const useAnalyticsMemoryStream = (mode: 'memory' | 'supervisor' = 'memory
     updateChatMessage,
   };
 };
+
+
+
+
+
 

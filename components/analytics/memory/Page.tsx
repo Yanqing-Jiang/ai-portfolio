@@ -8,6 +8,32 @@ import {
 import { ChatHistory } from './';
 import { useAnalyticsMemoryStream } from '../hooks';
 import { isValidChartSpec } from '../utils';
+import type { FlowMode } from '../types';
+
+
+
+type FlowOption = FlowMode;
+
+const FLOW_META: Record<FlowOption, { chip: string; chipClass: string; helper: string; placeholder: string }> = {
+  'planner-executor': {
+    chip: 'Planner -> Executor',
+    chipClass: 'bg-emerald-600/20 text-emerald-300 border-emerald-500/30',
+    helper: 'Deterministic planner/executor pipeline with YAML-backed SQL guidance.',
+    placeholder: 'Ask about financial data (planner/executor flow)',
+  },
+  'single-agent': {
+    chip: 'Single Agent + Tools',
+    chipClass: 'bg-blue-600/20 text-blue-300 border-blue-500/30',
+    helper: 'Claude-style agent calling structured tools with live telemetry.',
+    placeholder: 'Ask about financial data (single-agent tools flow)',
+  },
+  'multi-agent': {
+    chip: 'Multi-Agent Orchestration',
+    chipClass: 'bg-purple-600/20 text-purple-300 border-purple-500/30',
+    helper: 'Lightweight collaboration across planner, analyst, and charting agents.',
+    placeholder: 'Ask about financial data (multi-agent orchestration)',
+  },
+};
 
 const MemoryAnalyticsPage: React.FC = () => {
   const [query, setQuery] = useState('');
@@ -15,7 +41,7 @@ const MemoryAnalyticsPage: React.FC = () => {
   const [useAltChart, setUseAltChart] = useState(false);
   const [hasStartedChat, setHasStartedChat] = useState(false);
   const [isHeaderCollapsed, setIsHeaderCollapsed] = useState(false);
-  const [analysisMode, setAnalysisMode] = useState<'memory' | 'supervisor'>('memory');
+  const [selectedFlow, setSelectedFlow] = useState<FlowOption>('planner-executor');
 
   // Reset header to expanded state when component mounts (project navigation)
   useEffect(() => {
@@ -44,20 +70,20 @@ const MemoryAnalyticsPage: React.FC = () => {
     handleQuery,
     submitClarification,
     stopAnalysis,
-  } = useAnalyticsMemoryStream(analysisMode);
+  } = useAnalyticsMemoryStream(selectedFlow);
 
   // Project data for the analytics memory project
   const projectData = {
     title: 'Next Gen Analytics (Memory)',
-    description: `â€¢ AI-powered financial analytics with LangGraph memory pipeline and intelligent clarifications.
-â€¢ Uses advanced intent detection â†’ SQL planning â†’ Chart Generation â†’ financial analysis workflow.
-â€¢ Real-time streaming with conversational clarifications and session memory management.
+    description: `• AI-powered financial analytics with LangGraph memory pipeline and intelligent clarifications.
+• Uses advanced intent detection ? SQL planning ? Chart Generation ? financial analysis workflow.
+• Real-time streaming with conversational clarifications and session memory management.
 
 Result:
 
-â€¢ Interactive financial analysis for AMD, AVGO, INTC, MU, NVDA, QCOM, TXN with memory optimization.
-â€¢ Streaming agent coordination with inline clarification UI.
-â€¢ Dynamic Chart Generation with session persistence and memory-aware caching.`,
+• Interactive financial analysis for AMD, AVGO, INTC, MU, NVDA, QCOM, TXN with memory optimization.
+• Streaming agent coordination with inline clarification UI.
+• Dynamic Chart Generation with session persistence and memory-aware caching.`,
     technologies: ['LangGraph', 'Memory Pipeline', 'Intent Detection', 'Clarifications', 'FastAPI', 'PostgreSQL'],
     imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/next-gen-sql.png'
   };
@@ -264,23 +290,28 @@ Result:
                   ))}
                 </div>
               )}
-              {/* Mode Selector */}
-              <div className="mt-3 sm:mt-4 flex items-center gap-2 sm:gap-3">
-                <label className="text-sm font-medium text-gray-300 whitespace-nowrap">Analysis Mode:</label>
+              {/* Flow Selector */}
+              <div className="mt-3 sm:mt-4 flex flex-wrap items-center gap-2 sm:gap-3">
+                <label className="text-sm font-medium text-gray-300 whitespace-nowrap">Flow:</label>
                 <select
-                  value={analysisMode}
-                  onChange={(e) => setAnalysisMode(e.target.value as 'memory' | 'supervisor')}
+                  value={selectedFlow}
+                  onChange={(e) => setSelectedFlow(e.target.value as FlowOption)}
                   disabled={isLoading}
-                  className="px-3 py-2 text-sm bg-gray-700/80 border border-gray-600/50 rounded-lg focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500/50 text-gray-100 transition-all duration-200"
+                  className="px-3 py-2 text-xs sm:text-sm bg-gray-700/80 border border-emerald-500/30 rounded-lg focus:ring-2 focus:ring-emerald-500/40 focus:border-emerald-500/40 text-gray-100 transition-all duration-200"
                 >
-                  <option value="memory">Memory Flow</option>
-                  <option value="supervisor">Claude Code Supervisor</option>
+                  <option value="planner-executor">Planner / Executor</option>
+                  <option value="single-agent">Single Agent + Tools</option>
+                  <option value="multi-agent">Multi-Agent Orchestration</option>
                 </select>
-                {analysisMode === 'supervisor' && (
-                  <span className="px-2 py-1 text-xs bg-blue-600/20 text-blue-300 rounded-full border border-blue-500/30">
-                    Single-Agent
-                  </span>
-                )}
+                <span
+                  className={"px-2 py-1 text-xs rounded-full border transition-colors duration-200 " + FLOW_META[selectedFlow].chipClass}
+                  title={FLOW_META[selectedFlow].helper}
+                >
+                  {FLOW_META[selectedFlow].chip}
+                </span>
+                <span className="text-xs text-gray-400 hidden lg:block">
+                  {FLOW_META[selectedFlow].helper}
+                </span>
               </div>
               
               {/* Input row */}
@@ -289,9 +320,7 @@ Result:
                   type="text"
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
-                  placeholder={analysisMode === 'supervisor' 
-                    ? "Ask about financial data (Claude Code Supervisor mode)" 
-                    : "Ask about financial data on NVDA, AMD, AVGO, INTC, MU, NVDA, QCOM, TXN"}
+                  placeholder={FLOW_META[selectedFlow].placeholder}
                   className="flex-1 px-4 py-3.5 text-sm md:text-base bg-gray-700/80 backdrop-blur-sm border border-gray-600/50 rounded-xl focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500/50 text-gray-100 placeholder-gray-400 min-h-[48px] shadow-lg transition-all duration-200 min-w-0"
                   onKeyPress={(e) => e.key === 'Enter' && handleAnalyticsQuery()}
                   disabled={isLoading}
@@ -316,6 +345,7 @@ Result:
       {/* Process Panel */}
       <ProcessPanel
         steps={processSteps}
+        flowMode={selectedFlow}
         show={showProcessPanel}
         onClose={() => setShowProcessPanel(false)}
         title="Agent Thinking Process"
@@ -327,3 +357,5 @@ Result:
 };
 
 export default MemoryAnalyticsPage;
+
+

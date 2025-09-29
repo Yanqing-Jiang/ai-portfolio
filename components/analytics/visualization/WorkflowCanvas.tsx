@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   ReactFlow,
   MiniMap,
@@ -6,388 +6,499 @@ import {
   Background,
   useNodesState,
   useEdgesState,
-  addEdge,
+  BackgroundVariant,
   Node,
   Edge,
-  Connection,
-  BackgroundVariant,
-  NodeTypes,
+  Position,
   ReactFlowProvider,
   ReactFlowInstance,
-  FitViewOptions,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
+
 import { ProcessNode } from './ProcessNode';
-import { ProcessStep } from '../types';
+import { ProcessStep, FlowMode, FlowVisualTheme } from '../types';
 
 interface WorkflowCanvasProps {
   steps: ProcessStep[];
+  flowMode: FlowMode;
   className?: string;
   isVisible?: boolean;
+  currentStepLabel?: string;
+  currentStatus?: string;
+  currentTimestamp?: string;
+  currentDuration?: string;
+  progressPercent?: number;
 }
 
 interface ProcessNodeData {
   step: ProcessStep;
   phase: keyof typeof PHASE_COLORS;
-  color: string;
+  theme: FlowVisualTheme;
   isActive: boolean;
   isCompleted: boolean;
   hasError: boolean;
+  statusLabel: string;
+  sequenceIndex: number;
+  totalSteps: number;
+  latestThinking?: string;
+  currentStatus?: string;
+  currentDuration?: string;
+  currentTimestamp?: string;
+  progressPercent?: number;
 }
 
-const nodeTypes: NodeTypes = {
+const nodeTypes = {
   processNode: ProcessNode,
 };
 
-const PHASE_COLORS = {
-  analysis: 'rgb(59, 130, 246)',
-  planning: 'rgb(147, 51, 234)',
-  execution: 'rgb(34, 197, 94)',
-  synthesis: 'rgb(250, 204, 21)',
-  error: 'rgb(239, 68, 68)',
+const PHASE_SEQUENCE = ['analysis', 'planning', 'execution', 'synthesis'] as const;
+
+const PHASE_COLORS: Record<(typeof PHASE_SEQUENCE)[number], string> = {
+  analysis: '#facc15',
+  planning: '#38bdf8',
+  execution: '#a855f7',
+  synthesis: '#34d399',
 };
 
-const PHASE_SEQUENCE: Array<keyof typeof PHASE_COLORS> = ['analysis', 'planning', 'execution', 'synthesis'];
-
-const PHASE_LABELS: Record<keyof typeof PHASE_COLORS, string> = {
-  analysis: 'Analysis',
-  planning: 'Planning',
-  execution: 'Execution',
-  synthesis: 'Synthesis',
-  error: 'Error',
+const FLOW_THEMES: Record<FlowMode, FlowVisualTheme> = {
+  'planner-executor': {
+    id: 'planner-executor',
+    accent: '#22d3a6',
+    nodeGradient: ['rgba(14, 116, 144, 0.35)', 'rgba(6, 95, 70, 0.68)'],
+    nodeBorder: 'border-emerald-400/50',
+    nodeGlow: 'shadow-[0_0_22px_rgba(16,185,129,0.35)]',
+    edgeIdle: '#0f766e55',
+    edgeActive: '#34d399',
+    edgeCompleted: '#bbf7d0',
+    badgeClass: 'text-emerald-200 bg-emerald-500/15 border border-emerald-400/30',
+    pulseClass: 'bg-emerald-400/90',
+  },
+  'single-agent': {
+    id: 'single-agent',
+    accent: '#60a5fa',
+    nodeGradient: ['rgba(30, 64, 175, 0.32)', 'rgba(15, 23, 42, 0.78)'],
+    nodeBorder: 'border-blue-400/60',
+    nodeGlow: 'shadow-[0_0_22px_rgba(96,165,250,0.35)]',
+    edgeIdle: '#3b82f655',
+    edgeActive: '#60a5fa',
+    edgeCompleted: '#bfdbfe',
+    badgeClass: 'text-blue-200 bg-blue-500/15 border border-blue-400/30',
+    pulseClass: 'bg-blue-400/90',
+  },
+  'multi-agent': {
+    id: 'multi-agent',
+    accent: '#c084fc',
+    nodeGradient: ['rgba(76, 29, 149, 0.32)', 'rgba(30, 8, 52, 0.78)'],
+    nodeBorder: 'border-purple-400/60',
+    nodeGlow: 'shadow-[0_0_24px_rgba(192,132,252,0.35)]',
+    edgeIdle: '#a855f755',
+    edgeActive: '#c084fc',
+    edgeCompleted: '#e9d5ff',
+    badgeClass: 'text-purple-200 bg-purple-500/15 border border-purple-400/30',
+    pulseClass: 'bg-purple-400/90',
+  },
 };
 
-const STEP_PHASES: Record<string, keyof typeof PHASE_COLORS> = {
-  classify: 'analysis',
+const FLOW_LAYOUT: Record<FlowMode, { columns: number; horizontalGap: number; verticalGap: number }> = {
+  'planner-executor': { columns: 4, horizontalGap: 420, verticalGap: 280 },
+  'single-agent': { columns: 5, horizontalGap: 400, verticalGap: 270 },
+  'multi-agent': { columns: 5, horizontalGap: 400, verticalGap: 280 },
+};
+
+const SNAP_GRID = 40;
+
+const FLOW_CANVAS_DECOR: Record<FlowMode, { wrapperClass: string; overlayClass: string }> = {
+  'planner-executor': {
+    wrapperClass: 'bg-gradient-to-br from-gray-950 via-slate-950 to-gray-900',
+    overlayClass: 'bg-[radial-gradient(circle_at_top_left,rgba(16,185,129,0.18),transparent_55%)]',
+  },
+  'single-agent': {
+    wrapperClass: 'bg-gradient-to-br from-slate-950 via-gray-950 to-blue-950',
+    overlayClass: 'bg-[radial-gradient(circle_at_top,rgba(96,165,250,0.2),transparent_60%)]',
+  },
+  'multi-agent': {
+    wrapperClass: 'bg-gradient-to-br from-gray-950 via-purple-950 to-black',
+    overlayClass: 'bg-[radial-gradient(circle_at_top_right,rgba(192,132,252,0.22),transparent_60%)]',
+  },
+};
+
+const STEP_PHASES: Record<string, (typeof PHASE_SEQUENCE)[number]> = {
   classification: 'analysis',
-  classification_reasoning: 'analysis',
+  classify: 'analysis',
   intent_detection: 'analysis',
-  schema_validation: 'analysis',
   clarification: 'analysis',
-  tool_planning: 'planning',
-  tool_selection: 'planning',
-  provisional_plan: 'planning',
-  retrieve_templates_rag: 'planning',
+  schema_validation: 'analysis',
   plan_and_select_template: 'planning',
   planning: 'planning',
-  sql_compilation: 'planning',
-  compile_sql: 'planning',
-  validate_sql: 'planning',
-  sql_validation: 'planning',
-  tool_execution: 'execution',
-  apply_execute_sql: 'execution',
+  tool_planning: 'planning',
+  provisional_plan: 'planning',
+  sql_validation: 'execution',
+  sql_compilation: 'execution',
   sql_execution: 'execution',
+  tool_execution: 'execution',
   plan_chart: 'execution',
-  build_chart: 'execution',
   chart_generation: 'execution',
-  short_financial_analysis: 'synthesis',
+  agent_coordination: 'execution',
   analysis_generation: 'synthesis',
+  short_financial_analysis: 'synthesis',
   finalization: 'synthesis',
 };
 
-const STEP_POSITIONS: Record<string, { x: number; y: number }> = {
-  classify: { x: 150, y: 50 },
-  classification: { x: 250, y: 50 },
-  classification_reasoning: { x: 350, y: 50 },
-  intent_detection: { x: 250, y: 140 },
-  schema_validation: { x: 360, y: 140 },
-  clarification: { x: 470, y: 140 },
-  tool_planning: { x: 100, y: 260 },
-  tool_selection: { x: 250, y: 260 },
-  provisional_plan: { x: 400, y: 260 },
-  retrieve_templates_rag: { x: 150, y: 340 },
-  plan_and_select_template: { x: 260, y: 340 },
-  planning: { x: 370, y: 340 },
-  sql_compilation: { x: 150, y: 420 },
-  compile_sql: { x: 260, y: 420 },
-  validate_sql: { x: 370, y: 420 },
-  sql_validation: { x: 480, y: 420 },
-  tool_execution: { x: 100, y: 520 },
-  apply_execute_sql: { x: 210, y: 520 },
-  sql_execution: { x: 320, y: 520 },
-  plan_chart: { x: 430, y: 520 },
-  build_chart: { x: 540, y: 520 },
-  chart_generation: { x: 650, y: 520 },
-  short_financial_analysis: { x: 260, y: 620 },
-  analysis_generation: { x: 370, y: 700 },
-  finalization: { x: 480, y: 780 },
+const toFriendlyStatus = (status: ProcessStep['status']) => {
+  switch (status) {
+    case 'in_progress':
+      return 'Running';
+    case 'completed':
+      return 'Finished';
+    case 'error':
+      return 'Error';
+    case 'stopped':
+      return 'Stopped';
+    default:
+      return 'Queued';
+  }
 };
 
-const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({ steps, className, isVisible = false }) => {
-  const [nodes, setNodes, onNodesChange] = useNodesState<Node<ProcessNodeData>[]>([]);
-  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge[]>([]);
-  const containerRef = useRef<HTMLDivElement | null>(null);
+interface SerpentinePlacement {
+  position: { x: number; y: number };
+  row: number;
+  stepInRow: number;
+  columnsInRow: number;
+  isEvenRow: boolean;
+}
+
+const computeSerpentinePlacement = (
+  index: number,
+  columns: number,
+  horizontalGap: number,
+  verticalGap: number,
+  totalSteps: number,
+): SerpentinePlacement => {
+  const row = Math.floor(index / columns);
+  const stepInRow = index % columns;
+  const rows = Math.ceil(totalSteps / columns) || 1;
+  const isLastRow = row === rows - 1;
+  const columnsInRow = isLastRow ? Math.max(1, ((totalSteps - 1) % columns) + 1) : columns;
+  const isEvenRow = row % 2 === 0;
+
+  const displayColumn = isEvenRow ? stepInRow : columnsInRow - 1 - stepInRow;
+  const rowOffset = ((columns - columnsInRow) * horizontalGap) / 2;
+  const x = displayColumn * horizontalGap + rowOffset;
+  const y = row * verticalGap;
+
+  return {
+    position: { x, y },
+    row,
+    stepInRow,
+    columnsInRow,
+    isEvenRow,
+  };
+};
+
+const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
+  steps,
+  flowMode,
+  className,
+  isVisible = true,
+  currentStepLabel,
+  currentStatus,
+  currentTimestamp,
+  currentDuration,
+  progressPercent,
+}) => {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [nodes, setNodes, onNodesChange] = useNodesState([]);
+  const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const flowInstanceRef = useRef<ReactFlowInstance | null>(null);
+  const hasInitialFit = useRef(false);
+  const lastStepCountRef = useRef(0);
 
-  const handleInit = useCallback((instance: ReactFlowInstance) => {
-    flowInstanceRef.current = instance;
-  }, []);
+  const theme = FLOW_THEMES[flowMode];
+  const layout = FLOW_LAYOUT[flowMode];
 
-  const fitViewToNodes = useCallback(
-    (options?: Partial<FitViewOptions>) => {
-      const instance = flowInstanceRef.current;
-      if (!instance) {
-        return;
-      }
-
-      const currentNodes = instance.getNodes();
-      if (!currentNodes.length) {
-        return;
-      }
-
-      if (currentNodes.length === 1) {
-        const [single] = currentNodes;
-        const width = single.width ?? 0;
-        const height = single.height ?? 0;
-        instance.setCenter(
-          single.position.x + width / 2,
-          single.position.y + height / 2,
-          { zoom: 1.1, duration: 300, ...options }
-        );
-        return;
-      }
-
-      instance.fitView({ padding: 0.2, duration: 300, ...options });
-    },
-    []
-  );
-
-  useEffect(() => {
-    const newNodes: Node<ProcessNodeData>[] = steps.map((step, index) => {
-      const phase = STEP_PHASES[step.id] || 'execution';
-      const position = STEP_POSITIONS[step.id] || { x: 250, y: 200 + index * 110 };
-
+  const processedSteps = useMemo(
+  () => {
+    const total = steps.length || 1;
+    return steps.map((step, index) => {
+      const phase = STEP_PHASES[step.id] || 'analysis';
+      const placement = computeSerpentinePlacement(
+        index,
+        layout.columns,
+        layout.horizontalGap,
+        layout.verticalGap,
+        total,
+      );
+      const latestThinking = step.thinking?.slice(-1)[0];
+      const isActive = step.status === 'in_progress';
+      const isCompleted = step.status === 'completed';
+      const hasError = step.status === 'error';
       return {
-        id: step.id,
-        type: 'processNode',
-        position,
-        data: {
-          step,
-          phase,
-          color: PHASE_COLORS[phase],
-          isActive: step.status === 'in_progress',
-          isCompleted: step.status === 'completed',
-          hasError: step.status === 'error',
-        },
+        step,
+        phase,
+        position: placement.position,
+        row: placement.row,
+        stepInRow: placement.stepInRow,
+        columnsInRow: placement.columnsInRow,
+        isEvenRow: placement.isEvenRow,
+        isActive,
+        isCompleted,
+        hasError,
+        latestThinking,
+        index,
       };
     });
+  },  [steps, layout.columns, layout.horizontalGap, layout.verticalGap],
+);
 
-    setNodes(newNodes);
-  }, [setNodes, steps]);
+  const translateExtent = useMemo(() => {
+    const basePadX = layout.horizontalGap * 0.75;
+    const basePadY = layout.verticalGap * 0.75;
+    if (!processedSteps.length) {
+      return [
+        [-basePadX, -basePadY],
+        [basePadX, basePadY],
+      ] as [[number, number], [number, number]];
+    }
+    const positions = processedSteps.map(({ position }) => position);
+    const maxX = Math.max(...positions.map(({ x }) => x));
+    const maxY = Math.max(...positions.map(({ y }) => y));
+    const minX = Math.min(...positions.map(({ x }) => x));
+    const extraWidth = layout.horizontalGap;
+    const extraHeight = layout.verticalGap;
+    return [
+      [Math.min(-basePadX, minX - basePadX), -basePadY],
+      [maxX + basePadX + extraWidth, maxY + basePadY + extraHeight],
+    ] as [[number, number], [number, number]];
+  }, [processedSteps, layout.horizontalGap, layout.verticalGap]);
+
+  const handleInit = useCallback((instance: ReactFlowInstance) => {
+    flowInstanceRef.current = instance;
+    hasInitialFit.current = false;
+    requestAnimationFrame(() => {
+      if (!hasInitialFit.current) {
+        instance.fitView({ padding: 0.04, includeHiddenNodes: true });
+        const currentZoom = instance.getZoom();
+        const targetZoom = Math.min(1.25, Math.max(0.8, currentZoom * 1.12));
+        instance.zoomTo(targetZoom);
+        hasInitialFit.current = true;
+      }
+    });
+  }, []);
 
   useEffect(() => {
-    if (steps.length < 2) {
+    const totalSteps = processedSteps.length || 1;
+    setNodes((prevNodes) => {
+      const previous = new Map(prevNodes.map((node) => [node.id, node]));
+      return processedSteps.map(({ step, phase, position, isActive, isCompleted, hasError, latestThinking, index }) => {
+        const priorPosition = previous.get(step.id)?.position ?? position;
+        return {
+          id: step.id,
+          type: 'processNode',
+          position: priorPosition,
+          dragHandle: '.process-node__drag-handle',
+          sourcePosition: Position.Right,
+          targetPosition: Position.Left,
+          data: {
+            step,
+            phase,
+            theme,
+            isActive,
+            isCompleted,
+            hasError,
+            statusLabel: toFriendlyStatus(step.status),
+            sequenceIndex: index,
+            totalSteps,
+            latestThinking,
+            currentStatus,
+            currentDuration,
+            currentTimestamp,
+            progressPercent,
+          },
+        } as Node<ProcessNodeData>;
+      });
+    });
+  }, [processedSteps, setNodes, theme, currentStatus, currentDuration, currentTimestamp, progressPercent]);
+
+  useEffect(() => {
+    if (processedSteps.length !== lastStepCountRef.current) {
+      lastStepCountRef.current = processedSteps.length;
+      hasInitialFit.current = false;
+    }
+  }, [processedSteps.length]);
+
+  useEffect(() => {
+    hasInitialFit.current = false;
+  }, [flowMode]);
+
+  useEffect(() => {
+    if (!isVisible) {
+      hasInitialFit.current = false;
+    }
+  }, [isVisible]);
+
+  useEffect(() => {
+    if (!isVisible) {
+      return;
+    }
+    const instance = flowInstanceRef.current;
+    if (!instance || nodes.length === 0) {
+      return;
+    }
+    if (instance.setTranslateExtent) {
+      instance.setTranslateExtent(translateExtent);
+    }
+    if (!hasInitialFit.current) {
+      hasInitialFit.current = true;
+      instance.fitView({ padding: 0.04, includeHiddenNodes: true, duration: 400 });
+      const currentZoom = instance.getZoom();
+      const targetZoom = Math.min(1.25, Math.max(0.8, currentZoom * 1.12));
+      instance.zoomTo(targetZoom);
+    }
+  }, [isVisible, nodes.length, translateExtent]);
+
+  useEffect(() => {
+    if (processedSteps.length < 2) {
       setEdges([]);
       return;
     }
 
     const sequentialEdges: Edge[] = [];
 
-    for (let i = 0; i < steps.length - 1; i += 1) {
-      const current = steps[i];
-      const next = steps[i + 1];
-      const shouldConnect =
-        current.status === 'completed' ||
-        next.status === 'in_progress' ||
-        next.status === 'completed';
+    for (let i = 0; i < processedSteps.length - 1; i += 1) {
+      const current = processedSteps[i];
+      const next = processedSteps[i + 1];
+      const hasTransitioned = current.step.status === 'completed' || current.step.status === 'error';
+      const isActiveChain = next.step.status === 'in_progress';
+      const shouldAnimate = hasTransitioned || isActiveChain;
 
-      if (shouldConnect) {
-        sequentialEdges.push({
-          id: `${current.id}-${next.id}`,
-          source: current.id,
-          target: next.id,
-          animated: next.status === 'in_progress' || current.status === 'completed',
-          style: {
-            stroke: current.status === 'completed' ? '#10b981' :
-                   next.status === 'in_progress' ? '#3b82f6' : '#6b7280',
-            strokeWidth: next.status === 'in_progress' ? 3 :
-                        current.status === 'completed' ? 2.5 : 2,
-            strokeDasharray: next.status === 'in_progress' ? '8,4' : undefined,
-            filter: next.status === 'in_progress' ?
-                   'drop-shadow(0 0 6px rgba(59, 130, 246, 0.6))' :
-                   current.status === 'completed' ?
-                   'drop-shadow(0 0 4px rgba(16, 185, 129, 0.4))' : 'none',
-          },
-          markerEnd: {
-            type: 'arrowclosed',
-            color: current.status === 'completed' ? '#10b981' :
-                  next.status === 'in_progress' ? '#3b82f6' : '#6b7280',
-          },
-          className: next.status === 'in_progress' ? 'animate-pulse' : undefined,
-        });
-      }
-    }
+      sequentialEdges.push({
+        id: `${current.step.id}-${next.step.id}`,
+        source: current.step.id,
+        target: next.step.id,
+        sourceHandle: 'right',
 
-    const planningStep = steps.find((step) => step.id === 'tool_planning');
-    const executionTargets = steps.filter((step) =>
-      ['provisional_plan', 'validate_sql', 'apply_execute_sql', 'plan_chart'].includes(step.id)
-    );
+        targetHandle: 'left',
 
-    if (planningStep) {
-      executionTargets.forEach((target) => {
-        const shouldAttach =
-          planningStep.status === 'completed' &&
-          (target.status === 'in_progress' || target.status === 'completed');
-
-        if (shouldAttach) {
-          sequentialEdges.push({
-            id: `${planningStep.id}-${target.id}`,
-            source: planningStep.id,
-            target: target.id,
-            animated: target.status === 'in_progress',
-            style: {
-              stroke: '#8b5cf6',
-              strokeWidth: 1.5,
-            },
-            markerEnd: {
-              type: 'arrowclosed',
-              color: '#8b5cf6',
-            },
-          });
-        }
+        type: 'smoothstep',
+        animated: shouldAnimate,
+        style: {
+          stroke: isActiveChain
+            ? theme.edgeActive
+            : hasTransitioned
+            ? theme.edgeCompleted
+            : theme.edgeIdle,
+          strokeWidth: isActiveChain ? 3 : hasTransitioned ? 2.2 : 1.4,
+          strokeDasharray: shouldAnimate ? '16 12' : undefined,
+          filter: shouldAnimate ? 'drop-shadow(0 0 8px rgba(148,163,184,0.35))' : undefined,
+        },
+        markerEnd: {
+          type: 'arrowclosed',
+          color: isActiveChain ? theme.edgeActive : hasTransitioned ? theme.edgeCompleted : theme.edgeIdle,
+          width: 18,
+          height: 18,
+        },
       });
     }
 
     setEdges(sequentialEdges);
-  }, [setEdges, steps]);
-
-  useLayoutEffect(() => {
-    if (!isVisible || !nodes.length) {
-      return;
-    }
-
-    const timeout = window.setTimeout(() => fitViewToNodes(), 180);
-    return () => window.clearTimeout(timeout);
-  }, [fitViewToNodes, isVisible, nodes]);
+  }, [processedSteps, setEdges, theme]);
 
   useEffect(() => {
-    if (!containerRef.current) {
+    if (!isVisible) {
       return;
     }
-
-    const observer = new ResizeObserver(() => {
-      if (isVisible) {
-        fitViewToNodes({ duration: 0 });
-      }
+    const raf = requestAnimationFrame(() => {
+      containerRef.current?.dispatchEvent(new CustomEvent('resize'));
     });
+    return () => cancelAnimationFrame(raf);
+  }, [isVisible, nodes.length, edges.length]);
 
-    observer.observe(containerRef.current);
-    return () => observer.disconnect();
-  }, [fitViewToNodes, isVisible]);
-
-  const onConnect = useCallback(
-    (connection: Edge | Connection) => setEdges((existing) => addEdge(connection, existing)),
-    [setEdges]
-  );
-
-  const phaseState = useMemo(() => {
+  const activePhase = useMemo(() => {
     const active = steps.find((step) => step.status === 'in_progress');
-    const lastCompleted = [...steps].reverse().find((step) => step.status === 'completed');
-    const reference = active || lastCompleted || steps[0];
-    const phase = reference ? STEP_PHASES[reference.id] || 'analysis' : 'analysis';
-    const activeIndex = PHASE_SEQUENCE.indexOf(phase);
-    const nextPhase = activeIndex >= 0 && activeIndex < PHASE_SEQUENCE.length - 1
-      ? PHASE_SEQUENCE[activeIndex + 1]
-      : null;
-    const latestDecision = active?.thinking?.slice(-1)[0] || lastCompleted?.thinking?.slice(-1)[0] || '';
-
-    return {
-      phase,
-      activeIndex,
-      nextPhase,
-      activeStepName: reference?.name || 'Waiting for agent updates...',
-      latestDecision,
-    };
+    if (active) {
+      return STEP_PHASES[active.id] || 'analysis';
+    }
+    const completed = [...steps].reverse().find((step) => step.status === 'completed');
+    if (completed) {
+      return STEP_PHASES[completed.id] || 'analysis';
+    }
+    return 'analysis';
   }, [steps]);
 
+  const decor = FLOW_CANVAS_DECOR[flowMode];
+
   return (
-    <div
-      ref={containerRef}
-      className={`workflow-canvas relative flex h-full flex-col ${className ?? ''}`}
-    >
-      <div className="border-b border-gray-700 bg-gray-800/80">
-        <div className="flex items-center gap-2 overflow-x-auto px-3 py-2 text-[10px] uppercase tracking-wide text-gray-300 sm:text-xs">
-          {PHASE_SEQUENCE.map((phase, idx) => (
-            <React.Fragment key={phase}>
-              <div
-                className={`rounded-md px-2 py-1 font-semibold ${
-                  idx < phaseState.activeIndex
-                    ? 'bg-emerald-500/20 text-emerald-200'
-                    : idx === phaseState.activeIndex
-                    ? 'bg-blue-500/20 text-blue-200'
-                    : 'bg-gray-700/60 text-gray-400'
-                }`}
-              >
-                {PHASE_LABELS[phase]}
-              </div>
-              {idx < PHASE_SEQUENCE.length - 1 && (
-                <span
-                  className={`text-sm ${
-                    idx === phaseState.activeIndex
-                      ? 'text-blue-300'
-                      : idx < phaseState.activeIndex
-                      ? 'text-emerald-300'
-                      : 'text-gray-600'
-                  }`}
-                >
-                  {'->'}
-                </span>
-              )}
-            </React.Fragment>
-          ))}
+    <div ref={containerRef} className={`relative flex h-full flex-col overflow-hidden ${decor.wrapperClass} ${className ?? ''}`}>
+      <div className={`pointer-events-none absolute inset-0 ${decor.overlayClass}`} />
+      <div className="flex items-center justify-between border-b border-white/5 bg-black/10 px-4 py-2 text-[11px] text-gray-300 backdrop-blur-sm">
+        <div className="flex items-center gap-2">
+          <span className={`rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide ${FLOW_THEMES[flowMode].badgeClass}`}>
+            {flowMode.replace('-', ' ')}
+          </span>
+          {currentStepLabel && <span className="font-medium text-gray-100">{currentStepLabel}</span>}
+          {currentStatus && <span className="text-gray-400">{currentStatus}</span>}
         </div>
-        <div className="flex flex-col gap-1 px-3 pb-2 text-xs text-gray-300 sm:flex-row sm:items-center sm:justify-between">
-          <div className="font-medium text-gray-200">
-            Active Step: <span className="font-normal text-gray-300">{phaseState.activeStepName}</span>
-          </div>
-          {phaseState.latestDecision && (
-            <div className="truncate text-blue-300">
-              Latest Decision: {phaseState.latestDecision}
-            </div>
-          )}
+        <div className="flex items-center gap-3 text-[10px] text-gray-400">
+          <span>{`Phase › ${activePhase.toUpperCase()}`}</span>
+          {typeof progressPercent === 'number' && <span>{progressPercent}% complete</span>}
+          {currentTimestamp && <span>{new Date(currentTimestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>}
+          {currentDuration && <span>{currentDuration}</span>}
         </div>
       </div>
 
-      <div className="flex-1">
+      <div className="relative flex-1">
         <ReactFlow
           nodes={nodes}
           edges={edges}
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
-          onConnect={onConnect}
           nodeTypes={nodeTypes}
           onInit={handleInit}
-          proOptions={{ hideAttribution: true }}
-          className="bg-gray-900"
+          fitView
+          fitViewOptions={{ padding: 0.04, maxZoom: 1.6, minZoom: 0.35, includeHiddenNodes: true }}
           colorMode="dark"
+          className="bg-transparent"
+          proOptions={{ hideAttribution: true }}
+          translateExtent={translateExtent}
+          defaultViewport={{ x: 0, y: 0, zoom: 1 }}
+          nodesDraggable
+          nodesConnectable={false}
+          elementsSelectable={false}
+          panOnDrag
+          autoPanOnNodeDrag
+          panOnScroll
+          snapToGrid
+          snapGrid={[SNAP_GRID, SNAP_GRID]}
+          minZoom={0.35}
+          maxZoom={1.75}
+          selectionOnDrag={false}
+          zoomOnDoubleClick={false}
+          elevateEdgesOnSelect
         >
-          <Controls
-            className="bg-gray-800 border border-gray-600 text-white"
-            showZoom
-            showFitView
-            showInteractive={false}
-          />
+          <Controls className="bg-gray-800/80 text-white border border-gray-700" showInteractive={false} showFitView={false} />
           <MiniMap
-            className="bg-gray-800 border border-gray-600"
-            maskColor="rgba(0, 0, 0, 0.6)"
+            className="bg-gray-900/90 border border-gray-700"
             nodeColor={(node) => {
               const data = node.data as ProcessNodeData | undefined;
               if (!data) {
-                return '#374151';
+                return '#4b5563';
               }
               if (data.hasError) {
                 return '#ef4444';
               }
-              if (data.isCompleted) {
-                return '#10b981';
-              }
               if (data.isActive) {
-                return data.color || '#6b7280';
+                return theme.edgeActive;
               }
-              return '#374151';
+              if (data.isCompleted) {
+                return theme.edgeCompleted;
+              }
+              return theme.edgeIdle;
             }}
+            pannable
+            zoomable
+            maskColor="rgba(8, 11, 20, 0.75)"
           />
-          <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="#374151" />
+          <Background variant={BackgroundVariant.Lines} gap={32} size={1} color="#1f2937" />
         </ReactFlow>
       </div>
     </div>
@@ -400,4 +511,5 @@ export const WorkflowCanvas: React.FC<WorkflowCanvasProps> = (props) => (
   </ReactFlowProvider>
 );
 
+export default WorkflowCanvas;
 

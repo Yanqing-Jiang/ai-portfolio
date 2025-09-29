@@ -32,9 +32,12 @@ Usage:
 from __future__ import annotations
 import os
 import logging
+import time
 from typing import Any, Dict, List, Optional, AsyncGenerator, TypeVar, Type, Tuple
+from types import SimpleNamespace
 from pydantic import BaseModel
 from openai import AsyncOpenAI
+from analytics.core.telemetry import responses_call
 
 logger = logging.getLogger(__name__)
 
@@ -197,10 +200,80 @@ class UnifiedResponsesClient:
             return content_attr
         return ""
 
-    def _extract_tool_calls(self, response: Any) -> List[Dict[str, Any]]:
-        calls: List[Dict[str, Any]] = []
+
+    def _extract_tool_calls(self, response: Any) -> List[Any]:
+        calls: List[Any] = []
         if response is None:
             return calls
+
+        seen_ids = set()
+
+        def _normalize(call_obj: Any):
+            if call_obj is None:
+                return None
+            if hasattr(call_obj, 'function') and getattr(call_obj.function, 'name', None):
+                return call_obj
+
+            call_dict = call_obj if isinstance(call_obj, dict) else self._as_dict(call_obj) or {}
+            if not call_dict:
+                return None
+
+            function_payload = call_dict.get('function')
+            function_dict = function_payload if isinstance(function_payload, dict) else self._as_dict(function_payload) or {}
+
+            arguments = function_dict.get('arguments')
+            if arguments is None and 'args' in function_dict:
+                arguments = function_dict.get('args')
+            arguments = '' if arguments is None else str(arguments)
+
+            function_obj = function_payload if hasattr(function_payload, 'name') else SimpleNamespace(
+                name=function_dict.get('name'),
+                arguments=arguments
+            )
+
+            return SimpleNamespace(
+                id=call_dict.get('id'),
+                type=call_dict.get('type', 'function'),
+                function=function_obj
+            )
+
+        def _append(call_obj: Any):
+            normalized = _normalize(call_obj)
+            if not normalized:
+                return
+            call_id = getattr(normalized, 'id', None)
+            if call_id and call_id in seen_ids:
+                return
+            if call_id:
+                seen_ids.add(call_id)
+            calls.append(normalized)
+
+        attr_calls = getattr(response, 'tool_calls', None)
+        if attr_calls:
+            for call in attr_calls:
+                _append(call)
+
+        data = self._as_dict(response)
+        if not data:
+            return calls
+
+        for call in data.get('tool_calls') or []:
+            _append(call)
+
+        required_action = data.get('required_action') or {}
+        submit = required_action.get('submit_tool_outputs') or {}
+        for call in submit.get('tool_calls', []) or []:
+            _append(call)
+
+        for block in data.get('output', []) or []:
+            block_dict = block if isinstance(block, dict) else self._as_dict(block) or {}
+            for segment in block_dict.get('content', []) or []:
+                segment_dict = segment if isinstance(segment, dict) else self._as_dict(segment) or {}
+                if segment_dict.get('type') == 'tool_calls':
+                    for call in segment_dict.get('tool_calls', []) or []:
+                        _append(call)
+
+        return calls
 
     def _extract_parsed_model(self, response: Any) -> Any:
         if response is None:
@@ -270,6 +343,8 @@ class UnifiedResponsesClient:
         self._apply_reasoning(params, reasoning_effort)
         self._inject_context(params, session_id)
 
+        call_start = time.time()
+
         try:
             response = await self.client.responses.parse(**params)
             response_id = getattr(response, "id", None)
@@ -277,8 +352,28 @@ class UnifiedResponsesClient:
             parsed_model = self._extract_parsed_model(response)
             if parsed_model is None:
                 raise ValueError('Responses API did not return parsed content')
+            elapsed_ms = int((time.time() - call_start) * 1000)
+            responses_call(
+                call_type="create_structured",
+                model=params.get("model"),
+                reasoning_effort=reasoning_effort,
+                duration_ms=elapsed_ms,
+                status="success",
+                session_id=session_id,
+                metadata={"response_id": response_id, "response_model": getattr(response_model, '__name__', str(response_model))},
+            )
             return parsed_model, response_id
         except Exception as exc:
+            elapsed_ms = int((time.time() - call_start) * 1000)
+            responses_call(
+                call_type="create_structured",
+                model=params.get("model"),
+                reasoning_effort=reasoning_effort,
+                duration_ms=elapsed_ms,
+                status="error",
+                session_id=session_id,
+                error=str(exc),
+            )
             logger.error("Responses API structured request failed: %s", exc)
             raise
 
@@ -300,6 +395,8 @@ class UnifiedResponsesClient:
         self._apply_reasoning(params, reasoning_effort)
         self._inject_context(params, session_id)
 
+        call_start = time.time()
+
         try:
             response = await self.client.responses.create(**params)
             response_id = getattr(response, "id", None)
@@ -307,8 +404,28 @@ class UnifiedResponsesClient:
 
             content = self._extract_output_text(response)
             tool_calls = self._extract_tool_calls(response)
+            elapsed_ms = int((time.time() - call_start) * 1000)
+            responses_call(
+                call_type="tool_calling_turn",
+                model=params.get("model"),
+                reasoning_effort=reasoning_effort,
+                duration_ms=elapsed_ms,
+                status="success",
+                session_id=session_id,
+                metadata={"response_id": response_id, "tool_call_count": len(tool_calls or [])},
+            )
             return ResponseMessage(content=content, tool_calls=tool_calls, response_id=response_id)
         except Exception as exc:
+            elapsed_ms = int((time.time() - call_start) * 1000)
+            responses_call(
+                call_type="tool_calling_turn",
+                model=params.get("model"),
+                reasoning_effort=reasoning_effort,
+                duration_ms=elapsed_ms,
+                status="error",
+                session_id=session_id,
+                error=str(exc),
+            )
             logger.error("Responses API tool calling failed: %s", exc)
             raise
 
@@ -326,6 +443,9 @@ class UnifiedResponsesClient:
         self._apply_reasoning(params, reasoning_effort)
         self._inject_context(params, session_id)
 
+        call_start = time.time()
+        delta_count = 0
+
         try:
             async with self.client.responses.stream(**params) as stream:
                 async for event in stream:
@@ -333,15 +453,18 @@ class UnifiedResponsesClient:
                     if event_type == "response.output_text.delta":
                         delta_text = getattr(event, "delta", None)
                         if delta_text:
+                            delta_count += 1
                             yield ResponseDelta(content=delta_text)
                     elif event_type == "response.reasoning.delta":
                         reasoning_delta = getattr(event, "delta", None)
                         if reasoning_delta:
+                            delta_count += 1
                             yield ResponseDelta(reasoning=reasoning_delta)
                     elif event_type == "response.tool_call.delta":
                         event_dict = self._as_dict(event) or {}
                         tool_calls = event_dict.get("tool_calls") or []
                         if tool_calls:
+                            delta_count += 1
                             yield ResponseDelta(tool_calls=tool_calls)
                     elif event_type == "response.error":
                         error_info = getattr(event, "error", None) or getattr(event, "message", None)
@@ -350,7 +473,27 @@ class UnifiedResponsesClient:
                 final_response = await stream.get_final_response()
                 response_id = getattr(final_response, "id", None) if final_response else None
                 self._set_previous_response_id(response_id, session_id)
+                elapsed_ms = int((time.time() - call_start) * 1000)
+                responses_call(
+                    call_type="stream_response",
+                    model=params.get("model"),
+                    reasoning_effort=reasoning_effort,
+                    duration_ms=elapsed_ms,
+                    status="success",
+                    session_id=session_id,
+                    metadata={"response_id": response_id, "delta_count": delta_count},
+                )
         except Exception as exc:
+            elapsed_ms = int((time.time() - call_start) * 1000)
+            responses_call(
+                call_type="stream_response",
+                model=params.get("model"),
+                reasoning_effort=reasoning_effort,
+                duration_ms=elapsed_ms,
+                status="error",
+                session_id=session_id,
+                error=str(exc),
+            )
             logger.error("Responses API streaming failed: %s", exc)
             raise
 
@@ -368,13 +511,35 @@ class UnifiedResponsesClient:
         self._apply_reasoning(params, reasoning_effort)
         self._inject_context(params, session_id)
 
+        call_start = time.time()
+
         try:
             response = await self.client.responses.create(**params)
             response_id = getattr(response, "id", None)
             self._set_previous_response_id(response_id, session_id)
             content = self._extract_output_text(response)
+            elapsed_ms = int((time.time() - call_start) * 1000)
+            responses_call(
+                call_type="simple_completion",
+                model=params.get("model"),
+                reasoning_effort=reasoning_effort,
+                duration_ms=elapsed_ms,
+                status="success",
+                session_id=session_id,
+                metadata={"response_id": response_id},
+            )
             return content, response_id
         except Exception as exc:
+            elapsed_ms = int((time.time() - call_start) * 1000)
+            responses_call(
+                call_type="simple_completion",
+                model=params.get("model"),
+                reasoning_effort=reasoning_effort,
+                duration_ms=elapsed_ms,
+                status="error",
+                session_id=session_id,
+                error=str(exc),
+            )
             logger.error("Responses API simple completion failed: %s", exc)
             raise
 
@@ -384,13 +549,34 @@ class UnifiedResponsesClient:
         model: str = "text-embedding-3-small"
     ) -> List[List[float]]:
         """Create embeddings for text using OpenAI embeddings API"""
+        call_start = time.time()
         try:
             response = await self.client.embeddings.create(
                 input=texts,
                 model=model
             )
+            elapsed_ms = int((time.time() - call_start) * 1000)
+            responses_call(
+                call_type="create_embeddings",
+                model=model,
+                reasoning_effort=None,
+                duration_ms=elapsed_ms,
+                status="success",
+                session_id=None,
+                metadata={"vector_count": len(response.data)},
+            )
             return [embedding.embedding for embedding in response.data]
         except Exception as exc:
+            elapsed_ms = int((time.time() - call_start) * 1000)
+            responses_call(
+                call_type="create_embeddings",
+                model=model,
+                reasoning_effort=None,
+                duration_ms=elapsed_ms,
+                status="error",
+                session_id=None,
+                error=str(exc),
+            )
             logger.error("Embeddings API request failed: %s", exc)
             raise
 

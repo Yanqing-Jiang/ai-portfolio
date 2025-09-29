@@ -1,0 +1,157 @@
+from __future__ import annotations
+
+from textwrap import dedent
+from typing import Any, Dict, List, Optional
+
+from ..core.config_store import ConfigStore, get_config_store
+from ..core.context import get_configs
+from ..core.state import IntentModel, QueryPlanModel
+from .templates import fetch_templates_for_intent, summarize_template
+
+CONFIGS = get_configs()
+
+
+def _render_metrics_summary(plan: QueryPlanModel) -> str:
+    metrics_catalog = CONFIGS.metrics.get("metrics", {}) or {}
+    summaries: List[str] = []
+    for metric_name in plan.metrics or []:
+        metric = None
+        for key, value in metrics_catalog.items():
+            if key.lower() == metric_name.lower() or value.get("name", "").lower() == metric_name.lower():
+                metric = {"id": key, **value}
+                break
+        if not metric:
+            summaries.append(f"- {metric_name}")
+            continue
+        alias_text = ", ".join(metric.get("aliases", [])) if metric.get("aliases") else ""
+        detail = f"- {metric.get('name', metric_name)} (db: {metric.get('database_name', metric_name)})"
+        if alias_text:
+            detail += f" | aliases: {alias_text}"
+        if metric.get("description"):
+            detail += f" | desc: {metric['description']}"
+        summaries.append(detail)
+    return "\n".join(summaries)
+
+
+def _render_constraints(plan: QueryPlanModel) -> str:
+    database_cfg = CONFIGS.database or {}
+    defaults = database_cfg.get("query_defaults", {})
+    allowed_tables = list((database_cfg.get("tables") or {}).keys()) or ["comp_financials"]
+    max_limit = defaults.get("max_limit", 10000)
+    default_years_back = defaults.get("default_years_back", plan.timeframe.years_back if plan.timeframe else 5)
+    return dedent(
+        f"""
+        Allowed tables: {', '.join(allowed_tables)}
+        Required filters:
+          - Must restrict calendar_year using >= CURRENT_YEAR - {default_years_back}
+          - Must include calendar_year in SELECT list
+          - If granularity is quarterly, include calendar_quarter_num and calendar_quarter in SELECT and GROUP BY
+        Limits:
+          - Always include LIMIT <= {max_limit}
+        Safety:
+          - No DDL/DML statements
+          - No CROSS JOIN unless justified by templates
+          - Use parameterized literals, avoid string concatenation
+        """
+    ).strip()
+
+
+async def build_sql_messages(
+    *,
+    original_query: str,
+    intent: IntentModel,
+    plan: QueryPlanModel,
+    config_store: Optional[ConfigStore] = None,
+    templates: Optional[List[Dict[str, Any]]] = None,
+    top_k_templates: int = 2,
+) -> List[Dict[str, str]]:
+    """Construct system/user messages guiding an LLM to draft SQL."""
+    store = config_store or get_config_store()
+    candidate_templates = templates
+    if candidate_templates is None:
+        candidate_templates = await fetch_templates_for_intent(
+            intent,
+            query=original_query,
+            top_k=top_k_templates,
+            store=store,
+        )
+    template_blocks = [summarize_template(template) for template in candidate_templates]
+    template_text = "\n\n".join(template_blocks) if template_blocks else "(No template match; use best judgment)"
+
+    metrics_summary = _render_metrics_summary(plan)
+    constraints_text = _render_constraints(plan)
+
+    slot_lines = []
+    for key, value in (intent.slots_detected or {}).items():
+        if key == "original_query":
+            continue
+        slot_lines.append(f"- {key}: {value}")
+    slots_section = "\n".join(slot_lines) if slot_lines else "- none captured"
+
+    system_prompt = dedent(
+        """
+        You are an expert financial data engineer. Generate safe SQL for PostgreSQL using only the allowed tables.
+        Obey all instructions, especially filters and limits. Respond with SQL only, wrapped in triple backticks, with no commentary.
+        """
+    ).strip()
+
+    user_prompt = dedent(
+        f"""
+        USER QUESTION:
+        {original_query}
+
+        DETECTED INTENT: {intent.intent_key} (confidence {intent.confidence:.2f})
+        SLOTS:
+        {slots_section}
+
+        QUERY PLAN:
+        - Metrics: {', '.join(plan.metrics or [])}
+        - Derived Metrics: {', '.join(plan.derived_metrics or []) or 'none'}
+        - Granularity: {plan.granularity}
+        - Comparison: {plan.comparison or 'n/a'}
+        - Years Back: {plan.timeframe.years_back if plan.timeframe else 'default'}
+        - Group By: {', '.join(plan.group_by or [])}
+
+        METRIC DETAILS:
+        {metrics_summary or '- unavailable'}
+
+        TEMPLATE SUGGESTIONS:
+        {template_text}
+
+        RULES:
+        {constraints_text}
+
+        OUTPUT FORMAT:
+        ```sql
+        SELECT ...
+        ```
+        """
+    ).strip()
+
+    return [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+
+
+def extract_sql_from_response(content: str) -> str:
+    """Extract SQL from an LLM response that may include formatting."""
+    content = content.strip()
+    if not content:
+        return content
+
+    if "```" in content:
+        segments = content.split("```")
+        for idx in range(1, len(segments), 2):
+            block = segments[idx]
+            block_stripped = block.lstrip()
+            if block_stripped.lower().startswith("sql"):
+                block_stripped = block_stripped[3:]
+            block_stripped = block_stripped.lstrip("\n")
+            if block_stripped:
+                return block_stripped.strip()
+        tail = segments[-1].strip()
+        if tail:
+            return tail
+
+    return content
