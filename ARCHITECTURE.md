@@ -11,9 +11,11 @@ This is a full-stack AI-powered portfolio application with a React frontend and 
 
 ## Backend (FastAPI + Python)
 - **Main API**: `backend/main.py` exposes all FastAPI endpoints
-- **Analytics Suite**: `backend/analytics_memory`, `backend/analytics_shared`, and `backend/analytics_supervisor` form one cohesive project that shares configuration, caching, and LangGraph orchestration
-- **Standalone Analytics Agent**: `backend/analytics_agent.py` is an independent workflow that should remain untouched unless user-facing frontend changes explicitly depend on it
-- **Services**: Gemini AI, TTS, and rate limiting helpers in dedicated modules
+- **Unified Analytics Suite**: `backend/analytics/` houses `core/`, `sql/`, `flows/`, `tools/`, and `streaming/`. The former `analytics_memory/*`, `analytics_shared/*`, and `analytics_supervisor/*` packages have been removed now that consumers import from this namespace.
+- **Workflow Dispatcher**: `backend/analytics/flows/workflow.py` selects the active analytics flow (`planner-executor`, `single-agent`, or `multi-agent`) and invokes the Responses API-first pipeline used by `/api/analytics/memory/stream`.
+- **SQL Catalogue**: `backend/analytics/sql/` compiles YAML templates from `backend/config/schemas/*.yaml` to propose, validate, and execute database queries with deterministic fallbacks.
+- **Standalone Analytics Agent**: `backend/analytics_agent.py` remains an independent workflow unless a shared frontend pathway requires changes.
+- **Shared Services**: Gemini AI, TTS, and rate limiting helpers in dedicated modules.
 - **Rate Limiting**: Redis-backed with in-memory fallback
 
 ## Key API Endpoints
@@ -26,10 +28,10 @@ This is a full-stack AI-powered portfolio application with a React frontend and 
   - No clarifications, direct query processing
 
 - **Analytics Memory** (`/api/analytics/memory/stream`)
-  - LangGraph memory pipeline with intelligent clarifications maintained by the analytics suite
-  - Advanced intent detection and query planning
-  - Conversational clarifications for ambiguous queries
-  - Session-based memory management
+  - Responses API-first planner that hydrates YAML-guided SQL suggestions before validation and execution
+  - `flow` query param selects demo experiences (`planner-executor` default, `single-agent`, `multi-agent`); the legacy `mode` alias remains for backwards compatibility
+  - Streams SSE telemetry (`progress`, `sql_generated`, `tool_call`, `agent_turn`, `agent_reasoning`, `final_answer`) for visualization overlays
+  - Session-based memory management with clarification loops
 
 - **Memory Clarifications** (`/api/analytics/memory/clarify`)
   - Handles user responses to clarification requests
@@ -48,13 +50,15 @@ This is a full-stack AI-powered portfolio application with a React frontend and 
 ### Frontend-Backend Communication
 - **Authentication**: Supabase JWT tokens sent via `apiService.streamWithAuth()`
 - **Rate Limiting**: Guest users (5/day) vs authenticated users (20/day)
-- **Streaming**: Server-Sent Events (SSE) for real-time AI responses
+- **Streaming**: Server-Sent Events (SSE) deliver `progress`, `sql_generated`, `tool_call`, `agent_turn`, `agent_reasoning`, and result/final_answer payloads for analytics flows
 - **Error Handling**: Unified error payloads prompting auth when required
 - **Config Service**: Centralized environment management through `services/config.ts`
 
 ### Analytics Suite Boundaries
-- `analytics_memory`, `analytics_shared`, and `analytics_supervisor` share state, prompts, and utilities; update them together to preserve workflow guarantees
-- `analytics_agent.py` is completely separate from the suite and should only change if a widely used frontend feature makes it necessary
+- `backend/analytics/` is the canonical package; no legacy proxies remain in the repository.
+- YAML catalogues in `backend/config/schemas/*.yaml` drive the planner, validator, and executor under `analytics/sql/`.
+- Planner-executor, single-agent, and multi-agent flows reuse `analytics.core` services for state, cache, events, and config.
+- `analytics_agent.py` stays separate and only changes when a shared frontend experience explicitly depends on it.
 
 ### AI Integration
 - **Research Agent**: LangChain + OpenAI for web research

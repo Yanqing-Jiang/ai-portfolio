@@ -215,4 +215,171 @@ This production-grade web application automates the invoice validation and match
         }
     ]
   },
+  {
+    year: 2021,
+    label: 'Pre-AI Projects',
+    hiddenOnLanding: true,
+    projects: [
+      {
+        id: 'global-inventory-dashboard',
+        title: 'Global Inventory Dashboard',
+        description: 'Power BI control tower that consolidates 20+ regional inventory reports with action cards and a Dataflow pipeline so leaders resolve stock risks in minutes.',
+        technologies: ['Power BI', 'Supply Chain Analytics', 'Data Automation'],
+        systemInstruction: 'You are the assistant for the Global Inventory Dashboard project. Explain how the control tower unifies worldwide inventory data, which KPIs matter, and how action cards accelerate mitigation.',
+        defaultPrompts: [
+          'How does the dashboard keep global inventory teams aligned?',
+          'What reports sit behind the action cards?',
+          'Describe the business impact of consolidating 20+ sub-reports.'
+        ],
+        coverUrl: 'http://jiangyanqing.com/wp-content/uploads/2021/10/15FA1F15-25C5-4AE6-A84A-EB5972FB0996.gif',
+        imageUrl: 'http://jiangyanqing.com/wp-content/uploads/2021/10/15FA1F15-25C5-4AE6-A84A-EB5972FB0996.gif',
+        link: 'https://www.jiangyanqing.com/portfolio/global-inventory-dashboard/',
+        contentHtml: `<div class="legacy-content">
+          <p><em>*Real project, hence sensitive data is blurred.</em></p>
+          <img class="legacy-hero" src="https://www.jiangyanqing.com/wp-content/uploads/2021/10/15FA1F15-25C5-4AE6-A84A-EB5972FB0996.gif" alt="Global Inventory Dashboard" loading="lazy" />
+          <h3>Global Inventory Dashboard Power BI report</h3>
+          <h4>Features</h4>
+          <ul>
+            <li>One main dashboard with 20+ sub reports that users can navigate inline.</li>
+            <li>"Actions Comment" block highlights mitigation steps whenever a KPI turns red.</li>
+            <li>Built-in definitions keep KPIs transparent for every stakeholder.</li>
+          </ul>
+          <div class="legacy-gallery">
+            <img src="https://www.jiangyanqing.com/wp-content/uploads/2021/10/Global-Inventory-Dashboard-1024x582.png" alt="Global inventory executive view" loading="lazy" />
+            <img src="https://www.jiangyanqing.com/wp-content/uploads/2021/10/Navigate.png" alt="Inventory navigation tabs" loading="lazy" />
+            <img src="https://www.jiangyanqing.com/wp-content/uploads/2021/10/Actions.png" alt="Mitigation action cards" loading="lazy" />
+            <img src="https://www.jiangyanqing.com/wp-content/uploads/2021/10/Definition.png" alt="KPI definition reference" loading="lazy" />
+            <img src="https://www.jiangyanqing.com/wp-content/uploads/2021/10/Add-Comment-Blurred.gif" alt="Comment workflow animation" loading="lazy" />
+          </div>
+          <h3>Back-end Data Processing</h3>
+          <p>PBIX dataset -> Power BI Dataflow (Cloud) -> unified SQL queries across multiple databases. The Dataflow approach bypasses the 2 GB PBIX limit and lets other teams reuse the curated schema.</p>
+        </div>`
+      },
+      {
+        id: 'time-series-forecasting-pre',
+        title: 'R Time Series Forecasting',
+        description: 'Automated R scripts embedded in Power BI compare seven forecasting models, benchmark accuracy, and publish demand outlooks straight to stakeholders.',
+        technologies: ['Power BI', 'R', 'Forecasting'],
+        systemInstruction: 'You speak for the R Time Series Forecasting project. Focus on the modeling pipeline, accuracy benchmarking, and how results surface inside Power BI for merchandisers.',
+        defaultPrompts: [
+          'Which forecasting models are compared in this solution?',
+          'How are the R scripts operationalized inside Power BI?',
+          'What decisions do merchandisers make with the forecasts?'
+        ],
+        coverUrl: 'https://www.jiangyanqing.com/wp-content/uploads/2021/12/R-Script-1.gif',
+        imageUrl: 'https://www.jiangyanqing.com/wp-content/uploads/2021/12/R-Script-1.gif',
+        link: 'https://www.jiangyanqing.com/portfolio/machine-learning-forecasting-visual/',
+        contentHtml: `<div class="legacy-content">
+          <p><em>*Real project, hence sensitive data is removed.</em></p>
+          <h3>Power BI Report: Advanced R Visualization</h3>
+          <ul>
+            <li>Custom R visuals embedded in Power BI Service with fully automated refresh.</li>
+            <li>No manual steps-forecasts and visuals ship straight to decision makers.</li>
+          </ul>
+          <h3>Time Series Forecasting</h3>
+          <p>The solution benchmarks seven models (Naive, SES, Holt's, Auto ARIMA, TBATS, Prophet, Neural Network) on 90-day holdout data and promotes the best performer before forecasting the next 90 days.</p>
+          <img class="legacy-hero" src="https://www.jiangyanqing.com/wp-content/uploads/2021/12/R-Script-1.gif" alt="R Time Series Forecasting" loading="lazy" />
+          <div class="legacy-gallery">
+            <img src="https://www.jiangyanqing.com/wp-content/uploads/2021/10/2021-10-09_18-33-40-1024x575.png" alt="Forecast accuracy comparison" loading="lazy" />
+            <img src="https://www.jiangyanqing.com/wp-content/uploads/2021/10/2021-10-09_18-35-28-1024x578.png" alt="Model selection dashboard" loading="lazy" />
+          </div>
+          <p>Additional Power BI reports reuse the same R pipeline for broader analytics.</p>
+        </div>`
+      },
+      {
+        id: 'supplier-review-system',
+        title: 'All-in-One Supplier Review System',
+        description: 'Interactive Power BI workspace for conducting supplier scorecards, capturing review notes, and sharing results with stakeholders in real time.',
+        technologies: ['Power BI', 'Supplier Management', 'Automation'],
+        systemInstruction: 'You summarize the All-in-One Supplier Review System. Highlight the review workflow, collaboration features, and how data refresh keeps stakeholders aligned.',
+        defaultPrompts: [
+          'Walk me through a supplier review inside the tool.',
+          'How does the system collect qualitative feedback?',
+          'What automation keeps data current for stakeholders?'
+        ],
+        coverUrl: 'https://www.jiangyanqing.com/wp-content/uploads/2021/10/02Q2JyM7Iq3t8rFTddlZMxa-7.1569482292.fit_scale.size_760x427-300x169.jpg',
+        imageUrl: 'https://www.jiangyanqing.com/wp-content/uploads/2021/10/02Q2JyM7Iq3t8rFTddlZMxa-7.1569482292.fit_scale.size_760x427-300x169.jpg',
+        link: 'https://www.jiangyanqing.com/portfolio/all-in-one-supplier-review-system/',
+        contentHtml: `<div class="legacy-content">
+          <p><em>*Real project, hence sensitive data is blurred.</em></p>
+          <h3>Technology Stack</h3>
+          <p>Power BI + Power Automate + Power Apps + SharePoint power an interactive supplier assessment workspace.</p>
+          <h3>What's Included</h3>
+          <ul>
+            <li>Excel-like input experience with live data updates.</li>
+            <li>Supplier reviews, notes, and PDF scorecards generated from one screen.</li>
+            <li>Periodic business review and email automation functions built in.</li>
+          </ul>
+          <div class="legacy-gallery">
+            <img src="https://www.jiangyanqing.com/wp-content/uploads/2021/10/Add-Comment-Blurred.gif" alt="Supplier review comment workflow" loading="lazy" />
+            <img src="https://www.jiangyanqing.com/wp-content/uploads/2021/10/Periodic-Business-Review-Blurred.gif" alt="Periodic business review automation" loading="lazy" />
+            <img src="https://www.jiangyanqing.com/wp-content/uploads/2021/10/Email-PDF-Blurred.gif" alt="Automated PDF email delivery" loading="lazy" />
+          </div>
+        </div>`
+      },
+      {
+        id: 'capex-project-tracker',
+        title: 'Capex Project Tracker',
+        description: 'One-stop Power Apps style tracker that manages project headers and line items with a shopping-cart approval flow for capital investments.',
+        technologies: ['Power Apps', 'Project Management', 'Process Automation'],
+        systemInstruction: 'You represent the Capex Project Tracker. Explain the shopping-cart intake pattern, approval automation, and how finance and procurement use the data.',
+        defaultPrompts: [
+          'How does the shopping-cart workflow improve Capex approvals?',
+          'Which teams rely on the tracker day to day?',
+          'Describe the data captured for each Capex line item.'
+        ],
+        coverUrl: 'http://jiangyanqing.com/wp-content/uploads/2021/10/Capex-Project-Tracker-Showcase.gif',
+        imageUrl: 'http://jiangyanqing.com/wp-content/uploads/2021/10/Capex-Project-Tracker-Showcase.gif',
+        link: 'https://www.jiangyanqing.com/portfolio/capex-project-tracker/',
+        contentHtml: `<div class="legacy-content">
+          <p><em>*Real project, hence sensitive data is blurred.</em></p>
+          <h3>Capex Project Tracker Highlights</h3>
+          <ul>
+            <li>One-stop Power Apps experience that blends project headers and line items.</li>
+            <li>Shopping-cart intake pattern streamlines approvals for capital requests.</li>
+            <li>Full data pipeline ends in Power BI reporting for finance and procurement.</li>
+          </ul>
+          <div class="legacy-gallery">
+            <img src="https://www.jiangyanqing.com/wp-content/uploads/2021/12/Capex-Project.gif" alt="Capex request intake workflow" loading="lazy" />
+            <img src="https://www.jiangyanqing.com/wp-content/uploads/2021/10/2021-10-09_18-35-28-1024x578.png" alt="Capital approval summary dashboard" loading="lazy" />
+          </div>
+        </div>`
+      },
+      {
+        id: 'engagement-intake-pre',
+        title: 'All-in-One Engagement Intake',
+        description: 'Complex Power Platform intake portal with thousands of business rules that orchestrates procurement engagement requests end to end.',
+        technologies: ['Power Platform', 'Workflow Automation', 'Procurement'],
+        systemInstruction: 'You speak for the All-in-One Engagement Intake project. Cover the scale of business rules, user adoption metrics, and how approvals are automated.',
+        defaultPrompts: [
+          'How many teams input work through Engagement Intake?',
+          'What kinds of rules govern an intake submission?',
+          'Explain how approvals and downstream reporting are automated.'
+        ],
+        coverUrl: 'https://www.jiangyanqing.com/wp-content/uploads/2021/10/Untitled1-300x177.png',
+        imageUrl: 'https://www.jiangyanqing.com/wp-content/uploads/2021/10/Untitled1-300x177.png',
+        link: 'https://www.jiangyanqing.com/portfolio/all-in-one-engagement-intake/',
+        contentHtml: `<div class="legacy-content">
+          <p>All-in-one Engagement Intake orchestrates procurement submissions with thousands of embedded business rules.</p>
+          <ul>
+            <li>Serves two procurement departments with 100-200 daily users.</li>
+            <li>Automates approvals and notifications-no more hand-typed emails.</li>
+            <li>Feeds Power BI Dataflows so downstream stakeholders can monitor progress.</li>
+          </ul>
+          <p>The original portfolio showcases process screenshots covering intake states, approvals, and reporting.</p>
+          <div class="legacy-gallery">
+            <img src="https://www.jiangyanqing.com/wp-content/uploads/2021/10/Engagement-Intake.gif" alt="Engagement intake workflow overview" loading="lazy" />
+            <img src="https://www.jiangyanqing.com/wp-content/uploads/2021/10/Untitled1-300x177.png" alt="Intake landing experience" loading="lazy" />
+            <img src="https://www.jiangyanqing.com/wp-content/uploads/2021/10/Untitled2-300x177.png" alt="Submission routing rules" loading="lazy" />
+            <img src="https://www.jiangyanqing.com/wp-content/uploads/2021/10/Untitled3-300x177.png" alt="Work queue monitoring" loading="lazy" />
+            <img src="https://www.jiangyanqing.com/wp-content/uploads/2021/10/Untitled4-300x182.png" alt="Approval escalations" loading="lazy" />
+            <img src="https://www.jiangyanqing.com/wp-content/uploads/2021/10/Untitled5-300x179.png" alt="Status dashboards" loading="lazy" />
+            <img src="https://www.jiangyanqing.com/wp-content/uploads/2021/10/2021-10-09_18-45-10-300x166.png" alt="Request detail view" loading="lazy" />
+            <img src="https://www.jiangyanqing.com/wp-content/uploads/2021/12/BC-Approval-Flow-300x167.png" alt="Business case approval flow" loading="lazy" />
+            <img src="https://www.jiangyanqing.com/wp-content/uploads/2021/12/Process-Overview-300x170.png" alt="Process overview diagram" loading="lazy" />
+          </div>
+        </div>`
+      },
+    ],
+  },
 ];

@@ -7,13 +7,62 @@ import { motion } from 'framer-motion';
 // @ts-ignore
 import { Helmet } from 'react-helmet-async';
 
+const contactLinks = [
+  {
+    label: 'LinkedIn',
+    href: 'https://www.linkedin.com/in/jiangyanqing/',
+    icon: (
+      <svg viewBox="0 0 34 34" className="w-8 h-8 sm:w-10 sm:h-10" xmlns="http://www.w3.org/2000/svg">
+        <rect width="34" height="34" rx="4" fill="#0A66C2"/>
+        <path d="M8 12.5h4v13H8v-13zm2-6.5C8.9 6 8 6.9 8 8s.9 2 2 2 2-.9 2-2-.9-2-2-2zm6 6.5h3.8v1.8h.1c.5-1 1.9-2 3.9-2 4.1 0 4.9 2.7 4.9 6.1V25.5h-4v-6.4c0-1.5 0-3.5-2.1-3.5-2.1 0-2.4 1.6-2.4 3.4v6.5h-4v-13z" fill="#fff"/>
+      </svg>
+    ),
+  },
+  {
+    label: 'Medium',
+    href: 'https://medium.com/@yanqing_j',
+    icon: (
+      <img src="https://yanqinghot.blob.core.windows.net/public-access/Medium_logo_Monogram.svg.png" alt="Medium" className="w-8 h-8 sm:w-10 sm:h-10" />
+    ),
+  },
+  {
+    label: 'Email',
+    href: 'mailto:jiangyanqing90@gmail.com',
+    icon: (
+      <svg viewBox="0 0 24 24" fill="currentColor" className="w-8 h-8 sm:w-10 sm:h-10">
+        <path d="M20 4H4a2 2 0 00-2 2v12a2 2 0 002 2h16a2 2 0 002-2V6a2 2 0 00-2-2zm0 2l-8 5-8-5h16zm0 12H4V8l8 5 8-5v10z" />
+      </svg>
+    ),
+  },
+] as const;
+
+const capabilities = [
+  {
+    title: 'Data Automation & AI Workflow',
+    description: 'Saved thousands of labor hours and reducing reliance on manual workflows. From Gen AI-powered web apps to smart bidding platforms, drive efficiency and intelligence into the analytics lifecycle by automating the boring stuff.',
+  },
+  {
+    title: 'Data Science Solutions',
+    description: 'Architect machine learning pipelines, experimentation frameworks, and predictive models that have delivered $150M+ incremental revenue.',
+  },
+  {
+    title: 'Reporting & Insight Platforms',
+    description: 'Lead end-to-end design of enterprise analytics tooling that drives measurable impact across digital commerce and retail media, and build BI ecosystems that surface the right metrics to executive stakeholders when they need them.',
+  },
+  {
+    title: 'Enterprise Data Infrastructure & Governance',
+    description: 'Hands-on with MS SQL Server from advanced queries to views and stored procedures powering terabyte-scale systems.',
+  },
+] as const;
+
 interface LandingPageProps {
   projectData: ProjectYear[];
   onSelectProject: (project: Project) => void;
 }
 
 const LandingPage: React.FC<LandingPageProps> = ({ projectData, onSelectProject }) => {
-  const allProjects = useMemo(() => projectData.flatMap(year => year.projects), [projectData]);
+  const preAiProjects = useMemo(() => projectData.find(group => group.label === 'Pre-AI Projects')?.projects ?? [], [projectData]);
+  const allProjects = useMemo(() => projectData.filter(group => !group.hiddenOnLanding).flatMap(year => year.projects), [projectData]);
   
   const [currentIndex, setCurrentIndex] = useState(0);
 
@@ -201,76 +250,97 @@ const LandingPage: React.FC<LandingPageProps> = ({ projectData, onSelectProject 
         </div>
       </div>
 
-      {/* --- Social Icons Section - responsive layout --- */}
-      <div className="flex flex-col sm:flex-row items-center justify-center gap-2 sm:gap-4 py-4 sm:py-6 px-4" data-testid="social-icons">
-        <h3 className="text-xl sm:text-2xl md:text-3xl font-bold mb-2 sm:mb-0 sm:mr-2 text-center">Find me at:</h3>
-        <div className="flex items-center gap-4 sm:gap-6 md:gap-8">
-        {[
-          {
-            href: 'https://www.linkedin.com/in/jiangyanqing/',
-            label: 'LinkedIn',
-            svg: (
-              <svg viewBox="0 0 34 34" className="w-8 h-8 sm:w-10 sm:h-10" xmlns="http://www.w3.org/2000/svg">
-                <rect width="34" height="34" rx="4" fill="#0A66C2"/>
-                <path d="M8 12.5h4v13H8v-13zm2-6.5C8.9 6 8 6.9 8 8s.9 2 2 2 2-.9 2-2-.9-2-2-2zm6 6.5h3.8v1.8h.1c.5-1 1.9-2 3.9-2 4.1 0 4.9 2.7 4.9 6.1V25.5h-4v-6.4c0-1.5 0-3.5-2.1-3.5-2.1 0-2.4 1.6-2.4 3.4v6.5h-4v-13z" fill="#fff"/>
-              </svg>
-            ),
-          },
-          {
-            href: 'https://medium.com/@yanqing_j',
-            label: 'Medium',
-            svg: (
-              <img src="https://yanqinghot.blob.core.windows.net/public-access/Medium_logo_Monogram.svg.png" alt="Medium" className="w-8 h-8 sm:w-10 sm:h-10" />
-            ),
-          },
-          {
-            href: 'mailto:jiangyanqing90@gmail.com',
-            label: 'Email',
-            svg: (
-              <svg viewBox="0 0 24 24" fill="currentColor" className="w-8 h-8 sm:w-10 sm:h-10">
-                <path d="M20 4H4a2 2 0 00-2 2v12a2 2 0 002 2h16a2 2 0 002-2V6a2 2 0 00-2-2zm0 2l-8 5-8-5h16zm0 12H4V8l8 5 8-5v10z" />
-              </svg>
-            ),
-          },
-        ].map((item, idx) => (
-          <motion.a
-            key={idx}
-            href={item.href}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="relative group text-gray-400 hover:text-white"
-            initial="rest"
-            whileHover="hover"
-            animate="rest"
-          >
-            <motion.div variants={{ rest: { scale: 1 }, hover: { scale: 1.15 } }} className="flex items-center justify-center">
-              {item.svg}
-            </motion.div>
-            {/* Tooltip - responsive positioning */}
-            <motion.div
-              variants={{ rest: { opacity: 0, y: 10, pointerEvents: 'none' }, hover: { opacity: 1, y: 0 } }}
-              transition={{ duration: 0.3 }}
-              className="absolute bottom-10 sm:bottom-12 left-1/2 -translate-x-1/2 bg-gray-800 px-2 sm:px-3 py-1 text-xs sm:text-sm rounded-md text-white whitespace-nowrap"
-            >
-              {item.label}
-            </motion.div>
-          </motion.a>
-        ))}
+
+      <section className="relative overflow-hidden border-b border-white/5 bg-slate-950 text-slate-100">
+        <div
+          className="absolute inset-0 opacity-40"
+          style={{
+            backgroundImage: "url('https://www.jiangyanqing.com/wp-content/uploads/2021/05/bg-02-free-img.png')",
+            backgroundPosition: 'top right',
+            backgroundRepeat: 'no-repeat',
+            backgroundSize: '65%',
+          }}
+        />
+        <div className="absolute inset-0 bg-gradient-to-br from-slate-900 via-slate-950 to-slate-900 opacity-90" />
+        <div className="relative mx-auto grid max-w-6xl gap-12 px-4 py-16 sm:py-20 md:grid-cols-[minmax(0,1fr)_minmax(0,320px)] md:py-24">
+          <div className="space-y-6">
+            <p className="text-sm font-semibold uppercase tracking-[0.3em] text-sky-300">Hello, my name is</p>
+            <h1 className="text-4xl sm:text-5xl md:text-6xl font-bold leading-tight text-white">Yanqing Jiang</h1>
+            <h2 className="text-xl sm:text-2xl font-semibold text-sky-200">Advance Analytics Senior Manager</h2>
+            <p className="max-w-2xl text-base sm:text-lg text-slate-300">
+              I unite analytics, automation, and modern AI agents to solve the hardest decision-support problems in commerce and media. From experimentation platforms to agentic workflows, I build systems that push insights directly into the hands of operators.
+            </p>
+            <div className="flex flex-wrap items-center gap-4 sm:gap-5">
+              {contactLinks.map((item) => (
+                <motion.a
+                  key={item.label}
+                  href={item.href}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="group flex flex-col items-center text-slate-300 hover:text-white transition-colors"
+                  initial="rest"
+                  whileHover="hover"
+                  animate="rest"
+                >
+                  <motion.div
+                    variants={{ rest: { scale: 1 }, hover: { scale: 1.1 } }}
+                    className="flex items-center justify-center rounded-full border border-white/15 bg-white/10 p-3 backdrop-blur-sm"
+                  >
+                    {item.icon}
+                  </motion.div>
+                  <motion.span
+                    variants={{ rest: { opacity: 0.8, y: 0 }, hover: { opacity: 1, y: -2 } }}
+                    className="mt-2 text-xs uppercase tracking-wide"
+                  >
+                    {item.label}
+                  </motion.span>
+                </motion.a>
+              ))}
+            </div>
+          </div>
+          <div className="relative flex justify-center md:justify-end">
+            <div className="absolute -top-6 -right-6 h-48 w-48 rounded-full bg-sky-500/50 blur-3xl" aria-hidden="true" />
+            <img
+              src="https://www.jiangyanqing.com/wp-content/uploads/2025/07/LinkedIn-Profile-4-e1753424574256.webp"
+              alt="Portrait of Yanqing Jiang"
+              className="relative z-10 w-64 rounded-3xl border border-white/10 bg-white/5 object-cover shadow-[0_25px_60px_rgba(15,118,230,0.35)]"
+              loading="lazy"
+            />
+          </div>
         </div>
-      </div>
+      </section>
+
+      <section className="py-16 sm:py-20 border-b border-white/5 bg-slate-900/40">
+        <div className="mx-auto flex max-w-5xl flex-col gap-8 px-4 md:flex-row md:items-start">
+          <div className="md:w-1/3">
+            <h2 className="text-3xl font-semibold text-white md:text-4xl">What I do</h2>
+            <p className="mt-4 text-base text-slate-300">
+              I move from discovery to deployment with the same hands-on ownership. Strategy is only useful when the build is production-ready.
+            </p>
+          </div>
+          <div className="grid flex-1 gap-6 sm:grid-cols-2">
+            {capabilities.map((capability) => (
+              <div key={capability.title} className="rounded-2xl border border-white/10 bg-slate-900/60 p-6 shadow-[0_18px_36px_rgba(12,74,110,0.2)]">
+                <h3 className="text-lg font-semibold text-white">{capability.title}</h3>
+                <p className="mt-3 text-sm text-slate-300">{capability.description}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
 
       {/* --- Projects List Section - responsive layout --- */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-12 md:py-20">
         <h2 className="text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-bold text-center mb-8 sm:mb-12">
           <span className="bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-purple-500">
-            Project Preview
+            AI Project Preview
           </span>
         </h2>
         <div className="space-y-12 sm:space-y-16">
-          {projectData.map(({ year, subtitle, projects }) => (
+          {projectData.filter(group => !group.hiddenOnLanding).map(({ year, subtitle, projects, label }) => (
             <div key={year}>
               <div className="flex flex-col sm:flex-row sm:items-baseline mb-6 sm:mb-8">
-                <h3 className="text-lg sm:text-xl md:text-2xl lg:text-3xl font-bold text-gray-200">{year}</h3>
+                <h3 className="text-lg sm:text-xl md:text-2xl lg:text-3xl font-bold text-gray-200">{label ?? year}</h3>
                 {subtitle && <p className="mt-1 sm:mt-0 sm:ml-3 text-xs sm:text-sm md:text-base text-gray-500">{subtitle}</p>}
               </div>
               <div className="grid grid-cols-1 gap-8 sm:gap-12">
@@ -315,6 +385,56 @@ const LandingPage: React.FC<LandingPageProps> = ({ projectData, onSelectProject 
           ))}
         </div>
       </div>
+
+      {preAiProjects.length > 0 && (
+        <section className="bg-slate-900/60 border-t border-white/5">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 sm:py-16">
+            <h2 className="text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-bold text-center mb-8 sm:mb-12">
+              <span className="bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-purple-500">
+                Pre-AI Projects
+              </span>
+            </h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-8 sm:gap-10">
+              {preAiProjects.map((project) => (
+                <div
+                  key={project.id}
+                  className="bg-gray-800/50 rounded-lg overflow-hidden transform hover:-translate-y-1 transition-transform duration-300 shadow-lg hover:shadow-blue-500/20 border border-gray-700/50 flex flex-col"
+                >
+                  <div className="w-full h-52 bg-gray-900 overflow-hidden">
+                    <img
+                      src={project.coverUrl ?? project.imageUrl}
+                      alt={project.title}
+                      className="w-full h-full object-cover transition-transform duration-300 hover:scale-105"
+                      loading="lazy"
+                    />
+                  </div>
+                  <div className="flex-1 p-4 sm:p-6 flex flex-col">
+                    <h3 className="text-lg sm:text-xl font-bold text-white mb-3">{project.title}</h3>
+                    <p className="text-gray-400 text-sm sm:text-base leading-relaxed mb-6">
+                      {project.description.length > 150 ? `${project.description.substring(0, 150)}...` : project.description}
+                    </p>
+                    <div className="mt-auto">
+                      <button
+                        type="button"
+                        onClick={() => onSelectProject(project)}
+                        className="inline-flex items-center gap-2 text-sm font-medium text-sky-300 hover:text-sky-100 transition-colors"
+                      >
+                        Visit case study
+                        <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M17.25 6.75L6.75 17.25" />
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 6.75h9v9" />
+                        </svg>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+      )}
+
+
 
       <style>{`
         @keyframes fade-in-up {

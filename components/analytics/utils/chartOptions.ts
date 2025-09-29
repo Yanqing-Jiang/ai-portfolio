@@ -1,5 +1,39 @@
 // Chart utilities for analytics components
 
+const looksLikeChartSpec = (value: any) => {
+  if (!value || typeof value !== 'object') return false;
+  if (Array.isArray((value as any).series) && (value as any).series.length > 0) return true;
+  if (Array.isArray((value as any).dataset) && (value as any).dataset.length > 0) return true;
+  if ((value as any).xAxis || (value as any).yAxis || (value as any).tooltip || (value as any).legend) return true;
+  if ((value as any).meta && typeof (value as any).meta === 'object') return true;
+  return false;
+};
+
+export const resolveChartSpecOption = (payload: any): any | null => {
+  if (!payload) return null;
+
+  if (looksLikeChartSpec(payload)) {
+    return payload;
+  }
+
+  if (payload && typeof payload === 'object') {
+    if ((payload as any).chart_spec) {
+      const nested = resolveChartSpecOption((payload as any).chart_spec);
+      if (nested) return nested;
+    }
+    if ((payload as any).chart) {
+      const nested = resolveChartSpecOption((payload as any).chart);
+      if (nested) return nested;
+    }
+    if ((payload as any).data && (payload as any).data.chart_spec) {
+      const nested = resolveChartSpecOption((payload as any).data.chart_spec);
+      if (nested) return nested;
+    }
+  }
+
+  return null;
+};
+
 export const isValidChartSpec = (spec: any) => {
   try {
     if (!spec || typeof spec !== 'object') return false;

@@ -535,8 +535,91 @@ query_patterns:
       ORDER BY y.calendar_year
       LIMIT 500;
 
+  rnd_top_spender:
+    name: "R&D Top Spender"
+    description: "Identify the company with the highest R&D expense for a selected year"
+    keywords:
+      - "highest r&d spending"
+      - "top r&d spender"
+      - "largest r&d expense"
+      - "most r&d investment"
+      - "highest research spending"
+    sql_template: |
+      WITH annual AS (
+        SELECT
+          ticker,
+          calendar_year,
+          SUM(CASE WHEN metric = 'R&D Expense' THEN value ELSE 0 END) AS rnd_spending,
+          SUM(CASE WHEN metric = 'Revenue' THEN value ELSE 0 END) AS revenue
+        FROM comp_financials
+        WHERE
+          metric IN ('R&D Expense','Revenue')
+          AND ticker IN ('AMD','AVGO','INTC','MU','NVDA','QCOM','TXN')
+          AND calendar_year >= COALESCE({start_year}, EXTRACT(YEAR FROM CURRENT_DATE) - {years_back})
+          AND ({end_year} IS NULL OR calendar_year <= {end_year})
+        GROUP BY ticker, calendar_year
+      ),
+      ranked AS (
+        SELECT
+          calendar_year,
+          ticker,
+          rnd_spending,
+          revenue,
+          CASE WHEN revenue = 0 THEN NULL ELSE (rnd_spending / revenue) * 100 END AS rnd_intensity_pct,
+          RANK() OVER (PARTITION BY calendar_year ORDER BY rnd_spending DESC NULLS LAST) AS rnd_rank
+        FROM annual
+      )
+      SELECT
+        calendar_year,
+        ticker,
+        rnd_spending,
+        revenue,
+        rnd_intensity_pct,
+        rnd_rank
+      FROM ranked
+      WHERE rnd_rank <= 5
+      ORDER BY calendar_year DESC, rnd_rank ASC
+      LIMIT 500;
+    single_year_template: |
+      WITH annual AS (
+        SELECT
+          ticker,
+          calendar_year,
+          SUM(CASE WHEN metric = 'R&D Expense' THEN value ELSE 0 END) AS rnd_spending,
+          SUM(CASE WHEN metric = 'Revenue' THEN value ELSE 0 END) AS revenue
+        FROM comp_financials
+        WHERE
+          metric IN ('R&D Expense','Revenue')
+          AND ticker IN ('AMD','AVGO','INTC','MU','NVDA','QCOM','TXN')
+          AND calendar_year = {start_year}
+        GROUP BY ticker, calendar_year
+      ),
+      ranked AS (
+        SELECT
+          calendar_year,
+          ticker,
+          rnd_spending,
+          revenue,
+          CASE WHEN revenue = 0 THEN NULL ELSE (rnd_spending / revenue) * 100 END AS rnd_intensity_pct,
+          RANK() OVER (ORDER BY rnd_spending DESC NULLS LAST) AS rnd_rank
+        FROM annual
+      )
+      SELECT
+        calendar_year,
+        ticker,
+        rnd_spending,
+        revenue,
+        rnd_intensity_pct,
+        rnd_rank
+      FROM ranked
+      ORDER BY rnd_rank ASC
+      LIMIT 10;
+    single_year_description: "Top R&D spenders for a specific fiscal year with intensity context"
+
 # Template variables
 template_variables:
   default_companies: ["AMD", "AVGO", "INTC", "MU", "NVDA", "QCOM", "TXN"]
   default_years_back: 5
   default_target_ticker: "NVDA"
+
+

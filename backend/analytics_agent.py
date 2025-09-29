@@ -85,6 +85,7 @@ class AnalyticsWorkflow:
         has_expense = ('expense' in q_lower) or ('spending' in q_lower) or ('spend' in q_lower) or ('expenditure' in q_lower)
         has_compare = ('peer' in q_lower) or ('peers' in q_lower) or ('compare' in q_lower) or ('comparison' in q_lower) or ('vs' in q_lower)
         has_average = ('average' in q_lower) or ('industry average' in q_lower) or ('mean' in q_lower)
+        has_rank = any(word in q_lower for word in ('highest', 'top', 'leading', 'leader', 'largest', 'biggest', 'most', 'rank', 'dominant'))
 
         if not kind:
             # Scored routing across possible intents
@@ -100,6 +101,7 @@ class AnalyticsWorkflow:
             add_candidate('revenue_growth_analysis', has_growth, 7)
             add_candidate('rnd_expense_vs_peers', has_rnd and has_expense and (has_compare or has_average), 6)
             add_candidate('rnd_intensity_vs_peers', has_rnd and (('intensity' in q_lower) or (has_compare or has_average)), 5)
+            add_candidate('rnd_top_spender', has_rnd and has_expense and has_rank, 6)
 
             # Phrase boosts
             if 'margin growth' in q_lower:
@@ -160,6 +162,8 @@ class AnalyticsWorkflow:
                 kind = 'rnd_expense_vs_peers'
             elif (('growth' in q_lower or 'growing' in q_lower or 'fast' in q_lower) and ('peer' in q_lower or 'peers' in q_lower or 'vs' in q_lower)):
                 kind = 'growth_vs_peers'
+            elif (has_rnd and has_expense and has_rank):
+                kind = 'rnd_top_spender'
             elif ('r&d' in q_lower or 'r and d' in q_lower or 'rnd' in q_lower or 'r&d expense' in q_lower or 'r&d expenses' in q_lower or ('intensity' in q_lower and ('r' in q_lower or 'rnd' in q_lower or 'r&d' in q_lower))):
                 kind = 'rnd_intensity_vs_peers'
         
@@ -802,7 +806,8 @@ class AnalyticsWorkflow:
 
         # Default: chart all candidate columns
         return candidate_columns
-    
+    
+
     async def _get_available_metrics(self) -> List[str]:
         """Query database for actual available metrics"""
         conn = None
@@ -1776,3 +1781,4 @@ async def create_analytics_workflow() -> AnalyticsWorkflow:
         pass
 
     return AnalyticsWorkflow(database_url, openai_api_key)
+

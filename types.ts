@@ -1,4 +1,4 @@
-export interface Project {
+﻿export interface Project {
   id: string;
   title: string;
   description: string;
@@ -7,12 +7,16 @@ export interface Project {
   defaultPrompts: string[];
   imageUrl?: string;
   coverUrl?: string;
+  link?: string;
+  contentHtml?: string;
   gifUrl?: string;
 }
 
 export interface ProjectYear {
   year: number;
   subtitle?: string;
+  label?: string;
+  hiddenOnLanding?: boolean;
   projects: Project[];
 }
 

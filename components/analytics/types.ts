@@ -1,4 +1,28 @@
-// Shared types for analytics components
+export type FlowMode = 'planner-executor' | 'single-agent' | 'multi-agent';
+
+export interface FlowVisualTheme {\n  id: FlowMode;\n  accent: string;\n  nodeGradient: [string, string];\n  nodeBorder: string;\n  nodeGlow: string;\n  edgeIdle: string;\n  edgeActive: string;\n  edgeCompleted: string;\n  badgeClass: string;\n  pulseClass: string;\n}\n\n// Shared types for analytics components
+
+export interface ToolCallTelemetry {
+  tool: string;
+  status: 'start' | 'end' | string;
+  ts?: string;
+  elapsed_ms?: number;
+  details?: Record<string, any>;
+}
+
+export interface AgentTurnTelemetry {
+  role: string;
+  status: 'start' | 'complete' | string;
+  ts?: string;
+  elapsed_ms?: number;
+  summary?: Record<string, any> | string;
+}
+
+export interface AgentReasoningTelemetry {
+  role: string;
+  thought: string;
+  ts?: string;
+}
 
 export interface ProcessStepDetails {
   sql?: string;
@@ -26,6 +50,9 @@ export interface ProcessStepDetails {
   args_preview?: string;
   result?: any;
   sql_length?: number;
+  tool_calls?: ToolCallTelemetry[];
+  agent_turns?: AgentTurnTelemetry[];
+  agent_reasoning?: AgentReasoningTelemetry[];
 }
 
 export interface ProcessStep {
@@ -174,3 +201,5 @@ export interface ProjectData {
   technologies: string[];
   imageUrl: string;
 }
+
+
