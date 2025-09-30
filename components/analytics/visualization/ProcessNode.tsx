@@ -73,6 +73,8 @@ export const ProcessNode = memo<NodeProps<ProcessNodeData>>(({ data, selected })
     currentStatus,
     currentDuration,
     currentTimestamp,
+    parallelGroup,
+    sequence,
   } = data;
 
   const nodeState = useMemo(() => {
@@ -171,6 +173,9 @@ export const ProcessNode = memo<NodeProps<ProcessNodeData>>(({ data, selected })
         <div className="process-node__drag-handle flex items-center gap-2">
           <span className={`rounded-full px-2 py-0.5 text-[10px] ${theme.badgeClass}`}>{phase.toUpperCase()}</span>
           <span className={`rounded-full px-2 py-0.5 text-[10px] ${statusAccent(step.status)}`}>{statusLabel}</span>
+          {parallelGroup && (
+            <span className="rounded-full bg-gray-900/60 px-2 py-0.5 text-[10px] uppercase tracking-wide text-gray-200">Lane {parallelGroup}</span>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <span className="text-[10px] text-gray-400">{String(sequenceIndex + 1).padStart(2, '0')} / {totalSteps}</span>
@@ -206,6 +211,8 @@ export const ProcessNode = memo<NodeProps<ProcessNodeData>>(({ data, selected })
         <div className="mt-3 flex flex-wrap items-center gap-3 text-[11px] text-gray-400">
           {timestampLabel && <span>{timestampLabel}</span>}
           {durationLabel && <span>{durationLabel}</span>}
+          {typeof sequence === 'number' && <span>Seq {sequence}</span>}
+          {parallelGroup && <span className="uppercase text-gray-200">Lane {parallelGroup}</span>}
           {currentStatus && isActive && (
             <span className="rounded-full bg-gray-800/70 px-2 py-0.5 text-[10px] text-blue-200">{currentStatus}</span>
           )}

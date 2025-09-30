@@ -44,6 +44,8 @@ export const useProcessSteps = (config?: StepConfig) => {
     details?: any,
     elapsed_ms?: number,
     timestamp?: string,
+    sequence?: number,
+    parallelGroup?: string,
   ) => {
     setProcessSteps((prev) => {
       const existing = prev.find((s) => s.id === stepId);
@@ -65,6 +67,8 @@ export const useProcessSteps = (config?: StepConfig) => {
             details: mergedDetails,
             elapsed_ms: elapsed_ms ?? step.elapsed_ms,
             timestamp: timestamp ?? step.timestamp,
+            sequence: sequence ?? step.sequence,
+            parallelGroup: parallelGroup ?? step.parallelGroup,
           };
         });
       }
@@ -79,6 +83,8 @@ export const useProcessSteps = (config?: StepConfig) => {
           details,
           elapsed_ms,
           timestamp,
+          sequence,
+          parallelGroup,
         },
       ];
 
@@ -86,6 +92,11 @@ export const useProcessSteps = (config?: StepConfig) => {
         const orderDiff = getOrderIndex(stepOrder, a.id) - getOrderIndex(stepOrder, b.id);
         if (orderDiff !== 0) {
           return orderDiff;
+        }
+        const seqA = a.sequence ?? Number.MAX_SAFE_INTEGER;
+        const seqB = b.sequence ?? Number.MAX_SAFE_INTEGER;
+        if (seqA !== seqB) {
+          return seqA - seqB;
         }
         return (a.timestamp || '').localeCompare(b.timestamp || '');
       });

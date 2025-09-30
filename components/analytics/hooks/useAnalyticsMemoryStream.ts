@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react';
-import { ChatMessage, ClarifyRequest, ClarifyAnswer, ToolCallTelemetry, AgentTurnTelemetry, AgentReasoningTelemetry } from '../types';
+import { ChatMessage, ClarifyRequest, ClarifyAnswer, ToolCallTelemetry, AgentTurnTelemetry, AgentReasoningTelemetry, ProcessStep } from '../types';
 import { apiService } from '../../../services/apiService';
 import { useAnalyticsStream } from './useAnalyticsStream';
 import { useProcessSteps } from './useProcessSteps';
@@ -99,7 +99,7 @@ export const useAnalyticsMemoryStream = (
     }, 50); // 50ms debounce for smooth updates
   };
 
-  const recordToolCallEvent = (payload: any, meta?: { ts?: string; elapsed_ms?: number }) => {
+  const recordToolCallEvent = (payload: any, meta?: { ts?: string; elapsed_ms?: number; sequence?: number; parallel_group?: string; tool_group?: string }) => {
     if (!payload || !payload.tool || !payload.status) {
       return;
     }
@@ -110,6 +110,9 @@ export const useAnalyticsMemoryStream = (
       ts: meta?.ts || payload.ts,
       elapsed_ms: meta?.elapsed_ms ?? payload.elapsed_ms,
       details: payload.details,
+      sequence: meta?.sequence ?? payload.sequence,
+      parallelGroup: meta?.parallel_group ?? payload.parallel_group,
+      toolGroup: meta?.tool_group ?? payload.tool_group,
     };
 
     toolTelemetryRef.current = [...toolTelemetryRef.current, entry].slice(-15);
@@ -127,10 +130,12 @@ export const useAnalyticsMemoryStream = (
       { tool_calls: [...toolTelemetryRef.current] },
       elapsed,
       ts,
+      meta?.sequence,
+      meta?.parallel_group,
     );
   };
 
-  const recordAgentTurnEvent = (payload: any, meta?: { ts?: string; elapsed_ms?: number }) => {
+  const recordAgentTurnEvent = (payload: any, meta?: { ts?: string; elapsed_ms?: number; sequence?: number; parallel_group?: string }) => {
     if (!payload || !payload.role || !payload.status) {
       return;
     }
@@ -141,6 +146,8 @@ export const useAnalyticsMemoryStream = (
       ts: meta?.ts || payload.ts,
       elapsed_ms: meta?.elapsed_ms ?? payload.elapsed_ms,
       summary: payload.summary,
+      sequence: meta?.sequence ?? payload.sequence,
+      parallelGroup: meta?.parallel_group ?? payload.parallel_group,
     };
     agentTurnsRef.current = [...agentTurnsRef.current, entry].slice(-15);
 
@@ -166,10 +173,12 @@ export const useAnalyticsMemoryStream = (
       },
       elapsed,
       ts,
+      meta?.sequence,
+      meta?.parallel_group,
     );
   };
 
-  const recordAgentReasoningEvent = (payload: any, meta?: { ts?: string; elapsed_ms?: number }) => {
+  const recordAgentReasoningEvent = (payload: any, meta?: { ts?: string; elapsed_ms?: number; sequence?: number; parallel_group?: string }) => {
     if (!payload || !payload.thought) {
       return;
     }
@@ -179,6 +188,8 @@ export const useAnalyticsMemoryStream = (
       role: payload.role || 'insight_reviewer',
       thought: payload.thought,
       ts,
+      sequence: meta?.sequence ?? payload.sequence,
+      parallelGroup: meta?.parallel_group ?? payload.parallel_group,
     };
     agentReasoningRef.current = [...agentReasoningRef.current, entry].slice(-40);
 
@@ -194,6 +205,8 @@ export const useAnalyticsMemoryStream = (
       },
       meta?.elapsed_ms ?? payload.elapsed_ms,
       ts,
+      meta?.sequence,
+      meta?.parallel_group,
     );
 
     stepsHook.updateStepStatus(
@@ -299,6 +312,35 @@ export const useAnalyticsMemoryStream = (
         ts: data.ts || eventData.ts,
         elapsed_ms: data.elapsed_ms || eventData.elapsed_ms
       };
+            const sequence: number | undefined =
+        typeof data.seq === 'number'
+          ? data.seq
+          : typeof eventData.sequence === 'number'
+          ? eventData.sequence
+          : undefined;
+      const parallelGroup: string | undefined =
+        typeof data.parallel_group === 'string'
+          ? data.parallel_group
+          : typeof eventData.parallel_group === 'string'
+          ? eventData.parallel_group
+          : undefined;
+      const toolGroup: string | undefined =
+        typeof data.tool_group === 'string'
+          ? data.tool_group
+          : typeof eventData.tool_group === 'string'
+          ? eventData.tool_group
+          : undefined;
+
+      const updateStep = (
+        stepId: string,
+        status: ProcessStep['status'],
+        thinking: string[] = [],
+        details?: any,
+        elapsed?: number,
+        ts?: string,
+      ) => {
+        stepsHook.updateStepStatus(stepId, status, thinking, details, elapsed, ts, sequence, parallelGroup);
+      };
       
       switch (eventType) {
         case 'session_started':
@@ -329,27 +371,27 @@ export const useAnalyticsMemoryStream = (
                   message: statusMessage,
                 }
               : undefined;
-            stepsHook.updateStepStatus(stepInfo.step, 'in_progress', thinkingLogs, detailPayload, stepInfo.elapsed_ms, stepInfo.ts);
+            updateStep(stepInfo.step, 'in_progress', thinkingLogs, detailPayload, stepInfo.elapsed_ms, stepInfo.ts);
           }
           break;
           
         case 'intent_draft':
-          stepsHook.updateStepStatus('intent_detection', 'in_progress', ['Intent detected; needs clarification'], eventData, eventData.elapsed_ms);
+          updateStep('intent_detection', 'in_progress', ['Intent detected; needs clarification'], eventData, eventData.elapsed_ms);
           break;
           
         case 'intent_decided':
         case 'intent_resolved':
           // Handle both old heavy format and new lightweight format
           const intentData = eventData.intent || eventData; // Old format has nested intent, new format is flat
-          stepsHook.updateStepStatus('intent_detection', 'completed', [], intentData, stepInfo.elapsed_ms, stepInfo.ts);
-          stepsHook.updateStepStatus('clarification', 'completed', ['Clarifications resolved'], intentData, stepInfo.elapsed_ms, stepInfo.ts);
+          updateStep('intent_detection', 'completed', [], intentData, stepInfo.elapsed_ms, stepInfo.ts);
+          updateStep('clarification', 'completed', ['Clarifications resolved'], intentData, stepInfo.elapsed_ms, stepInfo.ts);
           setPendingClarification(null);
           break;
           
         case 'clarification_request':
           console.log('?? [DEBUG] Received clarification_request:', eventData);
           setPendingClarification(eventData as ClarifyRequest);
-          stepsHook.updateStepStatus('clarification', 'in_progress', [eventData.question]);
+          updateStep('clarification', 'in_progress', [eventData.question]);
           streamHook.setCurrentStatus(`Clarification needed: ${eventData.question}`);
           const clarificationMessage = {
             type: 'clarification' as const,
@@ -363,6 +405,9 @@ export const useAnalyticsMemoryStream = (
         case 'clarification_ack':
           setPendingClarification(null);
           addChatMessage({
+            type: 'user',
+            content: `${eventData.answer}`,
+      e({
             type: 'user',
             content: `${eventData.answer}`,
           });
@@ -554,15 +599,15 @@ export const useAnalyticsMemoryStream = (
         // Optional richer logs for agent demo
 
         case 'tool_call':
-          recordToolCallEvent(eventData, { ts: stepInfo.ts, elapsed_ms: stepInfo.elapsed_ms });
+          recordToolCallEvent(eventData, { ts: stepInfo.ts, elapsed_ms: stepInfo.elapsed_ms, sequence, parallel_group: parallelGroup, tool_group: toolGroup });
           break;
 
         case 'agent_turn':
-          recordAgentTurnEvent(eventData, { ts: stepInfo.ts, elapsed_ms: stepInfo.elapsed_ms });
+          recordAgentTurnEvent(eventData, { ts: stepInfo.ts, elapsed_ms: stepInfo.elapsed_ms, sequence, parallel_group: parallelGroup });
           break;
 
         case 'agent_reasoning':
-          recordAgentReasoningEvent(eventData, { ts: stepInfo.ts, elapsed_ms: stepInfo.elapsed_ms });
+          recordAgentReasoningEvent(eventData, { ts: stepInfo.ts, elapsed_ms: stepInfo.elapsed_ms, sequence, parallel_group: parallelGroup });
           break;
 
         case 'catalog_trace':
@@ -606,8 +651,24 @@ export const useAnalyticsMemoryStream = (
           break;
 
         case 'classification_fallback':
-          stepsHook.updateStepStatus('classification', 'completed', [`Fallback to ${eventData.method}`], { method: eventData.method }, undefined, eventData.ts);
+          updateStep('classification', 'completed', [`Fallback to ${eventData.method}`], { method: eventData.method }, undefined, eventData.ts);
           break;
+
+        case 'memory_gate_decision':
+          {
+            const reasons = Array.isArray(eventData.reasons) ? eventData.reasons : eventData.reasons ? [eventData.reasons] : [];
+            const details = {
+              policy: eventData.policy,
+              reuse_sql: eventData.reuse_sql,
+              reuse_chart: eventData.reuse_chart,
+              reuse_analysis: eventData.reuse_analysis,
+              tool_directives: eventData.tool_directives,
+            };
+            updateStep('classification', 'completed', reasons.length ? reasons : ['Memory gate evaluated session state'], details, eventData.elapsed_ms, eventData.ts);
+            streamHook.setCurrentStatus(`Memory gate policy: ${eventData.policy}`);
+          }
+          break;
+
 
         case 'intent_detection_started':
           stepsHook.updateStepStatus('intent_detection', 'in_progress', ['Detecting query intent...'], undefined, undefined, eventData.ts);

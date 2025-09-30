@@ -122,7 +122,7 @@ const formatTimestamp = (value?: string) => {
 const isBrowser = typeof window !== 'undefined';
 
 const exportStepsToCsv = (steps: ProcessStep[]) => {
-  const header = ['stepNumber', 'id', 'name', 'status', 'timestamp', 'elapsedMs', 'latestThinking'];
+  const header = ['stepNumber', 'id', 'name', 'status', 'timestamp', 'elapsedMs', 'latestThinking', 'sequence', 'parallelGroup'];
   const rows = steps.map((step, index) => {
     const latestThought = step.thinking?.slice(-1)[0] ?? '';
     return [
@@ -133,6 +133,8 @@ const exportStepsToCsv = (steps: ProcessStep[]) => {
       step.timestamp ? new Date(step.timestamp).toISOString() : '',
       step.elapsed_ms != null ? String(step.elapsed_ms) : '',
       latestThought.replace(/"/g, ''),
+      step.sequence !== undefined ? String(step.sequence) : '',
+      step.parallelGroup ?? '',
     ];
   });
   return [header, ...rows]
@@ -492,6 +494,12 @@ export const ProcessPanel: React.FC<ProcessPanelProps> = ({
                               <span className="font-semibold text-gray-100">
                                 {`${String(index + 1).padStart(2, '0')} - ${step.name}`}
                               </span>
+                              {typeof step.sequence === 'number' && (
+                                <span className="rounded-full bg-gray-800/50 px-2 py-0.5 text-[10px] text-gray-300">#{step.sequence}</span>
+                              )}
+                              {step.parallelGroup && (
+                                <span className="rounded-full bg-gray-800/50 px-2 py-0.5 text-[10px] uppercase tracking-wide text-gray-200">Lane {step.parallelGroup}</span>
+                              )}
                             </div>
                             {step.thinking?.length ? (
                               <div className="text-[11px] text-gray-400">{step.thinking.slice(-1)[0]}</div>
@@ -504,6 +512,8 @@ export const ProcessPanel: React.FC<ProcessPanelProps> = ({
                         <div className="flex flex-wrap gap-3 text-[10px] text-gray-500">
                           {timestampLabel && <span>{timestampLabel}</span>}
                           {durationLabel && <span>{durationLabel}</span>}
+                          {typeof step.sequence === 'number' && <span>{`Seq ${step.sequence}`}</span>}
+                          {step.parallelGroup && <span className="uppercase text-gray-300">{`Lane ${step.parallelGroup}`}</span>}
                           <span>Toggle for full insight</span>
                         </div>
                       </div>
