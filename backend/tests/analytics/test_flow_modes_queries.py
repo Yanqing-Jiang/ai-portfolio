@@ -1,16 +1,40 @@
-﻿import asyncio
+import asyncio
+import sys
+from pathlib import Path
 from typing import List
 
 import pytest
+import fakeredis.aioredis
+
+ROOT = Path(__file__).resolve().parents[3]
+BACKEND_ROOT = Path(__file__).resolve().parents[2]
+for entry in (ROOT, BACKEND_ROOT):
+    entry_str = str(entry)
+    if entry_str not in sys.path:
+        sys.path.insert(0, entry_str)
 
 from analytics.core import config as analytics_config
 from analytics.core import analysis
 from analytics.flows import planner_executor
+from analytics.core.memory_gate import MemoryGate
+from analytics.core.session_state import SessionStateRepository
+from analytics.flows import instrumentation
 from analytics.flows.workflow import analytics_memory_workflow
 from analytics.sql import executor
 
 MARKET_QUERY = "Nvidia market share in the past 5 years?"
 MARGIN_QUERY = "How's Nvidia margin growth compare to industry average?"
+
+@pytest.fixture(autouse=True)
+def _memory_gate_uses_fakeredis():
+    fake = fakeredis.aioredis.FakeRedis()
+    instrumentation._memory_gate = MemoryGate(
+        repository=SessionStateRepository(redis_client=fake)
+    )
+    try:
+        yield
+    finally:
+        instrumentation._memory_gate = None
 
 
 class DummyUnifiedClient:
@@ -125,3 +149,4 @@ async def test_planner_executor_validation_fallback(_reload_configs):
     sql_event = next(event for event in events if event.get("event") == "sql_generated")
     assert "SELECT" in sql_event["data"].get("sql", "")
     assert sql_event["data"].get("fallback_reason") in {"sql_validation_failed", "sql_execution_error"}
+

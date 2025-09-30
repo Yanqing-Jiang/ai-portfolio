@@ -1,5 +1,5 @@
 ﻿## Agent Ground Rules & Tooling
-Understand the task before editing: read the full function and its direct call sites, and prefer surgical diffs over speculative refactors. Look into the files, generate a plan of changes first, then execute. Do not add fallback code unless requested; Prioritize PowerShell over Bash. Always do unit test before you mark completion. 
+Understand the task before editing: read the full function and its direct call sites, and prefer surgical diffs over speculative refactors. Look into the files, generate a plan of changes first, then execute. Do not add fallback code unless requested; Prioritize PowerShell over Bash. Always do unit test before you mark completion. When generating plan, be more elaborative on concept, use actual examples.
 
 ## Project Structure & Module Organization
 The Vite frontend lives at the repo root, with `App.tsx` routing into feature components. UI pieces sit under `components/`, shared data in `constants/` + `constants.ts`, and network helpers in `services/`. The FastAPI backend is in `backend/`, See `ARCHITECTURE.md` for deeper diagrams.
@@ -18,7 +18,6 @@ Copy `.env` templates at the root and inside `backend/` before running servers. 
 - `planner-executor`: deterministic planner/executor baseline that emits ordered SQL + result telemetry from the YAML catalogue.
 - `single-agent`: single agent with many tools; wraps the baseline events with `tool_call` start/end payloads to highlight tool orchestration.
 - `multi-agent`: lightweight coordinator that layers `agent_turn` and `agent_reasoning` events on top of the planner stream so the frontend can visualize roles handing work off.
-- Legacy `analytics_memory/*`, `analytics_shared/*`, and `analytics_supervisor/*` packages have been removed; import everything from the consolidated `analytics.*` namespace.
 - Flow metadata comes from `backend/analytics/flows/workflow.py::get_available_flows()`. Keep frontend selectors in sync with that mapping.
 
 ## Streaming Telemetry Reference

@@ -8,6 +8,9 @@ export interface ToolCallTelemetry {
   ts?: string;
   elapsed_ms?: number;
   details?: Record<string, any>;
+  sequence?: number;
+  parallelGroup?: string;
+  toolGroup?: string;
 }
 
 export interface AgentTurnTelemetry {
@@ -16,12 +19,16 @@ export interface AgentTurnTelemetry {
   ts?: string;
   elapsed_ms?: number;
   summary?: Record<string, any> | string;
+  sequence?: number;
+  parallelGroup?: string;
 }
 
 export interface AgentReasoningTelemetry {
   role: string;
   thought: string;
   ts?: string;
+  sequence?: number;
+  parallelGroup?: string;
 }
 
 export interface ProcessStepDetails {
@@ -63,6 +70,8 @@ export interface ProcessStep {
   details?: ProcessStepDetails;
   elapsed_ms?: number;
   timestamp?: string;
+  sequence?: number;
+  parallelGroup?: string;
 }
 
 export interface ChatMessage {

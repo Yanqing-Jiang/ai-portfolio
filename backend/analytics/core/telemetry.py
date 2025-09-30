@@ -5,7 +5,7 @@ import logging
 import time
 from contextlib import contextmanager
 from datetime import datetime
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 _TELEMETRY_LOGGER = logging.getLogger("analytics.telemetry")
 
@@ -85,6 +85,28 @@ def tool_iteration(
     )
     if details:
         payload["details"] = details
+    _emit(payload)
+
+def memory_gate_decision(
+    *,
+    session_id: str,
+    flow: Optional[str],
+    decision: str,
+    reasons: List[str],
+    reuse_sql: bool,
+    reuse_chart: bool,
+    reuse_analysis: bool,
+    tool_directives: Dict[str, Any],
+) -> None:
+    payload = _base_payload("memory_gate_decision", session_id=session_id, flow=flow)
+    payload.update({
+        "decision": decision,
+        "reasons": reasons,
+        "reuse_sql": reuse_sql,
+        "reuse_chart": reuse_chart,
+        "reuse_analysis": reuse_analysis,
+        "tool_directives": tool_directives,
+    })
     _emit(payload)
 
 

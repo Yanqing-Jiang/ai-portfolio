@@ -131,6 +131,11 @@ class EventEmitter:
         return StreamEvent("status", step, data=data).to_dict()
 
     @staticmethod
+    def heartbeat(message: str = "still_running") -> Dict[str, Any]:
+        """Emit a heartbeat keepalive event."""
+        return StreamEvent("heartbeat", "keepalive", data={"message": message}).to_dict()
+
+    @staticmethod
     def complete(step: str, summary: str = None, total_elapsed_ms: int = None) -> Dict[str, Any]:
         """
         Emit a completion event.

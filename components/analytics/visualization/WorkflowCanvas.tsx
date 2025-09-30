@@ -216,8 +216,7 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
   const theme = FLOW_THEMES[flowMode];
   const layout = FLOW_LAYOUT[flowMode];
 
-  const processedSteps = useMemo(
-  () => {
+  const processedSteps = useMemo(() => {
     const total = steps.length || 1;
     return steps.map((step, index) => {
       const phase = STEP_PHASES[step.id] || 'analysis';
@@ -245,32 +244,55 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
         hasError,
         latestThinking,
         index,
+        parallelGroup: step.parallelGroup,
+        sequence: step.sequence,
       };
     });
   },  [steps, layout.columns, layout.horizontalGap, layout.verticalGap],
 );
 
-  const translateExtent = useMemo(() => {
-    const basePadX = layout.horizontalGap * 0.75;
-    const basePadY = layout.verticalGap * 0.75;
-    if (!processedSteps.length) {
-      return [
-        [-basePadX, -basePadY],
-        [basePadX, basePadY],
-      ] as [[number, number], [number, number]];
-    }
-    const positions = processedSteps.map(({ position }) => position);
-    const maxX = Math.max(...positions.map(({ x }) => x));
-    const maxY = Math.max(...positions.map(({ y }) => y));
-    const minX = Math.min(...positions.map(({ x }) => x));
-    const extraWidth = layout.horizontalGap;
-    const extraHeight = layout.verticalGap;
-    return [
-      [Math.min(-basePadX, minX - basePadX), -basePadY],
-      [maxX + basePadX + extraWidth, maxY + basePadY + extraHeight],
-    ] as [[number, number], [number, number]];
-  }, [processedSteps, layout.horizontalGap, layout.verticalGap]);
-
+  const translateExtent = useMemo(() => {
+
+    const basePadX = layout.horizontalGap * 0.75;
+
+    const basePadY = layout.verticalGap * 0.75;
+
+    if (!processedSteps.length) {
+
+      return [
+
+        [-basePadX, -basePadY],
+
+        [basePadX, basePadY],
+
+      ] as [[number, number], [number, number]];
+
+    }
+
+    const positions = processedSteps.map(({ position }) => position);
+
+    const maxX = Math.max(...positions.map(({ x }) => x));
+
+    const maxY = Math.max(...positions.map(({ y }) => y));
+
+    const minX = Math.min(...positions.map(({ x }) => x));
+
+    const extraWidth = layout.horizontalGap;
+
+    const extraHeight = layout.verticalGap;
+
+    return [
+
+      [Math.min(-basePadX, minX - basePadX), -basePadY],
+
+      [maxX + basePadX + extraWidth, maxY + basePadY + extraHeight],
+
+    ] as [[number, number], [number, number]];
+
+  }, [processedSteps, layout.horizontalGap, layout.verticalGap]);
+
+
+
   const handleInit = useCallback((instance: ReactFlowInstance) => {
     flowInstanceRef.current = instance;
     hasInitialFit.current = false;
@@ -289,7 +311,7 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
     const totalSteps = processedSteps.length || 1;
     setNodes((prevNodes) => {
       const previous = new Map(prevNodes.map((node) => [node.id, node]));
-      return processedSteps.map(({ step, phase, position, isActive, isCompleted, hasError, latestThinking, index }) => {
+      return processedSteps.map(({ step, phase, position, isActive, isCompleted, hasError, latestThinking, index, parallelGroup, sequence }) => {
         const priorPosition = previous.get(step.id)?.position ?? position;
         return {
           id: step.id,
@@ -313,6 +335,8 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
             currentDuration,
             currentTimestamp,
             progressPercent,
+            parallelGroup,
+            sequence,
           },
         } as Node<ProcessNodeData>;
       });

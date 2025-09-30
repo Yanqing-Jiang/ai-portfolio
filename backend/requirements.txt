@@ -16,3 +16,4 @@ redis
 asyncpg
 sqlglot
 python-jose[cryptography]
+fakeredis

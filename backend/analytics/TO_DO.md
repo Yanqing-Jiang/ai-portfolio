@@ -7,17 +7,26 @@
 
 ## Shared Foundations
 1. **Memory Gate & SessionState plumbing**
+   - [Update September 30, 2025] MemoryGate service, Redis-backed SessionState repository, and logging hooks are implemented and exercised via `instrument_events`; new pytest coverage (`test_memory_gate.py`) validates cold-start vs reuse behaviours.
+   - Questions: Should MemoryGate expose adapter-level TTL overrides before we wire in multi-agent flows?
    - Stand up the `MemoryGate` policy service with adapters for transcript embeddings, tool output cache, and routing rules.
    - Persist `SessionState` in Redis only (conversation-scoped TTL, purge on idle/close) with typed repositories; keep TTL short by default (5 minutes, configurable 1-15) and drop keys as soon as the chat ends.
    - Log gate decisions and state mutations to the internal analytics event store so support can inspect timelines without external tooling.
 2. **Internal observability**
+   - [Update September 30, 2025] Added telemetry emission for `memory_gate_decision` plus persistent sequence/parallel metadata so dashboards can chart fan-out; awaiting guidance on surfacing new metrics.
+   - Questions: Do we want interim Grafana panels for sequence skew before pulling playbook owners in?
    - Extend existing analytics event logging to capture `fanout_*` events, tool/agent latencies, web-search usage, and routing context.
    - Update internal dashboards to surface P50/P95 tool latency, agent handoffs, SSE retry counts, Redis hit/miss rates, and stock widget load failures; wire alert thresholds that feed the current on-call process.
    - Reuse the established metrics ingestion path-no OpenTelemetry or LangSmith; only add the new fields required for concurrency diagnosis.
 3. **SSE & Event Schema updates**
+   - [Update September 30, 2025] Instrumentation now enriches SSE with `seq`, `parallel_group`, and `tool_group` metadata and streams MemoryGate decisions end-to-end; `analytics_memory_workflow` wraps flows via `instrument_events` (configurable through `ANALYTICS_MEMORY_INSTRUMENT`, default on) so ProcessPanel, WorkflowCanvas, and ProcessNode render lane badges when metadata is present.
+   - Questions: Should we gate the lane labels behind a UI flag until design signs off, and do we need a runtime kill-switch beyond the `ANALYTICS_MEMORY_INSTRUMENT` env toggle for rapid rollback?
    - Update `backend/analytics/core/events.py` with heartbeat envelopes, `tool_group`/`parallel_group` fields, sequence IDs, and merge metadata for multi-track payloads.
    - Patch `useAnalyticsMemoryStream`, `ProcessPanel`, and `WorkflowCanvas` to accept parallel metadata while defaulting to sequential rendering when flags are off.
 4. **Testing scaffolds**
+   - [Update September 30, 2025] Added `test_memory_gate.py` using `fakeredis` to cover MemoryGate decisions and instrumentation sequencing; no frontend fixtures yet.
+   - [Update September 30, 2025] Added `test_flow_modes_queries.py` coverage that boots instrumentation with `fakeredis` to exercise the full SSE envelope without hitting production Redis.
+   - Questions: Is a Vitest reducer suite the next priority, or do we block on concurrent SSE recordings first, and should the analytics flow tests assert on `memory_gate_decision` events to guard the new stream contract?
    - Build async harness utilities plus deterministic fake adapters/agents under `backend/tests/analytics/` for TaskGroup scenarios.
    - Prepare Vitest reducers and Playwright fixtures that replay concurrent SSE payloads for both tool stacks and agent swimlanes.
 
