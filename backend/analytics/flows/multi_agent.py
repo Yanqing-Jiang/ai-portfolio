@@ -1,11 +1,279 @@
 from __future__ import annotations
 
-from datetime import datetime
+import hashlib
+import json
+import re
 import time
-from typing import Any, AsyncGenerator, Dict, Optional
+from datetime import datetime
+from typing import Any, AsyncGenerator, Dict, List, Optional
 
+from analytics.core.memory_gate import MemoryGateDecision
+from analytics.core.session_state import SessionStateSnapshot, get_session_state_repository
 from analytics.core.telemetry import analysis_chunk as log_analysis_chunk
+from analytics.services.polygon import PolygonMarketDataClient, PolygonError, fetch_daily_snapshot
 from .planner_executor import PlannerExecutorFlow
+from .orchestrator import (
+    AgentExecutionOrchestrator,
+    AgentRunContext,
+    AgentResult,
+    AgentSpec,
+    AgentTask,
+    OrchestratorContext,
+)
+
+_HASH_PREFIX = "analytics"
+_MAX_FRAGMENT_COUNT = 5
+_MAX_ANALYSIS_STORED = 1200
+
+
+def _make_identifier(session_id: Optional[str], prefix: str, payload: str) -> str:
+    base = session_id or "sessionless"
+    digest = hashlib.sha1(f"{base}:{prefix}:{payload}".encode("utf-8")).hexdigest()[:12]
+    return f"{_HASH_PREFIX}:{prefix}:{digest}"
+
+
+def _infer_tickers(query: Optional[str]) -> List[str]:
+    if not query:
+        return []
+    tokens = set(re.findall(r"[A-Z]{2,5}", query))
+    blacklist = {"WITH", "FROM", "AND", "THE"}
+    return sorted(token for token in tokens if token not in blacklist)[:5]
+
+
+def _derive_tasks(memory_gate: Dict[str, Any], analysis_ctx: Dict[str, Any], chart_ctx: Dict[str, Any], tickers: List[str]) -> List[Dict[str, Any]]:
+    tasks: List[Dict[str, Any]] = []
+
+    def add_task(name: str, present: bool, reuse_flag: Optional[bool], default_reason: str) -> None:
+        if not present:
+            tasks.append({"name": name, "status": "skip", "reason": default_reason})
+            return
+        if reuse_flag:
+            tasks.append({"name": name, "status": "reuse", "reason": "memory_gate_reuse"})
+        else:
+            tasks.append({"name": name, "status": "run", "reason": "fresh"})
+
+    add_task(
+        "analyst",
+        present=bool(analysis_ctx.get("final")),
+        reuse_flag=memory_gate.get("reuse_analysis"),
+        default_reason="analysis_not_available",
+    )
+    add_task(
+        "chart",
+        present=bool(chart_ctx.get("spec_summary")),
+        reuse_flag=memory_gate.get("reuse_chart"),
+        default_reason="chart_not_available",
+    )
+
+    if tickers:
+        status = "reuse" if memory_gate.get("reuse_sql") else "run"
+        tasks.append({"name": "market", "status": status, "reason": "tickers_detected"})
+    else:
+        tasks.append({"name": "market", "status": "skip", "reason": "no_tickers"})
+    return tasks
+
+
+def _task_status(tasks: List[Dict[str, Any]], name: str) -> str:
+    for task in tasks:
+        if task.get("name") == name:
+            return str(task.get("status", "skip"))
+    return "skip"
+
+
+def _create_planner_bundle(
+    session_id: Optional[str],
+    query: str,
+    planner_ctx: Dict[str, Any],
+    sql_ctx: Dict[str, Any],
+    chart_ctx: Dict[str, Any],
+    analysis_ctx: Dict[str, Any],
+    tasks: List[Dict[str, Any]],
+    memory_gate: Dict[str, Any],
+) -> Dict[str, Any]:
+    bundle = {
+        "query": query,
+        "intent": {
+            "key": planner_ctx.get("intent_key"),
+            "confidence": planner_ctx.get("confidence"),
+        },
+        "reuse": {
+            "sql": memory_gate.get("reuse_sql"),
+            "chart": memory_gate.get("reuse_chart"),
+            "analysis": memory_gate.get("reuse_analysis"),
+        },
+        "assets": {
+            "sql_id": sql_ctx.get("id"),
+            "chart_id": chart_ctx.get("spec_id"),
+            "analysis_id": analysis_ctx.get("id"),
+        },
+        "tickers": planner_ctx.get("tickers", []),
+        "tasks": tasks,
+    }
+    serialized = json.dumps(bundle, sort_keys=True)
+    bundle["id"] = _make_identifier(session_id, "bundle", serialized)
+    return bundle
+
+
+async def _planner_agent(context: AgentRunContext) -> AgentResult:
+    shared = context.shared
+    memory_gate = shared.get("memory_gate", {}) or {}
+    planner_ctx = shared.setdefault("planner", {})
+    sql_ctx = shared.setdefault("sql", {})
+    chart_ctx = shared.setdefault("chart", {})
+    analysis_ctx = shared.setdefault("analysis", {})
+
+    tasks = _derive_tasks(memory_gate, analysis_ctx, chart_ctx, planner_ctx.get("tickers", []))
+    bundle = _create_planner_bundle(
+        context.session_id,
+        context.query,
+        planner_ctx,
+        sql_ctx,
+        chart_ctx,
+        analysis_ctx,
+        tasks,
+        memory_gate,
+    )
+    planner_ctx["tasks"] = tasks
+    planner_ctx["bundle"] = bundle
+    return AgentResult(
+        name="planner",
+        output={
+            "status": "planned",
+            "tasks": tasks,
+            "bundle_id": bundle["id"],
+            "bundle": bundle,
+        },
+    )
+
+
+async def _analyst_agent(context: AgentRunContext) -> AgentResult:
+    planner_output = context.dependencies.get("planner_phase")
+    tasks = planner_output.output.get("tasks", []) if planner_output else []
+    status = _task_status(tasks, "analyst")
+    analysis_ctx = context.shared.get("analysis", {})
+    final_text: Optional[str] = analysis_ctx.get("final")
+    summary = None
+    if status in {"run", "reuse"} and final_text:
+        summary = final_text
+        if len(summary) > 280:
+            summary = summary[:277].rstrip() + "..."
+    return AgentResult(
+        name="analyst",
+        output={
+            "status": status,
+            "summary": summary,
+            "word_count": len(final_text.split()) if final_text else 0,
+        },
+    )
+
+
+async def _chart_agent(context: AgentRunContext) -> AgentResult:
+    planner_output = context.dependencies.get("planner_phase")
+    tasks = planner_output.output.get("tasks", []) if planner_output else []
+    status = _task_status(tasks, "chart")
+    chart_ctx = context.shared.get("chart", {})
+    summary = chart_ctx.get("spec_summary") or {}
+    spec_id = chart_ctx.get("spec_id")
+    payload: Dict[str, Any] = {"status": status}
+    if summary or spec_id:
+        payload["chart"] = {
+            "chart_type": summary.get("chart_type"),
+            "series_count": summary.get("series_count"),
+            "spec_id": spec_id,
+        }
+    return AgentResult(name="chart", output=payload)
+
+
+async def _market_agent(context: AgentRunContext) -> AgentResult:
+    planner_output = context.dependencies.get("planner_phase")
+    tasks = planner_output.output.get("tasks", []) if planner_output else []
+    status = _task_status(tasks, "market")
+    tickers = context.shared.get("planner", {}).get("tickers", [])
+    market_ctx = context.shared.setdefault("market", {})
+    runtime = context.shared.get("_runtime", {})
+    snapshot_payload: Optional[Dict[str, Any]] = market_ctx.get("snapshot")
+    error_reason: Optional[str] = None
+
+    if status == "run" and tickers:
+        fetcher = runtime.get("market_fetcher")
+        client = runtime.get("market_client")
+        if fetcher and client and getattr(client, "is_configured", False):
+            try:
+                snapshot = await fetcher(tickers[0], client=client)
+                bars = snapshot.bars[-30:]
+                snapshot_payload = {
+                    "symbol": snapshot.symbol,
+                    "latest_close": snapshot.latest_close,
+                    "change_percent": snapshot.change_percent,
+                    "bars": [{"time": bar.time, "close": bar.close} for bar in bars],
+                }
+                market_ctx["snapshot"] = snapshot_payload
+                market_ctx.pop("error", None)
+            except Exception as exc:
+                error_reason = str(exc)
+                market_ctx["error"] = error_reason
+        else:
+            error_reason = "polygon_client_unconfigured"
+            market_ctx["error"] = error_reason
+    elif status == "reuse":
+        snapshot_payload = market_ctx.get("snapshot")
+    else:
+        market_ctx.pop("snapshot", None)
+        market_ctx.pop("error", None)
+        snapshot_payload = None
+
+    output: Dict[str, Any] = {
+        "status": status,
+        "tickers": tickers,
+        "refresh": status == "run",
+    }
+    if snapshot_payload:
+        output["insights"] = snapshot_payload
+    if error_reason:
+        output["error"] = error_reason
+    return AgentResult(name="market", output=output)
+
+
+def _build_default_agent_registry() -> Dict[str, AgentSpec]:
+    return {
+        "planner": AgentSpec(
+            name="planner",
+            system_prompt="Plan the analytics workflow into specialist-ready tasks while keeping payloads light.",
+            capabilities=("task_planning", "sql_routing"),
+            latency_budget_ms=400,
+            entrypoint=_planner_agent,
+        ),
+        "analyst": AgentSpec(
+            name="analyst",
+            system_prompt="Summarize findings using planner context and cached notes without re-querying data.",
+            capabilities=("narrative", "context_blending"),
+            latency_budget_ms=500,
+            entrypoint=_analyst_agent,
+        ),
+        "chart": AgentSpec(
+            name="chart",
+            system_prompt="Convert planner data into chart metadata summaries only when required.",
+            capabilities=("visualization", "vega_lite"),
+            latency_budget_ms=400,
+            entrypoint=_chart_agent,
+        ),
+        "market": AgentSpec(
+            name="market",
+            system_prompt="Surface market context for planner tickers without persisting across sessions.",
+            capabilities=("market_data", "ticker_updates"),
+            latency_budget_ms=400,
+            entrypoint=_market_agent,
+        ),
+    }
+
+
+def _build_default_plan() -> List[AgentTask]:
+    return [
+        AgentTask(name="planner_phase", agent="planner"),
+        AgentTask(name="analyst_phase", agent="analyst", depends_on=("planner_phase",)),
+        AgentTask(name="chart_phase", agent="chart", depends_on=("planner_phase",)),
+        AgentTask(name="market_phase", agent="market", depends_on=("planner_phase",)),
+    ]
 
 
 class MultiAgentFlow:
@@ -33,18 +301,43 @@ class MultiAgentFlow:
         "analysis_complete": "insight_reviewer",
     }
 
+    ORCHESTRATION_ROLES: Dict[str, str] = {
+        "planner_phase": "planner_agent",
+        "analyst_phase": "analyst_agent",
+        "chart_phase": "chart_agent",
+        "market_phase": "market_agent",
+    }
+
     def __init__(self) -> None:
         self._planner = PlannerExecutorFlow()
         self.flow_label = "multi-agent"
         self._timers: Dict[str, float] = {}
+        self._memory_gate_decision: Optional[MemoryGateDecision] = None
+        self._agent_registry = _build_default_agent_registry()
+        self._orchestrator = AgentExecutionOrchestrator(self._agent_registry)
+        self._base_plan = _build_default_plan()
+        self._market_client = PolygonMarketDataClient()
+        self._market_fetcher = fetch_daily_snapshot
+        self._session_snapshot: Optional[SessionStateSnapshot] = None
+        self._shared_context: Dict[str, Any] = {}
+        self._orchestrated = False
+
+    def set_memory_gate_decision(self, decision: MemoryGateDecision) -> None:
+        self._memory_gate_decision = decision
+        self._session_snapshot = decision.state
+        self._shared_context.setdefault("memory_gate", self._serialize_decision(decision))
+        if hasattr(self._planner, "set_memory_gate_decision"):
+            self._planner.set_memory_gate_decision(decision)
 
     async def events(
         self, query: str, session_id: Optional[str] = None
     ) -> AsyncGenerator[Dict[str, Any], None]:
         active_session = session_id
+        self._prepare_context(query)
         async for event in self._planner.events(query, session_id=session_id):
             if event.get("event") == "session_started":
                 active_session = (event.get("data") or {}).get("session_id", active_session)
+            self._capture_event(event)
             start_event = self._maybe_agent_turn_start(event)
             if start_event:
                 yield start_event
@@ -56,6 +349,125 @@ class MultiAgentFlow:
             end_event = self._maybe_agent_turn_end(event)
             if end_event:
                 yield end_event
+            if not self._orchestrated and event.get("event") == "analysis_complete":
+                async for orchestrated_event in self._run_agent_orchestration(query, active_session):
+                    yield orchestrated_event
+                self._orchestrated = True
+
+    def _prepare_context(self, query: str) -> None:
+        preserved = self._shared_context.get("memory_gate", {})
+        preserved_market = self._shared_context.get("market", {})
+        self._shared_context = {
+            "query": query,
+            "memory_gate": preserved,
+            "planner": {"tickers": _infer_tickers(query)},
+            "sql": {},
+            "chart": {},
+            "analysis": {"fragments": [], "final": None},
+            "market": preserved_market or {},
+            "agents": {},
+            "_runtime": {
+                "market_fetcher": self._market_fetcher,
+                "market_client": self._market_client,
+            },
+        }
+        self._orchestrated = False
+
+    def _capture_event(self, event: Dict[str, Any]) -> None:
+        name = event.get("event")
+        data = event.get("data") or {}
+        planner_ctx = self._shared_context.setdefault("planner", {})
+        sql_ctx = self._shared_context.setdefault("sql", {})
+        analysis_ctx = self._shared_context.setdefault("analysis", {"fragments": [], "final": None})
+        chart_ctx = self._shared_context.setdefault("chart", {})
+
+        if name == "intent_detection_complete":
+            planner_ctx["intent_key"] = data.get("intent_key")
+            planner_ctx["confidence"] = data.get("confidence")
+            slots = data.get("slots_detected") or {}
+            planner_ctx["slots"] = {k: v for k, v in slots.items() if k in {"company", "metric", "ticker"}}
+            companies = slots.get("company")
+            if isinstance(companies, str):
+                companies = [companies]
+            if isinstance(companies, list):
+                planner_ctx["tickers"] = sorted(set(planner_ctx.get("tickers", [])).union({str(item) for item in companies}))[:5]
+        elif name == "sql_generated":
+            sql_text = data.get("sql") or ""
+            sql_ctx["llm_used"] = data.get("llm_used")
+            sql_ctx["template_fallback"] = data.get("template_fallback")
+            sql_ctx["generated"] = True
+            if sql_text:
+                sql_ctx["id"] = _make_identifier(self._session_id, "sql", sql_text)
+                self._record_snapshot(sql=sql_text)
+        elif name == "sql_validated":
+            sql_ctx["validated"] = data.get("ok", False)
+            sql_ctx["issues"] = data.get("issues_count", 0)
+        elif name == "execution_stats":
+            sql_ctx["row_count"] = data.get("row_count")
+        elif name == "chart_generated":
+            spec = data.get("chart_spec")
+            if spec is not None:
+                identifier = _make_identifier(self._session_id, "chart", json.dumps(spec, sort_keys=True))
+                chart_ctx["spec_id"] = identifier
+                chart_ctx["spec_summary"] = {
+                    "chart_type": data.get("chart_type"),
+                    "series_count": len(spec.get("datasets", [])) if isinstance(spec, dict) else None,
+                }
+                data["chart_spec_id"] = identifier
+                self._record_snapshot(chart_spec=spec)
+            else:
+                chart_ctx["spec_summary"] = {"chart_type": data.get("chart_type")}
+        elif name == "analysis_streaming":
+            fragment = data.get("partial_analysis")
+            if fragment:
+                fragments: List[str] = analysis_ctx.setdefault("fragments", [])
+                if len(fragments) < _MAX_FRAGMENT_COUNT:
+                    fragments.append(fragment[:200])
+        elif name == "analysis_complete":
+            final_text = data.get("analysis") or ""
+            if final_text:
+                truncated = final_text[:_MAX_ANALYSIS_STORED]
+                analysis_ctx["final"] = truncated
+                analysis_ctx["id"] = _make_identifier(self._session_id, "analysis", final_text)
+                analysis_ctx["length"] = data.get("analysis_length", len(final_text))
+                self._record_snapshot(analysis=final_text)
+
+    async def _run_agent_orchestration(
+        self,
+        query: str,
+        session_id: Optional[str],
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        for task in self._base_plan:
+            role = self.ORCHESTRATION_ROLES.get(task.name)
+            if role:
+                yield self._format_agent_turn(role, "start")
+
+        context = OrchestratorContext(
+            query=query,
+            session_id=session_id,
+            shared=self._shared_context,
+        )
+        results = await self._orchestrator.run(self._base_plan, context)
+
+        planner_result = results.get("planner_phase")
+        bundle = planner_result.output.get("bundle") if planner_result else None
+
+        for task in self._base_plan:
+            role = self.ORCHESTRATION_ROLES.get(task.name)
+            result = results.get(task.name)
+            if not role or not result:
+                continue
+            reasoning = self._format_reasoning(role, result)
+            if reasoning:
+                yield reasoning
+            yield self._format_agent_turn(
+                role,
+                "complete",
+                summary=self._result_summary(result),
+                elapsed=result.elapsed_ms,
+            )
+
+        await self._persist_bundle(bundle)
 
     def _maybe_agent_turn_start(self, event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if event.get("event") != "progress":
@@ -124,7 +536,141 @@ class MultiAgentFlow:
         if role == "data_engineer":
             return {"rows": data.get("row_count")}
         if role == "viz_designer":
-            return {"chart_type": data.get("chart_type")}
+            payload = {"chart_type": data.get("chart_type")}
+            if "chart_spec_id" in data:
+                payload["chart_spec_id"] = data.get("chart_spec_id")
+            return payload
         if role == "insight_reviewer":
             return {"analysis_length": data.get("analysis_length")}
         return None
+
+    def _format_agent_turn(
+        self,
+        role: str,
+        status: str,
+        *,
+        summary: Optional[Dict[str, Any]] = None,
+        elapsed: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "role": role,
+            "status": status,
+            "ts": datetime.utcnow().isoformat(),
+        }
+        if summary:
+            payload["summary"] = summary
+        if elapsed is not None:
+            payload["elapsed_ms"] = elapsed
+        return {"event": "agent_turn", "data": payload}
+
+    def _format_reasoning(self, role: str, result: AgentResult) -> Optional[Dict[str, Any]]:
+        output = result.output or {}
+        thought: Optional[str] = None
+        if role == "planner_agent":
+            tasks = output.get("tasks") or []
+            bundle_id = output.get("bundle_id")
+            descriptors = [f"{item['name']}={item['status']}" for item in tasks if isinstance(item, dict)]
+            pieces = ["Planner tasks"]
+            if bundle_id:
+                pieces.append(f"bundle={bundle_id}")
+            if descriptors:
+                pieces.append(", ".join(descriptors))
+            thought = " | ".join(pieces)
+        elif role == "analyst_agent":
+            status = output.get("status")
+            summary = output.get("summary")
+            thought = f"Analyst status: {status}"
+            if summary:
+                thought = f"Analyst ({status}) summary: {summary[:120]}"
+        elif role == "chart_agent":
+            status = output.get("status")
+            chart = output.get("chart") or {}
+            if chart.get("chart_type"):
+                thought = f"Chart agent ({status}) prepared {chart['chart_type']}"
+            else:
+                thought = f"Chart agent status: {status}"
+        elif role == "market_agent":
+            status = output.get("status")
+            tickers = output.get("tickers") or []
+            insights = output.get("insights") or {}
+            change = insights.get("change_percent")
+            if change is not None and tickers:
+                thought = f"Market agent ({status}) {tickers[0]} change {change:.2f}%"
+            elif tickers:
+                thought = f"Market agent ({status}) monitoring {', '.join(tickers[:3])}"
+            else:
+                thought = f"Market agent status: {status}"
+        if not thought:
+            return None
+        return {
+            "event": "agent_reasoning",
+            "data": {
+                "role": role,
+                "thought": thought,
+                "ts": datetime.utcnow().isoformat(),
+            },
+        }
+
+    def _result_summary(self, result: AgentResult) -> Dict[str, Any]:
+        output = result.output or {}
+        summary: Dict[str, Any] = {}
+        if "status" in output:
+            summary["status"] = output["status"]
+        if "bundle_id" in output:
+            summary["bundle_id"] = output["bundle_id"]
+        if "tasks" in output:
+            summary["tasks"] = output["tasks"]
+        if "chart" in output and output["chart"]:
+            summary["chart"] = output["chart"]
+        if "tickers" in output and output["tickers"]:
+            summary["tickers"] = output["tickers"]
+        insights = output.get("insights")
+        if insights:
+            summary["insights"] = {
+                "symbol": insights.get("symbol"),
+                "change_percent": insights.get("change_percent"),
+                "latest_close": insights.get("latest_close"),
+            }
+        if output.get("error"):
+            summary["error"] = output["error"]
+        return summary
+
+    async def _persist_bundle(self, bundle: Optional[Dict[str, Any]]) -> None:
+        if not bundle or not self._session_snapshot:
+            return
+        try:
+            self._session_snapshot.record_tool_result("planner_bundle", bundle)
+            repository = get_session_state_repository()
+            await repository.save(self._session_snapshot)
+        except Exception:
+            pass
+
+    def _record_snapshot(
+        self,
+        *,
+        sql: Optional[str] = None,
+        chart_spec: Optional[Dict[str, Any]] = None,
+        analysis: Optional[str] = None,
+    ) -> None:
+        if not self._session_snapshot:
+            return
+        self._session_snapshot.record_outputs(
+            sql=sql,
+            chart_spec=chart_spec,
+            analysis=analysis,
+        )
+
+    def _serialize_decision(self, decision: MemoryGateDecision) -> Dict[str, Any]:
+        return {
+            "policy": getattr(decision, "policy", None),
+            "reuse_sql": getattr(decision, "reuse_sql", None),
+            "reuse_chart": getattr(decision, "reuse_chart", None),
+            "reuse_analysis": getattr(decision, "reuse_analysis", None),
+        }
+
+    @property
+    def _session_id(self) -> Optional[str]:
+        return getattr(self._session_snapshot, "session_id", None)
+
+
+__all__ = ["MultiAgentFlow"]
