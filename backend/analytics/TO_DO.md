@@ -2,29 +2,26 @@
 
 ## Overview
 - Deliver Mode 1 (Single Agent + Tool Fan-Out) and Mode 2 (Multi-Agent Orchestration) without regressing today's sequential UX.
-- Land shared plumbing first (MemoryGate, SSE schema, internal analytics logging, test harnesses) so both modes inherit the same foundations.
+- Land shared plumbing first (session state persistence, SSE schema, internal analytics logging, test harnesses) so both modes inherit the same foundations.
 - Keep all changes behind feature flags so we can fall back to the current deterministic executor instantly if needed.
 
 ## Shared Foundations
-1. **Memory Gate & SessionState plumbing**
-   - [Update September 30, 2025] MemoryGate service, Redis-backed SessionState repository, and logging hooks are implemented and exercised via `instrument_events`; new pytest coverage (`test_memory_gate.py`) validates cold-start vs reuse behaviours.
-   - Questions: Should MemoryGate expose adapter-level TTL overrides before we wire in multi-agent flows?
-   - Stand up the `MemoryGate` policy service with adapters for transcript embeddings, tool output cache, and routing rules.
+1. **Session persistence**
+   - [Update September 30, 2025] MemoryGate retired-solo agent now decides when to reuse cached artifacts. Session state remains in Redis purely for in-flight conversations and resets when a chat restarts.
    - Persist `SessionState` in Redis only (conversation-scoped TTL, purge on idle/close) with typed repositories; keep TTL short by default (5 minutes, configurable 1-15) and drop keys as soon as the chat ends.
-   - Log gate decisions and state mutations to the internal analytics event store so support can inspect timelines without external tooling.
+   - Log state mutations to the internal analytics event store so support can inspect timelines without external tooling.
 2. **Internal observability**
-   - [Update September 30, 2025] Added telemetry emission for `memory_gate_decision` plus persistent sequence/parallel metadata so dashboards can chart fan-out; awaiting guidance on surfacing new metrics.
+   - [Update September 30, 2025] Added persistent sequence/parallel metadata so dashboards can chart fan-out; awaiting guidance on surfacing new metrics.
    - Questions: Do we want interim Grafana panels for sequence skew before pulling playbook owners in?
    - Extend existing analytics event logging to capture `fanout_*` events, tool/agent latencies, web-search usage, and routing context.
    - Update internal dashboards to surface P50/P95 tool latency, agent handoffs, SSE retry counts, Redis hit/miss rates, and stock widget load failures; wire alert thresholds that feed the current on-call process.
    - Reuse the established metrics ingestion path-no OpenTelemetry or LangSmith; only add the new fields required for concurrency diagnosis.
 3. **SSE & Event Schema updates**
-   - [Update September 30, 2025] Instrumentation now enriches SSE with `seq`, `parallel_group`, and `tool_group` metadata and streams MemoryGate decisions end-to-end; `analytics_memory_workflow` wraps flows via `instrument_events` (configurable through `ANALYTICS_MEMORY_INSTRUMENT`, default on) so ProcessPanel, WorkflowCanvas, and ProcessNode render lane badges when metadata is present.
+   - [Update September 30, 2025] Instrumentation now enriches SSE with `seq`, `parallel_group`, and `tool_group` metadata; `analytics_memory_workflow` wraps flows via `instrument_events` (configurable through `ANALYTICS_MEMORY_INSTRUMENT`, default on) so ProcessPanel, WorkflowCanvas, and ProcessNode render lane badges when metadata is present.
    - Questions: Should we gate the lane labels behind a UI flag until design signs off, and do we need a runtime kill-switch beyond the `ANALYTICS_MEMORY_INSTRUMENT` env toggle for rapid rollback?
    - Update `backend/analytics/core/events.py` with heartbeat envelopes, `tool_group`/`parallel_group` fields, sequence IDs, and merge metadata for multi-track payloads.
    - Patch `useAnalyticsMemoryStream`, `ProcessPanel`, and `WorkflowCanvas` to accept parallel metadata while defaulting to sequential rendering when flags are off.
 4. **Testing scaffolds**
-   - [Update September 30, 2025] Added `test_memory_gate.py` using `fakeredis` to cover MemoryGate decisions and instrumentation sequencing; no frontend fixtures yet.
    - [Update September 30, 2025] Added `test_flow_modes_queries.py` coverage that boots instrumentation with `fakeredis` to exercise the full SSE envelope without hitting production Redis.
    - Questions: Is a Vitest reducer suite the next priority, or do we block on concurrent SSE recordings first, and should the analytics flow tests assert on `memory_gate_decision` events to guard the new stream contract?
    - Build async harness utilities plus deterministic fake adapters/agents under `backend/tests/analytics/` for TaskGroup scenarios.
@@ -37,15 +34,21 @@
 
 ## Mode 1: Single Agent + Tool Fan-Out (=5 tools)
 **Phase 1 - Planner refactor & gating**
-- Break `PlannerExecutorFlow.events` into phase coroutines and insert `MemoryGate` hooks.
+- [Status September 30, 2025] Completed - `PlannerExecutorFlow.events` now delegates to phase coroutines and `ANALYTICS_TOOL_PARALLELISM` flag (default off) is wired.
+- [Update September 30, 2025] MemoryGate removed; instrumentation now simply maintains session snapshots, and the solo-agent prompt lives at `backend/analytics/solo_agent.md`.
+- Break `PlannerExecutorFlow.events` into phase coroutines and prepare for async tool fan-out without gating heuristics.
 - Introduce feature flag `ANALYTICS_TOOL_PARALLELISM` (default off).
 
 **Phase 2 - ToolTaskGroup and adapters**
+- [Status September 30, 2025] In progress - Introduced `backend/analytics/flows/tooling.py` with TaskGroup fan-out; adapters remain telemetry-only so the frontend can visualize parallel progress while the legacy sequential pipeline produces the actual results.
+- Decision: adapters emit preview telemetry only (no duplicate execution), ensuring ProcessPanel shows fan-out lanes while final `analysis_complete` still comes from the baseline flow.
+- Error handling: adapters emit `tool_parallel_result` with `status="error"`; fatal errors cancel sibling adapters, non-fatal issues keep other adapters running. No adapter-level fallback is implemented.
 - Create `backend/analytics/flows/tooling.py` with TaskGroup scheduling, shared semaphores, and adapter registration.
+- Open questions: 1) Should tool_parallel_result include an explicit preview_only flag for the frontend? 2) After telemetry wiring, would you prefer we begin Phase 3 event merge work or deepen adapter payloads first?
 - Register five adapters (tentative ordering) with policy metadata:
   1. **SQL Planner/Executor** - generate validated SQL, execute against warehouse connectors, and produce structured frames for downstream consumers.
   2. **Chart Builder** - transform result frames into exisiting ECharts specs and enforce theme presets for the frontend.
-  3. **Responses API Web Retriever** - call OpenAI Responses API web search on the first turn for fresh context; MemoryGate suppresses subsequent calls for follow-up tweaks unless intent scoring flags stale data (rate limiting handled via `rate_limiter.py`).
+  3. **Responses API Web Retriever** - call OpenAI Responses API web search on the first turn for fresh context; the solo agent decides whether cached snippets are still valid on follow-up turns (rate limiting handled via `rate_limiter.py`).
   4. **Stock Price Tracker** - embed the TradingView Symbol Overview widget so the UI can display recent price moves for any ticker with a single script include; return normalized series to the planner for reasoning.
   5. **Narrative Synthesizer** - collate SQL + web findings into analyst-ready bullet points that SoloAgent can surface as tool reasoning or final response seeds.
 
@@ -60,14 +63,18 @@
 
 ## Mode 2: Multi-Agent Orchestration (<5 agents)
 **Phase 1 - Orchestrator skeleton**
+- [Update September 30, 2025] AgentExecutionOrchestrator with TaskGroup fan-out and default registry scaffolding is in place; planner/analyst/chart/market roles registered with latency budgets.
 - Implement `AgentExecutionOrchestrator` with shallow DAG support (max depth 3) and TaskGroup fan-out.
 - Define the agent registry with capability metadata, evaluation hooks, and latency budgets.
 
 **Phase 2 - Agent roles, data flow, and heuristics**
+- [Update September 30, 2025] Planner agent now emits lightweight task bundles for analyst/chart/market roles; shared context only keeps reusable SQL/chart IDs and session snapshots stay Redis-scoped.
 - **Planner Agent**: expands the user prompt into structured tasks, triggers SQL Planner/Executor, and creates a shared context package (SQL results, tool plans, timeline). Publishes payloads into `SessionState` and the orchestration bus.
 - **Analyst Agent**: consumes planner outputs plus narrative seeds, blends them with cached web context, and drafts analysis paragraphs; feeds summaries back to the bus for display and for Chart/Market agents to reference.
 - **Chart Agent**: ingests planner SQL outputs and analyst highlights, chooses visual encodings, and emits Vega-Lite specs plus annotations that tie back to the narrative.
 - **Market Agent**: reads planner output (ticker metadata) and analyst context, invokes the shared stock tracker adapter, then emits transient stock insights and chart overlays for the same turn (no persistence beyond the response).
+- [Update September 30, 2025] Market agent integrates Polygon.io daily aggregates feeding TradingView Lightweight Charts; `PolygonMarketDataClient` and coverage tests live under `analytics/services/polygon.py` and `backend/tests/analytics/test_polygon_service.py`.
+- [Decision September 30, 2025] Market agent integrates Polygon.io daily aggregates feeding TradingView Lightweight Charts; Polygon client scaffold ships in `backend/analytics/services/polygon.py`.
 - The conductor orchestrates message passing via lightweight envelopes (context IDs, revision numbers) so each specialist knows when to update or reuse prior artifacts; Redis keys deliver cross-agent state during the active session window.
 - Heuristics inspired by Kairos decide whether to reuse prior SQL/chart assets or trigger new work when user intent references existing outputs (e.g., "make that chart a bar chart").
 
@@ -102,3 +109,4 @@
 3. Are there compliance considerations for storing web-search excerpts in SessionState during the active session window?
 4. When presenting multiple visual assets (chart + stock widget), do we want a defined ordering or leave it chronological by completion time?
 5. Should we add a lightweight "tool summary" card in the UI to reinforce how the cohesive response was assembled, or is the existing stacked layout enough?
+
