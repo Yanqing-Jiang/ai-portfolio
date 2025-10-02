@@ -18,9 +18,25 @@ import '@xyflow/react/dist/style.css';
 import { ProcessNode } from './ProcessNode';
 import { ProcessStep, FlowMode, FlowVisualTheme } from '../types';
 
+type WorkflowLayoutMode = 'sequential' | 'lanes';
+
+const LANE_ORDER = ['overview', 'planner', 'query', 'analyst', 'chart', 'web', 'market', 'coordination'] as const;
+
+const LANE_LABELS: Record<(typeof LANE_ORDER)[number], string> = {
+  overview: 'Overview',
+  planner: 'Planner Agent',
+  query: 'Query Agent',
+  analyst: 'Analyst Agent',
+  chart: 'Chart Agent',
+  web: 'Web Research',
+  market: 'Market Agent',
+  coordination: 'Coordination',
+};
+
 interface WorkflowCanvasProps {
   steps: ProcessStep[];
   flowMode: FlowMode;
+  layoutMode?: WorkflowLayoutMode;
   className?: string;
   isVisible?: boolean;
   currentStepLabel?: string;
@@ -198,6 +214,7 @@ const computeSerpentinePlacement = (
 const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
   steps,
   flowMode,
+  layoutMode = 'sequential',
   className,
   isVisible = true,
   currentStepLabel,
@@ -218,19 +235,46 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
 
   const processedSteps = useMemo(() => {
     const total = steps.length || 1;
+    const useLaneLayout = flowMode === 'multi-agent' && layoutMode === 'lanes';
+    const laneCounts: Record<string, number> = {};
+
     return steps.map((step, index) => {
       const phase = STEP_PHASES[step.id] || 'analysis';
-      const placement = computeSerpentinePlacement(
-        index,
-        layout.columns,
-        layout.horizontalGap,
-        layout.verticalGap,
-        total,
-      );
+      const parallelGroup = step.parallelGroup;
+
+      let placement: SerpentinePlacement;
+      let laneKey: (typeof LANE_ORDER)[number] | undefined;
+
+      if (useLaneLayout) {
+        const rawLane = (parallelGroup as (typeof LANE_ORDER)[number]) || 'overview';
+        laneKey = LANE_ORDER.includes(rawLane) ? rawLane : 'overview';
+        const laneIndex = LANE_ORDER.indexOf(laneKey);
+        const currentCount = laneCounts[laneKey] ?? 0;
+        laneCounts[laneKey] = currentCount + 1;
+        placement = {
+          position: { x: laneIndex * layout.horizontalGap, y: currentCount * layout.verticalGap },
+          row: currentCount,
+          stepInRow: laneIndex,
+          columnsInRow: 1,
+          isEvenRow: true,
+        };
+      } else {
+        placement = computeSerpentinePlacement(
+          index,
+          layout.columns,
+          layout.horizontalGap,
+          layout.verticalGap,
+          total,
+        );
+      }
+
       const latestThinking = step.thinking?.slice(-1)[0];
       const isActive = step.status === 'in_progress';
       const isCompleted = step.status === 'completed';
       const hasError = step.status === 'error';
+
+      const laneGroup = useLaneLayout ? laneKey : parallelGroup;
+
       return {
         step,
         phase,
@@ -244,52 +288,37 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
         hasError,
         latestThinking,
         index,
-        parallelGroup: step.parallelGroup,
+        parallelGroup: laneGroup,
         sequence: step.sequence,
       };
     });
-  },  [steps, layout.columns, layout.horizontalGap, layout.verticalGap],
-);
+  }, [steps, layout.columns, layout.horizontalGap, layout.verticalGap, flowMode, layoutMode]);
+
 
   const translateExtent = useMemo(() => {
-
     const basePadX = layout.horizontalGap * 0.75;
-
     const basePadY = layout.verticalGap * 0.75;
 
     if (!processedSteps.length) {
-
       return [
-
         [-basePadX, -basePadY],
-
         [basePadX, basePadY],
-
       ] as [[number, number], [number, number]];
-
     }
 
     const positions = processedSteps.map(({ position }) => position);
-
     const maxX = Math.max(...positions.map(({ x }) => x));
-
     const maxY = Math.max(...positions.map(({ y }) => y));
-
     const minX = Math.min(...positions.map(({ x }) => x));
-
     const extraWidth = layout.horizontalGap;
-
     const extraHeight = layout.verticalGap;
 
     return [
-
       [Math.min(-basePadX, minX - basePadX), -basePadY],
-
       [maxX + basePadX + extraWidth, maxY + basePadY + extraHeight],
-
     ] as [[number, number], [number, number]];
-
   }, [processedSteps, layout.horizontalGap, layout.verticalGap]);
+
 
 
 
@@ -352,7 +381,7 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
 
   useEffect(() => {
     hasInitialFit.current = false;
-  }, [flowMode]);
+  }, [flowMode, layoutMode]);
 
   useEffect(() => {
     if (!isVisible) {

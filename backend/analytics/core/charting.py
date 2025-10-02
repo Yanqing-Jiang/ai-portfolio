@@ -1,4 +1,6 @@
 from __future__ import annotations
+
+import re
 from typing import Dict, Any, List, Optional
 
 from .types import ChartPlanModel
@@ -13,6 +15,54 @@ from .charting_impl import (
 
 # Use shared intent titles
 INTENT_TITLES = SHARED_INTENT_TITLES
+
+
+_NUMERIC_REGEX = re.compile(r'^-?\d+(?:\.\d+)?$')
+_QUARTER_REGEX = re.compile(r'(?i)q\s*([1-4])')
+_DIGIT_REGEX = re.compile(r'\d+')
+
+
+def _sort_axis_values(values: List[str], x_field: str) -> List[str]:
+    """Return axis labels sorted ascending using date/quarter heuristics."""
+    _ = x_field  # reserved for future heuristics
+
+    def sort_key(raw: Any) -> tuple:
+        if raw is None:
+            return (5, float('inf'), 0, '')
+        text = str(raw).strip()
+        if not text:
+            return (5, float('inf'), 0, '')
+        if _NUMERIC_REGEX.match(text):
+            return (0, float(text), 0, text.lower())
+
+        digits = [int(token) for token in _DIGIT_REGEX.findall(text)]
+        year_candidates = [d for d in digits if d >= 1000]
+        year = year_candidates[0] if year_candidates else (digits[0] if digits else None)
+        remaining = digits.copy()
+        if year is not None and year in remaining:
+            remaining.remove(year)
+
+        quarter_match = _QUARTER_REGEX.search(text)
+        if quarter_match:
+            quarter = int(quarter_match.group(1))
+            year_value = year if year is not None else 0
+            return (1, year_value, quarter, text.lower())
+
+        if year is not None and remaining:
+            month = remaining[0]
+            day = remaining[1] if len(remaining) > 1 else 0
+            return (2, year, month, day, text.lower())
+
+        if year is not None:
+            return (3, year, text.lower())
+
+        return (4, text.lower())
+
+    try:
+        unique_values = list(dict.fromkeys(values))
+        return sorted(unique_values, key=sort_key)
+    except Exception:
+        return values
 
 
 
@@ -57,6 +107,8 @@ def build_chart_spec(data: List[Dict[str, Any]], chart_plan: Dict[str, Any], cha
         if s not in seen:
             seen.add(s)
             x_vals.append(s)
+
+    x_vals = _sort_axis_values(x_vals, x_field)
 
     # Colors - enhanced with primary/secondary distinction and company colors
     colors = (charts_cfg.get('themes', {}).get('light', {}).get('chart_colors', {}).get('primary_palette') or

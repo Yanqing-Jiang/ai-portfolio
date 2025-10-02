@@ -23,12 +23,55 @@ export interface AgentTurnTelemetry {
   parallelGroup?: string;
 }
 
-export interface AgentReasoningTelemetry {
-  role: string;
-  thought: string;
-  ts?: string;
-  sequence?: number;
-  parallelGroup?: string;
+export interface ToolFanoutManifest {
+  name: string;
+  display_name?: string;
+  description?: string;
+  preview_only?: boolean;
+  capabilities?: string[];
+  outputs?: string[];
+  summary?: string;
+  preview_keys?: string[];
+  sample_metrics?: string[];
+}
+
+export interface ToolFanoutResult {
+  tool: string;
+  status: string;
+  elapsed_ms?: number;
+  started_at?: string | null;
+  completed_at?: string | null;
+  fatal?: boolean;
+  error?: string | null;
+  metadata?: Record<string, any>;
+  payload?: Record<string, any>;
+}
+
+export interface WebSearchResult {
+  query?: string;
+  summary?: string;
+  snippets: Array<{
+    title?: string;
+    url?: string;
+    snippet?: string;
+    display_url?: string;
+    published_at?: string;
+  }>;
+  annotations?: Array<Record<string, any>>;
+  searchId?: string;
+  fromCache?: boolean;
+  fetchedAt?: string;
+  latencyMs?: number | null;
+  ready?: boolean;
+}
+
+export interface StockWidgetConfig {
+  symbols: string[];
+  original?: string[];
+  generated_at?: string;
+  locale?: string;
+  colorTheme?: 'light' | 'dark';
+  height?: number;
 }
 
 export interface ProcessStepDetails {
@@ -60,6 +103,10 @@ export interface ProcessStepDetails {
   tool_calls?: ToolCallTelemetry[];
   agent_turns?: AgentTurnTelemetry[];
   agent_reasoning?: AgentReasoningTelemetry[];
+  tool_manifest?: ToolFanoutManifest[];
+  tool_fanout_results?: ToolFanoutResult[];
+  concurrency_limit?: number;
+  stock_widget?: StockWidgetConfig;
 }
 
 export interface ProcessStep {
@@ -85,6 +132,10 @@ export interface ChatMessage {
   chartSpec?: any;
   sqlQuery?: string;
   dataSample?: any[];
+  stockWidgetConfig?: StockWidgetConfig | null;
+  toolFanoutManifest?: ToolFanoutManifest[];
+  toolFanoutResults?: ToolFanoutResult[];
+  webSearch?: WebSearchResult | null;
 }
 
 export interface ClarifyRequest {
@@ -133,6 +184,8 @@ export interface ChartCardProps {
 
 export interface ProcessPanelProps {
   steps: ProcessStep[];
+  flowMode: FlowMode;
+  layoutMode?: 'sequential' | 'lanes';
   show: boolean;
   onClose: () => void;
   showElapsedTime?: boolean;

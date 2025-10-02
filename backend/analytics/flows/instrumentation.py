@@ -4,7 +4,6 @@ import uuid
 from datetime import datetime
 from typing import Any, AsyncGenerator, Dict, Optional, Tuple
 
-from analytics.core.memory_gate import MemoryGate, MemoryGateDecision
 from analytics.core.session_state import SessionStateSnapshot, get_session_state_repository
 
 PARALLEL_GROUP_BY_EVENT = {
@@ -41,17 +40,6 @@ PARALLEL_GROUP_BY_STEP = {
     "analysis_generation": "analysis",
     "chart_generation": "chart",
 }
-
-_memory_gate: Optional[MemoryGate] = None
-
-
-def _get_memory_gate() -> MemoryGate:
-    global _memory_gate
-    if _memory_gate is None:
-        repository = get_session_state_repository()
-        _memory_gate = MemoryGate(repository=repository)
-    return _memory_gate
-
 
 def _resolve_parallel_group(event: Dict[str, Any]) -> Optional[str]:
     name = event.get("event")
@@ -94,22 +82,8 @@ def _enrich_event(
     return event, seq
 
 
-def _format_gate_event(decision: MemoryGateDecision) -> Dict[str, Any]:
-    return {
-        "event": "memory_gate_decision",
-        "data": {
-            "policy": decision.policy,
-            "reasons": decision.reasons,
-            "reuse_sql": decision.reuse_sql,
-            "reuse_chart": decision.reuse_chart,
-            "reuse_analysis": decision.reuse_analysis,
-            "tool_directives": {
-                name: directive.model_dump()
-                for name, directive in decision.tool_directives.items()
-            },
-            "ts": datetime.utcnow().isoformat(),
-        },
-    }
+def _ensure_session_id(session_id: Optional[str]) -> str:
+    return session_id or str(uuid.uuid4())
 
 
 def _maybe_update_session_state(
@@ -120,6 +94,7 @@ def _maybe_update_session_state(
     name = event.get("event")
     data = event.get("data") or {}
     updated = False
+
     if name == "intent_detection_complete":
         snapshot.record_query(query, data.get("intent_key"))
         updated = True
@@ -128,9 +103,15 @@ def _maybe_update_session_state(
         if sql_text:
             snapshot.record_outputs(sql=sql_text)
             updated = True
+    elif name == "sql_attempts":
+        attempts = data.get("attempts") or []
+        analytics_cache = snapshot.tool_cache.setdefault("analytics", {})
+        analytics_cache["sql_attempts"] = attempts
+        snapshot.touch()
+        updated = True
     elif name == "chart_generated":
         chart_spec = data.get("chart_spec")
-        if chart_spec:
+        if chart_spec is not None:
             snapshot.record_outputs(chart_spec=chart_spec)
             updated = True
     elif name == "analysis_complete":
@@ -138,11 +119,17 @@ def _maybe_update_session_state(
         if analysis:
             snapshot.record_outputs(analysis=analysis)
             updated = True
+    elif name == "tool_parallel_result":
+        tool = (data.get("tool") or "").strip()
+        payload = data.get("payload") or {}
+        if tool == "web_retriever" and payload:
+            cache_payload = dict(payload)
+            cache_payload.setdefault("query", cache_payload.get("query_terms"))
+            snapshot.record_tool_result("web_search", cache_payload)
+            updated = True
+
     return updated
 
-
-def _ensure_session_id(session_id: Optional[str]) -> str:
-    return session_id or str(uuid.uuid4())
 
 
 async def instrument_events(
@@ -151,18 +138,14 @@ async def instrument_events(
     session_id: Optional[str],
     flow_label: Optional[str],
 ) -> AsyncGenerator[Dict[str, Any], None]:
-    memory_gate = _get_memory_gate()
+    repository = get_session_state_repository()
     resolved_session = _ensure_session_id(session_id)
-    decision = await memory_gate.evaluate(
-        session_id=resolved_session,
-        query=query,
-        flow_label=flow_label or getattr(flow, "flow_label", None) or "planner-executor",
-    )
-    session_snapshot = decision.state
-    await memory_gate.repository.save(session_snapshot)
+    snapshot = await repository.load(resolved_session)
+    if snapshot is None:
+        snapshot = SessionStateSnapshot(session_id=resolved_session)
+        await repository.save(snapshot)
 
     sequence = 0
-    gate_event_emitted = False
 
     async for raw_event in flow.events(query, session_id=resolved_session):
         parallel_group = _resolve_parallel_group(raw_event)
@@ -175,24 +158,8 @@ async def instrument_events(
         )
         yield enriched_event
 
-        if not gate_event_emitted and raw_event.get("event") == "classification_complete":
-            gate_event_emitted = True
-            gate_event, sequence = _enrich_event(
-                _format_gate_event(decision),
-                sequence=sequence,
-                parallel_group="memory",
-            )
-            yield gate_event
+        if _maybe_update_session_state(snapshot, enriched_event, query):
+            await repository.save(snapshot)
 
-        if _maybe_update_session_state(session_snapshot, enriched_event, query):
-            await memory_gate.repository.save(session_snapshot)
+    await repository.save(snapshot)
 
-    if not gate_event_emitted:
-        gate_event, sequence = _enrich_event(
-            _format_gate_event(decision),
-            sequence=sequence,
-            parallel_group="memory",
-        )
-        yield gate_event
-
-    await memory_gate.repository.save(session_snapshot)

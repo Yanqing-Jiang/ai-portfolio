@@ -134,6 +134,101 @@ async def build_sql_messages(
     ]
 
 
+async def build_sql_retry_messages(
+    *,
+    original_query: str,
+    intent: IntentModel,
+    plan: QueryPlanModel,
+    error_code: str,
+    error_detail: str,
+    previous_sql: Optional[str],
+    attempts: List[Dict[str, Any]],
+    config_store: Optional[ConfigStore] = None,
+    templates: Optional[List[Dict[str, Any]]] = None,
+    top_k_templates: int = 2,
+) -> List[Dict[str, str]]:
+    """Construct retry-oriented messages for the SQL query agent."""
+    store = config_store or get_config_store()
+    candidate_templates = templates
+    if candidate_templates is None:
+        candidate_templates = await fetch_templates_for_intent(
+            intent,
+            query=original_query,
+            top_k=top_k_templates,
+            store=store,
+        )
+    template_blocks = [summarize_template(template) for template in candidate_templates]
+    template_text = "\n\n".join(template_blocks) if template_blocks else "(No template match; rely on reasoning)"
+
+    metrics_summary = _render_metrics_summary(plan)
+    constraints_text = _render_constraints(plan)
+
+    history_lines: List[str] = []
+    for attempt in attempts or []:
+        idx = attempt.get("attempt")
+        source = attempt.get("source", "unknown")
+        status = attempt.get("status", "unknown")
+        code = attempt.get("error_code")
+        detail = attempt.get("error_detail")
+        preview = attempt.get("sql_preview")
+        line = f"Attempt {idx} [{source}] -> {status}"
+        if code:
+            line += f" ({code})"
+        if detail:
+            line += f" | {detail}"
+        if preview:
+            line += f" | SQL: {preview}"
+        history_lines.append(line)
+    history_text = "\n".join(history_lines) if history_lines else "No previous attempts recorded."
+
+    truncated_sql = (previous_sql[:500] + "...") if previous_sql and len(previous_sql) > 500 else (previous_sql or "n/a")
+
+    system_prompt = dedent(
+        """
+        You are a senior analytics query agent tasked with fixing SQL that previously failed.
+        Produce safe, efficient PostgreSQL.
+        Return SQL only, wrapped in triple backticks. No commentary.
+        """
+    ).strip()
+
+    user_prompt = dedent(
+        f"""
+        USER QUESTION:
+        {original_query}
+
+        DETECTED INTENT: {intent.intent_key} (confidence {intent.confidence:.2f})
+        PLAN GRANULARITY: {plan.granularity}
+        PLAN COMPARISON: {plan.comparison or 'n/a'}
+        METRICS: {', '.join(plan.metrics or []) or 'n/a'}
+        GROUP BY: {', '.join(plan.group_by or []) or 'n/a'}
+
+        LAST ERROR CODE: {error_code or 'unknown'}
+        LAST ERROR DETAIL: {error_detail or 'n/a'}
+        PRIOR SQL (truncated):
+        {truncated_sql}
+
+        PREVIOUS ATTEMPTS:
+        {history_text}
+
+        TEMPLATE SUGGESTIONS:
+        {template_text}
+
+        RULES:
+        {constraints_text}
+
+        OUTPUT:
+        ```sql
+        SELECT ...
+        ```
+        """
+    ).strip()
+
+    return [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+
+
 def extract_sql_from_response(content: str) -> str:
     """Extract SQL from an LLM response that may include formatting."""
     content = content.strip()

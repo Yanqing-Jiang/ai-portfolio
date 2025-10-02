@@ -8,7 +8,7 @@
 ## Shared Foundations
 1. **Session persistence**
    - [Update September 30, 2025] MemoryGate retired-solo agent now decides when to reuse cached artifacts. Session state remains in Redis purely for in-flight conversations and resets when a chat restarts.
-   - Persist `SessionState` in Redis only (conversation-scoped TTL, purge on idle/close) with typed repositories; keep TTL short by default (5 minutes, configurable 1-15) and drop keys as soon as the chat ends.
+   - Persist `SessionState` in Redis with a short TTL (5 minutes, configurable 1-15) and drop keys when chats end; repository now auto-falls back to an in-memory cache when Redis is unavailable so local devs can work without a broker.
    - Log state mutations to the internal analytics event store so support can inspect timelines without external tooling.
 2. **Internal observability**
    - [Update September 30, 2025] Added persistent sequence/parallel metadata so dashboards can chart fan-out; awaiting guidance on surfacing new metrics.
@@ -51,8 +51,20 @@
   3. **Responses API Web Retriever** - call OpenAI Responses API web search on the first turn for fresh context; the solo agent decides whether cached snippets are still valid on follow-up turns (rate limiting handled via `rate_limiter.py`).
   4. **Stock Price Tracker** - embed the TradingView Symbol Overview widget so the UI can display recent price moves for any ticker with a single script include; return normalized series to the planner for reasoning.
   5. **Narrative Synthesizer** - collate SQL + web findings into analyst-ready bullet points that SoloAgent can surface as tool reasoning or final response seeds.
+- **Web search integration (Responses API)** *(Completed Oct 2, 2025)*
+  - Build shared helper `backend/analytics/services/response_search.py` wrapping `client.responses.create` with the `web_search_preview` tool, including retry/backoff through `rate_limiter.py`.
+  - Extend `WebRetrieverAdapter.execute` in `backend/analytics/flows/tooling.py` to call the helper when recency heuristics or explicit user phrasing ("today", "latest", ticker updates) demand fresh context and emit completed payloads containing snippet/citation data.
+  - Cache per-turn snippets in `backend/analytics/core/session_state.py` so refinements reuse prior search results unless the planner marks the context stale; respect the 5-minute TTL.
+  - Log `tool_parallel_result` telemetry with `tool_group="web_search"` via `backend/analytics/core/events.py` and forward usage metrics to the internal analytics store for latency/cost tracking.
+  - Add coverage: `backend/tests/analytics/test_web_retriever_adapter.py` mocking the Responses client plus a Vitest card render test (e.g., `components/analytics/__tests__/SearchCard.test.tsx`).
+- **Market data integration (Polygon)** *(Update October 2, 2025)*
+  - Stock tracker adapter now calls `backend/analytics/services/polygon.py` to fetch latest closes, prior closes, change %, and trailing bars so Mode 1 can surface live market deltas alongside SQL findings.
+  - Persist Polygon snapshots in the tool fan-out manifest so ProcessPanel and the UI can present combined SQL + market + web narratives without custom join code.
+
 
 **Phase 3 - Event merge & UI integration**
+- [Update October 2, 2025] Frontend renamed the legacy planner lane to "Direct Workflow" and now composes the final Markdown narrative with SQL insights plus quoted web snippets and Polygon market notes pulled from tool fan-out results.
+- TODO: mirror the combined analysis composer inside Mode 2 screens once orchestrator wiring lands, ensuring multi-agent responses reuse the same direct-workflow section headers.
 - Emit per-tool reasoning/status events, log them to the internal analytics store, and merge results into the existing response serializer so charts, analysis, web snippets, and stock visuals arrive in a single cohesive SSE frame.
 - Implement the TradingView Symbol Overview widget with minimal styling overrides (branding tweaks not required per latest guidance); document optional hooks in case design requests future theme changes.
 
@@ -62,6 +74,8 @@
 - Guardrails: keep automated guardrails off for v1; rely on internal event logs plus manual sampling while telemetry stabilizes.
 
 ## Mode 2: Multi-Agent Orchestration (<5 agents)
+- [Update October 2, 2025] Planner/analyst/market agents should reuse the new combined SQL + web + market summary format; capture an action item to emit web/stock payloads on the orchestrator bus so the UI composer can stay identical across modes.
+- TODO: teach the market agent to fall back gracefully when Polygon is unavailable (surface queued status vs. empty payload) so the combined narrative still renders in Mode 2.
 **Phase 1 - Orchestrator skeleton**
 - [Update September 30, 2025] AgentExecutionOrchestrator with TaskGroup fan-out and default registry scaffolding is in place; planner/analyst/chart/market roles registered with latency budgets.
 - Implement `AgentExecutionOrchestrator` with shallow DAG support (max depth 3) and TaskGroup fan-out.
@@ -73,6 +87,13 @@
 - **Analyst Agent**: consumes planner outputs plus narrative seeds, blends them with cached web context, and drafts analysis paragraphs; feeds summaries back to the bus for display and for Chart/Market agents to reference.
 - **Chart Agent**: ingests planner SQL outputs and analyst highlights, chooses visual encodings, and emits Vega-Lite specs plus annotations that tie back to the narrative.
 - **Market Agent**: reads planner output (ticker metadata) and analyst context, invokes the shared stock tracker adapter, then emits transient stock insights and chart overlays for the same turn (no persistence beyond the response).
+- **WebResearchAgent integration** *(Completed Oct 2, 2025)*
+  - Register a new `WebResearchAgent` role (none exists today) inside `backend/analytics/flows/multi_agent/orchestrator.py` that schedules the shared search helper with TaskGroup concurrency and a 6-second budget.
+  - Publish search payloads onto the orchestration bus so `AnalystAgent` and `MarketAgent` consume citations; store snippets alongside SQL/chart IDs in `backend/analytics/core/session_state.py`.
+  - Extend SSE telemetry (`backend/analytics/flows/multi_agent/telemetry.py`) to emit `agent_turn` events with `tool_group="web_search"` and include citation metadata for ProcessPanel/WorkflowCanvas.
+  - Update `WorkflowCanvas.tsx` to render a Web Research swimlane card showing source badges and completion status.
+  - Tests: add `backend/tests/analytics/test_multi_agent_web_search.py` to assert orchestrator ordering and Playwright coverage replaying a multi-agent session with the new lane.
+
 - [Update September 30, 2025] Market agent integrates Polygon.io daily aggregates feeding TradingView Lightweight Charts; `PolygonMarketDataClient` and coverage tests live under `analytics/services/polygon.py` and `backend/tests/analytics/test_polygon_service.py`.
 - [Decision September 30, 2025] Market agent integrates Polygon.io daily aggregates feeding TradingView Lightweight Charts; Polygon client scaffold ships in `backend/analytics/services/polygon.py`.
 - The conductor orchestrates message passing via lightweight envelopes (context IDs, revision numbers) so each specialist knows when to update or reuse prior artifacts; Redis keys deliver cross-agent state during the active session window.
@@ -109,4 +130,6 @@
 3. Are there compliance considerations for storing web-search excerpts in SessionState during the active session window?
 4. When presenting multiple visual assets (chart + stock widget), do we want a defined ordering or leave it chronological by completion time?
 5. Should we add a lightweight "tool summary" card in the UI to reinforce how the cohesive response was assembled, or is the existing stacked layout enough?
+
+
 

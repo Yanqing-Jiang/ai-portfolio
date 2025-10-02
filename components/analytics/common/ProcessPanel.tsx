@@ -34,9 +34,9 @@ const PANE_KEY = 'processPanelFocusedPane';
 
 const FLOW_META: Record<FlowMode, { title: string; accent: string; description: string }> = {
   'planner-executor': {
-    title: 'Planner & Executor',
+    title: 'Direct Workflow',
     accent: 'text-emerald-300',
-    description: 'Deterministic SQL planning with ordered tool execution.',
+    description: 'Deterministic direct workflow with ordered tool execution.',
   },
   'single-agent': {
     title: 'Single Agent + Tools',
@@ -199,6 +199,14 @@ export const ProcessPanel: React.FC<ProcessPanelProps> = ({
       position: { x: 0, y: 0 },
     };
   });
+
+  const [layoutMode, setLayoutMode] = useState<'sequential' | 'lanes'>(flowMode === 'multi-agent' ? 'lanes' : 'sequential');
+
+  useEffect(() => {
+    if (flowMode !== 'multi-agent' && layoutMode !== 'sequential') {
+      setLayoutMode('sequential');
+    }
+  }, [flowMode, layoutMode]);
 
   const [focusedPane, setFocusedPane] = useState<PaneFocus>(() => {
     if (!isBrowser) {
@@ -583,6 +591,7 @@ export const ProcessPanel: React.FC<ProcessPanelProps> = ({
         <WorkflowCanvas
           steps={displaySteps}
           flowMode={flowMode}
+          layoutMode={flowMode === 'multi-agent' ? layoutMode : 'sequential'}
           isVisible
           currentStepLabel={contextStep?.name}
           currentStatus={friendlyStatus(contextStatus)}
@@ -647,6 +656,16 @@ export const ProcessPanel: React.FC<ProcessPanelProps> = ({
                   >
                     JSON
                   </button>
+                  {flowMode === 'multi-agent' && (
+                    <button
+                      type="button"
+                      onClick={() => setLayoutMode((prev) => (prev === 'lanes' ? 'sequential' : 'lanes'))}
+                      className="rounded border border-purple-500/40 px-2 py-0.5 text-[10px] uppercase tracking-wide text-purple-200 transition hover:border-purple-400 hover:text-purple-100"
+                      title="Toggle between swimlanes and sequential view"
+                    >
+                      {layoutMode === 'lanes' ? 'Sequential View' : 'Lane View'}
+                    </button>
+                  )}
                   {resizable && (
                     <button
                       type="button"
@@ -693,6 +712,7 @@ export const ProcessPanel: React.FC<ProcessPanelProps> = ({
 };
 
 export default ProcessPanel;
+
 
 
 

@@ -1,10 +1,93 @@
 import React, { Suspense } from 'react';
 import { ChatHistoryProps } from '../types';
 import { ClarificationOptions } from './ClarificationOptions';
-import { AnalysisCard, SqlCard, CollapsibleSection } from '../common';
+import { AnalysisCard, SqlCard, CollapsibleSection, TradingViewSymbolOverview, WebSearchCard } from '../common';
 import { isValidChartSpec } from '../utils';
 
 const ChartCard = React.lazy(() => import('../common/ChartCard').then(m => ({ default: m.ChartCard }))); // Lazy-load heavy chart component
+
+const buildWebInsightsSection = (webSearch: ChatHistoryProps['messages'][number]['webSearch']) => {
+  if (!webSearch || !webSearch.snippets?.length) return null;
+  const lines: string[] = [];
+  if (webSearch.summary?.trim()) {
+    lines.push(`- Summary: ${webSearch.summary.trim()}`);
+  }
+  webSearch.snippets.slice(0, 3).forEach((snippet) => {
+    const raw = (snippet.snippet ?? '').trim();
+    if (!raw) return;
+    const sanitized = raw.replace(/\s+/g, ' ').trim();
+    const excerpt = sanitized.length > 220 ? `${sanitized.slice(0, 217).trimEnd()}...` : sanitized;
+    const safeExcerpt = excerpt.replace(/"/g, "'");
+    const title = snippet.title || snippet.display_url || snippet.url || 'source';
+    const source = snippet.display_url || snippet.url;
+    if (source && source !== title) {
+      lines.push(`- "${safeExcerpt}" - ${title} (${source})`);
+    } else {
+      lines.push(`- "${safeExcerpt}" - ${title}`);
+    }
+  });
+  if (!lines.length) return null;
+  return `**Web Insights**
+${lines.join('
+')}`;
+};
+
+const buildStockInsightsSection = (results: ChatHistoryProps['messages'][number]['toolFanoutResults']) => {
+  if (!results?.length) return null;
+  const stockResult = results.find((entry) => entry?.tool === 'stock_tracker' && entry.payload && (entry.payload as any).ready);
+  if (!stockResult?.payload) return null;
+  const payload = stockResult.payload as Record<string, any>;
+  const symbol = (payload.symbol || payload.tickers?.[0] || '').toString().toUpperCase();
+  const latest = typeof payload.latest_close === 'number' ? payload.latest_close : undefined;
+  const previous = typeof payload.previous_close === 'number' ? payload.previous_close : undefined;
+  const change = typeof payload.change_percent === 'number' ? payload.change_percent : undefined;
+  const fetchedAt = typeof payload.fetched_at === 'string' ? payload.fetched_at : null;
+  const lines: string[] = [];
+  if (symbol && latest !== undefined) {
+    lines.push(`- ${symbol} latest close: $${latest.toFixed(2)}`);
+  } else if (symbol) {
+    lines.push(`- Symbol: ${symbol}`);
+  }
+  if (change !== undefined) {
+    const formatted = change >= 0 ? `+${change.toFixed(2)}%` : `${change.toFixed(2)}%`;
+    lines.push(`- Session change vs prior close: ${formatted}`);
+  }
+  if (previous !== undefined && latest !== undefined) {
+    const delta = latest - previous;
+    const formatted = delta >= 0 ? `+${delta.toFixed(2)}` : delta.toFixed(2);
+    lines.push(`- Prior close: $${previous.toFixed(2)} (delta ${formatted})`);
+  }
+  if (fetchedAt) {
+    lines.push(`- Snapshot fetched at ${fetchedAt}`);
+  }
+  const bars = Array.isArray(payload.bars) ? payload.bars : [];
+  if (bars.length) {
+    const ts = bars[bars.length - 1]?.time;
+    if (typeof ts === 'number') {
+      const date = new Date(ts * 1000);
+      if (!Number.isNaN(date.getTime())) {
+        lines.push(`- Latest bar date: ${date.toISOString().slice(0, 10)}`);
+      }
+    }
+  }
+  if (!lines.length) return null;
+  return `**Market Snapshot**
+${lines.join('
+')}`;
+};
+
+const buildCombinedAnalysis = (message: ChatHistoryProps['messages'][number]) => {
+  const sections: string[] = [];
+  const base = message.analysis?.trim();
+  if (base) sections.push(base);
+  const webSection = buildWebInsightsSection(message.webSearch);
+  if (webSection) sections.push(webSection);
+  const stockSection = buildStockInsightsSection(message.toolFanoutResults);
+  if (stockSection) sections.push(stockSection);
+  return sections.join('
+
+');
+};
 
 export const ChatHistory: React.FC<ChatHistoryProps> = ({ 
   messages, 
@@ -65,11 +148,36 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
                     )}
 
                     {/* Analysis Display */}
-                    {message.analysis && (
-                      <div className="rounded-xl overflow-hidden">
-                        <AnalysisCard analysis={message.analysis} />
+                    {(() => {
+                      const combinedAnalysis = buildCombinedAnalysis(message);
+                      return combinedAnalysis ? (
+                        <div className="rounded-xl overflow-hidden">
+                          <AnalysisCard analysis={combinedAnalysis} />
+                        </div>
+                      ) : null;
+                    })()}
                       </div>
                     )}
+
+                    {message.stockWidgetConfig && message.stockWidgetConfig.symbols?.length ? (
+                      <CollapsibleSection
+                        title="Market Snapshot"
+                        defaultOpen={true}
+                        className="bg-gray-800/50"
+                      >
+                        <TradingViewSymbolOverview config={message.stockWidgetConfig} />
+                      </CollapsibleSection>
+                    ) : null}
+
+                    {message.webSearch && message.webSearch.snippets?.length ? (
+                      <CollapsibleSection
+                        title="Search Highlights"
+                        defaultOpen
+                        className="bg-gray-800/50"
+                      >
+                        <WebSearchCard result={message.webSearch} />
+                      </CollapsibleSection>
+                    ) : null}
 
                     {/* SQL Query Display (Collapsible) */}
                     {message.sqlQuery && (
@@ -81,6 +189,7 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
                         <SqlCard sqlQuery={message.sqlQuery} compact={true} />
                       </CollapsibleSection>
                     )}
+
                   </div>
                 )}
               </div>
