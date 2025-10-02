@@ -1,7 +1,19 @@
 import { useState, useRef } from 'react';
-import { ChatMessage, ClarifyRequest, ClarifyAnswer, ToolCallTelemetry, AgentTurnTelemetry, AgentReasoningTelemetry, ProcessStep } from '../types';
+import { ChatMessage, ClarifyRequest, ClarifyAnswer, ToolCallTelemetry, AgentTurnTelemetry, AgentReasoningTelemetry, ProcessStep, ToolFanoutManifest, ToolFanoutResult, StockWidgetConfig, WebSearchResult } from '../types';
 import { apiService } from '../../../services/apiService';
 import { useAnalyticsStream } from './useAnalyticsStream';
+
+const AGENT_ROLE_CONFIG: Record<string, { stepId: string; lane: string; label: string }> = {
+  planner_agent: { stepId: 'planner_agent', lane: 'planner', label: 'Planner Agent' },
+  query_agent: { stepId: 'query_agent', lane: 'query', label: 'Query Agent' },
+  analyst_agent: { stepId: 'analyst_agent', lane: 'analyst', label: 'Analyst Agent' },
+  chart_agent: { stepId: 'chart_agent', lane: 'chart', label: 'Chart Agent' },
+  market_agent: { stepId: 'market_agent', lane: 'market', label: 'Market Agent' },
+  web_research_agent: { stepId: 'web_research_agent', lane: 'web', label: 'Web Research Agent' },
+};
+
+const DEFAULT_AGENT_ROLE = { stepId: 'agent_coordination', lane: 'coordination', label: 'Agent Coordination' };
+
 import { useProcessSteps } from './useProcessSteps';
 import { resolveChartSpecOption } from '../utils';
 
@@ -18,10 +30,37 @@ export const useAnalyticsMemoryStream = (
   const [sqlQuery, setSqlQuery] = useState('');
   const [dataSample, setDataSample] = useState<any[] | null>(null);
   const [streamingText, setStreamingText] = useState('');
+  const [webSearch, setWebSearch] = useState<WebSearchResult | null>(null);
   
   // Progressive rendering: update state immediately instead of accumulating in refs
   const [progressiveAnalysis, setProgressiveAnalysis] = useState('');
   const [progressiveText, setProgressiveText] = useState('');
+
+  const normalizeWebContext = (raw: any): WebSearchResult | null => {
+    if (!raw) {
+      return null;
+    }
+    const snippets = Array.isArray(raw.snippets)
+      ? raw.snippets.map((item: any) => ({
+          title: item?.title,
+          url: item?.url,
+          snippet: item?.snippet,
+          display_url: item?.display_url ?? item?.displayUrl,
+          published_at: item?.published_at ?? item?.publishedAt,
+        }))
+      : [];
+    return {
+      query: raw.query_terms ?? raw.query,
+      summary: raw.summary,
+      snippets,
+      annotations: Array.isArray(raw.annotations) ? raw.annotations : [],
+      searchId: raw.search_id ?? raw.searchId,
+      fromCache: raw.from_cache ?? raw.fromCache ?? raw.cache_hit ?? false,
+      fetchedAt: raw.fetched_at ?? raw.fetchedAt,
+      latencyMs: raw.latency_ms ?? raw.latencyMs ?? null,
+      ready: raw.ready ?? false,
+    };
+  };
 
   // Ref for debouncing rapid updates
   const updateTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -36,6 +75,10 @@ export const useAnalyticsMemoryStream = (
   const toolTelemetryRef = useRef<ToolCallTelemetry[]>([]);
   const agentTurnsRef = useRef<AgentTurnTelemetry[]>([]);
   const agentReasoningRef = useRef<AgentReasoningTelemetry[]>([]);
+  const toolFanoutRef = useRef<{ manifest: ToolFanoutManifest[]; results: ToolFanoutResult[]; concurrencyLimit: number }>({ manifest: [], results: [], concurrencyLimit: 0 });
+
+  const sqlAttemptsRef = useRef<any[]>([]);
+  const agentLaneStateRef = useRef<Record<string, ProcessStep['status']>>({});
 
   // Workflow data ref for result accumulation
   const workflowDataRef = useRef<{
@@ -45,13 +88,22 @@ export const useAnalyticsMemoryStream = (
     dataSample: any[] | null;
     streamingText: string;
     criteria: any | null;
+    stockWidget: StockWidgetConfig | null;
+    toolFanoutManifest: ToolFanoutManifest[];
+    toolFanoutResults: ToolFanoutResult[];
+    concurrencyLimit: number;
   }>({
     chartSpec: null,
     analysis: '',
     sqlQuery: '',
     dataSample: null,
     streamingText: '',
-    criteria: null
+    criteria: null,
+    stockWidget: null,
+    toolFanoutManifest: [],
+    toolFanoutResults: [],
+    concurrencyLimit: 0,
+    webSearch: null
   });
 
   const streamHook = useAnalyticsStream();
@@ -99,6 +151,57 @@ export const useAnalyticsMemoryStream = (
     }, 50); // 50ms debounce for smooth updates
   };
 
+  const resolveAgentConfig = (role: string) => AGENT_ROLE_CONFIG[role] ?? DEFAULT_AGENT_ROLE;
+
+  const computeAggregateStatus = (fallback: ProcessStep['status'] = 'pending'): ProcessStep['status'] => {
+    const laneStates = Object.values(agentLaneStateRef.current);
+    if (laneStates.some((state) => state === 'error')) {
+      return 'error';
+    }
+    if (laneStates.some((state) => state === 'in_progress')) {
+      return 'in_progress';
+    }
+    if (laneStates.some((state) => state === 'completed')) {
+      return 'completed';
+    }
+    return fallback;
+  };
+
+  const buildLaneSummary = () => {
+    const entries = Object.entries(agentLaneStateRef.current);
+    if (!entries.length) {
+      return ['Awaiting agent activity'];
+    }
+    return entries.map(([stepId, status]) => {
+      const roleConfig = Object.values(AGENT_ROLE_CONFIG).find((config) => config.stepId === stepId) ?? DEFAULT_AGENT_ROLE;
+      const statusLabel = status.replace('_', ' ');
+      return `${roleConfig.label}: ${statusLabel}`;
+    });
+  };
+
+  const updateAgentCoordination = (
+    messages: string[] = [],
+    statusOverride?: ProcessStep['status'],
+    meta?: { ts?: string; elapsed_ms?: number; sequence?: number },
+  ) => {
+    const summary = messages.length ? messages : buildLaneSummary();
+    const aggregateStatus = statusOverride ?? computeAggregateStatus();
+    stepsHook.updateStepStatus(
+      'agent_coordination',
+      aggregateStatus,
+      summary,
+      {
+        agent_turns: [...agentTurnsRef.current],
+        agent_reasoning: [...agentReasoningRef.current],
+        agent_status: { ...agentLaneStateRef.current },
+      },
+      meta?.elapsed_ms,
+      meta?.ts,
+      meta?.sequence,
+      'coordination',
+    );
+  };
+
   const recordToolCallEvent = (payload: any, meta?: { ts?: string; elapsed_ms?: number; sequence?: number; parallel_group?: string; tool_group?: string }) => {
     if (!payload || !payload.tool || !payload.status) {
       return;
@@ -140,84 +243,116 @@ export const useAnalyticsMemoryStream = (
       return;
     }
 
+    const config = resolveAgentConfig(payload.role);
+    const ts = meta?.ts || payload.ts;
+    const elapsed = meta?.elapsed_ms ?? payload.elapsed_ms;
+    const sequence = meta?.sequence ?? payload.sequence;
+
     const entry: AgentTurnTelemetry = {
       role: payload.role,
       status: payload.status,
-      ts: meta?.ts || payload.ts,
-      elapsed_ms: meta?.elapsed_ms ?? payload.elapsed_ms,
+      ts,
+      elapsed_ms: elapsed,
       summary: payload.summary,
-      sequence: meta?.sequence ?? payload.sequence,
-      parallelGroup: meta?.parallel_group ?? payload.parallel_group,
+      sequence,
+      parallelGroup: meta?.parallel_group ?? payload.parallel_group ?? config.lane,
     };
     agentTurnsRef.current = [...agentTurnsRef.current, entry].slice(-15);
 
-    const ts = meta?.ts || payload.ts;
-    const elapsed = meta?.elapsed_ms ?? payload.elapsed_ms;
+    const status: ProcessStep['status'] = payload.status === 'complete'
+      ? 'completed'
+      : payload.status === 'error'
+        ? 'error'
+        : payload.status === 'skip' || payload.status === 'reuse'
+          ? 'completed'
+          : 'in_progress';
+
+    agentLaneStateRef.current[config.stepId] = status;
 
     const rawSummary = payload.summary;
-    const summaryText = typeof rawSummary === 'string' ? rawSummary : rawSummary ? JSON.stringify(rawSummary) : undefined;
-    const labelParts = [`${payload.role.replace(/_/g, ' ')} ${payload.status}`];
-    if (summaryText) {
-      labelParts.push(summaryText);
-    }
-
-    const stepStatus = payload.status === 'complete' ? 'completed' : 'in_progress';
+    const summaryText = typeof rawSummary === 'string'
+      ? rawSummary
+      : rawSummary
+        ? JSON.stringify(rawSummary)
+        : undefined;
+    const laneMessage = summaryText
+      ? `${config.label}: ${summaryText}`
+      : `${config.label}: ${payload.status}`;
 
     stepsHook.updateStepStatus(
-      'agent_coordination',
-      stepStatus,
-      [labelParts.join(' - ')],
+      config.stepId,
+      status,
+      [laneMessage],
       {
         agent_turns: [...agentTurnsRef.current],
         agent_reasoning: [...agentReasoningRef.current],
+        latest_summary: rawSummary,
       },
       elapsed,
       ts,
-      meta?.sequence,
-      meta?.parallel_group,
+      sequence,
+      config.lane,
     );
+
+    updateAgentCoordination([laneMessage], status === 'error' ? 'error' : undefined, { ts, elapsed_ms: elapsed, sequence });
   };
 
+
+
   const recordAgentReasoningEvent = (payload: any, meta?: { ts?: string; elapsed_ms?: number; sequence?: number; parallel_group?: string }) => {
-    if (!payload || !payload.thought) {
+    if (!payload || (!payload.thought && !payload.message)) {
       return;
     }
 
+    const config = resolveAgentConfig(payload.role || 'agent_coordination');
     const ts = meta?.ts || payload.ts;
+    const elapsed = meta?.elapsed_ms ?? payload.elapsed_ms;
+    const sequence = meta?.sequence ?? payload.sequence;
+    const parallelGroup = meta?.parallel_group ?? payload.parallel_group ?? config.lane;
+
     const entry: AgentReasoningTelemetry = {
-      role: payload.role || 'insight_reviewer',
-      thought: payload.thought,
+      role: payload.role || config.stepId,
+      thought: payload.thought || payload.message,
       ts,
-      sequence: meta?.sequence ?? payload.sequence,
-      parallelGroup: meta?.parallel_group ?? payload.parallel_group,
+      sequence,
+      parallelGroup,
     };
     agentReasoningRef.current = [...agentReasoningRef.current, entry].slice(-40);
 
-    const thought = typeof payload.thought === 'string' ? payload.thought : JSON.stringify(payload.thought);
+    const thoughtText = typeof entry.thought === 'string' ? entry.thought : JSON.stringify(entry.thought);
+    const laneStatus = agentLaneStateRef.current[config.stepId] ?? 'in_progress';
 
     stepsHook.updateStepStatus(
-      'agent_coordination',
-      'in_progress',
-      [thought],
+      config.stepId,
+      laneStatus === 'completed' ? laneStatus : 'in_progress',
+      [thoughtText],
       {
-        agent_turns: [...agentTurnsRef.current],
         agent_reasoning: [...agentReasoningRef.current],
+        agent_turns: [...agentTurnsRef.current],
+        latest_thought: entry.thought,
       },
-      meta?.elapsed_ms ?? payload.elapsed_ms,
+      elapsed,
       ts,
-      meta?.sequence,
-      meta?.parallel_group,
+      sequence,
+      parallelGroup,
     );
 
-    stepsHook.updateStepStatus(
-      'analysis_generation',
-      'in_progress',
-      [thought],
-      undefined,
-      undefined,
-      ts,
-    );
+    updateAgentCoordination([`${config.label}: ${thoughtText}`], undefined, { ts, elapsed_ms: elapsed, sequence });
+
+    if (config.stepId === 'analyst_agent') {
+      stepsHook.updateStepStatus(
+        'analysis_generation',
+        'in_progress',
+        [thoughtText],
+        undefined,
+        undefined,
+        ts,
+      );
+    }
   };
+
+
+
 
   // Chat history management
   const addChatMessage = (message: Omit<ChatMessage, 'id' | 'timestamp'>) => {
@@ -272,6 +407,8 @@ export const useAnalyticsMemoryStream = (
     setStreamingText('');
     setProgressiveText('');
     setProgressiveAnalysis('');
+    setWebSearch(null);
+    workflowDataRef.current.webSearch = null;
     setPendingClarification(null);
     setCriteria(null);
     stepsHook.resetSteps();
@@ -405,9 +542,6 @@ export const useAnalyticsMemoryStream = (
         case 'clarification_ack':
           setPendingClarification(null);
           addChatMessage({
-            type: 'user',
-            content: `${eventData.answer}`,
-      e({
             type: 'user',
             content: `${eventData.answer}`,
           });
@@ -581,6 +715,79 @@ export const useAnalyticsMemoryStream = (
           stepsHook.updateStepStatus('analysis_generation', 'in_progress', ['Generating financial analysis...']);
           break;
           
+        case 'cohesive_result':
+          {
+            const bundle = { ...eventData };
+            delete (bundle as any).step;
+
+            if (typeof bundle.analysis === 'string') {
+              scheduleProgressiveUpdate({ analysis: bundle.analysis });
+              workflowDataRef.current.analysis = bundle.analysis;
+            }
+            if (bundle.chart_spec) {
+              scheduleProgressiveUpdate({ chartSpec: bundle.chart_spec });
+              workflowDataRef.current.chartSpec = bundle.chart_spec;
+            }
+            if (bundle.sql) {
+              scheduleProgressiveUpdate({ sqlQuery: bundle.sql });
+              workflowDataRef.current.sqlQuery = bundle.sql;
+            }
+            if (Array.isArray(bundle.data_sample)) {
+              scheduleProgressiveUpdate({ dataSample: bundle.data_sample });
+              workflowDataRef.current.dataSample = bundle.data_sample;
+            }
+            if (bundle.stock_widget) {
+              workflowDataRef.current.stockWidget = bundle.stock_widget as StockWidgetConfig;
+            } else {
+              workflowDataRef.current.stockWidget = null;
+            }
+            if (bundle.criteria) {
+              workflowDataRef.current.criteria = bundle.criteria;
+            }
+            if (Array.isArray(bundle.tool_manifest)) {
+              workflowDataRef.current.toolFanoutManifest = bundle.tool_manifest as ToolFanoutManifest[];
+              toolFanoutRef.current.manifest = bundle.tool_manifest as ToolFanoutManifest[];
+            } else {
+              workflowDataRef.current.toolFanoutManifest = [];
+              toolFanoutRef.current.manifest = [];
+            }
+            if (Array.isArray(bundle.tool_results)) {
+              const results = bundle.tool_results as ToolFanoutResult[];
+              workflowDataRef.current.toolFanoutResults = results;
+              toolFanoutRef.current.results = results;
+            } else {
+              workflowDataRef.current.toolFanoutResults = [];
+              toolFanoutRef.current.results = [];
+            }
+            if (bundle.web_context) {
+              const webContext = normalizeWebContext(bundle.web_context);
+              if (webContext) {
+                setWebSearch(webContext);
+                workflowDataRef.current.webSearch = webContext;
+              }
+            }
+
+            updateStep(
+              'analysis_generation',
+              'completed',
+              bundle.analysis ? [bundle.analysis.slice(0, 120)] : [],
+              {
+                analysis: bundle.analysis,
+                chart_spec: bundle.chart_spec,
+                sql: bundle.sql,
+                data_sample: bundle.data_sample,
+                stock_widget: bundle.stock_widget,
+                tool_manifest: workflowDataRef.current.toolFanoutManifest,
+                tool_fanout_results: workflowDataRef.current.toolFanoutResults,
+              },
+              stepInfo.elapsed_ms,
+              stepInfo.ts,
+              sequence,
+              parallelGroup,
+            );
+          }
+          break;
+
         case 'analysis_complete':
           // Handle both old and new formats for analysis
           const finalAnalysis =
@@ -598,8 +805,184 @@ export const useAnalyticsMemoryStream = (
 
         // Optional richer logs for agent demo
 
+        case 'sql_attempts': {
+          const attempts = Array.isArray(eventData.attempts) ? eventData.attempts : [];
+          sqlAttemptsRef.current = attempts;
+
+          const lastAttempt = attempts.length ? attempts[attempts.length - 1] : undefined;
+          const attemptMessages = attempts.slice(-3).map((attempt: any) => {
+            const attemptId = attempt.attempt ?? attempts.indexOf(attempt) + 1;
+            const source = attempt.source ? String(attempt.source).replace(/_/g, ' ') : 'unknown source';
+            const statusLabel = attempt.status ? String(attempt.status).replace(/_/g, ' ') : 'pending';
+            const duration = typeof attempt.elapsed_ms === 'number' ? ` (${attempt.elapsed_ms}ms)` : '';
+            const details: string[] = [];
+            if (attempt.error_code) details.push(`[${attempt.error_code}]`);
+            if (attempt.error_detail) details.push(String(attempt.error_detail));
+            if (attempt.rows !== undefined) details.push(`${attempt.rows} rows`);
+            return `Attempt ${attemptId} via ${source}: ${statusLabel}${duration}${details.length ? ' - ' + details.join(' ') : ''}`;
+          });
+
+          const details = { attempts, last_attempt: lastAttempt };
+
+          let compilationStatus: ProcessStep['status'] = 'in_progress';
+          const statusCode = typeof lastAttempt?.status === 'string' ? lastAttempt.status : undefined;
+          if (statusCode === 'success') {
+            compilationStatus = 'completed';
+          } else if (statusCode === 'llm_error' || statusCode === 'empty') {
+            compilationStatus = 'error';
+          }
+
+          const summaryMessages = attemptMessages.length ? attemptMessages : ['Tracking SQL retry attempts'];
+
+          stepsHook.updateStepStatus(
+            'sql_compilation',
+            compilationStatus,
+            summaryMessages,
+            details,
+            stepInfo.elapsed_ms,
+            stepInfo.ts,
+            sequence,
+            parallelGroup
+          );
+
+          if (statusCode === 'success') {
+            stepsHook.updateStepStatus(
+              'sql_validation',
+              'completed',
+              summaryMessages,
+              details,
+              stepInfo.elapsed_ms,
+              stepInfo.ts,
+              sequence,
+              parallelGroup
+            );
+            stepsHook.updateStepStatus(
+              'sql_execution',
+              'completed',
+              summaryMessages,
+              { ...details, rows: lastAttempt?.rows },
+              stepInfo.elapsed_ms,
+              stepInfo.ts,
+              sequence,
+              parallelGroup
+            );
+          } else if (statusCode === 'validation_failed') {
+            stepsHook.updateStepStatus(
+              'sql_validation',
+              'error',
+              summaryMessages,
+              details,
+              stepInfo.elapsed_ms,
+              stepInfo.ts,
+              sequence,
+              parallelGroup
+            );
+          } else if (statusCode === 'execution_failed' || statusCode === 'result_invalid') {
+            stepsHook.updateStepStatus(
+              'sql_execution',
+              'error',
+              summaryMessages,
+              details,
+              stepInfo.elapsed_ms,
+              stepInfo.ts,
+              sequence,
+              parallelGroup
+            );
+          }
+          break;
+        }
+
         case 'tool_call':
           recordToolCallEvent(eventData, { ts: stepInfo.ts, elapsed_ms: stepInfo.elapsed_ms, sequence, parallel_group: parallelGroup, tool_group: toolGroup });
+          break;
+
+        case 'tool_parallel_start':
+          {
+            const manifest = (eventData.tools ?? []) as ToolFanoutManifest[];
+            const concurrencyLimit = eventData.concurrency_limit ?? eventData.tool_count ?? toolFanoutRef.current.concurrencyLimit;
+            toolFanoutRef.current = {
+              manifest,
+              results: [],
+              concurrencyLimit,
+            };
+            workflowDataRef.current.toolFanoutManifest = manifest;
+            workflowDataRef.current.toolFanoutResults = [];
+            workflowDataRef.current.concurrencyLimit = concurrencyLimit;
+            const fanoutThought = `Fan-out launched with ${eventData.tool_count ?? manifest.length} tools (limit ${concurrencyLimit}).`;
+            updateStep('tool_fanout', 'in_progress', [fanoutThought], {
+              tool_manifest: manifest,
+              concurrency_limit: concurrencyLimit,
+            }, stepInfo.elapsed_ms, stepInfo.ts, sequence, parallelGroup);
+          }
+          break;
+
+        case 'tool_parallel_result':
+          {
+            const resultSummary: ToolFanoutResult = {
+              tool: eventData.tool,
+              status: eventData.status,
+              elapsed_ms: eventData.elapsed_ms,
+              started_at: eventData.started_at,
+              completed_at: eventData.completed_at,
+              fatal: eventData.fatal,
+              error: eventData.error,
+              metadata: eventData.metadata,
+              payload: eventData.payload,
+            };
+            toolFanoutRef.current.results = [...toolFanoutRef.current.results, resultSummary].slice(-10);
+            workflowDataRef.current.toolFanoutResults = toolFanoutRef.current.results;
+
+            if (eventData.tool === 'web_retriever') {
+              const fromPayload = eventData.payload || {};
+              const webContext = normalizeWebContext({
+                ...fromPayload,
+                summary: fromPayload.summary ?? eventData.metadata?.summary,
+                from_cache: fromPayload.from_cache ?? eventData.metadata?.cache_hit,
+              });
+              if (webContext) {
+                setWebSearch(webContext);
+                workflowDataRef.current.webSearch = webContext;
+              }
+            }
+
+            const manifest = toolFanoutRef.current.manifest;
+            updateStep(
+              'tool_fanout',
+              'in_progress',
+              [`${eventData.tool} status: ${eventData.status}`],
+              {
+                tool_manifest: manifest,
+                tool_fanout_results: toolFanoutRef.current.results,
+                concurrency_limit: toolFanoutRef.current.concurrencyLimit,
+              },
+              eventData.elapsed_ms ?? stepInfo.elapsed_ms,
+              stepInfo.ts,
+              sequence,
+              parallelGroup,
+            );
+          }
+          break;
+
+        case 'tool_parallel_complete':
+          {
+            workflowDataRef.current.toolFanoutResults = toolFanoutRef.current.results;
+            const completionStatus = eventData.status || 'complete';
+            const finalState = completionStatus === 'complete' ? 'completed' : completionStatus === 'cancelled' ? 'stopped' : 'completed';
+            updateStep(
+              'tool_fanout',
+              finalState as ProcessStep['status'],
+              [`Fan-out ${completionStatus}.`],
+              {
+                tool_manifest: toolFanoutRef.current.manifest,
+                tool_fanout_results: toolFanoutRef.current.results,
+                concurrency_limit: toolFanoutRef.current.concurrencyLimit,
+              },
+              stepInfo.elapsed_ms,
+              stepInfo.ts,
+              sequence,
+              parallelGroup,
+            );
+          }
           break;
 
         case 'agent_turn':
@@ -609,6 +992,38 @@ export const useAnalyticsMemoryStream = (
         case 'agent_reasoning':
           recordAgentReasoningEvent(eventData, { ts: stepInfo.ts, elapsed_ms: stepInfo.elapsed_ms, sequence, parallel_group: parallelGroup });
           break;
+
+        case 'policy_decision': {
+          const rawScore = typeof eventData.score === 'number' ? eventData.score : Number(eventData.score || 0);
+          const rawThreshold = typeof eventData.threshold === 'number' ? eventData.threshold : Number(eventData.threshold || 0);
+          const safeScore = Number.isFinite(rawScore) ? rawScore : 0;
+          const safeThreshold = Number.isFinite(rawThreshold) ? rawThreshold : 0;
+          const decisionStep = eventData.policy === 'planner_sql_retry' ? 'sql_compilation' : 'agent_coordination';
+          const message = `Policy ${eventData.action === 'skip_retry' ? 'blocked' : 'allowed'} (score ${safeScore.toFixed(2)} / threshold ${safeThreshold.toFixed(2)})`;
+          updateAgentCoordination([message], eventData.action === 'skip_retry' ? 'stopped' : undefined, {
+            ts: eventData.ts ?? stepInfo.ts,
+            elapsed_ms: stepInfo.elapsed_ms,
+            sequence,
+          });
+          const policyMessages = eventData.reason ? [message, String(eventData.reason)] : [message];
+          stepsHook.updateStepStatus(
+            decisionStep,
+            eventData.action === 'skip_retry' ? 'stopped' : 'in_progress',
+            policyMessages,
+            {
+              policy: eventData.policy,
+              action: eventData.action,
+              score: rawScore,
+              threshold: rawThreshold,
+              attempt: eventData.attempt,
+            },
+            stepInfo.elapsed_ms,
+            eventData.ts ?? stepInfo.ts,
+            sequence,
+            parallelGroup,
+          );
+          break;
+        }
 
         case 'catalog_trace':
           {
@@ -652,21 +1067,6 @@ export const useAnalyticsMemoryStream = (
 
         case 'classification_fallback':
           updateStep('classification', 'completed', [`Fallback to ${eventData.method}`], { method: eventData.method }, undefined, eventData.ts);
-          break;
-
-        case 'memory_gate_decision':
-          {
-            const reasons = Array.isArray(eventData.reasons) ? eventData.reasons : eventData.reasons ? [eventData.reasons] : [];
-            const details = {
-              policy: eventData.policy,
-              reuse_sql: eventData.reuse_sql,
-              reuse_chart: eventData.reuse_chart,
-              reuse_analysis: eventData.reuse_analysis,
-              tool_directives: eventData.tool_directives,
-            };
-            updateStep('classification', 'completed', reasons.length ? reasons : ['Memory gate evaluated session state'], details, eventData.elapsed_ms, eventData.ts);
-            streamHook.setCurrentStatus(`Memory gate policy: ${eventData.policy}`);
-          }
           break;
 
 
@@ -772,12 +1172,12 @@ export const useAnalyticsMemoryStream = (
               ? 'Single-agent tools workflow completed!'
               : flow === 'multi-agent'
                 ? 'Multi-agent workflow completed!'
-                : 'Planner/executor workflow completed!';
+                : 'Direct workflow completed!';
           streamHook.setCurrentStatus(summaryStatusMessage);
           if (!isThinkingEvent) {
             addChatMessage({
               type: 'assistant',
-              content: `?? **Final Summary:**\n\n**SQL:** ${eventData.sql_summary}\n**Chart:** ${eventData.chart_summary}\n\n**Key Findings:**\n${eventData.key_findings?.map((f: string) => `• ${f}`).join('\n') || 'No findings available'}`,
+              content: `?? **Final Summary:**\n\n**SQL:** ${eventData.sql_summary}\n**Chart:** ${eventData.chart_summary}\n\n**Key Findings:**\n${eventData.key_findings?.map((f: string) => ` ${f}`).join('\n') || 'No findings available'}`,
             });
           }
           break;
@@ -788,7 +1188,7 @@ export const useAnalyticsMemoryStream = (
               ? 'Single-agent tools workflow completed!'
               : flow === 'multi-agent'
                 ? 'Multi-agent workflow completed!'
-                : 'Planner/executor workflow completed!';
+                : 'Direct workflow completed!';
           const isEarlyExit = Boolean(eventData?.early_exit);
           // Handle both old and new formats for completion message
           const completionMessage = eventData?.message || (eventData.total_elapsed_ms ? `Completed in ${eventData.total_elapsed_ms}ms` : null);
@@ -801,6 +1201,10 @@ export const useAnalyticsMemoryStream = (
               chartSpec: workflowDataRef.current.chartSpec,
               sqlQuery: workflowDataRef.current.sqlQuery,
               dataSample: workflowDataRef.current.dataSample,
+              stockWidgetConfig: workflowDataRef.current.stockWidget,
+              toolFanoutManifest: workflowDataRef.current.toolFanoutManifest,
+              toolFanoutResults: workflowDataRef.current.toolFanoutResults,
+              webSearch: workflowDataRef.current.webSearch,
             });
           }
 
@@ -889,6 +1293,9 @@ export const useAnalyticsMemoryStream = (
     toolTelemetryRef.current = [];
     agentTurnsRef.current = [];
     agentReasoningRef.current = [];
+    sqlAttemptsRef.current = [];
+    agentLaneStateRef.current = {};
+    toolFanoutRef.current = { manifest: [], results: [], concurrencyLimit: 0 };
 
     // Reset workflow data ref
     workflowDataRef.current = {
@@ -897,7 +1304,12 @@ export const useAnalyticsMemoryStream = (
       sqlQuery: '',
       dataSample: null,
       streamingText: '',
-      criteria: null
+      criteria: null,
+      stockWidget: null,
+      toolFanoutManifest: [],
+      toolFanoutResults: [],
+      concurrencyLimit: 0,
+      webSearch: null
     };
   };
 
@@ -912,6 +1324,7 @@ export const useAnalyticsMemoryStream = (
     dataSample,
     criteria,
     streamingText,
+    webSearch,
 
     // Progressive rendering state
     progressiveAnalysis,
@@ -936,6 +1349,7 @@ export const useAnalyticsMemoryStream = (
     updateChatMessage,
   };
 };
+
 
 
 

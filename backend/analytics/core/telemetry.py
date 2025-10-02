@@ -87,27 +87,18 @@ def tool_iteration(
         payload["details"] = details
     _emit(payload)
 
-def memory_gate_decision(
+def tool_parallelism(
     *,
-    session_id: str,
-    flow: Optional[str],
-    decision: str,
-    reasons: List[str],
-    reuse_sql: bool,
-    reuse_chart: bool,
-    reuse_analysis: bool,
-    tool_directives: Dict[str, Any],
+    stage: str,
+    session_id: Optional[str] = None,
+    flow: Optional[str] = None,
+    payload: Optional[Dict[str, Any]] = None,
 ) -> None:
-    payload = _base_payload("memory_gate_decision", session_id=session_id, flow=flow)
-    payload.update({
-        "decision": decision,
-        "reasons": reasons,
-        "reuse_sql": reuse_sql,
-        "reuse_chart": reuse_chart,
-        "reuse_analysis": reuse_analysis,
-        "tool_directives": tool_directives,
-    })
-    _emit(payload)
+    record = _base_payload("tool_parallelism", session_id=session_id, flow=flow)
+    record["stage"] = stage
+    if payload:
+        record["payload"] = payload
+    _emit(record)
 
 
 def analysis_chunk(
@@ -126,6 +117,79 @@ def analysis_chunk(
             "chars": len(chunk or ""),
         }
     )
+    _emit(payload)
+
+
+def agent_handoff(
+    *,
+    role: str,
+    status: str,
+    elapsed_ms: Optional[int] = None,
+    handoff: Optional[str] = None,
+    retries: Optional[int] = None,
+    session_id: Optional[str] = None,
+    flow: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> None:
+    payload = _base_payload('agent_handoff', session_id=session_id, flow=flow)
+    payload.update(
+        {
+            'role': role,
+            'status': status,
+            'elapsed_ms': elapsed_ms,
+            'handoff': handoff,
+            'retries': retries,
+        }
+    )
+    if metadata:
+        payload['metadata'] = metadata
+    _emit(payload)
+
+
+def retry_summary(
+    *,
+    stage: str,
+    attempts: List[Dict[str, Any]],
+    final_status: Optional[str] = None,
+    session_id: Optional[str] = None,
+    flow: Optional[str] = None,
+) -> None:
+    payload = _base_payload('retry_summary', session_id=session_id, flow=flow)
+    payload.update(
+        {
+            'stage': stage,
+            'attempts': attempts,
+            'attempt_count': len(attempts),
+            'final_status': final_status,
+        }
+    )
+    _emit(payload)
+
+
+def policy_decision(
+    *,
+    policy: str,
+    score: float,
+    threshold: float,
+    action: str,
+    reason: Optional[str] = None,
+    session_id: Optional[str] = None,
+    flow: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> None:
+    payload = _base_payload('policy_decision', session_id=session_id, flow=flow)
+    payload.update(
+        {
+            'policy': policy,
+            'score': score,
+            'threshold': threshold,
+            'action': action,
+        }
+    )
+    if reason:
+        payload['reason'] = reason
+    if metadata:
+        payload['metadata'] = metadata
     _emit(payload)
 
 

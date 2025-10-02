@@ -6,6 +6,28 @@ import { ProcessStep, FlowVisualTheme } from '../types';
 const MAX_DETAIL_ITEMS = 4;
 const MAX_THOUGHTS = 4;
 
+const LANE_LABELS: Record<string, string> = {
+  overview: 'Overview',
+  planner: 'Planner Agent',
+  query: 'Query Agent',
+  analyst: 'Analyst Agent',
+  chart: 'Chart Agent',
+  market: 'Market Agent',
+  coordination: 'Coordination',
+};
+
+const LANE_BADGE_CLASS: Record<string, string> = {
+  overview: 'bg-gray-900/60 text-gray-200 border border-gray-700/40',
+  planner: 'bg-purple-500/25 text-purple-200 border border-purple-400/40',
+  query: 'bg-sky-500/25 text-sky-200 border border-sky-400/40',
+  analyst: 'bg-emerald-500/25 text-emerald-200 border border-emerald-400/40',
+  chart: 'bg-amber-500/25 text-amber-200 border border-amber-400/40',
+  market: 'bg-rose-500/25 text-rose-200 border border-rose-400/40',
+  coordination: 'bg-slate-500/25 text-slate-200 border border-slate-400/40',
+};
+
+const defaultLaneBadge = 'bg-gray-900/60 text-gray-200 border border-gray-700/40';
+
 interface ProcessNodeData {
   step: ProcessStep;
   phase: 'analysis' | 'planning' | 'execution' | 'synthesis';
@@ -76,6 +98,31 @@ export const ProcessNode = memo<NodeProps<ProcessNodeData>>(({ data, selected })
     parallelGroup,
     sequence,
   } = data;
+
+  const laneLabel = parallelGroup ? LANE_LABELS[parallelGroup] ?? parallelGroup : undefined;
+  const laneBadgeClass = parallelGroup ? LANE_BADGE_CLASS[parallelGroup] ?? defaultLaneBadge : defaultLaneBadge;
+
+  const confidenceRaw = (step.details as any)?.confidence ?? (step.details as any)?.intent?.confidence;
+  const confidenceValue = typeof confidenceRaw === 'number' ? confidenceRaw : undefined;
+  const confidencePercent = typeof confidenceValue === 'number' ? Math.round(confidenceValue * 100) : undefined;
+
+  const handleReplay = useCallback((event?: React.MouseEvent<HTMLButtonElement>) => {
+    if (event) {
+      event.stopPropagation();
+    }
+    const payload = {
+      id: step.id,
+      name: step.name,
+      status: step.status,
+      details: step.details,
+      thinking: step.thinking,
+    };
+    const serialized = JSON.stringify(payload, null, 2);
+    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(serialized).catch(() => {});
+    }
+    console.info('[Workflow Replay]', step.id, payload);
+  }, [step]);
 
   const nodeState = useMemo(() => {
     if (hasError || step.status === 'error') {
@@ -173,12 +220,21 @@ export const ProcessNode = memo<NodeProps<ProcessNodeData>>(({ data, selected })
         <div className="process-node__drag-handle flex items-center gap-2">
           <span className={`rounded-full px-2 py-0.5 text-[10px] ${theme.badgeClass}`}>{phase.toUpperCase()}</span>
           <span className={`rounded-full px-2 py-0.5 text-[10px] ${statusAccent(step.status)}`}>{statusLabel}</span>
-          {parallelGroup && (
-            <span className="rounded-full bg-gray-900/60 px-2 py-0.5 text-[10px] uppercase tracking-wide text-gray-200">Lane {parallelGroup}</span>
+          {laneLabel && (
+            <span className={`rounded-full px-2 py-0.5 text-[10px] ${laneBadgeClass}`}>{laneLabel}</span>
           )}
         </div>
         <div className="flex items-center gap-2">
           <span className="text-[10px] text-gray-400">{String(sequenceIndex + 1).padStart(2, '0')} / {totalSteps}</span>
+          <button
+            type="button"
+            onClick={handleReplay}
+            onMouseDown={(event) => event.stopPropagation()}
+            className="rounded-md border border-white/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-indigo-200 transition hover:border-white/25 hover:text-white focus:outline-none focus:ring-1 focus:ring-indigo-300/60 focus:ring-offset-2 focus:ring-offset-gray-900"
+            title="Copy telemetry for replay"
+          >
+            Replay
+          </button>
           {hasDetails && (
             <button
               type="button"
@@ -212,7 +268,10 @@ export const ProcessNode = memo<NodeProps<ProcessNodeData>>(({ data, selected })
           {timestampLabel && <span>{timestampLabel}</span>}
           {durationLabel && <span>{durationLabel}</span>}
           {typeof sequence === 'number' && <span>Seq {sequence}</span>}
-          {parallelGroup && <span className="uppercase text-gray-200">Lane {parallelGroup}</span>}
+          {laneLabel && <span className="uppercase text-gray-200">{laneLabel}</span>}
+          {typeof confidencePercent === 'number' && (
+            <span className="rounded-full bg-gray-900/70 px-2 py-0.5 text-[10px] text-amber-200">Confidence {confidencePercent}%</span>
+          )}
           {currentStatus && isActive && (
             <span className="rounded-full bg-gray-800/70 px-2 py-0.5 text-[10px] text-blue-200">{currentStatus}</span>
           )}

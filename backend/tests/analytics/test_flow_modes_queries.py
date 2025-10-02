@@ -4,7 +4,11 @@ from pathlib import Path
 from typing import List
 
 import pytest
-import fakeredis.aioredis
+
+try:
+    import fakeredis.aioredis  # type: ignore[import]
+except ModuleNotFoundError as exc:
+    pytest.skip(f"fakeredis not installed: {exc}", allow_module_level=True)
 
 ROOT = Path(__file__).resolve().parents[3]
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
@@ -16,26 +20,21 @@ for entry in (ROOT, BACKEND_ROOT):
 from analytics.core import config as analytics_config
 from analytics.core import analysis
 from analytics.flows import planner_executor
-from analytics.core.memory_gate import MemoryGate
 from analytics.core.session_state import SessionStateRepository
 from analytics.flows import instrumentation
 from analytics.flows.workflow import analytics_memory_workflow
 from analytics.sql import executor
 
+@pytest.fixture(autouse=True)
+def _session_state_uses_fakeredis(monkeypatch):
+    fake = fakeredis.aioredis.FakeRedis()
+    repository = SessionStateRepository(redis_client=fake)
+    monkeypatch.setattr(instrumentation, 'get_session_state_repository', lambda: repository)
+    yield
+
+
 MARKET_QUERY = "Nvidia market share in the past 5 years?"
 MARGIN_QUERY = "How's Nvidia margin growth compare to industry average?"
-
-@pytest.fixture(autouse=True)
-def _memory_gate_uses_fakeredis():
-    fake = fakeredis.aioredis.FakeRedis()
-    instrumentation._memory_gate = MemoryGate(
-        repository=SessionStateRepository(redis_client=fake)
-    )
-    try:
-        yield
-    finally:
-        instrumentation._memory_gate = None
-
 
 class DummyUnifiedClient:
     def __init__(self) -> None:
@@ -104,7 +103,9 @@ async def test_planner_executor_uses_market_share_template():
 
 
 @pytest.mark.asyncio
-async def test_single_agent_tool_calls_include_template_details():
+async def test_single_agent_tool_calls_include_template_details(monkeypatch):
+    monkeypatch.setenv("ANALYTICS_TOOL_PARALLELISM", "1")
+    monkeypatch.setenv("ANALYTICS_TOOL_CONCURRENCY_LIMIT", "3")
     events = await _collect_events(MARGIN_QUERY, flow="single-agent")
     template_event = next(e for e in events if e.get("event") == "template_selected")
     assert template_event["data"]["template_id"] == "margin_growth_vs_peers"
@@ -116,6 +117,15 @@ async def test_single_agent_tool_calls_include_template_details():
         and event["data"].get("status") == "end"
     )
     assert "Margin Growth" in sql_tool_end["data"]["details"]["template_used"]
+
+    parallel_start = next(event for event in events if event.get("event") == "tool_parallel_start")
+    assert parallel_start["data"]["concurrency_limit"] == 3
+    assert len(parallel_start["data"]["tools"]) == 5
+    sql_manifest = next(manifest for manifest in parallel_start["data"]["tools"] if manifest["name"] == "sql_planner")
+    assert sql_manifest["display_name"] == "SQL Planner"
+
+    parallel_results = [event for event in events if event.get("event") == "tool_parallel_result"]
+    assert any(result["data"]["metadata"].get("display_name") == "Chart Builder" for result in parallel_results)
 
 
 @pytest.mark.asyncio
@@ -149,4 +159,5 @@ async def test_planner_executor_validation_fallback(_reload_configs):
     sql_event = next(event for event in events if event.get("event") == "sql_generated")
     assert "SELECT" in sql_event["data"].get("sql", "")
     assert sql_event["data"].get("fallback_reason") in {"sql_validation_failed", "sql_execution_error"}
+
 

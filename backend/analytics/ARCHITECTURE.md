@@ -38,11 +38,22 @@ The analytics package powers the next-generation analytics memory experience. It
             +---------------+         +--------------------------+
 ```
 
-### Flow Mode Differences
-- planner-executor: deterministic baseline emitting shared SSE events (`progress`, `classification_*`, `sql_generated`, `analysis_streaming`, `result`, `done`).
-- single-agent: wraps each baseline step with `tool_call` start/end telemetry, durations, and SQL template metadata; when `ANALYTICS_TOOL_PARALLELISM` is enabled it also streams `tool_parallel_*` fan-out events from the new TaskGroup adapters.
-- multi-agent: wraps the same baseline steps with persona `agent_turn` start/complete envelopes, adds `agent_reasoning` for analysis deltas, and attaches role-specific summaries.
-When the flag is disabled, the adapters stay dormant and the deterministic sequential behaviour remains unchanged.
+The repository in `core/session_state.py` now falls back to an in-memory store when Redis is unavailable while keeping the 5-minute TTL semantics for analytics sessions.
+
+## Analytics Memory Flow Modes
+Use `/api/analytics/memory/stream?flow=<flow>` to select the demo experience surfaced in the Memory page (legacy `mode` query param is still accepted for backwards compatibility).
+Flow metadata comes from `backend/analytics/flows/workflow.py::get_available_flows()`; keep frontend selectors in sync with that mapping.
+- `planner-executor`: deterministic baseline emitting shared SSE events (`progress`, `classification_*`, `sql_generated`, `analysis_streaming`, `result`, `done`).
+- `single-agent`: wraps each baseline step with `tool_call` start/end telemetry, durations, and SQL template metadata; when `ANALYTICS_TOOL_PARALLELISM` is enabled it also streams `tool_parallel_*` fan-out events from the new TaskGroup adapters. Prompt contract lives in `backend/analytics/solo_agent.md`; consult that doc for tool policy, cache reuse rules, and safety guardrails.
+- `multi-agent`: wraps the same baseline steps with persona `agent_turn` start/complete envelopes, adds `agent_reasoning` for analysis deltas, and attaches role-specific summaries.
+When `ANALYTICS_TOOL_PARALLELISM` is disabled, the adapters stay dormant and the deterministic sequential behaviour remains unchanged.
+
+## Streaming Telemetry Reference
+- Core SSE events across all flows: `classification_*`, `intent_*`, `clarification_*`, `progress`, `status`, `sql_generated`, `analysis_streaming`, `result`, `final_answer`, `done`, and `error`.
+- Demo-specific enrichments: `tool_call` (single-agent), `agent_turn` and `agent_reasoning` (multi-agent) augment the stream for visualization overlays.
+- Planner flows emit `sql_attempts` events to log each generated query revision before execution.
+- Parallel fan-out instrumentation emits `tool_parallel_*` envelopes whenever `ANALYTICS_TOOL_PARALLELISM` is enabled.
+- Frontend consumers (`useAnalyticsMemoryStream`, `ProcessPanel`, `WorkflowCanvas`) subscribe to the stream and must handle these payloads.
 
 ## Directory Layout
 ```
@@ -64,6 +75,7 @@ analytics/
 |   |   `-- models.py
 |   |-- openai_client.py
 |   |-- state.py
+|   |-- session_state.py
 |   |-- telemetry.py
 |   `-- types.py
 |-- flows/
@@ -151,3 +163,5 @@ Frontend analytics components consume the SSE payloads described here; see `comp
 - **Configuration** - YAML files in `backend/config/schemas/` (e.g., `queries.yaml`) drive template selection and metric metadata.
 - **Environment** - `DATABASE_URL`, `OPENAI_API_KEY`, and optional reasoning overrides (`SUPERVISOR_REASONING_EFFORT`) must be set before running flows.
 - **API integration** - `/api/analytics/memory/stream` (FastAPI) maps query parameters to `analytics_memory_workflow` and streams events directly to the frontend `EventSource` client.
+
+

@@ -7,10 +7,10 @@ import time
 from datetime import datetime
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
-from analytics.core.memory_gate import MemoryGateDecision
 from analytics.core.session_state import SessionStateSnapshot, get_session_state_repository
-from analytics.core.telemetry import analysis_chunk as log_analysis_chunk
+from analytics.core.telemetry import analysis_chunk as log_analysis_chunk, agent_handoff, policy_decision
 from analytics.services.polygon import PolygonMarketDataClient, PolygonError, fetch_daily_snapshot
+from analytics.services.response_search import ResponseSearchError, perform_response_search
 from .planner_executor import PlannerExecutorFlow
 from .orchestrator import (
     AgentExecutionOrchestrator,
@@ -40,36 +40,171 @@ def _infer_tickers(query: Optional[str]) -> List[str]:
     return sorted(token for token in tokens if token not in blacklist)[:5]
 
 
-def _derive_tasks(memory_gate: Dict[str, Any], analysis_ctx: Dict[str, Any], chart_ctx: Dict[str, Any], tickers: List[str]) -> List[Dict[str, Any]]:
+RECENCY_KEYWORDS = (
+    "today",
+    "latest",
+    "recent",
+    "news",
+    "headline",
+    "update",
+    "guidance",
+    "current",
+    "filing",
+    "quarter",
+    "earnings",
+)
+
+
+def _needs_web_refresh(query: str, web_ctx: Dict[str, Any]) -> bool:
+    normalized = (query or "").strip().lower()
+    if any(keyword in normalized for keyword in RECENCY_KEYWORDS):
+        return True
+    cached_query = str(web_ctx.get('query') or web_ctx.get('query_terms') or '').strip().lower()
+    if cached_query and cached_query != normalized:
+        return True
+    snippets = web_ctx.get('snippets') or []
+    return not bool(snippets)
+
+
+def _is_chart_revision(query: Optional[str]) -> bool:
+    if not query:
+        return False
+    normalized = query.lower()
+    keywords = ["revise chart", "update chart", "adjust chart", "change chart", "tweak chart"]
+    return any(keyword in normalized for keyword in keywords)
+
+
+
+def _derive_tasks(
+    planner_ctx: Dict[str, Any],
+    sql_ctx: Dict[str, Any],
+    analysis_ctx: Dict[str, Any],
+    chart_ctx: Dict[str, Any],
+    market_ctx: Dict[str, Any],
+    web_ctx: Dict[str, Any],
+    query: str,
+) -> List[Dict[str, Any]]:
     tasks: List[Dict[str, Any]] = []
-
-    def add_task(name: str, present: bool, reuse_flag: Optional[bool], default_reason: str) -> None:
-        if not present:
-            tasks.append({"name": name, "status": "skip", "reason": default_reason})
-            return
-        if reuse_flag:
-            tasks.append({"name": name, "status": "reuse", "reason": "memory_gate_reuse"})
-        else:
-            tasks.append({"name": name, "status": "run", "reason": "fresh"})
-
-    add_task(
-        "analyst",
-        present=bool(analysis_ctx.get("final")),
-        reuse_flag=memory_gate.get("reuse_analysis"),
-        default_reason="analysis_not_available",
-    )
-    add_task(
-        "chart",
-        present=bool(chart_ctx.get("spec_summary")),
-        reuse_flag=memory_gate.get("reuse_chart"),
-        default_reason="chart_not_available",
-    )
-
-    if tickers:
-        status = "reuse" if memory_gate.get("reuse_sql") else "run"
-        tasks.append({"name": "market", "status": status, "reason": "tickers_detected"})
+    attempts = sql_ctx.get('attempts') or []
+    last_attempt = attempts[-1] if attempts else None
+    if attempts:
+        tasks.append(
+            {
+                'name': 'query',
+                'status': 'run',
+                'reason': 'sql_attempt_summary',
+                'outcome': last_attempt.get('status') if last_attempt else None,
+            }
+        )
     else:
-        tasks.append({"name": "market", "status": "skip", "reason": "no_tickers"})
+        tasks.append({
+            'name': 'query',
+            'status': 'skip',
+            'reason': 'no_sql_attempts',
+        })
+
+    chart_revision = _is_chart_revision(query)
+
+    analysis_ready = bool(analysis_ctx.get('final'))
+    chart_ready = bool(chart_ctx.get('spec_summary')) and (sql_ctx.get('row_count', 0) > 0)
+    tickers = planner_ctx.get('tickers', []) or market_ctx.get('tickers', []) or []
+    market_ctx['tickers'] = tickers
+
+    if chart_revision:
+        tasks.append(
+            {
+                'name': 'chart',
+                'status': 'run',
+                'reason': 'chart_revision',
+            }
+        )
+        tasks.append(
+            {
+                'name': 'analyst',
+                'status': 'skip',
+                'reason': 'chart_revision',
+            }
+        )
+        tasks.append(
+            {
+                'name': 'market',
+                'status': 'skip',
+                'reason': 'chart_revision',
+                'tickers': tickers,
+            }
+        )
+        tasks.append(
+            {
+                'name': 'web_research',
+                'status': 'run',
+                'reason': 'chart_revision',
+            }
+        )
+        return tasks
+
+    tasks.append(
+        {
+            'name': 'analyst',
+            'status': 'run' if analysis_ready else 'skip',
+            'reason': 'analysis_ready' if analysis_ready else 'analysis_not_available',
+        }
+    )
+
+    tasks.append(
+        {
+            'name': 'chart',
+            'status': 'run' if chart_ready else 'skip',
+            'reason': 'chart_ready' if chart_ready else 'chart_not_available',
+        }
+    )
+
+    market_ready = bool(tickers) and chart_ready
+    tasks.append(
+        {
+            'name': 'market',
+            'status': 'run' if market_ready else 'skip',
+            'reason': 'tickers_detected' if market_ready else 'no_tickers',
+            'tickers': tickers,
+        }
+    )
+
+    web_should_run = _needs_web_refresh(query, web_ctx)
+    tasks.append(
+        {
+            'name': 'web_research',
+            'status': 'run' if web_should_run else 'skip',
+            'reason': 'recency_requested' if web_should_run else 'cached_web_context',
+        }
+    )
+
+    return tasks
+
+    tasks.append(
+        {
+            'name': 'analyst',
+            'status': 'run' if analysis_ready else 'skip',
+            'reason': 'analysis_ready' if analysis_ready else 'analysis_not_available',
+        }
+    )
+
+    tasks.append(
+        {
+            'name': 'chart',
+            'status': 'run' if chart_ready else 'skip',
+            'reason': 'chart_ready' if chart_ready else 'chart_not_available',
+        }
+    )
+
+    market_ready = bool(tickers) and chart_ready
+    tasks.append(
+        {
+            'name': 'market',
+            'status': 'run' if market_ready else 'skip',
+            'reason': 'tickers_detected' if market_ready else 'no_tickers',
+            'tickers': tickers,
+        }
+    )
+
     return tasks
 
 
@@ -88,41 +223,66 @@ def _create_planner_bundle(
     chart_ctx: Dict[str, Any],
     analysis_ctx: Dict[str, Any],
     tasks: List[Dict[str, Any]],
-    memory_gate: Dict[str, Any],
 ) -> Dict[str, Any]:
+    attempts = sql_ctx.get('attempts') or []
     bundle = {
-        "query": query,
-        "intent": {
-            "key": planner_ctx.get("intent_key"),
-            "confidence": planner_ctx.get("confidence"),
+        'query': query,
+        'intent': {
+            'key': planner_ctx.get('intent_key'),
+            'confidence': planner_ctx.get('confidence'),
         },
-        "reuse": {
-            "sql": memory_gate.get("reuse_sql"),
-            "chart": memory_gate.get("reuse_chart"),
-            "analysis": memory_gate.get("reuse_analysis"),
+        'sql': {
+            'row_count': sql_ctx.get('row_count'),
+            'attempts': attempts,
+            'status': sql_ctx.get('status'),
         },
-        "assets": {
-            "sql_id": sql_ctx.get("id"),
-            "chart_id": chart_ctx.get("spec_id"),
-            "analysis_id": analysis_ctx.get("id"),
+        'analysis': {
+            'available': bool(analysis_ctx.get('final')),
+            'id': analysis_ctx.get('id'),
         },
-        "tickers": planner_ctx.get("tickers", []),
-        "tasks": tasks,
+        'chart': {
+            'spec_id': chart_ctx.get('spec_id'),
+            'summary': chart_ctx.get('spec_summary'),
+        },
+        'assets': {
+            'sql_id': sql_ctx.get('id'),
+            'chart_id': chart_ctx.get('spec_id'),
+            'analysis_id': analysis_ctx.get('id'),
+        },
+        'tasks': tasks,
     }
-    serialized = json.dumps(bundle, sort_keys=True)
-    bundle["id"] = _make_identifier(session_id, "bundle", serialized)
+    tickers = planner_ctx.get('tickers') or []
+    if tickers:
+        bundle['tickers'] = tickers
+    if attempts:
+        bundle['sql']['last_attempt'] = attempts[-1]
+    serialized = json.dumps(bundle, sort_keys=True, default=str)
+    bundle['id'] = _make_identifier(session_id, 'bundle', serialized)
     return bundle
+
+
+
 
 
 async def _planner_agent(context: AgentRunContext) -> AgentResult:
     shared = context.shared
-    memory_gate = shared.get("memory_gate", {}) or {}
-    planner_ctx = shared.setdefault("planner", {})
-    sql_ctx = shared.setdefault("sql", {})
-    chart_ctx = shared.setdefault("chart", {})
-    analysis_ctx = shared.setdefault("analysis", {})
+    planner_ctx = shared.setdefault('planner', {})
+    sql_ctx = shared.setdefault('sql', {})
+    chart_ctx = shared.setdefault('chart', {})
+    analysis_ctx = shared.setdefault('analysis', {})
+    market_ctx = shared.setdefault('market', {})
 
-    tasks = _derive_tasks(memory_gate, analysis_ctx, chart_ctx, planner_ctx.get("tickers", []))
+    shared.setdefault('query', context.query)
+
+    tasks = _derive_tasks(
+        planner_ctx,
+        sql_ctx,
+        analysis_ctx,
+        chart_ctx,
+        market_ctx,
+        shared.setdefault('web', {}),
+        shared.get('query', context.query),
+    )
     bundle = _create_planner_bundle(
         context.session_id,
         context.query,
@@ -131,19 +291,48 @@ async def _planner_agent(context: AgentRunContext) -> AgentResult:
         chart_ctx,
         analysis_ctx,
         tasks,
-        memory_gate,
     )
-    planner_ctx["tasks"] = tasks
-    planner_ctx["bundle"] = bundle
+    planner_ctx['tasks'] = tasks
+    planner_ctx['bundle'] = bundle
     return AgentResult(
-        name="planner",
+        name='planner',
         output={
-            "status": "planned",
-            "tasks": tasks,
-            "bundle_id": bundle["id"],
-            "bundle": bundle,
+            'status': 'planned',
+            'tasks': tasks,
+            'bundle_id': bundle['id'],
+            'bundle': bundle,
         },
     )
+
+
+
+async def _query_agent(context: AgentRunContext) -> AgentResult:
+    planner_output = context.dependencies.get('planner_phase')
+    tasks = planner_output.output.get('tasks', []) if planner_output else []
+    status = _task_status(tasks, 'query')
+    sql_ctx = context.shared.get('sql', {})
+    attempts = sql_ctx.get('attempts') or []
+    last_attempt = attempts[-1] if attempts else None
+    summary_attempts: List[Dict[str, Any]] = []
+    for attempt in attempts[-3:]:
+        summary_attempts.append(
+            {
+                'attempt': attempt.get('attempt'),
+                'source': attempt.get('source'),
+                'status': attempt.get('status'),
+                'error_code': attempt.get('error_code'),
+                'error_detail': attempt.get('error_detail'),
+            }
+        )
+    output = {
+        'status': status,
+        'attempt_count': len(attempts),
+        'summary': summary_attempts,
+    }
+    if last_attempt:
+        output['last_status'] = last_attempt.get('status')
+        output['last_error_code'] = last_attempt.get('error_code')
+    return AgentResult(name='query', output=output)
 
 
 async def _analyst_agent(context: AgentRunContext) -> AgentResult:
@@ -185,95 +374,229 @@ async def _chart_agent(context: AgentRunContext) -> AgentResult:
 
 
 async def _market_agent(context: AgentRunContext) -> AgentResult:
-    planner_output = context.dependencies.get("planner_phase")
-    tasks = planner_output.output.get("tasks", []) if planner_output else []
-    status = _task_status(tasks, "market")
-    tickers = context.shared.get("planner", {}).get("tickers", [])
-    market_ctx = context.shared.setdefault("market", {})
-    runtime = context.shared.get("_runtime", {})
-    snapshot_payload: Optional[Dict[str, Any]] = market_ctx.get("snapshot")
+    planner_output = context.dependencies.get('planner_phase')
+    tasks = planner_output.output.get('tasks', []) if planner_output else []
+    status = _task_status(tasks, 'market')
+    tickers = context.shared.get('planner', {}).get('tickers', [])
+    market_ctx = context.shared.setdefault('market', {})
+    runtime = context.shared.get('_runtime', {})
+    snapshot_payload: Optional[Dict[str, Any]] = market_ctx.get('snapshot')
     error_reason: Optional[str] = None
+    error_code: Optional[str] = None
 
-    if status == "run" and tickers:
-        fetcher = runtime.get("market_fetcher")
-        client = runtime.get("market_client")
-        if fetcher and client and getattr(client, "is_configured", False):
+    if status == 'run' and tickers:
+        fetcher = runtime.get('market_fetcher')
+        client = runtime.get('market_client')
+        retries = market_ctx.get('retry_count', 0)
+        planner_confidence = float(context.shared.get('planner', {}).get('confidence') or 0.0)
+        flow_label = context.shared.get('_meta', {}).get('flow_label')
+        if retries:
+            threshold = 0.55 if retries == 1 else 0.7
+            allowed = planner_confidence >= threshold
+            policy_decision(
+                policy='market_refresh_retry',
+                score=planner_confidence,
+                threshold=threshold,
+                action='allow_retry' if allowed else 'skip_retry',
+                reason=f'{retries} prior retries',
+                session_id=context.session_id,
+                flow=flow_label,
+                metadata={'retries': retries, 'tickers': tickers},
+            )
+            if not allowed:
+                status = 'skip'
+                error_reason = 'market refresh blocked by policy'
+                error_code = 'POLICY_BLOCKED'
+                market_ctx['error'] = error_reason
+                market_ctx['error_code'] = error_code
+                market_ctx['policy_blocked'] = True
+                output = {
+                    'status': status,
+                    'tickers': tickers,
+                    'refresh': False,
+                    'error': error_reason,
+                    'error_code': error_code,
+                    'policy_score': planner_confidence,
+                    'policy_threshold': threshold,
+                }
+                return AgentResult(name='market', output=output)
+        if fetcher and client and getattr(client, 'is_configured', False):
             try:
                 snapshot = await fetcher(tickers[0], client=client)
                 bars = snapshot.bars[-30:]
                 snapshot_payload = {
-                    "symbol": snapshot.symbol,
-                    "latest_close": snapshot.latest_close,
-                    "change_percent": snapshot.change_percent,
-                    "bars": [{"time": bar.time, "close": bar.close} for bar in bars],
+                    'symbol': snapshot.symbol,
+                    'latest_close': snapshot.latest_close,
+                    'change_percent': snapshot.change_percent,
+                    'bars': [{'time': bar.time, 'close': bar.close} for bar in bars],
                 }
-                market_ctx["snapshot"] = snapshot_payload
-                market_ctx.pop("error", None)
+                market_ctx['snapshot'] = snapshot_payload
+                market_ctx['retry_count'] = 0
+                market_ctx.pop('error', None)
+                market_ctx.pop('error_code', None)
             except Exception as exc:
                 error_reason = str(exc)
-                market_ctx["error"] = error_reason
+                error_code = 'POLYGON_API_ERROR' if isinstance(exc, PolygonError) else 'MARKET_FETCH_ERROR'
+                market_ctx['error'] = error_reason
+                market_ctx['error_code'] = error_code
+                market_ctx['retry_count'] = retries + 1
         else:
-            error_reason = "polygon_client_unconfigured"
-            market_ctx["error"] = error_reason
-    elif status == "reuse":
-        snapshot_payload = market_ctx.get("snapshot")
+            error_reason = 'polygon_client_unconfigured'
+            error_code = 'POLYGON_CLIENT_UNCONFIGURED'
+            market_ctx['error'] = error_reason
+            market_ctx['error_code'] = error_code
+            market_ctx['retry_count'] = retries + 1
+    elif status == 'reuse':
+        snapshot_payload = market_ctx.get('snapshot')
+        error_code = market_ctx.get('error_code')
+        error_reason = market_ctx.get('error')
     else:
-        market_ctx.pop("snapshot", None)
-        market_ctx.pop("error", None)
+        market_ctx.pop('snapshot', None)
+        market_ctx.pop('error', None)
+        market_ctx.pop('error_code', None)
         snapshot_payload = None
 
     output: Dict[str, Any] = {
-        "status": status,
-        "tickers": tickers,
-        "refresh": status == "run",
+        'status': status,
+        'tickers': tickers,
+        'refresh': status == 'run',
     }
     if snapshot_payload:
-        output["insights"] = snapshot_payload
+        output['insights'] = snapshot_payload
     if error_reason:
-        output["error"] = error_reason
-    return AgentResult(name="market", output=output)
+        output['error'] = error_reason
+        output['error_code'] = error_code or 'UNKNOWN_MARKET_ERROR'
+    return AgentResult(name='market', output=output)
+
+
+
+
+
+
+async def _web_research_agent(context: AgentRunContext) -> AgentResult:
+    web_ctx = context.shared.setdefault('web', {})
+    query = context.shared.get('query', context.query)
+    session_id = context.session_id
+
+    repository = get_session_state_repository()
+    snapshot = await repository.load(session_id) if session_id else None
+    cached_payload = None
+    if snapshot:
+        cache = snapshot.tool_cache.get('web_search')
+        if cache and str(cache.get('query') or '').strip().lower() == query.strip().lower():
+            cached_payload = cache
+
+    if cached_payload and not _needs_web_refresh(query, web_ctx):
+        web_ctx.update(cached_payload)
+        web_ctx['ready'] = True
+        web_ctx['from_cache'] = True
+        return AgentResult(
+            name='web_research',
+            output={
+                'status': 'reuse',
+                'summary': cached_payload.get('summary'),
+                'snippets': cached_payload.get('snippets'),
+                'from_cache': True,
+            },
+        )
+
+    try:
+        search_result = await perform_response_search(
+            query,
+            session_id=session_id,
+        )
+    except ResponseSearchError as exc:
+        web_ctx['error'] = str(exc)
+        return AgentResult(
+            name='web_research',
+            output={'status': 'error', 'error': str(exc)},
+        )
+
+    payload = search_result.to_payload()
+    payload['query'] = query
+    payload['ready'] = True
+    payload['from_cache'] = False
+    web_ctx.update(payload)
+
+    if snapshot:
+        snapshot.record_tool_result('web_search', payload)
+        await repository.save(snapshot)
+
+    return AgentResult(
+        name='web_research',
+        output={
+            'status': 'run',
+            'summary': payload.get('summary'),
+            'snippets': payload.get('snippets'),
+            'search_id': payload.get('search_id'),
+            'from_cache': False,
+        },
+        metrics={'latency_ms': search_result.latency_ms},
+    )
 
 
 def _build_default_agent_registry() -> Dict[str, AgentSpec]:
     return {
-        "planner": AgentSpec(
-            name="planner",
-            system_prompt="Plan the analytics workflow into specialist-ready tasks while keeping payloads light.",
-            capabilities=("task_planning", "sql_routing"),
+        'planner': AgentSpec(
+            name='planner',
+            system_prompt='Plan the analytics workflow into specialist-ready tasks while keeping payloads light.',
+            capabilities=('task_planning', 'sql_routing'),
             latency_budget_ms=400,
             entrypoint=_planner_agent,
         ),
-        "analyst": AgentSpec(
-            name="analyst",
-            system_prompt="Summarize findings using planner context and cached notes without re-querying data.",
-            capabilities=("narrative", "context_blending"),
+        'query': AgentSpec(
+            name='query',
+            system_prompt='Summarize SQL attempt history and highlight retry outcomes.',
+            capabilities=('sql_diagnostics',),
+            latency_budget_ms=300,
+            entrypoint=_query_agent,
+        ),
+        'analyst': AgentSpec(
+            name='analyst',
+            system_prompt='Summarize findings using planner context and cached notes without re-querying data.',
+            capabilities=('narrative', 'context_blending'),
             latency_budget_ms=500,
             entrypoint=_analyst_agent,
         ),
-        "chart": AgentSpec(
-            name="chart",
-            system_prompt="Convert planner data into chart metadata summaries only when required.",
-            capabilities=("visualization", "vega_lite"),
+        'chart': AgentSpec(
+            name='chart',
+            system_prompt='Convert planner data into chart metadata summaries only when required.',
+            capabilities=('visualization', 'vega_lite'),
             latency_budget_ms=400,
             entrypoint=_chart_agent,
         ),
-        "market": AgentSpec(
-            name="market",
-            system_prompt="Surface market context for planner tickers without persisting across sessions.",
-            capabilities=("market_data", "ticker_updates"),
+        'market': AgentSpec(
+            name='market',
+            system_prompt='Surface market context for planner tickers without persisting across sessions.',
+            capabilities=('market_data', 'ticker_updates'),
             latency_budget_ms=400,
             entrypoint=_market_agent,
+        ),
+        'web_research': AgentSpec(
+            name='web_research',
+            system_prompt='Retrieve fresh external signals and citations for the active query.',
+            capabilities=('web_search', 'context_enrichment'),
+            latency_budget_ms=600,
+            entrypoint=_web_research_agent,
         ),
     }
 
 
+
+
+
 def _build_default_plan() -> List[AgentTask]:
     return [
-        AgentTask(name="planner_phase", agent="planner"),
-        AgentTask(name="analyst_phase", agent="analyst", depends_on=("planner_phase",)),
-        AgentTask(name="chart_phase", agent="chart", depends_on=("planner_phase",)),
-        AgentTask(name="market_phase", agent="market", depends_on=("planner_phase",)),
+        AgentTask(name='planner_phase', agent='planner'),
+        AgentTask(name='query_phase', agent='query', depends_on=('planner_phase',)),
+        AgentTask(name='analyst_phase', agent='analyst', depends_on=('planner_phase',)),
+        AgentTask(name='chart_phase', agent='chart', depends_on=('planner_phase',)),
+        AgentTask(name='market_phase', agent='market', depends_on=('planner_phase',)),
+        AgentTask(name='web_research_phase', agent='web_research', depends_on=('planner_phase',)),
     ]
+
+
+
 
 
 class MultiAgentFlow:
@@ -297,12 +620,14 @@ class MultiAgentFlow:
         "sql_generated": "sql_specialist",
         "sql_validated": "risk_controller",
         "execution_stats": "data_engineer",
+        "sql_attempts": "query_agent",
         "chart_generated": "viz_designer",
         "analysis_complete": "insight_reviewer",
     }
 
     ORCHESTRATION_ROLES: Dict[str, str] = {
         "planner_phase": "planner_agent",
+        "query_phase": "query_agent",
         "analyst_phase": "analyst_agent",
         "chart_phase": "chart_agent",
         "market_phase": "market_agent",
@@ -312,7 +637,6 @@ class MultiAgentFlow:
         self._planner = PlannerExecutorFlow()
         self.flow_label = "multi-agent"
         self._timers: Dict[str, float] = {}
-        self._memory_gate_decision: Optional[MemoryGateDecision] = None
         self._agent_registry = _build_default_agent_registry()
         self._orchestrator = AgentExecutionOrchestrator(self._agent_registry)
         self._base_plan = _build_default_plan()
@@ -322,12 +646,6 @@ class MultiAgentFlow:
         self._shared_context: Dict[str, Any] = {}
         self._orchestrated = False
 
-    def set_memory_gate_decision(self, decision: MemoryGateDecision) -> None:
-        self._memory_gate_decision = decision
-        self._session_snapshot = decision.state
-        self._shared_context.setdefault("memory_gate", self._serialize_decision(decision))
-        if hasattr(self._planner, "set_memory_gate_decision"):
-            self._planner.set_memory_gate_decision(decision)
 
     async def events(
         self, query: str, session_id: Optional[str] = None
@@ -355,27 +673,39 @@ class MultiAgentFlow:
                 self._orchestrated = True
 
     def _prepare_context(self, query: str) -> None:
-        preserved = self._shared_context.get("memory_gate", {})
-        preserved_market = self._shared_context.get("market", {})
+        preserved_market = self._shared_context.get('market', {})
+        preserved_web = self._shared_context.get('web', {})
         self._shared_context = {
-            "query": query,
-            "memory_gate": preserved,
-            "planner": {"tickers": _infer_tickers(query)},
-            "sql": {},
-            "chart": {},
-            "analysis": {"fragments": [], "final": None},
-            "market": preserved_market or {},
-            "agents": {},
-            "_runtime": {
-                "market_fetcher": self._market_fetcher,
-                "market_client": self._market_client,
+            'query': query,
+            'planner': {'tickers': _infer_tickers(query)},
+            'sql': {'attempts': []},
+            'chart': {},
+            'analysis': {'fragments': [], 'final': None},
+            'market': preserved_market or {},
+            'web': preserved_web or {},
+            'agents': {},
+            '_runtime': {
+                'market_fetcher': self._market_fetcher,
+                'market_client': self._market_client,
+            },
+            '_meta': {
+                'flow_label': getattr(self, 'flow_label', None),
             },
         }
         self._orchestrated = False
 
+
+
+
     def _capture_event(self, event: Dict[str, Any]) -> None:
         name = event.get("event")
         data = event.get("data") or {}
+        if name == "session_started":
+            session_identifier = data.get("session_id")
+            if session_identifier:
+                self._session_snapshot = SessionStateSnapshot(session_id=session_identifier)
+            return
+
         planner_ctx = self._shared_context.setdefault("planner", {})
         sql_ctx = self._shared_context.setdefault("sql", {})
         analysis_ctx = self._shared_context.setdefault("analysis", {"fragments": [], "final": None})
@@ -384,6 +714,11 @@ class MultiAgentFlow:
         if name == "intent_detection_complete":
             planner_ctx["intent_key"] = data.get("intent_key")
             planner_ctx["confidence"] = data.get("confidence")
+            if self._session_snapshot:
+                self._session_snapshot.record_query(
+                    self._shared_context.get("query", ""),
+                    planner_ctx.get("intent_key"),
+                )
             slots = data.get("slots_detected") or {}
             planner_ctx["slots"] = {k: v for k, v in slots.items() if k in {"company", "metric", "ticker"}}
             companies = slots.get("company")
@@ -402,8 +737,14 @@ class MultiAgentFlow:
         elif name == "sql_validated":
             sql_ctx["validated"] = data.get("ok", False)
             sql_ctx["issues"] = data.get("issues_count", 0)
+        elif name == "sql_attempts":
+            attempts = data.get("attempts") or []
+            sql_ctx["attempts"] = attempts
+            if attempts:
+                sql_ctx["status"] = attempts[-1].get("status")
         elif name == "execution_stats":
             sql_ctx["row_count"] = data.get("row_count")
+            sql_ctx["status"] = 'success'
         elif name == "chart_generated":
             spec = data.get("chart_spec")
             if spec is not None:
@@ -431,6 +772,22 @@ class MultiAgentFlow:
                 analysis_ctx["id"] = _make_identifier(self._session_id, "analysis", final_text)
                 analysis_ctx["length"] = data.get("analysis_length", len(final_text))
                 self._record_snapshot(analysis=final_text)
+
+        elif name == "tool_parallel_result":
+            if (data.get("tool") or "").strip() == "web_retriever":
+                web_ctx = self._shared_context.setdefault('web', {})
+                payload = data.get("payload") or {}
+                metadata = data.get("metadata") or {}
+                if payload:
+                    web_ctx.update(payload)
+                    web_ctx['ready'] = payload.get('ready', False)
+                    web_ctx.setdefault('query', payload.get('query_terms'))
+                elif metadata.get('summary'):
+                    web_ctx.setdefault('summary', metadata.get('summary'))
+                if metadata.get('cache_hit') is not None:
+                    web_ctx['cache_hit'] = metadata.get('cache_hit')
+                if metadata.get('summary') and not web_ctx.get('summary'):
+                    web_ctx['summary'] = metadata.get('summary')
 
     async def _run_agent_orchestration(
         self,
@@ -465,6 +822,17 @@ class MultiAgentFlow:
                 "complete",
                 summary=self._result_summary(result),
                 elapsed=result.elapsed_ms,
+            )
+            agent_output = result.output or {}
+            agent_handoff(
+                role=role,
+                status=str(agent_output.get('status') or 'unknown'),
+                elapsed_ms=result.elapsed_ms,
+                handoff=','.join(task.depends_on) if getattr(task, 'depends_on', None) else None,
+                retries=len(agent_output.get('attempts') or []),
+                session_id=session_id,
+                flow=getattr(self, 'flow_label', None),
+                metadata={'summary': agent_output.get('summary'), 'tickers': agent_output.get('tickers')},
             )
 
         await self._persist_bundle(bundle)
@@ -576,6 +944,18 @@ class MultiAgentFlow:
             if descriptors:
                 pieces.append(", ".join(descriptors))
             thought = " | ".join(pieces)
+        elif role == "query_agent":
+            attempts = output.get('attempt_count')
+            last_status = output.get('last_status')
+            last_error = output.get('last_error_code')
+            parts = []
+            if attempts is not None:
+                parts.append(f"attempts={attempts}")
+            if last_status:
+                parts.append(f"last={last_status}")
+            if last_error:
+                parts.append(f"error={last_error}")
+            thought = " | ".join(parts) if parts else None
         elif role == "analyst_agent":
             status = output.get("status")
             summary = output.get("summary")
@@ -620,10 +1000,22 @@ class MultiAgentFlow:
             summary["bundle_id"] = output["bundle_id"]
         if "tasks" in output:
             summary["tasks"] = output["tasks"]
+        if "attempt_count" in output:
+            summary["attempt_count"] = output["attempt_count"]
+        if "last_status" in output and output.get("last_status") is not None:
+            summary["last_status"] = output["last_status"]
+        if "last_error_code" in output and output.get("last_error_code") is not None:
+            summary["last_error_code"] = output["last_error_code"]
+        if "summary" in output and output["summary"]:
+            summary["attempts"] = output["summary"]
         if "chart" in output and output["chart"]:
             summary["chart"] = output["chart"]
         if "tickers" in output and output["tickers"]:
             summary["tickers"] = output["tickers"]
+        if "snippets" in output and output["snippets"]:
+            summary["snippets"] = len(output["snippets"])
+        if "from_cache" in output:
+            summary["from_cache"] = output["from_cache"]
         insights = output.get("insights")
         if insights:
             summary["insights"] = {
@@ -660,12 +1052,7 @@ class MultiAgentFlow:
             analysis=analysis,
         )
 
-    def _serialize_decision(self, decision: MemoryGateDecision) -> Dict[str, Any]:
         return {
-            "policy": getattr(decision, "policy", None),
-            "reuse_sql": getattr(decision, "reuse_sql", None),
-            "reuse_chart": getattr(decision, "reuse_chart", None),
-            "reuse_analysis": getattr(decision, "reuse_analysis", None),
         }
 
     @property
@@ -674,3 +1061,5 @@ class MultiAgentFlow:
 
 
 __all__ = ["MultiAgentFlow"]
+
+

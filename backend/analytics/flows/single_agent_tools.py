@@ -38,7 +38,6 @@ class SingleAgentToolsFlow:
         self.flow_label = "single-agent"
         self._timers: Dict[str, float] = {}
         self._sql_compile_details: Dict[str, Any] = {}
-
     async def events(
         self, query: str, session_id: Optional[str] = None
     ) -> AsyncGenerator[Dict[str, Any], None]:
