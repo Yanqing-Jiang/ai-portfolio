@@ -1,4 +1,4 @@
-﻿"""
+"""
 Intent Detection Shared Functions
 
 Provides shared intent detection, classification, and slot post-processing for
@@ -248,7 +248,7 @@ async def classify_query_async(
     query: str,
     *,
     session_id: Optional[str] = None,
-    model: str = "gpt-5-mini-2025-08-07",
+    model: str = "gpt-5-nano-2025-08-07",
     reasoning_effort: str = "low",
 ) -> OffTopicClassifierSchema:
     """Async helper used by agents that already run inside an event loop."""
@@ -258,8 +258,11 @@ async def classify_query_async(
         {
             "role": "system",
             "content": (
-                "You classify user queries to determine if they are about financial analytics.\n"
-                "Return JSON following the OffTopicClassifierSchema."
+                "You classify user queries to decide if they request financial analytics support.\n"
+                "Return JSON following the OffTopicClassifierSchema.\n"
+                "- If the user is off-topic, supply a polite_decline_message under 30 words that redirects them to financial analysis.\n"
+                "- When possible, include a suggested_rephrase that turns the query into a valid financial analytics request.\n"
+                "- Respect prior context when judging follow-up questions."
             ),
         },
         {"role": "user", "content": f"Classify this query: '{query}'"},
@@ -279,7 +282,7 @@ def classify_query(
     query: str,
     *,
     session_id: Optional[str] = None,
-    model: str = "gpt-5-mini-2025-08-07",
+    model: str = "gpt-5-nano-2025-08-07",
     reasoning_effort: str = "low",
 ) -> OffTopicClassifierSchema:
     """Synchronous wrapper for classification."""
@@ -307,7 +310,7 @@ async def detect_intent_fast_async(
     configs: Dict[str, Any],
     *,
     session_id: Optional[str] = None,
-    model: str = "gpt-5-mini-2025-08-07",
+    model: str = "gpt-5-nano-2025-08-07",
     reasoning_effort: str = "low",
 ) -> IntentModel:
     """Fast path: heuristic-first, at most one LLM call, low effort by default."""
@@ -393,7 +396,7 @@ def detect_intent_with_clarifications(
     configs: Dict[str, Any],
     *,
     session_id: Optional[str] = None,
-    model: str = "gpt-5-mini-2025-08-07",
+    model: str = "gpt-5-nano-2025-08-07",
     reasoning_effort: str = "low",
 ) -> IntentModel:
     """Synchronous helper maintained for legacy pipelines."""

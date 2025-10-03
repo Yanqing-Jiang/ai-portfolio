@@ -4,6 +4,9 @@ import hashlib
 import json
 import re
 import time
+import copy
+import os
+import asyncio
 from datetime import datetime
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
@@ -11,7 +14,9 @@ from analytics.core.session_state import SessionStateSnapshot, get_session_state
 from analytics.core.telemetry import analysis_chunk as log_analysis_chunk, agent_handoff, policy_decision
 from analytics.services.polygon import PolygonMarketDataClient, PolygonError, fetch_daily_snapshot
 from analytics.services.response_search import ResponseSearchError, perform_response_search
-from .planner_executor import PlannerExecutorFlow
+from .planner_executor import PlannerExecutorFlow, run_planner_executor
+from .tool_bundle import collect_tool_bundle
+from .task_plan import AgentTaskPlan, AgentTaskStep
 from .orchestrator import (
     AgentExecutionOrchestrator,
     AgentRunContext,
@@ -40,6 +45,11 @@ def _infer_tickers(query: Optional[str]) -> List[str]:
     return sorted(token for token in tokens if token not in blacklist)[:5]
 
 
+def _web_search_enabled() -> bool:
+    value = os.getenv("ANALYTICS_ENABLE_WEB_SEARCH", "0").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
 RECENCY_KEYWORDS = (
     "today",
     "latest",
@@ -53,6 +63,10 @@ RECENCY_KEYWORDS = (
     "quarter",
     "earnings",
 )
+
+
+WEB_SEARCH_MAX_ATTEMPTS = 2
+WEB_SEARCH_BACKOFF_SECONDS = 0.6
 
 
 def _needs_web_refresh(query: str, web_ctx: Dict[str, Any]) -> bool:
@@ -81,111 +95,73 @@ def _derive_tasks(
     analysis_ctx: Dict[str, Any],
     chart_ctx: Dict[str, Any],
     market_ctx: Dict[str, Any],
-    web_ctx: Dict[str, Any],
     query: str,
-) -> List[Dict[str, Any]]:
-    tasks: List[Dict[str, Any]] = []
-    attempts = sql_ctx.get('attempts') or []
+    *,
+    web_ctx: Optional[Dict[str, Any]] = None,
+) -> AgentTaskPlan:
+    plan = AgentTaskPlan()
+    attempts = sql_ctx.get("attempts") or []
     last_attempt = attempts[-1] if attempts else None
     if attempts:
-        tasks.append(
-            {
-                'name': 'query',
-                'status': 'run',
-                'reason': 'sql_attempt_summary',
-                'outcome': last_attempt.get('status') if last_attempt else None,
-            }
+        plan.add_step(
+            "query",
+            "run",
+            reason="sql_attempt_summary",
+            metadata={"outcome": last_attempt.get("status") if last_attempt else None},
         )
     else:
-        tasks.append({
-            'name': 'query',
-            'status': 'skip',
-            'reason': 'no_sql_attempts',
-        })
+        plan.add_step("query", "skip", reason="no_sql_attempts")
 
     chart_revision = _is_chart_revision(query)
 
-    analysis_ready = bool(analysis_ctx.get('final'))
-    chart_ready = bool(chart_ctx.get('spec_summary')) and (sql_ctx.get('row_count', 0) > 0)
-    tickers = planner_ctx.get('tickers', []) or market_ctx.get('tickers', []) or []
-    market_ctx['tickers'] = tickers
+    analysis_ready = bool(analysis_ctx.get("final"))
+    chart_ready = bool(chart_ctx.get("spec_summary")) and (sql_ctx.get("row_count", 0) > 0)
+    tickers = planner_ctx.get("tickers", []) or market_ctx.get("tickers", []) or []
+    market_ctx["tickers"] = tickers
 
     if chart_revision:
-        tasks.append(
-            {
-                'name': 'chart',
-                'status': 'run',
-                'reason': 'chart_revision',
-            }
+        plan.add_step("chart", "run", reason="chart_revision")
+        plan.add_step("analyst", "skip", reason="chart_revision")
+        plan.add_step(
+            "market",
+            "skip",
+            reason="chart_revision",
+            metadata={"tickers": tickers},
         )
-        tasks.append(
-            {
-                'name': 'analyst',
-                'status': 'skip',
-                'reason': 'chart_revision',
-            }
-        )
-        tasks.append(
-            {
-                'name': 'market',
-                'status': 'skip',
-                'reason': 'chart_revision',
-                'tickers': tickers,
-            }
-        )
-        tasks.append(
-            {
-                'name': 'web_research',
-                'status': 'run',
-                'reason': 'chart_revision',
-            }
-        )
-        return tasks
+        plan.add_step("web_research", "run", reason="chart_revision")
+        return plan
 
-    tasks.append(
-        {
-            'name': 'analyst',
-            'status': 'run' if analysis_ready else 'skip',
-            'reason': 'analysis_ready' if analysis_ready else 'analysis_not_available',
-        }
+    plan.add_step(
+        "analyst",
+        "run" if analysis_ready else "skip",
+        reason="analysis_ready" if analysis_ready else "analysis_not_available",
     )
 
-    tasks.append(
-        {
-            'name': 'chart',
-            'status': 'run' if chart_ready else 'skip',
-            'reason': 'chart_ready' if chart_ready else 'chart_not_available',
-        }
+    plan.add_step(
+        "chart",
+        "run" if chart_ready else "skip",
+        reason="chart_ready" if chart_ready else "chart_not_available",
     )
 
     market_ready = bool(tickers) and chart_ready
-    tasks.append(
-        {
-            'name': 'market',
-            'status': 'run' if market_ready else 'skip',
-            'reason': 'tickers_detected' if market_ready else 'no_tickers',
-            'tickers': tickers,
-        }
+    plan.add_step(
+        "market",
+        "run" if market_ready else "skip",
+        reason="tickers_detected" if market_ready else "no_tickers",
+        metadata={"tickers": tickers},
     )
 
-    web_should_run = _needs_web_refresh(query, web_ctx)
-    tasks.append(
-        {
-            'name': 'web_research',
-            'status': 'run' if web_should_run else 'skip',
-            'reason': 'recency_requested' if web_should_run else 'cached_web_context',
-        }
+    web_context = web_ctx or {}
+    web_should_run = _needs_web_refresh(query, web_context)
+    plan.add_step(
+        "web_research",
+        "run" if web_should_run else "skip",
+        reason="recency_requested" if web_should_run else "cached_web_context",
     )
 
-    return tasks
+    return plan
 
-    tasks.append(
-        {
-            'name': 'analyst',
-            'status': 'run' if analysis_ready else 'skip',
-            'reason': 'analysis_ready' if analysis_ready else 'analysis_not_available',
-        }
-    )
+
 
     tasks.append(
         {
@@ -208,9 +184,17 @@ def _derive_tasks(
     return tasks
 
 
-def _task_status(tasks: List[Dict[str, Any]], name: str) -> str:
-    for task in tasks:
-        if task.get("name") == name:
+def _task_status(tasks, name: str) -> str:
+    """Return the status for a task by name regardless of container type."""
+    if isinstance(tasks, AgentTaskPlan):
+        iterable = tasks.steps
+    else:
+        iterable = tasks or []
+    for task in iterable:
+        if isinstance(task, AgentTaskStep):
+            if task.name == name:
+                return task.status
+        elif task.get("name") == name:
             return str(task.get("status", "skip"))
     return "skip"
 
@@ -223,6 +207,11 @@ def _create_planner_bundle(
     chart_ctx: Dict[str, Any],
     analysis_ctx: Dict[str, Any],
     tasks: List[Dict[str, Any]],
+    *,
+    tool_manifest: Optional[List[Dict[str, Any]]] = None,
+    tool_results: Optional[List[Dict[str, Any]]] = None,
+    stock_widget: Optional[Dict[str, Any]] = None,
+    web_context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     attempts = sql_ctx.get('attempts') or []
     bundle = {
@@ -256,6 +245,17 @@ def _create_planner_bundle(
         bundle['tickers'] = tickers
     if attempts:
         bundle['sql']['last_attempt'] = attempts[-1]
+    if tool_manifest:
+        bundle['tool_manifest'] = copy.deepcopy(tool_manifest)
+    if tool_results:
+        bundle['tool_results'] = copy.deepcopy(tool_results)
+    visuals: Dict[str, Any] = {}
+    if stock_widget:
+        visuals['stock_widget'] = copy.deepcopy(stock_widget)
+    if web_context:
+        visuals['web_context'] = copy.deepcopy(web_context)
+    if visuals:
+        bundle['visuals'] = visuals
     serialized = json.dumps(bundle, sort_keys=True, default=str)
     bundle['id'] = _make_identifier(session_id, 'bundle', serialized)
     return bundle
@@ -274,15 +274,16 @@ async def _planner_agent(context: AgentRunContext) -> AgentResult:
 
     shared.setdefault('query', context.query)
 
-    tasks = _derive_tasks(
+    plan = _derive_tasks(
         planner_ctx,
         sql_ctx,
         analysis_ctx,
         chart_ctx,
         market_ctx,
-        shared.setdefault('web', {}),
         shared.get('query', context.query),
+        web_ctx=shared.setdefault('web', {}),
     )
+    tasks = plan.to_dicts()
     bundle = _create_planner_bundle(
         context.session_id,
         context.query,
@@ -291,16 +292,30 @@ async def _planner_agent(context: AgentRunContext) -> AgentResult:
         chart_ctx,
         analysis_ctx,
         tasks,
+        tool_manifest=shared.get('tool_manifest'),
+        tool_results=shared.get('tool_results'),
+        stock_widget=shared.get('stock_widget'),
+        web_context=shared.get('web'),
+    )
+    agent_handoff(
+        role='planner_agent',
+        status='planned',
+        metadata={'tasks': tasks},
+        session_id=context.session_id,
+        flow=shared.get('_meta', {}).get('flow_label'),
     )
     planner_ctx['tasks'] = tasks
+    planner_ctx['task_plan'] = tasks
     planner_ctx['bundle'] = bundle
     return AgentResult(
         name='planner',
         output={
             'status': 'planned',
             'tasks': tasks,
+            'task_plan': tasks,
             'bundle_id': bundle['id'],
             'bundle': bundle,
+            'planner_result': planner_ctx.get('result'),
         },
     )
 
@@ -478,6 +493,15 @@ async def _web_research_agent(context: AgentRunContext) -> AgentResult:
     query = context.shared.get('query', context.query)
     session_id = context.session_id
 
+    attempts_meta: List[Dict[str, Any]] = []
+
+    if not _web_search_enabled():
+        web_ctx['attempts'] = attempts_meta
+        return AgentResult(name='web_research', output={'status': 'skip', 'reason': 'web_search_disabled', 'attempts': attempts_meta, 'attempt_count': 0})
+    if not os.getenv('OPENAI_API_KEY'):
+        web_ctx['attempts'] = attempts_meta
+        return AgentResult(name='web_research', output={'status': 'skip', 'reason': 'api_key_missing', 'attempts': attempts_meta, 'attempt_count': 0})
+
     repository = get_session_state_repository()
     snapshot = await repository.load(session_id) if session_id else None
     cached_payload = None
@@ -490,6 +514,8 @@ async def _web_research_agent(context: AgentRunContext) -> AgentResult:
         web_ctx.update(cached_payload)
         web_ctx['ready'] = True
         web_ctx['from_cache'] = True
+        attempts_meta = list(cached_payload.get('attempts', attempts_meta))
+        web_ctx['attempts'] = attempts_meta
         return AgentResult(
             name='web_research',
             output={
@@ -497,30 +523,72 @@ async def _web_research_agent(context: AgentRunContext) -> AgentResult:
                 'summary': cached_payload.get('summary'),
                 'snippets': cached_payload.get('snippets'),
                 'from_cache': True,
+                'attempts': attempts_meta,
+                'attempt_count': len(attempts_meta),
             },
         )
 
-    try:
-        search_result = await perform_response_search(
-            query,
-            session_id=session_id,
-        )
-    except ResponseSearchError as exc:
-        web_ctx['error'] = str(exc)
+    last_error: Optional[Exception] = None
+    search_result = None
+    for attempt in range(1, WEB_SEARCH_MAX_ATTEMPTS + 1):
+        try:
+            search_result = await perform_response_search(
+                query,
+                session_id=session_id,
+            )
+            attempts_meta.append({
+                'attempt': attempt,
+                'status': 'success',
+                'latency_ms': search_result.latency_ms,
+            })
+            break
+        except ResponseSearchError as exc:
+            last_error = exc
+            attempts_meta.append({
+                'attempt': attempt,
+                'status': 'error',
+                'error': str(exc),
+            })
+            if attempt >= WEB_SEARCH_MAX_ATTEMPTS:
+                web_ctx['error'] = str(exc)
+                web_ctx['attempts'] = attempts_meta
+                return AgentResult(
+                    name='web_research',
+                    output={
+                        'status': 'error',
+                        'error': str(exc),
+                        'attempts': attempts_meta,
+                        'attempt_count': len(attempts_meta),
+                    },
+                )
+            await asyncio.sleep(min(WEB_SEARCH_BACKOFF_SECONDS * attempt, 2.0))
+
+    if not search_result:
+        error_message = str(last_error) if last_error else 'web_search_failed'
+        web_ctx['error'] = error_message
+        web_ctx['attempts'] = attempts_meta
         return AgentResult(
             name='web_research',
-            output={'status': 'error', 'error': str(exc)},
+            output={
+                'status': 'error',
+                'error': error_message,
+                'attempts': attempts_meta,
+                'attempt_count': len(attempts_meta),
+            },
         )
 
     payload = search_result.to_payload()
     payload['query'] = query
     payload['ready'] = True
     payload['from_cache'] = False
+    payload['attempts'] = attempts_meta
     web_ctx.update(payload)
 
     if snapshot:
         snapshot.record_tool_result('web_search', payload)
         await repository.save(snapshot)
+
+    web_ctx['attempts'] = attempts_meta
 
     return AgentResult(
         name='web_research',
@@ -530,9 +598,12 @@ async def _web_research_agent(context: AgentRunContext) -> AgentResult:
             'snippets': payload.get('snippets'),
             'search_id': payload.get('search_id'),
             'from_cache': False,
+            'attempts': attempts_meta,
+            'attempt_count': len(attempts_meta),
         },
         metrics={'latency_ms': search_result.latency_ms},
     )
+
 
 
 def _build_default_agent_registry() -> Dict[str, AgentSpec]:
@@ -652,7 +723,13 @@ class MultiAgentFlow:
     ) -> AsyncGenerator[Dict[str, Any], None]:
         active_session = session_id
         self._prepare_context(query)
-        async for event in self._planner.events(query, session_id=session_id):
+        planner_events = getattr(self._planner, "events", None)
+        if callable(planner_events):
+            planner_stream = planner_events(query, session_id=session_id)
+        else:
+            planner_stream = run_planner_executor(query, session_id=session_id)
+
+        async for event in planner_stream:
             if event.get("event") == "session_started":
                 active_session = (event.get("data") or {}).get("session_id", active_session)
             self._capture_event(event)
@@ -683,6 +760,9 @@ class MultiAgentFlow:
             'analysis': {'fragments': [], 'final': None},
             'market': preserved_market or {},
             'web': preserved_web or {},
+            'tool_manifest': None,
+            'tool_results': [],
+            'stock_widget': None,
             'agents': {},
             '_runtime': {
                 'market_fetcher': self._market_fetcher,
@@ -726,6 +806,9 @@ class MultiAgentFlow:
                 companies = [companies]
             if isinstance(companies, list):
                 planner_ctx["tickers"] = sorted(set(planner_ctx.get("tickers", [])).union({str(item) for item in companies}))[:5]
+        elif name == "planner_result":
+            planner_ctx["result"] = data
+
         elif name == "sql_generated":
             sql_text = data.get("sql") or ""
             sql_ctx["llm_used"] = data.get("llm_used")
@@ -772,9 +855,33 @@ class MultiAgentFlow:
                 analysis_ctx["id"] = _make_identifier(self._session_id, "analysis", final_text)
                 analysis_ctx["length"] = data.get("analysis_length", len(final_text))
                 self._record_snapshot(analysis=final_text)
+            tool_bundle = collect_tool_bundle(
+                manifest=self._shared_context.get("tool_manifest"),
+                results=self._shared_context.get("tool_results"),
+                stock_widget=data.get("stock_widget"),
+                web_context=data.get("web_context"),
+            )
+            if tool_bundle.get("stock_widget"):
+                self._shared_context["stock_widget"] = tool_bundle["stock_widget"]
+            if tool_bundle.get("web_context"):
+                web_ctx = self._shared_context.setdefault("web", {})
+                web_ctx.update(tool_bundle["web_context"])
+            if tool_bundle and self._session_snapshot:
+                self._session_snapshot.record_tool_result("visual_bundle", tool_bundle)
+
+        elif name == "tool_parallel_start":
+            manifest = data.get("tools") or data.get("tool_manifest")
+            if manifest:
+                self._shared_context["tool_manifest"] = manifest
+                self._shared_context["tool_results"] = []
 
         elif name == "tool_parallel_result":
-            if (data.get("tool") or "").strip() == "web_retriever":
+            results_list = self._shared_context.setdefault("tool_results", [])
+            results_list.append(copy.deepcopy(data))
+            if len(results_list) > 10:
+                del results_list[0]
+            tool_name = (data.get("tool") or "").strip()
+            if tool_name == "web_retriever":
                 web_ctx = self._shared_context.setdefault('web', {})
                 payload = data.get("payload") or {}
                 metadata = data.get("metadata") or {}
@@ -788,6 +895,21 @@ class MultiAgentFlow:
                     web_ctx['cache_hit'] = metadata.get('cache_hit')
                 if metadata.get('summary') and not web_ctx.get('summary'):
                     web_ctx['summary'] = metadata.get('summary')
+            elif tool_name == "stock_tracker":
+                payload = data.get("payload") or {}
+                if isinstance(payload, dict) and payload.get('ready'):
+                    widget = collect_tool_bundle(results=[data]).get('stock_widget')
+                    if widget:
+                        self._shared_context['stock_widget'] = widget
+            bundle_update = collect_tool_bundle(
+                manifest=self._shared_context.get('tool_manifest'),
+                results=self._shared_context.get('tool_results'),
+            )
+            if bundle_update.get('stock_widget'):
+                self._shared_context['stock_widget'] = bundle_update['stock_widget']
+            if bundle_update.get('web_context'):
+                web_ctx = self._shared_context.setdefault('web', {})
+                web_ctx.update(bundle_update['web_context'])
 
     async def _run_agent_orchestration(
         self,
@@ -1061,5 +1183,7 @@ class MultiAgentFlow:
 
 
 __all__ = ["MultiAgentFlow"]
+
+
 
 

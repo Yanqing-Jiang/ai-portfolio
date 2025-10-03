@@ -16,6 +16,7 @@ from analytics.core.types import (
     QueryPlanModel,
     ClarifyAnswerModel,
     ClarifyRequestModel,
+    PlannerResultModel,
 )
 from analytics.core.context import get_configs
 from analytics.core.config_store import get_config_store
@@ -24,12 +25,12 @@ from .tooling import run_tool_parallelism
 from ..core.intent import intent_to_sql_criteria
 from analytics.core.intent import detect_intent, detect_intent_llm, detect_intent_with_clarifications
 from analytics.sql.sql_planner import build_query_plan, choose_template
-from analytics.sql.compiler import compile_sql_from_plan
 from analytics.sql.executor import execute_sql
 from analytics.sql.validator import validate_sql
 from analytics.sql.templates import fetch_templates_for_intent
 from analytics.sql.prompt_builder import build_sql_messages, extract_sql_from_response
 from analytics.core.charting import build_chart_spec, plan_chart_rule_based
+from .tool_bundle import collect_tool_bundle
 from analytics.core.telemetry import analysis_chunk as log_analysis_chunk
 from analytics.core.analysis import summarize, stream_insights_llm
 from analytics.core.clarify import (
@@ -116,14 +117,16 @@ def _generate_chart_design(intent_key: Optional[str], plan: QueryPlanModel, data
             'chart_type': 'line_multi'
         })
     return design
+
 @dataclass
 class PlannerPhaseContext:
     query: str
     session_id: str
     workflow_start: float
     timed_emitter: TimedEventEmitter
-    looks_financial: bool = False
     configs: Dict[str, Any] = field(default_factory=dict)
+    classification: Optional[OffTopicClassifierSchema] = None
+    is_financial_query: bool = True
     intent: Optional[IntentModel] = None
     provisional_plan: Optional[QueryPlanModel] = None
     template: Optional[Any] = None
@@ -135,27 +138,27 @@ class PlannerPhaseContext:
     selected_template_id: Optional[str] = None
     sql: str = ""
     llm_used: bool = False
-    fallback_used: bool = False
-    fallback_reason: Optional[str] = None
     sql_attempt: int = 1
+    sql_attempts: List[Dict[str, Any]] = field(default_factory=list)
     validation_attempt: int = 1
     data: List[Dict[str, Any]] = field(default_factory=list)
     exec_elapsed_ms: Optional[int] = None
     chart_spec: Optional[Dict[str, Any]] = None
     analysis: str = ""
     parallelism_enabled: bool = False
+    planner_result: PlannerResultModel = field(default_factory=PlannerResultModel)
+
 
 class PlannerExecutorFlow:
     """Phase 2 workflow that emits SSE-friendly events for the memory pipeline."""
+
     def __init__(self) -> None:
         self.unified_client = get_unified_client()
         self.config_store = CONFIG_STORE
         self.flow_label = "planner-executor"
         self.parallelism_enabled = _env_flag("ANALYTICS_TOOL_PARALLELISM", default=False)
-    def _looks_financial(self, query: str) -> bool:
-        q = (query or "").lower()
-        keywords = ("market share", "margin", "profit", "earnings", "revenue", "growth", "cash flow", "guidance", "quarter", "qoq", "yoy", "opex", "capex", "gross", "net income")
-        return any(keyword in q for keyword in keywords)
+
+
 async def _initialize_context(self, query: str, session_id: Optional[str]) -> PlannerPhaseContext:
     workflow_start = time.time()
     resolved_session = session_id or str(uuid.uuid4())
@@ -168,29 +171,52 @@ async def _initialize_context(self, query: str, session_id: Optional[str]) -> Pl
         configs=CONFIGS.__dict__,
         parallelism_enabled=self.parallelism_enabled,
     )
+
+
 async def _classification_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[str, Any], None]:
     timed_emitter = ctx.timed_emitter
     timed_emitter.start_step("classification")
     classification_started_ts = datetime.utcnow().isoformat()
+    model_name = "gpt-5-nano-2025-08-07"
     yield {
         "event": "classification_started",
         "data": {
             "message": "Starting query classification...",
-            "model": "heuristic-keyword-gate",
+            "model": model_name,
             "ts": classification_started_ts,
         },
     }
-    looks_financial = self._looks_financial(ctx.query)
-    ctx.looks_financial = looks_financial
-    reasoning_message = (
-        "Detected financial analytics keywords" if looks_financial else "No financial analytics keywords detected"
-    )
+    classification: Optional[OffTopicClassifierSchema] = None
+    try:
+        classification = await classify_query_async(
+            ctx.query,
+            session_id=ctx.session_id,
+            model=model_name,
+            reasoning_effort="low",
+        )
+    except Exception as exc:
+        logger.exception("[CLASSIFICATION] LLM classification failed: %s", exc)
+        error_event = EventEmitter.error(
+            "classification",
+            "Classification model unavailable",
+            details={"error": str(exc)},
+            code="CLASSIFIER_ERROR",
+        )
+        error_event["data"]["ts"] = datetime.utcnow().isoformat()
+        yield error_event
+        raise
+    if classification is None:
+        raise RuntimeError("Classifier returned no response")
+    ctx.classification = classification
+    ctx.planner_result.metadata['classification'] = classification.model_dump()
+    ctx.is_financial_query = bool(getattr(classification, "is_financial_query", False))
+    reasoning_message = f"LLM classified topic '{classification.topic_category}'"
     yield {
         "event": "classification_reasoning",
         "data": {
             "thinking": reasoning_message,
-            "confidence": 0.9 if looks_financial else 0.1,
-            "category": "financial_analytics" if looks_financial else "other",
+            "confidence": classification.confidence,
+            "category": classification.topic_category,
             "ts": datetime.utcnow().isoformat(),
         },
     }
@@ -198,23 +224,45 @@ async def _classification_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerato
     classification_complete = {
         "event": "classification_complete",
         "data": {
-            "is_financial": looks_financial,
-            "category": "financial_analytics" if looks_financial else "other",
-            "confidence": 0.9 if looks_financial else 0.1,
+            "is_financial": ctx.is_financial_query,
+            "category": classification.topic_category,
+            "confidence": classification.confidence,
             "ts": datetime.utcnow().isoformat(),
         },
     }
     if classification_elapsed:
         classification_complete["data"]["elapsed_ms"] = classification_elapsed
     yield classification_complete
-    if not looks_financial:
-        yield {
-            "event": "classification_fallback",
+    if not ctx.is_financial_query:
+        decline_message = classification.polite_decline_message or "I am here for financial analytics insights. Try asking about revenue trends or market share."
+        if len(decline_message) > 200:
+            decline_message = decline_message[:197] + "..."
+        final_event = {
+            "event": "final_answer",
             "data": {
-                "method": "keyword_gate",
+                "message": decline_message,
+                "confidence": classification.confidence,
+                "category": classification.topic_category,
                 "ts": datetime.utcnow().isoformat(),
             },
         }
+        if getattr(classification, "suggested_rephrase", None):
+            final_event["data"]["suggested_rephrase"] = classification.suggested_rephrase
+        yield final_event
+        result_event = EventEmitter.result("planner_result", ctx.planner_result.model_dump())
+        result_event["event"] = "planner_result"
+        result_event["data"]["ts"] = datetime.utcnow().isoformat()
+        yield result_event
+        workflow_summary = {
+            "status": "off_topic",
+            "category": classification.topic_category,
+            "total_elapsed_ms": int((time.time() - ctx.workflow_start) * 1000),
+        }
+        workflow_complete = EventEmitter.result("workflow_complete", workflow_summary)
+        workflow_complete["event"] = "workflow_complete"
+        workflow_complete["data"]["ts"] = datetime.utcnow().isoformat()
+        yield workflow_complete
+
 async def _intent_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[str, Any], None]:
     timed_emitter = ctx.timed_emitter
     intent_progress = EventEmitter.progress("intent_detection", "Detecting intent...")
@@ -237,6 +285,7 @@ async def _intent_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[s
     )
     intent.slots_detected["original_query"] = ctx.query
     ctx.intent = intent
+    ctx.planner_result.intent = intent
     intent_elapsed = timed_emitter.end_step("intent_detection")
     intent_complete = {
         "event": "intent_detection_complete",
@@ -264,6 +313,7 @@ async def _intent_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[s
         seen_slots.add(request.slot)
         deduped_requests.append(request)
     ctx.clarifications = deduped_requests
+    ctx.planner_result.clarification_requests = list(deduped_requests)
     ctx.assumptions = []
     ctx.clarification_rounds = 0
     clarifications_needed = bool(deduped_requests)
@@ -569,6 +619,8 @@ async def _plan_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[str
         yield EventEmitter.session_started(session_id)
         async for event in _classification_phase(self, ctx):
             yield event
+        if not ctx.is_financial_query:
+            return
         async for event in _intent_phase(self, ctx):
             yield event
         async for event in _clarification_phase(self, ctx):
@@ -588,478 +640,257 @@ async def _plan_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[str
         sql_progress["data"]["ts"] = datetime.utcnow().isoformat()
         yield sql_progress
         timed_emitter.start_step("sql_generation")
+        MAX_SQL_ATTEMPTS = 3
         sql = ""
         llm_used = False
-        fallback_used = False
-        fallback_reason: Optional[str] = None
-        sql_attempt = 1
-        generation_elapsed = 0
-        def _emit_sql_events(
-            sql_text: str,
-            elapsed_ms: int,
-            *,
-            attempt: int,
-            llm_flag: bool,
-            fallback_flag: bool,
-            reason: Optional[str],
-        ) -> List[Dict[str, Any]]:
-            compiled_event = EventEmitter.result(
-                "sql_compiled",
-                {
-                    "sql_length": len(sql_text),
-                    "template_fallback": fallback_flag or not llm_flag,
-                    "template_used": selected_template_id,
-                    "attempt": attempt,
-                    "fallback_reason": reason,
-                    "llm_used": llm_flag,
-                },
-            )
-            compiled_event["event"] = "sql_compiled"
-            compiled_event["data"].update(
-                {
-                    "ts": datetime.utcnow().isoformat(),
-                    "elapsed_ms": elapsed_ms,
-                }
-            )
-            generated_event = EventEmitter.sql_generated(sql_text)
-            generated_event["data"].update(
-                {
-                    "ts": datetime.utcnow().isoformat(),
-                    "elapsed_ms": elapsed_ms,
-                    "llm_used": llm_flag,
-                    "attempt": attempt,
-                    "fallback_reason": reason,
-                }
-            )
-            return [compiled_event, generated_event]
-        try:
-            messages = await build_sql_messages(
-                original_query=query,
-                intent=intent,
-                plan=provisional_plan,
-                config_store=self.config_store,
-                templates=candidate_templates,
-            )
-            if not self.unified_client:
-                self.unified_client = get_unified_client()
-            if not self.unified_client:
-                raise RuntimeError("Unified Responses client is not configured")
-            llm_response, _ = await self.unified_client.simple_completion(
-                messages=messages,
-                reasoning_effort="medium",
-            )
-            candidate_sql = extract_sql_from_response(llm_response)
-            if candidate_sql and candidate_sql.strip():
-                sql = candidate_sql.strip()
-                llm_used = True
-        except Exception as exc:
-            logger.warning("[SQL_GENERATION] LLM SQL generation failed: %s", exc)
-        compile_elapsed_ms = 0
-        if not sql:
-            fallback_used = True
-            fallback_reason = "llm_sql_empty"
-            logger.info(
-                "[SQL_GENERATION] Falling back to template due to empty LLM output",
-                extra={
-                    "flow": self.flow_label,
-                    "session_id": session_id,
-                    "intent_key": intent.intent_key,
-                },
-            )
-            fallback_notice = EventEmitter.progress(
-                "sql_compilation",
-                "Using YAML template fallback for SQL generation",
-            )
-            fallback_notice["data"].update(
-                {
-                    "ts": datetime.utcnow().isoformat(),
-                    "code": "SQL_COMPILATION_FALLBACK",
-                    "attempt": sql_attempt,
-                }
-            )
-            yield fallback_notice
-            compile_start = time.time()
+        attempt_logs: List[Dict[str, Any]] = []
+        last_error_code: Optional[str] = None
+        last_error_detail: Optional[str] = None
+        previous_sql: Optional[str] = None
+
+        for attempt in range(1, MAX_SQL_ATTEMPTS + 1):
+            attempt_start = time.time()
+            attempt_record: Dict[str, Any] = {"attempt": attempt, "status": "started"}
+            candidate_sql = ""
             try:
-                sql = compile_sql_from_plan(provisional_plan, intent, CONFIGS.__dict__, template)
-            except ValueError as ve:
-                error_msg = str(ve)
-                if "This query requires specifying a company" in error_msg:
-                    companies_list = CONFIGS.companies.get("companies", {}).get(
-                        "semiconductor", []
+                if not self.unified_client:
+                    self.unified_client = get_unified_client()
+                if not self.unified_client:
+                    raise RuntimeError("Unified Responses client is not configured")
+                llm_response, _ = await self.unified_client.simple_completion(
+                    messages=messages,
+                    reasoning_effort="medium",
+                )
+                candidate_sql = (extract_sql_from_response(llm_response) or "").strip()
+            except Exception as exc:
+                last_error_code = "SQL_GENERATION_ERROR"
+                last_error_detail = str(exc)
+                attempt_record.update(
+                    status="error",
+                    error_code=last_error_code,
+                    error_detail=last_error_detail,
+                    elapsed_ms=int((time.time() - attempt_start) * 1000),
+                )
+                attempt_logs.append(attempt_record)
+                ctx.sql_attempts = attempt_logs
+                ctx.planner_result.sql_attempts = list(attempt_logs)
+                error_event = EventEmitter.error(
+                    "sql_compilation",
+                    "SQL generation failed",
+                    details={"attempt": attempt, "error": last_error_detail},
+                    code=last_error_code,
+                )
+                error_event["data"]["ts"] = datetime.utcnow().isoformat()
+                yield error_event
+            else:
+                if not candidate_sql:
+                    last_error_code = "SQL_EMPTY"
+                    last_error_detail = "Responses API returned no SQL content."
+                    attempt_record.update(
+                        status="empty",
+                        error_code=last_error_code,
+                        error_detail=last_error_detail,
+                        elapsed_ms=int((time.time() - attempt_start) * 1000),
                     )
-                    display_options: list[str] = []
-                    for comp in companies_list[:7]:
-                        try:
-                            ticker_value = comp.get("ticker")
-                            display_name = comp.get(
-                                "short_name", comp.get("name", ticker_value)
-                            )
-                            if ticker_value:
-                                display_options.append(f"{ticker_value} ({display_name})")
-                        except Exception:
-                            continue
-                    if not display_options:
-                        display_options = [
-                            "NVDA (Nvidia)",
-                            "AMD (AMD)",
-                            "INTC (Intel)",
-                            "MU (Micron)",
-                        ]
-                    clarification_request = ClarifyRequestModel(
-                        request_id=f"company_req_{int(time.time() * 1000)}",
-                        slot="company",
-                        question="Which company would you like to analyze?",
-                        type="single",
-                        options=display_options,
-                        default=display_options[0],
-                        required=True,
-                        reason="Market share analysis requires specifying a company",
-                    )
-                    company_request = EventEmitter.clarification_request(
-                        session_id,
-                        {
-                            "request_id": clarification_request.request_id,
-                            "slot": clarification_request.slot,
-                            "question": clarification_request.question,
-                            "type": clarification_request.type,
-                            "options": clarification_request.options,
-                            "default": clarification_request.default,
-                            "required": clarification_request.required,
-                            "reason": clarification_request.reason,
-                            "round": rounds + 1,
-                        },
-                    )
-                    company_request["data"]["ts"] = datetime.utcnow().isoformat()
-                    yield company_request
-                    try:
-                        answer = await asyncio.wait_for(
-                            wait_for_answer_blocking(
-                                session_id, clarification_request.request_id
-                            ),
-                            timeout=60.0,
-                        )
-                        if answer and answer.value:
-                            ack_event = EventEmitter.clarification_ack(
-                                session_id,
-                                clarification_request.request_id,
-                                answer.value,
-                            )
-                            ack_event["data"].update(
-                                {
-                                    "slot": clarification_request.slot,
-                                    "ts": datetime.utcnow().isoformat(),
-                                }
-                            )
-                            yield ack_event
-                            intent.slots_detected["company"] = answer.value
-                            sql = compile_sql_from_plan(
-                                provisional_plan, intent, CONFIGS.__dict__, template
-                            )
-                        else:
-                            error_event = EventEmitter.error(
-                                "clarification",
-                                "No company selected",
-                                code="CLARIFICATION_NO_SELECTION",
-                            )
-                            error_event["data"]["ts"] = datetime.utcnow().isoformat()
-                            yield error_event
-                            return
-                    except asyncio.TimeoutError:
-                        timeout_event = EventEmitter.progress(
-                            "clarification_timeout",
-                            "Timeout waiting for company selection",
-                        )
-                        timeout_event["data"]["ts"] = datetime.utcnow().isoformat()
-                        yield timeout_event
-                        return
-                else:
-                    error_event = EventEmitter.error(
+                    attempt_logs.append(attempt_record)
+                    ctx.sql_attempts = attempt_logs
+                    ctx.planner_result.sql_attempts = list(attempt_logs)
+                    empty_notice = EventEmitter.progress(
                         "sql_compilation",
-                        str(ve),
-                        code="SQL_COMPILATION_ERROR",
+                        "SQL attempt returned no content; retrying with additional guidance.",
                     )
-                    error_event["data"]["ts"] = datetime.utcnow().isoformat()
-                    yield error_event
-                    return
-            compile_elapsed_ms = int((time.time() - compile_start) * 1000)
-        generation_elapsed = timed_emitter.end_step("sql_generation") or compile_elapsed_ms
-        def _validate_sql(current_sql: str) -> Tuple[bool, List[str], int]:
-            validate_start = time.time()
-            ok, issues = validate_sql(
-                current_sql,
-                allowed_tables=["comp_financials"],
-                max_limit=CONFIGS.database.get("query_defaults", {}).get(
-                    "max_limit", 10000
-                ),
-                granularity=plan.granularity,
+                    empty_notice["data"].update(
+                        {"ts": datetime.utcnow().isoformat(), "attempt": attempt}
+                    )
+                    yield empty_notice
+                else:
+                    ok, issues, validate_elapsed = _validate_sql(candidate_sql)
+                    attempt_record.update(
+                        status="valid" if ok else "invalid",
+                        elapsed_ms=int((time.time() - attempt_start) * 1000),
+                        validation_elapsed_ms=validate_elapsed,
+                    )
+                    if not ok:
+                        last_error_code = "SQL_VALIDATION_FAILED"
+                        last_error_detail = "; ".join(issues) if issues else "Validation failed"
+                    attempt_logs.append(attempt_record)
+                    ctx.sql_attempts = attempt_logs
+                    ctx.planner_result.sql_attempts = list(attempt_logs)
+                    if ok:
+                        sql = candidate_sql
+                        ctx.sql = sql
+                        ctx.llm_used = True
+                        ctx.sql_attempt = attempt
+                        ctx.planner_result.sql_text = sql
+                        compiled_event = EventEmitter.result(
+                            "sql_compiled",
+                            {
+                                "sql_length": len(sql),
+                                "template_fallback": False,
+                                "template_used": selected_template_id,
+                                "attempt": attempt,
+                                "fallback_reason": None,
+                                "llm_used": True,
+                            },
+                        )
+                        compiled_event["event"] = "sql_compiled"
+                        compiled_event["data"].update(
+                            {
+                                "ts": datetime.utcnow().isoformat(),
+                                "elapsed_ms": attempt_record.get("elapsed_ms"),
+                            }
+                        )
+                        yield compiled_event
+                        generated_event = EventEmitter.sql_generated(sql)
+                        generated_event["data"].update(
+                            {
+                                "ts": datetime.utcnow().isoformat(),
+                                "elapsed_ms": attempt_record.get("elapsed_ms"),
+                                "llm_used": True,
+                                "attempt": attempt,
+                            }
+                        )
+                        yield generated_event
+                        break
+                    validation_event = EventEmitter.error(
+                        "sql_validation",
+                        "Generated SQL failed validation",
+                        details={"attempt": attempt, "issues": issues},
+                        code=last_error_code,
+                    )
+                    validation_event["data"]["ts"] = datetime.utcnow().isoformat()
+                    yield validation_event
+                    previous_sql = candidate_sql
+            if sql:
+                break
+            if attempt < MAX_SQL_ATTEMPTS:
+                retry_notice = EventEmitter.progress(
+                    "sql_compilation",
+                    f"Retrying SQL generation (attempt {attempt + 1}/{MAX_SQL_ATTEMPTS})",
+                )
+                retry_notice["data"].update(
+                    {"ts": datetime.utcnow().isoformat(), "last_error": last_error_code}
+                )
+                yield retry_notice
+                messages = await build_sql_retry_messages(
+                    original_query=query,
+                    intent=intent,
+                    plan=plan,
+                    error_code=last_error_code or "unknown_error",
+                    error_detail=last_error_detail or "",
+                    previous_sql=previous_sql,
+                    attempts=attempt_logs,
+                    config_store=self.config_store,
+                    templates=candidate_templates,
+                )
+
+        ctx.sql_attempts = attempt_logs
+        ctx.planner_result.sql_attempts = list(attempt_logs)
+        if not sql:
+            failure_event = EventEmitter.error(
+                "sql_compilation",
+                "Unable to generate valid SQL after 3 attempts",
+                details={"attempts": attempt_logs, "last_error": last_error_code, "last_detail": last_error_detail},
+                code=last_error_code or "SQL_RETRY_EXHAUSTED",
             )
-            return ok, issues, int((time.time() - validate_start) * 1000)
+            failure_event["data"]["ts"] = datetime.utcnow().isoformat()
+            yield failure_event
+            workflow_abort = EventEmitter.result(
+                "workflow_complete",
+                {
+                    "status": "sql_generation_failed",
+                    "total_elapsed_ms": int((time.time() - workflow_start) * 1000),
+                },
+            )
+            workflow_abort["event"] = "workflow_complete"
+            workflow_abort["data"]["ts"] = datetime.utcnow().isoformat()
+            yield workflow_abort
+            return
+
         # 8) SQL Validation Phase
         validation_progress = EventEmitter.progress(
             "sql_validation", "Validating SQL..."
         )
         validation_progress["data"]["ts"] = datetime.utcnow().isoformat()
         yield validation_progress
-        validation_attempt = 1
         ok, issues, validate_elapsed = _validate_sql(sql)
-        while True:
-            validation_event = EventEmitter.result(
-                "sql_validated",
-                {
-                    "ok": ok,
-                    "issues_count": len(issues),
-                    "attempt": validation_attempt,
-                    "issues": issues,
-                },
-            )
-            validation_event["event"] = "sql_validated"
-            validation_event["data"].update(
-                {
-                    "ts": datetime.utcnow().isoformat(),
-                    "elapsed_ms": validate_elapsed,
-                }
-            )
-            yield validation_event
-            if ok:
-                break
-            logger.error(
-                "[SQL_VALIDATION] Validation failed (attempt %s): %s",
-                validation_attempt,
-                issues,
-                extra={
-                    "error_code": "SQL_VALIDATION_FAILED",
-                    "flow": self.flow_label,
-                    "session_id": session_id,
-                    "intent_key": intent.intent_key,
-                },
-            )
-            if template and not fallback_used:
-                fallback_used = True
-                fallback_reason = "sql_validation_failed"
-                llm_used = False
-                sql_attempt += 1
-                logger.info(
-                    "[SQL_VALIDATION] Triggering template fallback",
-                    extra={
-                        "flow": self.flow_label,
-                        "session_id": session_id,
-                        "intent_key": intent.intent_key,
-                        "attempt": validation_attempt,
-                    },
-                )
-                fallback_notice = EventEmitter.progress(
-                    "sql_compilation",
-                    "Validation failed; regenerating SQL from template",
-                )
-                fallback_notice["data"].update(
-                    {
-                        "ts": datetime.utcnow().isoformat(),
-                        "code": "SQL_VALIDATION_FAILED",
-                        "attempt": validation_attempt,
-                    }
-                )
-                yield fallback_notice
-                fallback_start = time.time()
-                try:
-                    sql = compile_sql_from_plan(provisional_plan, intent, CONFIGS.__dict__, template)
-                except ValueError as ve:
-                    error_event = EventEmitter.error(
-                        "sql_compilation",
-                        str(ve),
-                        code="SQL_COMPILATION_ERROR",
-                        details={"template": selected_template_id},
-                    )
-                    error_event["data"]["ts"] = datetime.utcnow().isoformat()
-                    yield error_event
-                    return
-                generation_elapsed = int((time.time() - fallback_start) * 1000)
-                for event in _emit_sql_events(
-                    sql,
-                    generation_elapsed,
-                    attempt=sql_attempt,
-                    llm_flag=llm_used,
-                    fallback_flag=True,
-                    reason=fallback_reason,
-                ):
-                    yield event
-                validation_attempt += 1
-                validation_progress = EventEmitter.progress(
-                    "sql_validation",
-                    "Validating fallback SQL...",
-                )
-                validation_progress["data"]["ts"] = datetime.utcnow().isoformat()
-                yield validation_progress
-                ok, issues, validate_elapsed = _validate_sql(sql)
-                continue
+        validation_event = EventEmitter.result(
+            "sql_validated",
+            {
+                "ok": ok,
+                "issues_count": len(issues),
+                "attempt": ctx.sql_attempt,
+                "issues": issues,
+            },
+        )
+        validation_event["event"] = "sql_validated"
+        validation_event["data"].update(
+            {"ts": datetime.utcnow().isoformat(), "elapsed_ms": validate_elapsed}
+        )
+        yield validation_event
+        if not ok:
             error_event = EventEmitter.error(
                 "sql_validation",
-                "; ".join(issues) if issues else "SQL validation failed",
-                details={"issues": issues, "attempt": validation_attempt},
-                code="SQL_VALIDATION_FAILED",
+                "SQL failed validation after retries",
+                details={"attempts": attempt_logs, "issues": issues},
+                code="SQL_VALIDATION_FINAL",
             )
             error_event["data"]["ts"] = datetime.utcnow().isoformat()
             yield error_event
+            workflow_abort = EventEmitter.result(
+                "workflow_complete",
+                {
+                    "status": "sql_validation_failed",
+                    "total_elapsed_ms": int((time.time() - workflow_start) * 1000),
+                },
+            )
+            workflow_abort["event"] = "workflow_complete"
+            workflow_abort["data"]["ts"] = datetime.utcnow().isoformat()
+            yield workflow_abort
             return
-        for event in _emit_sql_events(
-            sql,
-            generation_elapsed,
-            attempt=sql_attempt,
-            llm_flag=llm_used,
-            fallback_flag=fallback_used,
-            reason=fallback_reason,
-        ):
-            yield event
+
         # 9) SQL Execution Phase
         execution_progress = EventEmitter.progress(
             "sql_execution", "Executing query..."
         )
         execution_progress["data"]["ts"] = datetime.utcnow().isoformat()
         yield execution_progress
-        execution_attempt = 1
-        while True:
-            exec_start = time.time()
-            try:
-                data = await execute_sql(sql)
-                exec_elapsed = int((time.time() - exec_start) * 1000)
-                break
-            except Exception as exec_exc:
-                logger.error(
-                    "[SQL_EXECUTION] Execution failed (attempt %s): %s",
-                    execution_attempt,
-                    exec_exc,
-                    extra={
-                        "error_code": "SQL_EXECUTION_ERROR",
-                        "flow": self.flow_label,
-                        "session_id": session_id,
-                        "intent_key": intent.intent_key,
-                    },
-                )
-                if template and llm_used and not fallback_used:
-                    fallback_used = True
-                    fallback_reason = "sql_execution_error"
-                    llm_used = False
-                    sql_attempt += 1
-                    logger.info(
-                        "[SQL_EXECUTION] Triggering template fallback",
-                        extra={
-                            "flow": self.flow_label,
-                            "session_id": session_id,
-                            "intent_key": intent.intent_key,
-                            "attempt": execution_attempt,
-                        },
-                    )
-                    fallback_notice = EventEmitter.progress(
-                        "sql_execution",
-                        "Execution error; regenerating SQL from template",
-                    )
-                    fallback_notice["data"].update(
-                        {
-                            "ts": datetime.utcnow().isoformat(),
-                            "code": "SQL_EXECUTION_ERROR",
-                            "attempt": execution_attempt,
-                        }
-                    )
-                    yield fallback_notice
-                    fallback_start = time.time()
-                    try:
-                        sql = compile_sql_from_plan(provisional_plan, intent, CONFIGS.__dict__, template)
-                    except ValueError as ve:
-                        error_event = EventEmitter.error(
-                            "sql_compilation",
-                            str(ve),
-                            code="SQL_COMPILATION_ERROR",
-                        )
-                        error_event["data"]["ts"] = datetime.utcnow().isoformat()
-                        yield error_event
-                        return
-                    generation_elapsed = int((time.time() - fallback_start) * 1000)
-                    for event in _emit_sql_events(
-                        sql,
-                        generation_elapsed,
-                        attempt=sql_attempt,
-                        llm_flag=llm_used,
-                        fallback_flag=True,
-                        reason=fallback_reason,
-                    ):
-                        yield event
-                    validation_progress = EventEmitter.progress(
-                        "sql_validation",
-                        "Validating fallback SQL...",
-                    )
-                    validation_progress["data"]["ts"] = datetime.utcnow().isoformat()
-                    yield validation_progress
-                    validation_attempt += 1
-                    ok, issues, validate_elapsed = _validate_sql(sql)
-                    validation_event = EventEmitter.result(
-                        "sql_validated",
-                        {
-                            "ok": ok,
-                            "issues_count": len(issues),
-                            "attempt": validation_attempt,
-                            "issues": issues,
-                        },
-                    )
-                    validation_event["event"] = "sql_validated"
-                    validation_event["data"].update(
-                        {
-                            "ts": datetime.utcnow().isoformat(),
-                            "elapsed_ms": validate_elapsed,
-                        }
-                    )
-                    yield validation_event
-                    if not ok:
-                        error_event = EventEmitter.error(
-                            "sql_validation",
-                            "; ".join(issues) if issues else "SQL validation failed",
-                            details={"issues": issues, "attempt": validation_attempt},
-                            code="SQL_VALIDATION_FAILED",
-                        )
-                        error_event["data"]["ts"] = datetime.utcnow().isoformat()
-                        yield error_event
-                        return
-                    execution_attempt += 1
-                    continue
-                error_event = EventEmitter.error(
-                    "sql_execution",
-                    str(exec_exc),
-                    details={"exception": str(exec_exc)},
-                    code="SQL_EXECUTION_ERROR",
-                )
-                error_event["data"]["ts"] = datetime.utcnow().isoformat()
-                yield error_event
-                return
+        exec_start = time.time()
         try:
-            SQLResultModel(query=sql, data=data)
-        except ValidationError as ve:
+            data = await execute_sql(sql)
+            exec_elapsed = int((time.time() - exec_start) * 1000)
+            ctx.planner_result.data_row_count = len(data)
+        except Exception as exec_exc:
+            logger.error(
+                "[SQL_EXECUTION] Execution failed: %s",
+                exec_exc,
+                extra={
+                    "error_code": "SQL_EXECUTION_ERROR",
+                    "flow": self.flow_label,
+                    "session_id": session_id,
+                    "intent_key": intent.intent_key,
+                },
+            )
             error_event = EventEmitter.error(
                 "sql_execution",
-                str(ve),
+                "SQL execution failed",
+                details={"error": str(exec_exc)},
                 code="SQL_EXECUTION_ERROR",
             )
             error_event["data"]["ts"] = datetime.utcnow().isoformat()
             yield error_event
+            workflow_abort = EventEmitter.result(
+                "workflow_complete",
+                {
+                    "status": "sql_execution_failed",
+                    "total_elapsed_ms": int((time.time() - workflow_start) * 1000),
+                },
+            )
+            workflow_abort["event"] = "workflow_complete"
+            workflow_abort["data"]["ts"] = datetime.utcnow().isoformat()
+            yield workflow_abort
             return
-        execution_stats = EventEmitter.result(
-            "execution_stats",
-            {
-                "row_count": len(data),
-                "columns_count": len(data[0].keys()) if data else 0,
-            },
-        )
-        execution_stats["event"] = "execution_stats"
-        execution_stats["data"].update(
-            {
-                "ts": datetime.utcnow().isoformat(),
-                "elapsed_ms": exec_elapsed,
-            }
-        )
-        yield execution_stats
-        data_retrieved = EventEmitter.result(
-            "data_retrieved", {"row_count": len(data)}
-        )
-        data_retrieved["event"] = "data_retrieved"
-        data_retrieved["data"]["ts"] = datetime.utcnow().isoformat()
-        yield data_retrieved
+
         # 10) Chart Planning Phase
         chart_progress = EventEmitter.progress(
             "chart_generation", "Planning chart..."
@@ -1077,6 +908,11 @@ async def _plan_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[str
         )
         chart_design = _generate_chart_design(intent.intent_key, plan, data, spec)
         spec.setdefault("meta", {}).setdefault("chartDesign", chart_design)
+        ctx.planner_result.chart_summary = {
+            "chart_type": chart_plan.chart_type,
+            "series_count": len(chart_plan.series),
+            "design": chart_design,
+        }
         chart_elapsed = int((time.time() - chart_start) * 1000)
         chart_event = EventEmitter.result(
             "chart_planned",
@@ -1158,12 +994,20 @@ async def _plan_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[str
                 )
                 yield streaming_event
         analysis_elapsed = int((time.time() - analysis_start) * 1000)
+        ctx.planner_result.analysis = full_analysis
+        analysis_payload = {
+            "analysis_length": len(full_analysis),
+            "analysis": full_analysis,
+        }
+        tool_bundle = collect_tool_bundle(
+            manifest=getattr(ctx, "tool_parallel_manifest", None),
+            results=getattr(ctx, "tool_parallel_results", None),
+        )
+        if tool_bundle:
+            analysis_payload.update(tool_bundle)
         analysis_complete = EventEmitter.result(
             "analysis_complete",
-            {
-                "analysis_length": len(full_analysis),
-                "analysis": full_analysis,
-            },
+            analysis_payload,
             key="analysis",
         )
         analysis_complete["event"] = "analysis_complete"
@@ -1179,6 +1023,12 @@ async def _plan_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[str
         session_store = await get_session_store()
         await session_store.cleanup_expired()
         total_elapsed = int((time.time() - workflow_start) * 1000)
+        result_event = EventEmitter.result(
+            "planner_result", ctx.planner_result.model_dump()
+        )
+        result_event["event"] = "planner_result"
+        result_event["data"]["ts"] = datetime.utcnow().isoformat()
+        yield result_event
         workflow_complete = EventEmitter.result(
             "workflow_complete", {"total_elapsed_ms": total_elapsed}
         )
