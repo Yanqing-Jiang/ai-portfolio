@@ -16,6 +16,7 @@ from .intent import (
 )
 
 __all__ = [
+    "PlannerResultModel",
     "WorkflowState",
     "SQLResultModel",
     "ChartSpecModel",
@@ -51,6 +52,21 @@ __all__ = [
     "OffTopicClassifierSchema",
     "ValidationError",
 ]
+
+class PlannerResultModel(BaseModel):
+    """Aggregated outputs from PlannerExecutorFlow."""
+
+    intent: Optional[IntentModel] = None
+    clarification_requests: List[ClarifyRequestModel] = Field(default_factory=list)
+    sql_attempts: List[Dict[str, Any]] = Field(default_factory=list)
+    sql_text: Optional[str] = None
+    data_row_count: Optional[int] = None
+    chart_summary: Optional[Dict[str, Any]] = None
+    analysis: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+
 
 
 

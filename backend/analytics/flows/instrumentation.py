@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any, AsyncGenerator, Dict, Optional, Tuple
 
 from analytics.core.session_state import SessionStateSnapshot, get_session_state_repository
+from .planner_executor import PlannerExecutorFlow, run_planner_executor
 
 PARALLEL_GROUP_BY_EVENT = {
     "session_started": "session",
@@ -147,7 +148,14 @@ async def instrument_events(
 
     sequence = 0
 
-    async for raw_event in flow.events(query, session_id=resolved_session):
+    if hasattr(flow, "events") and callable(getattr(flow, "events")):
+        event_stream = flow.events(query, session_id=resolved_session)
+    elif isinstance(flow, PlannerExecutorFlow):
+        event_stream = run_planner_executor(query, session_id=resolved_session)
+    else:
+        raise AttributeError("Flow object does not expose an events() coroutine")
+
+    async for raw_event in event_stream:
         parallel_group = _resolve_parallel_group(raw_event)
         tool_group = _resolve_tool_group(raw_event)
         enriched_event, sequence = _enrich_event(
@@ -162,4 +170,6 @@ async def instrument_events(
             await repository.save(snapshot)
 
     await repository.save(snapshot)
+
+
 

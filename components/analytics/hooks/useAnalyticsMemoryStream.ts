@@ -790,17 +790,62 @@ export const useAnalyticsMemoryStream = (
 
         case 'analysis_complete':
           // Handle both old and new formats for analysis
-          const finalAnalysis =
-            !isThinkingEvent
-              ? eventData.analysis || data.analysis || streamingText
-              : eventData.analysis || data.analysis;
-          if (!isThinkingEvent && typeof finalAnalysis === 'string') {
-            scheduleProgressiveUpdate({ analysis: finalAnalysis });
+          {
+            const finalAnalysis =
+              !isThinkingEvent
+                ? eventData.analysis || data.analysis || streamingText
+                : eventData.analysis || data.analysis;
+
+            if (!isThinkingEvent && typeof finalAnalysis === 'string') {
+              scheduleProgressiveUpdate({ analysis: finalAnalysis });
+            }
+
+            if (!isThinkingEvent) {
+              if (eventData.stock_widget !== undefined) {
+                workflowDataRef.current.stockWidget = eventData.stock_widget
+                  ? (eventData.stock_widget as StockWidgetConfig)
+                  : null;
+              }
+
+              if (eventData.web_context) {
+                const webContext = normalizeWebContext(eventData.web_context);
+                if (webContext) {
+                  setWebSearch(webContext);
+                  workflowDataRef.current.webSearch = webContext;
+                }
+              }
+
+              if (Array.isArray(eventData.tool_manifest)) {
+                workflowDataRef.current.toolFanoutManifest = eventData.tool_manifest as ToolFanoutManifest[];
+                toolFanoutRef.current.manifest = eventData.tool_manifest as ToolFanoutManifest[];
+              }
+
+              if (Array.isArray(eventData.tool_results)) {
+                const fanoutResults = eventData.tool_results as ToolFanoutResult[];
+                workflowDataRef.current.toolFanoutResults = fanoutResults;
+                toolFanoutRef.current.results = fanoutResults;
+              }
+            }
+
+            setStreamingText('');
+            setProgressiveText('');
+
+            stepsHook.updateStepStatus(
+              'short_financial_analysis',
+              'completed',
+              ['Short financial analysis complete'],
+              { analysis: finalAnalysis, analysis_length: eventData.analysis_length },
+              stepInfo.elapsed_ms
+            );
+
+            stepsHook.updateStepStatus(
+              'analysis_generation',
+              'completed',
+              [],
+              { analysis: finalAnalysis, analysis_length: eventData.analysis_length },
+              stepInfo.elapsed_ms
+            );
           }
-          setStreamingText('');
-          setProgressiveText('');
-          stepsHook.updateStepStatus('short_financial_analysis', 'completed', ['Short financial analysis complete'], { analysis: finalAnalysis, analysis_length: eventData.analysis_length }, stepInfo.elapsed_ms);
-          stepsHook.updateStepStatus('analysis_generation', 'completed', [], { analysis: finalAnalysis, analysis_length: eventData.analysis_length }, stepInfo.elapsed_ms);
           break;
 
         // Optional richer logs for agent demo

@@ -5,7 +5,7 @@ import time
 from typing import Any, AsyncGenerator, Dict, Optional
 
 from analytics.core.telemetry import tool_iteration as log_tool_iteration
-from .planner_executor import PlannerExecutorFlow
+from .planner_executor import PlannerExecutorFlow, run_planner_executor
 
 
 class SingleAgentToolsFlow:
@@ -42,7 +42,13 @@ class SingleAgentToolsFlow:
         self, query: str, session_id: Optional[str] = None
     ) -> AsyncGenerator[Dict[str, Any], None]:
         active_session = session_id
-        async for event in self._planner.events(query, session_id=session_id):
+        planner_events = getattr(self._planner, "events", None)
+        if callable(planner_events):
+            planner_stream = planner_events(query, session_id=session_id)
+        else:
+            planner_stream = run_planner_executor(query, session_id=session_id)
+
+        async for event in planner_stream:
             if event.get("event") == "session_started":
                 active_session = (event.get("data") or {}).get("session_id", active_session)
             start_event = self._maybe_tool_start(event, active_session)
@@ -133,3 +139,5 @@ class SingleAgentToolsFlow:
         if tool == "analysis_writer":
             return {"analysis_length": data.get("analysis_length")}
         return data
+
+

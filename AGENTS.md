@@ -1,6 +1,11 @@
 ## Agent Ground Rules & Tooling
 Understand the task before editing: read the full function and its direct call sites, and prefer surgical diffs over speculative refactors. Look into the files, generate a plan of changes first, then execute. Do not add fallback code unless requested; Prioritize PowerShell over Bash. Always do unit test before you mark completion. When generating plan, be more elaborative on concept, use actual examples.
 
+- Snapshot baseline files (e.g. `git show`) before deep edits so expectations like `_sql_phase` stay visible.
+- Run targeted `pytest` modules after each change to catch missing mocks (Polygon keys, etc.) before the full suite.
+- Favor JS/TS-aware scripts (e.g. `node -e`) when editing TSX to avoid PowerShell escaping loops.
+
+
 ## Project Structure & Module Organization
 The Vite frontend lives at the repo root, with `App.tsx` routing into feature components. UI pieces sit under `components/`, shared data in `constants/` + `constants.ts`, and network helpers in `services/`. The FastAPI backend is in `backend/`, See `ARCHITECTURE.md` for deeper diagrams.
 
@@ -11,7 +16,8 @@ Install dependencies with `npm install`, then `npm run dev` for the frontend at 
 
 ### Backend (FastAPI)
 - Stop stale listeners on port 8000: `Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue }`.
-- Launch from `backend/` using PowerShell so we honor repo instructions: `Set-Location "backend"; $env:PYTHONPATH="$(Resolve-Path ..)"; python -m uvicorn main:app --reload --port 8000 *> uvicorn.log`.
+- Double-check the port really released before relaunching: `if (Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue) { throw "Port 8000 still occupied" }` (rerun the stop command if needed).
+- Launch from `backend/` using PowerShell so we honor repo instructions: `Set-Location "backend"; $env:PYTHONPATH="$(Resolve-Path ..)"; python -m uvicorn main:app --reload --port 8000` and keep that window open (Ctrl+C to stop). If you do background it, store the returned PID from `$backend = Start-Process ... -PassThru` so you can `Stop-Process` later and avoid ghost uvicorns.
 - Verify the server: `Invoke-RestMethod http://127.0.0.1:8000/docs -TimeoutSec 5 | Out-Null` (returns HTTP 200 when healthy).
 
 ### Frontend (Vite)
@@ -33,9 +39,3 @@ Copy `.env` templates at the root and inside `backend/` before running servers. 
 - Session state lives in Redis with a short TTL and enriched SSE metadata (`seq`, `parallel_group`, `tool_group`); review rollout and concurrency tasks in `backend/analytics/TO_DO.md` before editing prompts.
 - Execution diagrams, flow wiring, and adapter responsibilities sit in `backend/analytics/ARCHITECTURE.md`; update that file and the TODO whenever analytics memory logic or prompt contracts change.
 - Treat prompts as the control surface: align `/api/analytics/memory/stream?flow=<flow>` prompts, flags such as `ANALYTICS_TOOL_PARALLELISM`, and telemetry expectations before merging.
-
-## Recent Lessons
-- Snapshot baseline files (e.g. `git show`) before deep edits so expectations like `_sql_phase` stay visible.
-- Run targeted `pytest` modules after each change to catch missing mocks (Polygon keys, etc.) before the full suite.
-- Favor JS/TS-aware scripts (e.g. `node -e`) when editing TSX to avoid PowerShell escaping loops.
-

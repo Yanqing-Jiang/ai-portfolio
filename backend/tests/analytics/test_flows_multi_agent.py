@@ -62,6 +62,9 @@ async def test_multi_agent_emits_turns_and_reasoning(monkeypatch):
     ]
 
     monkeypatch.setattr(multi_agent, "PlannerExecutorFlow", lambda: DummyPlanner(planner_events))
+    async def _mock_market_agent(context):
+        return multi_agent.AgentResult(name='market', output={'status': 'skip', 'tickers': []})
+    monkeypatch.setattr(multi_agent, "_market_agent", _mock_market_agent)
 
     flow = multi_agent.MultiAgentFlow()
     emitted = [event async for event in flow.events("demo question about NVDA")]

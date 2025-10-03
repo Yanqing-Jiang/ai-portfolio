@@ -66,8 +66,8 @@ def test_derive_tasks_handles_chart_revision():
     chart_ctx = {"spec_summary": {"chart_type": "line"}}
     market_ctx = {}
 
-    tasks = _derive_tasks(planner_ctx, sql_ctx, analysis_ctx, chart_ctx, market_ctx, "revise chart for nvda")
-    status_map = {task["name"]: task["status"] for task in tasks}
+    task_plan = _derive_tasks(planner_ctx, sql_ctx, analysis_ctx, chart_ctx, market_ctx, "revise chart for nvda")
+    status_map = {step.name: step.status for step in task_plan}
 
     assert status_map["query"] == "run"
     assert status_map["chart"] == "run"
@@ -82,8 +82,8 @@ def test_derive_tasks_standard_flow():
     chart_ctx = {"spec_summary": {"chart_type": "bar"}}
     market_ctx = {}
 
-    tasks = _derive_tasks(planner_ctx, sql_ctx, analysis_ctx, chart_ctx, market_ctx, "market share report")
-    status_map = {task["name"]: task["status"] for task in tasks}
+    task_plan = _derive_tasks(planner_ctx, sql_ctx, analysis_ctx, chart_ctx, market_ctx, "market share report")
+    status_map = {step.name: step.status for step in task_plan}
 
     assert status_map["query"] == "run"
     assert status_map["analyst"] == "run"

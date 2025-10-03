@@ -68,7 +68,7 @@ def detect_intent_llm(
     configs: Dict[str, Any],
     session_id: Optional[str] = None,
     *,
-    model: str = "gpt-5-mini-2025-08-07",
+    model: str = "gpt-5-nano-2025-08-07",
     reasoning_effort: str = "low",
 ) -> IntentModel:
     """Backwards-compatible sync helper for LLM-powered intent detection."""
@@ -87,7 +87,7 @@ def detect_intent_with_clarifications(
     configs: Dict[str, Any],
     session_id: Optional[str] = None,
     *,
-    model: str = "gpt-5-mini-2025-08-07",
+    model: str = "gpt-5-nano-2025-08-07",
     reasoning_effort: str = "low",
 ) -> IntentModel:
     """Primary entry point for the analytics flows (sync)."""
@@ -106,7 +106,7 @@ async def detect_intent_with_clarifications_async(
     configs: Dict[str, Any],
     session_id: Optional[str] = None,
     *,
-    model: str = "gpt-5-mini-2025-08-07",
+    model: str = "gpt-5-nano-2025-08-07",
     reasoning_effort: str = "low",
 ) -> IntentModel:
     """Async variant retained for event-loop callers."""
