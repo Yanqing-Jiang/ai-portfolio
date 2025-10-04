@@ -5,6 +5,7 @@ Contains shared chart planning logic used by both analytics_memory and analytics
 """
 
 from typing import Dict, Any, List, Optional
+from decimal import Decimal
 
 
 # Intent-based chart titles
@@ -47,8 +48,8 @@ def detect_primary_series(intent_key: Optional[str], available_slugs: List[str])
         return []
 
     primary_patterns = {
-        'market_share_single': ['market_share_percent', 'share_percent'],
-        'market_share_all': ['market_share_percent', 'share_percent'],
+        'market_share_single': ['market_share_percent', 'share_percent', 'market_share'],
+        'market_share_all': ['market_share_percent', 'share_percent', 'market_share'],
         'margins_vs_peers': ['gross_margin', 'operating_margin', 'net_margin'],
         'margin_growth_vs_peers': ['company_gross_margin_change_pp', 'company_operating_margin_change_pp', 'company_net_margin_change_pp', 'peer_avg_gross_margin_change_pp', 'peer_avg_operating_margin_change_pp', 'peer_avg_net_margin_change_pp'],
         'revenue_growth_analysis': ['qoq_growth_percent', 'yoy_growth_percent'],
@@ -68,6 +69,19 @@ def detect_primary_series(intent_key: Optional[str], available_slugs: List[str])
                 break
 
     return primary
+
+
+
+
+def _is_share_column(column: str) -> bool:
+    """Identify columns that represent market share percentages."""
+    lowered = column.lower()
+    if 'market_share' in lowered:
+        return True
+    if 'share_' in lowered and any(token in lowered for token in ('percent', 'pct', 'percentage')):
+        return True
+    return lowered.endswith('_share_pct') or lowered.endswith('_share_percent')
+
 
 
 def assign_series_axes(series_list: List[Dict[str, Any]]) -> Dict[str, str]:
@@ -112,6 +126,9 @@ def plan_chart_rule_based(data: List[Dict[str, Any]], query: str, intent_key: st
         }
 
     cols = list(data[0].keys())
+    print(f"[CHART_DEBUG plan_chart_rule_based] Data columns: {cols}")
+    print(f"[CHART_DEBUG plan_chart_rule_based] Sample row: {data[0]}")
+
     has_time = any(c in cols for c in ['calendar_year', 'calendar_quarter'])
     if not has_time:
         chart_type = 'bar'
@@ -126,6 +143,8 @@ def plan_chart_rule_based(data: List[Dict[str, Any]], query: str, intent_key: st
     if 'ticker' in cols and len(data) > 1:
         unique_tickers = set(row.get('ticker') for row in data if row.get('ticker'))
         has_multiple_tickers = len(unique_tickers) > 1
+
+    print(f"[CHART_DEBUG plan_chart_rule_based] has_multiple_tickers: {has_multiple_tickers}, unique_tickers: {unique_tickers}")
 
     series = []
 
@@ -143,7 +162,7 @@ def plan_chart_rule_based(data: List[Dict[str, Any]], query: str, intent_key: st
             for c in cols:
                 if c not in {'ticker', 'metric', 'date', 'tag_used', 'calendar_year', 'calendar_quarter', 'calendar_quarter_num'}:
                     v = data[0].get(c)
-                    if isinstance(v, (int, float)):
+                    if isinstance(v, (int, float, Decimal)):
                         primary_metric = c
                         break
 
@@ -154,7 +173,8 @@ def plan_chart_rule_based(data: List[Dict[str, Any]], query: str, intent_key: st
                     'name': ticker,
                     'data_column': primary_metric,
                     'value_type': vtype,
-                    'ticker_filter': ticker
+                    'ticker_filter': ticker,
+                    'source_column': primary_metric
                 })
     else:
         # Single-ticker or non-ticker data: use column-based series
@@ -165,12 +185,39 @@ def plan_chart_rule_based(data: List[Dict[str, Any]], query: str, intent_key: st
             if c in std:
                 continue
             v = data[0].get(c)
-            if isinstance(v, (int, float)):
+            if isinstance(v, (int, float, Decimal)):
                 numeric_cols.append(c)
+
+        print(f"[CHART_DEBUG plan_chart_rule_based] All numeric_cols: {numeric_cols}")
+
+        share_cols = [c for c in numeric_cols if _is_share_column(c)]
+        print(f"[CHART_DEBUG plan_chart_rule_based] share_cols: {share_cols}")
+
+        if intent_key == 'market_share_single':
+            if share_cols:
+                numeric_cols = share_cols
+            else:
+                percent_cols = [c for c in numeric_cols if any(token in c.lower() for token in ('percent', 'pct'))]
+                numeric_cols = percent_cols or [c for c in numeric_cols if 'revenue' not in c.lower()]
+        elif share_cols:
+            ordered = share_cols + [c for c in numeric_cols if c not in share_cols]
+            numeric_cols = ordered
+
+        print(f"[CHART_DEBUG plan_chart_rule_based] After intent filtering: {numeric_cols}")
+
+        numeric_cols = [c for c in numeric_cols if 'revenue' not in c.lower()]
+        print(f"[CHART_DEBUG plan_chart_rule_based] After revenue filter: {numeric_cols}")
+
         if not numeric_cols:
             # fallback to 'value' if present
             if 'value' in cols:
                 numeric_cols = ['value']
+
+        numeric_cols = list(dict.fromkeys(numeric_cols))
+        if share_cols:
+            numeric_cols = [c for c in numeric_cols if c != 'value']
+
+        print(f"[CHART_DEBUG plan_chart_rule_based] Final numeric_cols for series: {numeric_cols}")
 
         for c in numeric_cols[:4]:  # cap to avoid clutter
             vtype = 'percent' if any(k in c.lower() for k in ['margin', 'share', 'ratio', 'growth', 'percent', 'pct']) else 'number'
@@ -221,11 +268,14 @@ def plan_chart_rule_based(data: List[Dict[str, Any]], query: str, intent_key: st
             else:
                 name = c.replace('_', ' ').title()
 
-            series.append({'name': name, 'data_column': c, 'value_type': vtype})
+            series.append({'name': name, 'data_column': c, 'value_type': vtype, 'source_column': c})
 
     # Generate descriptive title based on intent and detected metrics
-    primary_metrics = detect_primary_series(intent_key, [s.get('source_column', '') for s in series])
+    primary_metrics = detect_primary_series(intent_key, [s.get('source_column') or s.get('data_column', '') for s in series])
     title = generate_descriptive_title(intent_key, primary_metrics)
+
+    print(f"[CHART_DEBUG plan_chart_rule_based] Returning plan with {len(series)} series for intent {intent_key}")
+    print(f"[CHART_DEBUG plan_chart_rule_based] Series details: {[{k: v for k, v in s.items() if k != 'ticker_filter'} for s in series[:3]]}")
 
     return {
         'chart_type': chart_type,

@@ -37,6 +37,8 @@ export const TradingViewSymbolOverview: React.FC<TradingViewSymbolOverviewProps>
     });
 
     // Optional theme overrides can be wired via the `theme` prop when design requests additional palettes.
+    const chartType = config.chartType ?? 'candlesticks';
+
     const widgetConfig = {
       symbols,
       chartOnly: false,
@@ -48,6 +50,7 @@ export const TradingViewSymbolOverview: React.FC<TradingViewSymbolOverviewProps>
       autosize: true,
       showVolume: false,
       showMA: false,
+      chartType,
     };
 
     script.innerHTML = JSON.stringify(widgetConfig);
@@ -58,7 +61,7 @@ export const TradingViewSymbolOverview: React.FC<TradingViewSymbolOverviewProps>
         containerRef.current.innerHTML = '';
       }
     };
-  }, [config.symbols, config.locale, config.height, config.colorTheme, height, theme]);
+  }, [config.symbols, config.locale, config.height, config.colorTheme, height, theme, config.chartType]);
 
   return (
     <div className="tradingview-widget-container rounded-xl border border-gray-700/70 bg-gray-900/50">
@@ -81,3 +84,5 @@ export const TradingViewSymbolOverview: React.FC<TradingViewSymbolOverviewProps>
 };
 
 export default TradingViewSymbolOverview;
+
+

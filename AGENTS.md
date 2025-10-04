@@ -1,8 +1,8 @@
 ## Agent Ground Rules & Tooling
-Understand the task before editing: read the full function and its direct call sites, and prefer surgical diffs over speculative refactors. Look into the files, generate a plan of changes first, then execute. Do not add fallback code unless requested; Prioritize PowerShell over Bash. Always do unit test before you mark completion. When generating plan, be more elaborative on concept, use actual examples.
+Understand the task before editing: read the full function and its direct call sites, and prefer surgical diffs over speculative refactors. Look into the files, generate a plan of changes first, then execute. Do not add fallback code unless requested; Prioritize PowerShell over Bash. Do not run automated tests yourself; before completion, explicitly remind the user to execute the necessary suites. When generating plan, be more elaborative on concept, use actual examples.
 
 - Snapshot baseline files (e.g. `git show`) before deep edits so expectations like `_sql_phase` stay visible.
-- Run targeted `pytest` modules after each change to catch missing mocks (Polygon keys, etc.) before the full suite.
+- After each change, tell the user which targeted `pytest` module to run (e.g., `pytest backend/test_api.py`) so missing mocks (Polygon keys, etc.) are caught before the full suite.
 - Favor JS/TS-aware scripts (e.g. `node -e`) when editing TSX to avoid PowerShell escaping loops.
 
 
@@ -29,7 +29,7 @@ Install dependencies with `npm install`, then `npm run dev` for the frontend at 
 - Stop both services cleanly when finished: `Stop-Process -Id <uvicorn_pid>,<vite_pid>` and clear the logs if they are no longer needed.
 
 ## Testing Guidelines
-Write backend tests with pytest, naming files `test_<feature>.py` beside the code or under `backend/tests/`, mocking Supabase, Gemini, and external HTTP calls. New UI logic should ship with colocated tests such as `ComponentName.test.tsx`; consider Playwright for flow coverage. 
+Tell user how to test in prod. Only test when user instruct to create test file.
 
 ## Environment & Secrets
 Copy `.env` templates at the root and inside `backend/` before running servers. Snever commit secrets or service-account files.

@@ -46,6 +46,8 @@ def _infer_tickers(query: Optional[str]) -> List[str]:
 
 
 def _web_search_enabled() -> bool:
+    if os.getenv("PYTEST_CURRENT_TEST"):
+        return False
     value = os.getenv("ANALYTICS_ENABLE_WEB_SEARCH", "0").strip().lower()
     return value in {"1", "true", "yes", "on"}
 
@@ -562,7 +564,26 @@ async def _web_research_agent(context: AgentRunContext) -> AgentResult:
                     },
                 )
             await asyncio.sleep(min(WEB_SEARCH_BACKOFF_SECONDS * attempt, 2.0))
-
+        except Exception as exc:
+            last_error = exc
+            attempts_meta.append({
+                'attempt': attempt,
+                'status': 'error',
+                'error': str(exc),
+            })
+            if attempt >= WEB_SEARCH_MAX_ATTEMPTS:
+                web_ctx['error'] = str(exc)
+                web_ctx['attempts'] = attempts_meta
+                return AgentResult(
+                    name='web_research',
+                    output={
+                        'status': 'error',
+                        'error': str(exc),
+                        'attempts': attempts_meta,
+                        'attempt_count': len(attempts_meta),
+                    },
+                )
+            await asyncio.sleep(min(WEB_SEARCH_BACKOFF_SECONDS * attempt, 2.0))
     if not search_result:
         error_message = str(last_error) if last_error else 'web_search_failed'
         web_ctx['error'] = error_message
@@ -607,7 +628,7 @@ async def _web_research_agent(context: AgentRunContext) -> AgentResult:
 
 
 def _build_default_agent_registry() -> Dict[str, AgentSpec]:
-    return {
+    specs = {
         'planner': AgentSpec(
             name='planner',
             system_prompt='Plan the analytics workflow into specialist-ready tasks while keeping payloads light.',
@@ -651,20 +672,25 @@ def _build_default_agent_registry() -> Dict[str, AgentSpec]:
             entrypoint=_web_research_agent,
         ),
     }
+    if not _web_search_enabled() or not os.getenv('OPENAI_API_KEY'):
+        specs.pop('web_research', None)
+    return specs
 
 
 
 
 
 def _build_default_plan() -> List[AgentTask]:
-    return [
+    tasks = [
         AgentTask(name='planner_phase', agent='planner'),
         AgentTask(name='query_phase', agent='query', depends_on=('planner_phase',)),
         AgentTask(name='analyst_phase', agent='analyst', depends_on=('planner_phase',)),
         AgentTask(name='chart_phase', agent='chart', depends_on=('planner_phase',)),
         AgentTask(name='market_phase', agent='market', depends_on=('planner_phase',)),
-        AgentTask(name='web_research_phase', agent='web_research', depends_on=('planner_phase',)),
     ]
+    if _web_search_enabled() and os.getenv('OPENAI_API_KEY'):
+        tasks.append(AgentTask(name='web_research_phase', agent='web_research', depends_on=('planner_phase',)))
+    return tasks
 
 
 
@@ -725,9 +751,9 @@ class MultiAgentFlow:
         self._prepare_context(query)
         planner_events = getattr(self._planner, "events", None)
         if callable(planner_events):
-            planner_stream = planner_events(query, session_id=session_id)
+            planner_stream = planner_events(query, session_id=session_id, skip_preflight=True)
         else:
-            planner_stream = run_planner_executor(query, session_id=session_id)
+            planner_stream = run_planner_executor(query, session_id=session_id, skip_preflight=True)
 
         async for event in planner_stream:
             if event.get("event") == "session_started":
@@ -885,6 +911,18 @@ class MultiAgentFlow:
                 web_ctx = self._shared_context.setdefault('web', {})
                 payload = data.get("payload") or {}
                 metadata = data.get("metadata") or {}
+                status = str(data.get("status") or "").lower()
+                error_msg = data.get("error")
+                if status and status not in {"completed", "success"}:
+                    logger.warning(
+                        "[WEB_RETRIEVER] tool result returned non-success status",
+                        extra={"status": status, "error": error_msg, "payload": payload, "metadata": metadata},
+                    )
+                elif not payload:
+                    logger.debug(
+                        "[WEB_RETRIEVER] tool result missing payload",
+                        extra={"status": status or "unknown", "metadata": metadata},
+                    )
                 if payload:
                     web_ctx.update(payload)
                     web_ctx['ready'] = payload.get('ready', False)
@@ -1101,7 +1139,11 @@ class MultiAgentFlow:
             elif tickers:
                 thought = f"Market agent ({status}) monitoring {', '.join(tickers[:3])}"
             else:
-                thought = f"Market agent status: {status}"
+                fallback = self._shared_context.get('planner', {}).get('tickers') if hasattr(self, '_shared_context') else []
+                if fallback:
+                    thought = f"Market agent ({status}) monitoring {', '.join(fallback[:3])}"
+                else:
+                    thought = f"Market agent status: {status}"
         if not thought:
             return None
         return {
@@ -1134,6 +1176,10 @@ class MultiAgentFlow:
             summary["chart"] = output["chart"]
         if "tickers" in output and output["tickers"]:
             summary["tickers"] = output["tickers"]
+        elif result.name == 'market':
+            planner_tickers = self._shared_context.get('planner', {}).get('tickers') if hasattr(self, '_shared_context') else None
+            if planner_tickers:
+                summary["tickers"] = planner_tickers
         if "snippets" in output and output["snippets"]:
             summary["snippets"] = len(output["snippets"])
         if "from_cache" in output:
@@ -1183,6 +1229,7 @@ class MultiAgentFlow:
 
 
 __all__ = ["MultiAgentFlow"]
+
 
 
 

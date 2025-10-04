@@ -8,7 +8,7 @@
 
 Start backend:
    - `cd backend`
-   - `uvicorn main:app`
+   - `py -m uvicorn main:app`
 Start frontend: `npm run dev`
 - Always restart the server before you summerize key changes. Always show new localhost address
 

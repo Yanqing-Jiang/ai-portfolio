@@ -237,10 +237,15 @@ def build_chart_spec(data: List[Dict[str, Any]], chart_plan: Dict[str, Any], cha
     # Build series with enhanced metadata (generic path)
     series_defs = chart_plan.get('series', [])
     series = []
-    
+
+    print(f"[CHART_DEBUG build_chart_spec] series_defs count: {len(series_defs)}")
+    print(f"[CHART_DEBUG build_chart_spec] data row count: {len(data)}")
+
     # Extract data columns (slugs) and create display name mapping
     slugs = [s['data_column'] for s in series_defs]
     display_names = {s['data_column']: s.get('name', s['data_column']) for s in series_defs}
+
+    print(f"[CHART_DEBUG build_chart_spec] slugs: {slugs}")
     
     # Detect primary series using data columns (slugs)
     primary_slugs = detect_primary_series(intent_key, slugs)
@@ -318,6 +323,8 @@ def build_chart_spec(data: List[Dict[str, Any]], chart_plan: Dict[str, Any], cha
                 'lineStyle': {'width': line_style['width'] + 1}
             }
         })
+
+    print(f"[CHART_DEBUG build_chart_spec] Built {len(series)} series objects")
 
     # Create Y-axis configuration based on data types
     has_left_axis = any(series_axes.get(s['name']) == 'left' for s in series)

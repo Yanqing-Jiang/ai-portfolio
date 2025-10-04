@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react';
-import { ChatMessage, ClarifyRequest, ClarifyAnswer, ToolCallTelemetry, AgentTurnTelemetry, AgentReasoningTelemetry, ProcessStep, ToolFanoutManifest, ToolFanoutResult, StockWidgetConfig, WebSearchResult } from '../types';
+import { ChatMessage, ClarifyRequest, ClarifyAnswer, ToolCallTelemetry, AgentTurnTelemetry, AgentReasoningTelemetry, ProcessStep, ToolFanoutManifest, ToolFanoutResult, StockWidgetConfig, WebSearchResult, FlowMode } from '../types';
 import { apiService } from '../../../services/apiService';
 import { useAnalyticsStream } from './useAnalyticsStream';
 
@@ -17,8 +17,32 @@ const DEFAULT_AGENT_ROLE = { stepId: 'agent_coordination', lane: 'coordination',
 import { useProcessSteps } from './useProcessSteps';
 import { resolveChartSpecOption } from '../utils';
 
+const owns = (obj: Record<string, any>, key: string): boolean => Object.prototype.hasOwnProperty.call(obj, key);
+
+const resolveAnalysisAccess = (payload: any) => {
+  const root = (payload && typeof payload === 'object' ? (payload as Record<string, any>) : {}) as Record<string, any>;
+  const nestedCandidate = root.analysis;
+  const nested =
+    nestedCandidate && typeof nestedCandidate === 'object' && !Array.isArray(nestedCandidate)
+      ? (nestedCandidate as Record<string, any>)
+      : root;
+
+  const has = (key: string) => owns(nested, key) || owns(root, key);
+  const get = <T,>(key: string): T | undefined => {
+    if (owns(nested, key)) {
+      return nested[key] as T;
+    }
+    if (owns(root, key)) {
+      return root[key] as T;
+    }
+    return undefined;
+  };
+
+  return { root, nested, has, get };
+};
+
 export const useAnalyticsMemoryStream = (
-  flow: 'planner-executor' | 'single-agent' | 'multi-agent' = 'planner-executor',
+  flow: FlowMode = 'planner-executor',
 ) => {
   const [sessionId, setSessionId] = useState<string>('');
   const [pendingClarification, setPendingClarification] = useState<ClarifyRequest | null>(null);
@@ -35,6 +59,9 @@ export const useAnalyticsMemoryStream = (
   // Progressive rendering: update state immediately instead of accumulating in refs
   const [progressiveAnalysis, setProgressiveAnalysis] = useState('');
   const [progressiveText, setProgressiveText] = useState('');
+
+  const isSingleAgentFlow = flow === 'single-agent';
+  const isMultiAgentFlow = flow === 'multi-agent';
 
   const normalizeWebContext = (raw: any): WebSearchResult | null => {
     if (!raw) {
@@ -78,6 +105,8 @@ export const useAnalyticsMemoryStream = (
   const toolFanoutRef = useRef<{ manifest: ToolFanoutManifest[]; results: ToolFanoutResult[]; concurrencyLimit: number }>({ manifest: [], results: [], concurrencyLimit: 0 });
 
   const sqlAttemptsRef = useRef<any[]>([]);
+  const resultMessageIdRef = useRef<string | null>(null);
+  const responseIdRef = useRef<string | null>(null);
   const agentLaneStateRef = useRef<Record<string, ProcessStep['status']>>({});
 
   // Workflow data ref for result accumulation
@@ -92,6 +121,10 @@ export const useAnalyticsMemoryStream = (
     toolFanoutManifest: ToolFanoutManifest[];
     toolFanoutResults: ToolFanoutResult[];
     concurrencyLimit: number;
+    webSearch: WebSearchResult | null;
+    analysisSections: Record<string, any> | null;
+    analysisSources: Record<string, boolean> | null;
+    llmAnalysis: string | null;
   }>({
     chartSpec: null,
     analysis: '',
@@ -103,6 +136,9 @@ export const useAnalyticsMemoryStream = (
     toolFanoutManifest: [],
     toolFanoutResults: [],
     concurrencyLimit: 0,
+    analysisSections: null,
+    analysisSources: null,
+    llmAnalysis: null,
     webSearch: null
   });
 
@@ -409,9 +445,14 @@ export const useAnalyticsMemoryStream = (
     setProgressiveAnalysis('');
     setWebSearch(null);
     workflowDataRef.current.webSearch = null;
+    workflowDataRef.current.analysis = '';
+    workflowDataRef.current.analysisSources = null;
+    workflowDataRef.current.analysisSections = null;
+    workflowDataRef.current.llmAnalysis = null;
     setPendingClarification(null);
     setCriteria(null);
     stepsHook.resetSteps();
+    resultMessageIdRef.current = null;
 
     // Clear any pending updates
     if (updateTimeoutRef.current) {
@@ -449,7 +490,16 @@ export const useAnalyticsMemoryStream = (
         ts: data.ts || eventData.ts,
         elapsed_ms: data.elapsed_ms || eventData.elapsed_ms
       };
-            const sequence: number | undefined =
+            const responseId =
+        typeof eventData.response_id === "string"
+          ? eventData.response_id
+          : typeof data.response_id === "string"
+          ? data.response_id
+          : undefined;
+      if (responseId) {
+        responseIdRef.current = responseId;
+      }
+      const sequence: number | undefined =
         typeof data.seq === 'number'
           ? data.seq
           : typeof eventData.sequence === 'number'
@@ -720,47 +770,57 @@ export const useAnalyticsMemoryStream = (
             const bundle = { ...eventData };
             delete (bundle as any).step;
 
-            if (typeof bundle.analysis === 'string') {
-              scheduleProgressiveUpdate({ analysis: bundle.analysis });
-              workflowDataRef.current.analysis = bundle.analysis;
+            const analysisAccess = resolveAnalysisAccess(bundle);
+            const resolvedAnalysis = analysisAccess.get<string>('analysis');
+            const chartSpecPayload = analysisAccess.get<any>('chart_spec');
+            const sqlText = analysisAccess.get<string>('sql');
+            const dataSamplePayload = analysisAccess.get<any[]>('data_sample');
+            const stockWidgetPayload = analysisAccess.get<StockWidgetConfig | null>('stock_widget') ?? null;
+            const criteriaPayload = analysisAccess.get<any>('criteria');
+            const manifestPayload = analysisAccess.get<ToolFanoutManifest[]>('tool_manifest');
+            const resultsPayload = analysisAccess.get<ToolFanoutResult[]>('tool_results');
+            const webContextPayload = analysisAccess.get<any>('web_context');
+
+            if (typeof resolvedAnalysis === 'string') {
+              scheduleProgressiveUpdate({ analysis: resolvedAnalysis });
+              workflowDataRef.current.analysis = resolvedAnalysis;
             }
-            if (bundle.chart_spec) {
-              scheduleProgressiveUpdate({ chartSpec: bundle.chart_spec });
-              workflowDataRef.current.chartSpec = bundle.chart_spec;
+            if (chartSpecPayload) {
+              scheduleProgressiveUpdate({ chartSpec: chartSpecPayload });
+              workflowDataRef.current.chartSpec = chartSpecPayload;
             }
-            if (bundle.sql) {
-              scheduleProgressiveUpdate({ sqlQuery: bundle.sql });
-              workflowDataRef.current.sqlQuery = bundle.sql;
+            if (typeof sqlText === 'string' && sqlText) {
+              scheduleProgressiveUpdate({ sqlQuery: sqlText });
+              workflowDataRef.current.sqlQuery = sqlText;
             }
-            if (Array.isArray(bundle.data_sample)) {
-              scheduleProgressiveUpdate({ dataSample: bundle.data_sample });
-              workflowDataRef.current.dataSample = bundle.data_sample;
+            if (Array.isArray(dataSamplePayload)) {
+              scheduleProgressiveUpdate({ dataSample: dataSamplePayload });
+              workflowDataRef.current.dataSample = dataSamplePayload;
             }
-            if (bundle.stock_widget) {
-              workflowDataRef.current.stockWidget = bundle.stock_widget as StockWidgetConfig;
+            if (analysisAccess.has('stock_widget')) {
+              workflowDataRef.current.stockWidget = stockWidgetPayload ? (stockWidgetPayload as StockWidgetConfig) : null;
             } else {
               workflowDataRef.current.stockWidget = null;
             }
-            if (bundle.criteria) {
-              workflowDataRef.current.criteria = bundle.criteria;
+            if (criteriaPayload) {
+              workflowDataRef.current.criteria = criteriaPayload;
             }
-            if (Array.isArray(bundle.tool_manifest)) {
-              workflowDataRef.current.toolFanoutManifest = bundle.tool_manifest as ToolFanoutManifest[];
-              toolFanoutRef.current.manifest = bundle.tool_manifest as ToolFanoutManifest[];
+            if (Array.isArray(manifestPayload)) {
+              workflowDataRef.current.toolFanoutManifest = manifestPayload;
+              toolFanoutRef.current.manifest = manifestPayload;
             } else {
               workflowDataRef.current.toolFanoutManifest = [];
               toolFanoutRef.current.manifest = [];
             }
-            if (Array.isArray(bundle.tool_results)) {
-              const results = bundle.tool_results as ToolFanoutResult[];
-              workflowDataRef.current.toolFanoutResults = results;
-              toolFanoutRef.current.results = results;
+            if (Array.isArray(resultsPayload)) {
+              workflowDataRef.current.toolFanoutResults = resultsPayload;
+              toolFanoutRef.current.results = resultsPayload;
             } else {
               workflowDataRef.current.toolFanoutResults = [];
               toolFanoutRef.current.results = [];
             }
-            if (bundle.web_context) {
-              const webContext = normalizeWebContext(bundle.web_context);
+            if (webContextPayload) {
+              const webContext = normalizeWebContext(webContextPayload);
               if (webContext) {
                 setWebSearch(webContext);
                 workflowDataRef.current.webSearch = webContext;
@@ -770,13 +830,13 @@ export const useAnalyticsMemoryStream = (
             updateStep(
               'analysis_generation',
               'completed',
-              bundle.analysis ? [bundle.analysis.slice(0, 120)] : [],
+              resolvedAnalysis ? [resolvedAnalysis.slice(0, 120)] : [],
               {
-                analysis: bundle.analysis,
-                chart_spec: bundle.chart_spec,
-                sql: bundle.sql,
-                data_sample: bundle.data_sample,
-                stock_widget: bundle.stock_widget,
+                analysis: resolvedAnalysis,
+                chart_spec: chartSpecPayload,
+                sql: sqlText,
+                data_sample: dataSamplePayload,
+                stock_widget: stockWidgetPayload,
                 tool_manifest: workflowDataRef.current.toolFanoutManifest,
                 tool_fanout_results: workflowDataRef.current.toolFanoutResults,
               },
@@ -789,41 +849,72 @@ export const useAnalyticsMemoryStream = (
           break;
 
         case 'analysis_complete':
-          // Handle both old and new formats for analysis
           {
-            const finalAnalysis =
-              !isThinkingEvent
-                ? eventData.analysis || data.analysis || streamingText
-                : eventData.analysis || data.analysis;
+            const analysisAccess = resolveAnalysisAccess(eventData as Record<string, any>);
+            const resolvedAnalysis = analysisAccess.get<string>('analysis') ?? (typeof data.analysis === 'string' ? data.analysis : undefined);
+            const finalAnalysis = !isThinkingEvent ? (resolvedAnalysis ?? streamingText) : resolvedAnalysis;
+            const analysisSources = analysisAccess.get<Record<string, boolean>>('analysis_sources') ?? workflowDataRef.current.analysisSources ?? null;
+            const analysisSections = analysisAccess.get<Record<string, any>>('analysis_sections') ?? workflowDataRef.current.analysisSections ?? null;
+            const llmAnalysis = analysisAccess.get<string>('llm_analysis') ?? workflowDataRef.current.llmAnalysis ?? finalAnalysis;
+            const analysisLength = analysisAccess.get<number>('analysis_length') ?? eventData.analysis_length;
 
             if (!isThinkingEvent && typeof finalAnalysis === 'string') {
               scheduleProgressiveUpdate({ analysis: finalAnalysis });
             }
 
             if (!isThinkingEvent) {
-              if (eventData.stock_widget !== undefined) {
-                workflowDataRef.current.stockWidget = eventData.stock_widget
-                  ? (eventData.stock_widget as StockWidgetConfig)
-                  : null;
+              workflowDataRef.current.analysis = typeof finalAnalysis === 'string' ? finalAnalysis : workflowDataRef.current.analysis;
+              workflowDataRef.current.analysisSources = analysisSources;
+              workflowDataRef.current.analysisSections = analysisSections;
+              workflowDataRef.current.llmAnalysis = typeof llmAnalysis === 'string' ? llmAnalysis : null;
+
+              if (analysisAccess.has('stock_widget')) {
+                const stockWidgetPayload = analysisAccess.get<StockWidgetConfig | null>('stock_widget');
+                workflowDataRef.current.stockWidget = stockWidgetPayload ? (stockWidgetPayload as StockWidgetConfig) : null;
               }
 
-              if (eventData.web_context) {
-                const webContext = normalizeWebContext(eventData.web_context);
+              const webContextPayload = analysisAccess.get<any>('web_context');
+              if (webContextPayload) {
+                const webContext = normalizeWebContext(webContextPayload);
                 if (webContext) {
                   setWebSearch(webContext);
                   workflowDataRef.current.webSearch = webContext;
                 }
               }
 
-              if (Array.isArray(eventData.tool_manifest)) {
-                workflowDataRef.current.toolFanoutManifest = eventData.tool_manifest as ToolFanoutManifest[];
-                toolFanoutRef.current.manifest = eventData.tool_manifest as ToolFanoutManifest[];
+              const manifestPayload = analysisAccess.get<ToolFanoutManifest[]>('tool_manifest');
+              if (Array.isArray(manifestPayload)) {
+                workflowDataRef.current.toolFanoutManifest = manifestPayload;
+                toolFanoutRef.current.manifest = manifestPayload;
               }
 
-              if (Array.isArray(eventData.tool_results)) {
-                const fanoutResults = eventData.tool_results as ToolFanoutResult[];
+              const fanoutResults = analysisAccess.get<ToolFanoutResult[]>('tool_results');
+              if (Array.isArray(fanoutResults)) {
                 workflowDataRef.current.toolFanoutResults = fanoutResults;
                 toolFanoutRef.current.results = fanoutResults;
+              }
+
+              const resultMessagePayload = {
+                type: 'result' as const,
+                content: 'Analysis ready! Here are your results:',
+                analysis: typeof finalAnalysis === 'string' ? finalAnalysis : '',
+                analysisSources: analysisSources || null,
+                analysisSections: analysisSections || null,
+                llmAnalysis: typeof llmAnalysis === 'string' ? llmAnalysis : null,
+                chartSpec: workflowDataRef.current.chartSpec,
+                sqlQuery: workflowDataRef.current.sqlQuery,
+                dataSample: workflowDataRef.current.dataSample,
+                stockWidgetConfig: workflowDataRef.current.stockWidget,
+                toolFanoutManifest: workflowDataRef.current.toolFanoutManifest,
+                toolFanoutResults: workflowDataRef.current.toolFanoutResults,
+                webSearch: workflowDataRef.current.webSearch,
+                responseId: responseIdRef.current || responseId || null,
+              };
+
+              if (resultMessageIdRef.current) {
+                updateChatMessage(resultMessageIdRef.current, resultMessagePayload);
+              } else {
+                resultMessageIdRef.current = addChatMessage(resultMessagePayload);
               }
             }
 
@@ -834,7 +925,13 @@ export const useAnalyticsMemoryStream = (
               'short_financial_analysis',
               'completed',
               ['Short financial analysis complete'],
-              { analysis: finalAnalysis, analysis_length: eventData.analysis_length },
+              {
+                analysis: finalAnalysis,
+                analysis_sources: analysisSources,
+                analysis_sections: analysisSections,
+                llm_analysis: llmAnalysis,
+                analysis_length: analysisLength,
+              },
               stepInfo.elapsed_ms
             );
 
@@ -842,13 +939,17 @@ export const useAnalyticsMemoryStream = (
               'analysis_generation',
               'completed',
               [],
-              { analysis: finalAnalysis, analysis_length: eventData.analysis_length },
+              {
+                analysis: finalAnalysis,
+                analysis_sources: analysisSources,
+                analysis_sections: analysisSections,
+                llm_analysis: llmAnalysis,
+                analysis_length: analysisLength,
+              },
               stepInfo.elapsed_ms
             );
           }
           break;
-
-        // Optional richer logs for agent demo
 
         case 'sql_attempts': {
           const attempts = Array.isArray(eventData.attempts) ? eventData.attempts : [];
@@ -1213,9 +1314,9 @@ export const useAnalyticsMemoryStream = (
         case 'final_summary':
           stepsHook.updateStepStatus('finalization', 'completed', ['Workflow summary generated']);
           const summaryStatusMessage =
-            flow === 'single-agent'
+            isSingleAgentFlow
               ? 'Single-agent tools workflow completed!'
-              : flow === 'multi-agent'
+               : isMultiAgentFlow
                 ? 'Multi-agent workflow completed!'
                 : 'Direct workflow completed!';
           streamHook.setCurrentStatus(summaryStatusMessage);
@@ -1228,48 +1329,67 @@ export const useAnalyticsMemoryStream = (
           break;
 
         case 'workflow_complete':
-          const workflowStatusMessage =
-            flow === 'single-agent'
-              ? 'Single-agent tools workflow completed!'
-              : flow === 'multi-agent'
-                ? 'Multi-agent workflow completed!'
-                : 'Direct workflow completed!';
-          const isEarlyExit = Boolean(eventData?.early_exit);
-          // Handle both old and new formats for completion message
-          const completionMessage = eventData?.message || (eventData.total_elapsed_ms ? `Completed in ${eventData.total_elapsed_ms}ms` : null);
-          streamHook.setCurrentStatus(completionMessage || workflowStatusMessage);
-          if (!isThinkingEvent && !isEarlyExit) {
-            addChatMessage({
-              type: 'result',
-              content: 'Analysis completed! Here are your results:',
-              analysis: workflowDataRef.current.analysis || workflowDataRef.current.streamingText,
-              chartSpec: workflowDataRef.current.chartSpec,
-              sqlQuery: workflowDataRef.current.sqlQuery,
-              dataSample: workflowDataRef.current.dataSample,
-              stockWidgetConfig: workflowDataRef.current.stockWidget,
-              toolFanoutManifest: workflowDataRef.current.toolFanoutManifest,
-              toolFanoutResults: workflowDataRef.current.toolFanoutResults,
-              webSearch: workflowDataRef.current.webSearch,
-            });
-          }
+          {
+            const workflowStatusMessage =
+              isSingleAgentFlow
+                ? 'Single-agent tools workflow completed!'
+                 : isMultiAgentFlow
+                  ? 'Multi-agent workflow completed!'
+                  : 'Direct workflow completed!';
+            const isEarlyExit = Boolean(eventData?.early_exit);
+            const completionMessage = eventData?.message || (eventData.total_elapsed_ms ? `Completed in ${eventData.total_elapsed_ms}ms` : null);
+            streamHook.setCurrentStatus(completionMessage || workflowStatusMessage);
 
-          if (isEarlyExit) {
-            // Clear any partial workflow artifacts for clarity
-            workflowDataRef.current = {
-              chartSpec: null,
-              analysis: '',
-              sqlQuery: '',
-              dataSample: null,
-              streamingText: '',
-              criteria: null,
-            };
-            setChartSpec(null);
-            setAnalysis('');
-            setSqlQuery('');
-            setDataSample(null);
-            setStreamingText('');
+            if (!isThinkingEvent) {
+              const resultPayload = {
+                type: 'result' as const,
+                content: completionMessage || workflowStatusMessage,
+                analysis: workflowDataRef.current.analysis || workflowDataRef.current.streamingText,
+                analysisSources: workflowDataRef.current.analysisSources,
+                analysisSections: workflowDataRef.current.analysisSections,
+                llmAnalysis: workflowDataRef.current.llmAnalysis,
+                chartSpec: workflowDataRef.current.chartSpec,
+                sqlQuery: workflowDataRef.current.sqlQuery,
+                dataSample: workflowDataRef.current.dataSample,
+                stockWidgetConfig: workflowDataRef.current.stockWidget,
+                toolFanoutManifest: workflowDataRef.current.toolFanoutManifest,
+                toolFanoutResults: workflowDataRef.current.toolFanoutResults,
+                webSearch: workflowDataRef.current.webSearch,
+                responseId: responseIdRef.current || responseId || null,
+              };
+              if (resultMessageIdRef.current) {
+                updateChatMessage(resultMessageIdRef.current, resultPayload);
+              } else if (!isEarlyExit) {
+                resultMessageIdRef.current = addChatMessage(resultPayload);
+              }
+            }
+
+            if (isEarlyExit) {
+              workflowDataRef.current = {
+                chartSpec: null,
+                analysis: '',
+                sqlQuery: '',
+                dataSample: null,
+                streamingText: '',
+                criteria: null,
+                stockWidget: null,
+                toolFanoutManifest: [],
+                toolFanoutResults: [],
+                concurrencyLimit: 0,
+                webSearch: null,
+                analysisSections: null,
+                analysisSources: null,
+                llmAnalysis: null,
+              };
+              setChartSpec(null);
+              setAnalysis('');
+              setSqlQuery('');
+              setDataSample(null);
+              setStreamingText('');
+              setWebSearch(null);
+            }
+            break;
           }
-          break;
 
         case 'final_answer':
           stepsHook.updateStepStatus('finalization', 'completed', ['Provided final response']);
@@ -1278,10 +1398,10 @@ export const useAnalyticsMemoryStream = (
             addChatMessage({
               type: 'assistant',
               content: eventData?.message || 'Happy to help with financial analytics questions!',
+              responseId: typeof eventData?.response_id === 'string' ? eventData.response_id : responseIdRef.current || undefined,
             });
           }
           break;
-          
         case 'done':
           streamHook.setCurrentStatus('Analysis completed successfully!');
           break;
@@ -1354,8 +1474,13 @@ export const useAnalyticsMemoryStream = (
       toolFanoutManifest: [],
       toolFanoutResults: [],
       concurrencyLimit: 0,
-      webSearch: null
+      webSearch: null,
+      analysisSections: null,
+      analysisSources: null,
+      llmAnalysis: null,
     };
+    resultMessageIdRef.current = null;
+    responseIdRef.current = null;
   };
 
   return {
@@ -1394,6 +1519,13 @@ export const useAnalyticsMemoryStream = (
     updateChatMessage,
   };
 };
+
+
+
+
+
+
+
 
 
 
