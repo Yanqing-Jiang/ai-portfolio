@@ -1,9 +1,10 @@
 
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import type { Project, ProjectYear } from '../types';
 import { ChevronLeftIcon } from './icons/ChevronLeftIcon';
 import { ChevronRightIcon } from './icons/ChevronRightIcon';
 import { motion } from 'framer-motion';
+import Style2MorphWords from './hero/Style2MorphWords';
 // @ts-ignore
 import { Helmet } from 'react-helmet-async';
 
@@ -65,6 +66,24 @@ const LandingPage: React.FC<LandingPageProps> = ({ projectData, onSelectProject 
   const allProjects = useMemo(() => projectData.filter(group => !group.hiddenOnLanding).flatMap(year => year.projects), [projectData]);
   
   const [currentIndex, setCurrentIndex] = useState(0);
+  const heroRef = useRef<HTMLElement | null>(null);
+  const [heroMouse, setHeroMouse] = useState<{ x: number; y: number } | null>(null);
+  const pageRef = useRef<HTMLDivElement | null>(null);
+  const [pageMouse, setPageMouse] = useState<{ x: number; y: number } | null>(null);
+  const [isMobile, setIsMobile] = useState(false);
+
+  useEffect(() => {
+    const update = () => setIsMobile(window.innerWidth < 768);
+    update();
+    window.addEventListener('resize', update);
+    return () => window.removeEventListener('resize', update);
+  }, []);
+
+  const onHeroMouseMove = useCallback((e: React.MouseEvent<HTMLElement>) => {
+    if (!heroRef.current) return;
+    const rect = heroRef.current.getBoundingClientRect();
+    setHeroMouse({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+  }, []);
 
   const goToPrevious = () => {
     const isFirstSlide = currentIndex === 0;
@@ -165,173 +184,75 @@ const LandingPage: React.FC<LandingPageProps> = ({ projectData, onSelectProject 
         })}
       </script>
     </Helmet>
-    <div className="w-full bg-gray-900">
-      {/* --- Carousel Section - responsive height --- */}
-      <div className="h-[60vh] sm:h-[70vh] md:h-[70vh] min-h-[400px] sm:min-h-[500px] w-full relative group">
-        <div className="w-full h-full">
-          {allProjects.map((project, index) => (
-              <div
-                  key={project.id}
-                  className={`absolute inset-0 w-full h-full transition-opacity duration-1000 ease-in-out ${index === currentIndex ? 'opacity-100' : 'opacity-0'}`}
-                  style={{
-                      backgroundImage: `url(${project.coverUrl ?? project.imageUrl})`,
-                      backgroundSize: 'cover',
-                      backgroundPosition: 'center',
-                  }}
+    <div
+      ref={pageRef}
+      onMouseMove={(e) => setPageMouse({ x: e.clientX, y: e.clientY })}
+      className="relative min-h-screen bg-slate-950 text-slate-100"
+    >
+      <div
+        aria-hidden
+        className="pointer-events-none fixed inset-0 z-10"
+        style={{
+          background: pageMouse
+            ? `radial-gradient(${isMobile ? 140 : 240}px ${isMobile ? 140 : 240}px at ${pageMouse.x}px ${pageMouse.y}px, rgba(56,189,248,0.12), transparent 60%), radial-gradient(${isMobile ? 220 : 320}px ${isMobile ? 220 : 320}px at ${pageMouse.x + 110}px ${pageMouse.y + 80}px, rgba(192,132,252,0.10), transparent 60%)`
+            : undefined,
+          transition: 'background 180ms ease-out',
+        }}
+      />
+      <div className="relative z-20">
+    <section ref={heroRef as any} onMouseMove={onHeroMouseMove} className="relative overflow-hidden border-b border-white/5">
+      {/* Spotlight handled globally; hero uses same base tone as remainder */}
+      <div className="relative mx-auto grid max-w-7xl gap-12 px-4 sm:px-6 lg:px-8 py-12 sm:py-16 md:py-24 md:grid-cols-2 items-center">
+        <div className="space-y-6">
+          <h1 className="text-balance font-extrabold text-white tracking-[-0.01em] leading-[1.05]" style={{ fontSize: 'clamp(40px, 5vw, 64px)' }}>Yanqing Jiang</h1>
+          <h2 className="text-sky-200 font-semibold" style={{ fontSize: 'clamp(16px, 2vw, 20px)' }}>Advanced Analytics @ P&amp;G</h2>
+          <div className="flex flex-wrap items-center gap-4 sm:gap-5">
+            {contactLinks.map((item) => (
+              <motion.a
+                key={item.label}
+                href={item.href}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="group flex flex-col items-center text-gray-400 hover:text-white transition-colors"
+                initial="rest"
+                whileHover="hover"
+                animate="rest"
               >
-                  <div className="absolute inset-0 bg-black/80"></div>
-              </div>
-          ))}
-        </div>
-        
-        {/* Animated Portfolio Title - responsive positioning and sizing */}
-        <div className="absolute top-4 sm:top-6 md:top-10 w-full flex justify-center z-20 pointer-events-none">
-            <div className="text-center animate-fade-in-down px-4">
-                <h2 className="text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-bold tracking-tight text-white">
-                    <span className="font-light">Yanqing</span>{' '}
-                    <span className="bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-purple-500">
-                        AI Portfolio
-                    </span>
-                </h2>
-            </div>
-        </div>
-        
-        {/* Main content - responsive layout and typography */}
-        <div className="absolute inset-0 flex flex-col items-center justify-center text-center p-4 sm:p-6 md:p-8 text-white z-10">
-          <h1 className="text-2xl sm:text-3xl md:text-4xl lg:text-5xl xl:text-7xl font-black uppercase tracking-wider animate-fade-in-up leading-tight px-2">
-              {currentProject?.title}
-          </h1>
-          <div className="mt-4 sm:mt-6 flex flex-wrap justify-center items-center gap-1.5 sm:gap-2 max-w-xs sm:max-w-md md:max-w-2xl animate-fade-in-up animation-delay-200">
-              {currentProject?.technologies.map(tech => (
-                  <span key={tech} className="bg-white/10 text-white text-xs sm:text-sm font-medium px-2 sm:px-3 py-1 sm:py-1.5 rounded-full">
-                      {tech}
-                  </span>
-              ))}
-          </div>
-          <button
-              onClick={() => currentProject && onSelectProject(currentProject)}
-              className="mt-6 sm:mt-8 bg-white text-black font-bold py-2 sm:py-3 px-6 sm:px-8 
-                       rounded-full text-sm sm:text-base md:text-lg uppercase tracking-widest 
-                       hover:bg-gray-200 transform hover:scale-105 transition-all duration-300 
-                       animate-fade-in-up animation-delay-400"
-          >
-              Explore Project
-          </button>
-        </div>
-
-        {/* Navigation Arrows - responsive sizing and positioning */}
-        <button 
-          onClick={goToPrevious} 
-          className="absolute top-1/2 left-2 sm:left-4 -translate-y-1/2 z-20 p-2 sm:p-3 
-                   bg-white/10 rounded-full hover:bg-white/30 transition-all 
-                   opacity-0 group-hover:opacity-100 text-white"
-        >
-          <ChevronLeftIcon />
-        </button>
-        <button 
-          onClick={goToNext} 
-          className="absolute top-1/2 right-2 sm:right-4 -translate-y-1/2 z-20 p-2 sm:p-3 
-                   bg-white/10 rounded-full hover:bg-white/30 transition-all 
-                   opacity-0 group-hover:opacity-100 text-white"
-        >
-          <ChevronRightIcon />
-        </button>
-
-        {/* Pagination Dots - responsive positioning */}
-        <div className="absolute bottom-4 sm:bottom-8 left-1/2 -translate-x-1/2 z-20 flex space-x-2">
-          {allProjects.map((_, slideIndex) => (
-            <button
-              key={slideIndex}
-              onClick={() => goToSlide(slideIndex)}
-              className={`w-2 h-2 sm:w-3 sm:h-3 rounded-full transition-all duration-300 ${currentIndex === slideIndex ? 'bg-white scale-125' : 'bg-white/50 hover:bg-white'}`}
-              aria-label={`Go to slide ${slideIndex + 1}`}
-            ></button>
-          ))}
-        </div>
-      </div>
-
-
-      <section className="relative overflow-hidden border-b border-white/5 bg-slate-950 text-slate-100">
-        <div
-          className="absolute inset-0 opacity-40"
-          style={{
-            backgroundImage: "url('https://www.jiangyanqing.com/wp-content/uploads/2021/05/bg-02-free-img.png')",
-            backgroundPosition: 'top right',
-            backgroundRepeat: 'no-repeat',
-            backgroundSize: '65%',
-          }}
-        />
-        <div className="absolute inset-0 bg-gradient-to-br from-slate-900 via-slate-950 to-slate-900 opacity-90" />
-        <div className="relative mx-auto grid max-w-6xl gap-12 px-4 py-16 sm:py-20 md:grid-cols-[minmax(0,1fr)_minmax(0,320px)] md:py-24">
-          <div className="space-y-6">
-            <p className="text-sm font-semibold uppercase tracking-[0.3em] text-sky-300">Hello, my name is</p>
-            <h1 className="text-4xl sm:text-5xl md:text-6xl font-bold leading-tight text-white">Yanqing Jiang</h1>
-            <h2 className="text-xl sm:text-2xl font-semibold text-sky-200">Advance Analytics Senior Manager</h2>
-            <p className="max-w-2xl text-base sm:text-lg text-slate-300">
-              I unite analytics, automation, and modern AI agents to solve the hardest decision-support problems in commerce and media. From experimentation platforms to agentic workflows, I build systems that push insights directly into the hands of operators.
-            </p>
-            <div className="flex flex-wrap items-center gap-4 sm:gap-5">
-              {contactLinks.map((item) => (
-                <motion.a
-                  key={item.label}
-                  href={item.href}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="group flex flex-col items-center text-slate-300 hover:text-white transition-colors"
-                  initial="rest"
-                  whileHover="hover"
-                  animate="rest"
+                <motion.div
+                  variants={{ rest: { scale: 1 }, hover: { scale: 1.1 } }}
+                  className="flex items-center justify-center rounded-full border border-white/15 bg-white/10 p-3 backdrop-blur-sm"
                 >
-                  <motion.div
-                    variants={{ rest: { scale: 1 }, hover: { scale: 1.1 } }}
-                    className="flex items-center justify-center rounded-full border border-white/15 bg-white/10 p-3 backdrop-blur-sm"
-                  >
-                    {item.icon}
-                  </motion.div>
-                  <motion.span
-                    variants={{ rest: { opacity: 0.8, y: 0 }, hover: { opacity: 1, y: -2 } }}
-                    className="mt-2 text-xs uppercase tracking-wide"
-                  >
-                    {item.label}
-                  </motion.span>
-                </motion.a>
-              ))}
-            </div>
-          </div>
-          <div className="relative flex justify-center md:justify-end">
-            <div className="absolute -top-6 -right-6 h-48 w-48 rounded-full bg-sky-500/50 blur-3xl" aria-hidden="true" />
-            <img
-              src="https://www.jiangyanqing.com/wp-content/uploads/2025/07/LinkedIn-Profile-4-e1753424574256.webp"
-              alt="Portrait of Yanqing Jiang"
-              className="relative z-10 w-64 rounded-3xl border border-white/10 bg-white/5 object-cover shadow-[0_25px_60px_rgba(15,118,230,0.35)]"
-              loading="lazy"
-            />
-          </div>
-        </div>
-      </section>
-
-      <section className="py-16 sm:py-20 border-b border-white/5 bg-slate-900/40">
-        <div className="mx-auto flex max-w-5xl flex-col gap-8 px-4 md:flex-row md:items-start">
-          <div className="md:w-1/3">
-            <h2 className="text-3xl font-semibold text-white md:text-4xl">What I do</h2>
-            <p className="mt-4 text-base text-slate-300">
-              I move from discovery to deployment with the same hands-on ownership. Strategy is only useful when the build is production-ready.
-            </p>
-          </div>
-          <div className="grid flex-1 gap-6 sm:grid-cols-2">
-            {capabilities.map((capability) => (
-              <div key={capability.title} className="rounded-2xl border border-white/10 bg-slate-900/60 p-6 shadow-[0_18px_36px_rgba(12,74,110,0.2)]">
-                <h3 className="text-lg font-semibold text-white">{capability.title}</h3>
-                <p className="mt-3 text-sm text-slate-300">{capability.description}</p>
-              </div>
+                  {item.icon}
+                </motion.div>
+                <motion.span
+                  variants={{ rest: { opacity: 0.8, y: 0 }, hover: { opacity: 1, y: -2 } }}
+                  className="mt-2 text-xs uppercase tracking-wide"
+                >
+                  {item.label}
+                </motion.span>
+              </motion.a>
             ))}
           </div>
         </div>
-      </section>
+        <div className="relative flex justify-center md:justify-start">
+          <div className="absolute -top-6 -right-6 h-48 w-48 rounded-full bg-sky-500/30 blur-3xl" aria-hidden="true" />
+          <div className="relative z-10 w-full flex items-center justify-center md:justify-start md:max-w-[48rem] text-left">
+            <Style2MorphWords
+              variant="inline"
+              size="xl"
+              gradient={false}
+              intervalMs={3600}
+              words={["AI Agent Systems","Insight Automation","Enterprise Data Platform","Long-term Memory Agent"]}
+            />
+          </div>
+        </div>
+      </div>
+    </section>
+      {/* Animation Showcase removed per request */}
 
       {/* --- Projects List Section - responsive layout --- */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-12 md:py-20">
-        <h2 className="text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-bold text-center mb-8 sm:mb-12">
+        <h2 className="text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-bold text-left mb-8 sm:mb-12 text-balance">
           <span className="bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-purple-500">
             AI Project Preview
           </span>
@@ -348,9 +269,9 @@ const LandingPage: React.FC<LandingPageProps> = ({ projectData, onSelectProject 
                   <div
                     key={project.id}
                     onClick={() => onSelectProject(project)}
-                    className={`bg-gray-800/50 rounded-lg overflow-hidden transform hover:-translate-y-1 
+                    className={`rounded-lg overflow-hidden transform hover:-translate-y-1 
                              transition-transform duration-300 shadow-lg hover:shadow-blue-500/20 cursor-pointer 
-                             group border border-gray-700/50 flex flex-col md:flex-row items-stretch 
+                             group border border-gray-700/50 bg-gray-800/50 flex flex-col md:flex-row items-stretch 
                              ${projectIndex % 2 !== 0 ? 'md:flex-row-reverse' : ''}`}
                   >
                     <div className="w-full md:w-2/5 xl:w-1/3 shrink-0">
@@ -362,16 +283,14 @@ const LandingPage: React.FC<LandingPageProps> = ({ projectData, onSelectProject 
                     </div>
                     <div className="flex-1 p-4 sm:p-6 lg:p-8 flex flex-col justify-center">
                       <h4 className="text-base sm:text-lg md:text-xl lg:text-2xl font-bold text-white mb-2 sm:mb-3">{project.title}</h4>
-                      <p className="text-gray-400 text-xs sm:text-sm md:text-base lg:text-lg mb-4 
-                                  leading-relaxed">
+                      <p className="text-gray-400 text-pretty text-xs sm:text-sm md:text-base lg:text-lg mb-4 leading-relaxed">
                         {project.description.length > 150 ? `${project.description.substring(0, 150)}...` : project.description}
                       </p>
                       <div className="flex flex-wrap gap-1.5 sm:gap-2 mt-auto">
                         {project.technologies.slice(0, 5).map(tech => (
                           <span 
                             key={tech} 
-                            className="bg-gray-700 text-gray-300 text-xs sm:text-sm font-medium 
-                                     px-2 sm:px-2.5 py-1 rounded-md"
+                            className="bg-gray-700 text-gray-300 text-xs sm:text-sm font-medium px-2 sm:px-2.5 py-1 rounded-md"
                           >
                             {tech}
                           </span>
@@ -387,7 +306,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ projectData, onSelectProject 
       </div>
 
       {preAiProjects.length > 0 && (
-        <section className="bg-slate-900/60 border-t border-white/5">
+        <section className="bg-gray-900 border-t border-white/5">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 sm:py-16">
             <h2 className="text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-bold text-center mb-8 sm:mb-12">
               <span className="bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-purple-500">
@@ -450,9 +369,11 @@ const LandingPage: React.FC<LandingPageProps> = ({ projectData, onSelectProject 
         .animation-delay-200 { animation-delay: 0.2s; }
         .animation-delay-400 { animation-delay: 0.4s; }
        `}</style>
+      </div>
     </div>
     </>
   );
 };
 
 export default LandingPage;
+

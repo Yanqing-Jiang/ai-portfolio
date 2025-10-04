@@ -32,6 +32,15 @@ from typing import List, Tuple, Optional
 env_path = Path(__file__).resolve().parent / ".env"
 load_dotenv(dotenv_path=env_path, override=False)
 
+
+log_level_name = os.getenv("ANALYTICS_LOG_LEVEL", "INFO").upper()
+log_level = getattr(logging, log_level_name, logging.INFO)
+logging.basicConfig(
+    level=log_level,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    force=True,
+)
+
 app = FastAPI()
 
 # Use the global session store from analytics.core.clarify
@@ -811,7 +820,7 @@ async def analytics_memory_stream_endpoint(
     query: str,
     request: Request,
     session_id: Optional[str] = None,
-    flow: Optional[str] = Query(default=None, description="Flow name (planner-executor | single-agent | multi-agent)"),
+    flow: Optional[str] = Query(default=None, description="Flow name (planner-executor | single-agent | multi-agent | single-agent-legacy | multi-agent-legacy)"),
     _: None = Depends(smart_rate_limit),
 ):
     """Stream analytics memory results with conversational clarifications"""
@@ -879,6 +888,7 @@ async def analytics_memory_clarify_endpoint(answer: ClarifyAnswerModel, _: None 
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
 
 
 

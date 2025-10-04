@@ -15,12 +15,10 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_MODEL = os.getenv("OPENAI_RESPONSES_SEARCH_MODEL") or os.getenv("OPENAI_MODEL", "gpt-5-mini-2025-08-07")
 _DEFAULT_CONTEXT_SIZE = os.getenv("WEB_SEARCH_CONTEXT_SIZE", "medium")
-_DEFAULT_COUNTRY = os.getenv("WEB_SEARCH_COUNTRY", "US")
-_DEFAULT_CITY = os.getenv("WEB_SEARCH_CITY")
+_FALLBACK_TOOL_TYPE = "web_search"
 _MAX_SNIPPETS = int(os.getenv("WEB_SEARCH_MAX_SNIPPETS", "5"))
 _RETRY_ATTEMPTS = int(os.getenv("WEB_SEARCH_RETRY_ATTEMPTS", "2"))
-_RETRY_BASE_DELAY = float(os.getenv("WEB_SEARCH_RETRY_BASE_DELAY", "0.6"))
-
+_RETRY_BASE_DELAY = float(os.getenv("WEB_SEARCH_RETRY_BASE_DELAY", "0.5"))
 
 class ResponseSearchError(RuntimeError):
     """Raised when the Responses API web search call fails."""
@@ -85,16 +83,8 @@ def _format_messages(query: str, *, context: Optional[str] = None) -> List[Dict[
     ]
 
 
-def _build_tool_payload(*, country: Optional[str], city: Optional[str], context_size: str) -> Dict[str, Any]:
-    user_location: Dict[str, Any] = {}
-    if country:
-        user_location["country"] = country
-    if city:
-        user_location["city"] = city
-    payload: Dict[str, Any] = {"type": "web_search_preview", "search_context_size": context_size}
-    if user_location:
-        payload["user_location"] = user_location
-    return payload
+def _build_tool_payload(*, context_size: str, tool_type: str) -> Dict[str, Any]:
+    return {"type": tool_type, "search_context_size": context_size}
 
 
 def _as_dict(obj: Any) -> Dict[str, Any]:
@@ -201,8 +191,6 @@ async def perform_response_search(
     *,
     session_id: Optional[str] = None,
     context: Optional[str] = None,
-    country: Optional[str] = None,
-    city: Optional[str] = None,
     context_size: Optional[str] = None,
     model: Optional[str] = None,
 ) -> ResponseSearchResult:
@@ -214,17 +202,19 @@ async def perform_response_search(
         raise ResponseSearchError("Unified OpenAI client is not configured")
 
     messages = _format_messages(query, context=context)
+    tool_type = os.getenv("WEB_SEARCH_TOOL_TYPE", _FALLBACK_TOOL_TYPE)
     tool_payload = _build_tool_payload(
-        country=country or _DEFAULT_COUNTRY,
-        city=city or _DEFAULT_CITY,
         context_size=context_size or _DEFAULT_CONTEXT_SIZE,
+        tool_type=tool_type,
     )
     params = {
         "model": model or _DEFAULT_MODEL,
         "input": messages,
         "tools": [tool_payload],
-        "tool_choice": {"type": "tool", "name": "web_search_preview"},
     }
+    force_web = os.getenv("WEB_SEARCH_FORCE", "0") == "1"
+    tool_choice = {"type": "tool", "name": tool_type} if force_web else "auto"
+    params["tool_choice"] = tool_choice
 
     attempts = max(1, _RETRY_ATTEMPTS)
     attempt = 0
@@ -239,7 +229,7 @@ async def perform_response_search(
             elapsed_ms = int((time.perf_counter() - start) * 1000)
             response_dict = _as_dict(raw_response)
             responses_call(
-                call_type="web_search_preview",
+                call_type=tool_type,
                 model=params["model"],
                 reasoning_effort=None,
                 duration_ms=elapsed_ms,
@@ -251,8 +241,9 @@ async def perform_response_search(
         except Exception as exc:  # pragma: no cover - network/SDK failure
             elapsed_ms = int((time.perf_counter() - start) * 1000)
             last_error = exc
+            logger.error(f"[WEB_SEARCH] Attempt {attempt + 1} failed: {type(exc).__name__}: {str(exc)}")
             responses_call(
-                call_type="web_search_preview",
+                call_type=tool_type,
                 model=params["model"],
                 reasoning_effort=None,
                 duration_ms=elapsed_ms,
@@ -263,7 +254,7 @@ async def perform_response_search(
             )
             attempt += 1
             if attempt >= attempts:
-                logger.error("Responses API web search failed after %s attempts", attempts)
+                logger.error("Responses API web search failed after %s attempts: %s", attempts, str(exc))
                 raise ResponseSearchError("Responses API web search failed") from exc
             delay = _RETRY_BASE_DELAY * (2 ** (attempt - 1))
             await asyncio.sleep(delay)
@@ -286,3 +277,4 @@ async def perform_response_search(
         model=params["model"],
     )
     return result
+

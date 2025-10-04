@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+﻿import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import Draggable from 'react-draggable';
 import { WorkflowCanvas } from '../visualization/WorkflowCanvas';
@@ -712,6 +712,7 @@ export const ProcessPanel: React.FC<ProcessPanelProps> = ({
 };
 
 export default ProcessPanel;
+
 
 
 

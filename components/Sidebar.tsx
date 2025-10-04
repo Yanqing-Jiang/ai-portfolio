@@ -150,22 +150,7 @@ const Sidebar: React.FC<SidebarProps> = ({ projectData, selectedProject, onSelec
             </span>
           </button>
 
-          {/* External website link */}
-          <a 
-            href="https://www.jiangyanqing.com" 
-            target="_blank" 
-            rel="noopener noreferrer" 
-            className="flex items-center gap-3 w-full text-left py-2 sm:py-3 px-2 sm:px-3 
-                     text-sm sm:text-base rounded-md transition-all duration-200 
-                     text-gray-400 hover:bg-gray-700/50 hover:text-white group"
-          >
-            <img 
-              src="https://yanqinghot.blob.core.windows.net/public-access/Profile%20Logo.png" 
-              alt="Website Logo" 
-              className="w-4 h-4 sm:w-5 sm:h-5 shrink-0 group-hover:scale-110 transition-transform duration-200" 
-            />
-            <span className="truncate">Visit Yanqing Pre-AI Page</span>
-          </a>
+          {/* Removed per request: Visit Yanqing Pre-AI Page */}
         </div>
       </div>
       

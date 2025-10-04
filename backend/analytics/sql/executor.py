@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -10,6 +11,20 @@ import asyncpg
 from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
+
+
+def _convert_decimals(data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Convert Decimal objects to float for JSON serialization."""
+    result = []
+    for row in data:
+        converted_row = {}
+        for key, value in row.items():
+            if isinstance(value, Decimal):
+                converted_row[key] = float(value)
+            else:
+                converted_row[key] = value
+        result.append(converted_row)
+    return result
 
 
 def _ensure_env_loaded() -> None:
@@ -44,7 +59,8 @@ async def execute_sql(sql: str, *, timeout: float = 15.0) -> List[Dict[str, Any]
         except Exception:  # pragma: no cover - best effort only
             pass
         rows = await conn.fetch(sql, timeout=timeout)
-        return [dict(row) for row in rows]
+        data = [dict(row) for row in rows]
+        return _convert_decimals(data)
     except asyncio.TimeoutError as exc:
         logger.error("[DATABASE] SQL execution timeout")
         raise RuntimeError("Database execution timeout") from exc

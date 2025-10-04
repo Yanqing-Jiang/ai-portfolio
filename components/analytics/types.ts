@@ -1,4 +1,4 @@
-export type FlowMode = 'planner-executor' | 'single-agent' | 'multi-agent';
+﻿export type FlowMode = 'planner-executor' | 'single-agent' | 'multi-agent';
 
 export interface FlowVisualTheme {\n  id: FlowMode;\n  accent: string;\n  nodeGradient: [string, string];\n  nodeBorder: string;\n  nodeGlow: string;\n  edgeIdle: string;\n  edgeActive: string;\n  edgeCompleted: string;\n  badgeClass: string;\n  pulseClass: string;\n}\n\n// Shared types for analytics components
 
@@ -72,6 +72,7 @@ export interface StockWidgetConfig {
   locale?: string;
   colorTheme?: 'light' | 'dark';
   height?: number;
+  chartType?: 'line' | 'area' | 'bars' | 'candlesticks';
 }
 
 export interface ProcessStepDetails {
@@ -124,11 +125,15 @@ export interface ProcessStep {
 export interface ChatMessage {
   id: string;
   type: 'user' | 'clarification' | 'result' | 'assistant';
+  responseId?: string;
   content: string;
   timestamp: string;
   clarifications?: ClarifyRequest[];
   answers?: Record<string, any>;
   analysis?: string;
+  analysisSources?: Record<string, boolean> | null;
+  analysisSections?: Record<string, any> | null;
+  llmAnalysis?: string | null;
   chartSpec?: any;
   sqlQuery?: string;
   dataSample?: any[];
@@ -263,5 +268,6 @@ export interface ProjectData {
   technologies: string[];
   imageUrl: string;
 }
+
 
 

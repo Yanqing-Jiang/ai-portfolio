@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef } from 'react';
+﻿import React, { useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   ReactFlow,
   MiniMap,
@@ -492,7 +492,7 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
           {currentStatus && <span className="text-gray-400">{currentStatus}</span>}
         </div>
         <div className="flex items-center gap-3 text-[10px] text-gray-400">
-          <span>{`Phase › ${activePhase.toUpperCase()}`}</span>
+          <span>{`Phase â€º ${activePhase.toUpperCase()}`}</span>
           {typeof progressPercent === 'number' && <span>{progressPercent}% complete</span>}
           {currentTimestamp && <span>{new Date(currentTimestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>}
           {currentDuration && <span>{currentDuration}</span>}
@@ -565,4 +565,9 @@ export const WorkflowCanvas: React.FC<WorkflowCanvasProps> = (props) => (
 );
 
 export default WorkflowCanvas;
+
+
+
+
+
 
