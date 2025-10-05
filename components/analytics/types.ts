@@ -92,10 +92,14 @@ export interface WebSearchResult {
   fetchedAt?: string;
   latencyMs?: number | null;
   ready?: boolean;
+  error?: string;
+  reason?: string;
+  provider?: string;
+  model?: string;
 }
 
 export interface StockWidgetConfig {
-  symbols: string[];
+  symbols: (string | [string, string])[];
   original?: string[];
   generated_at?: string;
   locale?: string;
@@ -228,6 +232,7 @@ export interface ProcessPanelProps {
   steps: ProcessStep[];
   flowMode: FlowMode;
   layoutMode?: 'sequential' | 'lanes';
+  showVisualization?: boolean;
   show: boolean;
   onClose: () => void;
   showElapsedTime?: boolean;
@@ -305,5 +310,8 @@ export interface ProjectData {
   technologies: string[];
   imageUrl: string;
 }
+
+
+
 
 

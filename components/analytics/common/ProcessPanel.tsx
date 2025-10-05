@@ -11,6 +11,7 @@ interface ProcessPanelProps {
   flowMode: FlowMode;
   show: boolean;
   onClose: () => void;
+  showVisualization?: boolean;
   title?: string;
   subtitle?: string;
   draggable?: boolean;
@@ -163,6 +164,7 @@ export const ProcessPanel: React.FC<ProcessPanelProps> = ({
   singleAgentFanout = null,
   show,
   onClose,
+  showVisualization = true,
   title = 'Agent Thinking Process',
   subtitle = 'Live reasoning telemetry rendered as an interactive graph.',
   draggable = true,
@@ -212,6 +214,9 @@ export const ProcessPanel: React.FC<ProcessPanelProps> = ({
   }, [flowMode, layoutMode]);
 
   const [focusedPane, setFocusedPane] = useState<PaneFocus>(() => {
+    if (!showVisualization) {
+      return 'ledger';
+    }
     if (!isBrowser) {
       return 'canvas';
     }
@@ -229,11 +234,17 @@ export const ProcessPanel: React.FC<ProcessPanelProps> = ({
   }, [panelState]);
 
   useEffect(() => {
-    if (!isBrowser) {
+    if (!isBrowser || !showVisualization) {
       return;
     }
     window.localStorage.setItem(PANE_KEY, focusedPane);
-  }, [focusedPane]);
+  }, [focusedPane, showVisualization]);
+
+  useEffect(() => {
+    if (!showVisualization) {
+      setFocusedPane('ledger');
+    }
+  }, [showVisualization]);
 
   const orderedSteps = useMemo(() => {
     if (!steps?.length) {
@@ -385,9 +396,9 @@ export const ProcessPanel: React.FC<ProcessPanelProps> = ({
     return null;
   }
 
-  const flowMeta = FLOW_META[flowMode];
-  const isCanvasExpanded = focusedPane === 'canvas';
-  const isLedgerExpanded = focusedPane === 'ledger';
+  const flowMeta = FLOW_META[flowMode] ?? FLOW_META['planner-executor'];
+  const isCanvasExpanded = showVisualization && focusedPane === 'canvas';
+  const isLedgerExpanded = !showVisualization || focusedPane === 'ledger';
 
   const renderCollapsedPane = (label: string, description: string, onRestore: () => void) => (
     <button
@@ -725,8 +736,18 @@ export const ProcessPanel: React.FC<ProcessPanelProps> = ({
             </div>
 
             <div className="flex min-h-0 flex-1 flex-col gap-3 p-4">
-              {isCanvasExpanded ? renderCanvas() : renderCollapsedPane('Query Planning & Template Selection', 'Tap to restore canvas view', () => handlePaneRestore('canvas'))}
-              {isLedgerExpanded ? renderLedger() : renderCollapsedPane('Insight Ledger', 'Tap to review finalized steps', () => handlePaneRestore('ledger'))}
+              {showVisualization ? (
+                <>
+                  {isCanvasExpanded
+                    ? renderCanvas()
+                    : renderCollapsedPane('Query Planning & Template Selection', 'Tap to restore canvas view', () => handlePaneRestore('canvas'))}
+                  {isLedgerExpanded
+                    ? renderLedger()
+                    : renderCollapsedPane('Insight Ledger', 'Tap to review finalized steps', () => handlePaneRestore('ledger'))}
+                </>
+              ) : (
+                renderLedger()
+              )}
             </div>
 
             {resizable && !panelState.isMaximized && (
@@ -740,24 +761,3 @@ export const ProcessPanel: React.FC<ProcessPanelProps> = ({
 };
 
 export default ProcessPanel;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

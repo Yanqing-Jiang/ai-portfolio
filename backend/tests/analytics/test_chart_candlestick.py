@@ -86,3 +86,26 @@ def test_extract_stock_widget_preserves_new_fields():
     assert widget["showMA"] is False
     assert widget["autosize"] is True
     assert widget["bars"][0]["open"] == 450.12
+def test_extract_stock_widget_returns_widget_when_ready_false():
+    payload = {
+        "tool": "stock_tracker",
+        "payload": {
+            "ready": False,
+            "tickers": ["NVDA"],
+            "stock_widget": {
+                "symbols": [["NASDAQ:NVDA", "NVDA"]],
+                "chartType": "candlesticks",
+                "showVolume": True,
+                "showMA": False,
+                "autosize": True,
+                "height": 420,
+            },
+        },
+    }
+
+    widget = _extract_stock_widget([payload])
+
+    assert widget is not None
+    assert widget["symbols"][0][0] == "NASDAQ:NVDA"
+    assert widget["chartType"] == "candlesticks"
+    assert widget["showVolume"] is True

@@ -1,11 +1,12 @@
 
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
   BrowserRouter,
   Routes,
   Route,
   Navigate,
   useNavigate,
+  useLocation,
   useParams,
 } from 'react-router-dom';
 import Sidebar from './components/Sidebar';
@@ -35,6 +36,8 @@ const Layout: React.FC = () => {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false); // Default closed for mobile-first
   const [isMobile, setIsMobile] = useState(false);
   const navigate = useNavigate();
+  const location = useLocation();
+  const mainContentRef = useRef<HTMLDivElement>(null);
 
   // Check if screen is mobile size
   useEffect(() => {
@@ -52,6 +55,17 @@ const Layout: React.FC = () => {
     window.addEventListener('resize', checkMobile);
     return () => window.removeEventListener('resize', checkMobile);
   }, []);
+
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => {
+      if (mainContentRef.current) {
+        mainContentRef.current.scrollTo({ top: 0, behavior: 'auto' });
+      } else {
+        window.scrollTo({ top: 0, behavior: 'auto' });
+      }
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [location.pathname]);
 
   // navigation helpers
   const goHome = () => {
@@ -96,7 +110,7 @@ const Layout: React.FC = () => {
         </button>
 
         {/* Main content area with fluid dimensions */}
-        <main className="flex-1 overflow-y-auto pt-16 md:pt-0">
+        <main ref={mainContentRef} className="flex-1 overflow-y-auto pt-16 md:pt-0">
           <Routes>
             <Route
               path="/"
@@ -126,3 +140,6 @@ const App: React.FC = () => (
 );
 
 export default App;
+
+
+

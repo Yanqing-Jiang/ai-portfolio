@@ -1,4 +1,4 @@
-﻿import React, { useCallback, useEffect, useMemo, useRef } from "react";
+import React, { useCallback, useEffect, useMemo, useRef } from "react";
 import {
   ReactFlow,
   ReactFlowProvider,
@@ -8,7 +8,11 @@ import {
   Edge,
   Position,
   ReactFlowInstance,
-} from "@xyflow/react";
+  Controls,
+  MiniMap,
+  Background,
+  BackgroundVariant,
+} from '@xyflow/react';
 import "@xyflow/react/dist/style.css";
 
 import { ProcessNode } from "./ProcessNode";
@@ -19,6 +23,14 @@ import {
   FanoutBranchStatus,
   SingleAgentFanoutBranch,
 } from "../types";
+
+const BRANCH_GROUP_MAP: Record<string, string> = {
+  sql_planner: 'planner',
+  chart_builder: 'chart',
+  stock_tracker: 'chart',
+  web_retriever: 'web',
+  narrative_synthesizer: 'analyst',
+};
 
 interface ProcessNodeData {
   step: ProcessStep;
@@ -141,8 +153,9 @@ const SingleAgentFanoutCanvasInner: React.FC<SingleAgentFanoutCanvasProps> = ({ 
         parallelGroup: "fanout",
         sequence: 0,
       },
-      draggable: false,
+      draggable: true,
       connectable: false,
+      dragHandle: '.process-node__drag-handle',
     });
 
     let agentStatus: ProcessStep["status"] = "pending";
@@ -197,8 +210,9 @@ const SingleAgentFanoutCanvasInner: React.FC<SingleAgentFanoutCanvasProps> = ({ 
         parallelGroup: "fanout",
         sequence: 1,
       },
-      draggable: false,
+      draggable: true,
       connectable: false,
+      dragHandle: '.process-node__drag-handle',
     });
 
     const halfSpread = (branchCount - 1) / 2;
@@ -338,8 +352,9 @@ const SingleAgentFanoutCanvasInner: React.FC<SingleAgentFanoutCanvasProps> = ({ 
         parallelGroup: "fanout",
         sequence: branchCount + 2,
       },
-      draggable: false,
+      draggable: true,
       connectable: false,
+      dragHandle: '.process-node__drag-handle',
     });
 
     edgesList.push({

@@ -375,11 +375,12 @@ async def merge_answers(
                 ticker = value.split('(')[0].strip()
             else:
                 ticker = str(value).strip()
-            
-            # Validate and sanitize
-            companies = configs.get('companies', {}).get('selection_rules', {}).get('default_companies', {}).get('tickers', [])
+
+            # Validate and sanitize against configured or default ticker list
+            from .companies import get_ticker_list
+            companies = get_ticker_list(configs)
             valid_ticker = sanitize_ticker(ticker, companies)
-            
+
             if valid_ticker:
                 intent.slots_detected['company'] = valid_ticker
                 assumptions.append(f"Using company: {valid_ticker}")
@@ -388,7 +389,8 @@ async def merge_answers(
                 fallback = companies[0] if companies else 'NVDA'
                 intent.slots_detected['company'] = fallback
                 assumptions.append(f"Invalid company selection, using fallback: {fallback}")
-                elif slot == 'timeframe':
+        
+        elif slot == 'timeframe':
             # Parse timeframe string or explicit fiscal year
             if isinstance(value, str):
                 raw_value = value.strip()

@@ -12,9 +12,11 @@ from ..core.companies import (
 )
 from ..core.context import get_configs
 from ..core.state import IntentModel, QueryPlanModel
+from ..semantic.catalog import get_semantic_catalog
 from .sql_planner import plan_sql_rule_based
 
 CONFIGS = get_configs()
+SEMANTIC_CATALOG = get_semantic_catalog()
 logger = logging.getLogger(__name__)
 
 
@@ -49,7 +51,7 @@ def compile_sql_from_plan(
 
     years_back = plan_dict.get('timeframe', {}).get('years_back')
     if not years_back:
-        defaults = cfg.get('database', {}).get('query_defaults', {})
+        defaults = SEMANTIC_CATALOG.query_defaults()
         years_back = defaults.get('default_years_back', 5)
 
     granularity = plan.granularity if isinstance(plan, QueryPlanModel) else plan_dict.get('granularity', 'annual')
@@ -116,5 +118,3 @@ def _generic_sql(plan: QueryPlanModel, ticker_clause: str, years_back: int, gran
         base.append(" GROUP BY ticker, calendar_year")
     base.append(f" ORDER BY ticker, {order_by_clause}")
     return "".join(base)
-
-

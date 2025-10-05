@@ -1,10 +1,11 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 from pathlib import Path
 from typing import Dict, Any
 import yaml
 
 # Point to shared YAMLs under backend/config/schemas
 SCHEMAS_DIR = Path(__file__).resolve().parents[2] / "config" / "schemas"
+
 
 class Configs:
     def __init__(self) -> None:
@@ -13,19 +14,32 @@ class Configs:
         self.charts: Dict[str, Any] = {}
         self.companies: Dict[str, Any] = {}
         self.database: Dict[str, Any] = {}
+        self.semantic: Dict[str, Any] = {}
 
     def load(self) -> "Configs":
         def _load(name: str) -> Dict[str, Any]:
-            p = SCHEMAS_DIR / f"{name}.yaml"
-            if p.exists():
-                with p.open("r", encoding="utf-8") as f:
-                    return yaml.safe_load(f) or {}
+            path = SCHEMAS_DIR / f"{name}.yaml"
+            if path.exists():
+                with path.open("r", encoding="utf-8") as handle:
+                    return yaml.safe_load(handle) or {}
             return {}
+
         self.queries = _load("queries")
         self.metrics = _load("metrics")
         self.charts = _load("charts")
         self.companies = _load("companies")
-        self.database = _load("database")
+
+        semantic_section = self.metrics.get("semantic", {}) if isinstance(self.metrics, dict) else {}
+        database_fallback = _load("database")
+
+        if isinstance(semantic_section, dict) and semantic_section:
+            self.database = semantic_section
+            self.semantic = semantic_section
+        else:
+            self.database = database_fallback
+            self.semantic = database_fallback if isinstance(database_fallback, dict) else {}
+
         return self
+
 
 CONFIGS = Configs().load()

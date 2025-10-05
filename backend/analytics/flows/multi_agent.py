@@ -46,8 +46,13 @@ def _infer_tickers(query: Optional[str]) -> List[str]:
 
 
 def _web_search_enabled() -> bool:
-    value = os.getenv("ANALYTICS_ENABLE_WEB_SEARCH", "0").strip().lower()
-    return value in {"1", "true", "yes", "on"}
+    value = os.getenv("ANALYTICS_ENABLE_WEB_SEARCH")
+    if value is None:
+        return True
+    normalized = value.strip().lower()
+    if not normalized:
+        return True
+    return normalized not in {"0", "false", "no", "off"}
 
 
 RECENCY_KEYWORDS = (
@@ -498,10 +503,6 @@ async def _web_research_agent(context: AgentRunContext) -> AgentResult:
     if not _web_search_enabled():
         web_ctx['attempts'] = attempts_meta
         return AgentResult(name='web_research', output={'status': 'skip', 'reason': 'web_search_disabled', 'attempts': attempts_meta, 'attempt_count': 0})
-    if not os.getenv('OPENAI_API_KEY'):
-        web_ctx['attempts'] = attempts_meta
-        return AgentResult(name='web_research', output={'status': 'skip', 'reason': 'api_key_missing', 'attempts': attempts_meta, 'attempt_count': 0})
-
     repository = get_session_state_repository()
     snapshot = await repository.load(session_id) if session_id else None
     cached_payload = None
@@ -1195,7 +1196,3 @@ class MultiAgentFlow:
 
 
 __all__ = ["MultiAgentFlow"]
-
-
-
-

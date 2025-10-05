@@ -1,12 +1,14 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import copy
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 
 from ..core.context import get_configs
 from ..core.state import IntentModel, QueryPlanModel
+from ..semantic.catalog import get_semantic_catalog
 
 CONFIGS = get_configs()
+SEMANTIC_CATALOG = get_semantic_catalog()
 
 
 def _coerce_slots(intent: IntentModel) -> Dict[str, Any]:
@@ -16,62 +18,87 @@ def _coerce_slots(intent: IntentModel) -> Dict[str, Any]:
     return dict(slots)
 
 
+def _fallback_plan_defaults(slots: Dict[str, Any]) -> Dict[str, Any]:
+    defaults = SEMANTIC_CATALOG.query_defaults()
+    years_back = defaults.get("default_years_back", 5)
+    raw_granularity = slots.get("granularity")
+    granularity = "quarterly" if isinstance(raw_granularity, str) and "quarter" in raw_granularity.lower() else "annual"
+    time_grain = SEMANTIC_CATALOG.get_time_grain(granularity)
+    limit = defaults.get("default_limit", SEMANTIC_CATALOG.default_limit() or 500)
+    timeframe = {}
+    timeframe_slot = slots.get("timeframe")
+    if isinstance(timeframe_slot, dict):
+        timeframe.update(timeframe_slot)
+    timeframe.setdefault("years_back", years_back)
+    return {
+        "metrics": ["Revenue"],
+        "derived_metrics": [],
+        "comparison": None,
+        "granularity": granularity,
+        "timeframe": timeframe,
+        "group_by": time_grain.group_by,
+        "filters": {},
+        "limit": limit,
+    }
+
+
 def plan_sql_rule_based(intent: IntentModel, configs: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    cfg = configs or CONFIGS.__dict__
+    _ = configs or CONFIGS.__dict__
     slots = _coerce_slots(intent)
-    intent_key = intent.intent_key
+    intent_spec = SEMANTIC_CATALOG.get_intent_spec(intent.intent_key)
 
-    metrics: list[str] = []
-    derived: list[str] = []
-    comparison: Optional[str] = None
+    if not intent_spec:
+        return _fallback_plan_defaults(slots)
 
-    if intent_key == "market_share_all":
-        metrics = ["Revenue"]
-        comparison = "all"
-    elif intent_key == "market_share_single":
-        metrics = ["Revenue"]
-        comparison = "single"
-    elif intent_key in {"margins_vs_peers", "margin_growth_vs_peers"}:
-        metrics = ["Revenue", "Gross Profit", "Operating Income", "Net Income"]
-        derived = ["gross_margin", "operating_margin", "net_margin"]
-        comparison = "vs_avg"
-    elif intent_key == "revenue_growth_vs_avg":
-        metrics = ["Revenue"]
-        comparison = "vs_avg"
-    elif intent_key in {"rnd_intensity_vs_peers", "rnd_expense_vs_peers"}:
-        metrics = ["Revenue", "R&D Expense"] if intent_key == "rnd_intensity_vs_peers" else ["R&D Expense"]
-        if intent_key == "rnd_intensity_vs_peers":
-            derived = ["rnd_intensity"]
-        comparison = "vs_avg"
-    elif intent_key == "rnd_top_spender":
-        metrics = ["R&D Expense"]
-        comparison = "leaderboard"
-    else:
-        metrics = ["Revenue"]
+    defaults = SEMANTIC_CATALOG.query_defaults()
 
-    timeframe = slots.get("timeframe", {}) if isinstance(slots.get("timeframe"), dict) else {}
+    # ---- metrics ----
+    metric_specs = SEMANTIC_CATALOG.list_metric_specs(intent_spec.metrics)
+    metrics: List[str] = [spec.source for spec in metric_specs if not spec.is_derived]
+    if not metrics:
+        metrics = intent_spec.metrics or ["Revenue"]
+    metrics = list(dict.fromkeys(metrics))
+
+    derived_specs = SEMANTIC_CATALOG.list_metric_specs(intent_spec.derived_metrics)
+    derived = [spec.key for spec in derived_specs]
+
+    # ---- timeframe ----
+    timeframe_input = slots.get("timeframe")
+    timeframe: Dict[str, Any] = {}
+    if isinstance(timeframe_input, dict):
+        timeframe.update(timeframe_input)
     years_back = timeframe.get("years_back")
-    default_years = (cfg.get("database", {}) or {}).get("query_defaults", {}).get("default_years_back", 5)
-    years_back = years_back or default_years
+    if not years_back:
+        years_back = intent_spec.default_years_back or defaults.get("default_years_back") or SEMANTIC_CATALOG.default_years_back() or 5
+        timeframe["years_back"] = years_back
 
-    raw_granularity = slots.get("granularity", "annual")
-    granularity = "quarterly" if raw_granularity and "quarter" in str(raw_granularity).lower() else "annual"
+    # ---- granularity ----
+    requested_grain = slots.get("granularity")
+    granularity = SEMANTIC_CATALOG.resolve_granularity(
+        requested=requested_grain,
+        allowed=intent_spec.allowed_granularities,
+        default_key=intent_spec.default_granularity,
+    )
+    time_grain = SEMANTIC_CATALOG.get_time_grain(granularity)
 
-    group_by = ["calendar_year"]
-    if granularity == "quarterly":
-        group_by.extend(["calendar_quarter_num", "calendar_quarter"])
+    group_by = intent_spec.group_by or time_grain.group_by
+    group_by = list(dict.fromkeys(group_by)) if group_by else time_grain.group_by
 
-    default_limit = (cfg.get("database", {}) or {}).get("query_defaults", {}).get("default_limit", 500)
+    filters = dict(intent_spec.filters or {})
+    if time_grain.filter and not filters.get("time_grain_filter"):
+        filters["time_grain_filter"] = time_grain.filter
+
+    limit = intent_spec.default_limit or defaults.get("default_limit") or SEMANTIC_CATALOG.default_limit() or 500
 
     plan_dict = {
         "metrics": metrics,
         "derived_metrics": derived,
-        "timeframe": {"years_back": years_back},
+        "timeframe": timeframe,
         "granularity": granularity,
-        "comparison": comparison,
+        "comparison": intent_spec.comparison,
         "group_by": group_by,
-        "filters": {},
-        "limit": default_limit,
+        "filters": filters,
+        "limit": limit,
     }
     return plan_dict
 
@@ -103,6 +130,4 @@ def choose_template(
             if template.get('single_year_description'):
                 template['description'] = template['single_year_description']
     return template
-
-
 

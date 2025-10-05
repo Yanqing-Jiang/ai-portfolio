@@ -11,7 +11,7 @@ The analytics package powers the next-generation analytics memory experience. It
 5. **Template context** - `sql.sql_planner`, `core.config_store`, and the new `PlannerResultModel` track YAML-derived patterns so downstream flows receive consistent metadata.
 6. **SQL generation & retry loop** - `sql.prompt_builder` builds Responses prompts; `unified_responses_client` runs up to three attempts (via `build_sql_retry_messages(...)`) and records each in `ctx.sql_attempts`.
 7. **Validation & execution** - `sql.validator` enforces table/limit guardrails; `sql.executor` runs the final statement once validation passes, otherwise emits `SQL_VALIDATION_FINAL` telemetry and aborts.
-8. **Real-time research** - `_web_search_phase` now invokes Gemini 2.5 Flash with the Google Search grounding tool to fetch late-breaking headlines, earnings notes, and regulatory filings for the detected tickers. The normalized payload travels through `EventEmitter.result("web_search", ...)` so downstream flows and the UI receive `web_context` snippets.
+8. **Real-time research** - `_web_search_phase` now invokes Gemini 2.5 Flash with the Google Search grounding tool to fetch late-breaking headlines, earnings notes, and regulatory filings for detected tickers. When Gemini/Google credentials are missing the phase emits a `web_search` result with `search_api_missing` metadata instead of aborting, so downstream tasks continue while still recording the attempted lookup. The normalized payload travels through `EventEmitter.result("web_search", ...)` so downstream flows and the UI receive `web_context` snippets whenever search completes.
 9. **Insights & visualization** - `core.analysis`, `core.charting`, and `plan_chart_rule_based` transform result sets into chart specs and narrative output, enriching payloads with tool bundles when parallel adapters run; the summary lands in `PlannerResultModel.analysis` for reuse by downstream modes.
 10. **Telemetry & cleanup** - `core.events.EventEmitter` streams SSE events end-to-end, `collect_tool_bundle` attaches auxiliary data, and `core.clarify` prunes expired session state.
 
@@ -128,14 +128,14 @@ Implements user-facing agent experiences.
 - `multi_agent.py` - `MultiAgentFlow.events(...)` replays planner decisions through agent personas (planner, SQL specialist, risk controller, viz designer, insight reviewer).
 - `workflow.py` - `analytics_memory_workflow(query, flow)` multiplexes flow objects, while `get_available_flows()` exposes the `/api/analytics/memory/stream?flow=` selector used by the UI.
 - `solo_agent.md` - Deploy-time prompt blueprint enumerating tool affordances and cache guidance consumed by the single-agent flow.
-- `tooling.py` - Hosts `ToolTaskGroup` and default adapters that emit preview telemetry when Mode 1 parallelism is toggled on.
+- `tooling.py` - Hosts `ToolTaskGroup` and default adapters that emit preview telemetry when Mode 1 parallelism is toggled on. `WebRetrieverAdapter` now checks `has_search_api_key()` so it can return a skip result when Gemini/Google credentials are absent and persist cache hits when search succeeds, while `StockTrackerAdapter` shares the chart agent lane so fan-out visuals stay consistent across flow modes.
 
 ### sql/
 Handles YAML-driven SQL authoring and guardrails.
 
 - `sql_planner.py` - `plan_sql_rule_based(intent)` composes metric lists, timeframe defaults, and comparison modes; `choose_template` now clones YAML patterns and swaps in the `single_year_template` when `timeframe.start_year` is locked, keeping multi-year leaderboards as the default.
 - `templates.py` - `fetch_templates_for_intent(intent_key)` lists YAML candidates, while `choose_template(...)` (in `sql_planner`) selects the final pattern.
-- `prompt_builder.py` - `build_sql_messages(...)` assembles the initial Responses prompt while `build_sql_retry_messages(...)` summarizes failures for follow-up attempts; `extract_sql_from_response(...)` parses fenced SQL blocks.
+- `prompt_builder.py` - `build_sql_messages(...)` assembles the initial Responses prompt while `build_sql_retry_messages(...)` summarizes failures for follow-up attempts; `extract_sql_from_response(...)` parses fenced SQL blocks. The constraint copy now explicitly instructs Responses to aggregate quarterly rows (`calendar_quarter_num IS NOT NULL`) when summing revenue, R&D, or cash flow metrics so LLM-generated SQL no longer filters on `calendar_quarter_num IS NULL` and silently returns empty annual datasets.
 - `compiler.py` - legacy helper that can still hydrate templates for experiments, though the default planner now leans on Responses retries instead of deterministic compilation.
 - `validator.py` / `sql_validate.py` - `validate_sql(...)` applies whitelist and limit checks before execution.
 - `executor.py` - `execute_sql(...)` runs asyncpg queries with cancellation and timeout guards.
@@ -159,12 +159,14 @@ Backend regression tests live under `backend/tests/analytics/` and cover:
 - SQL prompt/template handling (`test_flow_modes_queries.py`, `test_prompt_builder.py`).
 - Clarification behaviour (`test_clarify_timeframe.py` exercises the new fiscal-year prompt path and single-year template selection).
 - Cache/config behaviour (`test_cache_service.py`).
+- Search resiliency (`test_web_retriever_adapter.py`) verifies the adapter skips gracefully without API keys and persists cache metadata after a successful lookup.
+- Flow-level hydration (`test_multi_agent_flow.py`) ensures the MultiAgent flow still records web context payloads when orchestration is stubbed.
 
 Frontend analytics components consume the SSE payloads described here; see `components/analytics/` for the hook (`useAnalyticsMemoryStream`) and visualization panels that mirror the telemetry contract.
 
 ## Operational Notes
 - **Configuration** - YAML files in `backend/config/schemas/` (e.g., `queries.yaml`) drive template selection and metric metadata.
-- **Environment** - `DATABASE_URL`, `OPENAI_API_KEY`, `GOOGLE_API_KEY` (or `GEMINI_API_KEY` / `GEMIN_API_KEY` for Gemini search), and optional reasoning overrides (`SUPERVISOR_REASONING_EFFORT`) must be set before running flows.
+- **Environment** - `DATABASE_URL`, `OPENAI_API_KEY`, `GEMINI_API_KEY`for Gemini search), and optional reasoning overrides (`SUPERVISOR_REASONING_EFFORT`) must be set before running flows.
 - **API integration** - `/api/analytics/memory/stream` (FastAPI) maps query parameters to `analytics_memory_workflow` and streams events directly to the frontend `EventSource` client.
 
 
