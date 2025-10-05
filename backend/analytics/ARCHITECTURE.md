@@ -1,4 +1,4 @@
-# Analytics Package Architecture
+﻿# Analytics Package Architecture
 
 ## Purpose
 The analytics package powers the next-generation analytics memory experience. It orchestrates multi-step agent flows, builds SQL with the OpenAI Responses API using YAML templates as guidance, validates and executes warehouse queries, enriches results with Gemini-powered market research, and streams structured telemetry to the frontend for visualization.
@@ -7,7 +7,7 @@ The analytics package powers the next-generation analytics memory experience. It
 1. **Entry point** - `analytics.flows.workflow.analytics_memory_workflow` resolves the requested flow (planner-executor, single-agent, multi-agent) and seeds a session identifier.
 2. **Flow orchestration** - each flow instance wires shared `EventEmitter` streams so progress, results, and errors surface uniformly to the UI.
 3. **LLM preflight** - `_classification_phase` calls `classify_query_async` with `gpt-5-nano-2025-08-07`; non-financial prompts emit a short `final_answer` decline and the workflow stops before generating SQL.
-4. **Intent + clarification** - `core.intent` and `core.intent_impl` detect the canonical analytics intent, derive slot assumptions, and surface clarification requests through `core.clarify` when required.
+4. **Intent + clarification** - `core.intent` and `core.intent_impl` detect the canonical analytics intent, derive slot assumptions, and surface clarification requests through `core.clarify` when required. When `ANALYTICS_SCHEMA_CLARIFIER_ENABLED` is true, `agents.schema_clarifier` checks template requirements before `_clarification_phase` so obvious single-company queries can proceed without extra prompts while still emitting targeted requests for genuinely missing slots.
 5. **Template context** - `sql.sql_planner`, `core.config_store`, and the new `PlannerResultModel` track YAML-derived patterns so downstream flows receive consistent metadata.
 6. **SQL generation & retry loop** - `sql.prompt_builder` builds Responses prompts; `unified_responses_client` runs up to three attempts (via `build_sql_retry_messages(...)`) and records each in `ctx.sql_attempts`.
 7. **Validation & execution** - `sql.validator` enforces table/limit guardrails; `sql.executor` runs the final statement once validation passes, otherwise emits `SQL_VALIDATION_FINAL` telemetry and aborts.
@@ -168,6 +168,7 @@ Frontend analytics components consume the SSE payloads described here; see `comp
 - **Configuration** - YAML files in `backend/config/schemas/` (e.g., `queries.yaml`) drive template selection and metric metadata.
 - **Environment** - `DATABASE_URL`, `OPENAI_API_KEY`, `GEMINI_API_KEY`for Gemini search), and optional reasoning overrides (`SUPERVISOR_REASONING_EFFORT`) must be set before running flows.
 - **API integration** - `/api/analytics/memory/stream` (FastAPI) maps query parameters to `analytics_memory_workflow` and streams events directly to the frontend `EventSource` client.
+
 
 
 

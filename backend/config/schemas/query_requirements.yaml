@@ -1,0 +1,16 @@
+﻿required_slots:
+  market_share_single:
+    - company
+  market_share_all: []
+  margins_vs_peers:
+    - company
+  margin_growth_vs_peers:
+    - company
+  revenue_growth_vs_avg:
+    - company
+  rnd_intensity_vs_peers:
+    - company
+  rnd_expense_vs_peers:
+    - company
+  rnd_top_spender:
+    - timeframe.start_year

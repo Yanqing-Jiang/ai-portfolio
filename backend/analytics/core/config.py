@@ -10,6 +10,7 @@ SCHEMAS_DIR = Path(__file__).resolve().parents[2] / "config" / "schemas"
 class Configs:
     def __init__(self) -> None:
         self.queries: Dict[str, Any] = {}
+        self.query_requirements: Dict[str, Any] = {}
         self.metrics: Dict[str, Any] = {}
         self.charts: Dict[str, Any] = {}
         self.companies: Dict[str, Any] = {}
@@ -25,6 +26,7 @@ class Configs:
             return {}
 
         self.queries = _load("queries")
+        self.query_requirements = _load("query_requirements")
         self.metrics = _load("metrics")
         self.charts = _load("charts")
         self.companies = _load("companies")
