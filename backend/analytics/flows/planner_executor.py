@@ -282,6 +282,14 @@ class PlannerExecutorFlow:
         last_error_detail: Optional[str] = None
         previous_sql: Optional[str] = None
 
+        messages = await build_sql_messages(
+            original_query=query,
+            intent=intent,
+            plan=plan,
+            config_store=self.config_store,
+            templates=candidate_templates,
+        )
+
         for attempt in range(1, MAX_SQL_ATTEMPTS + 1):
             attempt_start = time.time()
             attempt_record: Dict[str, Any] = {"attempt": attempt, "status": "started"}
