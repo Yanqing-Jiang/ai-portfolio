@@ -234,25 +234,23 @@ This production-grade web application automates the invoice validation and match
         coverUrl: 'http://jiangyanqing.com/wp-content/uploads/2021/10/15FA1F15-25C5-4AE6-A84A-EB5972FB0996.gif',
         imageUrl: 'http://jiangyanqing.com/wp-content/uploads/2021/10/15FA1F15-25C5-4AE6-A84A-EB5972FB0996.gif',
         link: 'https://www.jiangyanqing.com/portfolio/global-inventory-dashboard/',
-        contentHtml: `<div class="legacy-content">
+        contentHtml: `<div class="inventory-content">
           <p><em>*Real project, hence sensitive data is blurred.</em></p>
-          <img class="legacy-hero" src="https://www.jiangyanqing.com/wp-content/uploads/2021/10/15FA1F15-25C5-4AE6-A84A-EB5972FB0996.gif" alt="Global Inventory Dashboard" loading="lazy" />
-          <h3>Global Inventory Dashboard Power BI report</h3>
-          <h4>Features</h4>
-          <ul>
-            <li>One main dashboard with 20+ sub reports that users can navigate inline.</li>
-            <li>"Actions Comment" block highlights mitigation steps whenever a KPI turns red.</li>
-            <li>Built-in definitions keep KPIs transparent for every stakeholder.</li>
-          </ul>
-          <div class="legacy-gallery">
-            <img src="https://www.jiangyanqing.com/wp-content/uploads/2021/10/Global-Inventory-Dashboard-1024x582.png" alt="Global inventory executive view" loading="lazy" />
-            <img src="https://www.jiangyanqing.com/wp-content/uploads/2021/10/Navigate.png" alt="Inventory navigation tabs" loading="lazy" />
-            <img src="https://www.jiangyanqing.com/wp-content/uploads/2021/10/Actions.png" alt="Mitigation action cards" loading="lazy" />
-            <img src="https://www.jiangyanqing.com/wp-content/uploads/2021/10/Definition.png" alt="KPI definition reference" loading="lazy" />
-            <img src="https://www.jiangyanqing.com/wp-content/uploads/2021/10/Add-Comment-Blurred.gif" alt="Comment workflow animation" loading="lazy" />
+          <img class="inventory-main" src="https://yanqinghot.blob.core.windows.net/public-access/Inventory%20Dashboard/Global-Inventory-Dashboard.png" alt="Global Inventory Dashboard overview" loading="lazy" />
+          <div class="inventory-row">
+            <img class="inventory-sidebar" src="https://yanqinghot.blob.core.windows.net/public-access/Inventory%20Dashboard/side%20bar.gif" alt="Inventory navigation sidebar animation" loading="lazy" />
+            <div class="inventory-text">
+              <h3>Global Inventory Dashboard Power BI report</h3>
+              <h4>Features</h4>
+              <ul>
+                <li>One main dashboard with 20+ sub reports that users can navigate inline.</li>
+                <li>"Actions Comment" block highlights mitigation steps whenever a KPI turns red.</li>
+                <li>Built-in definitions keep KPIs transparent for every stakeholder.</li>
+              </ul>
+              <h3>Back-end Data Processing</h3>
+              <p>PBIX dataset -> Power BI Dataflow (Cloud) -> unified SQL queries across multiple databases. The Dataflow approach bypasses the 2 GB PBIX limit and lets other teams reuse the curated schema.</p>
+            </div>
           </div>
-          <h3>Back-end Data Processing</h3>
-          <p>PBIX dataset -> Power BI Dataflow (Cloud) -> unified SQL queries across multiple databases. The Dataflow approach bypasses the 2 GB PBIX limit and lets other teams reuse the curated schema.</p>
         </div>`
       },
       {
@@ -266,10 +264,11 @@ This production-grade web application automates the invoice validation and match
           'How are the R scripts operationalized inside Power BI?',
           'What decisions do merchandisers make with the forecasts?'
         ],
-        coverUrl: 'https://www.jiangyanqing.com/wp-content/uploads/2021/12/R-Script-1.gif',
-        imageUrl: 'https://www.jiangyanqing.com/wp-content/uploads/2021/12/R-Script-1.gif',
+        coverUrl: 'https://yanqinghot.blob.core.windows.net/public-access/R-Time-Series/R-Script-1.gif',
+        imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/R-Time-Series/R-Script-1.gif',
         link: 'https://www.jiangyanqing.com/portfolio/machine-learning-forecasting-visual/',
-        contentHtml: `<div class="legacy-content">
+        contentHtml: `<div class='legacy-content'>
+          <img class='legacy-hero' src='https://yanqinghot.blob.core.windows.net/public-access/R-Time-Series/R-dashboard.png' alt='R Time Series dashboard overview' loading='lazy' />
           <p><em>*Real project, hence sensitive data is removed.</em></p>
           <h3>Power BI Report: Advanced R Visualization</h3>
           <ul>
@@ -277,13 +276,12 @@ This production-grade web application automates the invoice validation and match
             <li>No manual steps-forecasts and visuals ship straight to decision makers.</li>
           </ul>
           <h3>Time Series Forecasting</h3>
-          <p>The solution benchmarks seven models (Naive, SES, Holt's, Auto ARIMA, TBATS, Prophet, Neural Network) on 90-day holdout data and promotes the best performer before forecasting the next 90 days.</p>
-          <img class="legacy-hero" src="https://www.jiangyanqing.com/wp-content/uploads/2021/12/R-Script-1.gif" alt="R Time Series Forecasting" loading="lazy" />
-          <div class="legacy-gallery">
-            <img src="https://www.jiangyanqing.com/wp-content/uploads/2021/10/2021-10-09_18-33-40-1024x575.png" alt="Forecast accuracy comparison" loading="lazy" />
-            <img src="https://www.jiangyanqing.com/wp-content/uploads/2021/10/2021-10-09_18-35-28-1024x578.png" alt="Model selection dashboard" loading="lazy" />
-          </div>
+          <p>The solution benchmarks seven models (Naive, SES, Holt&apos;s, Auto ARIMA, TBATS, Prophet, Neural Network) on 90-day holdout data and promotes the best performer before forecasting the next 90 days.</p>
+          <img class='legacy-hero' src='https://yanqinghot.blob.core.windows.net/public-access/R-Time-Series/R-Script-1.gif' alt='R Time Series Forecasting' loading='lazy' />
           <p>Additional Power BI reports reuse the same R pipeline for broader analytics.</p>
+          <div class='legacy-gallery'>
+            <img src='https://yanqinghot.blob.core.windows.net/public-access/R-Time-Series/PBI%20advance%20forecasting.png' alt='Power BI advanced forecasting report' loading='lazy' />
+          </div>
         </div>`
       },
       {
@@ -328,8 +326,8 @@ This production-grade web application automates the invoice validation and match
           'Which teams rely on the tracker day to day?',
           'Describe the data captured for each Capex line item.'
         ],
-        coverUrl: 'http://jiangyanqing.com/wp-content/uploads/2021/10/Capex-Project-Tracker-Showcase.gif',
-        imageUrl: 'http://jiangyanqing.com/wp-content/uploads/2021/10/Capex-Project-Tracker-Showcase.gif',
+        coverUrl: 'https://yanqinghot.blob.core.windows.net/public-access/Capex-Project-Tracker-Showcase-1.gif',
+        imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/Capex-Project-Tracker-Showcase-1.gif',
         link: 'https://www.jiangyanqing.com/portfolio/capex-project-tracker/',
         contentHtml: `<div class="legacy-content">
           <p><em>*Real project, hence sensitive data is blurred.</em></p>
@@ -340,7 +338,7 @@ This production-grade web application automates the invoice validation and match
             <li>Full data pipeline ends in Power BI reporting for finance and procurement.</li>
           </ul>
           <div class="legacy-gallery">
-            <img src="https://www.jiangyanqing.com/wp-content/uploads/2021/12/Capex-Project.gif" alt="Capex request intake workflow" loading="lazy" />
+            <img src="https://yanqinghot.blob.core.windows.net/public-access/Capex-Project-Tracker-Showcase-1.gif" alt="Capex request intake workflow" loading="lazy" />
             <img src="https://www.jiangyanqing.com/wp-content/uploads/2021/10/2021-10-09_18-35-28-1024x578.png" alt="Capital approval summary dashboard" loading="lazy" />
           </div>
         </div>`
@@ -383,3 +381,4 @@ This production-grade web application automates the invoice validation and match
     ],
   },
 ];
+

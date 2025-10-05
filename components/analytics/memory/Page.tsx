@@ -1,4 +1,4 @@
-ï»¿import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import {
   AnalysisCard,
@@ -16,10 +16,10 @@ type FlowOption = FlowMode;
 
 const FLOW_META: Record<FlowOption, { chip: string; chipClass: string; helper: string; placeholder: string }> = {
   'planner-executor': {
-    chip: 'Planner -> Executor',
+    chip: 'Direct Workflow',
     chipClass: 'bg-emerald-600/20 text-emerald-300 border-emerald-500/30',
-    helper: 'Deterministic planner/executor pipeline with YAML-backed SQL guidance.',
-    placeholder: 'Ask about financial data (planner/executor flow)',
+    helper: 'Deterministic direct workflow with YAML-backed SQL guidance.',
+    placeholder: 'Ask about financial data (direct workflow)',
   },
   'single-agent': {
     chip: 'Single Agent + Tools',
@@ -30,8 +30,8 @@ const FLOW_META: Record<FlowOption, { chip: string; chipClass: string; helper: s
   'multi-agent': {
     chip: 'Multi-Agent Orchestration',
     chipClass: 'bg-purple-600/20 text-purple-300 border-purple-500/30',
-    helper: 'Tool-native orchestrator coordinating planner, query, analyst, chart, market, and web specialists.',
-    placeholder: 'Ask about financial data (multi-agent flow)',
+    helper: 'Lightweight collaboration across planner, analyst, and charting agents.',
+    placeholder: 'Ask about financial data (multi-agent orchestration)',
   },
 };
 
@@ -75,15 +75,15 @@ const MemoryAnalyticsPage: React.FC = () => {
   // Project data for the analytics memory project
   const projectData = {
     title: 'Next Gen Analytics (Memory)',
-    description: `â€¢ AI-powered financial analytics with LangGraph memory pipeline and intelligent clarifications.
-â€¢ Uses advanced intent detection ? SQL planning ? Chart Generation ? financial analysis workflow.
-â€¢ Real-time streaming with conversational clarifications and session memory management.
+    description: `• AI-powered financial analytics with LangGraph memory pipeline and intelligent clarifications.
+• Uses advanced intent detection ? SQL planning ? Chart Generation ? financial analysis workflow.
+• Real-time streaming with conversational clarifications and session memory management.
 
 Result:
 
-â€¢ Interactive financial analysis for AMD, AVGO, INTC, MU, NVDA, QCOM, TXN with memory optimization.
-â€¢ Streaming agent coordination with inline clarification UI.
-â€¢ Dynamic Chart Generation with session persistence and memory-aware caching.`,
+• Interactive financial analysis for AMD, AVGO, INTC, MU, NVDA, QCOM, TXN with memory optimization.
+• Streaming agent coordination with inline clarification UI.
+• Dynamic Chart Generation with session persistence and memory-aware caching.`,
     technologies: ['LangGraph', 'Memory Pipeline', 'Intent Detection', 'Clarifications', 'FastAPI', 'PostgreSQL'],
     imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/next-gen-sql.png'
   };
@@ -299,7 +299,7 @@ Result:
                   disabled={isLoading}
                   className="px-3 py-2 text-xs sm:text-sm bg-gray-700/80 border border-emerald-500/30 rounded-lg focus:ring-2 focus:ring-emerald-500/40 focus:border-emerald-500/40 text-gray-100 transition-all duration-200"
                 >
-                  <option value="planner-executor">Planner / Executor</option>
+                  <option value="planner-executor">Direct Workflow</option>
                   <option value="single-agent">Single Agent + Tools</option>
                   <option value="multi-agent">Multi-Agent Orchestration</option>
                 </select>
@@ -357,7 +357,6 @@ Result:
 };
 
 export default MemoryAnalyticsPage;
-
 
 
 

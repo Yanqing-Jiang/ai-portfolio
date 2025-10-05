@@ -241,7 +241,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ projectData, onSelectProject 
               variant="inline"
               size="xl"
               gradient={false}
-              intervalMs={3600}
+              intervalMs={2900}
               words={["AI Agent Systems","Insight Automation","Enterprise Data Platform","Long-term Memory Agent"]}
             />
           </div>

@@ -44,9 +44,9 @@ class SingleAgentToolsFlow:
         active_session = session_id
         planner_events = getattr(self._planner, "events", None)
         if callable(planner_events):
-            planner_stream = planner_events(query, session_id=session_id, skip_preflight=True)
+            planner_stream = planner_events(query, session_id=session_id)
         else:
-            planner_stream = run_planner_executor(query, session_id=session_id, skip_preflight=True)
+            planner_stream = run_planner_executor(query, session_id=session_id)
 
         async for event in planner_stream:
             if event.get("event") == "session_started":
@@ -139,4 +139,5 @@ class SingleAgentToolsFlow:
         if tool == "analysis_writer":
             return {"analysis_length": data.get("analysis_length")}
         return data
+
 

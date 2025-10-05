@@ -1,4 +1,4 @@
-﻿import React from 'react';
+import React from 'react';
 import type { Project } from '../types';
 
 interface LegacyProjectPageProps {
@@ -70,6 +70,45 @@ const LegacyProjectPage: React.FC<LegacyProjectPageProps> = ({ project }) => {
           grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
           gap: 1rem;
           margin: 1.5rem 0;
+        }
+        .legacy-content .inventory-content {
+          display: flex;
+          flex-direction: column;
+          gap: 2rem;
+        }
+        .legacy-content .inventory-main {
+          display: block;
+          width: 100%;
+          margin: 0;
+        }
+        .legacy-content .inventory-row {
+          display: flex;
+          flex-direction: row;
+          align-items: flex-start;
+          gap: 2rem;
+        }
+        .legacy-content .inventory-sidebar {
+          flex: 0 0 auto;
+          width: min(280px, 100%);
+          margin: 0;
+        }
+        .legacy-content .inventory-text {
+          flex: 1 1 0%;
+          color: inherit;
+        }
+        @media (min-width: 1024px) {
+          .legacy-content .inventory-content {
+            gap: 2.5rem;
+          }
+          .legacy-content .inventory-row {
+            gap: 2.5rem;
+          }
+          .legacy-content .inventory-sidebar {
+            flex-basis: 300px;
+          }
+          .legacy-content .inventory-text {
+            padding-left: 0.5rem;
+          }
         }
       `}</style>
 

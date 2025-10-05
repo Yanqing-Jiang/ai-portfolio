@@ -251,3 +251,31 @@ def timed_metric(
         if metadata:
             payload.update(metadata)
         _emit(payload)
+
+
+def gemini_call(
+    *,
+    operation: str,
+    model: Optional[str],
+    duration_ms: Optional[int],
+    status: str,
+    session_id: Optional[str] = None,
+    flow: Optional[str] = None,
+    error: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> None:
+    payload = _base_payload("gemini_call", session_id=session_id, flow=flow)
+    payload.update(
+        {
+            "operation": operation,
+            "model": model,
+            "duration_ms": duration_ms,
+            "status": status,
+        }
+    )
+    if error:
+        payload["error"] = error
+    if metadata:
+        payload["metadata"] = metadata
+    _emit(payload)
+

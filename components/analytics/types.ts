@@ -1,4 +1,4 @@
-﻿export type FlowMode = 'planner-executor' | 'single-agent' | 'multi-agent';
+export type FlowMode = 'planner-executor' | 'single-agent' | 'multi-agent';
 
 export interface FlowVisualTheme {\n  id: FlowMode;\n  accent: string;\n  nodeGradient: [string, string];\n  nodeBorder: string;\n  nodeGlow: string;\n  edgeIdle: string;\n  edgeActive: string;\n  edgeCompleted: string;\n  badgeClass: string;\n  pulseClass: string;\n}\n\n// Shared types for analytics components
 
@@ -47,6 +47,35 @@ export interface ToolFanoutResult {
   payload?: Record<string, any>;
 }
 
+
+export type FanoutBranchStatus = 'queued' | 'running' | 'completed' | 'failed' | 'stopped';
+
+export interface SingleAgentFanoutBranch {
+  id: string;
+  tool: string;
+  label: string;
+  description?: string;
+  status: FanoutBranchStatus;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  elapsedMs?: number;
+  error?: string | null;
+  metadata?: Record<string, any>;
+  payload?: Record<string, any>;
+}
+
+export interface SingleAgentFanout {
+  hasFanout: boolean;
+  branches: SingleAgentFanoutBranch[];
+  concurrencyLimit?: number;
+  activeCount: number;
+  completedCount: number;
+  failedCount: number;
+  queuedCount: number;
+  stoppedCount: number;
+  runningCount: number;
+  lastUpdated?: string;
+}
 export interface WebSearchResult {
   query?: string;
   summary?: string;
@@ -72,7 +101,6 @@ export interface StockWidgetConfig {
   locale?: string;
   colorTheme?: 'light' | 'dark';
   height?: number;
-  chartType?: 'line' | 'area' | 'bars' | 'candlesticks';
 }
 
 export interface ProcessStepDetails {
@@ -125,15 +153,11 @@ export interface ProcessStep {
 export interface ChatMessage {
   id: string;
   type: 'user' | 'clarification' | 'result' | 'assistant';
-  responseId?: string;
   content: string;
   timestamp: string;
   clarifications?: ClarifyRequest[];
   answers?: Record<string, any>;
   analysis?: string;
-  analysisSources?: Record<string, boolean> | null;
-  analysisSections?: Record<string, any> | null;
-  llmAnalysis?: string | null;
   chartSpec?: any;
   sqlQuery?: string;
   dataSample?: any[];
@@ -188,6 +212,7 @@ export interface ChartCardProps {
 }
 
 export interface ProcessPanelProps {
+  singleAgentFanout?: SingleAgentFanout | null;
   steps: ProcessStep[];
   flowMode: FlowMode;
   layoutMode?: 'sequential' | 'lanes';
@@ -268,6 +293,5 @@ export interface ProjectData {
   technologies: string[];
   imageUrl: string;
 }
-
 
 
