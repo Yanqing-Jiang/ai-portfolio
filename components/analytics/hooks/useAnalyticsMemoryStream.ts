@@ -32,6 +32,27 @@ export const useAnalyticsMemoryStream = (
   const [streamingText, setStreamingText] = useState('');
   const [webSearch, setWebSearch] = useState<WebSearchResult | null>(null);
   const [singleAgentFanout, setSingleAgentFanout] = useState<SingleAgentFanout | null>(null);
+  const resultSentRef = useRef<boolean>(false);
+  const summarySentRef = useRef<boolean>(false);
+  const emitResultOnce = useCallback(() => {
+    if (resultSentRef.current) return;
+    resultSentRef.current = true;
+    const newMessage = {
+      id: Date.now().toString(),
+      timestamp: new Date().toISOString(),
+      type: 'result' as const,
+      content: 'Analysis completed! Here are your results:',
+      analysis: workflowDataRef.current.analysis || workflowDataRef.current.streamingText,
+      chartSpec: workflowDataRef.current.chartSpec,
+      sqlQuery: workflowDataRef.current.sqlQuery,
+      dataSample: workflowDataRef.current.dataSample,
+      stockWidgetConfig: workflowDataRef.current.stockWidget,
+      toolFanoutManifest: workflowDataRef.current.toolFanoutManifest,
+      toolFanoutResults: workflowDataRef.current.toolFanoutResults,
+      webSearch: workflowDataRef.current.webSearch,
+    };
+    setChatHistory((prev) => [...prev, newMessage]);
+  }, [setChatHistory]);
   
   // Progressive rendering: update state immediately instead of accumulating in refs
   const [progressiveAnalysis, setProgressiveAnalysis] = useState('');
@@ -50,16 +71,30 @@ export const useAnalyticsMemoryStream = (
           published_at: item?.published_at ?? item?.publishedAt,
         }))
       : [];
+    const error = typeof raw.error === 'string' ? raw.error : undefined;
+    const reason = typeof raw.reason === 'string' ? raw.reason : (typeof raw.error_stage === 'string' ? raw.error_stage : undefined);
+    let summary = raw.summary as string | undefined;
+    // Override outdated Responses API summary lines with Gemini wording
+    if (summary && /responses api/i.test(summary)) {
+      summary = 'Web search unavailable (Gemini search error).';
+    }
+    if (!summary && (error === 'search_api_missing' || reason === 'search_api_missing')) {
+      summary = 'Web search disabled until Gemini or Google Search API credentials are configured.';
+    }
     return {
       query: raw.query_terms ?? raw.query,
-      summary: raw.summary,
+      summary,
+      error,
+      reason,
       snippets,
       annotations: Array.isArray(raw.annotations) ? raw.annotations : [],
       searchId: raw.search_id ?? raw.searchId,
       fromCache: raw.from_cache ?? raw.fromCache ?? raw.cache_hit ?? false,
       fetchedAt: raw.fetched_at ?? raw.fetchedAt,
       latencyMs: raw.latency_ms ?? raw.latencyMs ?? null,
-      ready: raw.ready ?? false,
+      ready: raw.ready ?? (error !== 'search_api_missing' && reason !== 'search_api_missing'),
+      provider: raw.provider ?? (raw.model ? 'Gemini' : undefined),
+      model: raw.model,
     };
   };
 
@@ -917,6 +952,59 @@ export const useAnalyticsMemoryStream = (
           });
           break;
           
+        case 'echarts_complete': {
+          const normalizedChartSpec =
+            resolveChartSpecOption(eventData) ??
+            resolveChartSpecOption(data) ??
+            eventData.chart_spec ??
+            (data as any)?.chart_spec ??
+            null;
+
+          const chartType =
+            eventData.chart_type ??
+            (typeof eventData.chart_spec === 'object' && eventData.chart_spec
+              ? eventData.chart_spec.chart_type
+              : undefined) ??
+            (typeof (data as any)?.chart_spec === 'object'
+              ? (data as any).chart_spec.chart_type
+              : undefined) ??
+            normalizedChartSpec?.meta?.chartDesign?.chart_type;
+
+          if (normalizedChartSpec) {
+            scheduleProgressiveUpdate({ chartSpec: normalizedChartSpec });
+          } else {
+            console.warn('[AnalyticsMemoryStream] echarts_complete event without chart_spec payload', { event: data });
+            streamHook.setError('Chart generation completed without a chart spec payload.');
+          }
+
+          stepsHook.updateStepStatus(
+            'chart_generation',
+            normalizedChartSpec ? 'completed' : 'error',
+            normalizedChartSpec ? [] : ['Chart spec missing in echarts_complete event'],
+            { chart_spec: normalizedChartSpec, chart_type: chartType },
+            stepInfo.elapsed_ms,
+            stepInfo.ts
+          );
+          break;
+        }
+
+        case 'echarts_error': {
+          const errorMessage = eventData.error || 'Chart generation failed';
+          stepsHook.updateStepStatus(
+            'chart_generation',
+            'error',
+            [errorMessage],
+            {
+              error: errorMessage,
+              details: eventData.details,
+            },
+            stepInfo.elapsed_ms,
+            stepInfo.ts
+          );
+          streamHook.setError('Chart generation error: ' + errorMessage);
+          break;
+        }
+
         case 'chart_generated': {
           // Normalize chart payloads from legacy + lightweight emitters
           const normalizedChartSpec =
@@ -980,7 +1068,6 @@ export const useAnalyticsMemoryStream = (
           }
           stepsHook.updateStepStatus('analysis_generation', 'in_progress', ['Generating financial analysis...']);
           break;
-          
         case 'cohesive_result':
           {
             const bundle = { ...eventData };
@@ -1002,10 +1089,9 @@ export const useAnalyticsMemoryStream = (
               scheduleProgressiveUpdate({ dataSample: bundle.data_sample });
               workflowDataRef.current.dataSample = bundle.data_sample;
             }
-            if (bundle.stock_widget) {
-              workflowDataRef.current.stockWidget = bundle.stock_widget as StockWidgetConfig;
-            } else {
-              workflowDataRef.current.stockWidget = null;
+            if ('stock_widget' in bundle) {
+              const widgetPayload = bundle.stock_widget as StockWidgetConfig | null | undefined;
+              workflowDataRef.current.stockWidget = widgetPayload ? widgetPayload : null;
             }
             if (bundle.criteria) {
               workflowDataRef.current.criteria = bundle.criteria;
@@ -1052,6 +1138,11 @@ export const useAnalyticsMemoryStream = (
               sequence,
               parallelGroup,
             );
+
+            // Emit the result bubble exactly once; guard handles subsequent workflow_complete
+            if (!isThinkingEvent) {
+              emitResultOnce();
+            }
           }
           break;
 
@@ -1113,6 +1204,11 @@ export const useAnalyticsMemoryStream = (
               { analysis: finalAnalysis, analysis_length: eventData.analysis_length },
               stepInfo.elapsed_ms
             );
+
+            // Emit the result bubble exactly once to avoid duplicates from later workflow_complete
+            if (!isThinkingEvent) {
+              emitResultOnce();
+            }
           }
           break;
 
@@ -1246,12 +1342,20 @@ export const useAnalyticsMemoryStream = (
             toolFanoutRef.current.results = [...toolFanoutRef.current.results, resultSummary].slice(-10);
             workflowDataRef.current.toolFanoutResults = toolFanoutRef.current.results;
 
+            const payloadForWidget = (eventData.payload ?? {}) as Record<string, unknown>;
+            if (payloadForWidget && 'stock_widget' in payloadForWidget) {
+              const widgetCandidate = (payloadForWidget as { stock_widget?: StockWidgetConfig | null }).stock_widget;
+              workflowDataRef.current.stockWidget = widgetCandidate ?? null;
+            }
+
             if (eventData.tool === 'web_retriever') {
               const fromPayload = eventData.payload || {};
               const webContext = normalizeWebContext({
                 ...fromPayload,
                 summary: fromPayload.summary ?? eventData.metadata?.summary,
                 from_cache: fromPayload.from_cache ?? eventData.metadata?.cache_hit,
+                provider: fromPayload.provider ?? eventData.metadata?.provider,
+                model: fromPayload.model ?? eventData.metadata?.model,
               });
               if (webContext) {
                 setWebSearch(webContext);
@@ -1477,11 +1581,11 @@ export const useAnalyticsMemoryStream = (
           streamHook.setCurrentStatus(`Tool error: ${eventData.error}`);
           addChatMessage({
             type: 'assistant',
-            content: `?? **Tool Error:** ${eventData.tool} - ${eventData.error}`,
+            content: `**Tool Error:** ${eventData.tool} - ${eventData.error}`,
           });
           break;
           
-        case 'final_summary':
+                case 'final_summary':
           stepsHook.updateStepStatus('finalization', 'completed', ['Workflow summary generated']);
           const summaryStatusMessage =
             flow === 'single-agent'
@@ -1490,15 +1594,19 @@ export const useAnalyticsMemoryStream = (
                 ? 'Multi-agent workflow completed!'
                 : 'Direct workflow completed!';
           streamHook.setCurrentStatus(summaryStatusMessage);
-          if (!isThinkingEvent) {
+          if (!isThinkingEvent && !summarySentRef.current) { /* patched: disable malformed content */
+            summarySentRef.current = true;
+            const keyFindings = Array.isArray(eventData.key_findings)
+              ? (eventData.key_findings as string[]).map((f: string) => ' ' + f).join('\\n')
+              : 'No findings available';
             addChatMessage({
-              type: 'assistant',
-              content: `?? **Final Summary:**\n\n**SQL:** ${eventData.sql_summary}\n**Chart:** ${eventData.chart_summary}\n\n**Key Findings:**\n${eventData.key_findings?.map((f: string) => ` ${f}`).join('\n') || 'No findings available'}`,
-            });
+  type: 'assistant'
+  ,content: `**Final Summary:**\n\n**Key Findings:**\n${keyFindings}`
+});
           }
           break;
 
-        case 'workflow_complete':
+                case 'workflow_complete':
           const workflowStatusMessage =
             flow === 'single-agent'
               ? 'Single-agent tools workflow completed!'
@@ -1506,23 +1614,9 @@ export const useAnalyticsMemoryStream = (
                 ? 'Multi-agent workflow completed!'
                 : 'Direct workflow completed!';
           const isEarlyExit = Boolean(eventData?.early_exit);
-          // Handle both old and new formats for completion message
-          const completionMessage = eventData?.message || (eventData.total_elapsed_ms ? `Completed in ${eventData.total_elapsed_ms}ms` : null);
+          const completionMessage = eventData?.message || (typeof eventData.total_elapsed_ms === 'number' ? `Completed in ${eventData.total_elapsed_ms} ms` : null);
           streamHook.setCurrentStatus(completionMessage || workflowStatusMessage);
-          if (!isThinkingEvent && !isEarlyExit) {
-            addChatMessage({
-              type: 'result',
-              content: 'Analysis completed! Here are your results:',
-              analysis: workflowDataRef.current.analysis || workflowDataRef.current.streamingText,
-              chartSpec: workflowDataRef.current.chartSpec,
-              sqlQuery: workflowDataRef.current.sqlQuery,
-              dataSample: workflowDataRef.current.dataSample,
-              stockWidgetConfig: workflowDataRef.current.stockWidget,
-              toolFanoutManifest: workflowDataRef.current.toolFanoutManifest,
-              toolFanoutResults: workflowDataRef.current.toolFanoutResults,
-              webSearch: workflowDataRef.current.webSearch,
-            });
-          }
+          if (!isThinkingEvent && !isEarlyExit) { emitResultOnce(); }
 
           if (isEarlyExit) {
             // Clear any partial workflow artifacts for clarity
@@ -1612,6 +1706,8 @@ export const useAnalyticsMemoryStream = (
     agentReasoningRef.current = [];
     sqlAttemptsRef.current = [];
     agentLaneStateRef.current = {};
+    resultSentRef.current = false;
+    summarySentRef.current = false;
     toolFanoutRef.current = { manifest: [], results: [], concurrencyLimit: 0 };
 
     // Reset workflow data ref
@@ -1667,6 +1763,10 @@ export const useAnalyticsMemoryStream = (
     updateChatMessage,
   };
 };
+
+
+
+
 
 
 

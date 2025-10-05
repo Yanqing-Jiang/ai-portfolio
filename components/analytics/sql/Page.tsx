@@ -55,17 +55,12 @@ const SqlAnalyticsPage: React.FC = () => {
   // Project data for the SQL analytics project
   const projectData = {
     title: 'Direct SQL Analytics',
-    description: `• Real-time financial data analysis with direct SQL generation and execution.
-• Streamlined workflow: Query Analysis → SQL Generation → Chart Creation → Analysis.
-• High-performance data processing with immediate insights and visualizations.
-
-Result:
-
-• Interactive financial analysis for AMD, AVGO, INTC, MU, NVDA, QCOM, TXN with optimized performance.
-• Real-time streaming analytics with comprehensive chart and data export capabilities.
-• Direct database queries with intelligent chart generation and detailed financial analysis.`,
-    technologies: ['FastAPI', 'PostgreSQL', 'Real-time Analytics', 'SQL Generation', 'ECharts', 'Chart Export'],
-    imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/direct-sql.png'
+    description: `**Streamlined workflow**: Query analysis -> SQL generation -> chart creation -> insight delivery.
+**Interactive financial analysis**: AMD, AVGO, INTC, MU, NVDA, QCOM, TXN with optimized performance.
+**Real-time streaming analytics**: Comprehensive charting and data export.
+**Direct database queries**: Intelligent chart generation with detailed financial commentary.`,
+    technologies: ['Direct SQL workflow', 'Query analysis', 'Chart generation', 'Real-time streaming', 'Data exports', 'Financial insights'],
+    imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/next-gen-sql.png'
   };
 
   const handleAnalyticsQuery = async () => {
@@ -90,9 +85,9 @@ Result:
   };
 
   const suggestedQueries = [
-    'Show NVIDIA revenue growth over the past 3 years',
+    'Show Nvidia market share in the past 5 years?',
     'Compare profit margins between tech companies',
-    'Which company has the highest R&D spending?',
+    'How is AMD  R&D expense compare to industry average',
     'AMD vs NVIDIA revenue comparison 2021-2024'
   ];
 
@@ -166,7 +161,22 @@ Result:
                                   space-y-1 sm:space-y-1.5 overflow-y-auto flex-1 md:flex-none">
                     {projectData.description.split('\n').map((line, idx) => {
                       const trimmed = line.trim();
-                      return <p key={idx} className="leading-relaxed">{line}</p>;
+                      if (!trimmed) {
+                        return null;
+                      }
+                      const boldMatch = trimmed.match(/^\*\*(.+?)\*\*(?::\s*)?(.*)$/);
+                      if (boldMatch) {
+                        const [, label, rest] = boldMatch;
+                        const restText = rest?.trim() ?? '';
+                        return (
+                          <p key={idx} className="leading-relaxed">
+                            <span className="font-semibold text-gray-200">{label}</span>
+                            {restText && <span className="text-gray-400">: {restText}</span>}
+                          </p>
+                        );
+                      }
+
+                      return <p key={idx} className="leading-relaxed">{trimmed}</p>;
                     })}
                   </div>
                   
@@ -184,13 +194,13 @@ Result:
                   </div>
                 </div>
 
-                {/* Project image - smaller */}
+                {/* Project image - responsive */}
                 {projectData.imageUrl && (
-                  <div className="hidden md:block md:w-1/4 lg:w-1/3 rounded-lg overflow-hidden shadow-xl">
-                    <img 
-                      src={projectData.imageUrl} 
-                      alt={projectData.title} 
-                      className="w-full h-28 sm:h-32 object-cover hover:scale-105 transition-transform duration-300" 
+                  <div className="order-first md:order-none w-full md:w-1/3 lg:w-2/5 flex justify-center md:justify-end mb-3 md:mb-0 flex-shrink-0">
+                    <img
+                      src={projectData.imageUrl}
+                      alt={projectData.title}
+                      className="w-full max-w-sm sm:max-w-md md:max-w-full h-auto rounded-xl object-contain shadow-xl"
                     />
                   </div>
                 )}
@@ -323,13 +333,16 @@ Result:
       {/* Process Visualization Panel */}
       <ProcessPanel
         steps={processSteps}
+        flowMode="planner-executor"
+        showVisualization={false}
         show={showProcessPanel}
         onClose={() => setShowProcessPanel(false)}
         title="SQL Process"
-        subtitle="Real-time SQL workflow visualization"
+        subtitle="Line-by-line SQL workflow status"
       />
     </div>
   );
 };
 
 export default SqlAnalyticsPage;
+

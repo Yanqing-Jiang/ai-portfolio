@@ -265,40 +265,50 @@ const LandingPage: React.FC<LandingPageProps> = ({ projectData, onSelectProject 
                 {subtitle && <p className="mt-1 sm:mt-0 sm:ml-3 text-xs sm:text-sm md:text-base text-gray-500">{subtitle}</p>}
               </div>
               <div className="grid grid-cols-1 gap-8 sm:gap-12">
-                {projects.map((project, projectIndex) => (
-                  <div
-                    key={project.id}
-                    onClick={() => onSelectProject(project)}
-                    className={`rounded-lg overflow-hidden transform hover:-translate-y-1 
+                {projects.map((project, projectIndex) => {
+                  const useContainLayout = project.id === 'next-gen-analytics-memory' || project.id === 'next-gen-analytics-sql';
+
+                  return (
+                    <div
+                      key={project.id}
+                      onClick={() => onSelectProject(project)}
+                      className={`rounded-lg overflow-hidden transform hover:-translate-y-1 
                              transition-transform duration-300 shadow-lg hover:shadow-blue-500/20 cursor-pointer 
                              group border border-gray-700/50 bg-gray-800/50 flex flex-col md:flex-row items-stretch 
                              ${projectIndex % 2 !== 0 ? 'md:flex-row-reverse' : ''}`}
-                  >
-                    <div className="w-full md:w-2/5 xl:w-1/3 shrink-0">
-                      <img 
-                        src={project.coverUrl ?? project.imageUrl} 
-                        alt={project.title} 
-                        className="w-full h-48 sm:h-64 md:h-full object-cover group-hover:scale-105 transition-transform duration-300" 
-                      />
-                    </div>
-                    <div className="flex-1 p-4 sm:p-6 lg:p-8 flex flex-col justify-center">
-                      <h4 className="text-base sm:text-lg md:text-xl lg:text-2xl font-bold text-white mb-2 sm:mb-3">{project.title}</h4>
-                      <p className="text-gray-400 text-pretty text-xs sm:text-sm md:text-base lg:text-lg mb-4 leading-relaxed">
-                        {project.description.length > 150 ? `${project.description.substring(0, 150)}...` : project.description}
-                      </p>
-                      <div className="flex flex-wrap gap-1.5 sm:gap-2 mt-auto">
-                        {project.technologies.slice(0, 5).map(tech => (
-                          <span 
-                            key={tech} 
-                            className="bg-gray-700 text-gray-300 text-xs sm:text-sm font-medium px-2 sm:px-2.5 py-1 rounded-md"
-                          >
-                            {tech}
-                          </span>
-                        ))}
+                    >
+                      <div
+                        className={`w-full md:w-2/5 xl:w-1/3 shrink-0${useContainLayout ? ' bg-gray-950/70 flex items-center justify-center' : ''}`}
+                      >
+                        <img
+                          src={project.coverUrl ?? project.imageUrl}
+                          alt={project.title}
+                          loading="lazy"
+                          className={`${useContainLayout
+                          ? 'w-full h-auto max-h-64 sm:max-h-72 md:max-h-[22rem] min-h-[12rem] object-contain transition-transform duration-300 group-hover:scale-105'
+                          : 'w-full h-48 sm:h-64 md:h-full object-cover transition-transform duration-300 group-hover:scale-105'
+                          }`}
+                        />
+                      </div>
+                      <div className="flex-1 p-4 sm:p-6 lg:p-8 flex flex-col justify-center">
+                        <h4 className="text-base sm:text-lg md:text-xl lg:text-2xl font-bold text-white mb-2 sm:mb-3">{project.title}</h4>
+                        <p className="text-gray-400 text-pretty text-xs sm:text-sm md:text-base lg:text-lg mb-4 leading-relaxed">
+                          {project.description.length > 150 ? `${project.description.substring(0, 150)}...` : project.description}
+                        </p>
+                        <div className="flex flex-wrap gap-1.5 sm:gap-2 mt-auto">
+                          {project.technologies.slice(0, 5).map(tech => (
+                            <span
+                              key={tech}
+                              className="bg-gray-700 text-gray-300 text-xs sm:text-sm font-medium px-2 sm:px-2.5 py-1 rounded-md"
+                            >
+                              {tech}
+                            </span>
+                          ))}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           ))}

@@ -76,17 +76,13 @@ const MemoryAnalyticsPage: React.FC = () => {
   // Project data for the analytics memory project
   const projectData = {
     title: 'Next Gen Analytics (Memory)',
-    description: `� AI-powered financial analytics with LangGraph memory pipeline and intelligent clarifications.
-� Uses advanced intent detection ? SQL planning ? Chart Generation ? financial analysis workflow.
-� Real-time streaming with conversational clarifications and session memory management.
-
-Result:
-
-� Interactive financial analysis for AMD, AVGO, INTC, MU, NVDA, QCOM, TXN with memory optimization.
-� Streaming agent coordination with inline clarification UI.
-� Dynamic Chart Generation with session persistence and memory-aware caching.`,
-    technologies: ['LangGraph', 'Memory Pipeline', 'Intent Detection', 'Clarifications', 'FastAPI', 'PostgreSQL'],
-    imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/next-gen-sql.png'
+    description: `**Three Agentic Workflows**: Direct (fast path), Single-Agent (multi-tool use), Multi-Agent (supervisor + specialists).
+**Human-in-the-loop**: Compact choice widget for peers/metrics/range; one-tap approvals & reruns.
+**Explainable thinking process panel**: plan graph + per-step trace.
+**Financial scope (peers)**: AMD, AVGO, INTC, MU, NVDA, QCOM, TXN.
+**Memory optimization**: Cached queries, vectorized prompts, result reuse.`,
+    technologies: ['Single Agent workflow', 'Multi-agent workflow', 'Human-in-loop', 'RAG', 'long term memory'],
+    imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/Agent%20demo.gif'
   };
 
   const handleAnalyticsQuery = async () => {
@@ -186,7 +182,22 @@ Result:
                                   space-y-1 sm:space-y-1.5 overflow-y-auto flex-1 md:flex-none">
                     {projectData.description.split('\n').map((line, idx) => {
                       const trimmed = line.trim();
-                      return <p key={idx} className="leading-relaxed">{line}</p>;
+                      if (!trimmed) {
+                        return null;
+                      }
+                      const boldMatch = trimmed.match(/^\*\*(.+?)\*\*(?::\s*)?(.*)$/);
+                      if (boldMatch) {
+                        const [, label, rest] = boldMatch;
+                        const restText = rest?.trim() ?? '';
+                        return (
+                          <p key={idx} className="leading-relaxed">
+                            <span className="font-semibold text-gray-200">{label}</span>
+                            {restText && <span className="text-gray-400">: {restText}</span>}
+                          </p>
+                        );
+                      }
+
+                      return <p key={idx} className="leading-relaxed">{trimmed}</p>;
                     })}
                   </div>
                   
@@ -204,13 +215,13 @@ Result:
                   </div>
                 </div>
 
-                {/* Project image - smaller */}
+                {/* Project image - responsive */}
                 {projectData.imageUrl && (
-                  <div className="hidden md:block md:w-1/4 lg:w-1/3 rounded-lg overflow-hidden shadow-xl">
-                    <img 
-                      src={projectData.imageUrl} 
-                      alt={projectData.title} 
-                      className="w-full h-28 sm:h-32 object-cover hover:scale-105 transition-transform duration-300" 
+                  <div className="order-first md:order-none w-full md:w-1/3 lg:w-2/5 flex justify-center md:justify-end mb-3 md:mb-0 flex-shrink-0">
+                    <img
+                      src={projectData.imageUrl}
+                      alt={projectData.title}
+                      className="w-full max-w-sm sm:max-w-md md:max-w-full h-auto rounded-xl object-contain shadow-xl"
                     />
                   </div>
                 )}
@@ -349,6 +360,7 @@ Result:
         flowMode={selectedFlow}
         singleAgentFanout={singleAgentFanout}
         show={showProcessPanel}
+        showVisualization={true}
         onClose={() => setShowProcessPanel(false)}
         title="Agent Thinking Process"
         subtitle="Real-time agent reasoning & tool execution"

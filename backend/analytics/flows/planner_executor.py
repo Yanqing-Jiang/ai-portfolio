@@ -2,6 +2,7 @@ from __future__ import annotations
 from typing import AsyncGenerator, Dict, Any, Optional, List, Tuple
 from dataclasses import dataclass, field
 import asyncio
+import re
 import os
 import logging
 import time
@@ -38,7 +39,7 @@ from analytics.sql.prompt_builder import build_sql_messages, build_sql_retry_mes
 from analytics.core.charting import build_chart_spec, plan_chart_rule_based
 from .tool_bundle import collect_tool_bundle
 from analytics.core.telemetry import analysis_chunk as log_analysis_chunk
-from analytics.services.response_search import ResponseSearchError, perform_response_search
+from analytics.services.response_search import ResponseSearchError, perform_response_search, has_search_api_key
 from analytics.core.analysis import summarize, stream_insights_llm
 from analytics.core.clarify import (
     detect_missing_slots,
@@ -162,6 +163,30 @@ class PlannerPhaseContext:
     parallelism_enabled: bool = False
     planner_result: PlannerResultModel = field(default_factory=PlannerResultModel)
 
+AGGREGATE_METRIC_MARKERS = (
+    "'r&d expense'",
+    "'revenue'",
+    "'operating cash flow'",
+    "'capex'",
+    "'capital expenditures'",
+    "'operating income'",
+    "'net income'",
+)
+
+
+def _normalize_calendar_filters(sql: str) -> str:
+    if not sql:
+        return sql
+    lower_sql = sql.lower()
+    if "calendar_quarter_num is null" not in lower_sql:
+        return sql
+    if "sum(" not in lower_sql:
+        return sql
+    if not any(marker in lower_sql for marker in AGGREGATE_METRIC_MARKERS):
+        return sql
+    return re.sub(r"calendar_quarter_num\s+IS\s+NULL", "calendar_quarter_num IS NOT NULL", sql, flags=re.IGNORECASE)
+
+
 
 class PlannerExecutorFlow:
     """Phase 2 workflow that emits SSE-friendly events for the memory pipeline."""
@@ -181,6 +206,18 @@ class PlannerExecutorFlow:
         progress = EventEmitter.progress("web_search", "Gathering latest market headlines...")
         progress["data"]["ts"] = datetime.utcnow().isoformat()
         yield progress
+
+        if not has_search_api_key():
+            summary = "Web search disabled until GOOGLE_API_KEY or GEMINI_API_KEY is configured."
+            payload = {
+                "ready": False,
+                "error": "search_api_missing",
+                "summary": summary,
+            }
+            result_event = EventEmitter.result("web_search", {"web_context": payload})
+            result_event["data"]["ts"] = datetime.utcnow().isoformat()
+            yield result_event
+            return
     
         context_parts: List[str] = []
         intent = ctx.intent
@@ -304,6 +341,7 @@ class PlannerExecutorFlow:
                     reasoning_effort="medium",
                 )
                 candidate_sql = (extract_sql_from_response(llm_response) or "").strip()
+                candidate_sql = _normalize_calendar_filters(candidate_sql)
             except Exception as exc:
                 last_error_code = "SQL_GENERATION_ERROR"
                 last_error_detail = str(exc)

@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import EChartsReact from 'echarts-for-react';
 import { ChartCardProps } from '../types';
 import { ChartErrorBoundary } from './ChartErrorBoundary';
@@ -16,6 +16,7 @@ export const ChartCard: React.FC<ChartCardProps> = ({
 }) => {
   const [chartRetryCount, setChartRetryCount] = useState(0);
   const chartRef = useRef<any>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
 
   console.log('[ChartCard] Rendered with chartSpec:', !!chartSpec, 'useAltChart:', useAltChart);
 
@@ -87,8 +88,32 @@ export const ChartCard: React.FC<ChartCardProps> = ({
     return null;
   }
 
+  // Ensure the chart resizes when its parent panel toggles visibility or changes size
+  useEffect(() => {
+    const ro = (window as any).ResizeObserver
+      ? new (window as any).ResizeObserver(() => {
+          if (chartRef.current) {
+            try { chartRef.current.resize(); } catch {}
+          }
+        })
+      : null;
+    if (ro && containerRef.current) {
+      ro.observe(containerRef.current);
+    }
+    const onWinResize = () => {
+      if (chartRef.current) {
+        try { chartRef.current.resize(); } catch {}
+      }
+    };
+    window.addEventListener('resize', onWinResize);
+    return () => {
+      window.removeEventListener('resize', onWinResize);
+      if (ro && containerRef.current) ro.unobserve(containerRef.current);
+    };
+  }, []);
+
   return (
-    <div className="bg-gray-800 border border-gray-700 rounded-xl shadow-2xl p-4 sm:p-6 md:p-8">
+    <div ref={containerRef} className="bg-gray-800 border border-gray-700 rounded-xl shadow-2xl p-4 sm:p-6 md:p-8">
       <h2 className="text-lg sm:text-xl md:text-2xl font-semibold text-white mb-4 sm:mb-6">Interactive Visualization</h2>
       <div className={`${height} bg-white rounded-lg p-2 sm:p-3`}>
         {/* Controls row */}
@@ -131,6 +156,8 @@ export const ChartCard: React.FC<ChartCardProps> = ({
               height: enableDropdown || enableCsvDownload ? 'calc(100% - 36px)' : 'calc(100% - 4px)', 
               width: '100%' 
             }} 
+            notMerge={false}
+            lazyUpdate={true}
             opts={{ renderer: 'canvas', devicePixelRatio: window.devicePixelRatio || 1 }} 
             onChartReady={(instance) => { 
               chartRef.current = instance;

@@ -8,6 +8,7 @@ import re
 from ..sql.sql_planner import plan_sql_rule_based, choose_template as cfg_choose_template
 from ..sql.compiler import compile_sql_from_plan
 from ..sql.validator import validate_sql
+from ..semantic.catalog import get_semantic_catalog
 from ..sql.executor import execute_sql
 from ..core.charting import plan_chart_rule_based
 from ..core.companies import get_ticker_list
@@ -24,6 +25,7 @@ from ..core.state import (
 from ..core.context import get_configs
 
 CONFIGS = get_configs()
+SEMANTIC_CATALOG = get_semantic_catalog()
 
 from ..core.config_store import get_config_store
 
@@ -403,7 +405,7 @@ class SupervisorTools:
 
 
     def validate_sql(self, sql: str, granularity: str, max_limit: Optional[int] = None):
-        max_limit = max_limit or self.configs.get('database', {}).get('query_defaults', {}).get('max_limit', 10000)
+                semantic_defaults = SEMANTIC_CATALOG.query_defaults()\n        max_limit = max_limit or semantic_defaults.get('max_limit', 10000)
         return validate_sql(sql, allowed_tables=["comp_financials"], max_limit=max_limit, granularity=granularity)
 
     async def apply_execute_sql(self, sql: str) -> Dict[str, Any]:
@@ -655,6 +657,9 @@ class SupervisorTools:
         if slot == "granularity":
             return ["annual", "quarterly"]
         return []
+
+
+
 
 
 

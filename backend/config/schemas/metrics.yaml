@@ -210,3 +210,311 @@ formatting:
     decimals: 1
     suffix: "%"
     multiplier: 100
+semantic:
+  tables:
+    comp_financials:
+      name: "comp_financials"
+      description: "Semiconductor company financial metrics in long format"
+      type: "long_format"
+      columns:
+        - name: "ticker"
+          type: "string"
+          description: "Company stock ticker symbol"
+          required: true
+          indexed: true
+        - name: "metric"
+          type: "string"
+          description: "Financial metric name (exact match required)"
+          required: true
+          indexed: true
+        - name: "value"
+          type: "float"
+          description: "Metric value in millions USD (except ratios)"
+          required: true
+          nullable: true
+        - name: "tag_used"
+          type: "string"
+          description: "Source tag or identifier"
+          required: false
+        - name: "date"
+          type: "date"
+          description: "Reporting date"
+          required: false
+        - name: "calendar_year"
+          type: "integer"
+          description: "Calendar year (e.g., 2023)"
+          required: true
+          indexed: true
+        - name: "calendar_quarter_num"
+          type: "integer"
+          description: "Quarter number (1, 2, 3, 4, or NULL for annual)"
+          required: false
+          indexed: true
+        - name: "calendar_quarter"
+          type: "string"
+          description: "Quarter label (Q1, Q2, Q3, Q4, or NULL for annual)"
+          required: false
+      indexes:
+        - name: "idx_ticker_metric_year_quarter"
+          columns: ["ticker", "metric", "calendar_year", "calendar_quarter_num"]
+          type: "btree"
+        - name: "idx_metric_year"
+          columns: ["metric", "calendar_year"]
+          type: "btree"
+        - name: "idx_ticker_year"
+          columns: ["ticker", "calendar_year"]
+          type: "btree"
+      time_columns:
+        year: "calendar_year"
+        quarter: "calendar_quarter_num"
+        quarter_label: "calendar_quarter"
+        date: "date"
+      value_column: "value"
+      entity_column: "ticker"
+      metric_column: "metric"
+  query_defaults:
+    default_limit: 500
+    max_limit: 10000
+    default_years_back: 5
+    max_years_back: 10
+    annual_filter: "calendar_quarter_num IS NULL"
+    quarterly_filter: "calendar_quarter_num IS NOT NULL"
+    active_companies_filter: "ticker IN ({company_list})"
+    recent_data_filter: "calendar_year >= EXTRACT(YEAR FROM CURRENT_DATE) - {years_back}"
+    statement_timeout: "15s"
+    work_mem: "256MB"
+  data_validation:
+    required_metrics:
+      - "Revenue"
+      - "Net Income"
+      - "Total Assets"
+    value_ranges:
+      currency_metrics:
+        min: -1000000
+        max: 1000000
+      ratio_metrics:
+        min: -10.0
+        max: 10.0
+    time_bounds:
+      min_year: 2010
+      max_year: 2030
+  aggregation:
+    quarterly_to_annual:
+      sum_metrics:
+        - "Revenue"
+        - "Net Income"
+        - "Operating Income"
+        - "Gross Profit"
+        - "R&D Expense"
+        - "SG&A"
+        - "CapEx"
+        - "CFO"
+        - "CFI"
+        - "CFF"
+      last_metrics:
+        - "Total Assets"
+        - "Cash & Equiv."
+        - "Total Liabilities"
+        - "Stockholders' Equity"
+      average_metrics:
+        - "Wtd Avg Shares Basic"
+        - "Wtd Avg Shares Diluted"
+  defaults:
+    granularity: "annual"
+    years_back: 5
+    limit: 500
+  time_grains:
+    annual:
+      label: "Annual"
+      description: "Calendar year aggregates"
+      group_by: ["calendar_year"]
+      filter: "calendar_quarter_num IS NULL"
+    quarterly:
+      label: "Quarterly"
+      description: "Quarterly reporting cadence"
+      group_by: ["calendar_year", "calendar_quarter_num", "calendar_quarter"]
+      filter: "calendar_quarter_num IS NOT NULL"
+  dimensions:
+    company:
+      column: "ticker"
+      entity: true
+      description: "Company ticker symbol"
+    calendar_year:
+      column: "calendar_year"
+      data_type: "integer"
+      role: "time"
+    calendar_quarter:
+      columns:
+        number: "calendar_quarter_num"
+        label: "calendar_quarter"
+      data_type: "integer"
+      role: "time"
+    metric_name:
+      column: "metric"
+      data_type: "string"
+      role: "categorical"
+  metrics:
+    revenue:
+      source: "Revenue"
+      category: "income_statement"
+      default_granularity: "annual"
+      allowed_granularities: ["annual", "quarterly"]
+      comparisons: ["single", "all", "vs_avg", "leaderboard"]
+      dimensions: ["company", "calendar_year", "calendar_quarter"]
+    gross_profit:
+      source: "Gross Profit"
+      category: "income_statement"
+      default_granularity: "annual"
+      allowed_granularities: ["annual", "quarterly"]
+      comparisons: ["single", "vs_avg"]
+      dimensions: ["company", "calendar_year", "calendar_quarter"]
+    operating_income:
+      source: "Operating Income"
+      category: "income_statement"
+      default_granularity: "annual"
+      allowed_granularities: ["annual", "quarterly"]
+      comparisons: ["single", "vs_avg"]
+      dimensions: ["company", "calendar_year", "calendar_quarter"]
+    net_income:
+      source: "Net Income"
+      category: "income_statement"
+      default_granularity: "annual"
+      allowed_granularities: ["annual", "quarterly"]
+      comparisons: ["single", "vs_avg"]
+      dimensions: ["company", "calendar_year", "calendar_quarter"]
+    rnd_expense:
+      source: "R&D Expense"
+      category: "income_statement"
+      default_granularity: "annual"
+      allowed_granularities: ["annual", "quarterly"]
+      comparisons: ["single", "vs_avg", "leaderboard"]
+      dimensions: ["company", "calendar_year", "calendar_quarter"]
+  derived_metrics:
+    gross_margin:
+      source: "gross_margin"
+      dependencies: ["gross_profit", "revenue"]
+      default_granularity: "annual"
+      allowed_granularities: ["annual", "quarterly"]
+      comparisons: ["vs_avg"]
+      dimensions: ["company", "calendar_year", "calendar_quarter"]
+    operating_margin:
+      source: "operating_margin"
+      dependencies: ["operating_income", "revenue"]
+      default_granularity: "annual"
+      allowed_granularities: ["annual", "quarterly"]
+      comparisons: ["vs_avg"]
+      dimensions: ["company", "calendar_year", "calendar_quarter"]
+    net_margin:
+      source: "net_margin"
+      dependencies: ["net_income", "revenue"]
+      default_granularity: "annual"
+      allowed_granularities: ["annual", "quarterly"]
+      comparisons: ["vs_avg"]
+      dimensions: ["company", "calendar_year", "calendar_quarter"]
+    rnd_intensity:
+      source: "rnd_intensity"
+      dependencies: ["rnd_expense", "revenue"]
+      default_granularity: "annual"
+      allowed_granularities: ["annual", "quarterly"]
+      comparisons: ["vs_avg", "leaderboard"]
+      dimensions: ["company", "calendar_year", "calendar_quarter"]
+  intents:
+    market_share_all:
+      label: "Market Share Analysis - All Companies"
+      metrics: ["revenue"]
+      derived_metrics: []
+      comparison: "all"
+      default_granularity: "quarterly"
+      allowed_granularities: ["quarterly"]
+      default_years_back: 5
+      default_limit: 500
+      group_by: ["calendar_year", "calendar_quarter_num", "calendar_quarter"]
+      filters:
+        metrics: ["Revenue"]
+        granularity_filter: "calendar_quarter_num IS NOT NULL"
+    market_share_single:
+      label: "Market Share Analysis - Single Company"
+      metrics: ["revenue"]
+      derived_metrics: []
+      comparison: "single"
+      default_granularity: "quarterly"
+      allowed_granularities: ["quarterly"]
+      default_years_back: 5
+      default_limit: 500
+      group_by: ["calendar_year", "calendar_quarter_num", "calendar_quarter"]
+      filters:
+        metrics: ["Revenue"]
+        granularity_filter: "calendar_quarter_num IS NOT NULL"
+    margins_vs_peers:
+      label: "Profit Margins vs Industry Average"
+      metrics: ["revenue", "gross_profit", "operating_income", "net_income"]
+      derived_metrics: ["gross_margin", "operating_margin", "net_margin"]
+      comparison: "vs_avg"
+      default_granularity: "annual"
+      allowed_granularities: ["annual", "quarterly"]
+      default_years_back: 5
+      default_limit: 500
+      group_by: ["calendar_year"]
+      filters:
+        metrics: ["Revenue", "Gross Profit", "Operating Income", "Net Income"]
+    margin_growth_vs_peers:
+      label: "Margin Growth vs Peers"
+      metrics: ["revenue", "gross_profit", "operating_income", "net_income"]
+      derived_metrics: ["gross_margin", "operating_margin", "net_margin"]
+      comparison: "vs_avg"
+      default_granularity: "annual"
+      allowed_granularities: ["annual", "quarterly"]
+      default_years_back: 5
+      default_limit: 500
+      group_by: ["calendar_year"]
+      filters:
+        metrics: ["Revenue", "Gross Profit", "Operating Income", "Net Income"]
+    revenue_growth_vs_avg:
+      label: "Revenue Growth vs Average"
+      metrics: ["revenue"]
+      derived_metrics: []
+      comparison: "vs_avg"
+      default_granularity: "annual"
+      allowed_granularities: ["annual", "quarterly"]
+      default_years_back: 5
+      default_limit: 500
+      group_by: ["calendar_year"]
+      filters:
+        metrics: ["Revenue"]
+    rnd_expense_vs_peers:
+      label: "R&D Expense vs Peers"
+      metrics: ["rnd_expense"]
+      derived_metrics: []
+      comparison: "vs_avg"
+      default_granularity: "annual"
+      allowed_granularities: ["annual", "quarterly"]
+      default_years_back: 5
+      default_limit: 500
+      group_by: ["calendar_year"]
+      filters:
+        metrics: ["R&D Expense"]
+    rnd_intensity_vs_peers:
+      label: "R&D Intensity vs Peers"
+      metrics: ["revenue", "rnd_expense"]
+      derived_metrics: ["rnd_intensity"]
+      comparison: "vs_avg"
+      default_granularity: "annual"
+      allowed_granularities: ["annual", "quarterly"]
+      default_years_back: 5
+      default_limit: 500
+      group_by: ["calendar_year"]
+      filters:
+        metrics: ["Revenue", "R&D Expense"]
+    rnd_top_spender:
+      label: "Top R&D Spenders"
+      metrics: ["rnd_expense", "revenue"]
+      derived_metrics: ["rnd_intensity"]
+      comparison: "leaderboard"
+      default_granularity: "annual"
+      allowed_granularities: ["annual"]
+      default_years_back: 5
+      default_limit: 10
+      group_by: ["calendar_year"]
+      filters:
+        metrics: ["R&D Expense", "Revenue"]
+        granularity_filter: "calendar_quarter_num IS NULL"

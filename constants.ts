@@ -8,8 +8,8 @@ export const PROJECT_DATA: ProjectYear[] = [
       {
         id: 'next-gen-analytics-memory',
         title: 'Next Gen Analytics (Memory)',
-        description: `• Advanced conversational AI analytics with memory and clarification capabilities.\n• Uses LangGraph agents with sophisticated intent detection, SQL generation, and interactive clarifications.\n• Real-time streaming with persistent conversation history and context-aware follow-ups.\n\nResult:\n\n• Intelligent clarification system that remembers user choices and context.\n• Conversational analytics interface with inline clarifications instead of modal dialogs.\n• Progressive results display with chat-based interaction patterns.`,
-        technologies: ['LangGraph', 'Memory Pipeline', 'Conversational AI', 'Intent Detection', 'Context Engineering', 'FastAPI', 'PostgreSQL'],
+        description: `Three agentic workflows: Direct (fast path), single-agent (multi-tool use), multi-agent (supervisor + specialists).\nHuman-in-the-loop: Compact choice widget for peers/metrics/range with one-tap approvals and reruns.\nExplainable thinking process panel: Plan graph with per-step trace.\nFinancial scope: AMD, AVGO, INTC, MU, NVDA, QCOM, TXN.\nMemory optimization: Cached queries, vectorized prompts, result reuse.`,
+        technologies: ['Single Agent workflow', 'Multi-agent workflow', 'Human-in-loop', 'RAG', 'long term memory'],
         systemInstruction: `You are the AI assistant for **Next Gen Analytics (Memory)**. You have full knowledge of the project described below. Use this embedded reference to answer questions with detail and accuracy. Quote or paraphrase the content to explain features, tech stack, workflow and technical implementation.
 
 +--------------------
@@ -50,8 +50,8 @@ Memory System: Session-based conversation persistence with context awareness
           'Show me AMD vs INTC margins - how do they compare to our last analysis?',
           'What clarification features help with ambiguous financial queries?',
         ],
-        coverUrl: 'https://yanqinghot.blob.core.windows.net/public-access/next-gen-memory.png',
-        imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/next-gen-memory.png'
+        coverUrl: 'https://yanqinghot.blob.core.windows.net/public-access/Agent%20demo.gif',
+        imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/Agent%20demo.gif'
       },
       {
         id: 'agentic-trade-bot',
@@ -77,8 +77,16 @@ Memory System: Session-based conversation persistence with context awareness
       {
         id: 'next-gen-analytics-sql',
         title: 'Next Gen Analytics (SQL)',
-        description: `• AI-powered financial analytics chatbot that queries semiconductor company financials via an agentic SQL workflow.\n• Uses LangGraph agents to coordinate schema understanding → SQL generation → Charting Agent → financial analysis.\n• Real-time streaming with progressive chart updates and expandable process visualization panel.\n\nResult:\n\n• Interactive financial analysis for AMD, AVGO, INTC, MU, NVDA, QCOM, TXN with 29 key metrics.\n• Streaming agent coordination with live process visualization.\n• Dynamic Charting Agent and Context Engineering for comprehensive financial insights.`,
-        technologies: ['LangGraph', 'Agentic Workflow', 'SQL Agent', 'Charting Agent', 'Context Engineering', 'FastAPI', 'PostgreSQL'],
+        description: `Real-time financial data analysis with direct SQL generation and execution.
+Streamlined workflow covering query analysis, SQL generation, chart creation, and insight delivery.
+High-performance data processing with immediate insights and responsive visualizations.
+
+Result:
+
+Interactive financial analysis for AMD, AVGO, INTC, MU, NVDA, QCOM, TXN with optimized performance.
+Real-time streaming analytics with comprehensive charting and data export.
+Direct database queries enable intelligent chart generation and detailed financial commentary.`,
+        technologies: ['Direct SQL workflow', 'Query analysis', 'Chart generation', 'Real-time streaming', 'Data exports', 'Financial insights'],
         systemInstruction: `You are the AI assistant for **Next Gen Analytics (SQL)**. You have full knowledge of the project described below. Use this embedded reference to answer questions with detail and accuracy. Quote or paraphrase the content to explain features, tech stack, workflow and technical implementation.
 
 +--------------------

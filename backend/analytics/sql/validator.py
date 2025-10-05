@@ -6,15 +6,15 @@ import sqlglot
 from sqlglot import exp
 
 from ..core.context import get_configs
+from ..semantic.catalog import get_semantic_catalog
 
 CONFIGS = get_configs()
+SEMANTIC_CATALOG = get_semantic_catalog()
 
 
 def _default_allowed_tables() -> List[str]:
-    tables = CONFIGS.database.get("tables") if CONFIGS.database else None
-    if isinstance(tables, dict):
-        return list(tables.keys())
-    return ["comp_financials"]
+    tables = SEMANTIC_CATALOG.allowed_tables()
+    return tables if tables else ["comp_financials"]
 
 
 def validate_sql(
@@ -27,7 +27,7 @@ def validate_sql(
     issues: List[str] = []
 
     allowed_tables = list(allowed_tables or _default_allowed_tables())
-    defaults = CONFIGS.database.get("query_defaults", {}) if CONFIGS.database else {}
+    defaults = SEMANTIC_CATALOG.query_defaults()
     max_limit = max_limit or defaults.get("max_limit", 10000)
 
     try:

@@ -6,46 +6,76 @@ from typing import Any, Dict, List, Optional
 from ..core.config_store import ConfigStore, get_config_store
 from ..core.context import get_configs
 from ..core.state import IntentModel, QueryPlanModel
+from ..semantic.catalog import get_semantic_catalog
 from .templates import fetch_templates_for_intent, summarize_template
 
 CONFIGS = get_configs()
+SEMANTIC_CATALOG = get_semantic_catalog()
 
 
 def _render_metrics_summary(plan: QueryPlanModel) -> str:
     metrics_catalog = CONFIGS.metrics.get("metrics", {}) or {}
+    derived_catalog = CONFIGS.metrics.get("derived_metrics", {}) or {}
     summaries: List[str] = []
+
     for metric_name in plan.metrics or []:
-        metric = None
-        for key, value in metrics_catalog.items():
-            if key.lower() == metric_name.lower() or value.get("name", "").lower() == metric_name.lower():
-                metric = {"id": key, **value}
-                break
-        if not metric:
-            summaries.append(f"- {metric_name}")
-            continue
-        alias_text = ", ".join(metric.get("aliases", [])) if metric.get("aliases") else ""
-        detail = f"- {metric.get('name', metric_name)} (db: {metric.get('database_name', metric_name)})"
+        key = str(metric_name).lower()
+        spec = SEMANTIC_CATALOG.get_metric(key)
+        base_cfg = metrics_catalog.get(spec.key, {}) if spec and not spec.is_derived else metrics_catalog.get(key, {})
+        display_name = base_cfg.get("name", metric_name)
+        database_name = base_cfg.get("database_name", metric_name)
+        aliases = base_cfg.get("aliases", []) if isinstance(base_cfg.get("aliases"), list) else []
+        alias_text = ", ".join(aliases)
+        detail = f"- {display_name} (db: {database_name})"
         if alias_text:
             detail += f" | aliases: {alias_text}"
-        if metric.get("description"):
-            detail += f" | desc: {metric['description']}"
+        if spec:
+            allowed = "/".join(spec.allowed_granularities) if spec.allowed_granularities else "annual"
+            detail += f" | grain: {allowed}"
+            if spec.comparisons:
+                detail += f" | comparison: {', '.join(spec.comparisons)}"
+        if base_cfg.get("description"):
+            detail += f" | desc: {base_cfg['description']}"
         summaries.append(detail)
+
+    for derived_name in plan.derived_metrics or []:
+        key = str(derived_name).lower()
+        spec = SEMANTIC_CATALOG.get_metric(key)
+        derived_cfg = derived_catalog.get(key, {})
+        display_name = derived_cfg.get("name", derived_name)
+        dependencies = derived_cfg.get("dependencies", []) if isinstance(derived_cfg.get("dependencies"), list) else []
+        detail = f"- {display_name} (derived)"
+        if dependencies:
+            detail += f" | deps: {', '.join(dependencies)}"
+        if spec and spec.allowed_granularities:
+            detail += f" | grain: {'/'.join(spec.allowed_granularities)}"
+        if spec and spec.comparisons:
+            detail += f" | comparison: {', '.join(spec.comparisons)}"
+        if derived_cfg.get("description"):
+            detail += f" | desc: {derived_cfg['description']}"
+        summaries.append(detail)
+
     return "\n".join(summaries)
 
 
 def _render_constraints(plan: QueryPlanModel) -> str:
-    database_cfg = CONFIGS.database or {}
-    defaults = database_cfg.get("query_defaults", {})
-    allowed_tables = list((database_cfg.get("tables") or {}).keys()) or ["comp_financials"]
+    defaults = SEMANTIC_CATALOG.query_defaults()
+    allowed_tables = SEMANTIC_CATALOG.allowed_tables() or ["comp_financials"]
     max_limit = defaults.get("max_limit", 10000)
-    default_years_back = defaults.get("default_years_back", plan.timeframe.years_back if plan.timeframe else 5)
+    default_years_back = plan.timeframe.years_back if plan.timeframe and plan.timeframe.years_back else defaults.get("default_years_back") or SEMANTIC_CATALOG.default_years_back() or 5
+    time_grain = SEMANTIC_CATALOG.get_time_grain(plan.granularity)
+    grain_filter = defaults.get(f"{plan.granularity}_filter") or time_grain.filter
+
+    grain_filter_line = f"  - Apply {plan.granularity} filter: {grain_filter}\n" if grain_filter else ""
+    quarterly_line = "  - When granularity is quarterly, include calendar_quarter_num and calendar_quarter in SELECT and GROUP BY"
+
     return dedent(
         f"""
         Allowed tables: {', '.join(allowed_tables)}
         Required filters:
           - Must restrict calendar_year using >= CURRENT_YEAR - {default_years_back}
           - Must include calendar_year in SELECT list
-          - If granularity is quarterly, include calendar_quarter_num and calendar_quarter in SELECT and GROUP BY
+{grain_filter_line}        {quarterly_line}
         Limits:
           - Always include LIMIT <= {max_limit}
         Safety:

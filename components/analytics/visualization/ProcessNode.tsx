@@ -14,6 +14,7 @@ const LANE_LABELS: Record<string, string> = {
   chart: 'Chart Agent',
   market: 'Market Agent',
   coordination: 'Coordination',
+  fanout: 'Tool Fan-Out',
 };
 
 const LANE_BADGE_CLASS: Record<string, string> = {
@@ -24,6 +25,7 @@ const LANE_BADGE_CLASS: Record<string, string> = {
   chart: 'bg-amber-500/25 text-amber-200 border border-amber-400/40',
   market: 'bg-rose-500/25 text-rose-200 border border-rose-400/40',
   coordination: 'bg-slate-500/25 text-slate-200 border border-slate-400/40',
+  fanout: 'bg-fuchsia-500/20 text-fuchsia-200 border border-fuchsia-400/40',
 };
 
 const defaultLaneBadge = 'bg-gray-900/60 text-gray-200 border border-gray-700/40';
@@ -212,7 +214,7 @@ export const ProcessNode = memo<NodeProps<ProcessNodeData>>(({ data, selected })
       initial="idle"
       animate={motionVariant[nodeState as keyof typeof motionVariant] ? nodeState : 'idle'}
       variants={motionVariant}
-      className={`group relative flex w-72 flex-col overflow-hidden rounded-2xl border bg-gray-900/85 text-gray-100 transition ${theme.nodeBorder} ${theme.nodeGlow} ${selected ? 'ring-2 ring-offset-2 ring-offset-gray-900 ring-cyan-400' : ''}`}
+      className={`group relative flex w-72 flex-col overflow-hidden rounded-2xl border bg-gray-900/85 text-gray-100 transition ${theme.nodeBorder} ${theme.nodeGlow} ${selected ? 'ring-2 ring-offset-2 ring-offset-gray-900 ring-cyan-400' : ''} cursor-grab active:cursor-grabbing`}
       style={{ background: `linear-gradient(135deg, ${theme.nodeGradient[0]}, ${theme.nodeGradient[1]})` }}
       onDoubleClick={() => toggleExpand()}
     >

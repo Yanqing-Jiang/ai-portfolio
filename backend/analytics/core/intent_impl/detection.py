@@ -161,6 +161,34 @@ def detect_company_from_query(
     return None
 
 
+
+def _normalize_company_candidates(values: Any, query: str) -> List[str]:
+    """Return upper-cased company symbols ordered by their appearance in the query."""
+    if values is None:
+        return []
+    if isinstance(values, str):
+        candidates = [values]
+    elif isinstance(values, (list, tuple, set)):
+        candidates = list(values)
+    else:
+        return []
+    deduped: List[str] = []
+    for item in candidates:
+        symbol = str(item).strip().upper()
+        if symbol and symbol not in deduped:
+            deduped.append(symbol)
+    if not query:
+        return deduped
+    query_lower = query.lower()
+    ranked = []
+    for idx, symbol in enumerate(deduped):
+        position = query_lower.find(symbol.lower())
+        if position == -1:
+            position = len(query_lower) + idx
+        ranked.append((position, idx, symbol))
+    ranked.sort(key=lambda item: (item[0], item[1]))
+    return [symbol for _, _, symbol in ranked]
+
 def post_process_slots(
     slots: Dict[str, Any],
     query: str,
@@ -171,11 +199,32 @@ def post_process_slots(
 
     processed_slots = dict(slots or {})
 
+    company_candidates = _normalize_company_candidates(processed_slots.get("company"), query)
+    if not company_candidates and processed_slots.get("tickers"):
+        company_candidates = _normalize_company_candidates(processed_slots.get("tickers"), query)
+
+    if company_candidates:
+        processed_slots["company_candidates"] = company_candidates
+        processed_slots["company"] = company_candidates[0]
+        processed_slots["tickers"] = company_candidates
+    else:
+        existing_company = processed_slots.get("company")
+        if isinstance(existing_company, str) and existing_company.strip():
+            normalized = existing_company.strip().upper()
+            processed_slots["company"] = normalized
+            processed_slots.setdefault("tickers", [normalized])
+            processed_slots.setdefault("company_candidates", [normalized])
+        else:
+            processed_slots.pop("company", None)
+
     if not processed_slots.get("company"):
         detected_company = detect_company_from_query(query, configs, resolve_alias_func)
         if detected_company:
             processed_slots["company"] = detected_company
+            processed_slots["tickers"] = [detected_company]
+            processed_slots.setdefault("company_candidates", [detected_company])
             logger.info("Post-processed company: %s", detected_company)
+
 
     timeframe = normalize_timeframe(processed_slots.get("timeframe"), query, configs)
     if timeframe:

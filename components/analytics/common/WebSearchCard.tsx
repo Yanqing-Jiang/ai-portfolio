@@ -25,8 +25,37 @@ export const WebSearchCard: React.FC<WebSearchCardProps> = ({ result }) => {
     return null;
   }
 
-  const { query, summary, snippets = [], fromCache, fetchedAt } = result;
-  const hasSnippets = snippets.length > 0;
+  const {
+    query,
+    summary,
+    snippets = [],
+    fromCache,
+    fetchedAt,
+    latencyMs,
+    ready,
+    error,
+    reason,
+    provider,
+    model,
+  } = result;
+
+  const isDisabled = error === 'search_api_missing' || reason === 'search_api_missing';
+  const summaryText = summary ?? (isDisabled
+    ? 'Web search disabled until Gemini or Google Search API credentials are configured.'
+    : undefined);
+  const statusLabel = isDisabled
+    ? 'Disabled'
+    : fromCache
+      ? 'Cached'
+      : ready
+        ? 'Fresh'
+        : 'Pending';
+  const badgeClass = isDisabled
+    ? 'text-amber-300 bg-amber-500/10 border border-amber-500/40'
+    : fromCache
+      ? 'text-violet-200 bg-violet-500/10 border border-violet-500/40'
+      : 'text-emerald-300 bg-emerald-500/10 border border-emerald-500/40';
+  const hasSnippets = !isDisabled && snippets.length > 0;
 
   return (
     <div className="rounded-xl border border-slate-700/70 bg-slate-900/50 overflow-hidden">
@@ -40,27 +69,31 @@ export const WebSearchCard: React.FC<WebSearchCardProps> = ({ result }) => {
             </p>
           ) : null}
         </div>
-        <div className="flex items-center gap-2">
-          {typeof result.latencyMs === 'number' ? (
-            <span className="text-[11px] text-slate-400 bg-slate-800/80 border border-slate-700/70 rounded-full px-2 py-0.5">
-              {result.latencyMs} ms
+        <div className="flex items-center gap-2 flex-wrap justify-end">
+          {provider ? (
+            <span className="text-[11px] text-emerald-300 bg-emerald-500/10 border border-emerald-500/40 rounded-full px-2 py-0.5">
+              {provider}
             </span>
           ) : null}
-          {fromCache ? (
-            <span className="text-[11px] text-amber-300 bg-amber-500/10 border border-amber-500/40 rounded-full px-2 py-0.5">
-              Cached
+          {model ? (
+            <span className="text-[11px] text-sky-300 bg-sky-500/10 border border-sky-500/40 rounded-full px-2 py-0.5">
+              {model}
             </span>
-          ) : (
-            <span className="text-[11px] text-emerald-300 bg-emerald-500/10 border border-emerald-500/40 rounded-full px-2 py-0.5">
-              Fresh
+          ) : null}
+          {typeof latencyMs === 'number' && latencyMs >= 0 ? (
+            <span className="text-[11px] text-slate-400 bg-slate-800/80 border border-slate-700/70 rounded-full px-2 py-0.5">
+              {latencyMs} ms
             </span>
-          )}
+          ) : null}
+          <span className={`text-[11px] rounded-full px-2 py-0.5 ${badgeClass}`}>
+            {statusLabel}
+          </span>
         </div>
       </div>
 
-      {summary ? (
+      {summaryText ? (
         <p className="px-4 pb-3 text-sm text-slate-200 leading-relaxed border-b border-slate-800/70">
-          {summary}
+          {summaryText}
         </p>
       ) : null}
 
@@ -96,7 +129,7 @@ export const WebSearchCard: React.FC<WebSearchCardProps> = ({ result }) => {
 
               <div className="mt-2 flex flex-wrap items-center gap-3 text-[11px] text-slate-500">
                 {item.display_url ? <span>{item.display_url}</span> : null}
-                {item.published_at ? <span>� {formatPublishedDate(item.published_at) ?? item.published_at}</span> : null}
+                {item.published_at ? <span>• {formatPublishedDate(item.published_at) ?? item.published_at}</span> : null}
                 {item.url ? (
                   <a
                     href={item.url}
@@ -104,7 +137,7 @@ export const WebSearchCard: React.FC<WebSearchCardProps> = ({ result }) => {
                     rel="noopener noreferrer"
                     className="text-emerald-300 hover:text-emerald-200"
                   >
-                    Open source ?
+                    Open source →
                   </a>
                 ) : null}
               </div>
@@ -112,7 +145,11 @@ export const WebSearchCard: React.FC<WebSearchCardProps> = ({ result }) => {
           ))}
         </ul>
       ) : (
-        <div className="px-4 py-3 text-sm text-slate-400">No search snippets available.</div>
+        <div className="px-4 py-3 text-sm text-slate-400">
+          {isDisabled
+            ? 'Provide a valid GOOGLE_API_KEY or GEMINI_API_KEY to re-enable live web context.'
+            : 'No search snippets available.'}
+        </div>
       )}
     </div>
   );

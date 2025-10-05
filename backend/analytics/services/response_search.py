@@ -24,8 +24,14 @@ _MAX_TOKENS = int(os.getenv('GEMINI_SEARCH_MAX_TOKENS', '1024'))
 _genai_configured = False
 _model: Optional[genai.GenerativeModel] = None
 
+SEARCH_API_ENV_VARS = ("GOOGLE_API_KEY", "GEMINI_API_KEY", "GEMIN_API_KEY")
+
 
 class ResponseSearchError(RuntimeError):
+    def __init__(self, message: str, *, stage: str = "unknown") -> None:
+        super().__init__(message)
+        self.stage = stage
+
     '''Raised when the Gemini-powered web search call fails.'''
 
 
@@ -70,14 +76,26 @@ class ResponseSearchResult:
         return payload
 
 
+def _resolve_search_api_key() -> Optional[str]:
+    for name in SEARCH_API_ENV_VARS:
+        value = os.getenv(name)
+        if value:
+            return value
+    return None
+
+
+def has_search_api_key() -> bool:
+    return _resolve_search_api_key() is not None
+
+
 def _ensure_model() -> genai.GenerativeModel:
     global _genai_configured, _model
     if _model is not None:
         return _model
 
-    api_key = os.getenv('GOOGLE_API_KEY') or os.getenv('GEMINI_API_KEY') or os.getenv('GEMIN_API_KEY')
+    api_key = _resolve_search_api_key()
     if not api_key:
-        raise ResponseSearchError('GOOGLE_API_KEY or GEMINI_API_KEY must be configured for Gemini search')
+        raise ResponseSearchError('GOOGLE_API_KEY or GEMINI_API_KEY must be configured for Gemini search', stage='configuration')
 
     if not _genai_configured:
         genai.configure(api_key=api_key)
@@ -350,7 +368,9 @@ def _build_request_args(search_query: str) -> Dict[str, Any]:
     prompt = _build_prompt(search_query)
     return {
         'contents': prompt,
-        'tools': ['google_search'],
+        'tools': [{
+            'google_search_retrieval': {},
+        }],
     }
 
 
@@ -367,11 +387,30 @@ async def perform_response_search(
     if not query or not query.strip():
         raise ValueError('Search query must be provided')
 
+    normalized_query = query.strip()
+    logger.info('Starting response search', extra={'query': normalized_query, 'session_id': session_id})
+
     gemini_model = _ensure_model()
-    search_query = await _generate_search_topic(
-        gemini_model,
-        query,
-        session_id=session_id,
+    logger.debug('Resolved Gemini search model: %s', getattr(gemini_model, 'model_name', _DEFAULT_MODEL))
+    try:
+        search_query = await _generate_search_topic(
+            gemini_model,
+            query,
+            session_id=session_id,
+        )
+    except Exception as exc:
+        logger.warning("Gemini topic generation failed: %s", exc)
+        raise ResponseSearchError(f"Search topic generation failed: {exc}", stage="topic_generation") from exc
+    logger.info('Generated search topic %s (from query %s)', search_query, normalized_query)
+    logger.info(
+        'ResponseSearch Step 1: chat rewrite',
+        extra={
+            'step': 'response_search.step1',
+            'phase': 'chat',
+            'query': normalized_query,
+            'search_topic': search_query,
+            'session_id': session_id,
+        },
     )
     request_args = _build_request_args(search_query)
 
@@ -384,6 +423,7 @@ async def perform_response_search(
     while attempt < attempts:
         attempt += 1
         start = time.perf_counter()
+        logger.debug('Gemini search attempt %s/%s for topic %s', attempt, attempts, search_query)
         try:
             response = await asyncio.to_thread(
                 gemini_model.generate_content,
@@ -402,10 +442,12 @@ async def perform_response_search(
                     'response_id': response_dict.get('response_id') or response_dict.get('id'),
                 },
             )
+            logger.info('Gemini search succeeded in %s ms on attempt %s', elapsed_ms, attempt)
             break
         except Exception as exc:
             elapsed_ms = int((time.perf_counter() - start) * 1000)
             last_error = exc
+            logger.warning('Gemini search attempt %s failed: %s', attempt, exc)
             gemini_call(
                 operation='google_search',
                 model=gemini_model.model_name,
@@ -417,12 +459,13 @@ async def perform_response_search(
             )
             if attempt >= attempts:
                 logger.error('Gemini Google Search failed after %s attempts', attempts)
-                raise ResponseSearchError('Gemini Google Search failed') from exc
+                raise ResponseSearchError('Gemini Google Search failed', stage='search_execution') from exc
             delay = _RETRY_BASE_DELAY * (2 ** (attempt - 1))
+            logger.debug('Retrying Gemini search in %.2f seconds', delay)
             await asyncio.sleep(delay)
 
     if not response_dict:
-        raise ResponseSearchError(str(last_error) if last_error else 'Gemini Google Search produced no output')
+        raise ResponseSearchError(str(last_error) if last_error else 'Gemini Google Search produced no output', stage='search_execution')
 
     summary_text: Optional[str] = None
     raw_text = response_dict.get('text')
@@ -447,6 +490,21 @@ async def perform_response_search(
         latency_ms=elapsed_ms,
         model=model or gemini_model.model_name,
     )
+    logger.info('Response search produced %s snippets (summary=%s) for query %s', len(result.snippets), bool(result.summary), normalized_query)
+    logger.info(
+        'ResponseSearch Step 2: search result',
+        extra={
+            'step': 'response_search.step2',
+            'phase': 'search',
+            'query': normalized_query,
+            'search_topic': search_query,
+            'session_id': session_id,
+            'snippets': len(result.snippets),
+            'summary_present': bool(result.summary),
+            'latency_ms': result.latency_ms,
+        },
+    )
     return result
+
 
 

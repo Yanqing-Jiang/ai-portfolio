@@ -147,6 +147,10 @@ title_patterns:
   rnd:
     intensity: "{company_name} R&D Intensity vs Peers - Last {years} Years"
     spending: "R&D Spending Analysis - {companies}"
+  profitability:
+    net_margin_rank: "Net Margin - Latest Quarter Rank ({companies})"
+  cashflow:
+    fcf_margin_vs_peers: "{company_name} FCF Margin vs Peers - Latest"
   generic:
     time_series: "{metric} - Time Series Analysis"
     comparison: "{metric} - Company Comparison"
@@ -179,4 +183,6 @@ interactivity:
   download:
     enabled: true
     formats: ["png", "svg"]
+
+
 

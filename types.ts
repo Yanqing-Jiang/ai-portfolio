@@ -10,6 +10,10 @@
   link?: string;
   contentHtml?: string;
   gifUrl?: string;
+  seoTitle?: string;
+  seoDescription?: string;
+  seoKeywords?: string[];
+  ogImage?: string;
 }
 
 export interface ProjectYear {

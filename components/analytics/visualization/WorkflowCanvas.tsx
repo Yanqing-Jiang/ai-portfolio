@@ -20,9 +20,10 @@ import { ProcessStep, FlowMode, FlowVisualTheme } from '../types';
 
 type WorkflowLayoutMode = 'sequential' | 'lanes';
 
-const LANE_ORDER = ['overview', 'planner', 'query', 'analyst', 'chart', 'web', 'market', 'coordination'] as const;
+const LANE_ORDER = ['fanout', 'overview', 'planner', 'query', 'analyst', 'chart', 'web', 'market', 'coordination'] as const;
 
 const LANE_LABELS: Record<(typeof LANE_ORDER)[number], string> = {
+  fanout: 'Tool Fan-Out',
   overview: 'Overview',
   planner: 'Planner Agent',
   query: 'Query Agent',
@@ -234,11 +235,23 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
   const layout = FLOW_LAYOUT[flowMode];
 
   const processedSteps = useMemo(() => {
-    const total = steps.length || 1;
+    const prioritizedSteps = flowMode === 'multi-agent'
+      ? (() => {
+          const targetIndex = steps.findIndex((step) => step.id === 'tool_fanout');
+          if (targetIndex <= 0) {
+            return steps;
+          }
+          const clone = [...steps];
+          const [fanoutStep] = clone.splice(targetIndex, 1);
+          return [fanoutStep, ...clone];
+        })()
+      : steps;
+
+    const total = prioritizedSteps.length || 1;
     const useLaneLayout = flowMode === 'multi-agent' && layoutMode === 'lanes';
     const laneCounts: Record<string, number> = {};
 
-    return steps.map((step, index) => {
+    return prioritizedSteps.map((step, index) => {
       const phase = STEP_PHASES[step.id] || 'analysis';
       const parallelGroup = step.parallelGroup;
 

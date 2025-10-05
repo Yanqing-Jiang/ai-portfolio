@@ -112,28 +112,6 @@ companies:
       default_selection: true
       priority: 7
 
-# Selection rules
-selection_rules:
-  default_companies:
-    tickers: ["NVDA", "AMD", "INTC", "MU", "QCOM", "AVGO", "TXN"]
-    reason: "Top 7 semiconductor companies by market cap and relevance"
-    
-  peer_groups:
-    gpu_focused:
-      tickers: ["NVDA", "AMD"]
-      description: "GPU and graphics-focused companies"
-      
-    cpu_focused:
-      tickers: ["INTC", "AMD"]
-      description: "CPU and processor-focused companies"
-      
-    memory_focused:
-      tickers: ["MU"]
-      description: "Memory and storage specialists"
-      
-    mobile_focused:
-      tickers: ["QCOM", "AVGO"]
-      description: "Mobile and wireless technology"
 
 # Display preferences
 display:
