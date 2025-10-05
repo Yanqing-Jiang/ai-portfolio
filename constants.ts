@@ -295,8 +295,8 @@ This production-grade web application automates the invoice validation and match
           'How does the system collect qualitative feedback?',
           'What automation keeps data current for stakeholders?'
         ],
-        coverUrl: 'https://www.jiangyanqing.com/wp-content/uploads/2021/10/02Q2JyM7Iq3t8rFTddlZMxa-7.1569482292.fit_scale.size_760x427-300x169.jpg',
-        imageUrl: 'https://www.jiangyanqing.com/wp-content/uploads/2021/10/02Q2JyM7Iq3t8rFTddlZMxa-7.1569482292.fit_scale.size_760x427-300x169.jpg',
+        coverUrl: 'https://yanqinghot.blob.core.windows.net/public-access/supplier-review-system/Email-PDF-Blurred-pbi.gif',
+        imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/supplier-review-system/Email-PDF-Blurred-pbi.gif',
         link: 'https://www.jiangyanqing.com/portfolio/all-in-one-supplier-review-system/',
         contentHtml: `<div class="legacy-content">
           <p><em>*Real project, hence sensitive data is blurred.</em></p>
@@ -308,39 +308,33 @@ This production-grade web application automates the invoice validation and match
             <li>Supplier reviews, notes, and PDF scorecards generated from one screen.</li>
             <li>Periodic business review and email automation functions built in.</li>
           </ul>
-          <div class="legacy-gallery">
-            <img src="https://www.jiangyanqing.com/wp-content/uploads/2021/10/Add-Comment-Blurred.gif" alt="Supplier review comment workflow" loading="lazy" />
-            <img src="https://www.jiangyanqing.com/wp-content/uploads/2021/10/Periodic-Business-Review-Blurred.gif" alt="Periodic business review automation" loading="lazy" />
-            <img src="https://www.jiangyanqing.com/wp-content/uploads/2021/10/Email-PDF-Blurred.gif" alt="Automated PDF email delivery" loading="lazy" />
-          </div>
-        </div>`
+          <img class="legacy-hero" src="https://yanqinghot.blob.core.windows.net/public-access/supplier-review-system/Email-PDF-Blurred-pbi.gif" alt="Supplier review automation workflow" loading="lazy" />        </div>`
       },
       {
         id: 'capex-project-tracker',
-        title: 'Capex Project Tracker',
+        title: 'Capex Project Application',
         description: 'One-stop Power Apps style tracker that manages project headers and line items with a shopping-cart approval flow for capital investments.',
         technologies: ['Power Apps', 'Project Management', 'Process Automation'],
-        systemInstruction: 'You represent the Capex Project Tracker. Explain the shopping-cart intake pattern, approval automation, and how finance and procurement use the data.',
+        systemInstruction: 'You represent the Capex Project Application. Explain the shopping-cart intake pattern, approval automation, and how finance and procurement use the data.',
         defaultPrompts: [
           'How does the shopping-cart workflow improve Capex approvals?',
           'Which teams rely on the tracker day to day?',
           'Describe the data captured for each Capex line item.'
         ],
-        coverUrl: 'https://yanqinghot.blob.core.windows.net/public-access/Capex-Project-Tracker-Showcase-1.gif',
-        imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/Capex-Project-Tracker-Showcase-1.gif',
+        coverUrl: 'https://yanqinghot.blob.core.windows.net/public-access/capex-tracker/Capex-Project.gif',
+        imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/capex-tracker/Capex-Project.gif',
         link: 'https://www.jiangyanqing.com/portfolio/capex-project-tracker/',
         contentHtml: `<div class="legacy-content">
           <p><em>*Real project, hence sensitive data is blurred.</em></p>
-          <h3>Capex Project Tracker Highlights</h3>
+          <h3>Capex Project Application Highlights</h3>
           <ul>
             <li>One-stop Power Apps experience that blends project headers and line items.</li>
             <li>Shopping-cart intake pattern streamlines approvals for capital requests.</li>
             <li>Full data pipeline ends in Power BI reporting for finance and procurement.</li>
           </ul>
-          <div class="legacy-gallery">
-            <img src="https://yanqinghot.blob.core.windows.net/public-access/Capex-Project-Tracker-Showcase-1.gif" alt="Capex request intake workflow" loading="lazy" />
-            <img src="https://www.jiangyanqing.com/wp-content/uploads/2021/10/2021-10-09_18-35-28-1024x578.png" alt="Capital approval summary dashboard" loading="lazy" />
-          </div>
+          <img class="legacy-hero" src="https://yanqinghot.blob.core.windows.net/public-access/capex-tracker/Capex-Project.gif" alt="Capex request intake workflow" loading="lazy" />
+          <img class="legacy-hero" src="https://yanqinghot.blob.core.windows.net/public-access/capex-tracker/BC-Approval-Flow2.png" alt="Business case approval flow" loading="lazy" />
+          <img class="legacy-hero" src="https://yanqinghot.blob.core.windows.net/public-access/capex-tracker/Power%20Automate.png" alt="Power Automate automation overview" loading="lazy" />
         </div>`
       },
       {
@@ -354,8 +348,8 @@ This production-grade web application automates the invoice validation and match
           'What kinds of rules govern an intake submission?',
           'Explain how approvals and downstream reporting are automated.'
         ],
-        coverUrl: 'https://www.jiangyanqing.com/wp-content/uploads/2021/10/Untitled1-300x177.png',
-        imageUrl: 'https://www.jiangyanqing.com/wp-content/uploads/2021/10/Untitled1-300x177.png',
+        coverUrl: 'https://yanqinghot.blob.core.windows.net/public-access/engagement-tracker/Engagement-Intake.gif',
+        imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/engagement-tracker/Engagement-Intake.gif',
         link: 'https://www.jiangyanqing.com/portfolio/all-in-one-engagement-intake/',
         contentHtml: `<div class="legacy-content">
           <p>All-in-one Engagement Intake orchestrates procurement submissions with thousands of embedded business rules.</p>
@@ -364,21 +358,20 @@ This production-grade web application automates the invoice validation and match
             <li>Automates approvals and notifications-no more hand-typed emails.</li>
             <li>Feeds Power BI Dataflows so downstream stakeholders can monitor progress.</li>
           </ul>
+          <img class="legacy-hero" src="https://yanqinghot.blob.core.windows.net/public-access/engagement-tracker/Engagement-Intake.gif" alt="Engagement intake workflow overview" loading="lazy" />
           <p>The original portfolio showcases process screenshots covering intake states, approvals, and reporting.</p>
-          <div class="legacy-gallery">
-            <img src="https://www.jiangyanqing.com/wp-content/uploads/2021/10/Engagement-Intake.gif" alt="Engagement intake workflow overview" loading="lazy" />
-            <img src="https://www.jiangyanqing.com/wp-content/uploads/2021/10/Untitled1-300x177.png" alt="Intake landing experience" loading="lazy" />
-            <img src="https://www.jiangyanqing.com/wp-content/uploads/2021/10/Untitled2-300x177.png" alt="Submission routing rules" loading="lazy" />
-            <img src="https://www.jiangyanqing.com/wp-content/uploads/2021/10/Untitled3-300x177.png" alt="Work queue monitoring" loading="lazy" />
-            <img src="https://www.jiangyanqing.com/wp-content/uploads/2021/10/Untitled4-300x182.png" alt="Approval escalations" loading="lazy" />
-            <img src="https://www.jiangyanqing.com/wp-content/uploads/2021/10/Untitled5-300x179.png" alt="Status dashboards" loading="lazy" />
-            <img src="https://www.jiangyanqing.com/wp-content/uploads/2021/10/2021-10-09_18-45-10-300x166.png" alt="Request detail view" loading="lazy" />
-            <img src="https://www.jiangyanqing.com/wp-content/uploads/2021/12/BC-Approval-Flow-300x167.png" alt="Business case approval flow" loading="lazy" />
-            <img src="https://www.jiangyanqing.com/wp-content/uploads/2021/12/Process-Overview-300x170.png" alt="Process overview diagram" loading="lazy" />
-          </div>
+          <img class="legacy-hero" src="https://yanqinghot.blob.core.windows.net/public-access/engagement-tracker/Business%20Case%20Approval%20Flow%20Chart.png" alt="Business case approval flow" loading="lazy" />
+          <img class="legacy-hero" src="https://yanqinghot.blob.core.windows.net/public-access/engagement-tracker/after-reject.png" alt="Post-rejection automation workflow" loading="lazy" />
         </div>`
       },
     ],
   },
 ];
+
+
+
+
+
+
+
 

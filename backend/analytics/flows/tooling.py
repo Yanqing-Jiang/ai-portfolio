@@ -53,6 +53,7 @@ class BaseToolAdapter:
     description: str = ""
     preview_only: bool = True
     capabilities: Tuple[str, ...] = ()
+    fatal_on_exception: bool = False
     outputs: Tuple[str, ...] = ()
 
     def get_metadata(self) -> Dict[str, Any]:
@@ -113,13 +114,14 @@ class ToolTaskGroup:
                     _record(index, cancel_result)
                     raise
                 except Exception as exc:  # pragma: no cover - defensive fan-out guard
+                    fatal = getattr(adapter, 'fatal_on_exception', False)
                     result = ToolAdapterResult(
                         name=getattr(adapter, "name", f"adapter_{index}"),
                         status="error",
                         payload={},
                         metadata=dict(adapter_meta),
                         error=str(exc),
-                        fatal=True,
+                        fatal=fatal,
                     )
                 else:
                     if result.metadata:

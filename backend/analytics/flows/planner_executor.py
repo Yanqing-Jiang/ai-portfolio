@@ -23,12 +23,18 @@ from analytics.core.config_store import get_config_store
 from analytics.core.events import EventEmitter, TimedEventEmitter
 from .tooling import run_tool_parallelism
 from ..core.intent import intent_to_sql_criteria
-from analytics.core.intent import detect_intent, detect_intent_llm, detect_intent_with_clarifications
+from analytics.core.intent import (
+    detect_intent,
+    detect_intent_llm,
+    detect_intent_with_clarifications,
+    classify_query_async,
+    OffTopicClassifierSchema,
+)
 from analytics.sql.sql_planner import build_query_plan, choose_template
 from analytics.sql.executor import execute_sql
 from analytics.sql.validator import validate_sql
 from analytics.sql.templates import fetch_templates_for_intent
-from analytics.sql.prompt_builder import build_sql_messages, extract_sql_from_response
+from analytics.sql.prompt_builder import build_sql_messages, build_sql_retry_messages, extract_sql_from_response
 from analytics.core.charting import build_chart_spec, plan_chart_rule_based
 from .tool_bundle import collect_tool_bundle
 from analytics.core.telemetry import analysis_chunk as log_analysis_chunk
@@ -119,6 +125,12 @@ def _generate_chart_design(intent_key: Optional[str], plan: QueryPlanModel, data
         })
     return design
 
+def _validate_sql(sql: str) -> Tuple[bool, List[str], int]:
+    start = time.time()
+    ok, issues = validate_sql(sql)
+    elapsed = int((time.time() - start) * 1000)
+    return ok, issues, elapsed
+
 @dataclass
 class PlannerPhaseContext:
     query: str
@@ -162,62 +174,62 @@ class PlannerExecutorFlow:
 
 
 
-async def _web_search_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[str, Any], None]:
-    if not ctx.query or not ctx.query.strip():
-        return
-
-    progress = EventEmitter.progress("web_search", "Gathering latest market headlines...")
-    progress["data"]["ts"] = datetime.utcnow().isoformat()
-    yield progress
-
-    context_parts: List[str] = []
-    intent = ctx.intent
-    if intent and getattr(intent, "intent_key", None):
-        context_parts.append(f"intent={intent.intent_key}")
-    slots = getattr(intent, "slots_detected", {}) or {}
-    company_slot = slots.get("company") if isinstance(slots, dict) else None
-    tickers: List[str] = []
-    if isinstance(company_slot, str) and company_slot.strip():
-        tickers.append(company_slot.strip().upper())
-    elif isinstance(company_slot, (list, tuple, set)):
-        for value in company_slot:
-            if isinstance(value, str) and value.strip():
-                tickers.append(value.strip().upper())
-    if tickers:
-        context_parts.append("tickers=" + ", ".join(tickers[:3]))
-    plan = ctx.plan or ctx.provisional_plan
-    if plan and getattr(plan, "metrics", None):
-        metrics = list(getattr(plan, "metrics", []) or [])
-        if metrics:
-            context_parts.append("metrics=" + ", ".join(metrics[:3]))
-    if ctx.assumptions:
-        context_parts.append("assumptions=" + "; ".join(str(item) for item in ctx.assumptions[:2]))
-
-    context_hint = " | ".join(context_parts) if context_parts else None
-
-    try:
-        search_result = await perform_response_search(
-            ctx.query,
-            session_id=ctx.session_id,
-            context=context_hint,
-        )
-    except ResponseSearchError as exc:
-        error_event = EventEmitter.error(
-            "web_search",
-            "Latest news search failed",
-            details={"error": str(exc)},
-            code="WEB_SEARCH_ERROR",
-        )
-        error_event["data"]["ts"] = datetime.utcnow().isoformat()
-        yield error_event
-        return
-
-    ctx.web_search = search_result
-    payload = search_result.to_payload()
-    payload["ready"] = True
-    payload["ts"] = datetime.utcnow().isoformat()
-    yield EventEmitter.result("web_search", {"web_context": payload})
-
+    async def _web_search_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[str, Any], None]:
+        if not ctx.query or not ctx.query.strip():
+            return
+    
+        progress = EventEmitter.progress("web_search", "Gathering latest market headlines...")
+        progress["data"]["ts"] = datetime.utcnow().isoformat()
+        yield progress
+    
+        context_parts: List[str] = []
+        intent = ctx.intent
+        if intent and getattr(intent, "intent_key", None):
+            context_parts.append(f"intent={intent.intent_key}")
+        slots = getattr(intent, "slots_detected", {}) or {}
+        company_slot = slots.get("company") if isinstance(slots, dict) else None
+        tickers: List[str] = []
+        if isinstance(company_slot, str) and company_slot.strip():
+            tickers.append(company_slot.strip().upper())
+        elif isinstance(company_slot, (list, tuple, set)):
+            for value in company_slot:
+                if isinstance(value, str) and value.strip():
+                    tickers.append(value.strip().upper())
+        if tickers:
+            context_parts.append("tickers=" + ", ".join(tickers[:3]))
+        plan = ctx.plan or ctx.provisional_plan
+        if plan and getattr(plan, "metrics", None):
+            metrics = list(getattr(plan, "metrics", []) or [])
+            if metrics:
+                context_parts.append("metrics=" + ", ".join(metrics[:3]))
+        if ctx.assumptions:
+            context_parts.append("assumptions=" + "; ".join(str(item) for item in ctx.assumptions[:2]))
+    
+        context_hint = " | ".join(context_parts) if context_parts else None
+    
+        try:
+            search_result = await perform_response_search(
+                ctx.query,
+                session_id=ctx.session_id,
+                context=context_hint,
+            )
+        except ResponseSearchError as exc:
+            error_event = EventEmitter.error(
+                "web_search",
+                "Latest news search failed",
+                details={"error": str(exc)},
+                code="WEB_SEARCH_ERROR",
+            )
+            error_event["data"]["ts"] = datetime.utcnow().isoformat()
+            yield error_event
+            return
+    
+        ctx.web_search = search_result
+        payload = search_result.to_payload()
+        payload["ready"] = True
+        payload["ts"] = datetime.utcnow().isoformat()
+        yield EventEmitter.result("web_search", {"web_context": payload})
+    
     def _get_company_display(self, intent: IntentModel, provisional_plan: Optional[QueryPlanModel] = None) -> str:
         """Generate smart company display based on intent and plan context."""
         company = intent.slots_detected.get('company')
@@ -1115,4 +1127,5 @@ async def run_planner_executor(query: str, session_id: Optional[str] = None) -> 
     workflow_instance = PlannerExecutorFlow()
     async for event in workflow_instance.events(query, session_id):
         yield event
+
 

@@ -15,8 +15,6 @@ from analytics.core.telemetry import gemini_call
 logger = logging.getLogger(__name__)
 
 _DEFAULT_MODEL = os.getenv('GEMINI_SEARCH_MODEL', 'gemini-2.5-flash')
-_DEFAULT_COUNTRY = os.getenv('WEB_SEARCH_COUNTRY', 'US')
-_DEFAULT_CITY = os.getenv('WEB_SEARCH_CITY')
 _MAX_SNIPPETS = int(os.getenv('WEB_SEARCH_MAX_SNIPPETS', '5'))
 _MAX_ATTEMPTS = int(os.getenv('WEB_SEARCH_RETRY_ATTEMPTS', '2'))
 _RETRY_BASE_DELAY = float(os.getenv('WEB_SEARCH_RETRY_BASE_DELAY', '0.6'))
@@ -77,9 +75,9 @@ def _ensure_model() -> genai.GenerativeModel:
     if _model is not None:
         return _model
 
-    api_key = os.getenv('GOOGLE_API_KEY')
+    api_key = os.getenv('GOOGLE_API_KEY') or os.getenv('GEMINI_API_KEY') or os.getenv('GEMIN_API_KEY')
     if not api_key:
-        raise ResponseSearchError('GOOGLE_API_KEY is not configured for Gemini search')
+        raise ResponseSearchError('GOOGLE_API_KEY or GEMINI_API_KEY must be configured for Gemini search')
 
     if not _genai_configured:
         genai.configure(api_key=api_key)
@@ -138,6 +136,72 @@ def _collect_candidate_texts(response_dict: Dict[str, Any]) -> List[str]:
         if isinstance(text_field, str) and text_field.strip():
             texts.append(text_field.strip())
     return texts
+
+
+def _extract_primary_text(response_dict: Dict[str, Any]) -> str:
+    raw_text = response_dict.get('text')
+    if isinstance(raw_text, str) and raw_text.strip():
+        return raw_text.strip()
+    candidate_texts = _collect_candidate_texts(response_dict)
+    if candidate_texts:
+        return candidate_texts[0].strip()
+    return ''
+
+
+def _sanitize_search_query(text: str, fallback: str) -> str:
+    if not isinstance(text, str):
+        return fallback
+    cleaned = text.strip().replace('"', '').replace('`', '')
+    cleaned = cleaned.splitlines()[0].strip() if cleaned else ''
+    return cleaned or fallback
+
+
+async def _generate_search_topic(
+    model: genai.GenerativeModel,
+    query: str,
+    *,
+    session_id: Optional[str] = None,
+) -> str:
+    prompt = [
+        {
+            'parts': [
+                {
+                    'text': (
+                        'You rewrite investor questions into a single concise web search query that surfaces the latest context needed to answer. Output only the search query without quotes.\n'
+                        f'User question: {query.strip()}\n'
+                    )
+                }
+            ]
+        }
+    ]
+    start = time.perf_counter()
+    try:
+        response = await asyncio.to_thread(
+            model.generate_content,
+            contents=prompt,
+        )
+        elapsed_ms = int((time.perf_counter() - start) * 1000)
+        response_dict = _as_dict(response)
+        gemini_call(
+            operation='search_query',
+            model=model.model_name,
+            duration_ms=elapsed_ms,
+            status='success',
+            session_id=session_id,
+        )
+        generated = _extract_primary_text(response_dict)
+    except Exception as exc:
+        elapsed_ms = int((time.perf_counter() - start) * 1000)
+        gemini_call(
+            operation='search_query',
+            model=getattr(model, 'model_name', None),
+            duration_ms=elapsed_ms,
+            status='error',
+            session_id=session_id,
+            error=str(exc),
+        )
+        return query
+    return _sanitize_search_query(generated, query)
 
 
 def _extract_support_text(support: Dict[str, Any], chunk_map: Dict[int, Dict[str, Any]]) -> Optional[str]:
@@ -272,47 +336,18 @@ def _dedupe_snippets(snippets: Iterable[SearchSnippet]) -> List[SearchSnippet]:
     return list(seen.values())
 
 
-def _build_prompt(
-    query: str,
-    *,
-    context: Optional[str],
-    country: Optional[str],
-    city: Optional[str],
-    context_size: Optional[str],
-) -> List[str]:
+def _build_prompt(search_query: str) -> List[str]:
     lines: List[str] = [
         'You are a financial research assistant. Use google_search to gather breaking developments, regulatory filings, and earnings coverage related to the analytics request.',
         'Prioritize sources published within the past 30 days and focus on companies or tickers mentioned by the user.',
         'Provide a concise summary (<=80 words) that cites the returned references (e.g. [1]) and highlight why each item matters for the user question.',
+        f'Search focus: {search_query.strip()}.',
     ]
-    if city and country:
-        lines.append(f'User location hint: {city}, {country}.')
-    elif country:
-        lines.append(f'User location hint: {country}.')
-    if context:
-        lines.append(f'Workflow context: {context.strip()}.')
-    if context_size:
-        lines.append(f'Context window preference: {context_size.strip()} prioritisation.')
-    lines.append(f'User question: {query.strip()}.')
-    return ['
-'.join(lines)]
+    return ["\n".join(lines)]
 
 
-def _build_request_args(
-    query: str,
-    *,
-    context: Optional[str],
-    country: Optional[str],
-    city: Optional[str],
-    context_size: Optional[str],
-) -> Dict[str, Any]:
-    prompt = _build_prompt(
-        query,
-        context=context,
-        country=country,
-        city=city,
-        context_size=context_size,
-    )
+def _build_request_args(search_query: str) -> Dict[str, Any]:
+    prompt = _build_prompt(search_query)
     return {
         'contents': prompt,
         'tools': ['google_search'],
@@ -333,13 +368,12 @@ async def perform_response_search(
         raise ValueError('Search query must be provided')
 
     gemini_model = _ensure_model()
-    request_args = _build_request_args(
+    search_query = await _generate_search_topic(
+        gemini_model,
         query,
-        context=context,
-        country=country or _DEFAULT_COUNTRY,
-        city=city or _DEFAULT_CITY,
-        context_size=context_size,
+        session_id=session_id,
     )
+    request_args = _build_request_args(search_query)
 
     attempts = max(1, _MAX_ATTEMPTS)
     attempt = 0

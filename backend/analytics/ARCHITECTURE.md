@@ -151,7 +151,7 @@ Defines reusable analytics tools exposed to agents.
 Placeholder namespace for SSE-specific helpers; the primary event formatting lives in `core.events.EventEmitter` today.
 
 ### Shared OpenAI Client
-`unified_responses_client.py` wraps the async OpenAI Responses API with reasoning support, streaming deltas, structured outputs, and embeddings helpers. All flows request instances via `get_unified_client()` to maintain session continuity and reasoning effort policies, while `analytics.services.response_search` issues Gemini 2.5 Flash search calls (requires `GOOGLE_API_KEY`).
+`unified_responses_client.py` wraps the async OpenAI Responses API with reasoning support, streaming deltas, structured outputs, and embeddings helpers. All flows request instances via `get_unified_client()` to maintain session continuity and reasoning effort policies, while `analytics.services.response_search` issues Gemini 2.5 Flash search calls (requires `GOOGLE_API_KEY` or `GEMINI_API_KEY` / `GEMIN_API_KEY`).
 
 ## Supporting Tests
 Backend regression tests live under `backend/tests/analytics/` and cover:
@@ -164,7 +164,7 @@ Frontend analytics components consume the SSE payloads described here; see `comp
 
 ## Operational Notes
 - **Configuration** - YAML files in `backend/config/schemas/` (e.g., `queries.yaml`) drive template selection and metric metadata.
-- **Environment** - `DATABASE_URL`, `OPENAI_API_KEY`, `GOOGLE_API_KEY` (for Gemini search), and optional reasoning overrides (`SUPERVISOR_REASONING_EFFORT`) must be set before running flows.
+- **Environment** - `DATABASE_URL`, `OPENAI_API_KEY`, `GOOGLE_API_KEY` (or `GEMINI_API_KEY` / `GEMIN_API_KEY` for Gemini search), and optional reasoning overrides (`SUPERVISOR_REASONING_EFFORT`) must be set before running flows.
 - **API integration** - `/api/analytics/memory/stream` (FastAPI) maps query parameters to `analytics_memory_workflow` and streams events directly to the frontend `EventSource` client.
 
 
