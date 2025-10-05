@@ -6,8 +6,6 @@ import os
 import logging
 import time
 import uuid
-import statistics
-import inspect
 from datetime import datetime
 from analytics.core.types import (
     WorkflowState,
@@ -25,15 +23,16 @@ from analytics.core.config_store import get_config_store
 from analytics.core.events import EventEmitter, TimedEventEmitter
 from .tooling import run_tool_parallelism
 from ..core.intent import intent_to_sql_criteria
-from analytics.core.intent import detect_intent, detect_intent_llm, detect_intent_with_clarifications, classify_query_async, OffTopicClassifierSchema
+from analytics.core.intent import detect_intent, detect_intent_llm, detect_intent_with_clarifications
 from analytics.sql.sql_planner import build_query_plan, choose_template
 from analytics.sql.executor import execute_sql
 from analytics.sql.validator import validate_sql
 from analytics.sql.templates import fetch_templates_for_intent
-from analytics.sql.prompt_builder import build_sql_messages, build_sql_retry_messages, extract_sql_from_response
+from analytics.sql.prompt_builder import build_sql_messages, extract_sql_from_response
 from analytics.core.charting import build_chart_spec, plan_chart_rule_based
 from .tool_bundle import collect_tool_bundle
-from analytics.core.telemetry import analysis_chunk as log_analysis_chunk, policy_decision as log_policy_decision, retry_summary
+from analytics.core.telemetry import analysis_chunk as log_analysis_chunk
+from analytics.services.response_search import ResponseSearchError, perform_response_search
 from analytics.core.analysis import summarize, stream_insights_llm
 from analytics.core.clarify import (
     detect_missing_slots,
@@ -142,11 +141,11 @@ class PlannerPhaseContext:
     llm_used: bool = False
     sql_attempt: int = 1
     sql_attempts: List[Dict[str, Any]] = field(default_factory=list)
-    sql_phase_status: str = "pending"
     validation_attempt: int = 1
     data: List[Dict[str, Any]] = field(default_factory=list)
     exec_elapsed_ms: Optional[int] = None
     chart_spec: Optional[Dict[str, Any]] = None
+    web_search: Optional[ResponseSearchResult] = None
     analysis: str = ""
     parallelism_enabled: bool = False
     planner_result: PlannerResultModel = field(default_factory=PlannerResultModel)
@@ -162,178 +161,119 @@ class PlannerExecutorFlow:
         self.parallelism_enabled = _env_flag("ANALYTICS_TOOL_PARALLELISM", default=False)
 
 
-    async def _sql_phase(
-        self,
-        ctx: PlannerPhaseContext,
-        *,
-        query: str,
-        intent: IntentModel,
-        plan: QueryPlanModel,
-        session_id: str,
-        candidate_templates: Optional[List[Dict[str, Any]]] = None,
-        selected_template_id: Optional[str] = None,
-        timed_emitter: TimedEventEmitter,
-        allow_policy_override: bool = False,
-    ) -> AsyncGenerator[Dict[str, Any], None]:
-        database_cfg = CONFIGS.database or {}
-        defaults = database_cfg.get("query_defaults", {}) if isinstance(database_cfg, dict) else {}
-        default_limit = int(defaults.get("default_limit", 500))
-        max_limit = int(defaults.get("max_limit", default_limit))
-        requested_limit = getattr(plan, "limit", None) if plan else None
-        effective_limit = default_limit
-        if isinstance(requested_limit, int) and requested_limit > 0:
-            effective_limit = min(requested_limit, default_limit)
-        plan.limit = effective_limit
 
-        sql_policy_meta = ctx.planner_result.metadata.setdefault("sql_policy", {})
-        sql_policy_meta.update({
-            "default_limit": default_limit,
-            "max_limit": max_limit,
-            "requested_limit": requested_limit,
-            "effective_limit": effective_limit,
-        })
+async def _web_search_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[str, Any], None]:
+    if not ctx.query or not ctx.query.strip():
+        return
 
-        ctx.sql = ""
-        ctx.data = []
-        ctx.sql_phase_status = "running"
-        ctx.sql_attempts = []
+    progress = EventEmitter.progress("web_search", "Gathering latest market headlines...")
+    progress["data"]["ts"] = datetime.utcnow().isoformat()
+    yield progress
 
-        progress_event = EventEmitter.progress("sql_compilation", "Generating SQL with Responses API...")
-        progress_event["data"]["ts"] = datetime.utcnow().isoformat()
-        yield progress_event
-        timed_emitter.start_step("sql_generation")
+    context_parts: List[str] = []
+    intent = ctx.intent
+    if intent and getattr(intent, "intent_key", None):
+        context_parts.append(f"intent={intent.intent_key}")
+    slots = getattr(intent, "slots_detected", {}) or {}
+    company_slot = slots.get("company") if isinstance(slots, dict) else None
+    tickers: List[str] = []
+    if isinstance(company_slot, str) and company_slot.strip():
+        tickers.append(company_slot.strip().upper())
+    elif isinstance(company_slot, (list, tuple, set)):
+        for value in company_slot:
+            if isinstance(value, str) and value.strip():
+                tickers.append(value.strip().upper())
+    if tickers:
+        context_parts.append("tickers=" + ", ".join(tickers[:3]))
+    plan = ctx.plan or ctx.provisional_plan
+    if plan and getattr(plan, "metrics", None):
+        metrics = list(getattr(plan, "metrics", []) or [])
+        if metrics:
+            context_parts.append("metrics=" + ", ".join(metrics[:3]))
+    if ctx.assumptions:
+        context_parts.append("assumptions=" + "; ".join(str(item) for item in ctx.assumptions[:2]))
 
-        fallback_emitted = False
+    context_hint = " | ".join(context_parts) if context_parts else None
 
-        def _build_fallback_analysis(message: str, *, sources: Optional[Dict[str, bool]] = None) -> Optional[Dict[str, Any]]:
-            nonlocal fallback_emitted
-            if fallback_emitted:
-                return None
-            fallback_emitted = True
-            resolved_message = message or "Analysis unavailable."
-            fallback_sources = sources or {'sql': False, 'web': False, 'market': False, 'llm': False}
-            sections = {
-                'market_trend': [],
-                'web_highlights': [],
-                'market_snapshot': [],
-                'llm_commentary': resolved_message,
-            }
-            ctx.planner_result.analysis = resolved_message
-            ctx.planner_result.metadata['analysis_sources'] = fallback_sources
-            ctx.planner_result.metadata['analysis_sections'] = sections
-            ctx.planner_result.metadata['llm_analysis'] = resolved_message
-            payload = {
-                'analysis_length': len(resolved_message or ''),
-                'analysis': resolved_message,
-                'analysis_sources': fallback_sources,
-                'analysis_sections': sections,
-                'llm_analysis': resolved_message,
-            }
-            event = EventEmitter.result(
-                "analysis_complete",
-                payload,
-                key="analysis",
-            )
-            event["event"] = "analysis_complete"
-            event["data"].update(
-                {
-                    "ts": datetime.utcnow().isoformat(),
-                    "elapsed_ms": 0,
-                }
-            )
-            return event
-
-        candidate_templates = candidate_templates or []
-        confidence = float(getattr(intent, "confidence", 0.0) or 0.0)
-        policy_threshold = float(os.getenv("ANALYTICS_SQL_CONFIDENCE_THRESHOLD", "0.35"))
-        sql_policy_meta["confidence"] = confidence
-        sql_policy_meta["policy_threshold"] = policy_threshold
-
-        attempt_logs: List[Dict[str, Any]] = []
-        if (not allow_policy_override and confidence < policy_threshold and isinstance(requested_limit, int) and requested_limit > default_limit):
-            log_policy_decision(
-                policy="sql_retry_confidence",
-                score=confidence,
-                threshold=policy_threshold,
-                action="skip_retry",
-                reason="intent confidence below threshold for expanded limit",
-                session_id=session_id,
-                flow=self.flow_label,
-                metadata={
-                    "requested_limit": requested_limit,
-                    "effective_limit": effective_limit,
-                },
-            )
-            policy_event = EventEmitter.result(
-                "sql_policy",
-                {
-                    "policy": "sql_retry_confidence",
-                    "score": confidence,
-                    "threshold": policy_threshold,
-                    "action": "skip_retry",
-                    "reason": "intent confidence below threshold for expanded limit",
-                    "requested_limit": requested_limit,
-                    "effective_limit": effective_limit,
-                },
-            )
-            policy_event["event"] = "policy_decision"
-            policy_event["data"]["ts"] = datetime.utcnow().isoformat()
-            yield policy_event
-            attempt_logs.append({
-                "attempt": 1,
-                "source": "policy_guard",
-                "status": "policy_blocked",
-                "score": confidence,
-                "threshold": policy_threshold,
-                "requested_limit": requested_limit,
-                "effective_limit": effective_limit,
-                "elapsed_ms": 0,
-                "validation_elapsed_ms": 0,
-            })
-            ctx.sql_attempts = attempt_logs
-            ctx.planner_result.sql_attempts = list(attempt_logs)
-            ctx.sql_phase_status = "policy_blocked"
-            fallback_text = (
-                "Unable to generate SQL because intent confidence "
-                f"{confidence:.2f} is below the retry policy threshold {policy_threshold:.2f}."
-            )
-            fallback_event = _build_fallback_analysis(fallback_text)
-            if fallback_event:
-                yield fallback_event
-            retry_summary(
-                stage="sql_generation",
-                attempts=attempt_logs,
-                final_status=ctx.sql_phase_status,
-                session_id=session_id,
-                flow=self.flow_label,
-            )
-            return
-
-        messages = await build_sql_messages(
-            original_query=query,
-            intent=intent,
-            plan=plan,
-            config_store=self.config_store,
-            templates=candidate_templates,
+    try:
+        search_result = await perform_response_search(
+            ctx.query,
+            session_id=ctx.session_id,
+            context=context_hint,
         )
+    except ResponseSearchError as exc:
+        error_event = EventEmitter.error(
+            "web_search",
+            "Latest news search failed",
+            details={"error": str(exc)},
+            code="WEB_SEARCH_ERROR",
+        )
+        error_event["data"]["ts"] = datetime.utcnow().isoformat()
+        yield error_event
+        return
 
+    ctx.web_search = search_result
+    payload = search_result.to_payload()
+    payload["ready"] = True
+    payload["ts"] = datetime.utcnow().isoformat()
+    yield EventEmitter.result("web_search", {"web_context": payload})
+
+    def _get_company_display(self, intent: IntentModel, provisional_plan: Optional[QueryPlanModel] = None) -> str:
+        """Generate smart company display based on intent and plan context."""
+        company = intent.slots_detected.get('company')
+        comparison = provisional_plan.comparison if provisional_plan else None
+        # Smart display based on context
+        if comparison == 'all':
+            return 'All Companies'
+        elif comparison == 'vs_avg':
+            return 'Industry Average'
+        elif company:
+            return company
+        else:
+            return 'Unknown'
+
+    async def events(self, query: str, session_id: Optional[str] = None) -> AsyncGenerator[Dict[str, Any], None]:
+        """Enhanced workflow with structured decision events and timing."""
+        ctx = await _initialize_context(self, query, session_id)
+        session_id = ctx.session_id
+        timed_emitter = ctx.timed_emitter
+        workflow_start = ctx.workflow_start
+        yield EventEmitter.session_started(session_id)
+        async for event in _classification_phase(self, ctx):
+            yield event
+        if not ctx.is_financial_query:
+            return
+        async for event in _intent_phase(self, ctx):
+            yield event
+        async for event in _clarification_phase(self, ctx):
+            yield event
+        async for event in _plan_phase(self, ctx):
+            yield event
+        intent = ctx.intent
+        provisional_plan = ctx.plan or ctx.provisional_plan
+        template = ctx.template
+        candidate_templates = ctx.candidate_templates
+        selected_template_id = ctx.selected_template_id
+        if not intent or not provisional_plan:
+            return
+        plan = provisional_plan
+        # 7) SQL Generation Phase
+        sql_progress = EventEmitter.progress("sql_compilation", "Generating SQL with Responses API...")
+        sql_progress["data"]["ts"] = datetime.utcnow().isoformat()
+        yield sql_progress
+        timed_emitter.start_step("sql_generation")
         MAX_SQL_ATTEMPTS = 3
+        sql = ""
+        llm_used = False
+        attempt_logs: List[Dict[str, Any]] = []
         last_error_code: Optional[str] = None
         last_error_detail: Optional[str] = None
         previous_sql: Optional[str] = None
-        sql_text = ""
 
         for attempt in range(1, MAX_SQL_ATTEMPTS + 1):
             attempt_start = time.time()
-            attempt_record: Dict[str, Any] = {
-                "attempt": attempt,
-                "source": "responses_sql",
-                "status": "started",
-                "elapsed_ms": 0,
-                "validation_elapsed_ms": 0,
-            }
+            attempt_record: Dict[str, Any] = {"attempt": attempt, "status": "started"}
             candidate_sql = ""
-            pending_events: List[Dict[str, Any]] = []
             try:
                 if not self.unified_client:
                     self.unified_client = get_unified_client()
@@ -351,7 +291,11 @@ class PlannerExecutorFlow:
                     status="error",
                     error_code=last_error_code,
                     error_detail=last_error_detail,
+                    elapsed_ms=int((time.time() - attempt_start) * 1000),
                 )
+                attempt_logs.append(attempt_record)
+                ctx.sql_attempts = attempt_logs
+                ctx.planner_result.sql_attempts = list(attempt_logs)
                 error_event = EventEmitter.error(
                     "sql_compilation",
                     "SQL generation failed",
@@ -359,7 +303,7 @@ class PlannerExecutorFlow:
                     code=last_error_code,
                 )
                 error_event["data"]["ts"] = datetime.utcnow().isoformat()
-                pending_events.append(error_event)
+                yield error_event
             else:
                 if not candidate_sql:
                     last_error_code = "SQL_EMPTY"
@@ -368,35 +312,42 @@ class PlannerExecutorFlow:
                         status="empty",
                         error_code=last_error_code,
                         error_detail=last_error_detail,
+                        elapsed_ms=int((time.time() - attempt_start) * 1000),
                     )
-                    empty_event = EventEmitter.progress(
+                    attempt_logs.append(attempt_record)
+                    ctx.sql_attempts = attempt_logs
+                    ctx.planner_result.sql_attempts = list(attempt_logs)
+                    empty_notice = EventEmitter.progress(
                         "sql_compilation",
                         "SQL attempt returned no content; retrying with additional guidance.",
                     )
-                    empty_event["data"].update({"ts": datetime.utcnow().isoformat(), "attempt": attempt})
-                    pending_events.append(empty_event)
-                else:
-                    ok, issues, validate_elapsed = self._validate_sql_with_timing(
-                        candidate_sql,
-                        plan,
-                        limit_guard=default_limit,
+                    empty_notice["data"].update(
+                        {"ts": datetime.utcnow().isoformat(), "attempt": attempt}
                     )
-                    attempt_record["validation_elapsed_ms"] = validate_elapsed
-                    if not ok and allow_policy_override:
-                        ok = True
-                        issues = []
+                    yield empty_notice
+                else:
+                    ok, issues, validate_elapsed = _validate_sql(candidate_sql)
+                    attempt_record.update(
+                        status="valid" if ok else "invalid",
+                        elapsed_ms=int((time.time() - attempt_start) * 1000),
+                        validation_elapsed_ms=validate_elapsed,
+                    )
+                    if not ok:
+                        last_error_code = "SQL_VALIDATION_FAILED"
+                        last_error_detail = "; ".join(issues) if issues else "Validation failed"
+                    attempt_logs.append(attempt_record)
+                    ctx.sql_attempts = attempt_logs
+                    ctx.planner_result.sql_attempts = list(attempt_logs)
                     if ok:
-                        sql_text = candidate_sql
-                        ctx.sql = sql_text
+                        sql = candidate_sql
+                        ctx.sql = sql
                         ctx.llm_used = True
                         ctx.sql_attempt = attempt
-                        ctx.planner_result.sql_text = sql_text
-                        attempt_record["status"] = "valid"
-                        attempt_record["sql_preview"] = candidate_sql[:160]
+                        ctx.planner_result.sql_text = sql
                         compiled_event = EventEmitter.result(
                             "sql_compiled",
                             {
-                                "sql_length": len(sql_text),
+                                "sql_length": len(sql),
                                 "template_fallback": False,
                                 "template_used": selected_template_id,
                                 "attempt": attempt,
@@ -408,45 +359,31 @@ class PlannerExecutorFlow:
                         compiled_event["data"].update(
                             {
                                 "ts": datetime.utcnow().isoformat(),
+                                "elapsed_ms": attempt_record.get("elapsed_ms"),
                             }
                         )
-                        pending_events.append(compiled_event)
-                        generated_event = EventEmitter.sql_generated(sql_text)
+                        yield compiled_event
+                        generated_event = EventEmitter.sql_generated(sql)
                         generated_event["data"].update(
                             {
                                 "ts": datetime.utcnow().isoformat(),
+                                "elapsed_ms": attempt_record.get("elapsed_ms"),
                                 "llm_used": True,
                                 "attempt": attempt,
                             }
                         )
-                        pending_events.append(generated_event)
-                    else:
-                        last_error_code = "SQL_VALIDATION_FAILED"
-                        last_error_detail = '; '.join(issues) if issues else "Validation failed"
-                        attempt_record.update(
-                            status="invalid",
-                            error_code=last_error_code,
-                            error_detail=last_error_detail,
-                            sql_preview=candidate_sql[:160],
-                        )
-                        validation_event = EventEmitter.error(
-                            "sql_validation",
-                            "Generated SQL failed validation",
-                            details={"attempt": attempt, "issues": issues},
-                            code=last_error_code,
-                        )
-                        validation_event["data"]["ts"] = datetime.utcnow().isoformat()
-                        pending_events.append(validation_event)
-                        previous_sql = candidate_sql
-            attempt_record["elapsed_ms"] = int((time.time() - attempt_start) * 1000)
-            attempt_logs.append(attempt_record)
-            ctx.sql_attempts = attempt_logs
-            ctx.planner_result.sql_attempts = list(attempt_logs)
-            for pending in pending_events:
-                if pending.get("event") in {"sql_compiled", "sql_generated"}:
-                    pending["data"].setdefault("elapsed_ms", attempt_record["elapsed_ms"])
-                yield pending
-            if sql_text:
+                        yield generated_event
+                        break
+                    validation_event = EventEmitter.error(
+                        "sql_validation",
+                        "Generated SQL failed validation",
+                        details={"attempt": attempt, "issues": issues},
+                        code=last_error_code,
+                    )
+                    validation_event["data"]["ts"] = datetime.utcnow().isoformat()
+                    yield validation_event
+                    previous_sql = candidate_sql
+            if sql:
                 break
             if attempt < MAX_SQL_ATTEMPTS:
                 retry_notice = EventEmitter.progress(
@@ -454,10 +391,7 @@ class PlannerExecutorFlow:
                     f"Retrying SQL generation (attempt {attempt + 1}/{MAX_SQL_ATTEMPTS})",
                 )
                 retry_notice["data"].update(
-                    {
-                        "ts": datetime.utcnow().isoformat(),
-                        "last_error": last_error_code,
-                    }
+                    {"ts": datetime.utcnow().isoformat(), "last_error": last_error_code}
                 )
                 yield retry_notice
                 messages = await build_sql_retry_messages(
@@ -472,15 +406,9 @@ class PlannerExecutorFlow:
                     templates=candidate_templates,
                 )
 
-        timed_emitter.end_step("sql_generation")
-        if not sql_text:
-            ctx.sql_phase_status = "sql_generation_failed"
-            fallback_reason = "SQL generation attempts were exhausted."
-            if last_error_detail:
-                fallback_reason = f"SQL generation failed: {last_error_detail}."
-            fallback_event = _build_fallback_analysis(fallback_reason)
-            if fallback_event:
-                yield fallback_event
+        ctx.sql_attempts = attempt_logs
+        ctx.planner_result.sql_attempts = list(attempt_logs)
+        if not sql:
             failure_event = EventEmitter.error(
                 "sql_compilation",
                 "Unable to generate valid SQL after 3 attempts",
@@ -489,27 +417,25 @@ class PlannerExecutorFlow:
             )
             failure_event["data"]["ts"] = datetime.utcnow().isoformat()
             yield failure_event
-            retry_summary(
-                stage="sql_generation",
-                attempts=attempt_logs,
-                final_status=ctx.sql_phase_status,
-                session_id=session_id,
-                flow=self.flow_label,
+            workflow_abort = EventEmitter.result(
+                "workflow_complete",
+                {
+                    "status": "sql_generation_failed",
+                    "total_elapsed_ms": int((time.time() - workflow_start) * 1000),
+                },
             )
+            workflow_abort["event"] = "workflow_complete"
+            workflow_abort["data"]["ts"] = datetime.utcnow().isoformat()
+            yield workflow_abort
             return
 
-        timed_emitter.start_step("sql_validation")
-        validation_progress = EventEmitter.progress("sql_validation", "Validating SQL...")
+        # 8) SQL Validation Phase
+        validation_progress = EventEmitter.progress(
+            "sql_validation", "Validating SQL..."
+        )
         validation_progress["data"]["ts"] = datetime.utcnow().isoformat()
         yield validation_progress
-        ok, issues, validate_elapsed = self._validate_sql_with_timing(
-            sql_text,
-            plan,
-            limit_guard=default_limit,
-        )
-        if not ok and allow_policy_override:
-            ok = True
-            issues = []
+        ok, issues, validate_elapsed = _validate_sql(sql)
         validation_event = EventEmitter.result(
             "sql_validated",
             {
@@ -524,17 +450,7 @@ class PlannerExecutorFlow:
             {"ts": datetime.utcnow().isoformat(), "elapsed_ms": validate_elapsed}
         )
         yield validation_event
-        timed_emitter.end_step("sql_validation")
         if not ok:
-            ctx.sql_phase_status = "sql_validation_failed"
-            fallback_reason = "SQL validation failed."
-            if issues:
-                joined = '; '.join(str(issue) for issue in issues if issue)
-                if joined:
-                    fallback_reason = f"SQL validation failed: {joined}."
-            fallback_event = _build_fallback_analysis(fallback_reason)
-            if fallback_event:
-                yield fallback_event
             error_event = EventEmitter.error(
                 "sql_validation",
                 "SQL failed validation after retries",
@@ -543,23 +459,29 @@ class PlannerExecutorFlow:
             )
             error_event["data"]["ts"] = datetime.utcnow().isoformat()
             yield error_event
-            ctx.sql_phase_status = "sql_validation_failed"
-            retry_summary(
-                stage="sql_generation",
-                attempts=attempt_logs,
-                final_status=ctx.sql_phase_status,
-                session_id=session_id,
-                flow=self.flow_label,
+            workflow_abort = EventEmitter.result(
+                "workflow_complete",
+                {
+                    "status": "sql_validation_failed",
+                    "total_elapsed_ms": int((time.time() - workflow_start) * 1000),
+                },
             )
+            workflow_abort["event"] = "workflow_complete"
+            workflow_abort["data"]["ts"] = datetime.utcnow().isoformat()
+            yield workflow_abort
             return
 
-        execution_progress = EventEmitter.progress("sql_execution", "Executing query...")
+        # 9) SQL Execution Phase
+        execution_progress = EventEmitter.progress(
+            "sql_execution", "Executing query..."
+        )
         execution_progress["data"]["ts"] = datetime.utcnow().isoformat()
         yield execution_progress
-        timed_emitter.start_step("sql_execution")
         exec_start = time.time()
         try:
-            data = await execute_sql(sql_text)
+            data = await execute_sql(sql)
+            exec_elapsed = int((time.time() - exec_start) * 1000)
+            ctx.planner_result.data_row_count = len(data)
         except Exception as exec_exc:
             logger.error(
                 "[SQL_EXECUTION] Execution failed: %s",
@@ -579,253 +501,175 @@ class PlannerExecutorFlow:
             )
             error_event["data"]["ts"] = datetime.utcnow().isoformat()
             yield error_event
-            fallback_reason = f"SQL execution failed: {exec_exc}."
-            fallback_event = _build_fallback_analysis(fallback_reason)
-            if fallback_event:
-                yield fallback_event
-            timed_emitter.end_step("sql_execution")
-            ctx.sql_phase_status = "sql_execution_failed"
-            retry_summary(
-                stage="sql_generation",
-                attempts=attempt_logs,
-                final_status=ctx.sql_phase_status,
-                session_id=session_id,
-                flow=self.flow_label,
+            workflow_abort = EventEmitter.result(
+                "workflow_complete",
+                {
+                    "status": "sql_execution_failed",
+                    "total_elapsed_ms": int((time.time() - workflow_start) * 1000),
+                },
             )
+            workflow_abort["event"] = "workflow_complete"
+            workflow_abort["data"]["ts"] = datetime.utcnow().isoformat()
+            yield workflow_abort
             return
-        exec_elapsed = int((time.time() - exec_start) * 1000)
-        timed_emitter.end_step("sql_execution")
-        ctx.data = data
-        ctx.exec_elapsed_ms = exec_elapsed
-        ctx.planner_result.data_row_count = len(data)
-        execution_summary = EventEmitter.result(
-            "sql_execution",
+
+        # 10) Chart Planning Phase
+        chart_progress = EventEmitter.progress(
+            "chart_generation", "Planning chart..."
+        )
+        chart_progress["data"]["ts"] = datetime.utcnow().isoformat()
+        yield chart_progress
+        chart_start = time.time()
+        chart_plan = plan_chart_rule_based(data, query, intent.intent_key)
+        spec = build_chart_spec(
+            data,
+            chart_plan.dict(),
+            CONFIGS.charts,
+            intent_key=intent.intent_key,
+            comparison=plan.comparison,
+        )
+        ctx.chart_spec = spec
+        chart_design = _generate_chart_design(intent.intent_key, plan, data, spec)
+        spec.setdefault("meta", {}).setdefault("chartDesign", chart_design)
+        ctx.planner_result.chart_summary = {
+            "chart_type": chart_plan.chart_type,
+            "series_count": len(chart_plan.series),
+            "design": chart_design,
+        }
+        chart_elapsed = int((time.time() - chart_start) * 1000)
+        chart_event = EventEmitter.result(
+            "chart_planned",
             {
-                "row_count": len(data),
-                "elapsed_ms": exec_elapsed,
+                "chart_type": chart_plan.chart_type,
+                "series_count": len(chart_plan.series),
             },
         )
-        execution_summary["event"] = "execution_stats"
-        execution_summary["data"]["ts"] = datetime.utcnow().isoformat()
-        yield execution_summary
-        ctx.sql_phase_status = "ok"
-        retry_summary(
-            stage="sql_generation",
-            attempts=attempt_logs,
-            final_status=ctx.sql_phase_status,
-            session_id=session_id,
-            flow=self.flow_label,
+        chart_event["event"] = "chart_planned"
+        chart_event["data"].update(
+            {
+                "ts": datetime.utcnow().isoformat(),
+                "elapsed_ms": chart_elapsed,
+            }
         )
+        yield chart_event
+        try:
+            ChartSpecModel(**spec)
+            generated_chart = EventEmitter.result(
+                "chart_generated",
+                {
+                    "chart_type": spec.get("meta", {}).get("chartDesign", {}).get(
+                        "chart_type", "unknown"
+                    ),
+                    "chart_spec": spec,
+                },
+                key="chart_spec",
+            )
+            generated_chart["event"] = "chart_generated"
+            generated_chart["data"]["ts"] = datetime.utcnow().isoformat()
+            yield generated_chart
+        except ValidationError as ve:
+            warning_event = EventEmitter.progress(
+                "warning", f"Chart spec validation warning: {str(ve)}"
+            )
+            warning_event["data"]["ts"] = datetime.utcnow().isoformat()
+            yield warning_event
+            fallback_chart = EventEmitter.result(
+                "chart_generated",
+                {
+                    "chart_type": spec.get("meta", {}).get("chartDesign", {}).get(
+                        "chart_type", "unknown"
+                    ),
+                    "chart_spec": spec,
+                },
+                key="chart_spec",
+            )
+            fallback_chart["event"] = "chart_generated"
+            fallback_chart["data"]["ts"] = datetime.utcnow().isoformat()
+            yield fallback_chart
+        async for event in _web_search_phase(self, ctx):
+            yield event
 
-    def _compose_analysis_summary(
-        self,
-        *,
-        ctx: PlannerPhaseContext,
-        data: List[Dict[str, Any]],
-        analysis_text: str,
-        tool_bundle: Dict[str, Any],
-    ) -> Tuple[str, Dict[str, bool], Dict[str, Any]]:
-        tool_bundle = tool_bundle or {}
-
-        def _scale_percent(value: Any) -> Optional[float]:
-            try:
-                numeric = float(value)
-            except (TypeError, ValueError):
-                return None
-            if abs(numeric) <= 1:
-                return numeric * 100
-            return numeric
-
-        def _format_percent(value: Any) -> str:
-            scaled = _scale_percent(value)
-            if scaled is None:
-                return "n/a"
-            return f"{scaled:.1f}%"
-
-        def _is_share_field(name: str) -> bool:
-            lowered = name.lower()
-            if 'market_share' in lowered:
-                return True
-            if 'share_' in lowered and any(token in lowered for token in ('percent', 'pct', 'percentage')):
-                return True
-            return lowered.endswith('_share_pct') or lowered.endswith('_share_percent')
-
-        def _detect_share_column(row: Dict[str, Any]) -> Optional[str]:
-            preferred = ['market_share_percent', 'market_share_pct']
-            for key in preferred:
-                if key in row:
-                    return key
-            for key in row.keys():
-                if _is_share_field(key):
-                    return key
-            return None
-
-        def _extract_share_series(rows: List[Dict[str, Any]], share_key: str) -> Tuple[List[Tuple[str, float]], Optional[str]]:
-            timeline: List[Tuple[Tuple[int, int, int], str, float]] = []
-            ticker: Optional[str] = None
-            for idx, row in enumerate(rows):
-                ticker_val = row.get('ticker')
-                if isinstance(ticker_val, str) and ticker_val:
-                    if ticker is None:
-                        ticker = ticker_val
-                    elif ticker_val != ticker:
-                        continue
-                scaled_value = _scale_percent(row.get(share_key))
-                if scaled_value is None:
-                    continue
-                year = row.get('calendar_year')
-                quarter_num = row.get('calendar_quarter_num')
-                quarter_label = row.get('calendar_quarter')
-                if year is not None:
-                    try:
-                        year_int = int(year)
-                    except (TypeError, ValueError):
-                        year_int = None
-                    if quarter_label:
-                        label = f"{year_int} {quarter_label}" if year_int is not None else str(quarter_label)
-                        sort_key = (year_int or 0, int(quarter_num or 0), idx)
-                    elif quarter_num is not None:
-                        label = f"{year} Q{quarter_num}"
-                        sort_key = (int(year or 0), int(quarter_num), idx)
-                    else:
-                        label = str(year)
-                        sort_key = (int(year or 0), 0, idx)
-                elif row.get('period'):
-                    label = str(row['period'])
-                    sort_key = (0, 0, idx)
-                elif row.get('date'):
-                    label = str(row['date'])
-                    sort_key = (0, 0, idx)
-                else:
-                    label = f"row {idx + 1}"
-                    sort_key = (0, 0, idx)
-                timeline.append((sort_key, label, scaled_value))
-            timeline.sort(key=lambda item: item[0])
-            return [(label, value) for _, label, value in timeline], ticker
-
-        market_lines: List[str] = []
-        share_column = _detect_share_column(data[0]) if data else None
-        share_points: List[Tuple[str, float]] = []
-        ticker: Optional[str] = None
-        if share_column:
-            share_points, ticker = _extract_share_series(data, share_column)
-        company_label = ctx.intent.slots_detected.get('company') if ctx.intent and ctx.intent.slots_detected else None
-        if not company_label and ticker:
-            company_label = ticker
-        if share_points:
-            first_period, first_value = share_points[0]
-            last_period, last_value = share_points[-1]
-            subject = company_label or 'The company'
-            if first_value is not None and last_value is not None:
-                delta_pp = last_value - first_value
-                delta_text = f" ({delta_pp:+.1f} pp)" if delta_pp is not None else ''
-                market_lines.append(
-                    f"{subject} share moved from {_format_percent(first_value)} in {first_period} to {_format_percent(last_value)} in {last_period}{delta_text}."
-                )
-            peak_period, peak_value = max(share_points, key=lambda item: item[1] if item[1] is not None else float('-inf'))
-            if peak_value is not None:
-                window = min(3, len(share_points))
-                window_values = [pt[1] for pt in share_points[-window:] if pt[1] is not None]
-                if window_values:
-                    avg_value = statistics.mean(window_values)
-                    market_lines.append(
-                        f"Peak share {_format_percent(peak_value)} in {peak_period}; trailing {window}-period avg {_format_percent(avg_value)}."
-                    )
-                else:
-                    market_lines.append(f"Peak share {_format_percent(peak_value)} in {peak_period}.")
-
-        web_lines: List[str] = []
-        web_context = tool_bundle.get('web_context') if isinstance(tool_bundle, dict) else None
-        if isinstance(web_context, dict):
-            summary = web_context.get('summary')
-            if isinstance(summary, str):
-                summary = summary.strip()
-                if summary:
-                    web_lines.append(summary)
-            snippets = web_context.get('snippets')
-            if isinstance(snippets, list):
-                seen = set()
-                for snippet in snippets:
-                    text = ''
-                    title = None
-                    if isinstance(snippet, dict):
-                        title = snippet.get('title')
-                        text = snippet.get('snippet') or snippet.get('summary') or snippet.get('text') or ''
-                    else:
-                        text = str(snippet)
-                    parts = []
-                    if title:
-                        parts.append(str(title).strip())
-                    if text:
-                        parts.append(str(text).strip())
-                    line = ': '.join(part for part in parts if part)
-                    if not line or line in seen:
-                        continue
-                    seen.add(line)
-                    web_lines.append(line)
-                    if len(web_lines) >= 4:
-                        break
-
-        stock_lines: List[str] = []
-        stock_widget = tool_bundle.get('stock_widget') if isinstance(tool_bundle, dict) else None
-        if isinstance(stock_widget, dict):
-            symbols = stock_widget.get('symbols') or stock_widget.get('original')
-            if isinstance(symbols, list) and symbols:
-                joined = ', '.join(str(sym).upper() for sym in symbols if sym)
-                if joined:
-                    stock_lines.append(f"Symbols: {joined}")
-            generated_at = stock_widget.get('generated_at')
-            if isinstance(generated_at, str) and generated_at:
-                stock_lines.append(f"Snapshot generated at {generated_at}.")
-
-        cleaned_llm = (analysis_text or '').strip()
-        sections: List[str] = []
-        if market_lines:
-            sections.append("### Market Share Trend\n" + "\n".join(f"- {line}" for line in market_lines))
-        if web_lines:
-            sections.append("### Web Highlights\n" + "\n".join(f"- {line}" for line in web_lines))
-        if stock_lines:
-            sections.append("### Market Snapshot\n" + "\n".join(f"- {line}" for line in stock_lines))
-        if cleaned_llm:
-            sections.append("### LLM Commentary\n" + cleaned_llm)
-        structured_summary = "\n\n".join(section.strip() for section in sections if section).strip()
-        if not structured_summary:
-            structured_summary = cleaned_llm
-
-        analysis_sources = {
-            'sql': bool(market_lines),
-            'web': bool(web_lines),
-            'market': bool(stock_lines),
-            'llm': bool(cleaned_llm),
-        }
-        section_details = {
-            'market_trend': market_lines,
-            'web_highlights': web_lines,
-            'market_snapshot': stock_lines,
-            'llm_commentary': cleaned_llm,
-        }
-        return structured_summary, analysis_sources, section_details
-
-    def _validate_sql_with_timing(
-        self,
-        sql: str,
-        plan: QueryPlanModel,
-        *,
-        limit_guard: int,
-    ) -> Tuple[bool, List[str], int]:
-        start = time.time()
-        database_cfg = CONFIGS.database or {}
-        tables_cfg = database_cfg.get('tables') if isinstance(database_cfg, dict) else None
-        allowed_tables = list(tables_cfg.keys()) if isinstance(tables_cfg, dict) else None
-        ok, issues = validate_sql(
+        # 11) Analysis Generation Phase
+        analysis_progress = EventEmitter.progress(
+            "analysis_generation", "Generating insights..."
+        )
+        analysis_progress["data"]["ts"] = datetime.utcnow().isoformat()
+        yield analysis_progress
+        analysis_start = time.time()
+        full_analysis = ""
+        async for text_chunk in stream_insights_llm(
+            data,
             sql,
-            allowed_tables=allowed_tables,
-            max_limit=limit_guard,
-            granularity=getattr(plan, 'granularity', 'annual') or 'annual',
+            query,
+            chart_spec=ctx.chart_spec,
+            search_result=ctx.web_search,
+            session_id=session_id,
+        ):
+            if text_chunk:
+                full_analysis += text_chunk
+                streaming_event = {
+                    "event": "analysis_streaming",
+                    "data": {
+                        "step": "analysis_generation",
+                        "partial_analysis": text_chunk,
+                        "chunk_length": len(text_chunk),
+                        "ts": datetime.utcnow().isoformat(),
+                    },
+                }
+                log_analysis_chunk(
+                    chunk=text_chunk,
+                    step="analysis_generation",
+                    role=None,
+                    session_id=session_id,
+                    flow=getattr(self, "flow_label", None),
+                )
+                yield streaming_event
+        analysis_elapsed = int((time.time() - analysis_start) * 1000)
+        ctx.planner_result.analysis = full_analysis
+        analysis_payload = {
+            "analysis_length": len(full_analysis),
+            "analysis": full_analysis,
+        }
+        tool_bundle = collect_tool_bundle(
+            manifest=getattr(ctx, "tool_parallel_manifest", None),
+            results=getattr(ctx, "tool_parallel_results", None),
         )
-        elapsed = int((time.time() - start) * 1000)
-        return ok, issues, elapsed
-
+        if tool_bundle:
+            analysis_payload.update(tool_bundle)
+        if ctx.web_search:
+            web_payload = ctx.web_search.to_payload()
+            analysis_payload['web_context'] = web_payload
+            ctx.planner_result.metadata['web_search'] = web_payload
+        analysis_complete = EventEmitter.result(
+            "analysis_complete",
+            analysis_payload,
+            key="analysis",
+        )
+        analysis_complete["event"] = "analysis_complete"
+        analysis_complete["data"].update(
+            {
+                "ts": datetime.utcnow().isoformat(),
+                "elapsed_ms": analysis_elapsed,
+            }
+        )
+        yield analysis_complete
+        # Cleanup expired sessions
+        from analytics.core.clarify import get_session_store
+        session_store = await get_session_store()
+        await session_store.cleanup_expired()
+        total_elapsed = int((time.time() - workflow_start) * 1000)
+        result_event = EventEmitter.result(
+            "planner_result", ctx.planner_result.model_dump()
+        )
+        result_event["event"] = "planner_result"
+        result_event["data"]["ts"] = datetime.utcnow().isoformat()
+        yield result_event
+        workflow_complete = EventEmitter.result(
+            "workflow_complete", {"total_elapsed_ms": total_elapsed}
+        )
+        workflow_complete["event"] = "workflow_complete"
+        workflow_complete["data"]["ts"] = datetime.utcnow().isoformat()
+        yield workflow_complete
 
 async def _initialize_context(self, query: str, session_id: Optional[str]) -> PlannerPhaseContext:
     workflow_start = time.time()
@@ -1265,477 +1109,10 @@ async def _plan_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[str
         yield catalog_event
     ctx.candidate_templates = candidate_templates
     ctx.selected_template_id = selected_template_id
-    def _get_company_display(self, intent: IntentModel, provisional_plan: Optional[QueryPlanModel] = None) -> str:
-        """Generate smart company display based on intent and plan context."""
-        company = intent.slots_detected.get('company')
-        comparison = provisional_plan.comparison if provisional_plan else None
-        # Smart display based on context
-        if comparison == 'all':
-            return 'All Companies'
-        elif comparison == 'vs_avg':
-            return 'Industry Average'
-        elif company:
-            return company
-        else:
-            return 'Unknown'
-    async def events(self, query: str, session_id: Optional[str] = None) -> AsyncGenerator[Dict[str, Any], None]:
-        """Enhanced workflow with structured decision events and timing."""
-        ctx_candidate = _initialize_context(self, query, session_id)
-        if inspect.isawaitable(ctx_candidate):
-            ctx = await ctx_candidate
-        else:
-            ctx = ctx_candidate
-        session_id = ctx.session_id
-        timed_emitter = ctx.timed_emitter
-        workflow_start = ctx.workflow_start
-        yield EventEmitter.session_started(session_id)
-        async for event in _classification_phase(self, ctx):
-            yield event
-        if not ctx.is_financial_query:
-            return
-        async for event in _intent_phase(self, ctx):
-            yield event
-        async for event in _clarification_phase(self, ctx):
-            yield event
-        async for event in _plan_phase(self, ctx):
-            yield event
-        intent = ctx.intent
-        provisional_plan = ctx.plan or ctx.provisional_plan
-        template = ctx.template
-        candidate_templates = ctx.candidate_templates
-        selected_template_id = ctx.selected_template_id
-        if not intent or not provisional_plan:
-            return
-        plan = provisional_plan
-        async for event in self._sql_phase(
-            ctx,
-            query=query,
-            intent=intent,
-            plan=plan,
-            session_id=session_id,
-            candidate_templates=candidate_templates,
-            selected_template_id=selected_template_id,
-            timed_emitter=timed_emitter,
-            allow_policy_override=True,
-        ):
-            yield event
-
-        if ctx.sql_phase_status != "ok":
-            workflow_complete = EventEmitter.result(
-                "workflow_complete",
-                {
-                    "status": ctx.sql_phase_status,
-                    "total_elapsed_ms": int((time.time() - workflow_start) * 1000),
-                },
-            )
-            workflow_complete["event"] = "workflow_complete"
-            workflow_complete["data"]["ts"] = datetime.utcnow().isoformat()
-            yield workflow_complete
-            return
-
-        sql = ctx.sql
-        data = ctx.data
-
-        # 10) Chart Planning Phase
-        # 10) Chart Planning Phase
-        chart_progress = EventEmitter.progress(
-            "chart_generation", "Planning chart..."
-        )
-        chart_progress["data"]["ts"] = datetime.utcnow().isoformat()
-        yield chart_progress
-        chart_start = time.time()
-        chart_plan = plan_chart_rule_based(data, query, intent.intent_key)
-        logger.info(f"[CHART_DEBUG] Chart plan generated: chart_type={chart_plan.chart_type}, series_count={len(chart_plan.series)}")
-        spec = build_chart_spec(
-            data,
-            chart_plan.dict(),
-            CONFIGS.charts,
-            intent_key=intent.intent_key,
-            comparison=plan.comparison,
-        )
-        logger.info(f"[CHART_DEBUG] Chart spec built: series_count={len(spec.get('series', []))}, has_xAxis={bool(spec.get('xAxis'))}")
-        chart_design = _generate_chart_design(intent.intent_key, plan, data, spec)
-        spec.setdefault("meta", {}).setdefault("chartDesign", chart_design)
-        ctx.planner_result.chart_summary = {
-            "chart_type": chart_plan.chart_type,
-            "series_count": len(chart_plan.series),
-            "design": chart_design,
-        }
-        chart_elapsed = int((time.time() - chart_start) * 1000)
-        chart_event = EventEmitter.result(
-            "chart_planned",
-            {
-                "chart_type": chart_plan.chart_type,
-                "series_count": len(chart_plan.series),
-            },
-        )
-        chart_event["event"] = "chart_planned"
-        chart_event["data"].update(
-            {
-                "ts": datetime.utcnow().isoformat(),
-                "elapsed_ms": chart_elapsed,
-            }
-        )
-        yield chart_event
-        try:
-            ChartSpecModel(**spec)
-            logger.info(f"[CHART_DEBUG] ChartSpecModel validation passed, emitting chart_generated event")
-            generated_chart = EventEmitter.result(
-                "chart_generated",
-                {
-                    "chart_type": spec.get("meta", {}).get("chartDesign", {}).get(
-                        "chart_type", "unknown"
-                    ),
-                    "chart_spec": spec,
-                },
-                key="chart_spec",
-            )
-            generated_chart["event"] = "chart_generated"
-            generated_chart["data"]["ts"] = datetime.utcnow().isoformat()
-            logger.info(f"[CHART_DEBUG] Chart_generated event payload: series_count={len(generated_chart.get('data', {}).get('chart_spec', {}).get('series', []))}")
-            yield generated_chart
-        except ValidationError as ve:
-            warning_event = EventEmitter.progress(
-                "warning", f"Chart spec validation warning: {str(ve)}"
-            )
-            warning_event["data"]["ts"] = datetime.utcnow().isoformat()
-            yield warning_event
-            fallback_chart = EventEmitter.result(
-                "chart_generated",
-                {
-                    "chart_type": spec.get("meta", {}).get("chartDesign", {}).get(
-                        "chart_type", "unknown"
-                    ),
-                    "chart_spec": spec,
-                },
-                key="chart_spec",
-            )
-            fallback_chart["event"] = "chart_generated"
-            fallback_chart["data"]["ts"] = datetime.utcnow().isoformat()
-            yield fallback_chart
-        # 11) Analysis Generation Phase
-        analysis_progress = EventEmitter.progress(
-            "analysis_generation", "Generating insights..."
-        )
-        analysis_progress["data"]["ts"] = datetime.utcnow().isoformat()
-        yield analysis_progress
-        analysis_start = time.time()
-        full_analysis = ""
-        async for text_chunk in stream_insights_llm(
-            data, sql, query, session_id=session_id
-        ):
-            if text_chunk:
-                full_analysis += text_chunk
-                streaming_event = {
-                    "event": "analysis_streaming",
-                    "data": {
-                        "step": "analysis_generation",
-                        "partial_analysis": text_chunk,
-                        "chunk_length": len(text_chunk),
-                        "ts": datetime.utcnow().isoformat(),
-                    },
-                }
-                log_analysis_chunk(
-                    chunk=text_chunk,
-                    step="analysis_generation",
-                    role=None,
-                    session_id=session_id,
-                    flow=getattr(self, "flow_label", None),
-                )
-                yield streaming_event
-        analysis_elapsed = int((time.time() - analysis_start) * 1000)
-        tool_bundle = collect_tool_bundle(
-            manifest=getattr(ctx, "tool_parallel_manifest", None),
-            results=getattr(ctx, "tool_parallel_results", None),
-        ) or {}
-        structured_summary, analysis_sources, analysis_sections = self._compose_analysis_summary(
-            ctx=ctx,
-            data=data,
-            analysis_text=full_analysis,
-            tool_bundle=tool_bundle,
-        )
-        ctx.planner_result.analysis = structured_summary
-        ctx.planner_result.metadata["analysis_sources"] = analysis_sources
-        ctx.planner_result.metadata["analysis_sections"] = analysis_sections
-        ctx.planner_result.metadata["llm_analysis"] = full_analysis
-        analysis_payload = {
-            "analysis_length": len(structured_summary or ''),
-            "analysis": structured_summary,
-            "analysis_sources": analysis_sources,
-            "analysis_sections": analysis_sections,
-            "llm_analysis": full_analysis,
-        }
-        if tool_bundle:
-            analysis_payload.update(tool_bundle)
-        analysis_complete = EventEmitter.result(
-            "analysis_complete",
-            analysis_payload,
-            key="analysis",
-        )
-        analysis_complete["event"] = "analysis_complete"
-        analysis_data = analysis_complete.get("data", {})
-        if isinstance(analysis_data.get("analysis"), dict):
-            flattened_analysis = analysis_data.pop("analysis")
-            analysis_data.update(flattened_analysis)
-        analysis_data.update(
-            {
-                "ts": datetime.utcnow().isoformat(),
-                "elapsed_ms": analysis_elapsed,
-            }
-        )
-        yield analysis_complete
-        # Cleanup expired sessions
-        from analytics.core.clarify import get_session_store
-        session_store = await get_session_store()
-        await session_store.cleanup_expired()
-        total_elapsed = int((time.time() - workflow_start) * 1000)
-        result_event = EventEmitter.result(
-            "planner_result", ctx.planner_result.model_dump()
-        )
-        result_event["event"] = "planner_result"
-        result_event["data"]["ts"] = datetime.utcnow().isoformat()
-        yield result_event
-        workflow_complete = EventEmitter.result(
-            "workflow_complete", {"total_elapsed_ms": total_elapsed}
-        )
-        workflow_complete["event"] = "workflow_complete"
-        workflow_complete["data"]["ts"] = datetime.utcnow().isoformat()
-        yield workflow_complete
-async def _planner_events(
-    self,
-    query: str,
-    session_id: Optional[str] = None,
-    *,
-    skip_preflight: bool = False,
-) -> AsyncGenerator[Dict[str, Any], None]:
-    """Enhanced workflow with structured decision events and timing."""
-    ctx_candidate = _initialize_context(self, query, session_id)
-    if inspect.isawaitable(ctx_candidate):
-        ctx = await ctx_candidate
-    else:
-        ctx = ctx_candidate
-    session_id = ctx.session_id
-    timed_emitter = ctx.timed_emitter
-    workflow_start = ctx.workflow_start
-    yield EventEmitter.session_started(session_id)
-    if not skip_preflight:
-        async for event in _classification_phase(self, ctx):
-            yield event
-        if not ctx.is_financial_query:
-            return
-    else:
-        classification_meta = ctx.planner_result.metadata.setdefault("classification", {})
-        classification_meta.update(
-            {
-                "status": "skipped",
-                "reason": "preflight_disabled",
-                "ts": datetime.utcnow().isoformat(),
-            }
-        )
-    async for event in _intent_phase(self, ctx):
-        yield event
-    async for event in _clarification_phase(self, ctx):
-        yield event
-    async for event in _plan_phase(self, ctx):
-        yield event
-    intent = ctx.intent
-    provisional_plan = ctx.plan or ctx.provisional_plan
-    template = ctx.template
-    candidate_templates = ctx.candidate_templates
-    selected_template_id = ctx.selected_template_id
-    if not intent or not provisional_plan:
-        return
-    plan = provisional_plan
-    async for event in self._sql_phase(
-        ctx,
-        query=query,
-        intent=intent,
-        plan=plan,
-        session_id=session_id,
-        candidate_templates=candidate_templates,
-        selected_template_id=selected_template_id,
-        timed_emitter=timed_emitter,
-        allow_policy_override=True,
-    ):
-        yield event
-
-    if ctx.sql_phase_status != "ok":
-        workflow_complete = EventEmitter.result(
-            "workflow_complete",
-            {
-                "status": ctx.sql_phase_status,
-                "total_elapsed_ms": int((time.time() - workflow_start) * 1000),
-            },
-        )
-        workflow_complete["event"] = "workflow_complete"
-        workflow_complete["data"]["ts"] = datetime.utcnow().isoformat()
-        yield workflow_complete
-        return
-
-    sql = ctx.sql
-    data = ctx.data
-
-    # 10) Chart Planning Phase
-    # 10) Chart Planning Phase
-    chart_progress = EventEmitter.progress(
-        "chart_generation", "Planning chart..."
-    )
-    chart_progress["data"]["ts"] = datetime.utcnow().isoformat()
-    yield chart_progress
-    chart_start = time.time()
-    chart_plan = plan_chart_rule_based(data, query, intent.intent_key)
-    logger.info(f"[CHART_DEBUG] Chart plan generated: chart_type={chart_plan.chart_type}, series_count={len(chart_plan.series)}")
-    spec = build_chart_spec(
-        data,
-        chart_plan.dict(),
-        CONFIGS.charts,
-        intent_key=intent.intent_key,
-        comparison=plan.comparison,
-    )
-    logger.info(f"[CHART_DEBUG] Chart spec built: series_count={len(spec.get('series', []))}, has_xAxis={bool(spec.get('xAxis'))}")
-    chart_design = _generate_chart_design(intent.intent_key, plan, data, spec)
-    spec.setdefault("meta", {}).setdefault("chartDesign", chart_design)
-    ctx.planner_result.chart_summary = {
-        "chart_type": chart_plan.chart_type,
-        "series_count": len(chart_plan.series),
-        "design": chart_design,
-    }
-    chart_elapsed = int((time.time() - chart_start) * 1000)
-    chart_event = EventEmitter.result(
-        "chart_planned",
-        {
-            "chart_type": chart_plan.chart_type,
-            "series_count": len(chart_plan.series),
-        },
-    )
-    chart_event["event"] = "chart_planned"
-    chart_event["data"].update(
-        {
-            "ts": datetime.utcnow().isoformat(),
-            "elapsed_ms": chart_elapsed,
-        }
-    )
-    yield chart_event
-    try:
-        ChartSpecModel(**spec)
-        generated_chart = EventEmitter.result(
-            "chart_generated",
-            {
-                "chart_type": spec.get("meta", {}).get("chartDesign", {}).get(
-                    "chart_type", "unknown"
-                ),
-                "chart_spec": spec,
-            },
-            key="chart_spec",
-        )
-        generated_chart["event"] = "chart_generated"
-        generated_chart["data"]["ts"] = datetime.utcnow().isoformat()
-        yield generated_chart
-    except ValidationError as ve:
-        warning_event = EventEmitter.progress(
-            "warning", f"Chart spec validation warning: {str(ve)}"
-        )
-        warning_event["data"]["ts"] = datetime.utcnow().isoformat()
-        yield warning_event
-        fallback_chart = EventEmitter.result(
-            "chart_generated",
-            {
-                "chart_type": spec.get("meta", {}).get("chartDesign", {}).get(
-                    "chart_type", "unknown"
-                ),
-                "chart_spec": spec,
-            },
-            key="chart_spec",
-        )
-        fallback_chart["event"] = "chart_generated"
-        fallback_chart["data"]["ts"] = datetime.utcnow().isoformat()
-        yield fallback_chart
-    # 11) Analysis Generation Phase
-    analysis_progress = EventEmitter.progress(
-        "analysis_generation", "Generating insights..."
-    )
-    analysis_progress["data"]["ts"] = datetime.utcnow().isoformat()
-    yield analysis_progress
-    analysis_start = time.time()
-    full_analysis = ""
-    async for text_chunk in stream_insights_llm(
-        data, sql, query, session_id=session_id
-    ):
-        if text_chunk:
-            full_analysis += text_chunk
-            streaming_event = {
-                "event": "analysis_streaming",
-                "data": {
-                    "step": "analysis_generation",
-                    "partial_analysis": text_chunk,
-                    "chunk_length": len(text_chunk),
-                    "ts": datetime.utcnow().isoformat(),
-                },
-            }
-            log_analysis_chunk(
-                chunk=text_chunk,
-                step="analysis_generation",
-                role=None,
-                session_id=session_id,
-                flow=getattr(self, "flow_label", None),
-            )
-            yield streaming_event
-    analysis_elapsed = int((time.time() - analysis_start) * 1000)
-    tool_bundle = collect_tool_bundle(
-        manifest=getattr(ctx, "tool_parallel_manifest", None),
-        results=getattr(ctx, "tool_parallel_results", None),
-    ) or {}
-    structured_summary, analysis_sources, analysis_sections = self._compose_analysis_summary(
-        ctx=ctx,
-        data=data,
-        analysis_text=full_analysis,
-        tool_bundle=tool_bundle,
-    )
-    ctx.planner_result.analysis = structured_summary
-    ctx.planner_result.metadata["analysis_sources"] = analysis_sources
-    ctx.planner_result.metadata["analysis_sections"] = analysis_sections
-    ctx.planner_result.metadata["llm_analysis"] = full_analysis
-    analysis_payload = {
-        "analysis_length": len(structured_summary or ''),
-        "analysis": structured_summary,
-        "analysis_sources": analysis_sources,
-        "llm_analysis": full_analysis,
-    }
-    if tool_bundle:
-        analysis_payload.update(tool_bundle)
-    analysis_complete = EventEmitter.result(
-        "analysis_complete",
-        analysis_payload,
-        key="analysis",
-    )
-    analysis_complete["event"] = "analysis_complete"
-    analysis_data = analysis_complete.get("data", {})
-    if isinstance(analysis_data.get("analysis"), dict):
-        flattened_analysis = analysis_data.pop("analysis")
-        analysis_data.update(flattened_analysis)
-    analysis_data.update(
-        {
-            "ts": datetime.utcnow().isoformat(),
-            "elapsed_ms": analysis_elapsed,
-        }
-    )
-    yield analysis_complete
-PlannerExecutorFlow.events = _planner_events
-
 # Standalone wrapper function for main.py
-
-async def run_planner_executor(
-    query: str,
-    session_id: Optional[str] = None,
-    *,
-    skip_preflight: bool = False,
-) -> AsyncGenerator[Dict[str, Any], None]:
+async def run_planner_executor(query: str, session_id: Optional[str] = None) -> AsyncGenerator[Dict[str, Any], None]:
     """Helper to stream planner-executor events without referencing the registry."""
     workflow_instance = PlannerExecutorFlow()
-    async for event in workflow_instance.events(query, session_id, skip_preflight=skip_preflight):
+    async for event in workflow_instance.events(query, session_id):
         yield event
-
-
-
-
 

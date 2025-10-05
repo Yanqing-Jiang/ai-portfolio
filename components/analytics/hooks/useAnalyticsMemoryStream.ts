@@ -1,5 +1,5 @@
-import { useState, useRef } from 'react';
-import { ChatMessage, ClarifyRequest, ClarifyAnswer, ToolCallTelemetry, AgentTurnTelemetry, AgentReasoningTelemetry, ProcessStep, ToolFanoutManifest, ToolFanoutResult, StockWidgetConfig, WebSearchResult, FlowMode } from '../types';
+import { useState, useRef, useCallback, useEffect } from 'react';
+import { ChatMessage, ClarifyRequest, ClarifyAnswer, ToolCallTelemetry, AgentTurnTelemetry, AgentReasoningTelemetry, ProcessStep, ToolFanoutManifest, ToolFanoutResult, StockWidgetConfig, WebSearchResult, SingleAgentFanout, SingleAgentFanoutBranch, FanoutBranchStatus } from '../types';
 import { apiService } from '../../../services/apiService';
 import { useAnalyticsStream } from './useAnalyticsStream';
 
@@ -17,32 +17,8 @@ const DEFAULT_AGENT_ROLE = { stepId: 'agent_coordination', lane: 'coordination',
 import { useProcessSteps } from './useProcessSteps';
 import { resolveChartSpecOption } from '../utils';
 
-const owns = (obj: Record<string, any>, key: string): boolean => Object.prototype.hasOwnProperty.call(obj, key);
-
-const resolveAnalysisAccess = (payload: any) => {
-  const root = (payload && typeof payload === 'object' ? (payload as Record<string, any>) : {}) as Record<string, any>;
-  const nestedCandidate = root.analysis;
-  const nested =
-    nestedCandidate && typeof nestedCandidate === 'object' && !Array.isArray(nestedCandidate)
-      ? (nestedCandidate as Record<string, any>)
-      : root;
-
-  const has = (key: string) => owns(nested, key) || owns(root, key);
-  const get = <T,>(key: string): T | undefined => {
-    if (owns(nested, key)) {
-      return nested[key] as T;
-    }
-    if (owns(root, key)) {
-      return root[key] as T;
-    }
-    return undefined;
-  };
-
-  return { root, nested, has, get };
-};
-
 export const useAnalyticsMemoryStream = (
-  flow: FlowMode = 'planner-executor',
+  flow: 'planner-executor' | 'single-agent' | 'multi-agent' = 'planner-executor',
 ) => {
   const [sessionId, setSessionId] = useState<string>('');
   const [pendingClarification, setPendingClarification] = useState<ClarifyRequest | null>(null);
@@ -55,13 +31,11 @@ export const useAnalyticsMemoryStream = (
   const [dataSample, setDataSample] = useState<any[] | null>(null);
   const [streamingText, setStreamingText] = useState('');
   const [webSearch, setWebSearch] = useState<WebSearchResult | null>(null);
+  const [singleAgentFanout, setSingleAgentFanout] = useState<SingleAgentFanout | null>(null);
   
   // Progressive rendering: update state immediately instead of accumulating in refs
   const [progressiveAnalysis, setProgressiveAnalysis] = useState('');
   const [progressiveText, setProgressiveText] = useState('');
-
-  const isSingleAgentFlow = flow === 'single-agent';
-  const isMultiAgentFlow = flow === 'multi-agent';
 
   const normalizeWebContext = (raw: any): WebSearchResult | null => {
     if (!raw) {
@@ -104,9 +78,261 @@ export const useAnalyticsMemoryStream = (
   const agentReasoningRef = useRef<AgentReasoningTelemetry[]>([]);
   const toolFanoutRef = useRef<{ manifest: ToolFanoutManifest[]; results: ToolFanoutResult[]; concurrencyLimit: number }>({ manifest: [], results: [], concurrencyLimit: 0 });
 
+  const refreshFanoutState = useCallback(() => {
+    if (flow !== 'single-agent') {
+      setSingleAgentFanout(null);
+      return;
+    }
+
+    const manifest = toolFanoutRef.current.manifest || [];
+    if (!manifest.length) {
+      setSingleAgentFanout(null);
+      return;
+    }
+
+    const canonical = (value?: string | null) => (
+      value ? value.toString().toLowerCase().replace(/[^a-z0-9]+/g, '') : ''
+    );
+
+    const branchMap = new Map<string, SingleAgentFanoutBranch>();
+    const aliasMap = new Map<string, string>();
+    const branchOrder = new Map<string, number>();
+
+    manifest.forEach((tool, index) => {
+      const fallbackLabel = `Tool ${index + 1}`;
+      const labelSource = tool.display_name || tool.name || fallbackLabel;
+      const label = labelSource.replace(/_/g, ' ');
+      const branchIdCandidate = canonical(tool.name) || canonical(tool.display_name) || `tool_${index}`;
+      const branchId = branchIdCandidate || `tool_${index}`;
+      const branch: SingleAgentFanoutBranch = {
+        id: branchId,
+        tool: tool.name || labelSource,
+        label,
+        description: tool.description || tool.summary,
+        status: 'queued',
+      };
+
+      const metadata: Record<string, any> = {};
+      if (tool.capabilities?.length) metadata.capabilities = tool.capabilities;
+      if (tool.outputs?.length) metadata.outputs = tool.outputs;
+      if (typeof tool.preview_only === 'boolean') metadata.preview_only = tool.preview_only;
+      if (tool.summary) metadata.summary = tool.summary;
+      if (Object.keys(metadata).length) {
+        branch.metadata = metadata;
+      }
+
+      branchMap.set(branchId, branch);
+      branchOrder.set(branchId, index);
+
+      const aliasCandidates = [
+        tool.name,
+        tool.display_name,
+        tool.description,
+        tool.summary,
+        labelSource,
+      ];
+
+      aliasCandidates.forEach((alias) => {
+        const key = canonical(alias);
+        if (key && !aliasMap.has(key)) {
+          aliasMap.set(key, branchId);
+        }
+      });
+
+      aliasMap.set(branchId, branchId);
+    });
+
+    const resolveBranchId = (rawName?: string | null) => {
+      const canonicalName = canonical(rawName);
+      if (canonicalName && aliasMap.has(canonicalName)) {
+        return aliasMap.get(canonicalName)!;
+      }
+      if (canonicalName) {
+        for (const [key, value] of aliasMap.entries()) {
+          if (key && (key.includes(canonicalName) || canonicalName.includes(key))) {
+            return value;
+          }
+        }
+      }
+      return undefined;
+    };
+
+    const ensureBranch = (rawName?: string | null, labelFallback?: string) => {
+      const resolved = resolveBranchId(rawName);
+      if (resolved && branchMap.has(resolved)) {
+        return resolved;
+      }
+      const canonicalName = canonical(rawName);
+      const branchId = canonicalName || `tool_${branchMap.size}`;
+      const labelSource = rawName || labelFallback || `Tool ${branchMap.size + 1}`;
+      const branch: SingleAgentFanoutBranch = {
+        id: branchId,
+        tool: rawName || labelSource,
+        label: labelSource.replace(/_/g, ' '),
+        status: 'queued',
+      };
+      branchMap.set(branchId, branch);
+      branchOrder.set(branchId, branchOrder.size + manifest.length);
+      if (canonicalName && !aliasMap.has(canonicalName)) {
+        aliasMap.set(canonicalName, branchId);
+      }
+      aliasMap.set(branchId, branchId);
+      return branchId;
+    };
+
+    const resultsByBranch = new Map<string, ToolFanoutResult>();
+    toolFanoutRef.current.results.forEach((result) => {
+      const branchId = ensureBranch(result.tool, result.tool);
+      resultsByBranch.set(branchId, result);
+    });
+
+    const telemetryByBranch = new Map<string, ToolCallTelemetry[]>();
+    toolTelemetryRef.current.forEach((entry) => {
+      const branchId = ensureBranch(entry.tool, entry.tool);
+      const list = telemetryByBranch.get(branchId) ?? [];
+      list.push(entry);
+      telemetryByBranch.set(branchId, list);
+    });
+
+    const normalizeStatus = (raw?: string | null, fallback: FanoutBranchStatus = 'queued'): FanoutBranchStatus => {
+      if (!raw) {
+        return fallback;
+      }
+      const value = raw.toString().toLowerCase();
+      if (['success', 'complete', 'completed', 'ok', 'done', 'finished', 'end'].includes(value)) {
+        return 'completed';
+      }
+      if (['running', 'in_progress', 'active', 'processing', 'start', 'started', 'working'].includes(value)) {
+        return 'running';
+      }
+      if (['pending', 'queued', 'waiting', 'idle', 'ready'].includes(value)) {
+        return 'queued';
+      }
+      if (['cancelled', 'canceled', 'skipped', 'reuse', 'stopped', 'aborted', 'halted'].includes(value)) {
+        return 'stopped';
+      }
+      if (['failed', 'error', 'timeout', 'fatal', 'exception', 'unavailable', 'bad_request'].includes(value)) {
+        return 'failed';
+      }
+      return fallback;
+    };
+
+    const branches = Array.from(branchMap.entries())
+      .map(([id, branch]) => {
+        const telemetry = telemetryByBranch.get(id) ?? [];
+        const result = resultsByBranch.get(id);
+
+        let status: FanoutBranchStatus = branch.status ?? 'queued';
+        let startedAt: string | null | undefined;
+        let completedAt: string | null | undefined;
+        let elapsedMs: number | undefined;
+        let error: string | null | undefined = branch.error ?? null;
+
+        const startEvent = telemetry.find((event) => event.status === 'start');
+        const endEvent = [...telemetry].reverse().find((event) => event.status === 'end');
+
+        if (startEvent) {
+          startedAt = startEvent.ts ?? null;
+          status = 'running';
+        }
+
+        if (endEvent && !result) {
+          completedAt = endEvent.ts ?? null;
+          elapsedMs = endEvent.elapsed_ms ?? elapsedMs;
+          if (status === 'running') {
+            status = 'completed';
+          }
+        }
+
+        if (result) {
+          status = normalizeStatus(result.status, result.error || result.fatal ? `failed` : status);
+          startedAt = result.started_at ?? startedAt ?? null;
+          completedAt = result.completed_at ?? completedAt ?? null;
+          elapsedMs = result.elapsed_ms ?? elapsedMs;
+          if (result.error) {
+            error = result.error;
+          }
+          if (result.metadata) {
+            branch.metadata = { ...(branch.metadata ?? {}), resultMetadata: result.metadata };
+          }
+          if (result.payload) {
+            branch.payload = result.payload;
+          }
+          if (result.fatal && status !== `failed`) {
+            status = 'failed';
+          }
+        }
+
+        branch.status = status;
+        branch.startedAt = startedAt ?? branch.startedAt ?? null;
+        branch.completedAt = completedAt ?? branch.completedAt ?? null;
+        if (elapsedMs !== undefined) {
+          branch.elapsedMs = elapsedMs;
+        }
+        if (error) {
+          branch.error = error;
+        }
+
+        return branch;
+      })
+      .sort((a, b) => {
+        const orderA = branchOrder.get(a.id) ?? Number.MAX_SAFE_INTEGER;
+        const orderB = branchOrder.get(b.id) ?? Number.MAX_SAFE_INTEGER;
+        if (orderA !== orderB) {
+          return orderA - orderB;
+        }
+        return a.label.localeCompare(b.label);
+      });
+
+    let completedCount = 0;
+    let runningCount = 0;
+    let failedCount = 0;
+    let queuedCount = 0;
+    let stoppedCount = 0;
+
+    branches.forEach((branch) => {
+      switch (branch.status) {
+        case 'completed':
+          completedCount += 1;
+          break;
+        case 'running':
+          runningCount += 1;
+          break;
+        case 'failed':
+          failedCount += 1;
+          break;
+        case 'stopped':
+          stoppedCount += 1;
+          break;
+        default:
+          queuedCount += 1;
+          break;
+      }
+    });
+
+    setSingleAgentFanout({
+      hasFanout: true,
+      branches,
+      concurrencyLimit: toolFanoutRef.current.concurrencyLimit || manifest.length,
+      activeCount: runningCount,
+      runningCount,
+      completedCount,
+      failedCount,
+      queuedCount,
+      stoppedCount,
+      lastUpdated: new Date().toISOString(),
+    });
+  }, [flow]);
+
+  useEffect(() => {
+    if (flow !== 'single-agent') {
+      setSingleAgentFanout(null);
+      return;
+    }
+    refreshFanoutState();
+  }, [flow, refreshFanoutState]);
+
   const sqlAttemptsRef = useRef<any[]>([]);
-  const resultMessageIdRef = useRef<string | null>(null);
-  const responseIdRef = useRef<string | null>(null);
   const agentLaneStateRef = useRef<Record<string, ProcessStep['status']>>({});
 
   // Workflow data ref for result accumulation
@@ -121,10 +347,6 @@ export const useAnalyticsMemoryStream = (
     toolFanoutManifest: ToolFanoutManifest[];
     toolFanoutResults: ToolFanoutResult[];
     concurrencyLimit: number;
-    webSearch: WebSearchResult | null;
-    analysisSections: Record<string, any> | null;
-    analysisSources: Record<string, boolean> | null;
-    llmAnalysis: string | null;
   }>({
     chartSpec: null,
     analysis: '',
@@ -136,9 +358,6 @@ export const useAnalyticsMemoryStream = (
     toolFanoutManifest: [],
     toolFanoutResults: [],
     concurrencyLimit: 0,
-    analysisSections: null,
-    analysisSources: null,
-    llmAnalysis: null,
     webSearch: null
   });
 
@@ -272,6 +491,7 @@ export const useAnalyticsMemoryStream = (
       meta?.sequence,
       meta?.parallel_group,
     );
+    refreshFanoutState();
   };
 
   const recordAgentTurnEvent = (payload: any, meta?: { ts?: string; elapsed_ms?: number; sequence?: number; parallel_group?: string }) => {
@@ -445,14 +665,9 @@ export const useAnalyticsMemoryStream = (
     setProgressiveAnalysis('');
     setWebSearch(null);
     workflowDataRef.current.webSearch = null;
-    workflowDataRef.current.analysis = '';
-    workflowDataRef.current.analysisSources = null;
-    workflowDataRef.current.analysisSections = null;
-    workflowDataRef.current.llmAnalysis = null;
     setPendingClarification(null);
     setCriteria(null);
     stepsHook.resetSteps();
-    resultMessageIdRef.current = null;
 
     // Clear any pending updates
     if (updateTimeoutRef.current) {
@@ -490,16 +705,7 @@ export const useAnalyticsMemoryStream = (
         ts: data.ts || eventData.ts,
         elapsed_ms: data.elapsed_ms || eventData.elapsed_ms
       };
-            const responseId =
-        typeof eventData.response_id === "string"
-          ? eventData.response_id
-          : typeof data.response_id === "string"
-          ? data.response_id
-          : undefined;
-      if (responseId) {
-        responseIdRef.current = responseId;
-      }
-      const sequence: number | undefined =
+            const sequence: number | undefined =
         typeof data.seq === 'number'
           ? data.seq
           : typeof eventData.sequence === 'number'
@@ -741,6 +947,16 @@ export const useAnalyticsMemoryStream = (
           break;
         }
           
+        case 'web_search':
+          if (eventData.web_context) {
+            const webContext = normalizeWebContext(eventData.web_context);
+            if (webContext) {
+              setWebSearch(webContext);
+              workflowDataRef.current.webSearch = webContext;
+            }
+          }
+          break;
+
         case 'analysis_streaming':
           if (!isThinkingEvent) {
             const chunk: string =
@@ -770,57 +986,48 @@ export const useAnalyticsMemoryStream = (
             const bundle = { ...eventData };
             delete (bundle as any).step;
 
-            const analysisAccess = resolveAnalysisAccess(bundle);
-            const resolvedAnalysis = analysisAccess.get<string>('analysis');
-            const chartSpecPayload = analysisAccess.get<any>('chart_spec');
-            const sqlText = analysisAccess.get<string>('sql');
-            const dataSamplePayload = analysisAccess.get<any[]>('data_sample');
-            const stockWidgetPayload = analysisAccess.get<StockWidgetConfig | null>('stock_widget') ?? null;
-            const criteriaPayload = analysisAccess.get<any>('criteria');
-            const manifestPayload = analysisAccess.get<ToolFanoutManifest[]>('tool_manifest');
-            const resultsPayload = analysisAccess.get<ToolFanoutResult[]>('tool_results');
-            const webContextPayload = analysisAccess.get<any>('web_context');
-
-            if (typeof resolvedAnalysis === 'string') {
-              scheduleProgressiveUpdate({ analysis: resolvedAnalysis });
-              workflowDataRef.current.analysis = resolvedAnalysis;
+            if (typeof bundle.analysis === 'string') {
+              scheduleProgressiveUpdate({ analysis: bundle.analysis });
+              workflowDataRef.current.analysis = bundle.analysis;
             }
-            if (chartSpecPayload) {
-              scheduleProgressiveUpdate({ chartSpec: chartSpecPayload });
-              workflowDataRef.current.chartSpec = chartSpecPayload;
+            if (bundle.chart_spec) {
+              scheduleProgressiveUpdate({ chartSpec: bundle.chart_spec });
+              workflowDataRef.current.chartSpec = bundle.chart_spec;
             }
-            if (typeof sqlText === 'string' && sqlText) {
-              scheduleProgressiveUpdate({ sqlQuery: sqlText });
-              workflowDataRef.current.sqlQuery = sqlText;
+            if (bundle.sql) {
+              scheduleProgressiveUpdate({ sqlQuery: bundle.sql });
+              workflowDataRef.current.sqlQuery = bundle.sql;
             }
-            if (Array.isArray(dataSamplePayload)) {
-              scheduleProgressiveUpdate({ dataSample: dataSamplePayload });
-              workflowDataRef.current.dataSample = dataSamplePayload;
+            if (Array.isArray(bundle.data_sample)) {
+              scheduleProgressiveUpdate({ dataSample: bundle.data_sample });
+              workflowDataRef.current.dataSample = bundle.data_sample;
             }
-            if (analysisAccess.has('stock_widget')) {
-              workflowDataRef.current.stockWidget = stockWidgetPayload ? (stockWidgetPayload as StockWidgetConfig) : null;
+            if (bundle.stock_widget) {
+              workflowDataRef.current.stockWidget = bundle.stock_widget as StockWidgetConfig;
             } else {
               workflowDataRef.current.stockWidget = null;
             }
-            if (criteriaPayload) {
-              workflowDataRef.current.criteria = criteriaPayload;
+            if (bundle.criteria) {
+              workflowDataRef.current.criteria = bundle.criteria;
             }
-            if (Array.isArray(manifestPayload)) {
-              workflowDataRef.current.toolFanoutManifest = manifestPayload;
-              toolFanoutRef.current.manifest = manifestPayload;
+            if (Array.isArray(bundle.tool_manifest)) {
+              workflowDataRef.current.toolFanoutManifest = bundle.tool_manifest as ToolFanoutManifest[];
+              toolFanoutRef.current.manifest = bundle.tool_manifest as ToolFanoutManifest[];
             } else {
               workflowDataRef.current.toolFanoutManifest = [];
               toolFanoutRef.current.manifest = [];
             }
-            if (Array.isArray(resultsPayload)) {
-              workflowDataRef.current.toolFanoutResults = resultsPayload;
-              toolFanoutRef.current.results = resultsPayload;
+            if (Array.isArray(bundle.tool_results)) {
+              const results = bundle.tool_results as ToolFanoutResult[];
+              workflowDataRef.current.toolFanoutResults = results;
+              toolFanoutRef.current.results = results;
             } else {
               workflowDataRef.current.toolFanoutResults = [];
               toolFanoutRef.current.results = [];
             }
-            if (webContextPayload) {
-              const webContext = normalizeWebContext(webContextPayload);
+            refreshFanoutState();
+            if (bundle.web_context) {
+              const webContext = normalizeWebContext(bundle.web_context);
               if (webContext) {
                 setWebSearch(webContext);
                 workflowDataRef.current.webSearch = webContext;
@@ -830,13 +1037,13 @@ export const useAnalyticsMemoryStream = (
             updateStep(
               'analysis_generation',
               'completed',
-              resolvedAnalysis ? [resolvedAnalysis.slice(0, 120)] : [],
+              bundle.analysis ? [bundle.analysis.slice(0, 120)] : [],
               {
-                analysis: resolvedAnalysis,
-                chart_spec: chartSpecPayload,
-                sql: sqlText,
-                data_sample: dataSamplePayload,
-                stock_widget: stockWidgetPayload,
+                analysis: bundle.analysis,
+                chart_spec: bundle.chart_spec,
+                sql: bundle.sql,
+                data_sample: bundle.data_sample,
+                stock_widget: bundle.stock_widget,
                 tool_manifest: workflowDataRef.current.toolFanoutManifest,
                 tool_fanout_results: workflowDataRef.current.toolFanoutResults,
               },
@@ -849,73 +1056,43 @@ export const useAnalyticsMemoryStream = (
           break;
 
         case 'analysis_complete':
+          // Handle both old and new formats for analysis
           {
-            const analysisAccess = resolveAnalysisAccess(eventData as Record<string, any>);
-            const resolvedAnalysis = analysisAccess.get<string>('analysis') ?? (typeof data.analysis === 'string' ? data.analysis : undefined);
-            const finalAnalysis = !isThinkingEvent ? (resolvedAnalysis ?? streamingText) : resolvedAnalysis;
-            const analysisSources = analysisAccess.get<Record<string, boolean>>('analysis_sources') ?? workflowDataRef.current.analysisSources ?? null;
-            const analysisSections = analysisAccess.get<Record<string, any>>('analysis_sections') ?? workflowDataRef.current.analysisSections ?? null;
-            const llmAnalysis = analysisAccess.get<string>('llm_analysis') ?? workflowDataRef.current.llmAnalysis ?? finalAnalysis;
-            const analysisLength = analysisAccess.get<number>('analysis_length') ?? eventData.analysis_length;
+            const finalAnalysis =
+              !isThinkingEvent
+                ? eventData.analysis || data.analysis || streamingText
+                : eventData.analysis || data.analysis;
 
             if (!isThinkingEvent && typeof finalAnalysis === 'string') {
               scheduleProgressiveUpdate({ analysis: finalAnalysis });
             }
 
             if (!isThinkingEvent) {
-              workflowDataRef.current.analysis = typeof finalAnalysis === 'string' ? finalAnalysis : workflowDataRef.current.analysis;
-              workflowDataRef.current.analysisSources = analysisSources;
-              workflowDataRef.current.analysisSections = analysisSections;
-              workflowDataRef.current.llmAnalysis = typeof llmAnalysis === 'string' ? llmAnalysis : null;
-
-              if (analysisAccess.has('stock_widget')) {
-                const stockWidgetPayload = analysisAccess.get<StockWidgetConfig | null>('stock_widget');
-                workflowDataRef.current.stockWidget = stockWidgetPayload ? (stockWidgetPayload as StockWidgetConfig) : null;
+              if (eventData.stock_widget !== undefined) {
+                workflowDataRef.current.stockWidget = eventData.stock_widget
+                  ? (eventData.stock_widget as StockWidgetConfig)
+                  : null;
               }
 
-              const webContextPayload = analysisAccess.get<any>('web_context');
-              if (webContextPayload) {
-                const webContext = normalizeWebContext(webContextPayload);
+              if (eventData.web_context) {
+                const webContext = normalizeWebContext(eventData.web_context);
                 if (webContext) {
                   setWebSearch(webContext);
                   workflowDataRef.current.webSearch = webContext;
                 }
               }
 
-              const manifestPayload = analysisAccess.get<ToolFanoutManifest[]>('tool_manifest');
-              if (Array.isArray(manifestPayload)) {
-                workflowDataRef.current.toolFanoutManifest = manifestPayload;
-                toolFanoutRef.current.manifest = manifestPayload;
+              if (Array.isArray(eventData.tool_manifest)) {
+                workflowDataRef.current.toolFanoutManifest = eventData.tool_manifest as ToolFanoutManifest[];
+                toolFanoutRef.current.manifest = eventData.tool_manifest as ToolFanoutManifest[];
               }
 
-              const fanoutResults = analysisAccess.get<ToolFanoutResult[]>('tool_results');
-              if (Array.isArray(fanoutResults)) {
+              if (Array.isArray(eventData.tool_results)) {
+                const fanoutResults = eventData.tool_results as ToolFanoutResult[];
                 workflowDataRef.current.toolFanoutResults = fanoutResults;
                 toolFanoutRef.current.results = fanoutResults;
               }
-
-              const resultMessagePayload = {
-                type: 'result' as const,
-                content: 'Analysis ready! Here are your results:',
-                analysis: typeof finalAnalysis === 'string' ? finalAnalysis : '',
-                analysisSources: analysisSources || null,
-                analysisSections: analysisSections || null,
-                llmAnalysis: typeof llmAnalysis === 'string' ? llmAnalysis : null,
-                chartSpec: workflowDataRef.current.chartSpec,
-                sqlQuery: workflowDataRef.current.sqlQuery,
-                dataSample: workflowDataRef.current.dataSample,
-                stockWidgetConfig: workflowDataRef.current.stockWidget,
-                toolFanoutManifest: workflowDataRef.current.toolFanoutManifest,
-                toolFanoutResults: workflowDataRef.current.toolFanoutResults,
-                webSearch: workflowDataRef.current.webSearch,
-                responseId: responseIdRef.current || responseId || null,
-              };
-
-              if (resultMessageIdRef.current) {
-                updateChatMessage(resultMessageIdRef.current, resultMessagePayload);
-              } else {
-                resultMessageIdRef.current = addChatMessage(resultMessagePayload);
-              }
+              refreshFanoutState();
             }
 
             setStreamingText('');
@@ -925,13 +1102,7 @@ export const useAnalyticsMemoryStream = (
               'short_financial_analysis',
               'completed',
               ['Short financial analysis complete'],
-              {
-                analysis: finalAnalysis,
-                analysis_sources: analysisSources,
-                analysis_sections: analysisSections,
-                llm_analysis: llmAnalysis,
-                analysis_length: analysisLength,
-              },
+              { analysis: finalAnalysis, analysis_length: eventData.analysis_length },
               stepInfo.elapsed_ms
             );
 
@@ -939,17 +1110,13 @@ export const useAnalyticsMemoryStream = (
               'analysis_generation',
               'completed',
               [],
-              {
-                analysis: finalAnalysis,
-                analysis_sources: analysisSources,
-                analysis_sections: analysisSections,
-                llm_analysis: llmAnalysis,
-                analysis_length: analysisLength,
-              },
+              { analysis: finalAnalysis, analysis_length: eventData.analysis_length },
               stepInfo.elapsed_ms
             );
           }
           break;
+
+        // Optional richer logs for agent demo
 
         case 'sql_attempts': {
           const attempts = Array.isArray(eventData.attempts) ? eventData.attempts : [];
@@ -1054,6 +1221,7 @@ export const useAnalyticsMemoryStream = (
             workflowDataRef.current.toolFanoutManifest = manifest;
             workflowDataRef.current.toolFanoutResults = [];
             workflowDataRef.current.concurrencyLimit = concurrencyLimit;
+            refreshFanoutState();
             const fanoutThought = `Fan-out launched with ${eventData.tool_count ?? manifest.length} tools (limit ${concurrencyLimit}).`;
             updateStep('tool_fanout', 'in_progress', [fanoutThought], {
               tool_manifest: manifest,
@@ -1106,6 +1274,7 @@ export const useAnalyticsMemoryStream = (
               sequence,
               parallelGroup,
             );
+            refreshFanoutState();
           }
           break;
 
@@ -1128,6 +1297,7 @@ export const useAnalyticsMemoryStream = (
               sequence,
               parallelGroup,
             );
+            refreshFanoutState();
           }
           break;
 
@@ -1314,9 +1484,9 @@ export const useAnalyticsMemoryStream = (
         case 'final_summary':
           stepsHook.updateStepStatus('finalization', 'completed', ['Workflow summary generated']);
           const summaryStatusMessage =
-            isSingleAgentFlow
+            flow === 'single-agent'
               ? 'Single-agent tools workflow completed!'
-               : isMultiAgentFlow
+              : flow === 'multi-agent'
                 ? 'Multi-agent workflow completed!'
                 : 'Direct workflow completed!';
           streamHook.setCurrentStatus(summaryStatusMessage);
@@ -1329,67 +1499,48 @@ export const useAnalyticsMemoryStream = (
           break;
 
         case 'workflow_complete':
-          {
-            const workflowStatusMessage =
-              isSingleAgentFlow
-                ? 'Single-agent tools workflow completed!'
-                 : isMultiAgentFlow
-                  ? 'Multi-agent workflow completed!'
-                  : 'Direct workflow completed!';
-            const isEarlyExit = Boolean(eventData?.early_exit);
-            const completionMessage = eventData?.message || (eventData.total_elapsed_ms ? `Completed in ${eventData.total_elapsed_ms}ms` : null);
-            streamHook.setCurrentStatus(completionMessage || workflowStatusMessage);
-
-            if (!isThinkingEvent) {
-              const resultPayload = {
-                type: 'result' as const,
-                content: completionMessage || workflowStatusMessage,
-                analysis: workflowDataRef.current.analysis || workflowDataRef.current.streamingText,
-                analysisSources: workflowDataRef.current.analysisSources,
-                analysisSections: workflowDataRef.current.analysisSections,
-                llmAnalysis: workflowDataRef.current.llmAnalysis,
-                chartSpec: workflowDataRef.current.chartSpec,
-                sqlQuery: workflowDataRef.current.sqlQuery,
-                dataSample: workflowDataRef.current.dataSample,
-                stockWidgetConfig: workflowDataRef.current.stockWidget,
-                toolFanoutManifest: workflowDataRef.current.toolFanoutManifest,
-                toolFanoutResults: workflowDataRef.current.toolFanoutResults,
-                webSearch: workflowDataRef.current.webSearch,
-                responseId: responseIdRef.current || responseId || null,
-              };
-              if (resultMessageIdRef.current) {
-                updateChatMessage(resultMessageIdRef.current, resultPayload);
-              } else if (!isEarlyExit) {
-                resultMessageIdRef.current = addChatMessage(resultPayload);
-              }
-            }
-
-            if (isEarlyExit) {
-              workflowDataRef.current = {
-                chartSpec: null,
-                analysis: '',
-                sqlQuery: '',
-                dataSample: null,
-                streamingText: '',
-                criteria: null,
-                stockWidget: null,
-                toolFanoutManifest: [],
-                toolFanoutResults: [],
-                concurrencyLimit: 0,
-                webSearch: null,
-                analysisSections: null,
-                analysisSources: null,
-                llmAnalysis: null,
-              };
-              setChartSpec(null);
-              setAnalysis('');
-              setSqlQuery('');
-              setDataSample(null);
-              setStreamingText('');
-              setWebSearch(null);
-            }
-            break;
+          const workflowStatusMessage =
+            flow === 'single-agent'
+              ? 'Single-agent tools workflow completed!'
+              : flow === 'multi-agent'
+                ? 'Multi-agent workflow completed!'
+                : 'Direct workflow completed!';
+          const isEarlyExit = Boolean(eventData?.early_exit);
+          // Handle both old and new formats for completion message
+          const completionMessage = eventData?.message || (eventData.total_elapsed_ms ? `Completed in ${eventData.total_elapsed_ms}ms` : null);
+          streamHook.setCurrentStatus(completionMessage || workflowStatusMessage);
+          if (!isThinkingEvent && !isEarlyExit) {
+            addChatMessage({
+              type: 'result',
+              content: 'Analysis completed! Here are your results:',
+              analysis: workflowDataRef.current.analysis || workflowDataRef.current.streamingText,
+              chartSpec: workflowDataRef.current.chartSpec,
+              sqlQuery: workflowDataRef.current.sqlQuery,
+              dataSample: workflowDataRef.current.dataSample,
+              stockWidgetConfig: workflowDataRef.current.stockWidget,
+              toolFanoutManifest: workflowDataRef.current.toolFanoutManifest,
+              toolFanoutResults: workflowDataRef.current.toolFanoutResults,
+              webSearch: workflowDataRef.current.webSearch,
+            });
           }
+
+          if (isEarlyExit) {
+            // Clear any partial workflow artifacts for clarity
+            workflowDataRef.current = {
+              chartSpec: null,
+              analysis: '',
+              sqlQuery: '',
+              dataSample: null,
+              streamingText: '',
+              criteria: null,
+            };
+            setChartSpec(null);
+            setAnalysis('');
+            setSqlQuery('');
+            setDataSample(null);
+            setStreamingText('');
+          }
+          break;
 
         case 'final_answer':
           stepsHook.updateStepStatus('finalization', 'completed', ['Provided final response']);
@@ -1398,10 +1549,10 @@ export const useAnalyticsMemoryStream = (
             addChatMessage({
               type: 'assistant',
               content: eventData?.message || 'Happy to help with financial analytics questions!',
-              responseId: typeof eventData?.response_id === 'string' ? eventData.response_id : responseIdRef.current || undefined,
             });
           }
           break;
+          
         case 'done':
           streamHook.setCurrentStatus('Analysis completed successfully!');
           break;
@@ -1449,6 +1600,7 @@ export const useAnalyticsMemoryStream = (
     setStreamingText('');
     setProgressiveAnalysis('');
     setProgressiveText('');
+    setSingleAgentFanout(null);
 
     // Clear any pending updates
     if (updateTimeoutRef.current) {
@@ -1474,13 +1626,8 @@ export const useAnalyticsMemoryStream = (
       toolFanoutManifest: [],
       toolFanoutResults: [],
       concurrencyLimit: 0,
-      webSearch: null,
-      analysisSections: null,
-      analysisSources: null,
-      llmAnalysis: null,
+      webSearch: null
     };
-    resultMessageIdRef.current = null;
-    responseIdRef.current = null;
   };
 
   return {
@@ -1495,6 +1642,7 @@ export const useAnalyticsMemoryStream = (
     criteria,
     streamingText,
     webSearch,
+    singleAgentFanout,
 
     // Progressive rendering state
     progressiveAnalysis,
@@ -1519,13 +1667,6 @@ export const useAnalyticsMemoryStream = (
     updateChatMessage,
   };
 };
-
-
-
-
-
-
-
 
 
 

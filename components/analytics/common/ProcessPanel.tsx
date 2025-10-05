@@ -1,8 +1,9 @@
-﻿import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import Draggable from 'react-draggable';
 import { WorkflowCanvas } from '../visualization/WorkflowCanvas';
-import { ProcessStep, FlowMode } from '../types';
+import { FanoutCanvas } from '../visualization/FanoutCanvas';
+import { ProcessStep, FlowMode, SingleAgentFanout } from '../types';
 
 interface ProcessPanelProps {
   steps: ProcessStep[];
@@ -158,6 +159,7 @@ const downloadBlob = (content: string, filename: string, mime: string) => {
 export const ProcessPanel: React.FC<ProcessPanelProps> = ({
   steps,
   flowMode,
+  singleAgentFanout = null,
   show,
   onClose,
   title = 'Agent Thinking Process',
@@ -712,7 +714,6 @@ export const ProcessPanel: React.FC<ProcessPanelProps> = ({
 };
 
 export default ProcessPanel;
-
 
 
 

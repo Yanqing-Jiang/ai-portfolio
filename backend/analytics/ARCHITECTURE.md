@@ -1,65 +1,173 @@
 # Analytics Package Architecture
 
 ## Purpose
-The analytics package powers the next-generation analytics memory experience. It orchestrates multi-step agent flows, builds SQL with the OpenAI Responses API using YAML templates as guidance, validates and executes warehouse queries, and streams structured telemetry to the frontend for visualization. The runtimes described below now cover planner-executor legacy flows, a Claude-style single agent, and the specialist multi-agent orchestrator introduced in Phases 3 and 4.
+The analytics package powers the next-generation analytics memory experience. It orchestrates multi-step agent flows, builds SQL with the OpenAI Responses API using YAML templates as guidance, validates and executes warehouse queries, enriches results with Gemini-powered market research, and streams structured telemetry to the frontend for visualization.
 
-## Runtime Entry Points
-- `analytics.flows.workflow.analytics_memory_workflow` is the public entry point. It inspects the `flow` query parameter (or the `ANALYTICS_AGENT_RUNTIME` feature flag) to choose between planner-executor, single-agent, and multi-agent implementations.
-- Every invocation seeds a `session_id`, attaches shared `EventEmitter` instances, and primes telemetry so SSE packets remain compatible with the legacy PlannerExecutor timeline.
-- Both runtime flavours reuse the shared tool registry (`analytics.agents.tool_registry.ToolRegistry`) and default tool catalog registered in `analytics.agents.tools.register_default_tools`.
+## Execution Path Overview
+1. **Entry point** - `analytics.flows.workflow.analytics_memory_workflow` resolves the requested flow (planner-executor, single-agent, multi-agent) and seeds a session identifier.
+2. **Flow orchestration** - each flow instance wires shared `EventEmitter` streams so progress, results, and errors surface uniformly to the UI.
+3. **LLM preflight** - `_classification_phase` calls `classify_query_async` with `gpt-5-nano-2025-08-07`; non-financial prompts emit a short `final_answer` decline and the workflow stops before generating SQL.
+4. **Intent + clarification** - `core.intent` and `core.intent_impl` detect the canonical analytics intent, derive slot assumptions, and surface clarification requests through `core.clarify` when required.
+5. **Template context** - `sql.sql_planner`, `core.config_store`, and the new `PlannerResultModel` track YAML-derived patterns so downstream flows receive consistent metadata.
+6. **SQL generation & retry loop** - `sql.prompt_builder` builds Responses prompts; `unified_responses_client` runs up to three attempts (via `build_sql_retry_messages(...)`) and records each in `ctx.sql_attempts`.
+7. **Validation & execution** - `sql.validator` enforces table/limit guardrails; `sql.executor` runs the final statement once validation passes, otherwise emits `SQL_VALIDATION_FINAL` telemetry and aborts.
+8. **Real-time research** - `_web_search_phase` now invokes Gemini 2.5 Flash with the Google Search grounding tool to fetch late-breaking headlines, earnings notes, and regulatory filings for the detected tickers. The normalized payload travels through `EventEmitter.result("web_search", ...)` so downstream flows and the UI receive `web_context` snippets.
+9. **Insights & visualization** - `core.analysis`, `core.charting`, and `plan_chart_rule_based` transform result sets into chart specs and narrative output, enriching payloads with tool bundles when parallel adapters run; the summary lands in `PlannerResultModel.analysis` for reuse by downstream modes.
+10. **Telemetry & cleanup** - `core.events.EventEmitter` streams SSE events end-to-end, `collect_tool_bundle` attaches auxiliary data, and `core.clarify` prunes expired session state.
 
-## Shared Execution Stages
-1. **Intent bootstrap** – incoming prompt + configs from `core.context.get_configs()` and cached session hints are bundled before any LLM work starts.
-2. **Classification / gating** – only the planner-executor flow runs `_classification_phase` to decline non-financial requests. Runtime flows bypass this gate and rely on clarification rounds when the planner detects ambiguity.
-3. **Clarification + intent detection** – `core.intent.detect_intent_with_clarifications_async` derives the canonical intent, prompts for missing slots through `clarification.ask_missing_slots`, and establishes timeframe/entity defaults.
-4. **SQL template selection** – `sql.sql_planner.plan_sql_rule_based` turns the intent into a `QueryPlanModel`, selecting YAML templates and comparison hints for downstream steps.
-5. **SQL drafting** – `sql.build_messages` prepares Responses prompts; runtimes call `unified_responses_client.tool_calling_turn` to draft SQL, persisting `response_id` values for telemetry.
-6. **Execution & validation** – `sql.execute` runs asyncpg queries with guardrails from `sql.validator` and emits `tool_iteration` telemetry for start/end/error envelopes.
-7. **Analysis & charting** – `analysis.summarize` and `chart.generate` transform rows into narrative takeaways and Vega-Lite chart specs. Fan-out adapters honour the `ANALYTICS_TOOL_PARALLELISM` flag.
-8. **Web & market enrichment** – optional specialists fetch supplemental data (Polygon, web search) when the query shows recency keywords or `ANALYTICS_ENABLE_WEB_SEARCH` is enabled.
-9. **Streaming & completion** – `EventEmitter` sends `agent_turn`, `tool_call`, `analysis_streaming`, and final `agent_reply` events with per-session `sequence` counters before emitting the terminal `workflow` completion packet.
+## Flow Mode Execution Diagram
 
-## Flow Mode Reference
-- **planner-executor** – retains the legacy sequential pipeline (`classification_*`, `_sql_phase`, etc.) and streams telemetry identical to historical PlannerExecutorFlow sessions.
-- **single-agent (runtime)** – wraps the baseline stages inside `analytics.agents.runtime.SingleAgentRuntime`. The loop streams `agent_turn` events for user/assistant turns, emits `tool_call` start/end packets around registry invocations, and preserves `tool_iteration` metrics. SSE payloads include `sequence` and `responseId` fields so the frontend can correlate deltas with chat history.
-- **multi-agent (runtime)** – routes work through `analytics.agents.multi_runtime.MultiAgentRuntime`. Persona specialists hand off context (planner, query, chart, analyst, market, web) while emitting `agent_turn` envelopes for each role plus shared `tool_call` telemetry; chart/analyst/market/web runs now execute in parallel with retry + fallback handling so a single specialist failure no longer tears down the session.
+```
+                  +-----------------------------------------------+
+                  | analytics_memory_workflow(query, flow?)       |
+                  |   picks flow arg or ANALYTICS_FLOW_MODE env   |
+                  +-----------------------+-----------------------+
+                                          |
+                                  +-------v--------+
+                                  | LLM preflight  |
+                                  | (gpt-5-nano)   |
+                                  +-------+--------+
+                                          |
+                      +-------------------v-------------------+
+                      | Baseline planner pipeline             |
+                      | intent -> clarification -> SQL -> ... |
+                      +---------+---------------+-------------+
+                                |               |
+              +-----------------v-+       +-----v-----------+       +-----------------+
+              | PlannerExecutor    |       | SingleAgentTools |       |   MultiAgent     |
+              | emits core events  |       | adds tool_call   |       | adds agent_turn  |
+              +--------------------+       | & parallel tools |       | + reasoning SSE  |
+                                            +-----------------+       +-----------------+
+```
 
-## Multi-Agent Orchestration (Phase 3)
-- Specialists are declared via `SpecialistConfig` objects. Defaults cover planner orchestration, SQL drafting/execution, charting, narrative analysis, Polygon-backed market snapshots, and recency web checks.
-- `run(...)` orchestrates planner -> query -> parallel chart/analyst/market/web stages. Shared context carries SQL rows, templates, clarifications, and response IDs between specialists while retry metadata is appended to `agent_turn` events for observability.
-- Specialists emit `agent_turn` events with `status` values (`thinking`, `completed`, `skipped`, `retry`, `failed`) and metadata such as row counts, clarification totals, or snapshot ticker lists.
-- Tool invocations go through `_invoke_tool`, which wraps registry calls with start/end/error telemetry (`tool_iteration`) and mirrored SSE packets. Retryable specialists route through `_run_with_retry`; when attempts are exhausted the runtime emits a fallback payload instead of aborting the workflow.
-- Final replies are assembled via `_build_final_payload`, ensuring charts, analysis text, market/web snippets, and clarifications are coalesced before the terminal SSE events fire.
+The repository in `core/session_state.py` now falls back to an in-memory store when Redis is unavailable while keeping the 5-minute TTL semantics for analytics sessions.
 
-## Telemetry & UX Integration (Phase 4)
-- Both runtimes maintain per-session `sequence` counters. `SingleAgentRuntime` also tracks a global counter so multiple sessions never clash when multiplexed.
-- LLM replies (`agent_reply` events) include the most recent `response_id`, enabling transcript reconciliation and debugging in ProcessPanel and WorkflowCanvas.
-- `components/analytics/hooks/useAnalyticsMemoryStream` consumes the expanded metadata: specialist lanes, retry states, tool telemetry, progressive analysis text, and additive payloads such as `market` and `market_tickers`.
-- `components/analytics/types.ts` models additive fields (`responseId`, `analysisSections`, `toolFanoutManifest`, `market`, `web`) so UI components can render richer context without bespoke plumbing.
-- Legacy SSE contracts remain intact; new fields are additive (e.g., `sequence`, `responseId`, `market`, `market_tickers`) and gated so historical replays remain compatible.
+## Analytics Memory Flow Modes
+Use `/api/analytics/memory/stream?flow=<flow>` to select the demo experience surfaced in the Memory page (legacy `mode` query param is still accepted for backwards compatibility).
+Flow metadata comes from `backend/analytics/flows/workflow.py::get_available_flows()`; keep frontend selectors in sync with that mapping.
+- `planner-executor`: baseline pipeline that streams `classification_*`, emits `final_answer` when the LLM gate declines a prompt, and records `sql_attempts`/`sql_generated` metadata for every Responses retry before analysis/`done`.
+- `single-agent`: wraps each baseline step with `tool_call` start/end telemetry, durations, and SQL template metadata; when `ANALYTICS_TOOL_PARALLELISM` is enabled it also streams `tool_parallel_*` fan-out events from the new TaskGroup adapters. Prompt contract lives in `backend/analytics/solo_agent.md`; consult that doc for tool policy, cache reuse rules, and safety guardrails.
+- `multi-agent`: wraps the same baseline steps with persona `agent_turn` start/complete envelopes, adds `agent_reasoning` for analysis deltas, and attaches role-specific summaries.
+When `ANALYTICS_TOOL_PARALLELISM` is disabled, the adapters stay dormant and the deterministic sequential behaviour remains unchanged.
 
-## Rollout & Operational Controls (Phase 5)
-- Feature flags: `ANALYTICS_AGENT_RUNTIME` (`planner|single|single-runtime|multi`) selects the active runtime, `ANALYTICS_TOOL_PARALLELISM` toggles TaskGroup fan-out, `ANALYTICS_ENABLE_WEB_SEARCH` forces the web specialist, and `ANALYTICS_MARKET_WIDGET` enables market snapshot specialists.
-- API toggles allow side-by-side comparisons between planner and runtime flows; telemetry parity (`tool_iteration`, SSE envelopes) is monitored so dashboards stay aligned across cohorts.
-- Replay benchmarking lives in `backend/analytics/flows/replay_benchmark.py`; use it when comparing flows pre/post rollout. Operational guidance resides in `backend/analytics/analytics_rollout.md`.
-- Baseline metrics for Phase 0 (classification accuracy, web latency, SQL retry counts) remain TODO items that should be instrumented ahead of GA.
+## Streaming Telemetry Reference
+- Core SSE events across all flows: `classification_*`, `intent_*`, `clarification_*`, `progress`, `status`, `sql_generated`, `analysis_streaming`, `result`, `final_answer`, `done`, and `error`.
+- `web_search`: emitted once Gemini returns fresh headlines; payload includes `web_context` with summary, snippets, latency, and cache metadata for the UI.
+- Demo-specific enrichments: `tool_call` (single-agent), `agent_turn` and `agent_reasoning` (multi-agent) augment the stream for visualization overlays.
+- Planner flows emit `sql_attempts` events to log each generated query revision before execution.
+- Parallel fan-out instrumentation emits `tool_parallel_*` envelopes whenever `ANALYTICS_TOOL_PARALLELISM` is enabled.
+- Frontend consumers (`useAnalyticsMemoryStream`, `ProcessPanel`, `WorkflowCanvas`) subscribe to the stream and must handle these payloads.
 
-## Package Map Highlights
-- `analytics/agents/runtime.py` – Claude-style single agent loop with per-session history, guardrails (max tool calls/turns), sequencing, and `response_id` propagation (low-confidence confirmation guardrail still pending).
-- `analytics/agents/multi_runtime.py` – specialist orchestrator managing planner/query/chart/analyst/market/web roles, sequencing, retry/fallback logic, parallel execution, and final response assembly.
-- `analytics/agents/tool_registry.py` & `analytics/agents/tools/__init__.py` – central registry plus default tool wrappers (clarifications, SQL, chart, analysis, web, market). All flows share these implementations.
-- `analytics/flows/workflow.py` – flow resolver and legacy compatibility wiring for `/api/analytics/memory/stream` with runtime feature-flag support.
-- `analytics/flows/replay_benchmark.py` – CLI + helpers for running replay benchmarks across flows and exporting telemetry summaries.
-- `core/events.py` / `core/telemetry.py` – SSE emission helpers and `tool_iteration` / `agent_handoff` logging used by both runtimes.
-- `components/analytics/hooks/useAnalyticsMemoryStream.ts` – frontend hook that fans SSE metadata into ProcessPanel lanes, progressive transcripts, and chart panes.
-- `components/analytics/memory/Page.tsx` – surfaces flow selection options and exposes the single- vs multi-agent runtime choices in the UI.
+## Directory Layout
+```
+analytics/
+|-- __init__.py
+|-- core/
+|   |-- analysis.py
+|   |-- cache.py
+|   |-- charting.py / charting_impl.py
+|   |-- clarify.py
+|   |-- companies.py
+|   |-- config.py / config_store.py
+|   |-- context.py
+|   |-- events.py
+|   |-- intent.py
+|   |-- intent_impl/
+|   |   |-- detection.py
+|   |   |-- normalization.py
+|   |   `-- models.py
+|   |-- openai_client.py
+|   |-- state.py
+|   |-- session_state.py
+|   |-- telemetry.py
+|   `-- types.py
+|-- flows/
+|   |-- planner_executor.py
+|   |-- single_agent_tools.py
+|   |-- multi_agent.py
+|   |-- tooling.py
+|   `-- workflow.py
+|-- sql/
+|   |-- compiler.py
+|   |-- db.py
+|   |-- executor.py
+|   |-- prompt_builder.py
+|   |-- sql_planner.py
+|   |-- sql_validate.py
+|   |-- templates.py
+|   `-- validator.py
+|-- streaming/
+|   `-- __init__.py
+|-- tools/
+|   |-- registry.py
+|   `-- __init__.py
+`-- unified_responses_client.py
+```
 
-## Open Items & Follow-Ups
-- Instrument baseline metrics (Phase 0 TODO) to quantify improvements post-runtime rollout.
-- Implement the low-confidence confirmation guardrail in `SingleAgentRuntime` before enabling autonomous follow-ups.
-- Feed replay benchmark output into dashboards/alerting so rollout comparisons are automated.
-- Expand pytest coverage for runtime SSE ordering + market fallback behaviour once mock fixtures are restored.
-- Coordinate with analytics telemetry owners to ensure ProcessPanel and WorkflowCanvas continue surfacing the new metadata fields without regressing legacy replays.
+### core/
+Foundational utilities that capture shared data models, config access, intent resolution, charting, telemetry, and caching.
+
+**Key files and functions**
+- `analysis.py` - `summarize(data, sql, query, intent)` condenses result sets into prose; `stream_insights_llm(...)` yields incremental analysis chunks for SSE streaming.
+- `charting.py` - `plan_chart_rule_based(plan, data)` maps metrics to chart primitives; `build_chart_spec(...)` wraps ECharts options with metadata used by the frontend overlays.
+- `charting_impl.py` - `_generate_chart_design(intent_key, plan, data, spec)` produces flow-specific colour palettes, annotations, and highlight rules consumed by `ProcessNode` overlays.
+- `clarify.py` - `_detect_missing_slots`, `_detect_timeframe_slot`, and `merge_answers` drive clarification prompts. The fiscal-year branch now emits current-year-plus-five options for `rnd_top_spender`, and `merge_answers` persists `start_year`, `end_year`, and `years_back` while appending human-readable assumptions for telemetry.
+- `companies.py` - `sanitize_ticker`, `validate_and_resolve_company`, and `resolve_alias_to_ticker` normalize user supplied tickers before SQL substitution.
+- `config.py` / `config_store.py` - `CONFIGS.load()` bootstraps YAML schemas; `ConfigStore.get_query_pattern(intent_key)` exposes cached template metadata.
+- `context.py` - `get_configs()` and `get_config_store()` provide singleton accessors used across flows.
+- `events.py` - `EventEmitter.session_started`, `progress`, `result`, and `error` build the structured SSE payloads `ProcessPanel` subscribes to.
+- `intent.py` - `detect_intent`, `detect_intent_with_clarifications`, and `detect_intent_llm` orchestrate heuristic and LLM-based routing.
+  - `intent_impl/detection.py` now flags ranking superlatives (highest/top/most) in `heuristic_intent` so `rnd_top_spender` short-circuits without unnecessary company clarifications.
+- `state.py` / `types.py` - Pydantic models such as `QueryPlanModel`, `TimeframeModel`, and `ProcessStep` define the contract between backend flows and the analytics UI.
+
+### flows/
+Implements user-facing agent experiences.
+
+- `planner_executor.py` - `PlannerExecutorFlow.events(...)` is the deterministic baseline that emits `classification_*`, `intent_detection`, `clarification`, `sql_*`, `chart`, and `analysis` events; helper `_generate_chart_design` attaches visualization metadata.
+- `single_agent_tools.py` - `SingleAgentToolsFlow.events(...)` wraps baseline steps with tool start/end markers (`tool_call`, `agent_turn`, `agent_reasoning`) that the new Flow View colours by flow mode.
+- `multi_agent.py` - `MultiAgentFlow.events(...)` replays planner decisions through agent personas (planner, SQL specialist, risk controller, viz designer, insight reviewer).
+- `workflow.py` - `analytics_memory_workflow(query, flow)` multiplexes flow objects, while `get_available_flows()` exposes the `/api/analytics/memory/stream?flow=` selector used by the UI.
+- `solo_agent.md` - Deploy-time prompt blueprint enumerating tool affordances and cache guidance consumed by the single-agent flow.
+- `tooling.py` - Hosts `ToolTaskGroup` and default adapters that emit preview telemetry when Mode 1 parallelism is toggled on.
+
+### sql/
+Handles YAML-driven SQL authoring and guardrails.
+
+- `sql_planner.py` - `plan_sql_rule_based(intent)` composes metric lists, timeframe defaults, and comparison modes; `choose_template` now clones YAML patterns and swaps in the `single_year_template` when `timeframe.start_year` is locked, keeping multi-year leaderboards as the default.
+- `templates.py` - `fetch_templates_for_intent(intent_key)` lists YAML candidates, while `choose_template(...)` (in `sql_planner`) selects the final pattern.
+- `prompt_builder.py` - `build_sql_messages(...)` assembles the initial Responses prompt while `build_sql_retry_messages(...)` summarizes failures for follow-up attempts; `extract_sql_from_response(...)` parses fenced SQL blocks.
+- `compiler.py` - legacy helper that can still hydrate templates for experiments, though the default planner now leans on Responses retries instead of deterministic compilation.
+- `validator.py` / `sql_validate.py` - `validate_sql(...)` applies whitelist and limit checks before execution.
+- `executor.py` - `execute_sql(...)` runs asyncpg queries with cancellation and timeout guards.
+
+### YAML templates
+`backend/config/schemas/queries.yaml` houses reusable SQL patterns. The `rnd_top_spender` entry now includes both a multi-year leaderboard (with revenue and intensity columns) and a `single_year_template` that isolates one fiscal year once the clarification response supplies it.
+
+### tools/
+Defines reusable analytics tools exposed to agents.
+- `registry.py` - `ToolRegistry.register(...)` ties tool metadata to dispatcher callables; helpers map telemetry (`ToolCallTelemetry`) back into the Flow View timeline.
+
+### streaming/
+Placeholder namespace for SSE-specific helpers; the primary event formatting lives in `core.events.EventEmitter` today.
+
+### Shared OpenAI Client
+`unified_responses_client.py` wraps the async OpenAI Responses API with reasoning support, streaming deltas, structured outputs, and embeddings helpers. All flows request instances via `get_unified_client()` to maintain session continuity and reasoning effort policies, while `analytics.services.response_search` issues Gemini 2.5 Flash search calls (requires `GOOGLE_API_KEY`).
+
+## Supporting Tests
+Backend regression tests live under `backend/tests/analytics/` and cover:
+- Flow event ordering (`test_flows_single_agent.py`, `test_flows_multi_agent.py`).
+- SQL prompt/template handling (`test_flow_modes_queries.py`, `test_prompt_builder.py`).
+- Clarification behaviour (`test_clarify_timeframe.py` exercises the new fiscal-year prompt path and single-year template selection).
+- Cache/config behaviour (`test_cache_service.py`).
+
+Frontend analytics components consume the SSE payloads described here; see `components/analytics/` for the hook (`useAnalyticsMemoryStream`) and visualization panels that mirror the telemetry contract.
+
+## Operational Notes
+- **Configuration** - YAML files in `backend/config/schemas/` (e.g., `queries.yaml`) drive template selection and metric metadata.
+- **Environment** - `DATABASE_URL`, `OPENAI_API_KEY`, `GOOGLE_API_KEY` (for Gemini search), and optional reasoning overrides (`SUPERVISOR_REASONING_EFFORT`) must be set before running flows.
+- **API integration** - `/api/analytics/memory/stream` (FastAPI) maps query parameters to `analytics_memory_workflow` and streams events directly to the frontend `EventSource` client.
+
+
 
 
 

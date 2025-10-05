@@ -188,5 +188,70 @@ class GeminiChatService:
         if session_id in self.chats:
             del self.chats[session_id]
 
+    def search(self, query: str, *, max_results: int = 5, context: Optional[str] = None) -> Dict[str, Any]:
+        """Run a Gemini web search and return structured summary data."""
+
+        if not GEMINI_API_KEY or not self.model:
+            raise RuntimeError("Gemini API not configured")
+
+        prompt_lines = [
+            "Use Google search to gather up-to-date information relevant to the analytics query below.",
+            f"Query: {query}",
+        ]
+        if context:
+            prompt_lines.append(f"Context: {context}")
+        prompt_lines.append("Return your answer strictly as JSON with keys 'summary' (<=75 words) and 'sources'.")
+        prompt_lines.append("'sources' must be an array of objects with fields 'title', 'url', 'snippet', and optional 'published_at'.")
+        prompt = "\n".join(prompt_lines)
+
+        generation_config = {
+            "temperature": 0.3,
+            "top_p": 0.8,
+            "top_k": 40,
+            "max_output_tokens": 1024,
+        }
+
+        try:
+            response = self.model.generate_content(
+                prompt,
+                tools=[{"google_search_retrieval": {}}],
+                generation_config=generation_config,
+            )
+        except Exception as exc:
+            raise RuntimeError(f"Gemini search failed: {exc}") from exc
+
+        text_output = getattr(response, "text", None)
+        if not text_output:
+            parts: List[str] = []
+            for candidate in getattr(response, "candidates", []) or []:
+                content = getattr(candidate, "content", None)
+                if not content:
+                    continue
+                for part in getattr(content, "parts", []) or []:
+                    segment = getattr(part, "text", None)
+                    if segment:
+                        parts.append(segment)
+            text_output = "\n".join(parts)
+
+        if not text_output:
+            return {"summary": "", "sources": [], "model": getattr(self.model, 'model_name', 'gemini-2.5-flash')}
+
+        try:
+            data = json.loads(text_output)
+        except json.JSONDecodeError:
+            data = {"summary": text_output.strip(), "sources": []}
+
+        if not isinstance(data, dict):
+            data = {"summary": str(data), "sources": []}
+
+        sources = data.get("sources")
+        if isinstance(sources, list):
+            data["sources"] = sources[:max_results]
+        else:
+            data["sources"] = []
+
+        data.setdefault("model", getattr(self.model, 'model_name', 'gemini-2.5-flash'))
+        return data
+
 # Global instance
 gemini_service = GeminiChatService()

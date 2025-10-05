@@ -37,11 +37,7 @@ def _render_constraints(plan: QueryPlanModel) -> str:
     database_cfg = CONFIGS.database or {}
     defaults = database_cfg.get("query_defaults", {})
     allowed_tables = list((database_cfg.get("tables") or {}).keys()) or ["comp_financials"]
-    default_limit = defaults.get("default_limit", 500)
-    limit_guard = default_limit
-    plan_limit = getattr(plan, "limit", None) if plan else None
-    if isinstance(plan_limit, int) and plan_limit > 0:
-        limit_guard = min(limit_guard, plan_limit)
+    max_limit = defaults.get("max_limit", 10000)
     default_years_back = defaults.get("default_years_back", plan.timeframe.years_back if plan.timeframe else 5)
     return dedent(
         f"""
@@ -51,8 +47,7 @@ def _render_constraints(plan: QueryPlanModel) -> str:
           - Must include calendar_year in SELECT list
           - If granularity is quarterly, include calendar_quarter_num and calendar_quarter in SELECT and GROUP BY
         Limits:
-          - Always include LIMIT <= {limit_guard}
-          - Planner default LIMIT guardrail: {default_limit}
+          - Always include LIMIT <= {max_limit}
         Safety:
           - No DDL/DML statements
           - No CROSS JOIN unless justified by templates
@@ -97,11 +92,6 @@ async def build_sql_messages(
         """
         You are an expert financial data engineer. Generate safe SQL for PostgreSQL using only the allowed tables.
         Obey all instructions, especially filters and limits. Respond with SQL only, wrapped in triple backticks, with no commentary.
-
-        PostgreSQL-specific rules:
-        - For rounding decimals, use ROUND(CAST(value AS numeric), precision) not ROUND(value, precision)
-        - Division of integers produces integer results; cast to numeric for decimal results
-        - Use EXTRACT(YEAR FROM CURRENT_DATE) for current year
         """
     ).strip()
 

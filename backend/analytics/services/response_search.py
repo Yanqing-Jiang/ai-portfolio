@@ -8,25 +8,32 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-from analytics.core.telemetry import responses_call
-from unified_responses_client import get_unified_client
+import google.generativeai as genai
+
+from analytics.core.telemetry import gemini_call
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_MODEL = os.getenv("OPENAI_RESPONSES_SEARCH_MODEL") or os.getenv("OPENAI_MODEL", "gpt-5-mini-2025-08-07")
-_DEFAULT_CONTEXT_SIZE = os.getenv("WEB_SEARCH_CONTEXT_SIZE", "medium")
-_FALLBACK_TOOL_TYPE = "web_search"
-_MAX_SNIPPETS = int(os.getenv("WEB_SEARCH_MAX_SNIPPETS", "5"))
-_RETRY_ATTEMPTS = int(os.getenv("WEB_SEARCH_RETRY_ATTEMPTS", "2"))
-_RETRY_BASE_DELAY = float(os.getenv("WEB_SEARCH_RETRY_BASE_DELAY", "0.5"))
+_DEFAULT_MODEL = os.getenv('GEMINI_SEARCH_MODEL', 'gemini-2.5-flash')
+_DEFAULT_COUNTRY = os.getenv('WEB_SEARCH_COUNTRY', 'US')
+_DEFAULT_CITY = os.getenv('WEB_SEARCH_CITY')
+_MAX_SNIPPETS = int(os.getenv('WEB_SEARCH_MAX_SNIPPETS', '5'))
+_MAX_ATTEMPTS = int(os.getenv('WEB_SEARCH_RETRY_ATTEMPTS', '2'))
+_RETRY_BASE_DELAY = float(os.getenv('WEB_SEARCH_RETRY_BASE_DELAY', '0.6'))
+_DEFAULT_TEMPERATURE = float(os.getenv('GEMINI_SEARCH_TEMPERATURE', '0.2'))
+_MAX_TOKENS = int(os.getenv('GEMINI_SEARCH_MAX_TOKENS', '1024'))
+
+_genai_configured = False
+_model: Optional[genai.GenerativeModel] = None
+
 
 class ResponseSearchError(RuntimeError):
-    """Raised when the Responses API web search call fails."""
+    '''Raised when the Gemini-powered web search call fails.'''
 
 
 @dataclass
 class SearchSnippet:
-    """Structured snippet returned to analytics flows."""
+    '''Structured snippet returned to analytics flows.'''
 
     title: Optional[str] = None
     url: Optional[str] = None
@@ -51,40 +58,52 @@ class ResponseSearchResult:
 
     def to_payload(self) -> Dict[str, Any]:
         payload = {
-            "query": self.query,
-            "search_id": self.search_id,
-            "summary": self.summary,
-            "snippets": [asdict(snippet) for snippet in self.snippets][: _MAX_SNIPPETS],
-            "annotations": self.annotations,
-            "usage": self.usage,
-            "fetched_at": self.fetched_at,
-            "latency_ms": self.latency_ms,
-            "model": self.model,
-            "from_cache": self.from_cache,
+            'query': self.query,
+            'search_id': self.search_id,
+            'summary': self.summary,
+            'snippets': [asdict(snippet) for snippet in self.snippets][: _MAX_SNIPPETS],
+            'annotations': self.annotations,
+            'usage': self.usage,
+            'fetched_at': self.fetched_at,
+            'latency_ms': self.latency_ms,
+            'model': self.model,
+            'from_cache': self.from_cache,
         }
         return payload
 
 
-def _format_messages(query: str, *, context: Optional[str] = None) -> List[Dict[str, Any]]:
-    system_prompt = (
-        "You enrich analytics answers with factual, recent snippets from trusted sources. "
-        "Summaries must stay concise (<=75 words) and cite the annotations returned by the web search tool."
+def _ensure_model() -> genai.GenerativeModel:
+    global _genai_configured, _model
+    if _model is not None:
+        return _model
+
+    api_key = os.getenv('GOOGLE_API_KEY')
+    if not api_key:
+        raise ResponseSearchError('GOOGLE_API_KEY is not configured for Gemini search')
+
+    if not _genai_configured:
+        genai.configure(api_key=api_key)
+        _genai_configured = True
+
+    generation_config = {
+        'temperature': _DEFAULT_TEMPERATURE,
+        'top_p': 0.9,
+        'top_k': 32,
+        'max_output_tokens': _MAX_TOKENS,
+    }
+
+    _model = genai.GenerativeModel(
+        model_name=_DEFAULT_MODEL,
+        generation_config=generation_config,
     )
-    user_prompt = context.strip() if context else query.strip()
-    return [
-        {
-            "role": "system",
-            "content": [{"type": "input_text", "text": system_prompt}],
-        },
-        {
-            "role": "user",
-            "content": [{"type": "input_text", "text": user_prompt or query}],
-        },
-    ]
+    return _model
 
 
-def _build_tool_payload(*, context_size: str, tool_type: str) -> Dict[str, Any]:
-    return {"type": tool_type, "search_context_size": context_size}
+def _first_str(*values: Any) -> Optional[str]:
+    for value in values:
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
 
 
 def _as_dict(obj: Any) -> Dict[str, Any]:
@@ -92,20 +111,149 @@ def _as_dict(obj: Any) -> Dict[str, Any]:
         return {}
     if isinstance(obj, dict):
         return obj
-    for attr in ("model_dump", "dict", "to_dict"):
+    for attr in ('to_dict', 'model_dump', 'dict'):
         if hasattr(obj, attr):
             try:
                 data = getattr(obj, attr)()
                 if isinstance(data, dict):
                     return data
-            except Exception:  # pragma: no cover - defensive
+            except Exception:
                 continue
     return {}
+
+
+def _collect_candidate_texts(response_dict: Dict[str, Any]) -> List[str]:
+    texts: List[str] = []
+    for candidate in response_dict.get('candidates') or []:
+        if not isinstance(candidate, dict):
+            continue
+        content = candidate.get('content')
+        if isinstance(content, dict):
+            for part in content.get('parts') or []:
+                if isinstance(part, dict):
+                    text = part.get('text')
+                    if isinstance(text, str) and text.strip():
+                        texts.append(text.strip())
+        text_field = candidate.get('text')
+        if isinstance(text_field, str) and text_field.strip():
+            texts.append(text_field.strip())
+    return texts
+
+
+def _extract_support_text(support: Dict[str, Any], chunk_map: Dict[int, Dict[str, Any]]) -> Optional[str]:
+    index_fields = (
+        'chunk_indices',
+        'groundingChunkIndices',
+        'grounding_chunk_indices',
+        'supportChunkIndices',
+    )
+    indices: Optional[List[Any]] = None
+    for key in index_fields:
+        value = support.get(key)
+        if isinstance(value, list):
+            indices = value
+            break
+
+    fragments: List[str] = []
+    if indices:
+        for raw in indices:
+            try:
+                idx = int(raw)
+            except (TypeError, ValueError):
+                continue
+            chunk = chunk_map.get(idx)
+            if not chunk:
+                continue
+            text = chunk.get('text') or chunk.get('content') or chunk.get('snippet')
+            if isinstance(text, str) and text.strip():
+                fragments.append(text.strip())
+
+    support_text = support.get('text') or support.get('snippet')
+    if not fragments and isinstance(support_text, str) and support_text.strip():
+        fragments.append(support_text.strip())
+
+    combined = ' '.join(fragment for fragment in fragments if fragment)
+    return combined or None
+
+
+def _collect_grounding_data(response_dict: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], List[SearchSnippet]]:
+    annotations: List[Dict[str, Any]] = []
+    snippets: List[SearchSnippet] = []
+    for candidate in response_dict.get('candidates') or []:
+        if not isinstance(candidate, dict):
+            continue
+        meta_sources: List[Dict[str, Any]] = []
+        chunk_map: Dict[int, Dict[str, Any]] = {}
+        for key in ('grounding', 'groundingMetadata'):
+            meta = _as_dict(candidate.get(key))
+            if not meta:
+                continue
+            meta_sources.append(meta)
+            chunks = meta.get('chunks')
+            if chunks is None:
+                chunks = meta.get('groundingChunks')
+            if isinstance(chunks, list):
+                for idx, chunk in enumerate(chunks):
+                    chunk_map[idx] = _as_dict(chunk)
+
+        for meta in meta_sources:
+            supports = meta.get('supports')
+            if supports is None:
+                supports = meta.get('supportingEvidence')
+            if not isinstance(supports, list):
+                continue
+            for support in supports:
+                support_dict = _as_dict(support)
+                if not support_dict:
+                    continue
+                annotations.append(support_dict)
+                snippet_text = _extract_support_text(support_dict, chunk_map)
+                web_info = _as_dict(support_dict.get('web'))
+                title = _first_str(
+                    support_dict.get('title'),
+                    web_info.get('title'),
+                    web_info.get('headline'),
+                )
+                url = _first_str(
+                    support_dict.get('url'),
+                    support_dict.get('uri'),
+                    web_info.get('uri'),
+                    web_info.get('url'),
+                    web_info.get('link'),
+                )
+                display_url = _first_str(
+                    support_dict.get('display_url'),
+                    web_info.get('displayUri'),
+                    web_info.get('displayUrl'),
+                    url,
+                )
+                published_at = _first_str(
+                    support_dict.get('published_at'),
+                    web_info.get('publishedDate'),
+                    web_info.get('date'),
+                )
+                snippet_value = snippet_text if isinstance(snippet_text, str) else None
+                if snippet_value is None:
+                    raw_snippet = support_dict.get('snippet')
+                    snippet_value = raw_snippet.strip() if isinstance(raw_snippet, str) else None
+                snippets.append(
+                    SearchSnippet(
+                        title=title,
+                        url=url,
+                        snippet=snippet_value,
+                        display_url=display_url,
+                        published_at=published_at,
+                        annotation=support_dict,
+                    )
+                )
+    return annotations, snippets
 
 
 def _dedupe_snippets(snippets: Iterable[SearchSnippet]) -> List[SearchSnippet]:
     seen: Dict[str, SearchSnippet] = {}
     for snippet in snippets:
+        if snippet is None:
+            continue
         key = (snippet.url or snippet.title or str(len(seen))).lower()
         if key in seen:
             existing = seen[key]
@@ -115,75 +263,60 @@ def _dedupe_snippets(snippets: Iterable[SearchSnippet]) -> List[SearchSnippet]:
                 existing.title = snippet.title
             if not existing.display_url and snippet.display_url:
                 existing.display_url = snippet.display_url
-            if not existing.annotation and snippet.annotation:
-                existing.annotation = snippet.annotation
             if not existing.published_at and snippet.published_at:
                 existing.published_at = snippet.published_at
+            if not existing.annotation and snippet.annotation:
+                existing.annotation = snippet.annotation
         else:
             seen[key] = snippet
-    return list(seen.values())[: _MAX_SNIPPETS]
+    return list(seen.values())
 
 
-def _extract_annotations(message_blocks: List[Dict[str, Any]]) -> Tuple[str, List[Dict[str, Any]], List[SearchSnippet]]:
-    summary_chunks: List[str] = []
-    annotations: List[Dict[str, Any]] = []
-    snippets: List[SearchSnippet] = []
-
-    for block in message_blocks:
-        if block.get("type") != "message":
-            continue
-        for segment in block.get("content", []) or []:
-            if segment.get("type") != "output_text":
-                continue
-            text = segment.get("text") or ""
-            if text:
-                summary_chunks.append(text)
-            for annotation in segment.get("annotations", []) or []:
-                if annotation.get("type") != "url_citation":
-                    continue
-                annotations.append(annotation)
-                snippet_text = None
-                try:
-                    start = annotation.get("start_index")
-                    end = annotation.get("end_index")
-                    if isinstance(start, int) and isinstance(end, int) and start < end and len(text) >= end:
-                        snippet_text = text[start:end].strip()
-                except Exception:  # pragma: no cover - defensive
-                    snippet_text = None
-                display = annotation.get("display") or {}
-                snippets.append(
-                    SearchSnippet(
-                        title=annotation.get("title") or display.get("friendly_name"),
-                        url=annotation.get("url"),
-                        snippet=snippet_text,
-                        display_url=display.get("url"),
-                        published_at=annotation.get("published_at"),
-                        annotation=annotation,
-                    )
-                )
-
-    summary = "\n".join(chunk.strip() for chunk in summary_chunks if chunk.strip())
-    return summary, annotations, snippets
+def _build_prompt(
+    query: str,
+    *,
+    context: Optional[str],
+    country: Optional[str],
+    city: Optional[str],
+    context_size: Optional[str],
+) -> List[str]:
+    lines: List[str] = [
+        'You are a financial research assistant. Use google_search to gather breaking developments, regulatory filings, and earnings coverage related to the analytics request.',
+        'Prioritize sources published within the past 30 days and focus on companies or tickers mentioned by the user.',
+        'Provide a concise summary (<=80 words) that cites the returned references (e.g. [1]) and highlight why each item matters for the user question.',
+    ]
+    if city and country:
+        lines.append(f'User location hint: {city}, {country}.')
+    elif country:
+        lines.append(f'User location hint: {country}.')
+    if context:
+        lines.append(f'Workflow context: {context.strip()}.')
+    if context_size:
+        lines.append(f'Context window preference: {context_size.strip()} prioritisation.')
+    lines.append(f'User question: {query.strip()}.')
+    return ['
+'.join(lines)]
 
 
-def _extract_results(output_blocks: List[Dict[str, Any]]) -> Tuple[Optional[str], List[SearchSnippet]]:
-    search_id: Optional[str] = None
-    snippets: List[SearchSnippet] = []
-    for block in output_blocks:
-        if block.get("type") != "web_search_call":
-            continue
-        search_id = block.get("id") or search_id
-        for result in block.get("results", []) or []:
-            snippets.append(
-                SearchSnippet(
-                    title=result.get("title") or result.get("url"),
-                    url=result.get("url"),
-                    snippet=result.get("snippet"),
-                    display_url=result.get("display_url") or result.get("url"),
-                    published_at=result.get("published_at"),
-                )
-            )
-    return search_id, snippets
+def _build_request_args(
+    query: str,
+    *,
+    context: Optional[str],
+    country: Optional[str],
+    city: Optional[str],
+    context_size: Optional[str],
+) -> Dict[str, Any]:
+    prompt = _build_prompt(
+        query,
+        context=context,
+        country=country,
+        city=city,
+        context_size=context_size,
+    )
+    return {
+        'contents': prompt,
+        'tools': ['google_search'],
+    }
 
 
 async def perform_response_search(
@@ -191,90 +324,95 @@ async def perform_response_search(
     *,
     session_id: Optional[str] = None,
     context: Optional[str] = None,
+    country: Optional[str] = None,
+    city: Optional[str] = None,
     context_size: Optional[str] = None,
     model: Optional[str] = None,
 ) -> ResponseSearchResult:
     if not query or not query.strip():
-        raise ValueError("Search query must be provided")
+        raise ValueError('Search query must be provided')
 
-    client = get_unified_client()
-    if not client:
-        raise ResponseSearchError("Unified OpenAI client is not configured")
-
-    messages = _format_messages(query, context=context)
-    tool_type = os.getenv("WEB_SEARCH_TOOL_TYPE", _FALLBACK_TOOL_TYPE)
-    tool_payload = _build_tool_payload(
-        context_size=context_size or _DEFAULT_CONTEXT_SIZE,
-        tool_type=tool_type,
+    gemini_model = _ensure_model()
+    request_args = _build_request_args(
+        query,
+        context=context,
+        country=country or _DEFAULT_COUNTRY,
+        city=city or _DEFAULT_CITY,
+        context_size=context_size,
     )
-    params = {
-        "model": model or _DEFAULT_MODEL,
-        "input": messages,
-        "tools": [tool_payload],
-    }
-    force_web = os.getenv("WEB_SEARCH_FORCE", "0") == "1"
-    tool_choice = {"type": "tool", "name": tool_type} if force_web else "auto"
-    params["tool_choice"] = tool_choice
 
-    attempts = max(1, _RETRY_ATTEMPTS)
+    attempts = max(1, _MAX_ATTEMPTS)
     attempt = 0
     last_error: Optional[Exception] = None
     response_dict: Dict[str, Any] = {}
     elapsed_ms: Optional[int] = None
 
     while attempt < attempts:
+        attempt += 1
         start = time.perf_counter()
         try:
-            raw_response = await client.client.responses.create(**params)
+            response = await asyncio.to_thread(
+                gemini_model.generate_content,
+                **request_args,
+            )
             elapsed_ms = int((time.perf_counter() - start) * 1000)
-            response_dict = _as_dict(raw_response)
-            responses_call(
-                call_type=tool_type,
-                model=params["model"],
-                reasoning_effort=None,
+            response_dict = _as_dict(response)
+            gemini_call(
+                operation='google_search',
+                model=gemini_model.model_name,
                 duration_ms=elapsed_ms,
-                status="success",
+                status='success',
                 session_id=session_id,
-                metadata={"attempt": attempt + 1, "response_id": response_dict.get("id")},
+                metadata={
+                    'attempt': attempt,
+                    'response_id': response_dict.get('response_id') or response_dict.get('id'),
+                },
             )
             break
-        except Exception as exc:  # pragma: no cover - network/SDK failure
+        except Exception as exc:
             elapsed_ms = int((time.perf_counter() - start) * 1000)
             last_error = exc
-            logger.error(f"[WEB_SEARCH] Attempt {attempt + 1} failed: {type(exc).__name__}: {str(exc)}")
-            responses_call(
-                call_type=tool_type,
-                model=params["model"],
-                reasoning_effort=None,
+            gemini_call(
+                operation='google_search',
+                model=gemini_model.model_name,
                 duration_ms=elapsed_ms,
-                status="error",
+                status='error',
                 session_id=session_id,
                 error=str(exc),
-                metadata={"attempt": attempt + 1},
+                metadata={'attempt': attempt},
             )
-            attempt += 1
             if attempt >= attempts:
-                logger.error("Responses API web search failed after %s attempts: %s", attempts, str(exc))
-                raise ResponseSearchError("Responses API web search failed") from exc
+                logger.error('Gemini Google Search failed after %s attempts', attempts)
+                raise ResponseSearchError('Gemini Google Search failed') from exc
             delay = _RETRY_BASE_DELAY * (2 ** (attempt - 1))
             await asyncio.sleep(delay)
 
-    output_blocks = response_dict.get("output") or []
-    summary, annotations, annotation_snippets = _extract_annotations(output_blocks)
-    search_id, result_snippets = _extract_results(output_blocks)
+    if not response_dict:
+        raise ResponseSearchError(str(last_error) if last_error else 'Gemini Google Search produced no output')
 
-    combined_snippets = _dedupe_snippets([*result_snippets, *annotation_snippets])
+    summary_text: Optional[str] = None
+    raw_text = response_dict.get('text')
+    if isinstance(raw_text, str) and raw_text.strip():
+        summary_text = raw_text.strip()
+    else:
+        candidate_texts = _collect_candidate_texts(response_dict)
+        if candidate_texts:
+            summary_text = '\n'.join(candidate_texts).strip()
+
+    annotations, annotation_snippets = _collect_grounding_data(response_dict)
+    combined_snippets = _dedupe_snippets(annotation_snippets)
 
     result = ResponseSearchResult(
         query=query,
-        search_id=search_id,
-        summary=summary or None,
-        snippets=combined_snippets,
+        search_id=response_dict.get('response_id') or response_dict.get('id'),
+        summary=summary_text,
+        snippets=combined_snippets[:_MAX_SNIPPETS],
         annotations=annotations,
-        usage=response_dict.get("usage"),
+        usage=response_dict.get('usage'),
         fetched_at=datetime.utcnow().isoformat(),
         latency_ms=elapsed_ms,
-        model=params["model"],
+        model=model or gemini_model.model_name,
     )
     return result
+
 
