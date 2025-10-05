@@ -24,20 +24,6 @@ const LegacyProjectPage: React.FC<LegacyProjectPageProps> = ({ project }) => {
           <p className="mt-6 max-w-3xl text-base sm:text-lg text-slate-200 leading-relaxed">
             {project.description}
           </p>
-          {project.link && (
-            <a
-              href={project.link}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="mt-8 inline-flex items-center gap-3 rounded-lg bg-sky-500/80 px-5 py-3 text-sm font-semibold text-white shadow hover:bg-sky-400 transition"
-            >
-              Visit case study
-              <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M17.25 6.75L6.75 17.25" />
-                <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 6.75h9v9" />
-              </svg>
-            </a>
-          )}
         </div>
       </header>
 
@@ -125,3 +111,4 @@ const LegacyProjectPage: React.FC<LegacyProjectPageProps> = ({ project }) => {
 };
 
 export default LegacyProjectPage;
+

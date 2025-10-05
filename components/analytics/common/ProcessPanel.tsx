@@ -2,10 +2,11 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion';
 import Draggable from 'react-draggable';
 import { WorkflowCanvas } from '../visualization/WorkflowCanvas';
-import { FanoutCanvas } from '../visualization/FanoutCanvas';
+import { SingleAgentFanoutCanvas } from '../visualization/SingleAgentFanoutCanvas';
 import { ProcessStep, FlowMode, SingleAgentFanout } from '../types';
 
 interface ProcessPanelProps {
+  singleAgentFanout?: SingleAgentFanout | null;
   steps: ProcessStep[];
   flowMode: FlowMode;
   show: boolean;
@@ -550,60 +551,85 @@ export const ProcessPanel: React.FC<ProcessPanelProps> = ({
       </div>
     </div>
   );
-  const renderCanvas = () => (
-    <div className={`flex flex-1 flex-col rounded-3xl border ${contextStyle.border} bg-gray-900/80 shadow-inner`}>
-      <div className="flex items-center justify-between border-b border-gray-800 px-4 py-3 text-sm font-semibold text-gray-200">
-        <div className="flex flex-col gap-1">
+  const renderCanvas = () => {
+    const isFanoutMode = flowMode === 'single-agent' && !!singleAgentFanout?.hasFanout && (singleAgentFanout?.branches.length ?? 0) > 0;
+    const activeCount = singleAgentFanout?.runningCount ?? 0;
+    const completedCount = singleAgentFanout?.completedCount ?? 0;
+    const failedCount = singleAgentFanout?.failedCount ?? 0;
+    const queuedCount = singleAgentFanout?.queuedCount ?? 0;
+
+    return (
+      <div className={`flex flex-1 flex-col rounded-3xl border ${contextStyle.border} bg-gray-900/80 shadow-inner`}>
+        <div className="flex items-center justify-between border-b border-gray-800 px-4 py-3 text-sm font-semibold text-gray-200">
+          <div className="flex flex-col gap-1">
+            <div className="flex items-center gap-2 text-[11px] text-gray-400">
+              <span className={`inline-flex h-2 w-2 rounded-full ${contextStyle.indicator}`} />
+              <span className="uppercase tracking-wide text-gray-400">
+                {isFanoutMode ? 'Agent Fan-Out Orchestration' : 'Query Planning & Template Selection'}
+              </span>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 text-xs text-gray-300">
+              <span className="font-medium text-gray-100">{contextStep?.name ?? (isFanoutMode ? 'Fan-out orchestration' : 'Awaiting events')}</span>
+              <span className="rounded-full bg-gray-800/70 px-2 py-0.5 text-[10px] uppercase tracking-wide text-gray-400">
+                {friendlyStatus(contextStatus)}
+              </span>
+              {contextStep?.elapsed_ms != null && (
+                <span className="text-[10px] text-gray-500">{formatDuration(contextStep.elapsed_ms)}</span>
+              )}
+              {contextStep?.timestamp && (
+                <span className="text-[10px] text-gray-500">{formatTimestamp(contextStep.timestamp)}</span>
+              )}
+            </div>
+            {isFanoutMode && (
+              <div className="mt-1 flex flex-wrap items-center gap-2 text-[10px] text-gray-400">
+                <span className="rounded-full border border-gray-700 px-2 py-0.5 text-[10px] uppercase tracking-wide text-gray-200">
+                  Limit {singleAgentFanout?.concurrencyLimit ?? singleAgentFanout?.branches.length ?? 0}
+                </span>
+                <span className="text-blue-300">{activeCount} running</span>
+                <span className="text-emerald-300">{completedCount} completed</span>
+                {failedCount > 0 && <span className="text-red-300">{failedCount} failed</span>}
+                {queuedCount > 0 && <span className="text-gray-500">{queuedCount} queued</span>}
+              </div>
+            )}
+          </div>
           <div className="flex items-center gap-2 text-[11px] text-gray-400">
-            <span className={`inline-flex h-2 w-2 rounded-full ${contextStyle.indicator}`} />
-            <span className="uppercase tracking-wide text-gray-400">Query Planning & Template Selection</span>
-          </div>
-          <div className="flex items-center gap-2 text-xs text-gray-300">
-            <span className="font-medium text-gray-100">{contextStep?.name ?? 'Awaiting events'}</span>
-            <span className="rounded-full bg-gray-800/70 px-2 py-0.5 text-[10px] uppercase tracking-wide text-gray-400">
-              {friendlyStatus(contextStatus)}
-            </span>
-            {contextStep?.elapsed_ms != null && (
-              <span className="text-[10px] text-gray-500">{formatDuration(contextStep.elapsed_ms)}</span>
-            )}
-            {contextStep?.timestamp && (
-              <span className="text-[10px] text-gray-500">{formatTimestamp(contextStep.timestamp)}</span>
-            )}
+            <button
+              type="button"
+              onClick={() => handlePaneCollapse('canvas')}
+              className="rounded border border-gray-700 px-2 py-1 text-[10px] uppercase tracking-wide transition hover:border-gray-500 hover:text-gray-200"
+            >
+              Collapse
+            </button>
+            <button
+              type="button"
+              onClick={() => handlePaneRestore('canvas')}
+              className="rounded border border-gray-700 px-2 py-1 text-[10px] uppercase tracking-wide transition hover:border-gray-500 hover:text-gray-200"
+              disabled={isCanvasExpanded}
+            >
+              Restore
+            </button>
           </div>
         </div>
-        <div className="flex items-center gap-2 text-[11px] text-gray-400">
-          <button
-            type="button"
-            onClick={() => handlePaneCollapse('canvas')}
-            className="rounded border border-gray-700 px-2 py-1 text-[10px] uppercase tracking-wide transition hover:border-gray-500 hover:text-gray-200"
-          >
-            Collapse
-          </button>
-          <button
-            type="button"
-            onClick={() => handlePaneRestore('canvas')}
-            className="rounded border border-gray-700 px-2 py-1 text-[10px] uppercase tracking-wide transition hover:border-gray-500 hover:text-gray-200"
-            disabled={isCanvasExpanded}
-          >
-            Restore
-          </button>
+        <div className="relative flex-1 overflow-hidden">
+          {isFanoutMode && singleAgentFanout ? (
+            <SingleAgentFanoutCanvas fanout={singleAgentFanout} />
+          ) : (
+            <WorkflowCanvas
+              steps={displaySteps}
+              flowMode={flowMode}
+              layoutMode={flowMode === 'multi-agent' ? layoutMode : 'sequential'}
+              isVisible
+              currentStepLabel={contextStep?.name}
+              currentStatus={friendlyStatus(contextStatus)}
+              currentTimestamp={contextStep?.timestamp ?? undefined}
+              currentDuration={formatDuration(contextStep?.elapsed_ms)}
+              progressPercent={progressPercent}
+            />
+          )}
         </div>
       </div>
-      <div className="relative flex-1 overflow-hidden">
-        <WorkflowCanvas
-          steps={displaySteps}
-          flowMode={flowMode}
-          layoutMode={flowMode === 'multi-agent' ? layoutMode : 'sequential'}
-          isVisible
-          currentStepLabel={contextStep?.name}
-          currentStatus={friendlyStatus(contextStatus)}
-          currentTimestamp={contextStep?.timestamp ?? undefined}
-          currentDuration={formatDuration(contextStep?.elapsed_ms)}
-          progressPercent={progressPercent}
-        />
-      </div>
-    </div>
-  );
+    );
+  };
 
   const containerClass = `relative flex h-full w-full flex-col border-l border-gray-800 bg-gray-900/95 text-gray-100 shadow-2xl ${panelState.isMaximized ? 'lg:w-[calc(100vw-4rem)]' : 'sm:max-w-[30rem]'}`;
 
@@ -714,6 +740,7 @@ export const ProcessPanel: React.FC<ProcessPanelProps> = ({
 };
 
 export default ProcessPanel;
+
 
 
 

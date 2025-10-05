@@ -57,6 +57,7 @@ const MemoryAnalyticsPage: React.FC = () => {
     sqlQuery,
     dataSample,
     streamingText,
+    singleAgentFanout,
     
     // Stream state
     isLoading,
@@ -75,15 +76,15 @@ const MemoryAnalyticsPage: React.FC = () => {
   // Project data for the analytics memory project
   const projectData = {
     title: 'Next Gen Analytics (Memory)',
-    description: `• AI-powered financial analytics with LangGraph memory pipeline and intelligent clarifications.
-• Uses advanced intent detection ? SQL planning ? Chart Generation ? financial analysis workflow.
-• Real-time streaming with conversational clarifications and session memory management.
+    description: `ï¿½ AI-powered financial analytics with LangGraph memory pipeline and intelligent clarifications.
+ï¿½ Uses advanced intent detection ? SQL planning ? Chart Generation ? financial analysis workflow.
+ï¿½ Real-time streaming with conversational clarifications and session memory management.
 
 Result:
 
-• Interactive financial analysis for AMD, AVGO, INTC, MU, NVDA, QCOM, TXN with memory optimization.
-• Streaming agent coordination with inline clarification UI.
-• Dynamic Chart Generation with session persistence and memory-aware caching.`,
+ï¿½ Interactive financial analysis for AMD, AVGO, INTC, MU, NVDA, QCOM, TXN with memory optimization.
+ï¿½ Streaming agent coordination with inline clarification UI.
+ï¿½ Dynamic Chart Generation with session persistence and memory-aware caching.`,
     technologies: ['LangGraph', 'Memory Pipeline', 'Intent Detection', 'Clarifications', 'FastAPI', 'PostgreSQL'],
     imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/next-gen-sql.png'
   };
@@ -346,6 +347,7 @@ Result:
       <ProcessPanel
         steps={processSteps}
         flowMode={selectedFlow}
+        singleAgentFanout={singleAgentFanout}
         show={showProcessPanel}
         onClose={() => setShowProcessPanel(false)}
         title="Agent Thinking Process"
