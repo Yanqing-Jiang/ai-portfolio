@@ -1,18 +1,22 @@
-import asyncio
+﻿import asyncio
 import logging
 from fastapi import FastAPI, Request, Depends, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, Response, JSONResponse
 from pydantic import BaseModel
-from dotenv import load_dotenv
 from pathlib import Path
 import os
+from dotenv import load_dotenv
 import json
 from datetime import date as _Date, datetime as _DateTime
 import uuid
 import time
 
 logger = logging.getLogger(__name__)
+
+# Always load the .env file located in the backend directory (same folder as this file)
+env_path = Path(__file__).resolve().parent / ".env"
+load_dotenv(dotenv_path=env_path, override=False)
 
 
 from research_agent import run_research_agent, run_research_agent_stream
@@ -28,9 +32,6 @@ from analytics.core.types import ClarifyAnswerModel
 from langchain.callbacks.base import BaseCallbackHandler
 from typing import List, Tuple, Optional
 
-# Always load the .env file located in the backend directory (same folder as this file)
-env_path = Path(__file__).resolve().parent / ".env"
-load_dotenv(dotenv_path=env_path, override=False)
 
 
 log_level_name = os.getenv("ANALYTICS_LOG_LEVEL", "INFO").upper()
@@ -888,6 +889,8 @@ async def analytics_memory_clarify_endpoint(answer: ClarifyAnswerModel, _: None 
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
+
 
 
 

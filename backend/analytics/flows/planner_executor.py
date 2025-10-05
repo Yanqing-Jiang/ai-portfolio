@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 from typing import AsyncGenerator, Dict, Any, Optional, List, Tuple
 from dataclasses import dataclass, field
 import asyncio
@@ -36,10 +36,11 @@ from analytics.sql.executor import execute_sql
 from analytics.sql.validator import validate_sql
 from analytics.sql.templates import fetch_templates_for_intent
 from analytics.sql.prompt_builder import build_sql_messages, build_sql_retry_messages, extract_sql_from_response
+from analytics.agents.schema_clarifier import ClarifierDecision, decide_schema_clarification
 from analytics.core.charting import build_chart_spec, plan_chart_rule_based
 from .tool_bundle import collect_tool_bundle
 from analytics.core.telemetry import analysis_chunk as log_analysis_chunk
-from analytics.services.response_search import ResponseSearchError, perform_response_search, has_search_api_key
+from analytics.services.response_search import ResponseSearchError, perform_response_search, has_search_api_key, generate_search_topic
 from analytics.core.analysis import summarize, stream_insights_llm
 from analytics.core.clarify import (
     detect_missing_slots,
@@ -63,6 +64,9 @@ def _env_flag(name: str, *, default: bool = False) -> bool:
     if normalized in {'0', 'false', 'no', 'off'}:
         return False
     return default
+
+SCHEMA_CLARIFIER_ENABLED = _env_flag("ANALYTICS_SCHEMA_CLARIFIER_ENABLED", default=False)
+
 def _generate_chart_design(intent_key: Optional[str], plan: QueryPlanModel, data: List[Dict[str, Any]], spec: Dict[str, Any]) -> Dict[str, Any]:
     """Generate smart chart design metadata for frontend optimization."""
     if not intent_key or not data:
@@ -147,6 +151,8 @@ class PlannerPhaseContext:
     clarifications: List[ClarifyRequestModel] = field(default_factory=list)
     assumptions: List[str] = field(default_factory=list)
     clarification_rounds: int = 0
+    clarifier_agent_invoked: bool = False
+    schema_clarifier_decision: Optional[ClarifierDecision] = None
     plan: Optional[QueryPlanModel] = None
     candidate_templates: List[Dict[str, Any]] = field(default_factory=list)
     selected_template_id: Optional[str] = None
@@ -186,6 +192,28 @@ def _normalize_calendar_filters(sql: str) -> str:
         return sql
     return re.sub(r"calendar_quarter_num\s+IS\s+NULL", "calendar_quarter_num IS NOT NULL", sql, flags=re.IGNORECASE)
 
+
+
+
+def _build_schema_clarifier_request(decision: ClarifierDecision, session_id: str) -> Optional[ClarifyRequestModel]:
+    if not decision.slot or not decision.question:
+        return None
+    options = decision.options or []
+    default_option = options[0] if options else None
+    input_type = "single" if options else "free"
+    return ClarifyRequestModel(
+        slot=decision.slot,
+        question=decision.question,
+        type=input_type,
+        options=options,
+        default=default_option,
+        reason=decision.reason or "Required by the schema clarifier.",
+        required=True,
+        request_id=str(uuid.uuid4()),
+        proposed=None,
+        proposed_confidence=None,
+        session_id=session_id,
+    )
 
 
 class PlannerExecutorFlow:
@@ -245,10 +273,22 @@ class PlannerExecutorFlow:
         context_hint = " | ".join(context_parts) if context_parts else None
     
         try:
+            # First, compute and surface the rewritten search topic
+            try:
+                topic = await generate_search_topic(ctx.query, session_id=ctx.session_id)
+            except Exception:
+                topic = None
+            if topic:
+                topic_event = EventEmitter.progress("web_search", f"Search topic: {topic}")
+                topic_event["data"]["ts"] = datetime.utcnow().isoformat()
+                yield topic_event
+
+            # Then, perform the actual web search using that topic
             search_result = await perform_response_search(
                 ctx.query,
                 session_id=ctx.session_id,
                 context=context_hint,
+                search_topic=topic,
             )
         except ResponseSearchError as exc:
             error_event = EventEmitter.error(
@@ -872,9 +912,62 @@ async def _intent_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[s
     yield intent_complete
     ctx.provisional_plan = build_query_plan(intent, CONFIGS.__dict__)
     ctx.template = choose_template(intent, ctx.provisional_plan, CONFIGS.__dict__)
-    official_clarifications = compute_required_clarifications(
-        intent, ctx.provisional_plan, ctx.template, CONFIGS.__dict__
-    )
+
+    schema_decision: Optional[ClarifierDecision] = None
+    if SCHEMA_CLARIFIER_ENABLED and ctx.template is not None:
+        try:
+            schema_decision = await asyncio.to_thread(
+                decide_schema_clarification,
+                intent,
+                ctx.provisional_plan,
+                session_id=ctx.session_id,
+                template_id=intent.intent_key or (ctx.template.get("name") if isinstance(ctx.template, dict) else None),
+            )
+        except Exception as exc:
+            logger.exception("[SCHEMA_CLARIFIER] decision failed: %s", exc)
+            schema_decision = ClarifierDecision(action="fallback", missing_slots=[])
+    elif SCHEMA_CLARIFIER_ENABLED:
+        schema_decision = ClarifierDecision(action="fallback", missing_slots=[])
+
+    ctx.clarifier_agent_invoked = bool(schema_decision)
+    ctx.schema_clarifier_decision = schema_decision
+    ctx.planner_result.metadata["schema_clarifier"] = {
+        "enabled": SCHEMA_CLARIFIER_ENABLED,
+        "action": schema_decision.action if schema_decision else "disabled",
+        "missing_slots": schema_decision.missing_slots if schema_decision else [],
+        "slot": schema_decision.slot if schema_decision else None,
+    }
+
+    if SCHEMA_CLARIFIER_ENABLED:
+        clarifier_event = EventEmitter.progress(
+            "schema_clarifier",
+            f"Schema clarifier decision: {(schema_decision.action if schema_decision else 'disabled')}",
+        )
+        clarifier_event["data"].update(
+            {
+                "action": schema_decision.action if schema_decision else "disabled",
+                "missing_slots": schema_decision.missing_slots if schema_decision else [],
+                "enabled": True,
+                "ts": datetime.utcnow().isoformat(),
+            }
+        )
+        if schema_decision and schema_decision.slot:
+            clarifier_event["data"]["slot"] = schema_decision.slot
+        yield clarifier_event
+
+    clarifier_request: Optional[ClarifyRequestModel] = None
+    if schema_decision and schema_decision.action == "skip":
+        official_clarifications: List[ClarifyRequestModel] = []
+    else:
+        official_clarifications = compute_required_clarifications(
+            intent, ctx.provisional_plan, ctx.template, CONFIGS.__dict__
+        )
+        if schema_decision and schema_decision.action == "clarify":
+            clarifier_request = _build_schema_clarifier_request(schema_decision, ctx.session_id)
+            if clarifier_request:
+                official_clarifications = [clarifier_request] + [
+                    request for request in official_clarifications if request.slot != clarifier_request.slot
+                ]
     deduped_requests: List[ClarifyRequestModel] = []
     seen_slots: set[str] = set()
     for request in official_clarifications:
@@ -1173,5 +1266,6 @@ async def run_planner_executor(query: str, session_id: Optional[str] = None) -> 
     workflow_instance = PlannerExecutorFlow()
     async for event in workflow_instance.events(query, session_id):
         yield event
+
 
 
