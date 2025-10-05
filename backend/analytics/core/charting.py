@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 
 from .types import ChartPlanModel
 from .config import CONFIGS
@@ -66,6 +66,213 @@ def _sort_axis_values(values: List[str], x_field: str) -> List[str]:
 
 
 
+def _coerce_float(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        cleaned = str(value).replace(',', '').strip()
+        if not cleaned:
+            return None
+        return float(cleaned)
+    except (TypeError, ValueError):
+        return None
+
+
+def _build_candlestick_spec(
+    data: List[Dict[str, Any]],
+    chart_plan: Dict[str, Any],
+    charts_cfg: Dict[str, Any],
+    intent_key: Optional[str],
+    comparison: Optional[str],
+) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+    series_list = chart_plan.get('series') or []
+    if not series_list:
+        return None, None
+
+    primary = series_list[0]
+    open_col = primary.get('open_column')
+    high_col = primary.get('high_column')
+    low_col = primary.get('low_column')
+    close_col = primary.get('close_column')
+
+    if not all([open_col, high_col, low_col, close_col]):
+        fallback_column = close_col or primary.get('data_column')
+        if fallback_column:
+            fallback_plan = {
+                'chart_type': 'line',
+                'title': chart_plan.get('title'),
+                'x_axis': chart_plan.get('x_axis', {}),
+                'series': [{
+                    'name': primary.get('name') or fallback_column,
+                    'data_column': fallback_column,
+                    'value_type': primary.get('value_type', 'currency'),
+                }],
+            }
+            return None, fallback_plan
+        return None, None
+
+    axis_field = (chart_plan.get('x_axis') or {}).get('field') or 'date'
+    axis_type = (chart_plan.get('x_axis') or {}).get('type') or 'time'
+    fallback_candidates = ['calendar_date', 'date', 'trading_day', 'trading_date', 'time', 'timestamp', 'day']
+
+    values_by_label: Dict[str, Dict[str, Any]] = {}
+    for row in data:
+        label_value = row.get(axis_field)
+        if label_value is None:
+            for candidate in fallback_candidates:
+                if row.get(candidate) is not None:
+                    label_value = row.get(candidate)
+                    axis_field = candidate
+                    break
+        if label_value is None:
+            continue
+
+        o = _coerce_float(row.get(open_col))
+        h = _coerce_float(row.get(high_col))
+        l = _coerce_float(row.get(low_col))
+        c = _coerce_float(row.get(close_col))
+        if None in (o, h, l, c):
+            continue
+
+        label = str(label_value)
+        volume_col = primary.get('volume_column')
+        volume_value = _coerce_float(row.get(volume_col)) if volume_col else None
+        values_by_label[label] = {
+            'ohlc': [o, c, l, h],
+            'volume': volume_value,
+        }
+
+    if not values_by_label:
+        fallback_plan = {
+            'chart_type': 'line',
+            'title': chart_plan.get('title'),
+            'x_axis': chart_plan.get('x_axis', {}),
+            'series': [{
+                'name': primary.get('name') or (close_col or 'Close'),
+                'data_column': close_col or primary.get('data_column'),
+                'value_type': primary.get('value_type', 'currency'),
+            }],
+        }
+        return None, fallback_plan
+
+    ordered_labels = _sort_axis_values(list(values_by_label.keys()), axis_field)
+    candlestick_data = [values_by_label[label]['ohlc'] for label in ordered_labels]
+    volume_values = [values_by_label[label]['volume'] for label in ordered_labels]
+
+    light_theme = charts_cfg.get('themes', {}).get('light', {}) if isinstance(charts_cfg.get('themes'), dict) else {}
+    candle_theme = light_theme.get('candlestick', {}) if isinstance(light_theme, dict) else {}
+    up_color = candle_theme.get('upColor') or '#26A69A'
+    down_color = candle_theme.get('downColor') or '#EF5350'
+    border_up = candle_theme.get('upBorderColor') or up_color
+    border_down = candle_theme.get('downBorderColor') or down_color
+
+    series_name = primary.get('name') or 'Price'
+    x_axis_option: Dict[str, Any] = {
+        'type': 'category',
+        'data': ordered_labels,
+        'boundaryGap': True,
+        'axisLabel': {'rotate': 0},
+    }
+    if axis_type == 'time':
+        x_axis_option['axisLabel'] = {**x_axis_option['axisLabel'], 'formatter': '{value}'}
+
+    y_axes: List[Dict[str, Any]] = [
+        {
+            'type': 'value',
+            'scale': True,
+            'name': 'Price',
+        }
+    ]
+
+    echarts_series: List[Dict[str, Any]] = [
+        {
+            'name': series_name,
+            'type': 'candlestick',
+            'data': candlestick_data,
+            'itemStyle': {
+                'color': up_color,
+                'color0': down_color,
+                'borderColor': border_up,
+                'borderColor0': border_down,
+            },
+            'emphasis': {
+                'itemStyle': {
+                    'color': up_color,
+                    'color0': down_color,
+                    'borderColor': border_up,
+                    'borderColor0': border_down,
+                }
+            },
+        }
+    ]
+
+    if any(v is not None for v in volume_values):
+        volumes = [v if v is not None else 0 for v in volume_values]
+        y_axes.append(
+            {
+                'type': 'value',
+                'scale': True,
+                'name': 'Volume',
+                'axisLabel': {'formatter': '{value:,.0f}'},
+                'splitLine': {'show': False},
+            }
+        )
+        echarts_series.append(
+            {
+                'name': 'Volume',
+                'type': 'bar',
+                'data': volumes,
+                'yAxisIndex': 1,
+                'itemStyle': {'color': '#3F51B5', 'opacity': 0.35},
+            }
+        )
+
+    included_columns = [col for col in [open_col, high_col, low_col, close_col] if col]
+    volume_column = primary.get('volume_column')
+    if volume_column:
+        included_columns.append(volume_column)
+
+    spec = {
+        'title': {
+            'left': 'center',
+            'text': chart_plan.get('title') or 'Financial Analytics',
+        },
+        'tooltip': {
+            'trigger': 'axis',
+            'axisPointer': {'type': 'cross'},
+        },
+        'legend': {'data': [series_name] + (['Volume'] if len(echarts_series) > 1 else [])},
+        'grid': {'left': '5%', 'right': '5%', 'bottom': '8%', 'top': '12%', 'containLabel': True},
+        'xAxis': x_axis_option,
+        'yAxis': y_axes,
+        'series': echarts_series,
+        'meta': {
+            'chartDesign': {
+                'chart_type': 'candlestick',
+                'intent': intent_key,
+                'comparison': comparison,
+                'series': [series_name],
+                'x_field': axis_field,
+            },
+            'seriesValueType': {series_name: primary.get('value_type', 'currency')},
+            'seriesAxis': {series_name: 'left'},
+            'includedColumns': included_columns,
+            'defaultColumns': [series_name],
+            'rawData': data,
+            'ohlcColumns': {
+                'open': open_col,
+                'high': high_col,
+                'low': low_col,
+                'close': close_col,
+                'volume': volume_column,
+            },
+        },
+    }
+
+    return spec, None
+
 
 # Wrapper to convert shared function result to ChartPlanModel
 def plan_chart_rule_based(
@@ -90,6 +297,14 @@ def plan_chart_rule_based(
 def build_chart_spec(data: List[Dict[str, Any]], chart_plan: Dict[str, Any], charts_cfg: Dict[str, Any], 
                      intent_key: Optional[str] = None, comparison: Optional[str] = None) -> Dict[str, Any]:
     """Enhanced chart spec builder with dual axes and primary series detection."""
+    chart_type = chart_plan.get('chart_type')
+    if chart_type == 'candlestick':
+        spec_result, fallback_plan = _build_candlestick_spec(data, chart_plan, charts_cfg, intent_key, comparison)
+        if spec_result is not None:
+            return spec_result
+        if fallback_plan is not None:
+            chart_plan = fallback_plan
+            chart_type = chart_plan.get('chart_type')
     
     # Time axis
     x_field = chart_plan.get('x_axis', {}).get('field') or 'calendar_year'

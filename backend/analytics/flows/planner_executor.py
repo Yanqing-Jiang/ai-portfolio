@@ -598,7 +598,7 @@ class PlannerExecutorFlow:
             fallback_chart["event"] = "chart_generated"
             fallback_chart["data"]["ts"] = datetime.utcnow().isoformat()
             yield fallback_chart
-        async for event in _web_search_phase(self, ctx):
+        async for event in self._web_search_phase(ctx):
             yield event
 
         # 11) Analysis Generation Phase

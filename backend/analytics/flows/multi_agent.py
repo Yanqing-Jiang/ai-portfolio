@@ -869,6 +869,18 @@ class MultiAgentFlow:
             if tool_bundle and self._session_snapshot:
                 self._session_snapshot.record_tool_result("visual_bundle", tool_bundle)
 
+        elif name == "web_search":
+            payload = data.get("web_context") or {}
+            if payload:
+                web_ctx = self._shared_context.setdefault('web', {})
+                web_ctx.update(payload)
+                if self._session_snapshot:
+                    try:
+                        self._session_snapshot.record_tool_result('web_search', payload)
+                    except Exception:
+                        pass
+            return
+
         elif name == "tool_parallel_start":
             manifest = data.get("tools") or data.get("tool_manifest")
             if manifest:

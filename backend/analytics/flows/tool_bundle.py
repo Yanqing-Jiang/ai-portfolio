@@ -44,6 +44,21 @@ def _extract_stock_widget(results: Optional[List[Dict[str, Any]]]) -> Optional[D
         height = payload.get("height")
         if isinstance(height, (int, float)) and height > 0:
             widget["height"] = int(height)
+        chart_type = payload.get("chartType") or payload.get("chart_type")
+        if isinstance(chart_type, str) and chart_type:
+            widget["chartType"] = chart_type
+        show_volume = payload.get("showVolume")
+        if isinstance(show_volume, bool):
+            widget["showVolume"] = show_volume
+        show_ma = payload.get("showMA")
+        if isinstance(show_ma, bool):
+            widget["showMA"] = show_ma
+        autosize = payload.get("autosize")
+        if isinstance(autosize, bool):
+            widget["autosize"] = autosize
+        bars = payload.get("bars")
+        if isinstance(bars, list) and bars:
+            widget["bars"] = copy.deepcopy(bars)
         return widget
     return None
 
