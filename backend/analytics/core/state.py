@@ -127,8 +127,15 @@ class SQLPlanModel(BaseModel):
 
 class ChartSeriesModel(BaseModel):
     name: str
-    data_column: str
+    data_column: Optional[str] = None
     value_type: Literal["currency", "percent", "number"] = "number"
+    open_column: Optional[str] = None
+    high_column: Optional[str] = None
+    low_column: Optional[str] = None
+    close_column: Optional[str] = None
+    volume_column: Optional[str] = None
+
+    model_config = ConfigDict(extra="ignore")
 
 
 class ChartAxisModel(BaseModel):
@@ -137,11 +144,13 @@ class ChartAxisModel(BaseModel):
 
 
 class ChartPlanModel(BaseModel):
-    chart_type: Literal["line", "bar", "scatter", "pie", "heatmap"] = "line"
+    chart_type: Literal["line", "bar", "scatter", "pie", "heatmap", "candlestick"] = "line"
     x_axis: ChartAxisModel = Field(default_factory=ChartAxisModel)
     series: List[ChartSeriesModel] = Field(default_factory=list)
     title: str = "Analytics"
     highlight_rules: List[Dict[str, Any]] = Field(default_factory=list)
+
+    model_config = ConfigDict(extra="ignore")
 
 
 class ClarifyErrorModel(BaseModel):

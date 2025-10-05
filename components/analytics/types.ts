@@ -101,6 +101,18 @@ export interface StockWidgetConfig {
   locale?: string;
   colorTheme?: 'light' | 'dark';
   height?: number;
+  chartType?: string;
+  showVolume?: boolean;
+  showMA?: boolean;
+  autosize?: boolean;
+  bars?: {
+    time: number;
+    open: number;
+    high: number;
+    low: number;
+    close: number;
+    volume: number;
+  }[];
 }
 
 export interface ProcessStepDetails {

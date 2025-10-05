@@ -465,6 +465,17 @@ class StockTrackerAdapter(BaseToolAdapter):
             )
 
         bars = snapshot.bars[-30:]
+        formatted_bars = [
+            {
+                "time": bar.time,
+                "open": round(bar.open, 2),
+                "high": round(bar.high, 2),
+                "low": round(bar.low, 2),
+                "close": round(bar.close, 2),
+                "volume": int(bar.volume),
+            }
+            for bar in bars
+        ]
         payload.update(
             {
                 "ready": True,
@@ -472,14 +483,11 @@ class StockTrackerAdapter(BaseToolAdapter):
                 "latest_close": snapshot.latest_close,
                 "previous_close": snapshot.previous_close,
                 "change_percent": snapshot.change_percent,
-                "bars": [
-                    {
-                        "time": bar.time,
-                        "close": round(bar.close, 2),
-                        "volume": int(bar.volume),
-                    }
-                    for bar in bars
-                ],
+                "bars": formatted_bars,
+                "chartType": payload.get("chartType") or "candlestick",
+                "showVolume": payload.get("showVolume", True),
+                "showMA": payload.get("showMA", False),
+                "autosize": payload.get("autosize", True),
                 "fetched_at": datetime.utcnow().isoformat(),
                 "insights": {
                     "symbol": snapshot.symbol,

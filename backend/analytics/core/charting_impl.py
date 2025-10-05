@@ -88,6 +88,79 @@ def assign_series_axes(series_list: List[Dict[str, Any]]) -> Dict[str, str]:
     return axis_assignment
 
 
+def detect_ohlc_columns(columns: List[str]) -> Optional[Dict[str, str]]:
+    normalized = {col.lower(): col for col in columns}
+    alias_map = {
+        'open': ['open', 'open_price', 'open_value', 'adj_open', 'o'],
+        'high': ['high', 'high_price', 'high_value', 'adj_high', 'h'],
+        'low': ['low', 'low_price', 'low_value', 'adj_low', 'l'],
+        'close': ['close', 'close_price', 'close_value', 'adj_close', 'c'],
+    }
+    result: Dict[str, str] = {}
+    for role, candidates in alias_map.items():
+        match = None
+        for candidate in candidates:
+            column = normalized.get(candidate)
+            if column:
+                match = column
+                break
+        if not match:
+            fuzzy = [
+                col for col in columns
+                if role in col.lower() and 'open_interest' not in col.lower()
+            ]
+            if fuzzy:
+                match = sorted(fuzzy, key=len)[0]
+        if not match:
+            return None
+        result[role] = match
+    return result
+
+
+def detect_volume_column(columns: List[str]) -> Optional[str]:
+    normalized = {col.lower(): col for col in columns}
+    for candidate in (
+        'volume',
+        'trading_volume',
+        'volume_traded',
+        'total_volume',
+        'share_volume',
+        'avg_volume',
+        'average_volume',
+        'volume_sum',
+        'v',
+    ):
+        if candidate in normalized:
+            return normalized[candidate]
+    fuzzy = [col for col in columns if 'volume' in col.lower()]
+    if fuzzy:
+        return sorted(fuzzy, key=len)[0]
+    return None
+
+
+def detect_time_axis(columns: List[str]) -> Optional[str]:
+    normalized = {col.lower(): col for col in columns}
+    for candidate in (
+        'calendar_date',
+        'trading_day',
+        'trading_date',
+        'date',
+        'as_of_date',
+        'day',
+        'datetime',
+        'timestamp',
+        'time',
+        'calendar_month',
+        'calendar_year',
+    ):
+        if candidate in normalized:
+            return normalized[candidate]
+    fuzzy_date = [col for col in columns if col.lower().endswith('_date') or col.lower().endswith('_day')]
+    if fuzzy_date:
+        return sorted(fuzzy_date, key=len)[0]
+    return None
+
+
 def plan_chart_rule_based(data: List[Dict[str, Any]], query: str, intent_key: str = None) -> Dict[str, Any]:
     """
     Plan chart configuration based on data structure and intent.
@@ -112,6 +185,33 @@ def plan_chart_rule_based(data: List[Dict[str, Any]], query: str, intent_key: st
         }
 
     cols = list(data[0].keys())
+    ohlc_columns = detect_ohlc_columns(cols)
+    if ohlc_columns:
+        axis_field = detect_time_axis(cols)
+        if not axis_field:
+            axis_field = 'calendar_date' if 'calendar_date' in cols else ('date' if 'date' in cols else ('trading_day' if 'trading_day' in cols else cols[0]))
+        axis_type = 'time' if axis_field and any(token in axis_field.lower() for token in ('date', 'time', 'day')) else 'category'
+        volume_column = detect_volume_column(cols)
+        ticker_values = {str(row.get('ticker')).strip() for row in data if isinstance(row.get('ticker'), str) and row.get('ticker')}
+        series_name = f"{next(iter(ticker_values))} Price" if len(ticker_values) == 1 else 'Price'
+        title = generate_descriptive_title(intent_key, [ohlc_columns.get('close') or 'close'])
+        return {
+            'chart_type': 'candlestick',
+            'title': title,
+            'series': [{
+                'name': series_name,
+                'value_type': 'currency',
+                'open_column': ohlc_columns['open'],
+                'high_column': ohlc_columns['high'],
+                'low_column': ohlc_columns['low'],
+                'close_column': ohlc_columns['close'],
+                'volume_column': volume_column,
+            }],
+            'x_axis': {
+                'field': axis_field,
+                'type': axis_type,
+            },
+        }
     has_time = any(c in cols for c in ['calendar_year', 'calendar_quarter'])
     if not has_time:
         chart_type = 'bar'
