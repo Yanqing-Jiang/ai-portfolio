@@ -48,6 +48,7 @@ class FakeIntent(SimpleNamespace):
 
 class FakePlan(SimpleNamespace):
     granularity = 'annual'
+    derived_metrics = []
     comparison = 'vs_avg'
     metrics = ['revenue']
     group_by = ['calendar_year']
