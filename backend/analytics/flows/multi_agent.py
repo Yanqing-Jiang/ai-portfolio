@@ -15,6 +15,7 @@ from analytics.core.telemetry import analysis_chunk as log_analysis_chunk, agent
 from analytics.services.polygon import PolygonMarketDataClient, PolygonError, fetch_daily_snapshot
 from analytics.services.response_search import ResponseSearchError, perform_response_search
 from .planner_executor import PlannerExecutorFlow, run_planner_executor
+from .hooks import AnalyticsFlowHooks
 from .tool_bundle import collect_tool_bundle
 from .task_plan import AgentTaskPlan, AgentTaskStep
 from .orchestrator import (
@@ -29,6 +30,61 @@ from .orchestrator import (
 _HASH_PREFIX = "analytics"
 _MAX_FRAGMENT_COUNT = 5
 _MAX_ANALYSIS_STORED = 1200
+
+
+class _MultiAgentHooks(AnalyticsFlowHooks):
+    def __init__(self, flow: "MultiAgentFlow", query: str) -> None:
+        self._flow = flow
+        self._query = query
+        self._active_session: Optional[str] = None
+
+    async def on_flow_start(self, ctx: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
+        if False:
+            yield {}
+        self._flow._prepare_context(self._query)
+
+    async def before_event(self, ctx: Dict[str, Any], event: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
+        if False:
+            yield {}
+        name = event.get("event")
+        if name == "session_started":
+            data = event.get("data") or {}
+            self._active_session = data.get("session_id") or ctx.get("session_id")
+            ctx["session_id"] = self._active_session
+        self._flow._capture_event(event)
+        start_event = self._flow._maybe_agent_turn_start(event)
+        if start_event:
+            yield start_event
+        if name == "analysis_streaming":
+            reasoning = self._flow._agent_reasoning(event, self._active_session)
+            if reasoning:
+                yield reasoning
+
+    async def after_event(self, ctx: Dict[str, Any], event: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
+        if False:
+            yield {}
+        end_event = self._flow._maybe_agent_turn_end(event)
+        if end_event:
+            yield end_event
+        if (
+            not self._flow._orchestrated
+            and event.get("event") == "analysis_complete"
+        ):
+            async for orchestrated_event in self._flow._run_agent_orchestration(
+                self._query,
+                self._active_session,
+            ):
+                yield orchestrated_event
+            self._flow._orchestrated = True
+
+    async def on_flow_end(
+        self,
+        ctx: Dict[str, Any],
+        *,
+        error: Optional[BaseException] = None,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        if False:
+            yield {}
 
 
 def _make_identifier(session_id: Optional[str], prefix: str, payload: str) -> str:
@@ -714,33 +770,45 @@ class MultiAgentFlow:
     async def events(
         self, query: str, session_id: Optional[str] = None
     ) -> AsyncGenerator[Dict[str, Any], None]:
-        active_session = session_id
-        self._prepare_context(query)
         planner_events = getattr(self._planner, "events", None)
-        if callable(planner_events):
-            planner_stream = planner_events(query, session_id=session_id)
-        else:
-            planner_stream = run_planner_executor(query, session_id=session_id)
+        hooks = _MultiAgentHooks(self, query)
 
-        async for event in planner_stream:
-            if event.get("event") == "session_started":
-                active_session = (event.get("data") or {}).get("session_id", active_session)
-            self._capture_event(event)
-            start_event = self._maybe_agent_turn_start(event)
-            if start_event:
-                yield start_event
-            if event.get("event") == "analysis_streaming":
-                reasoning = self._agent_reasoning(event, active_session)
-                if reasoning:
-                    yield reasoning
+        async def forward_with_hooks(stream: AsyncGenerator[Dict[str, Any], None]):
+            hook_ctx: Dict[str, Any] = {"query": query, "session_id": session_id}
+            try:
+                async for start_event in hooks.on_flow_start(hook_ctx):
+                    yield start_event
+                async for event in stream:
+                    async for pre_event in hooks.before_event(hook_ctx, event):
+                        yield pre_event
+                    yield event
+                    if event.get("event") == "session_started":
+                        data = event.get("data") or {}
+                        hook_ctx["session_id"] = data.get("session_id", hook_ctx.get("session_id"))
+                    async for post_event in hooks.after_event(hook_ctx, event):
+                        yield post_event
+            except BaseException as exc:
+                async for end_event in hooks.on_flow_end(hook_ctx, error=exc):
+                    yield end_event
+                raise
+            else:
+                async for end_event in hooks.on_flow_end(hook_ctx):
+                    yield end_event
+
+        if callable(planner_events):
+            try:
+                async for event in planner_events(query, session_id=session_id, hooks=hooks):
+                    yield event
+                return
+            except TypeError:
+                planner_stream = planner_events(query, session_id=session_id)
+                async for event in forward_with_hooks(planner_stream):
+                    yield event
+                return
+
+        planner_stream = run_planner_executor(query, session_id=session_id)
+        async for event in forward_with_hooks(planner_stream):
             yield event
-            end_event = self._maybe_agent_turn_end(event)
-            if end_event:
-                yield end_event
-            if not self._orchestrated and event.get("event") == "analysis_complete":
-                async for orchestrated_event in self._run_agent_orchestration(query, active_session):
-                    yield orchestrated_event
-                self._orchestrated = True
 
     def _prepare_context(self, query: str) -> None:
         preserved_market = self._shared_context.get('market', {})
@@ -1188,5 +1256,6 @@ class MultiAgentFlow:
 
 
 __all__ = ["MultiAgentFlow"]
+
 
 
