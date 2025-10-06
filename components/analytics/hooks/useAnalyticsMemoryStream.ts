@@ -991,6 +991,10 @@ export const useAnalyticsMemoryStream = (
             rowCount: eventData.row_count,
             sampleData: eventData.sample_data || []
           });
+          try {
+            const rc = typeof eventData.row_count === 'number' ? eventData.row_count : (eventData.sample_data?.length ?? 0);
+            updateAgentCoordination([`Rows retrieved: ${rc}`]);
+          } catch {}
           break;
           
         case 'echarts_complete': {
@@ -1026,6 +1030,11 @@ export const useAnalyticsMemoryStream = (
             stepInfo.elapsed_ms,
             stepInfo.ts
           );
+          try {
+            const seriesCount = Array.isArray(normalizedChartSpec?.series) ? normalizedChartSpec.series.length : undefined;
+            const msg = `Chart complete${chartType ? ` (type: ${chartType})` : ''}${seriesCount!=null ? `, series: ${seriesCount}` : ''}`;
+            updateAgentCoordination([msg]);
+          } catch {}
           break;
         }
 
@@ -1073,6 +1082,11 @@ export const useAnalyticsMemoryStream = (
             { chart_spec: normalizedChartSpec, chart_type: chartType },
             stepInfo.elapsed_ms
           );
+          try {
+            const seriesCount = Array.isArray(normalizedChartSpec?.series) ? normalizedChartSpec.series.length : undefined;
+            const msg = `Chart generated${chartType ? ` (type: ${chartType})` : ''}${seriesCount!=null ? `, series: ${seriesCount}` : ''}`;
+            updateAgentCoordination([msg]);
+          } catch {}
           break;
         }
 
