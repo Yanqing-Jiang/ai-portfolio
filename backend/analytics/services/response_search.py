@@ -200,7 +200,7 @@ def _as_dict(obj: Any) -> Dict[str, Any]:
 
 def _collect_candidate_texts(response_dict: Dict[str, Any]) -> List[str]:
     texts: List[str] = []
-    for candidate in response_dict.get('candidates') or []:
+    for candidate_idx, candidate in enumerate(response_dict.get('candidates') or []):
         if not isinstance(candidate, dict):
             continue
         content = candidate.get('content')
@@ -447,23 +447,62 @@ def _extract_support_text(support: Dict[str, Any], chunk_map: Dict[int, Dict[str
 def _collect_grounding_data(response_dict: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], List[SearchSnippet]]:
     annotations: List[Dict[str, Any]] = []
     snippets: List[SearchSnippet] = []
-    for candidate in response_dict.get('candidates') or []:
+    for candidate_idx, candidate in enumerate(response_dict.get('candidates') or []):
         candidate_dict = _as_dict(candidate)
         if not candidate_dict:
             continue
 
-        meta = (_as_dict(candidate_dict.get('groundingMetadata')) or _as_dict(candidate_dict.get('grounding_metadata')) or _as_dict(candidate_dict.get('grounding')) )
+        meta = (
+            _as_dict(candidate_dict.get('groundingMetadata'))
+            or _as_dict(candidate_dict.get('grounding_metadata'))
+            or _as_dict(candidate_dict.get('grounding'))
+        )
+        candidate_label = _first_str(
+            candidate_dict.get('id'),
+            candidate_dict.get('response_id'),
+            candidate_dict.get('candidate_id'),
+        ) or str(candidate_idx)
+
         if not meta:
+            logger.debug(
+                'ResponseSearch candidate %s missing grounding metadata; keys=%s',
+                candidate_label,
+                list(candidate_dict.keys()),
+            )
             continue
 
         chunk_map: Dict[int, Dict[str, Any]] = {}
-        chunks = (meta.get('groundingChunks') or meta.get('grounding_chunks') or meta.get('chunks') or [])
+        chunks = (
+            meta.get('groundingChunks')
+            or meta.get('grounding_chunks')
+            or meta.get('chunks')
+            or []
+        )
         if isinstance(chunks, list):
             for idx, chunk in enumerate(chunks):
                 chunk_map[idx] = _as_dict(chunk)
+        chunk_count = len(chunk_map)
 
-        supports = (meta.get('groundingSupports') or meta.get('grounding_supports') or meta.get('supports') or meta.get('supportingEvidence'))
+        supports = (
+            meta.get('groundingSupports')
+            or meta.get('grounding_supports')
+            or meta.get('supports')
+            or meta.get('supportingEvidence')
+        )
+        support_count = len(supports) if isinstance(supports, list) else 0
+        logger.debug(
+            'ResponseSearch candidate %s grounding summary: supports=%s, chunks=%s, search_entry_point=%s',
+            candidate_label,
+            support_count,
+            chunk_count,
+            bool(meta.get('search_entry_point') or meta.get('searchEntryPoint')),
+        )
         if not isinstance(supports, list):
+            logger.debug(
+                'ResponseSearch candidate %s has non-list supports payload (type=%s); skipping',
+                candidate_label,
+                type(supports).__name__,
+            )
             continue
 
         before_topic_snippets = len(snippets)
@@ -475,7 +514,13 @@ def _collect_grounding_data(response_dict: Dict[str, Any]) -> Tuple[List[Dict[st
             annotations.append(support_dict)
             snippet_text = _extract_support_text(support_dict, chunk_map)
 
-            idxs = (support_dict.get('groundingChunkIndices') or support_dict.get('grounding_chunk_indices') or support_dict.get('chunk_indices') or support_dict.get('supportChunkIndices') or [])
+            idxs = (
+                support_dict.get('groundingChunkIndices')
+                or support_dict.get('grounding_chunk_indices')
+                or support_dict.get('chunk_indices')
+                or support_dict.get('supportChunkIndices')
+                or []
+            )
             first_uri: Optional[str] = None
             first_title: Optional[str] = None
             first_display: Optional[str] = None
@@ -512,6 +557,13 @@ def _collect_grounding_data(response_dict: Dict[str, Any]) -> Tuple[List[Dict[st
             if snippet_value is None:
                 raw_snippet = support_dict.get('snippet')
                 snippet_value = raw_snippet.strip() if isinstance(raw_snippet, str) and raw_snippet.strip() else None
+                if snippet_value is None:
+                    logger.debug(
+                        'ResponseSearch support missing snippet text; candidate=%s indices=%s keys=%s',
+                        candidate_label,
+                        idxs,
+                        list(support_dict.keys()),
+                    )
 
             snippets.append(
                 SearchSnippet(
@@ -525,6 +577,7 @@ def _collect_grounding_data(response_dict: Dict[str, Any]) -> Tuple[List[Dict[st
             )
 
         if len(snippets) == before_topic_snippets:
+            logger.debug('ResponseSearch candidate %s produced no grounded snippets after parsing supports', candidate_label)
             search_entry = _as_dict(meta.get('search_entry_point') or meta.get('searchEntryPoint'))
             html_content = _first_str(search_entry.get('rendered_content'), search_entry.get('renderedContent'))
             if isinstance(html_content, str) and html_content.strip():
@@ -747,6 +800,24 @@ async def perform_response_search(
                 topic_summary = '\n'.join(candidate_texts).strip()
 
         topic_annotations, topic_snippets = _collect_grounding_data(response_dict)
+        topic_support_count = len(topic_annotations)
+        first_snippet = topic_snippets[0] if topic_snippets else None
+        logger.info(
+            'ResponseSearch topic result',
+            extra={
+                'step': 'response_search.topic',
+                'phase': 'search',
+                'session_id': session_id,
+                'topic_label': plan.label,
+                'topic_query': plan.query,
+                'snippets': len(topic_snippets),
+                'supports': topic_support_count,
+                'summary_present': bool(topic_summary),
+                'latency_ms': elapsed_ms,
+                'first_snippet_title': getattr(first_snippet, 'title', None),
+                'first_snippet_url': getattr(first_snippet, 'url', None),
+            },
+        )
         if not topic_snippets:
             logger.info(
                 "ResponseSearch returned no grounded snippets for topic '%s'; response_id=%s",
@@ -809,6 +880,9 @@ async def perform_response_search(
             'snippets': len(result.snippets),
             'summary_present': bool(result.summary),
             'latency_ms': result.latency_ms,
+            'topics_overview': '; '.join(f"{topic.label}:{len(topic.snippets)}" for topic in topic_results),
+            'first_snippet_title': result.snippets[0].title if result.snippets else None,
+            'first_snippet_url': result.snippets[0].url if result.snippets else None,
         },
     )
     return result

@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, it, expect } from 'vitest';
 import { WebSearchCard } from '../common/WebSearchCard';
 import { WebSearchResult } from '../types';
@@ -31,6 +31,10 @@ describe('WebSearchCard', () => {
     expect(screen.getByText(/Question: latest Nvidia earnings/)).toBeInTheDocument();
     expect(screen.getByText('Nvidia Q2 2025 results')).toBeInTheDocument();
     expect(screen.getByText('Nvidia posted $24B in revenue, up 89% year over year.')).toBeInTheDocument();
-    expect(screen.getByText('Fresh')).toBeInTheDocument();
+    expect(screen.getByText('1 result')).toBeInTheDocument();
+    expect(screen.getByText('Topic 1 of 1')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Previous topic' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Next topic' })).toBeDisabled();
+    expect(screen.queryByText('Nvidia beat expectations with record data center revenue.')).toBeNull();
   });
 });

@@ -1,0 +1,105 @@
+*** Begin Patch
+*** Update File: backend/analytics/services/response_search.py
+@@
+-    for candidate in response_dict.get('candidates') or []:
+-        candidate_dict = _as_dict(candidate)
++    for candidate_idx, candidate in enumerate(response_dict.get('candidates') or []):
++        candidate_dict = _as_dict(candidate)
+         if not candidate_dict:
+             continue
+ 
+-        meta = (_as_dict(candidate_dict.get('groundingMetadata')) or _as_dict(candidate_dict.get('grounding_metadata')) or _as_dict(candidate_dict.get('grounding')) )
++        meta = (
++            _as_dict(candidate_dict.get('groundingMetadata'))
++            or _as_dict(candidate_dict.get('grounding_metadata'))
++            or _as_dict(candidate_dict.get('grounding'))
++        )
++        candidate_label = _first_str(
++            candidate_dict.get('id'),
++            candidate_dict.get('response_id'),
++            candidate_dict.get('candidate_id'),
++        ) or str(candidate_idx)
+         if not meta:
++            logger.debug(
++                'ResponseSearch candidate %s missing grounding metadata; keys=%s',
++                candidate_label,
++                list(candidate_dict.keys()),
++            )
+             continue
+ 
+         chunk_map: Dict[int, Dict[str, Any]] = {}
+         chunks = (meta.get('groundingChunks') or meta.get('grounding_chunks') or meta.get('chunks') or [])
+         if isinstance(chunks, list):
+             for idx, chunk in enumerate(chunks):
+                 chunk_map[idx] = _as_dict(chunk)
++        chunk_count = len(chunk_map)
+ 
+-        supports = (meta.get('groundingSupports') or meta.get('grounding_supports') or meta.get('supports') or meta.get('supportingEvidence'))
+-        if not isinstance(supports, list):
++        supports = (
++            meta.get('groundingSupports')
++            or meta.get('grounding_supports')
++            or meta.get('supports')
++            or meta.get('supportingEvidence')
++        )
++        support_count = len(supports) if isinstance(supports, list) else 0
++        logger.debug(
++            'ResponseSearch candidate %s grounding summary: supports=%s, chunks=%s, search_entry_point=%s',
++            candidate_label,
++            support_count,
++            chunk_count,
++            bool(meta.get('search_entry_point') or meta.get('searchEntryPoint')),
++        )
++        if not isinstance(supports, list):
++            logger.debug(
++                'ResponseSearch candidate %s has non-list supports payload (type=%s); skipping',
++                candidate_label,
++                type(supports).__name__,
++            )
+             continue
+ 
+         before_topic_snippets = len(snippets)
+         for support in supports:
+             support_dict = _as_dict(support)
+             if not support_dict:
+                 continue
+ 
+             annotations.append(support_dict)
+             snippet_text = _extract_support_text(support_dict, chunk_map)
+ 
+             idxs = (support_dict.get('groundingChunkIndices') or support_dict.get('grounding_chunk_indices') or support_dict.get('chunk_indices') or support_dict.get('supportChunkIndices') or [])
+@@
+             snippet_value = snippet_text.strip() if isinstance(snippet_text, str) else None
+             if snippet_value is None:
+                 raw_snippet = support_dict.get('snippet')
+                 snippet_value = raw_snippet.strip() if isinstance(raw_snippet, str) and raw_snippet.strip() else None
++                if snippet_value is None:
++                    logger.debug(
++                        'ResponseSearch support missing snippet text; candidate=%s indices=%s keys=%s',
++                        candidate_label,
++                        idxs,
++                        list(support_dict.keys()),
++                    )
+ 
+             snippets.append(
+                 SearchSnippet(
+                     title=title,
+                     url=url,
+                     snippet=snippet_value,
+                     display_url=display_url,
+                     published_at=published_at,
+                     annotation=support_dict,
+                 )
+             )
+ 
+         if len(snippets) == before_topic_snippets:
+             search_entry = _as_dict(meta.get('search_entry_point') or meta.get('searchEntryPoint'))
+             html_content = _first_str(search_entry.get('rendered_content'), search_entry.get('renderedContent'))
+             if isinstance(html_content, str) and html_content.strip():
+@@
+                     )
+ 
++        if len(snippets) == before_topic_snippets:
++            logger.debug('ResponseSearch candidate %s produced no grounded snippets after parsing supports', candidate_label)
++
+*** End Patch
