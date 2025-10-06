@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any, Dict, Optional
+import re
 
 from ..core.companies import (
     format_company_error,
@@ -75,6 +76,9 @@ def compile_sql_from_plan(
         sql = sql.replace('{join_clause}', join_clause)
         sql = sql.replace('{order_by_clause}', order_by_clause)
         sql = sql.replace("('AMD','AVGO','INTC','MU','NVDA','QCOM','TXN')", f"({ticker_clause})")
+        # If granularity is annual, strip quarterly-only filters to avoid empty results
+        if granularity != 'quarterly':
+            sql = re.sub(r"\s+AND\s+calendar_quarter_num\s+IS\s+NOT\s+NULL\s*", " ", sql)
         return sql.strip().rstrip(';')
 
     return _generic_sql(plan, ticker_clause, years_back, granularity)
