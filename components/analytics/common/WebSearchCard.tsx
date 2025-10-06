@@ -140,7 +140,7 @@ export const WebSearchCard: React.FC<WebSearchCardProps> = ({
           className={`rounded-full border border-slate-700/70 px-2 py-1 transition ${activeTopicIndex === 0 ? 'opacity-40 cursor-not-allowed' : 'hover:border-emerald-400 hover:text-emerald-300'}`}
           aria-label="Previous topic"
         >
-          < Prev
+          {'< Prev'}
         </button>
         <span>Topic {activeTopicIndex + 1} of {totalTopics}</span>
         <button
@@ -150,7 +150,7 @@ export const WebSearchCard: React.FC<WebSearchCardProps> = ({
           className={`rounded-full border border-slate-700/70 px-2 py-1 transition ${activeTopicIndex >= totalTopics - 1 ? 'opacity-40 cursor-not-allowed' : 'hover:border-emerald-400 hover:text-emerald-300'}`}
           aria-label="Next topic"
         >
-          Next >
+          {'Next >'}
         </button>
       </div>
 
@@ -169,10 +169,6 @@ export const WebSearchCard: React.FC<WebSearchCardProps> = ({
               {activeTopic.reason ? (
                 <p className="text-xs text-slate-500 italic mt-0.5">Why: {activeTopic.reason}</p>
               ) : null}
-            </div>
-            <div className="flex items-center gap-2 text-[11px] text-slate-500">
-              {typeof activeTopic.latency_ms === 'number' ? <span>{activeTopic.latency_ms} ms</span> : null}
-              {activeTopic.search_id ? <span>ID: {activeTopic.search_id}</span> : null}
             </div>
           </div>
 
@@ -212,7 +208,7 @@ export const WebSearchCard: React.FC<WebSearchCardProps> = ({
                               rel="noopener noreferrer"
                               className="text-emerald-300 hover:text-emerald-200"
                             >
-                              Open source >
+                              View source
                             </a>
                           ) : null}
                         </div>

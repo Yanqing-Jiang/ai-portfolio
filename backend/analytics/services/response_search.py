@@ -444,6 +444,156 @@ def _extract_support_text(support: Dict[str, Any], chunk_map: Dict[int, Dict[str
     return combined or None
 
 
+def _extract_web_metadata(*objects: Any) -> Tuple[Optional[str], Optional[str], Optional[str], Optional[str]]:
+    url: Optional[str] = None
+    title: Optional[str] = None
+    display: Optional[str] = None
+    published: Optional[str] = None
+
+    def _visit(data: Dict[str, Any]) -> None:
+        nonlocal url, title, display, published
+        if not data:
+            return
+        web_info = _as_dict(data.get('web'))
+        candidates = [data]
+        for key in ('source', 'primarySource', 'document', 'webSource', 'snippetSource'):
+            nested = _as_dict(data.get(key))
+            if nested:
+                candidates.append(nested)
+        if web_info:
+            candidates.append(web_info)
+        for item in candidates:
+            if not item:
+                continue
+            if url is None:
+                url = _first_str(
+                    item.get('uri'),
+                    item.get('url'),
+                    item.get('link'),
+                    item.get('sourceUri'),
+                    item.get('sourceUrl'),
+                    item.get('source_uri'),
+                    item.get('source_url'),
+                )
+            if title is None:
+                title = _first_str(
+                    item.get('title'),
+                    item.get('headline'),
+                    item.get('name'),
+                    item.get('label'),
+                    item.get('sourceTitle'),
+                )
+            if display is None:
+                display = _first_str(
+                    item.get('displayUri'),
+                    item.get('displayUrl'),
+                    item.get('display'),
+                    item.get('site'),
+                    item.get('siteName'),
+                    item.get('publisher'),
+                    item.get('domain'),
+                )
+            if published is None:
+                published = _first_str(
+                    item.get('published_at'),
+                    item.get('publishedAt'),
+                    item.get('publishTime'),
+                    item.get('publishedDate'),
+                    item.get('date'),
+                    item.get('timestamp'),
+                )
+        if display is None and url:
+            display = url
+
+    for obj in objects:
+        data = _as_dict(obj)
+        _visit(data)
+
+    return url, title, display, published
+
+
+def _collect_search_grounding_snippets(meta: Dict[str, Any], annotations: List[Dict[str, Any]]) -> List[SearchSnippet]:
+    snippets: List[SearchSnippet] = []
+    search_grounding = (
+        _as_dict(meta.get('searchGrounding'))
+        or _as_dict(meta.get('search_grounding'))
+    )
+    if not search_grounding:
+        return snippets
+
+    entries = search_grounding.get('searchEntries') or search_grounding.get('search_entries') or []
+    if not isinstance(entries, list):
+        return snippets
+
+    for entry in entries:
+        entry_dict = _as_dict(entry)
+        if not entry_dict:
+            continue
+        annotations.append(entry_dict)
+        chunk_snippets = entry_dict.get('chunkSnippets') or entry_dict.get('chunk_snippets') or []
+        if isinstance(chunk_snippets, list) and chunk_snippets:
+            for chunk in chunk_snippets:
+                chunk_dict = _as_dict(chunk)
+                if not chunk_dict:
+                    continue
+                segment = _as_dict(chunk_dict.get('segment'))
+                snippet_text = _first_str(
+                    chunk_dict.get('text'),
+                    chunk_dict.get('snippet'),
+                    chunk_dict.get('content'),
+                    segment.get('text') if segment else None,
+                    segment.get('snippet') if segment else None,
+                )
+                if snippet_text:
+                    snippet_text = snippet_text.strip()
+                if not snippet_text:
+                    continue
+                url, title, display, published = _extract_web_metadata(
+                    chunk_dict,
+                    chunk_dict.get('source'),
+                    entry_dict,
+                    entry_dict.get('source'),
+                    entry_dict.get('document'),
+                )
+                snippets.append(
+                    SearchSnippet(
+                        title=title,
+                        url=url,
+                        snippet=snippet_text,
+                        display_url=display,
+                        published_at=published,
+                        annotation={
+                            'entry_id': entry_dict.get('id'),
+                            'chunk_snippet': chunk_dict,
+                        },
+                    )
+                )
+        else:
+            snippet_text = _first_str(
+                entry_dict.get('summary'),
+                entry_dict.get('snippet'),
+                entry_dict.get('text'),
+            )
+            if snippet_text:
+                snippet_text = snippet_text.strip()
+            if not snippet_text:
+                continue
+            url, title, display, published = _extract_web_metadata(entry_dict, entry_dict.get('source'))
+            snippets.append(
+                SearchSnippet(
+                    title=title,
+                    url=url,
+                    snippet=snippet_text,
+                    display_url=display,
+                    published_at=published,
+                    annotation={'entry': entry_dict},
+                )
+            )
+
+    return snippets
+
+
+
 def _collect_grounding_data(response_dict: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], List[SearchSnippet]]:
     annotations: List[Dict[str, Any]] = []
     snippets: List[SearchSnippet] = []
@@ -497,87 +647,91 @@ def _collect_grounding_data(response_dict: Dict[str, Any]) -> Tuple[List[Dict[st
             chunk_count,
             bool(meta.get('search_entry_point') or meta.get('searchEntryPoint')),
         )
-        if not isinstance(supports, list):
+
+        before_topic_snippets = len(snippets)
+        if isinstance(supports, list):
+            for support in supports:
+                support_dict = _as_dict(support)
+                if not support_dict:
+                    continue
+
+                annotations.append(support_dict)
+                snippet_text = _extract_support_text(support_dict, chunk_map)
+
+                idxs = (
+                    support_dict.get('groundingChunkIndices')
+                    or support_dict.get('grounding_chunk_indices')
+                    or support_dict.get('chunk_indices')
+                    or support_dict.get('supportChunkIndices')
+                    or []
+                )
+                first_uri: Optional[str] = None
+                first_title: Optional[str] = None
+                first_display: Optional[str] = None
+                if isinstance(idxs, list):
+                    for raw in idxs:
+                        try:
+                            i = int(raw)
+                        except (TypeError, ValueError):
+                            continue
+                        chunk = _as_dict(chunk_map.get(i) or {})
+                        web_info = _as_dict(chunk.get('web')) if chunk else {}
+                        if web_info and not first_uri:
+                            first_uri = _first_str(web_info.get('uri'), web_info.get('url'), web_info.get('link'))
+                            first_title = _first_str(web_info.get('title'), web_info.get('headline'))
+                            first_display = _first_str(web_info.get('displayUri'), web_info.get('displayUrl'), first_uri)
+
+                url = first_uri or _first_str(support_dict.get('url'), support_dict.get('uri'))
+                title = first_title or _first_str(support_dict.get('title'))
+                display_url = first_display or url
+
+                published_at = _first_str(support_dict.get('published_at'))
+                if not published_at and isinstance(idxs, list):
+                    for raw in idxs:
+                        try:
+                            i = int(raw)
+                        except (TypeError, ValueError):
+                            continue
+                        web_info = _as_dict(_as_dict(chunk_map.get(i) or {}).get('web'))
+                        published_at = _first_str(web_info.get('publishedDate'), web_info.get('date'))
+                        if published_at:
+                            break
+
+                snippet_value = snippet_text.strip() if isinstance(snippet_text, str) else None
+                if snippet_value is None:
+                    raw_snippet = support_dict.get('snippet')
+                    snippet_value = raw_snippet.strip() if isinstance(raw_snippet, str) and raw_snippet.strip() else None
+                    if snippet_value is None:
+                        logger.debug(
+                            'ResponseSearch support missing snippet text; candidate=%s indices=%s keys=%s',
+                            candidate_label,
+                            idxs,
+                            list(support_dict.keys()),
+                        )
+
+                snippets.append(
+                    SearchSnippet(
+                        title=title,
+                        url=url,
+                        snippet=snippet_value,
+                        display_url=display_url,
+                        published_at=published_at,
+                        annotation=support_dict,
+                    )
+                )
+        else:
             logger.debug(
-                'ResponseSearch candidate %s has non-list supports payload (type=%s); skipping',
+                'ResponseSearch candidate %s has non-list supports payload (type=%s)',
                 candidate_label,
                 type(supports).__name__,
             )
-            continue
 
-        before_topic_snippets = len(snippets)
-        for support in supports:
-            support_dict = _as_dict(support)
-            if not support_dict:
-                continue
-
-            annotations.append(support_dict)
-            snippet_text = _extract_support_text(support_dict, chunk_map)
-
-            idxs = (
-                support_dict.get('groundingChunkIndices')
-                or support_dict.get('grounding_chunk_indices')
-                or support_dict.get('chunk_indices')
-                or support_dict.get('supportChunkIndices')
-                or []
-            )
-            first_uri: Optional[str] = None
-            first_title: Optional[str] = None
-            first_display: Optional[str] = None
-            if isinstance(idxs, list):
-                for raw in idxs:
-                    try:
-                        i = int(raw)
-                    except (TypeError, ValueError):
-                        continue
-                    chunk = _as_dict(chunk_map.get(i) or {})
-                    web_info = _as_dict(chunk.get('web')) if chunk else {}
-                    if web_info and not first_uri:
-                        first_uri = _first_str(web_info.get('uri'), web_info.get('url'), web_info.get('link'))
-                        first_title = _first_str(web_info.get('title'), web_info.get('headline'))
-                        first_display = _first_str(web_info.get('displayUri'), web_info.get('displayUrl'), first_uri)
-
-            url = first_uri or _first_str(support_dict.get('url'), support_dict.get('uri'))
-            title = first_title or _first_str(support_dict.get('title'))
-            display_url = first_display or url
-
-            published_at = _first_str(support_dict.get('published_at'))
-            if not published_at and isinstance(idxs, list):
-                for raw in idxs:
-                    try:
-                        i = int(raw)
-                    except (TypeError, ValueError):
-                        continue
-                    web_info = _as_dict(_as_dict(chunk_map.get(i) or {}).get('web'))
-                    published_at = _first_str(web_info.get('publishedDate'), web_info.get('date'))
-                    if published_at:
-                        break
-
-            snippet_value = snippet_text.strip() if isinstance(snippet_text, str) else None
-            if snippet_value is None:
-                raw_snippet = support_dict.get('snippet')
-                snippet_value = raw_snippet.strip() if isinstance(raw_snippet, str) and raw_snippet.strip() else None
-                if snippet_value is None:
-                    logger.debug(
-                        'ResponseSearch support missing snippet text; candidate=%s indices=%s keys=%s',
-                        candidate_label,
-                        idxs,
-                        list(support_dict.keys()),
-                    )
-
-            snippets.append(
-                SearchSnippet(
-                    title=title,
-                    url=url,
-                    snippet=snippet_value,
-                    display_url=display_url,
-                    published_at=published_at,
-                    annotation=support_dict,
-                )
-            )
+        search_snippets = _collect_search_grounding_snippets(meta, annotations)
+        if search_snippets:
+            snippets.extend(search_snippets)
 
         if len(snippets) == before_topic_snippets:
-            logger.debug('ResponseSearch candidate %s produced no grounded snippets after parsing supports', candidate_label)
+            logger.debug('ResponseSearch candidate %s produced no grounded snippets after parsing supports/searchGrounding', candidate_label)
             search_entry = _as_dict(meta.get('search_entry_point') or meta.get('searchEntryPoint'))
             html_content = _first_str(search_entry.get('rendered_content'), search_entry.get('renderedContent'))
             if isinstance(html_content, str) and html_content.strip():
@@ -613,6 +767,7 @@ def _collect_grounding_data(response_dict: Dict[str, Any]) -> Tuple[List[Dict[st
             )
 
     return annotations, snippets
+
 
 
 def _dedupe_snippets(snippets: Iterable[SearchSnippet]) -> List[SearchSnippet]:
@@ -818,6 +973,18 @@ async def perform_response_search(
                 'first_snippet_url': getattr(first_snippet, 'url', None),
             },
         )
+
+        if topic_snippets:
+            first_snippet_preview = topic_snippets[0].snippet or topic_snippets[0].title or topic_snippets[0].display_url
+            if isinstance(first_snippet_preview, str) and first_snippet_preview.strip():
+                preview = first_snippet_preview.strip()
+                if len(preview) > 200:
+                    preview = preview[:197].rstrip() + '...'
+                logger.debug(
+                    "ResponseSearch topic '%s' first snippet preview: %s",
+                    plan.query,
+                    preview,
+                )
         if not topic_snippets:
             logger.info(
                 "ResponseSearch returned no grounded snippets for topic '%s'; response_id=%s",
