@@ -22,6 +22,7 @@ from analytics.core.types import (
 from analytics.core.context import get_configs
 from analytics.core.config_store import get_config_store
 from analytics.core.events import EventEmitter, TimedEventEmitter
+from .hooks import AnalyticsFlowHooks, NullFlowHooks
 from .tooling import run_tool_parallelism
 from ..core.intent import intent_to_sql_criteria
 from analytics.core.intent import (
@@ -228,6 +229,7 @@ class PlannerPipeline:
         self.flow_label = "planner-executor"
         # Tool fan-out is now the default; legacy ANALYTICS_TOOL_PARALLELISM flag removed
         self.parallelism_enabled = True
+        self.hooks: AnalyticsFlowHooks = NullFlowHooks()
 
 
 
@@ -1296,15 +1298,48 @@ class PlannerExecutorFlow:
         self,
         query: str,
         session_id: Optional[str] = None,
+        *,
+        hooks: Optional[AnalyticsFlowHooks] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
-        async for event in self._pipeline.events(query, session_id):
-            yield event
+        stream = self._pipeline.events(query, session_id)
+        if hooks is None:
+            async for event in stream:
+                yield event
+            return
+
+        hook_ctx: Dict[str, Any] = {"query": query, "session_id": session_id}
+        try:
+            async for start_event in hooks.on_flow_start(hook_ctx):
+                yield start_event
+            async for event in stream:
+                async for pre_event in hooks.before_event(hook_ctx, event):
+                    yield pre_event
+                yield event
+                if event.get("event") == "session_started":
+                    data = event.get("data") or {}
+                    hook_ctx["session_id"] = data.get("session_id", hook_ctx.get("session_id"))
+                async for post_event in hooks.after_event(hook_ctx, event):
+                    yield post_event
+        except BaseException as exc:
+            async for end_event in hooks.on_flow_end(hook_ctx, error=exc):
+                yield end_event
+            raise
+        else:
+            async for end_event in hooks.on_flow_end(hook_ctx):
+                yield end_event
 # Standalone wrapper function for main.py
 async def run_planner_executor(query: str, session_id: Optional[str] = None) -> AsyncGenerator[Dict[str, Any], None]:
     """Helper to stream planner-executor events without referencing the registry."""
     workflow_instance = PlannerExecutorFlow()
     async for event in workflow_instance.events(query, session_id):
         yield event
+
+
+
+
+
+
+
 
 
 
