@@ -1,4 +1,4 @@
-﻿import React from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { WebSearchResult, WebSearchTopic } from '../types';
 
 interface WebSearchCardProps {
@@ -47,7 +47,6 @@ export const WebSearchCard: React.FC<WebSearchCardProps> = ({
     query,
     searchTopic,
     searchTopics,
-    summary,
     snippets = [],
     fromCache,
     fetchedAt,
@@ -61,41 +60,41 @@ export const WebSearchCard: React.FC<WebSearchCardProps> = ({
   } = result;
 
   const isDisabled = error === 'search_api_missing' || reason === 'search_api_missing';
-  const summaryText = summary ?? (isDisabled
-    ? 'Web search disabled until Gemini or Google Search API credentials are configured.'
-    : undefined);
-  const statusLabel = isDisabled
-    ? 'Disabled'
-    : fromCache
-      ? 'Cached'
-      : ready
-        ? 'Fresh'
-        : 'Pending';
-  const badgeClass = isDisabled
-    ? 'text-amber-300 bg-amber-500/10 border border-amber-500/40'
-    : fromCache
-      ? 'text-violet-200 bg-violet-500/10 border border-violet-500/40'
-      : 'text-emerald-300 bg-emerald-500/10 border border-emerald-500/40';
 
   const enrichedTopics: WebSearchTopic[] = topics.length
     ? topics
     : [{
         label: searchTopic ?? 'Primary question',
         query: searchTopic ?? query ?? '',
-        summary: summary ?? undefined,
         snippets,
         reason: undefined,
         search_id: result.searchId,
         latency_ms: latencyMs ?? null,
       }];
 
-  let globalIndex = 1;
-  const totalSnippets = enrichedTopics.reduce((count, topic) => count + topic.snippets.length, 0);
+  const totalSnippets = useMemo(
+    () => enrichedTopics.reduce((count, topic) => count + topic.snippets.length, 0),
+    [enrichedTopics],
+  );
+
   const effectiveEmptyMessage = emptyMessage
     ? emptyMessage
     : (isDisabled
       ? 'Provide a valid GOOGLE_API_KEY or GEMINI_API_KEY to re-enable live web context.'
       : 'No market research snippets available.');
+
+  const [activeTopicIndex, setActiveTopicIndex] = useState(0);
+  useEffect(() => {
+    setActiveTopicIndex(0);
+  }, [enrichedTopics.length, enrichedTopics[0]?.query]);
+
+  const activeTopic = enrichedTopics[Math.min(activeTopicIndex, enrichedTopics.length - 1)];
+  const totalTopics = enrichedTopics.length;
+  const topicSnippets = activeTopic?.snippets ?? [];
+
+  const handlePrev = () => setActiveTopicIndex((idx) => Math.max(0, idx - 1));
+  const handleNext = () => setActiveTopicIndex((idx) => Math.min(totalTopics - 1, idx + 1));
+  const snippetNumber = (index: number) => index + 1;
 
   return (
     <div className="rounded-xl border border-slate-700/70 bg-slate-900/50 overflow-hidden">
@@ -115,120 +114,117 @@ export const WebSearchCard: React.FC<WebSearchCardProps> = ({
           ) : null}
         </div>
         <div className="flex items-center gap-2 flex-wrap justify-end">
-          {totalSnippets > 0 ? (
+          {totalSnippets > 0 && (
             <span className="text-[11px] text-slate-200 bg-slate-800/80 border border-slate-700/70 rounded-full px-2 py-0.5">
               {totalSnippets} {totalSnippets === 1 ? 'result' : 'results'}
             </span>
-          ) : null}
-          {provider ? (
+          )}
+          {provider && (
             <span className="text-[11px] text-emerald-300 bg-emerald-500/10 border border-emerald-500/40 rounded-full px-2 py-0.5">
               {provider}
             </span>
-          ) : null}
-          {model ? (
+          )}
+          {model && (
             <span className="text-[11px] text-sky-300 bg-sky-500/10 border border-sky-500/40 rounded-full px-2 py-0.5">
               {model}
             </span>
-          ) : null}
-          {typeof latencyMs === 'number' && latencyMs >= 0 ? (
-            <span className="text-[11px] text-slate-400 bg-slate-800/80 border border-slate-700/70 rounded-full px-2 py-0.5">
-              {latencyMs} ms (aggregate)
-            </span>
-          ) : null}
-          <span className={`text-[11px] rounded-full px-2 py-0.5 ${badgeClass}`}>
-            {statusLabel}
-          </span>
+          )}
         </div>
       </div>
 
-      {summaryText ? (
-        <p className="px-4 pb-3 text-sm text-slate-200 leading-relaxed border-b border-slate-800/70">
-          {summaryText}
-        </p>
-      ) : null}
+      <div className="flex items-center justify-between px-4 pb-2 text-xs text-slate-400">
+        <button
+          type="button"
+          onClick={handlePrev}
+          disabled={activeTopicIndex === 0}
+          className={`rounded-full border border-slate-700/70 px-2 py-1 transition ${activeTopicIndex === 0 ? 'opacity-40 cursor-not-allowed' : 'hover:border-emerald-400 hover:text-emerald-300'}`}
+          aria-label="Previous topic"
+        >
+          < Prev
+        </button>
+        <span>Topic {activeTopicIndex + 1} of {totalTopics}</span>
+        <button
+          type="button"
+          onClick={handleNext}
+          disabled={activeTopicIndex >= totalTopics - 1}
+          className={`rounded-full border border-slate-700/70 px-2 py-1 transition ${activeTopicIndex >= totalTopics - 1 ? 'opacity-40 cursor-not-allowed' : 'hover:border-emerald-400 hover:text-emerald-300'}`}
+          aria-label="Next topic"
+        >
+          Next >
+        </button>
+      </div>
 
       {isDisabled || totalSnippets === 0 ? (
         <div className="px-4 py-3 text-sm text-slate-400">
           {effectiveEmptyMessage}
         </div>
       ) : (
-        <div className="space-y-4 py-3">
-          {enrichedTopics.map((topic, idx) => {
-            const topicSnippets = topic.snippets ?? [];
-            const topicLatency = topic.latency_ms ?? null;
-            return (
-              <div key={`${topic.query}-${idx}`} className="px-4">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <p className="text-sm font-semibold text-slate-100">{topic.label || `Topic ${idx + 1}`}</p>
-                    {topic.query ? (
-                      <p className="text-xs text-slate-400 mt-0.5">Focus: {topic.query}</p>
-                    ) : null}
-                    {topic.reason ? (
-                      <p className="text-xs text-slate-500 italic mt-0.5">Why: {topic.reason}</p>
-                    ) : null}
-                  </div>
-                  <div className="flex items-center gap-2 text-[11px] text-slate-500">
-                    {typeof topicLatency === 'number' ? <span>{topicLatency} ms</span> : null}
-                    {topic.search_id ? <span>ID: {topic.search_id}</span> : null}
-                  </div>
-                </div>
-                {topic.summary ? (
-                  <p className="mt-2 text-sm text-slate-200 leading-relaxed">{topic.summary}</p>
-                ) : null}
-                {topicSnippets.length > 0 ? (
-                  <ol className="mt-3 space-y-3 border-l border-slate-800/70 pl-4">
-                    {topicSnippets.map((item, snippetIdx) => {
-                      const currentIndex = globalIndex++;
-                      const title = item.title || displayHost(item.url) || `Result ${currentIndex}`;
-                      return (
-                        <li key={item.url ?? `snippet-${idx}-${snippetIdx}`} className="text-sm text-slate-200">
-                          <div className="flex items-start gap-2">
-                            <span className="text-xs text-slate-500 font-mono mt-0.5">[{currentIndex}]</span>
-                            <div>
-                              {item.url ? (
-                                <a
-                                  href={item.url}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="font-medium text-slate-100 hover:text-emerald-300 transition"
-                                >
-                                  {title}
-                                </a>
-                              ) : (
-                                <span className="font-medium text-slate-100">{title}</span>
-                              )}
-                              {item.snippet ? (
-                                <p className="mt-1 text-xs text-slate-300 leading-relaxed">{item.snippet}</p>
-                              ) : null}
-                              <div className="mt-2 flex flex-wrap items-center gap-3 text-[11px] text-slate-500">
-                                {displayHost(item.url) ? <span>{displayHost(item.url)}</span> : null}
-                                {item.published_at ? (
-                                  <span>{formatPublishedDate(item.published_at) ?? item.published_at}</span>
-                                ) : null}
-                                {item.url ? (
-                                  <a
-                                    href={item.url}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="text-emerald-300 hover:text-emerald-200"
-                                  >
-                                    Open source →
-                                  </a>
-                                ) : null}
-                              </div>
-                            </div>
-                          </div>
-                        </li>
-                      );
-                    })}
-                  </ol>
-                ) : (
-                  <p className="mt-3 text-xs text-slate-400">No citations captured for this topic.</p>
-                )}
-              </div>
-            );
-          })}
+        <div className="px-4 pb-4 space-y-3">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold text-slate-100">{activeTopic.label || `Topic ${activeTopicIndex + 1}`}</p>
+              {activeTopic.query ? (
+                <p className="text-xs text-slate-400 mt-0.5">Focus: {activeTopic.query}</p>
+              ) : null}
+              {activeTopic.reason ? (
+                <p className="text-xs text-slate-500 italic mt-0.5">Why: {activeTopic.reason}</p>
+              ) : null}
+            </div>
+            <div className="flex items-center gap-2 text-[11px] text-slate-500">
+              {typeof activeTopic.latency_ms === 'number' ? <span>{activeTopic.latency_ms} ms</span> : null}
+              {activeTopic.search_id ? <span>ID: {activeTopic.search_id}</span> : null}
+            </div>
+          </div>
+
+          {topicSnippets.length > 0 ? (
+            <ol className="mt-2 max-h-64 overflow-y-auto space-y-3 border-l border-slate-800/70 pl-4 pr-2">
+              {topicSnippets.map((item, snippetIdx) => {
+                const title = item.title || displayHost(item.url) || `Result ${snippetNumber(snippetIdx)}`;
+                return (
+                  <li key={item.url ?? `snippet-${activeTopicIndex}-${snippetIdx}`} className="text-sm text-slate-200">
+                    <div className="flex items-start gap-2">
+                      <span className="text-xs text-slate-500 font-mono mt-0.5">[{snippetNumber(snippetIdx)}]</span>
+                      <div>
+                        {item.url ? (
+                          <a
+                            href={item.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="font-medium text-slate-100 hover:text-emerald-300 transition"
+                          >
+                            {title}
+                          </a>
+                        ) : (
+                          <span className="font-medium text-slate-100">{title}</span>
+                        )}
+                        {item.snippet ? (
+                          <p className="mt-1 text-xs text-slate-300 leading-relaxed">{item.snippet}</p>
+                        ) : null}
+                        <div className="mt-2 flex flex-wrap items-center gap-3 text-[11px] text-slate-500">
+                          {displayHost(item.url) ? <span>{displayHost(item.url)}</span> : null}
+                          {item.published_at ? (
+                            <span>{formatPublishedDate(item.published_at) ?? item.published_at}</span>
+                          ) : null}
+                          {item.url ? (
+                            <a
+                              href={item.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-emerald-300 hover:text-emerald-200"
+                            >
+                              Open source >
+                            </a>
+                          ) : null}
+                        </div>
+                      </div>
+                    </div>
+                  </li>
+                );
+              })}
+            </ol>
+          ) : (
+            <p className="mt-3 text-xs text-slate-400">No citations captured for this topic.</p>
+          )}
         </div>
       )}
     </div>

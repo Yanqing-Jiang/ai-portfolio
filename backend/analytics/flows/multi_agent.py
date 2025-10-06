@@ -45,14 +45,8 @@ def _infer_tickers(query: Optional[str]) -> List[str]:
     return sorted(token for token in tokens if token not in blacklist)[:5]
 
 
-def _web_search_enabled() -> bool:
-    value = os.getenv("ANALYTICS_ENABLE_WEB_SEARCH")
-    if value is None:
-        return True
-    normalized = value.strip().lower()
-    if not normalized:
-        return True
-    return normalized not in {"0", "false", "no", "off"}
+# Web search is now owned by a specialist agent step in the plan.
+# Legacy env flag removed; agent plan controls whether to run web search.
 
 
 RECENCY_KEYWORDS = (
@@ -500,9 +494,7 @@ async def _web_research_agent(context: AgentRunContext) -> AgentResult:
 
     attempts_meta: List[Dict[str, Any]] = []
 
-    if not _web_search_enabled():
-        web_ctx['attempts'] = attempts_meta
-        return AgentResult(name='web_research', output={'status': 'skip', 'reason': 'web_search_disabled', 'attempts': attempts_meta, 'attempt_count': 0})
+    # Always allow specialist agent to attempt web search; errors/caching handled below.
     repository = get_session_state_repository()
     snapshot = await repository.load(session_id) if session_id else None
     cached_payload = None

@@ -55,6 +55,8 @@ CONFIGS = get_configs()
 CONFIG_STORE = get_config_store()
 logger = logging.getLogger(__name__)
 def _env_flag(name: str, *, default: bool = False) -> bool:
+    # Legacy env flag helper retained for backwards compatibility in logs only.
+    # Behavioural flags have been removed; flows use built-in defaults.
     value = os.getenv(name)
     if value is None:
         return default
@@ -65,7 +67,8 @@ def _env_flag(name: str, *, default: bool = False) -> bool:
         return False
     return default
 
-SCHEMA_CLARIFIER_ENABLED = _env_flag("ANALYTICS_SCHEMA_CLARIFIER_ENABLED", default=False)
+# Schema clarifier is now always enabled (legacy env flag removed)
+SCHEMA_CLARIFIER_ENABLED = True
 
 def _generate_chart_design(intent_key: Optional[str], plan: QueryPlanModel, data: List[Dict[str, Any]], spec: Dict[str, Any]) -> Dict[str, Any]:
     """Generate smart chart design metadata for frontend optimization."""
@@ -223,7 +226,8 @@ class PlannerExecutorFlow:
         self.unified_client = get_unified_client()
         self.config_store = CONFIG_STORE
         self.flow_label = "planner-executor"
-        self.parallelism_enabled = _env_flag("ANALYTICS_TOOL_PARALLELISM", default=False)
+        # Tool fan-out is now the default; legacy ANALYTICS_TOOL_PARALLELISM flag removed
+        self.parallelism_enabled = True
 
 
 

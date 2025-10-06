@@ -6,7 +6,7 @@ The analytics package powers the next-generation analytics memory experience. It
 ## Execution Path Overview
 1. **Entry point** - `analytics.flows.workflow.analytics_memory_workflow` resolves the requested flow (planner-executor, single-agent, multi-agent) and seeds a session identifier.
 2. **Flow orchestration** - each flow instance wires shared `EventEmitter` streams so progress, results, and errors surface uniformly to the UI.
-3. **LLM preflight** - `_classification_phase` calls `classify_query_async` with `gpt-5-nano-2025-08-07`; non-financial prompts emit a short `final_answer` decline and the workflow stops before generating SQL.
+4. **Intent + clarification** -  `core.intent` and `core.intent_impl` detect the canonical analytics intent, derive slot assumptions, and surface clarification requests through `core.clarify`. The schema clarifier is now built-in and always enabled; legacy environment flags have been removed. 
 4. **Intent + clarification** - `core.intent` and `core.intent_impl` detect the canonical analytics intent, derive slot assumptions, and surface clarification requests through `core.clarify` when required. When `ANALYTICS_SCHEMA_CLARIFIER_ENABLED` is true, `agents.schema_clarifier` checks template requirements before `_clarification_phase` so obvious single-company queries can proceed without extra prompts while still emitting targeted requests for genuinely missing slots.
 5. **Template context** - `sql.sql_planner`, `core.config_store`, and the new `PlannerResultModel` track YAML-derived patterns so downstream flows receive consistent metadata.
 6. **SQL generation & retry loop** - `sql.prompt_builder` builds Responses prompts; `unified_responses_client` runs up to three attempts (via `build_sql_retry_messages(...)`) and records each in `ctx.sql_attempts`.
@@ -46,16 +46,16 @@ The repository in `core/session_state.py` now falls back to an in-memory store w
 Use `/api/analytics/memory/stream?flow=<flow>` to select the demo experience surfaced in the Memory page (legacy `mode` query param is still accepted for backwards compatibility).
 Flow metadata comes from `backend/analytics/flows/workflow.py::get_available_flows()`; keep frontend selectors in sync with that mapping.
 - `planner-executor`: baseline pipeline that streams `classification_*`, emits `final_answer` when the LLM gate declines a prompt, and records `sql_attempts`/`sql_generated` metadata for every Responses retry before analysis/`done`.
-- `single-agent`: wraps each baseline step with `tool_call` start/end telemetry, durations, and SQL template metadata; when `ANALYTICS_TOOL_PARALLELISM` is enabled it also streams `tool_parallel_*` fan-out events from the new TaskGroup adapters. Prompt contract lives in `backend/analytics/solo_agent.md`; consult that doc for tool policy, cache reuse rules, and safety guardrails.
+-  `single-agent`: wraps each baseline step with `tool_call` start/end telemetry, durations, and SQL template metadata. Parallel fan-out (`tool_parallel_*` envelopes) is now the default and does not require any environment flags. Prompt contract lives alongside the agent specs; consult that doc for tool policy, cache reuse rules, and safety guardrails. 
 - `multi-agent`: wraps the same baseline steps with persona `agent_turn` start/complete envelopes, adds `agent_reasoning` for analysis deltas, and attaches role-specific summaries.
-When `ANALYTICS_TOOL_PARALLELISM` is disabled, the adapters stay dormant and the deterministic sequential behaviour remains unchanged.
+
 
 ## Streaming Telemetry Reference
 - Core SSE events across all flows: `classification_*`, `intent_*`, `clarification_*`, `progress`, `status`, `sql_generated`, `analysis_streaming`, `result`, `final_answer`, `done`, and `error`.
 - `web_search`: emitted once Gemini returns fresh headlines; payload includes `web_context` with summary, snippets, latency, and cache metadata for the UI.
 - Demo-specific enrichments: `tool_call` (single-agent), `agent_turn` and `agent_reasoning` (multi-agent) augment the stream for visualization overlays.
 - Planner flows emit `sql_attempts` events to log each generated query revision before execution.
-- Parallel fan-out instrumentation emits `tool_parallel_*` envelopes whenever `ANALYTICS_TOOL_PARALLELISM` is enabled.
+
 - Frontend consumers (`useAnalyticsMemoryStream`, `ProcessPanel`, `WorkflowCanvas`) subscribe to the stream and must handle these payloads.
 
 ## Directory Layout
