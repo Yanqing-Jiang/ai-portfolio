@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 from typing import AsyncGenerator, Dict, Any, Optional, List, Tuple
 from dataclasses import dataclass, field
 import asyncio
@@ -219,7 +219,7 @@ def _build_schema_clarifier_request(decision: ClarifierDecision, session_id: str
     )
 
 
-class PlannerExecutorFlow:
+class PlannerPipeline:
     """Phase 2 workflow that emits SSE-friendly events for the memory pipeline."""
 
     def __init__(self) -> None:
@@ -1271,12 +1271,43 @@ async def _plan_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[str
         yield catalog_event
     ctx.candidate_templates = candidate_templates
     ctx.selected_template_id = selected_template_id
+
+class PlannerExecutorFlow:
+    """Backward-compatible wrapper around :class:`PlannerPipeline`."""
+
+    def __init__(self) -> None:
+        self._pipeline = PlannerPipeline()
+
+    def __getattr__(self, name: str):
+        try:
+            return getattr(self._pipeline, name)
+        except AttributeError:
+            raise AttributeError(name) from None
+
+    def __setattr__(self, name: str, value):
+        if name == '_pipeline':
+            super().__setattr__(name, value)
+        elif hasattr(self, '_pipeline') and hasattr(self._pipeline, name):
+            setattr(self._pipeline, name, value)
+        else:
+            super().__setattr__(name, value)
+
+    async def events(
+        self,
+        query: str,
+        session_id: Optional[str] = None,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        async for event in self._pipeline.events(query, session_id):
+            yield event
 # Standalone wrapper function for main.py
 async def run_planner_executor(query: str, session_id: Optional[str] = None) -> AsyncGenerator[Dict[str, Any], None]:
     """Helper to stream planner-executor events without referencing the registry."""
     workflow_instance = PlannerExecutorFlow()
     async for event in workflow_instance.events(query, session_id):
         yield event
+
+
+
 
 
 
