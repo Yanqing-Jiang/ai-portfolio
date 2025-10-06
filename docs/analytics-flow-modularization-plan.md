@@ -26,6 +26,7 @@ Enable Single Agent and Multi-Agent modes to call modular analytics tools—especi
   - Hook base class + tests ensuring callbacks fire.
   - Simplified wrappers with minimal duplication of telemetry tables.
 - **Dependencies**: Phase 1 complete.
+- **Status (Oct 6, 2025)**: Added `AnalyticsFlowHooks` lifecycle hooks, refactored single-agent and multi-agent flows to use hook implementations, and validated planner/multi-agent pytest suites.
 
 ## Phase 3 – Tool Registry Integration
 - **Task**: Register core phases as tool descriptors in `backend/analytics/flows/tooling.py` or a new `pipeline_tools.py`.
@@ -84,4 +85,7 @@ Enable Single Agent and Multi-Agent modes to call modular analytics tools—especi
 - Need lightweight classifier or rules to route revision queries vs. full reruns.
 - Decide how to version chart specs (`chart_spec_id`) for audit and backoff.
 - Determine if analysis revisions must update `planner_result` or append new messages only.
+
+
+
 
