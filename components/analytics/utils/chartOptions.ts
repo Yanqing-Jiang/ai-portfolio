@@ -187,6 +187,43 @@ export const withLightTheme = (spec: any) => {
     }));
   }
 
+  // Fallback: if legend.selected disables all series, auto-enable sensible defaults
+  try {
+    const legendObj = Array.isArray(option.legend) ? option.legend[0] : option.legend;
+    if (legendObj) {
+      const names: string[] = Array.isArray(legendObj.data) ? legendObj.data : [];
+      const selectedMap: Record<string, boolean> = { ...(legendObj.selected || {}) };
+      const hasSelectionKeys = Object.keys(selectedMap).length > 0;
+      const allFalse = hasSelectionKeys && Object.values(selectedMap).every(v => v === false);
+      if (!hasSelectionKeys || allFalse) {
+        const defaults: string[] = (spec.meta?.defaultColumns || spec.meta?.includedColumns || []) as string[];
+        const toTitle = (s: string) => s.replace(/_/g, ' ').replace(/\b\w/g, (m: string) => m.toUpperCase());
+        const defaultTitles = new Set(defaults.map(toTitle));
+        const nextSel: Record<string, boolean> = {};
+        if (defaultTitles.size > 0) {
+          for (const n of names) {
+            const metric = n.includes(' - ') ? n.split(' - ', 2)[1] : n;
+            nextSel[n] = defaultTitles.has(metric);
+          }
+        } else {
+          // If no defaults, enable first few series to avoid empty chart
+          for (let i = 0; i < names.length; i++) {
+            nextSel[names[i]] = i < 6; // cap to keep chart readable
+          }
+        }
+        if (Object.values(nextSel).some(v => v)) {
+          if (Array.isArray(option.legend)) {
+            option.legend[0] = { ...legendObj, selected: nextSel };
+          } else {
+            option.legend = { ...legendObj, selected: nextSel };
+          }
+        }
+      }
+    }
+  } catch {
+    // ignore fallback errors
+  }
+
   return option;
 };
 
