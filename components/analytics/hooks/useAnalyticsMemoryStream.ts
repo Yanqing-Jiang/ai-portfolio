@@ -1163,6 +1163,43 @@ export const useAnalyticsMemoryStream = (
                     ? webContext.topics.reduce((acc: number, topic: any) => acc + (Array.isArray(topic?.snippets) ? topic.snippets.length : 0), 0)
                     : 0);
               thinking.push(`Snippets: ${snippetsCount}`);
+              const previewSnippet = (() => {
+                if (Array.isArray(webContext.topics)) {
+                  for (const topic of webContext.topics) {
+                    if (topic?.snippets && topic.snippets.length) {
+                      return topic.snippets[0];
+                    }
+                  }
+                }
+                if (Array.isArray(webContext.snippets) && webContext.snippets.length) {
+                  return webContext.snippets[0];
+                }
+                return null;
+              })();
+              if (previewSnippet) {
+                const hostFromUrl = (url?: string) => {
+                  if (!url || typeof url !== 'string') return undefined;
+                  try {
+                    const parsed = new URL(url);
+                    return parsed.hostname.replace(/^www\./, '');
+                  } catch {
+                    return undefined;
+                  }
+                };
+                const hostLabel = hostFromUrl(previewSnippet.url);
+                if (previewSnippet.title) {
+                  thinking.push(`Result: ${previewSnippet.title}${hostLabel ? ` - ${hostLabel}` : ''}`);
+                } else if (hostLabel) {
+                  thinking.push(`Result host: ${hostLabel}`);
+                }
+                if (previewSnippet.snippet) {
+                  const clean = previewSnippet.snippet.replace(/\s+/g, ' ').trim();
+                  const excerpt = clean.length > 140 ? `${clean.slice(0, 137).trimEnd()}...` : clean;
+                  if (excerpt) {
+                    thinking.push(`Excerpt: ${excerpt}`);
+                  }
+                }
+              }
               const latency = typeof webContext.latencyMs === 'number' ? webContext.latencyMs : null;
               if (latency !== null) {
                 thinking.push(`Latency: ${latency}ms`);

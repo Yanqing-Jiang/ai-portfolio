@@ -251,9 +251,6 @@ class GeminiChatService:
         data.setdefault("model", getattr(self.model, 'model_name', 'gemini-2.5-flash'))
         return data
 
-# Global instance
-gemini_service = GeminiChatService()
-
 # --- Inline shim for google-genai (local to this module) ---
 _client: Optional[google_genai.Client] = None
 
@@ -350,3 +347,7 @@ def _generate_content_stream(*, model: str, contents: Any, generation_config: Op
         text = getattr(chunk, 'text', None)
         if isinstance(text, str) and text:
             yield text
+
+# Global instance
+gemini_service = GeminiChatService()
+

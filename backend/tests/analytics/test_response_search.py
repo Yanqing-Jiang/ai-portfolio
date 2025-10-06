@@ -100,6 +100,90 @@ def test_perform_response_search_uses_gemin_api_key(monkeypatch):
     assert 'Summary from Gemini' in (payload["summary"] or '')
     assert payload.get('topics') and payload['topics'][0]['snippets'][0]['title'] == "Headline"
 
+
+
+def test_perform_response_search_handles_search_grounding_entries(monkeypatch):
+    class SearchGroundingModel:
+        created_instances = []
+
+        def __init__(self, model_name: str, generation_config: Dict[str, Any]):
+            self.model_name = model_name
+            self._config = generation_config
+            self.calls = []
+            SearchGroundingModel.created_instances.append(self)
+
+        def generate_content(self, **kwargs):
+            self.calls.append(kwargs)
+            if kwargs.get('tools'):
+                return {
+                    "text": "Grounded answer summary",
+                    "response_id": "search-grounding-001",
+                    "usage": {"input_tokens": 12, "output_tokens": 32},
+                    "candidates": [
+                        {
+                            "content": {"parts": [{"text": "Grounded answer summary"}]},
+                            "groundingMetadata": {
+                                "searchGrounding": {
+                                    "searchEntries": [
+                                        {
+                                            "id": "entry-1",
+                                            "title": "IDC: AMD server market share climbs",
+                                            "searchQuery": "amd server share 2025",
+                                            "chunkSnippets": [
+                                                {
+                                                    "text": "IDC reports AMD server share rose to 35% in Q3 2025.",
+                                                    "publishedDate": "2025-09-29",
+                                                    "source": {
+                                                        "uri": "https://example.com/amd-share",
+                                                        "title": "IDC: AMD server market share climbs",
+                                                        "displayUri": "example.com"
+                                                    }
+                                                }
+                                            ]
+                                        }
+                                    ]
+                                }
+                            }
+                        }
+                    ]
+                }
+            return {"text": '{"topics":[{"label":"Primary question","query":"AMD server share 2025","reason":"Company trend"}]}' }
+
+    SearchGroundingModel.created_instances = []
+    monkeypatch.setattr(response_search, "_model", None)
+    monkeypatch.setattr(response_search, "_genai_configured", False)
+    monkeypatch.setattr(response_search, "_DEFAULT_MODEL", "gemini-grounding")
+
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GEMIN_API_KEY", raising=False)
+    monkeypatch.setenv("GEMINI_API_KEY", "grounding-key")
+    monkeypatch.setenv("GEMINI_SEARCH_MODEL", "gemini-grounding")
+
+    configured = {}
+
+    def fake_configure(*, api_key):
+        configured["api_key"] = api_key
+
+    monkeypatch.setattr(response_search.genai, "configure", fake_configure)
+    monkeypatch.setattr(response_search.genai, "GenerativeModel", SearchGroundingModel)
+
+    result = asyncio.run(
+        response_search.perform_response_search("How has AMD's server market share changed recently?")
+    )
+
+    assert configured["api_key"] == "grounding-key"
+    assert result.snippets, "Expected snippets parsed from searchGrounding entries"
+
+    snippet = result.snippets[0]
+    assert snippet.snippet.startswith("IDC reports AMD")
+    assert snippet.url == "https://example.com/amd-share"
+    assert snippet.display_url == "example.com"
+    assert snippet.annotation and snippet.annotation.get('entry_id') == 'entry-1'
+    assert any(ann.get('id') == 'entry-1' for ann in result.annotations)
+    assert "Grounded answer summary" in (result.summary or "")
+    assert result.model == "gemini-grounding"
+
 def test_perform_response_search_runs_two_step_flow(monkeypatch):
     class TwoStepModelSpy:
         created_instances = []
