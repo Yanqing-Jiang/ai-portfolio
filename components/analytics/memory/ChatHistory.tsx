@@ -154,21 +154,7 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
                       )}
 
                       {showTradingView && message.stockWidgetConfig && (
-                        <CollapsibleSection
-                          title="Market Snapshot"
-                          defaultOpen={false}
-                          className="bg-gray-800/50"
-                        >
-                          <div className="border border-gray-700 rounded-lg overflow-hidden">
-                            <div className="px-4 py-3 border-b border-gray-700/60">
-                              <h3 className="text-base sm:text-lg font-semibold text-white">Market Snapshot</h3>
-                              <p className="text-xs sm:text-sm text-gray-400">
-                                Live TradingView overview for {primaryTicker ?? 'selected ticker'}
-                              </p>
-                            </div>
-                            <TradingViewSymbolOverview config={message.stockWidgetConfig} />
-                          </div>
-                        </CollapsibleSection>
+                        <TradingViewSymbolOverview config={message.stockWidgetConfig} />
                       )}
 
                       {combinedAnalysis && (
@@ -177,13 +163,17 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
                         </div>
                       )}
 
-                      {message.webSearch && message.webSearch.snippets?.length ? (
+                      {message.webSearch ? (
                         <CollapsibleSection
-                          title="Search Highlights"
+                          title="Market Research"
                           defaultOpen={false}
                           className="bg-gray-800/50"
                         >
-                          <WebSearchCard result={message.webSearch} />
+                          <WebSearchCard
+                            result={message.webSearch}
+                            title="Market Research"
+                            emptyMessage="No market research snippets available."
+                          />
                         </CollapsibleSection>
                       ) : null}
 
@@ -208,7 +198,7 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
               </div>
 
               <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${message.type === 'user' ? 'bg-gray-700 text-gray-300 order-3 ml-2' : 'bg-gray-700/50 text-gray-400 order-0 mr-2'}`}>
-                {message.type === 'user' ? 'ðŸ‘¤' : 'ðŸ¤–'}
+                {message.type === 'user' ? '👤' : '🤖'}
               </div>
             </div>
           );
@@ -234,7 +224,7 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
               </div>
             </div>
             <div className="w-8 h-8 rounded-full bg-gray-600 text-gray-300 flex items-center justify-center flex-shrink-0 order-0 mr-2">
-              ðŸ¤–
+              🤖
             </div>
           </div>
         )}

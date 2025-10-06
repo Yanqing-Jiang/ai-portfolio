@@ -981,19 +981,26 @@ async def _intent_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[s
     ctx.clarification_rounds = 0
     clarifications_needed = bool(deduped_requests)
     confidence_sufficient = (intent.confidence or 0.0) >= 0.8
-    intent_status_event = (
-        EventEmitter.intent_draft(
+
+    if clarifications_needed:
+        intent_status_event = EventEmitter.intent_draft(
             confidence=intent.confidence,
             clarifications_needed=True,
             clarifications_count=len(deduped_requests),
         )
-        if clarifications_needed or not confidence_sufficient
-        else EventEmitter.intent_decided(
+    else:
+        intent_status_event = EventEmitter.intent_decided(
             key=intent.intent_key,
             confidence=intent.confidence,
             clarifications_needed=False,
         )
-    )
+        if not confidence_sufficient:
+            intent_status_event["data"]["low_confidence"] = True
+        if schema_decision:
+            intent_status_event["data"]["schema_clarifier_action"] = schema_decision.action
+            if schema_decision.missing_slots:
+                intent_status_event["data"]["schema_clarifier_missing"] = schema_decision.missing_slots
+
     intent_status_event["data"]["ts"] = datetime.utcnow().isoformat()
     if intent_elapsed:
         intent_status_event["data"]["elapsed_ms"] = intent_elapsed

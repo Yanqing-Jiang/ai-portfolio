@@ -42,7 +42,7 @@ def test_plan_sql_rule_based_uses_semantic_metrics_bundle():
     assert plan["granularity"] == "annual"
     assert plan["group_by"] == ["calendar_year"]
     assert plan["timeframe"]["years_back"] == 5
-    assert plan["filters"].get("time_grain_filter") == "calendar_quarter_num IS NULL"
+    assert plan["filters"].get("time_grain_filter") == "calendar_quarter_num IS NOT NULL"
 
 
 def test_plan_granularity_override_respects_semantic_allow_list():

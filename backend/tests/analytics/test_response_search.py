@@ -23,24 +23,34 @@ class DummyGenerativeModel:
         if kwargs.get('tools'):
             return {
                 "text": "Summary from Gemini",
+                "response_id": "search-primary",
                 "usage": {"input_tokens": 10, "output_tokens": 42},
                 "candidates": [
                     {
                         "content": {"parts": [{"text": "Candidate narrative chunk"}]},
-                        "grounding": {
-                            "supports": [
+                        "groundingMetadata": {
+                            "groundingSupports": [
                                 {
+                                    "segment": {"text": "Snippet text"},
+                                    "groundingChunkIndices": [0],
                                     "title": "Headline",
-                                    "url": "https://example.com/article",
-                                    "snippet": "Snippet text",
-                                    "published_at": "2025-10-01",
                                 }
-                            ]
+                            ],
+                            "groundingChunks": [
+                                {
+                                    "web": {
+                                        "uri": "https://example.com/article",
+                                        "title": "Headline",
+                                        "displayUri": "example.com",
+                                        "publishedDate": "2025-10-01",
+                                    }
+                                }
+                            ],
                         },
                     }
                 ],
             }
-        return {"text": "NVDA latest earnings momentum"}
+        return {"text": '{"topics":[{"label":"Primary question","query":"NVDA latest earnings","reason":"Company focus"},{"label":"Industry context","query":"Semiconductor industry outlook","reason":"Sector backdrop"}]}' }
 
 
 def test_perform_response_search_uses_gemin_api_key(monkeypatch):
@@ -66,25 +76,29 @@ def test_perform_response_search_uses_gemin_api_key(monkeypatch):
 
     result = asyncio.run(response_search.perform_response_search("What is NVDA's guidance for next quarter?", session_id="session-123"))
 
-    assert result.summary == "Summary from Gemini"
+    assert 'Summary from Gemini' in (result.summary or '')
     assert result.model == "gemini-test-model"
     assert result.snippets, "Expected grounded snippets from dummy response"
+    assert result.search_topics and result.search_topics[0] == "NVDA latest earnings"
     assert calls.get("configured_with") == "dummy-key"
 
     instance = DummyGenerativeModel.created_instances[0]
-    assert len(instance.calls) == 2
-    refine_call = instance.calls[0]
-    search_call = instance.calls[1]
-    assert 'tools' not in refine_call
-    search_focus = refine_call['contents'][0]['parts'][0]['text']
-    assert 'latest' in search_focus.lower()
-    tools = search_call.get('tools')
-    assert isinstance(tools, list) and len(tools) > 0
-    assert isinstance(tools[0], dict) and 'google_search_retrieval' in tools[0]
+    assert len(instance.calls) == len(result.search_topics) + 1
+    plan_call = instance.calls[0]
+    assert 'tools' not in plan_call
+    plan_prompt = plan_call['contents'][0]['parts'][0]['text']
+    assert 'User question: What is NVDA' in plan_prompt
+    search_calls = instance.calls[1:]
+    for call, topic in zip(search_calls, result.search_topics):
+        tools = call.get('tools')
+        assert isinstance(tools, list) and len(tools) > 0
+        assert isinstance(tools[0], dict) and 'google_search' in tools[0]
+        prompt_preview = call['contents'][0]
+        assert topic in prompt_preview
 
     payload = result.to_payload()
-    assert payload["summary"] == "Summary from Gemini"
-    assert payload["snippets"][0]["title"] == "Headline"
+    assert 'Summary from Gemini' in (payload["summary"] or '')
+    assert payload.get('topics') and payload['topics'][0]['snippets'][0]['title'] == "Headline"
 
 def test_perform_response_search_runs_two_step_flow(monkeypatch):
     class TwoStepModelSpy:
@@ -103,8 +117,32 @@ def test_perform_response_search_runs_two_step_flow(monkeypatch):
                     "text": "Synthesized search answer",
                     "response_id": "search-001",
                     "usage": {"input_tokens": 8, "output_tokens": 16},
+                    "candidates": [
+                        {
+                            "content": {"parts": [{"text": "Synthesized snippet"}]},
+                            "groundingMetadata": {
+                                "groundingSupports": [
+                                    {
+                                        "segment": {"text": "Synthesized snippet"},
+                                        "groundingChunkIndices": [0],
+                                        "title": "NVDA revenue analysis",
+                                    }
+                                ],
+                                "groundingChunks": [
+                                    {
+                                        "web": {
+                                            "uri": "https://example.com/nvda-outlook",
+                                            "title": "NVDA revenue analysis",
+                                            "displayUri": "example.com",
+                                            "publishedDate": "2025-10-02",
+                                        }
+                                    }
+                                ],
+                            },
+                        }
+                    ],
                 }
-            return {"text": '  "NVDA 2025 revenue outlook?"\nAdd context that should be ignored.'}
+            return {"text": '{"topics":[{"label":"Primary question","query":"NVDA 2025 revenue outlook","reason":"Company view"},{"label":"Industry context","query":"Semiconductor industry trends 2025","reason":"Sector backdrop"}]}' }
 
     TwoStepModelSpy.created_instances = []
     monkeypatch.setattr(response_search, "_model", None)
@@ -132,21 +170,22 @@ def test_perform_response_search_runs_two_step_flow(monkeypatch):
     assert configured["api_key"] == "two-step-key"
 
     instance = TwoStepModelSpy.created_instances[0]
-    assert len(instance.calls) == 2
+    assert len(instance.calls) == len(result.search_topics) + 1
 
-    rewrite_prompt = instance.calls[0]["contents"][0]["parts"][0]["text"]
-    assert "User question: Tell me about \"NVDA 2025\" revenue outlook?" in rewrite_prompt
+    plan_call = instance.calls[0]
+    assert 'tools' not in plan_call
+    plan_prompt = plan_call['contents'][0]['parts'][0]['text']
+    assert 'User question: Tell me about "NVDA 2025" revenue outlook?' in plan_prompt
 
-    search_call = instance.calls[1]
-    tools = search_call.get("tools")
-    assert isinstance(tools, list) and len(tools) > 0
-    assert isinstance(tools[0], dict) and 'google_search_retrieval' in tools[0]
+    search_calls = instance.calls[1:]
+    for call, topic in zip(search_calls, result.search_topics):
+        tools = call.get("tools")
+        assert isinstance(tools, list) and len(tools) > 0
+        assert isinstance(tools[0], dict) and 'google_search' in tools[0]
+        prompt_text = call["contents"][0]
+        assert topic in prompt_text
 
-    search_prompt = search_call["contents"][0]
-    assert search_prompt.endswith("NVDA 2025 revenue outlook?.")
-    assert '"' not in search_prompt
-
-    assert result.summary == "Synthesized search answer"
+    assert result.topics and result.topics[0].summary == "Synthesized search answer"
     assert result.model == "gemini-two-step"
 
 def test_perform_response_search_logs_steps(monkeypatch, caplog):
@@ -169,20 +208,29 @@ def test_perform_response_search_logs_steps(monkeypatch, caplog):
                     "candidates": [
                         {
                             "content": {"parts": [{"text": "AMD MI300 orders climb on cloud demand."}]},
-                            "grounding": {
-                                "supports": [
+                            "groundingMetadata": {
+                                "groundingSupports": [
                                     {
+                                        "segment": {"text": "AMD reports record data center momentum."},
+                                        "groundingChunkIndices": [0],
                                         "title": "AMD MI300 demand surges",
-                                        "url": "https://example.com/amd-mi300",
-                                        "snippet": "AMD reports record data center momentum.",
-                                        "published_at": "2025-09-28",
                                     }
-                                ]
+                                ],
+                                "groundingChunks": [
+                                    {
+                                        "web": {
+                                            "uri": "https://example.com/amd-mi300",
+                                            "title": "AMD MI300 demand surges",
+                                            "displayUri": "example.com",
+                                            "publishedDate": "2025-09-28",
+                                        }
+                                    }
+                                ],
                             },
                         }
                     ],
                 }
-            return {"text": "AMD data center AI updates"}
+            return {"text": '{"topics":[{"label":"Primary question","query":"Latest AMD data center news","reason":"Company focus"},{"label":"Industry context","query":"Semiconductor AI market 2025","reason":"Sector update"}]}' }
 
     AMDGenerativeModel.created_instances = []
     monkeypatch.setattr(response_search, "_model", None)
@@ -224,20 +272,20 @@ def test_perform_response_search_logs_steps(monkeypatch, caplog):
     assert step1.step == "response_search.step1"
     assert step1.phase == "chat"
     assert step1.query == "Latest AMD data center news?"
-    assert step1.search_topic == "AMD data center AI updates"
+    assert step1.search_topics[0].startswith("Latest AMD data center news")
     assert step1.session_id == "session-amd"
 
     assert step2.step == "response_search.step2"
     assert step2.phase == "search"
     assert step2.session_id == "session-amd"
-    assert step2.search_topic == "AMD data center AI updates"
+    assert step2.search_topics[0].startswith("Latest AMD data center news")
     assert step2.snippets == len(result.snippets)
     assert step2.summary_present == bool(result.summary)
     assert step2.latency_ms == result.latency_ms
 
     assert caplog.records.index(step1) < caplog.records.index(step2)
 
-    assert result.summary == "AMD expands MI300 deployments across hyperscalers"
+    assert result.topics and result.topics[0].summary == "AMD expands MI300 deployments across hyperscalers"
     assert result.snippets
     assert result.model == "gemini-amd-news"
 

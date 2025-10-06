@@ -206,3 +206,143 @@ export const buildMetricAwareOption = (spec: any, selectedMetric?: string) => {
   
   return option;
 };
+
+
+// Agent-driven chart tool: high-level ops and reducer
+export type ChartOp =
+  | { op: 'set_chart_type'; value: 'line' | 'bar' | 'area' | 'candlestick' | 'stacked_area' | 'stacked_bar' }
+  | { op: 'set_grouping'; grouping: 'ticker' | 'metric' }
+  | { op: 'set_stack'; stack: boolean; mode?: 'normal' | 'percent' }
+  | { op: 'select_metrics'; include?: string[] | 'ALL'; exclude?: string[] }
+  | { op: 'filter_companies'; tickers: string[] }
+  | { op: 'set_x_axis'; field: 'calendar_year' | 'calendar_quarter' | 'date' }
+  | { op: 'set_y_axis_format'; valueType: 'percent' | 'currency'; percentFormat?: 'decimal' | 'pre_multiplied' }
+  | { op: 'set_palette'; palette: string[] }
+  | { op: 'set_axis_scale'; axis: 'x' | 'y' | 0 | 1; scale: 'linear' | 'log' }
+  | { op: 'toggle_series'; names: string[]; visible: boolean };
+
+export interface ChartPatch { ops: ChartOp[]; reason?: string; chart_id?: string }
+
+export function applyChartOps(base: any, patch: ChartPatch): any {
+  if (!base || typeof base !== 'object' || !patch || !Array.isArray(patch.ops)) {
+    return base;
+  }
+  const option: any = JSON.parse(JSON.stringify(base));
+
+  const ensureLegend = () => {
+    option.legend = option.legend || {};
+    if (Array.isArray(option.legend)) {
+      // Normalize first legend object if array form used
+      option.legend = option.legend[0] || {};
+    }
+  };
+
+  for (const p of patch.ops) {
+    switch (p.op) {
+      case 'set_chart_type': {
+        const isStacked = p.value === 'stacked_area' || p.value === 'stacked_bar';
+        const type = p.value.includes('bar') ? 'bar' : p.value.includes('area') ? 'line' : p.value; // area => line + areaStyle
+        option.series = (option.series || []).map((s: any) => ({
+          ...s,
+          type,
+          areaStyle: p.value === 'area' || p.value === 'stacked_area' ? { opacity: 0.2 } : undefined,
+          stack: isStacked ? 'total' : undefined,
+        }));
+        option.meta = option.meta || {};
+        option.meta.chartDesign = { ...(option.meta.chartDesign || {}), chart_type: p.value };
+        break;
+      }
+      case 'set_stack': {
+        const stack = p.stack ? 'total' : undefined;
+        option.series = (option.series || []).map((s: any) => ({ ...s, stack }));
+        if (p.mode === 'percent') {
+          option.meta = option.meta || {};
+          option.meta.chartValueType = 'percent';
+        }
+        break;
+      }
+      case 'toggle_series': {
+        ensureLegend();
+        const selected = { ...(option.legend.selected || {}) } as Record<string, boolean>;
+        for (const name of p.names) selected[name] = p.visible;
+        option.legend.selected = selected;
+        break;
+      }
+      case 'set_y_axis_format': {
+        option.meta = option.meta || {};
+        option.meta.chartValueType = p.valueType;
+        // Preserve any per-series overrides in meta.seriesPercentFormat
+        option.meta.seriesPercentFormat = option.meta.seriesPercentFormat || {};
+        break;
+      }
+      case 'set_x_axis': {
+        const arr = Array.isArray(option.xAxis) ? option.xAxis : option.xAxis ? [option.xAxis] : [];
+        option.xAxis = arr.map((ax: any) => ({ ...ax, name: p.field }));
+        option.meta = option.meta || {};
+        option.meta.chartDesign = { ...(option.meta.chartDesign || {}), x_field: p.field };
+        break;
+      }
+      case 'filter_companies': {
+        ensureLegend();
+        const selected = { ...(option.legend.selected || {}) } as Record<string, boolean>;
+        const whitelist = new Set((p.tickers || []).map(t => String(t).toUpperCase()));
+        for (const s of option.series || []) {
+          const name: string = s.name || '';
+          const prefix = name.includes(' - ') ? name.split(' - ', 1)[0] : name;
+          selected[name] = whitelist.size ? whitelist.has(prefix.toUpperCase()) : true;
+        }
+        option.legend.selected = selected;
+        break;
+      }
+      case 'set_palette': {
+        const palette = Array.isArray(p.palette) ? p.palette : [];
+        if (palette.length) {
+          option.color = palette.slice();
+        }
+        break;
+      }
+      case 'set_axis_scale': {
+        const normalize = (ax: any) => ({
+          ...(ax || {}),
+          type: p.scale === 'log' ? 'log' : 'value',
+        });
+        if (p.axis === 'x') {
+          const arr = Array.isArray(option.xAxis) ? option.xAxis : option.xAxis ? [option.xAxis] : [];
+          option.xAxis = arr.map(normalize);
+        } else {
+          const arr = Array.isArray(option.yAxis) ? option.yAxis : option.yAxis ? [option.yAxis] : [];
+          option.yAxis = arr.map(normalize);
+        }
+        break;
+      }
+      case 'select_metrics': {
+        // Best-effort: toggle series by metric suffix (" - <Metric>")
+        ensureLegend();
+        const selected = { ...(option.legend.selected || {}) } as Record<string, boolean>;
+        const includeAll = p.include === 'ALL';
+        const include = new Set((Array.isArray(p.include) ? p.include : []) as string[]);
+        const exclude = new Set((Array.isArray(p.exclude) ? p.exclude : []) as string[]);
+        for (const s of option.series || []) {
+          const name: string = s.name || '';
+          const metric = name.includes(' - ') ? name.split(' - ', 2)[1] : name;
+          if (includeAll) {
+            selected[name] = !exclude.has(metric);
+          } else if (include.size) {
+            selected[name] = include.has(metric) && !exclude.has(metric);
+          }
+        }
+        option.legend.selected = selected;
+        break;
+      }
+      case 'set_grouping': {
+        option.meta = option.meta || {};
+        option.meta.groupingType = p.grouping;
+        break;
+      }
+      default:
+        // no-op for unknown ops
+        break;
+    }
+  }
+  return option;
+}

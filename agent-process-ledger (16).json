@@ -1,0 +1,2905 @@
+[
+  {
+    "id": "classification",
+    "name": "classification",
+    "status": "completed",
+    "thinking": [
+      "Starting query classification...",
+      "LLM classified topic 'financial_analytics'",
+      "Query classified as financial analytics"
+    ],
+    "details": {
+      "model": "gpt-5-nano-2025-08-07",
+      "confidence": 0.76,
+      "category": "financial_analytics",
+      "is_financial": true
+    },
+    "elapsed_ms": 2024,
+    "timestamp": "2025-10-05T22:58:34.089632"
+  },
+  {
+    "id": "clarification_timeout",
+    "name": "clarification_timeout",
+    "status": "completed",
+    "thinking": [],
+    "timestamp": "2025-10-05T22:59:34.106276",
+    "sequence": 13
+  },
+  {
+    "id": "clarification",
+    "name": "Requirements Clarification",
+    "status": "completed",
+    "thinking": [
+      "Missing fields: comparison",
+      "Do you want a single company or all companies?",
+      "Processing your answer...",
+      "Clarifications resolved"
+    ],
+    "details": {
+      "missing_fields": [
+        "comparison"
+      ],
+      "step": "intent_detection",
+      "ts": "2025-10-05T22:59:34.106731",
+      "key": "market_share_single",
+      "confidence": 0.75,
+      "rounds": 1,
+      "assumptions": [
+        "Updated intent to market_share_single for company selection",
+        "Using comparison: single"
+      ],
+      "elapsed_ms": 60015,
+      "sequence": 15,
+      "parallel_group": "intent"
+    },
+    "elapsed_ms": 60015,
+    "timestamp": "2025-10-05T22:59:34.106731",
+    "sequence": 15,
+    "parallelGroup": "intent"
+  },
+  {
+    "id": "schema_validation",
+    "name": "Schema & Criteria Validation",
+    "status": "completed",
+    "thinking": [
+      "SQL criteria ready"
+    ],
+    "details": {
+      "intent_key": "market_share_single",
+      "company": "NVDA",
+      "comparison": "single",
+      "timeframe": {
+        "years_back": 5,
+        "start_year": null,
+        "end_year": null
+      },
+      "granularity": "annual",
+      "tickers": [
+        "NVDA",
+        "AMD",
+        "INTC",
+        "MU",
+        "QCOM",
+        "AVGO",
+        "TXN"
+      ],
+      "metrics": [],
+      "ts": "2025-10-05T22:59:34.106946",
+      "sequence": 17
+    },
+    "timestamp": "2025-10-05T22:59:34.106946"
+  },
+  {
+    "id": "intent_detection",
+    "name": "Intent Detection",
+    "status": "completed",
+    "thinking": [
+      "Detecting query intent...",
+      "Intent: market_share_single (75%)",
+      "Intent detected; needs clarification",
+      "Intent and schema finalized"
+    ],
+    "details": {
+      "intent_key": "market_share_single",
+      "confidence": 0.75,
+      "slots_detected": {
+        "tickers": [
+          "NVDA",
+          "AMD",
+          "INTC",
+          "MU",
+          "QCOM",
+          "AVGO",
+          "TXN"
+        ],
+        "granularity": "annual",
+        "timeframe": {
+          "years_back": 5
+        },
+        "company": "NVDA",
+        "original_query": "Nvidia market share in the past 5 years?"
+      },
+      "step": "intent_detection",
+      "ts": "2025-10-05T22:59:34.106823",
+      "clarifications_needed": true,
+      "clarifications_count": 1,
+      "elapsed_ms": 60015,
+      "sequence": 16,
+      "parallel_group": "intent",
+      "key": "market_share_single",
+      "rounds": 1,
+      "assumptions": [
+        "Updated intent to market_share_single for company selection",
+        "Using comparison: single"
+      ],
+      "clarification_rounds": 1
+    },
+    "elapsed_ms": 60015,
+    "timestamp": "2025-10-05T22:59:34.106823",
+    "sequence": 15,
+    "parallelGroup": "intent"
+  },
+  {
+    "id": "tool_fanout",
+    "name": "Tool Fan-Out Telemetry",
+    "status": "completed",
+    "thinking": [
+      "Fan-out launched with 5 tools (limit 5).",
+      "sql_planner status: planned",
+      "chart_builder status: awaiting_data",
+      "web_retriever status: completed",
+      "stock_tracker status: completed",
+      "narrative_synthesizer status: drafting",
+      "Fan-out complete."
+    ],
+    "details": {
+      "tool_manifest": [
+        {
+          "name": "sql_planner",
+          "display_name": "SQL Planner",
+          "description": "Preview metrics and comparisons before execution.",
+          "preview_only": true,
+          "capabilities": [
+            "plan_summary",
+            "telemetry"
+          ],
+          "outputs": [
+            "intent",
+            "metrics_count",
+            "comparison",
+            "granularity"
+          ]
+        },
+        {
+          "name": "chart_builder",
+          "display_name": "Chart Builder",
+          "description": "Echo chart scaffolding before data arrives.",
+          "preview_only": true,
+          "capabilities": [
+            "chart_stub",
+            "telemetry"
+          ],
+          "outputs": [
+            "group_by",
+            "timeframe"
+          ]
+        },
+        {
+          "name": "web_retriever",
+          "display_name": "Web Search",
+          "description": "Fetch fresh external context using Gemini (Google Search retrieval).",
+          "preview_only": false,
+          "capabilities": [
+            "web_context",
+            "telemetry"
+          ],
+          "outputs": [
+            "query_terms",
+            "ready",
+            "summary",
+            "snippets",
+            "search_id",
+            "annotations",
+            "from_cache"
+          ]
+        },
+        {
+          "name": "stock_tracker",
+          "display_name": "Stock Tracker",
+          "description": "Fetch live stock snapshots for planner tickers.",
+          "preview_only": true,
+          "capabilities": [
+            "market_data",
+            "telemetry"
+          ],
+          "outputs": [
+            "tickers",
+            "ready",
+            "insights",
+            "bars",
+            "stock_widget"
+          ]
+        },
+        {
+          "name": "narrative_synthesizer",
+          "display_name": "Narrative Synthesizer",
+          "description": "Draft narrative preview text from planned metrics.",
+          "preview_only": true,
+          "capabilities": [
+            "analysis_preview",
+            "telemetry"
+          ],
+          "outputs": [
+            "preview"
+          ]
+        }
+      ],
+      "concurrency_limit": 5,
+      "tool_fanout_results": [
+        {
+          "tool": "sql_planner",
+          "status": "planned",
+          "elapsed_ms": 0,
+          "started_at": "2025-10-05T22:59:34.107325",
+          "completed_at": "2025-10-05T22:59:34.107340",
+          "fatal": false,
+          "error": null,
+          "metadata": {
+            "name": "sql_planner",
+            "display_name": "SQL Planner",
+            "description": "Preview metrics and comparisons before execution.",
+            "preview_only": true,
+            "capabilities": [
+              "plan_summary",
+              "telemetry"
+            ],
+            "outputs": [
+              "intent",
+              "metrics_count",
+              "comparison",
+              "granularity"
+            ],
+            "summary": "1 metric planned",
+            "preview_keys": [
+              "intent",
+              "metrics_count",
+              "comparison",
+              "granularity"
+            ],
+            "sample_metrics": [
+              "Revenue"
+            ]
+          },
+          "payload": {
+            "intent": "market_share_single",
+            "metrics_count": 1,
+            "comparison": "single",
+            "granularity": "quarterly"
+          }
+        },
+        {
+          "tool": "chart_builder",
+          "status": "awaiting_data",
+          "elapsed_ms": 0,
+          "started_at": "2025-10-05T22:59:34.107353",
+          "completed_at": "2025-10-05T22:59:34.107363",
+          "fatal": false,
+          "error": null,
+          "metadata": {
+            "name": "chart_builder",
+            "display_name": "Chart Builder",
+            "description": "Echo chart scaffolding before data arrives.",
+            "preview_only": true,
+            "capabilities": [
+              "chart_stub",
+              "telemetry"
+            ],
+            "outputs": [
+              "group_by",
+              "timeframe"
+            ],
+            "summary": "3 groupings staged",
+            "timeframe": "years_back=5 start_year=None end_year=None",
+            "group_by_preview": [
+              "calendar_year",
+              "calendar_quarter_num",
+              "calendar_quarter"
+            ],
+            "preview_keys": [
+              "group_by",
+              "timeframe"
+            ]
+          },
+          "payload": {
+            "group_by": [
+              "calendar_year",
+              "calendar_quarter_num",
+              "calendar_quarter"
+            ],
+            "timeframe": "years_back=5 start_year=None end_year=None"
+          }
+        },
+        {
+          "tool": "web_retriever",
+          "status": "completed",
+          "elapsed_ms": 16329,
+          "started_at": "2025-10-05T22:59:34.107371",
+          "completed_at": "2025-10-05T22:59:50.437195",
+          "fatal": false,
+          "error": null,
+          "metadata": {
+            "name": "web_retriever",
+            "display_name": "Web Search",
+            "description": "Fetch fresh external context using Gemini (Google Search retrieval).",
+            "preview_only": false,
+            "capabilities": [
+              "web_context",
+              "telemetry"
+            ],
+            "outputs": [
+              "query_terms",
+              "ready",
+              "summary",
+              "snippets",
+              "search_id",
+              "annotations",
+              "from_cache"
+            ],
+            "preview_keys": [
+              "query_terms",
+              "ready",
+              "query",
+              "search_id",
+              "summary",
+              "snippets",
+              "annotations",
+              "usage",
+              "fetched_at",
+              "latency_ms",
+              "model",
+              "from_cache"
+            ],
+            "summary": "Web search results ready.",
+            "snippets_count": 0,
+            "latency_ms": 10510,
+            "search_id": "ZfjiaJXILpWFz7IPhZjlmAw",
+            "provider": "Gemini",
+            "model": "gemini-2.5-flash"
+          },
+          "payload": {
+            "query_terms": "Nvidia market share in the past 5 years?",
+            "ready": true,
+            "query": "Nvidia market share in the past 5 years?",
+            "search_id": "ZfjiaJXILpWFz7IPhZjlmAw",
+            "summary": null,
+            "snippets": [],
+            "annotations": [],
+            "usage": null,
+            "fetched_at": "2025-10-05T22:59:50.437052",
+            "latency_ms": 10510,
+            "model": "gemini-2.5-flash",
+            "from_cache": false
+          }
+        },
+        {
+          "tool": "stock_tracker",
+          "status": "completed",
+          "elapsed_ms": 472,
+          "started_at": "2025-10-05T22:59:34.107668",
+          "completed_at": "2025-10-05T22:59:34.580341",
+          "fatal": false,
+          "error": null,
+          "metadata": {
+            "name": "stock_tracker",
+            "display_name": "Stock Tracker",
+            "description": "Fetch live stock snapshots for planner tickers.",
+            "preview_only": false,
+            "capabilities": [
+              "market_data",
+              "telemetry"
+            ],
+            "outputs": [
+              "tickers",
+              "ready",
+              "insights",
+              "bars",
+              "stock_widget"
+            ],
+            "preview_keys": [
+              "ready",
+              "stock_widget",
+              "tickers"
+            ],
+            "summary": "NVDA close 187.62 (-0.67% vs prior close)"
+          },
+          "payload": {
+            "tickers": [
+              "NVDA"
+            ],
+            "ready": true,
+            "stock_widget": {
+              "symbols": [
+                [
+                  "NASDAQ:NVDA",
+                  "NVDA"
+                ]
+              ],
+              "original": [
+                "NVDA"
+              ],
+              "chartType": "candlestick",
+              "showVolume": true,
+              "showMA": false,
+              "autosize": true,
+              "height": 440,
+              "locale": "en"
+            },
+            "symbol": "NVDA",
+            "latest_close": 187.62,
+            "previous_close": 188.89,
+            "change_percent": -0.6723489861824247,
+            "bars": [
+              {
+                "time": 1755835200,
+                "open": 172.61,
+                "high": 178.59,
+                "low": 171.2,
+                "close": 177.99,
+                "volume": 172789427
+              },
+              {
+                "time": 1756094400,
+                "open": 178.35,
+                "high": 181.91,
+                "low": 176.57,
+                "close": 179.81,
+                "volume": 163012789
+              },
+              {
+                "time": 1756180800,
+                "open": 180.06,
+                "high": 182.39,
+                "low": 178.81,
+                "close": 181.77,
+                "volume": 168688186
+              },
+              {
+                "time": 1756267200,
+                "open": 181.98,
+                "high": 182.49,
+                "low": 179.1,
+                "close": 181.6,
+                "volume": 235518949
+              },
+              {
+                "time": 1756353600,
+                "open": 180.82,
+                "high": 184.47,
+                "low": 176.41,
+                "close": 180.17,
+                "volume": 281787824
+              },
+              {
+                "time": 1756440000,
+                "open": 178.11,
+                "high": 178.15,
+                "low": 173.15,
+                "close": 174.18,
+                "volume": 243257873
+              },
+              {
+                "time": 1756785600,
+                "open": 170,
+                "high": 172.38,
+                "low": 167.22,
+                "close": 170.78,
+                "volume": 231164853
+              },
+              {
+                "time": 1756872000,
+                "open": 171.06,
+                "high": 172.41,
+                "low": 168.88,
+                "close": 170.62,
+                "volume": 164424873
+              },
+              {
+                "time": 1756958400,
+                "open": 170.57,
+                "high": 171.86,
+                "low": 169.41,
+                "close": 171.66,
+                "volume": 141670144
+              },
+              {
+                "time": 1757044800,
+                "open": 168.03,
+                "high": 169.03,
+                "low": 164.07,
+                "close": 167.02,
+                "volume": 224441435
+              },
+              {
+                "time": 1757304000,
+                "open": 167.55,
+                "high": 170.96,
+                "low": 167.35,
+                "close": 168.31,
+                "volume": 163769133
+              },
+              {
+                "time": 1757390400,
+                "open": 169.09,
+                "high": 170.98,
+                "low": 166.74,
+                "close": 170.76,
+                "volume": 157548392
+              },
+              {
+                "time": 1757476800,
+                "open": 176.64,
+                "high": 179.29,
+                "low": 175.47,
+                "close": 177.33,
+                "volume": 226852020
+              },
+              {
+                "time": 1757563200,
+                "open": 179.68,
+                "high": 180.28,
+                "low": 176.48,
+                "close": 177.17,
+                "volume": 151159274
+              },
+              {
+                "time": 1757649600,
+                "open": 177.77,
+                "high": 178.59,
+                "low": 176.45,
+                "close": 177.82,
+                "volume": 124911026
+              },
+              {
+                "time": 1757908800,
+                "open": 175.67,
+                "high": 178.85,
+                "low": 174.51,
+                "close": 177.75,
+                "volume": 147061559
+              },
+              {
+                "time": 1757995200,
+                "open": 177,
+                "high": 177.5,
+                "low": 174.38,
+                "close": 174.88,
+                "volume": 140737775
+              },
+              {
+                "time": 1758081600,
+                "open": 172.64,
+                "high": 173.2,
+                "low": 168.41,
+                "close": 170.29,
+                "volume": 211843817
+              },
+              {
+                "time": 1758168000,
+                "open": 173.98,
+                "high": 177.1,
+                "low": 172.96,
+                "close": 176.24,
+                "volume": 191763313
+              },
+              {
+                "time": 1758254400,
+                "open": 175.77,
+                "high": 178.08,
+                "low": 175.18,
+                "close": 176.67,
+                "volume": 237182143
+              },
+              {
+                "time": 1758513600,
+                "open": 175.3,
+                "high": 184.55,
+                "low": 174.71,
+                "close": 183.61,
+                "volume": 269637001
+              },
+              {
+                "time": 1758600000,
+                "open": 181.97,
+                "high": 182.42,
+                "low": 176.21,
+                "close": 178.43,
+                "volume": 192559552
+              },
+              {
+                "time": 1758686400,
+                "open": 179.77,
+                "high": 179.78,
+                "low": 175.4,
+                "close": 176.97,
+                "volume": 143564116
+              },
+              {
+                "time": 1758772800,
+                "open": 174.48,
+                "high": 180.26,
+                "low": 173.12,
+                "close": 177.69,
+                "volume": 191586733
+              },
+              {
+                "time": 1758859200,
+                "open": 178.17,
+                "high": 179.77,
+                "low": 174.93,
+                "close": 178.19,
+                "volume": 148573732
+              },
+              {
+                "time": 1759118400,
+                "open": 180.43,
+                "high": 184,
+                "low": 180.32,
+                "close": 181.85,
+                "volume": 193063455
+              },
+              {
+                "time": 1759204800,
+                "open": 182.08,
+                "high": 187.35,
+                "low": 181.48,
+                "close": 186.58,
+                "volume": 236981032
+              },
+              {
+                "time": 1759291200,
+                "open": 185.24,
+                "high": 188.14,
+                "low": 183.9,
+                "close": 187.24,
+                "volume": 173844901
+              },
+              {
+                "time": 1759377600,
+                "open": 189.6,
+                "high": 191.05,
+                "low": 188.06,
+                "close": 188.89,
+                "volume": 136805821
+              },
+              {
+                "time": 1759464000,
+                "open": 189.19,
+                "high": 190.36,
+                "low": 185.38,
+                "close": 187.62,
+                "volume": 137596896
+              }
+            ],
+            "chartType": "candlestick",
+            "showVolume": true,
+            "showMA": false,
+            "autosize": true,
+            "fetched_at": "2025-10-05T22:59:34.579448",
+            "insights": {
+              "symbol": "NVDA",
+              "latest_close": 187.62,
+              "previous_close": 188.89,
+              "change_percent": -0.6723489861824247
+            }
+          }
+        },
+        {
+          "tool": "narrative_synthesizer",
+          "status": "drafting",
+          "elapsed_ms": 0,
+          "started_at": "2025-10-05T22:59:34.107794",
+          "completed_at": "2025-10-05T22:59:34.107804",
+          "fatal": false,
+          "error": null,
+          "metadata": {
+            "name": "narrative_synthesizer",
+            "display_name": "Narrative Synthesizer",
+            "description": "Draft narrative preview text from planned metrics.",
+            "preview_only": true,
+            "capabilities": [
+              "analysis_preview",
+              "telemetry"
+            ],
+            "outputs": [
+              "preview"
+            ],
+            "summary": "Preparing narrative for Revenue",
+            "sample_metrics": [
+              "Revenue"
+            ],
+            "preview_keys": [
+              "preview"
+            ]
+          },
+          "payload": {
+            "preview": "Preparing narrative for Revenue"
+          }
+        }
+      ]
+    },
+    "elapsed_ms": 0,
+    "timestamp": "2025-10-05T22:59:50.438542",
+    "sequence": 25,
+    "parallelGroup": "tool_fanout"
+  },
+  {
+    "id": "sql_compilation",
+    "name": "SQL Compilation",
+    "status": "completed",
+    "thinking": [
+      "SQL compiled (len: 917)",
+      "SQL ready (attempt 1)"
+    ],
+    "details": {
+      "sql_length": 917,
+      "template_used": "Market Share Analysis - Single Company",
+      "template_fallback": false,
+      "attempt": 1,
+      "llm_used": true,
+      "sql": "WITH market AS (\n  SELECT\n    calendar_year,\n    calendar_quarter_num,\n    calendar_quarter,\n    SUM(value) FILTER (WHERE ticker = 'NVDA' AND metric = 'Revenue') AS nvda_revenue,\n    SUM(value) FILTER (WHERE metric = 'Revenue') AS total_market_revenue\n  FROM comp_financials\n  WHERE calendar_quarter_num IS NOT NULL\n    AND ticker IN ('NVDA','AMD','INTC','MU','QCOM','AVGO','TXN')\n    AND metric = 'Revenue'\n    AND calendar_year >= (EXTRACT(YEAR FROM CURRENT_DATE)::int - 5)\n  GROUP BY calendar_year, calendar_quarter_num, calendar_quarter\n)\nSELECT\n  calendar_year,\n  calendar_quarter_num,\n  calendar_quarter,\n  nvda_revenue,\n  total_market_revenue,\n  CASE\n    WHEN total_market_revenue = 0 OR total_market_revenue IS NULL THEN NULL\n    ELSE (nvda_revenue::numeric / total_market_revenue::numeric) * 100.0\n  END AS nvda_market_share_pct\nFROM market\nORDER BY calendar_year DESC, calendar_quarter_num DESC\nLIMIT 10000;"
+    },
+    "elapsed_ms": 25775,
+    "timestamp": "2025-10-05T23:00:24.396893",
+    "sequence": 28,
+    "parallelGroup": "sql"
+  },
+  {
+    "id": "sql_validation",
+    "name": "SQL Validation",
+    "status": "completed",
+    "thinking": [
+      "SQL validation passed (attempt 1)"
+    ],
+    "details": {
+      "ok": true,
+      "issues": [],
+      "issues_count": 0,
+      "attempt": 1
+    },
+    "elapsed_ms": 3,
+    "timestamp": "2025-10-05T23:00:28.479931",
+    "sequence": 31
+  },
+  {
+    "id": "sql_execution",
+    "name": "Data Retrieval",
+    "status": "completed",
+    "thinking": [],
+    "timestamp": "2025-10-05T23:00:28.480046",
+    "sequence": 33,
+    "parallelGroup": "sql"
+  },
+  {
+    "id": "chart_generation",
+    "name": "Chart Generation",
+    "status": "completed",
+    "thinking": [],
+    "details": {
+      "chart_spec": {
+        "title": {
+          "left": "center",
+          "top": "5%",
+          "text": "Market Share Analysis"
+        },
+        "tooltip": {
+          "trigger": "axis",
+          "axisPointer": {
+            "type": "cross"
+          }
+        },
+        "legend": {
+          "top": "10%",
+          "left": "center",
+          "data": [
+            "Nvda Revenue",
+            "Total Market Revenue"
+          ],
+          "selected": {
+            "Nvda Revenue": true,
+            "Total Market Revenue": false
+          }
+        },
+        "grid": {
+          "left": "3%",
+          "right": "8%",
+          "bottom": "3%",
+          "top": "20%",
+          "containLabel": true
+        },
+        "xAxis": {
+          "type": "category",
+          "data": [
+            "Q1",
+            "Q2",
+            "Q3",
+            "Q4"
+          ],
+          "axisLabel": {
+            "rotate": 45
+          }
+        },
+        "yAxis": [
+          {
+            "type": "value",
+            "name": "Currency",
+            "position": "left",
+            "axisLabel": {
+              "formatter": "{value}"
+            }
+          },
+          {
+            "type": "value",
+            "name": "Percentage",
+            "position": "right",
+            "axisLabel": {
+              "formatter": "{value}%"
+            }
+          }
+        ],
+        "series": [
+          {
+            "name": "Nvda Revenue",
+            "type": "line",
+            "data": [
+              null,
+              null,
+              null,
+              null
+            ],
+            "yAxisIndex": 0,
+            "lineStyle": {
+              "color": "#5470C6",
+              "width": 3,
+              "opacity": 1
+            },
+            "itemStyle": {
+              "color": "#5470C6"
+            },
+            "emphasis": {
+              "lineStyle": {
+                "width": 4
+              }
+            }
+          },
+          {
+            "name": "Total Market Revenue",
+            "type": "line",
+            "data": [
+              null,
+              null,
+              null,
+              null
+            ],
+            "yAxisIndex": 0,
+            "lineStyle": {
+              "color": "#FAC858",
+              "width": 1,
+              "opacity": 0.6,
+              "type": "dashed"
+            },
+            "itemStyle": {
+              "color": "#FAC858"
+            },
+            "emphasis": {
+              "lineStyle": {
+                "width": 2
+              }
+            }
+          }
+        ],
+        "meta": {
+          "primarySeries": [
+            "Nvda Revenue"
+          ],
+          "seriesAxis": {
+            "Nvda Revenue": "left",
+            "Total Market Revenue": "left"
+          },
+          "defaultLegendSelection": {
+            "Nvda Revenue": true,
+            "Total Market Revenue": false
+          },
+          "annotations": [],
+          "highlightRules": {
+            "emphasizePrimary": true,
+            "mutedSecondary": true
+          },
+          "seriesValueType": {
+            "Nvda Revenue": "currency",
+            "Total Market Revenue": "currency"
+          },
+          "includedColumns": [
+            "nvda_revenue",
+            "total_market_revenue"
+          ],
+          "displayNames": {
+            "nvda_revenue": "Nvda Revenue",
+            "total_market_revenue": "Total Market Revenue"
+          },
+          "defaultColumns": [
+            "nvda_revenue"
+          ],
+          "rawData": [
+            {
+              "calendar_year": 2025,
+              "calendar_quarter_num": 2,
+              "calendar_quarter": "Q2",
+              "nvda_revenue": 44061999104,
+              "total_market_revenue": 126372003840,
+              "nvda_market_share_pct": "34.866900895768049884000"
+            },
+            {
+              "calendar_year": 2025,
+              "calendar_quarter_num": 1,
+              "calendar_quarter": "Q1",
+              "nvda_revenue": 130497003520,
+              "total_market_revenue": 200289009664,
+              "nvda_market_share_pct": "65.154351961415754235000"
+            },
+            {
+              "calendar_year": 2024,
+              "calendar_quarter_num": 4,
+              "calendar_quarter": "Q4",
+              "nvda_revenue": 91165999104,
+              "total_market_revenue": 257645002752,
+              "nvda_market_share_pct": "35.384346678569349298000"
+            },
+            {
+              "calendar_year": 2024,
+              "calendar_quarter_num": 3,
+              "calendar_quarter": "Q3",
+              "nvda_revenue": 56084000768,
+              "total_market_revenue": 168790999040,
+              "nvda_market_share_pct": "33.226890059304109816000"
+            },
+            {
+              "calendar_year": 2024,
+              "calendar_quarter_num": 2,
+              "calendar_quarter": "Q2",
+              "nvda_revenue": 26044000256,
+              "total_market_revenue": 128194994176,
+              "nvda_market_share_pct": "20.315924958071687663000"
+            },
+            {
+              "calendar_year": 2024,
+              "calendar_quarter_num": 1,
+              "calendar_quarter": "Q1",
+              "nvda_revenue": 60921999360,
+              "total_market_revenue": 119890001920,
+              "nvda_market_share_pct": "50.814913670864959546000"
+            },
+            {
+              "calendar_year": 2023,
+              "calendar_quarter_num": 4,
+              "calendar_quarter": "Q4",
+              "nvda_revenue": 38819000320,
+              "total_market_revenue": 183725998080,
+              "nvda_market_share_pct": "21.128746067513580005000"
+            },
+            {
+              "calendar_year": 2023,
+              "calendar_quarter_num": 3,
+              "calendar_quarter": "Q3",
+              "nvda_revenue": 20699000832,
+              "total_market_revenue": 157307011072,
+              "nvda_market_share_pct": "13.158346418150495528000"
+            },
+            {
+              "calendar_year": 2023,
+              "calendar_quarter_num": 2,
+              "calendar_quarter": "Q2",
+              "nvda_revenue": 7192000000,
+              "total_market_revenue": 77380001792,
+              "nvda_market_share_pct": "9.294391315585422590000"
+            },
+            {
+              "calendar_year": 2023,
+              "calendar_quarter_num": 1,
+              "calendar_quarter": "Q1",
+              "nvda_revenue": 26973999104,
+              "total_market_revenue": 62698999808,
+              "nvda_market_share_pct": "43.021419799358841449000"
+            },
+            {
+              "calendar_year": 2022,
+              "calendar_quarter_num": 4,
+              "calendar_quarter": "Q4",
+              "nvda_revenue": 20923000832,
+              "total_market_revenue": 223369019392,
+              "nvda_market_share_pct": "9.367011536963499859000"
+            },
+            {
+              "calendar_year": 2022,
+              "calendar_quarter_num": 3,
+              "calendar_quarter": "Q3",
+              "nvda_revenue": 14992000000,
+              "total_market_revenue": 168820015104,
+              "nvda_market_share_pct": "8.880464399952612250000"
+            },
+            {
+              "calendar_year": 2022,
+              "calendar_quarter_num": 2,
+              "calendar_quarter": "Q2",
+              "nvda_revenue": 8288000000,
+              "total_market_revenue": 98744999936,
+              "nvda_market_share_pct": "8.393336371461846169000"
+            },
+            {
+              "calendar_year": 2022,
+              "calendar_quarter_num": 1,
+              "calendar_quarter": "Q1",
+              "nvda_revenue": 26914000896,
+              "total_market_revenue": 75066007552,
+              "nvda_market_share_pct": "35.853782005168784803000"
+            },
+            {
+              "calendar_year": 2021,
+              "calendar_quarter_num": 4,
+              "calendar_quarter": "Q4",
+              "nvda_revenue": 19271000064,
+              "total_market_revenue": 178914983936,
+              "nvda_market_share_pct": "10.771036525724506050000"
+            },
+            {
+              "calendar_year": 2021,
+              "calendar_quarter_num": 3,
+              "calendar_quarter": "Q3",
+              "nvda_revenue": 12167999488,
+              "total_market_revenue": 128924991488,
+              "nvda_market_share_pct": "9.438045375218150087000"
+            },
+            {
+              "calendar_year": 2021,
+              "calendar_quarter_num": 2,
+              "calendar_quarter": "Q2",
+              "nvda_revenue": 5661000192,
+              "total_market_revenue": 86373007360,
+              "nvda_market_share_pct": "6.554131499426904241000"
+            },
+            {
+              "calendar_year": 2021,
+              "calendar_quarter_num": 1,
+              "calendar_quarter": "Q1",
+              "nvda_revenue": 16675000320,
+              "total_market_revenue": 78916009984,
+              "nvda_market_share_pct": "21.130062344771655938000"
+            },
+            {
+              "calendar_year": 2020,
+              "calendar_quarter_num": 4,
+              "calendar_quarter": "Q4",
+              "nvda_revenue": 11672000512,
+              "total_market_revenue": 151659003904,
+              "nvda_market_share_pct": "7.696213215173514266000"
+            },
+            {
+              "calendar_year": 2020,
+              "calendar_quarter_num": 3,
+              "calendar_quarter": "Q3",
+              "nvda_revenue": 6945999872,
+              "total_market_revenue": 89191006208,
+              "nvda_market_share_pct": "7.787781278380105616000"
+            },
+            {
+              "calendar_year": 2020,
+              "calendar_quarter_num": 2,
+              "calendar_quarter": "Q2",
+              "nvda_revenue": 3080000000,
+              "total_market_revenue": 54343999488,
+              "nvda_market_share_pct": "5.667598998969527455000"
+            },
+            {
+              "calendar_year": 2020,
+              "calendar_quarter_num": 1,
+              "calendar_quarter": "Q1",
+              "nvda_revenue": 3104999936,
+              "total_market_revenue": 48995000320,
+              "nvda_market_share_pct": "6.337381365445453618000"
+            }
+          ],
+          "seriesPercentFormat": {},
+          "chartDesign": {
+            "intent": "market_share_single",
+            "grouping": "metric",
+            "chart_type": "line_multi",
+            "y_axis": {
+              "type": "dual"
+            },
+            "legend_order": [],
+            "defaultLegendSelection": {
+              "market_share_percent": true
+            },
+            "color_by": "metric",
+            "measure": "market_share_percent"
+          }
+        }
+      },
+      "chart_type": "line_multi"
+    },
+    "timestamp": "2025-10-05T23:00:29.984148",
+    "sequence": 34,
+    "parallelGroup": "chart"
+  },
+  {
+    "id": "web_research_agent",
+    "name": "Web Research Agent Lane",
+    "status": "completed",
+    "thinking": [
+      "Search topic: Nvidia market share in the past 5 years?",
+      "Snippets: 0",
+      "Model: gemini-2.5-flash"
+    ],
+    "details": {
+      "query": "Nvidia market share in the past 5 years?",
+      "summary": "Web search results ready.",
+      "snippets": [],
+      "annotations": [],
+      "searchId": "ZfjiaJXILpWFz7IPhZjlmAw",
+      "fromCache": false,
+      "fetchedAt": "2025-10-05T22:59:50.437052",
+      "latencyMs": 10510,
+      "ready": true,
+      "provider": "Gemini",
+      "model": "gemini-2.5-flash"
+    },
+    "elapsed_ms": 16329,
+    "timestamp": "2025-10-05T23:00:29.984917",
+    "sequence": 37
+  },
+  {
+    "id": "analysis_generation",
+    "name": "Final Analysis",
+    "status": "completed",
+    "thinking": [
+      "Generating financial analysis..."
+    ],
+    "details": {
+      "analysis": {
+        "analysis_length": 2514,
+        "analysis": "TLDR: Nvidia’s market share across the selected peer group has been highly volatile over the past five years, swinging from low-teens to a peak above 60% in the SQL sample, with recent quarters showing multi-quarter elevated share. The chart shows sharp quarter-to-quarter jumps rather than a smooth climb, consistent with headlines that Nvidia has rapidly expanded share but also suggesting volatile reporting or sample effects.\n\nKey quantified observations\n- Recent peak and current level: NVDA’s market share samples peak at ~65.2% in 2025 Q1 and remain elevated at ~34.9% in 2025 Q2, indicating very large relative revenue contributions in the most recent quarters versus peers (SQL rows: 2025 Q1 = 65.15%, 2025 Q2 = 34.87%). (Chart: abrupt spike around 2025 Q1.) Relates to headline: “Nvidia has significantly expanded its market share” [1].\n- Multi-quarter swings: Across 2023–2024 the computed shares vary widely — e.g., ~13.16% (2023 Q3), ~21.13% (2023 Q4), then jumps to ~50.8% (2024 Q1), ~20.3% (2024 Q2), ~33.2–35.4% later in 2024 to 2025 — showing large quarter-to-quarter volatility rather than a steady upward trend (Chart: jagged line with large peaks/troughs).\n- Magnitude and context: Absolute NVDA revenues in the sample are large (tens of billions per quarter), but the total-market revenue also varies quarter-to-quarter; some high NVDA share quarters coincide with lower reported total-market revenue, amplifying NVDA’s percentage.\n\nDivergences / caveats between fundamentals and headlines\n- Data volatility vs. narrative: Headlines correctly characterize rapid share expansion, but the SQL results show extreme quarter-to-quarter variability — this could reflect timing differences in revenue recognition, an incomplete peer set (only seven tickers), or one-off large product/service deliveries rather than a sustained structural share takeover.\n- Possible sample or reporting artifacts: The 65% figure is unusually high for a multi-firm semiconductor/IC market and likely driven by either an outlier NVDA quarter or a dip in aggregated peer revenue; treat single-quarter peaks cautiously and verify with full market definitions, broader peer set, or trailing-12-month (TTM) measures for a steadier view.\n- Next steps to reconcile: compute TTM market share, expand the peer universe (include AWS/Intel customers where relevant, other GPU/AI players), and cross-check with segment-level revenues (data center/GPUs) to see if the expansion is product-specific rather than across the entire TAM.",
+        "tool_manifest": [
+          {
+            "name": "sql_planner",
+            "display_name": "SQL Planner",
+            "description": "Preview metrics and comparisons before execution.",
+            "preview_only": true,
+            "capabilities": [
+              "plan_summary",
+              "telemetry"
+            ],
+            "outputs": [
+              "intent",
+              "metrics_count",
+              "comparison",
+              "granularity"
+            ]
+          },
+          {
+            "name": "chart_builder",
+            "display_name": "Chart Builder",
+            "description": "Echo chart scaffolding before data arrives.",
+            "preview_only": true,
+            "capabilities": [
+              "chart_stub",
+              "telemetry"
+            ],
+            "outputs": [
+              "group_by",
+              "timeframe"
+            ]
+          },
+          {
+            "name": "web_retriever",
+            "display_name": "Web Search",
+            "description": "Fetch fresh external context using Gemini (Google Search retrieval).",
+            "preview_only": false,
+            "capabilities": [
+              "web_context",
+              "telemetry"
+            ],
+            "outputs": [
+              "query_terms",
+              "ready",
+              "summary",
+              "snippets",
+              "search_id",
+              "annotations",
+              "from_cache"
+            ]
+          },
+          {
+            "name": "stock_tracker",
+            "display_name": "Stock Tracker",
+            "description": "Fetch live stock snapshots for planner tickers.",
+            "preview_only": true,
+            "capabilities": [
+              "market_data",
+              "telemetry"
+            ],
+            "outputs": [
+              "tickers",
+              "ready",
+              "insights",
+              "bars",
+              "stock_widget"
+            ]
+          },
+          {
+            "name": "narrative_synthesizer",
+            "display_name": "Narrative Synthesizer",
+            "description": "Draft narrative preview text from planned metrics.",
+            "preview_only": true,
+            "capabilities": [
+              "analysis_preview",
+              "telemetry"
+            ],
+            "outputs": [
+              "preview"
+            ]
+          }
+        ],
+        "tool_results": [
+          {
+            "tool": "sql_planner",
+            "status": "planned",
+            "payload": {
+              "intent": "market_share_single",
+              "metrics_count": 1,
+              "comparison": "single",
+              "granularity": "quarterly"
+            },
+            "metadata": {
+              "name": "sql_planner",
+              "display_name": "SQL Planner",
+              "description": "Preview metrics and comparisons before execution.",
+              "preview_only": true,
+              "capabilities": [
+                "plan_summary",
+                "telemetry"
+              ],
+              "outputs": [
+                "intent",
+                "metrics_count",
+                "comparison",
+                "granularity"
+              ],
+              "summary": "1 metric planned",
+              "preview_keys": [
+                "intent",
+                "metrics_count",
+                "comparison",
+                "granularity"
+              ],
+              "sample_metrics": [
+                "Revenue"
+              ]
+            },
+            "error": null,
+            "elapsed_ms": 0,
+            "started_at": "2025-10-05T22:59:34.107325",
+            "completed_at": "2025-10-05T22:59:34.107340",
+            "fatal": false
+          },
+          {
+            "tool": "chart_builder",
+            "status": "awaiting_data",
+            "payload": {
+              "group_by": [
+                "calendar_year",
+                "calendar_quarter_num",
+                "calendar_quarter"
+              ],
+              "timeframe": "years_back=5 start_year=None end_year=None"
+            },
+            "metadata": {
+              "name": "chart_builder",
+              "display_name": "Chart Builder",
+              "description": "Echo chart scaffolding before data arrives.",
+              "preview_only": true,
+              "capabilities": [
+                "chart_stub",
+                "telemetry"
+              ],
+              "outputs": [
+                "group_by",
+                "timeframe"
+              ],
+              "summary": "3 groupings staged",
+              "timeframe": "years_back=5 start_year=None end_year=None",
+              "group_by_preview": [
+                "calendar_year",
+                "calendar_quarter_num",
+                "calendar_quarter"
+              ],
+              "preview_keys": [
+                "group_by",
+                "timeframe"
+              ]
+            },
+            "error": null,
+            "elapsed_ms": 0,
+            "started_at": "2025-10-05T22:59:34.107353",
+            "completed_at": "2025-10-05T22:59:34.107363",
+            "fatal": false
+          },
+          {
+            "tool": "web_retriever",
+            "status": "completed",
+            "payload": {
+              "query_terms": "Nvidia market share in the past 5 years?",
+              "ready": true,
+              "query": "Nvidia market share in the past 5 years?",
+              "search_id": "ZfjiaJXILpWFz7IPhZjlmAw",
+              "summary": null,
+              "snippets": [],
+              "annotations": [],
+              "usage": null,
+              "fetched_at": "2025-10-05T22:59:50.437052",
+              "latency_ms": 10510,
+              "model": "gemini-2.5-flash",
+              "from_cache": false
+            },
+            "metadata": {
+              "name": "web_retriever",
+              "display_name": "Web Search",
+              "description": "Fetch fresh external context using Gemini (Google Search retrieval).",
+              "preview_only": false,
+              "capabilities": [
+                "web_context",
+                "telemetry"
+              ],
+              "outputs": [
+                "query_terms",
+                "ready",
+                "summary",
+                "snippets",
+                "search_id",
+                "annotations",
+                "from_cache"
+              ],
+              "preview_keys": [
+                "query_terms",
+                "ready",
+                "query",
+                "search_id",
+                "summary",
+                "snippets",
+                "annotations",
+                "usage",
+                "fetched_at",
+                "latency_ms",
+                "model",
+                "from_cache"
+              ],
+              "summary": "Web search results ready.",
+              "snippets_count": 0,
+              "latency_ms": 10510,
+              "search_id": "ZfjiaJXILpWFz7IPhZjlmAw",
+              "provider": "Gemini",
+              "model": "gemini-2.5-flash"
+            },
+            "error": null,
+            "elapsed_ms": 16329,
+            "started_at": "2025-10-05T22:59:34.107371",
+            "completed_at": "2025-10-05T22:59:50.437195",
+            "fatal": false
+          },
+          {
+            "tool": "stock_tracker",
+            "status": "completed",
+            "payload": {
+              "tickers": [
+                "NVDA"
+              ],
+              "ready": true,
+              "stock_widget": {
+                "symbols": [
+                  [
+                    "NASDAQ:NVDA",
+                    "NVDA"
+                  ]
+                ],
+                "original": [
+                  "NVDA"
+                ],
+                "chartType": "candlestick",
+                "showVolume": true,
+                "showMA": false,
+                "autosize": true,
+                "height": 440,
+                "locale": "en"
+              },
+              "symbol": "NVDA",
+              "latest_close": 187.62,
+              "previous_close": 188.89,
+              "change_percent": -0.6723489861824247,
+              "bars": [
+                {
+                  "time": 1755835200,
+                  "open": 172.61,
+                  "high": 178.59,
+                  "low": 171.2,
+                  "close": 177.99,
+                  "volume": 172789427
+                },
+                {
+                  "time": 1756094400,
+                  "open": 178.35,
+                  "high": 181.91,
+                  "low": 176.57,
+                  "close": 179.81,
+                  "volume": 163012789
+                },
+                {
+                  "time": 1756180800,
+                  "open": 180.06,
+                  "high": 182.39,
+                  "low": 178.81,
+                  "close": 181.77,
+                  "volume": 168688186
+                },
+                {
+                  "time": 1756267200,
+                  "open": 181.98,
+                  "high": 182.49,
+                  "low": 179.1,
+                  "close": 181.6,
+                  "volume": 235518949
+                },
+                {
+                  "time": 1756353600,
+                  "open": 180.82,
+                  "high": 184.47,
+                  "low": 176.41,
+                  "close": 180.17,
+                  "volume": 281787824
+                },
+                {
+                  "time": 1756440000,
+                  "open": 178.11,
+                  "high": 178.15,
+                  "low": 173.15,
+                  "close": 174.18,
+                  "volume": 243257873
+                },
+                {
+                  "time": 1756785600,
+                  "open": 170,
+                  "high": 172.38,
+                  "low": 167.22,
+                  "close": 170.78,
+                  "volume": 231164853
+                },
+                {
+                  "time": 1756872000,
+                  "open": 171.06,
+                  "high": 172.41,
+                  "low": 168.88,
+                  "close": 170.62,
+                  "volume": 164424873
+                },
+                {
+                  "time": 1756958400,
+                  "open": 170.57,
+                  "high": 171.86,
+                  "low": 169.41,
+                  "close": 171.66,
+                  "volume": 141670144
+                },
+                {
+                  "time": 1757044800,
+                  "open": 168.03,
+                  "high": 169.03,
+                  "low": 164.07,
+                  "close": 167.02,
+                  "volume": 224441435
+                },
+                {
+                  "time": 1757304000,
+                  "open": 167.55,
+                  "high": 170.96,
+                  "low": 167.35,
+                  "close": 168.31,
+                  "volume": 163769133
+                },
+                {
+                  "time": 1757390400,
+                  "open": 169.09,
+                  "high": 170.98,
+                  "low": 166.74,
+                  "close": 170.76,
+                  "volume": 157548392
+                },
+                {
+                  "time": 1757476800,
+                  "open": 176.64,
+                  "high": 179.29,
+                  "low": 175.47,
+                  "close": 177.33,
+                  "volume": 226852020
+                },
+                {
+                  "time": 1757563200,
+                  "open": 179.68,
+                  "high": 180.28,
+                  "low": 176.48,
+                  "close": 177.17,
+                  "volume": 151159274
+                },
+                {
+                  "time": 1757649600,
+                  "open": 177.77,
+                  "high": 178.59,
+                  "low": 176.45,
+                  "close": 177.82,
+                  "volume": 124911026
+                },
+                {
+                  "time": 1757908800,
+                  "open": 175.67,
+                  "high": 178.85,
+                  "low": 174.51,
+                  "close": 177.75,
+                  "volume": 147061559
+                },
+                {
+                  "time": 1757995200,
+                  "open": 177,
+                  "high": 177.5,
+                  "low": 174.38,
+                  "close": 174.88,
+                  "volume": 140737775
+                },
+                {
+                  "time": 1758081600,
+                  "open": 172.64,
+                  "high": 173.2,
+                  "low": 168.41,
+                  "close": 170.29,
+                  "volume": 211843817
+                },
+                {
+                  "time": 1758168000,
+                  "open": 173.98,
+                  "high": 177.1,
+                  "low": 172.96,
+                  "close": 176.24,
+                  "volume": 191763313
+                },
+                {
+                  "time": 1758254400,
+                  "open": 175.77,
+                  "high": 178.08,
+                  "low": 175.18,
+                  "close": 176.67,
+                  "volume": 237182143
+                },
+                {
+                  "time": 1758513600,
+                  "open": 175.3,
+                  "high": 184.55,
+                  "low": 174.71,
+                  "close": 183.61,
+                  "volume": 269637001
+                },
+                {
+                  "time": 1758600000,
+                  "open": 181.97,
+                  "high": 182.42,
+                  "low": 176.21,
+                  "close": 178.43,
+                  "volume": 192559552
+                },
+                {
+                  "time": 1758686400,
+                  "open": 179.77,
+                  "high": 179.78,
+                  "low": 175.4,
+                  "close": 176.97,
+                  "volume": 143564116
+                },
+                {
+                  "time": 1758772800,
+                  "open": 174.48,
+                  "high": 180.26,
+                  "low": 173.12,
+                  "close": 177.69,
+                  "volume": 191586733
+                },
+                {
+                  "time": 1758859200,
+                  "open": 178.17,
+                  "high": 179.77,
+                  "low": 174.93,
+                  "close": 178.19,
+                  "volume": 148573732
+                },
+                {
+                  "time": 1759118400,
+                  "open": 180.43,
+                  "high": 184,
+                  "low": 180.32,
+                  "close": 181.85,
+                  "volume": 193063455
+                },
+                {
+                  "time": 1759204800,
+                  "open": 182.08,
+                  "high": 187.35,
+                  "low": 181.48,
+                  "close": 186.58,
+                  "volume": 236981032
+                },
+                {
+                  "time": 1759291200,
+                  "open": 185.24,
+                  "high": 188.14,
+                  "low": 183.9,
+                  "close": 187.24,
+                  "volume": 173844901
+                },
+                {
+                  "time": 1759377600,
+                  "open": 189.6,
+                  "high": 191.05,
+                  "low": 188.06,
+                  "close": 188.89,
+                  "volume": 136805821
+                },
+                {
+                  "time": 1759464000,
+                  "open": 189.19,
+                  "high": 190.36,
+                  "low": 185.38,
+                  "close": 187.62,
+                  "volume": 137596896
+                }
+              ],
+              "chartType": "candlestick",
+              "showVolume": true,
+              "showMA": false,
+              "autosize": true,
+              "fetched_at": "2025-10-05T22:59:34.579448",
+              "insights": {
+                "symbol": "NVDA",
+                "latest_close": 187.62,
+                "previous_close": 188.89,
+                "change_percent": -0.6723489861824247
+              }
+            },
+            "metadata": {
+              "name": "stock_tracker",
+              "display_name": "Stock Tracker",
+              "description": "Fetch live stock snapshots for planner tickers.",
+              "preview_only": false,
+              "capabilities": [
+                "market_data",
+                "telemetry"
+              ],
+              "outputs": [
+                "tickers",
+                "ready",
+                "insights",
+                "bars",
+                "stock_widget"
+              ],
+              "preview_keys": [
+                "ready",
+                "stock_widget",
+                "tickers"
+              ],
+              "summary": "NVDA close 187.62 (-0.67% vs prior close)"
+            },
+            "error": null,
+            "elapsed_ms": 472,
+            "started_at": "2025-10-05T22:59:34.107668",
+            "completed_at": "2025-10-05T22:59:34.580341",
+            "fatal": false
+          },
+          {
+            "tool": "narrative_synthesizer",
+            "status": "drafting",
+            "payload": {
+              "preview": "Preparing narrative for Revenue"
+            },
+            "metadata": {
+              "name": "narrative_synthesizer",
+              "display_name": "Narrative Synthesizer",
+              "description": "Draft narrative preview text from planned metrics.",
+              "preview_only": true,
+              "capabilities": [
+                "analysis_preview",
+                "telemetry"
+              ],
+              "outputs": [
+                "preview"
+              ],
+              "summary": "Preparing narrative for Revenue",
+              "sample_metrics": [
+                "Revenue"
+              ],
+              "preview_keys": [
+                "preview"
+              ]
+            },
+            "error": null,
+            "elapsed_ms": 0,
+            "started_at": "2025-10-05T22:59:34.107794",
+            "completed_at": "2025-10-05T22:59:34.107804",
+            "fatal": false
+          }
+        ],
+        "stock_widget": {
+          "symbols": [
+            [
+              "NASDAQ:NVDA",
+              "NVDA"
+            ]
+          ],
+          "original": [
+            "NVDA"
+          ],
+          "chartType": "candlestick",
+          "showVolume": true,
+          "showMA": false,
+          "autosize": true,
+          "height": 440,
+          "locale": "en",
+          "generated_at": "2025-10-05T22:59:34.579448",
+          "bars": [
+            {
+              "time": 1755835200,
+              "open": 172.61,
+              "high": 178.59,
+              "low": 171.2,
+              "close": 177.99,
+              "volume": 172789427
+            },
+            {
+              "time": 1756094400,
+              "open": 178.35,
+              "high": 181.91,
+              "low": 176.57,
+              "close": 179.81,
+              "volume": 163012789
+            },
+            {
+              "time": 1756180800,
+              "open": 180.06,
+              "high": 182.39,
+              "low": 178.81,
+              "close": 181.77,
+              "volume": 168688186
+            },
+            {
+              "time": 1756267200,
+              "open": 181.98,
+              "high": 182.49,
+              "low": 179.1,
+              "close": 181.6,
+              "volume": 235518949
+            },
+            {
+              "time": 1756353600,
+              "open": 180.82,
+              "high": 184.47,
+              "low": 176.41,
+              "close": 180.17,
+              "volume": 281787824
+            },
+            {
+              "time": 1756440000,
+              "open": 178.11,
+              "high": 178.15,
+              "low": 173.15,
+              "close": 174.18,
+              "volume": 243257873
+            },
+            {
+              "time": 1756785600,
+              "open": 170,
+              "high": 172.38,
+              "low": 167.22,
+              "close": 170.78,
+              "volume": 231164853
+            },
+            {
+              "time": 1756872000,
+              "open": 171.06,
+              "high": 172.41,
+              "low": 168.88,
+              "close": 170.62,
+              "volume": 164424873
+            },
+            {
+              "time": 1756958400,
+              "open": 170.57,
+              "high": 171.86,
+              "low": 169.41,
+              "close": 171.66,
+              "volume": 141670144
+            },
+            {
+              "time": 1757044800,
+              "open": 168.03,
+              "high": 169.03,
+              "low": 164.07,
+              "close": 167.02,
+              "volume": 224441435
+            },
+            {
+              "time": 1757304000,
+              "open": 167.55,
+              "high": 170.96,
+              "low": 167.35,
+              "close": 168.31,
+              "volume": 163769133
+            },
+            {
+              "time": 1757390400,
+              "open": 169.09,
+              "high": 170.98,
+              "low": 166.74,
+              "close": 170.76,
+              "volume": 157548392
+            },
+            {
+              "time": 1757476800,
+              "open": 176.64,
+              "high": 179.29,
+              "low": 175.47,
+              "close": 177.33,
+              "volume": 226852020
+            },
+            {
+              "time": 1757563200,
+              "open": 179.68,
+              "high": 180.28,
+              "low": 176.48,
+              "close": 177.17,
+              "volume": 151159274
+            },
+            {
+              "time": 1757649600,
+              "open": 177.77,
+              "high": 178.59,
+              "low": 176.45,
+              "close": 177.82,
+              "volume": 124911026
+            },
+            {
+              "time": 1757908800,
+              "open": 175.67,
+              "high": 178.85,
+              "low": 174.51,
+              "close": 177.75,
+              "volume": 147061559
+            },
+            {
+              "time": 1757995200,
+              "open": 177,
+              "high": 177.5,
+              "low": 174.38,
+              "close": 174.88,
+              "volume": 140737775
+            },
+            {
+              "time": 1758081600,
+              "open": 172.64,
+              "high": 173.2,
+              "low": 168.41,
+              "close": 170.29,
+              "volume": 211843817
+            },
+            {
+              "time": 1758168000,
+              "open": 173.98,
+              "high": 177.1,
+              "low": 172.96,
+              "close": 176.24,
+              "volume": 191763313
+            },
+            {
+              "time": 1758254400,
+              "open": 175.77,
+              "high": 178.08,
+              "low": 175.18,
+              "close": 176.67,
+              "volume": 237182143
+            },
+            {
+              "time": 1758513600,
+              "open": 175.3,
+              "high": 184.55,
+              "low": 174.71,
+              "close": 183.61,
+              "volume": 269637001
+            },
+            {
+              "time": 1758600000,
+              "open": 181.97,
+              "high": 182.42,
+              "low": 176.21,
+              "close": 178.43,
+              "volume": 192559552
+            },
+            {
+              "time": 1758686400,
+              "open": 179.77,
+              "high": 179.78,
+              "low": 175.4,
+              "close": 176.97,
+              "volume": 143564116
+            },
+            {
+              "time": 1758772800,
+              "open": 174.48,
+              "high": 180.26,
+              "low": 173.12,
+              "close": 177.69,
+              "volume": 191586733
+            },
+            {
+              "time": 1758859200,
+              "open": 178.17,
+              "high": 179.77,
+              "low": 174.93,
+              "close": 178.19,
+              "volume": 148573732
+            },
+            {
+              "time": 1759118400,
+              "open": 180.43,
+              "high": 184,
+              "low": 180.32,
+              "close": 181.85,
+              "volume": 193063455
+            },
+            {
+              "time": 1759204800,
+              "open": 182.08,
+              "high": 187.35,
+              "low": 181.48,
+              "close": 186.58,
+              "volume": 236981032
+            },
+            {
+              "time": 1759291200,
+              "open": 185.24,
+              "high": 188.14,
+              "low": 183.9,
+              "close": 187.24,
+              "volume": 173844901
+            },
+            {
+              "time": 1759377600,
+              "open": 189.6,
+              "high": 191.05,
+              "low": 188.06,
+              "close": 188.89,
+              "volume": 136805821
+            },
+            {
+              "time": 1759464000,
+              "open": 189.19,
+              "high": 190.36,
+              "low": 185.38,
+              "close": 187.62,
+              "volume": 137596896
+            }
+          ]
+        },
+        "web_context": {
+          "query": "Nvidia market share in the past 5 years?",
+          "search_id": "mvjiaJWiMJ2gz7IPkdG3-Qs",
+          "summary": "Nvidia has significantly expanded its market share",
+          "snippets": [],
+          "annotations": [],
+          "usage": null,
+          "fetched_at": "2025-10-05T23:00:43.463621",
+          "latency_ms": 8960,
+          "model": "gemini-2.5-flash",
+          "from_cache": false
+        }
+      }
+    },
+    "elapsed_ms": 15159,
+    "timestamp": "2025-10-05T23:00:43.463898",
+    "sequence": 39,
+    "parallelGroup": "analysis"
+  },
+  {
+    "id": "plan_and_select_template",
+    "name": "Query Planning & Template Selection",
+    "status": "completed",
+    "thinking": [
+      "Plan built",
+      "Selected template: market_share_single",
+      "YAML catalogue lookup via lookup"
+    ],
+    "details": {
+      "plan": {
+        "metrics_count": 1,
+        "granularity": "quarterly",
+        "comparison": "single"
+      },
+      "template": {
+        "id": "market_share_single",
+        "name": "Market Share Analysis - Single Company",
+        "description": "Calculate market share for one company vs total market"
+      },
+      "candidates": [],
+      "metadata": {}
+    },
+    "elapsed_ms": 8182
+  },
+  {
+    "id": "short_financial_analysis",
+    "name": "Financial Analysis",
+    "status": "completed",
+    "thinking": [
+      "Short financial analysis complete"
+    ],
+    "details": {
+      "analysis": {
+        "analysis_length": 2514,
+        "analysis": "TLDR: Nvidia’s market share across the selected peer group has been highly volatile over the past five years, swinging from low-teens to a peak above 60% in the SQL sample, with recent quarters showing multi-quarter elevated share. The chart shows sharp quarter-to-quarter jumps rather than a smooth climb, consistent with headlines that Nvidia has rapidly expanded share but also suggesting volatile reporting or sample effects.\n\nKey quantified observations\n- Recent peak and current level: NVDA’s market share samples peak at ~65.2% in 2025 Q1 and remain elevated at ~34.9% in 2025 Q2, indicating very large relative revenue contributions in the most recent quarters versus peers (SQL rows: 2025 Q1 = 65.15%, 2025 Q2 = 34.87%). (Chart: abrupt spike around 2025 Q1.) Relates to headline: “Nvidia has significantly expanded its market share” [1].\n- Multi-quarter swings: Across 2023–2024 the computed shares vary widely — e.g., ~13.16% (2023 Q3), ~21.13% (2023 Q4), then jumps to ~50.8% (2024 Q1), ~20.3% (2024 Q2), ~33.2–35.4% later in 2024 to 2025 — showing large quarter-to-quarter volatility rather than a steady upward trend (Chart: jagged line with large peaks/troughs).\n- Magnitude and context: Absolute NVDA revenues in the sample are large (tens of billions per quarter), but the total-market revenue also varies quarter-to-quarter; some high NVDA share quarters coincide with lower reported total-market revenue, amplifying NVDA’s percentage.\n\nDivergences / caveats between fundamentals and headlines\n- Data volatility vs. narrative: Headlines correctly characterize rapid share expansion, but the SQL results show extreme quarter-to-quarter variability — this could reflect timing differences in revenue recognition, an incomplete peer set (only seven tickers), or one-off large product/service deliveries rather than a sustained structural share takeover.\n- Possible sample or reporting artifacts: The 65% figure is unusually high for a multi-firm semiconductor/IC market and likely driven by either an outlier NVDA quarter or a dip in aggregated peer revenue; treat single-quarter peaks cautiously and verify with full market definitions, broader peer set, or trailing-12-month (TTM) measures for a steadier view.\n- Next steps to reconcile: compute TTM market share, expand the peer universe (include AWS/Intel customers where relevant, other GPU/AI players), and cross-check with segment-level revenues (data center/GPUs) to see if the expansion is product-specific rather than across the entire TAM.",
+        "tool_manifest": [
+          {
+            "name": "sql_planner",
+            "display_name": "SQL Planner",
+            "description": "Preview metrics and comparisons before execution.",
+            "preview_only": true,
+            "capabilities": [
+              "plan_summary",
+              "telemetry"
+            ],
+            "outputs": [
+              "intent",
+              "metrics_count",
+              "comparison",
+              "granularity"
+            ]
+          },
+          {
+            "name": "chart_builder",
+            "display_name": "Chart Builder",
+            "description": "Echo chart scaffolding before data arrives.",
+            "preview_only": true,
+            "capabilities": [
+              "chart_stub",
+              "telemetry"
+            ],
+            "outputs": [
+              "group_by",
+              "timeframe"
+            ]
+          },
+          {
+            "name": "web_retriever",
+            "display_name": "Web Search",
+            "description": "Fetch fresh external context using Gemini (Google Search retrieval).",
+            "preview_only": false,
+            "capabilities": [
+              "web_context",
+              "telemetry"
+            ],
+            "outputs": [
+              "query_terms",
+              "ready",
+              "summary",
+              "snippets",
+              "search_id",
+              "annotations",
+              "from_cache"
+            ]
+          },
+          {
+            "name": "stock_tracker",
+            "display_name": "Stock Tracker",
+            "description": "Fetch live stock snapshots for planner tickers.",
+            "preview_only": true,
+            "capabilities": [
+              "market_data",
+              "telemetry"
+            ],
+            "outputs": [
+              "tickers",
+              "ready",
+              "insights",
+              "bars",
+              "stock_widget"
+            ]
+          },
+          {
+            "name": "narrative_synthesizer",
+            "display_name": "Narrative Synthesizer",
+            "description": "Draft narrative preview text from planned metrics.",
+            "preview_only": true,
+            "capabilities": [
+              "analysis_preview",
+              "telemetry"
+            ],
+            "outputs": [
+              "preview"
+            ]
+          }
+        ],
+        "tool_results": [
+          {
+            "tool": "sql_planner",
+            "status": "planned",
+            "payload": {
+              "intent": "market_share_single",
+              "metrics_count": 1,
+              "comparison": "single",
+              "granularity": "quarterly"
+            },
+            "metadata": {
+              "name": "sql_planner",
+              "display_name": "SQL Planner",
+              "description": "Preview metrics and comparisons before execution.",
+              "preview_only": true,
+              "capabilities": [
+                "plan_summary",
+                "telemetry"
+              ],
+              "outputs": [
+                "intent",
+                "metrics_count",
+                "comparison",
+                "granularity"
+              ],
+              "summary": "1 metric planned",
+              "preview_keys": [
+                "intent",
+                "metrics_count",
+                "comparison",
+                "granularity"
+              ],
+              "sample_metrics": [
+                "Revenue"
+              ]
+            },
+            "error": null,
+            "elapsed_ms": 0,
+            "started_at": "2025-10-05T22:59:34.107325",
+            "completed_at": "2025-10-05T22:59:34.107340",
+            "fatal": false
+          },
+          {
+            "tool": "chart_builder",
+            "status": "awaiting_data",
+            "payload": {
+              "group_by": [
+                "calendar_year",
+                "calendar_quarter_num",
+                "calendar_quarter"
+              ],
+              "timeframe": "years_back=5 start_year=None end_year=None"
+            },
+            "metadata": {
+              "name": "chart_builder",
+              "display_name": "Chart Builder",
+              "description": "Echo chart scaffolding before data arrives.",
+              "preview_only": true,
+              "capabilities": [
+                "chart_stub",
+                "telemetry"
+              ],
+              "outputs": [
+                "group_by",
+                "timeframe"
+              ],
+              "summary": "3 groupings staged",
+              "timeframe": "years_back=5 start_year=None end_year=None",
+              "group_by_preview": [
+                "calendar_year",
+                "calendar_quarter_num",
+                "calendar_quarter"
+              ],
+              "preview_keys": [
+                "group_by",
+                "timeframe"
+              ]
+            },
+            "error": null,
+            "elapsed_ms": 0,
+            "started_at": "2025-10-05T22:59:34.107353",
+            "completed_at": "2025-10-05T22:59:34.107363",
+            "fatal": false
+          },
+          {
+            "tool": "web_retriever",
+            "status": "completed",
+            "payload": {
+              "query_terms": "Nvidia market share in the past 5 years?",
+              "ready": true,
+              "query": "Nvidia market share in the past 5 years?",
+              "search_id": "ZfjiaJXILpWFz7IPhZjlmAw",
+              "summary": null,
+              "snippets": [],
+              "annotations": [],
+              "usage": null,
+              "fetched_at": "2025-10-05T22:59:50.437052",
+              "latency_ms": 10510,
+              "model": "gemini-2.5-flash",
+              "from_cache": false
+            },
+            "metadata": {
+              "name": "web_retriever",
+              "display_name": "Web Search",
+              "description": "Fetch fresh external context using Gemini (Google Search retrieval).",
+              "preview_only": false,
+              "capabilities": [
+                "web_context",
+                "telemetry"
+              ],
+              "outputs": [
+                "query_terms",
+                "ready",
+                "summary",
+                "snippets",
+                "search_id",
+                "annotations",
+                "from_cache"
+              ],
+              "preview_keys": [
+                "query_terms",
+                "ready",
+                "query",
+                "search_id",
+                "summary",
+                "snippets",
+                "annotations",
+                "usage",
+                "fetched_at",
+                "latency_ms",
+                "model",
+                "from_cache"
+              ],
+              "summary": "Web search results ready.",
+              "snippets_count": 0,
+              "latency_ms": 10510,
+              "search_id": "ZfjiaJXILpWFz7IPhZjlmAw",
+              "provider": "Gemini",
+              "model": "gemini-2.5-flash"
+            },
+            "error": null,
+            "elapsed_ms": 16329,
+            "started_at": "2025-10-05T22:59:34.107371",
+            "completed_at": "2025-10-05T22:59:50.437195",
+            "fatal": false
+          },
+          {
+            "tool": "stock_tracker",
+            "status": "completed",
+            "payload": {
+              "tickers": [
+                "NVDA"
+              ],
+              "ready": true,
+              "stock_widget": {
+                "symbols": [
+                  [
+                    "NASDAQ:NVDA",
+                    "NVDA"
+                  ]
+                ],
+                "original": [
+                  "NVDA"
+                ],
+                "chartType": "candlestick",
+                "showVolume": true,
+                "showMA": false,
+                "autosize": true,
+                "height": 440,
+                "locale": "en"
+              },
+              "symbol": "NVDA",
+              "latest_close": 187.62,
+              "previous_close": 188.89,
+              "change_percent": -0.6723489861824247,
+              "bars": [
+                {
+                  "time": 1755835200,
+                  "open": 172.61,
+                  "high": 178.59,
+                  "low": 171.2,
+                  "close": 177.99,
+                  "volume": 172789427
+                },
+                {
+                  "time": 1756094400,
+                  "open": 178.35,
+                  "high": 181.91,
+                  "low": 176.57,
+                  "close": 179.81,
+                  "volume": 163012789
+                },
+                {
+                  "time": 1756180800,
+                  "open": 180.06,
+                  "high": 182.39,
+                  "low": 178.81,
+                  "close": 181.77,
+                  "volume": 168688186
+                },
+                {
+                  "time": 1756267200,
+                  "open": 181.98,
+                  "high": 182.49,
+                  "low": 179.1,
+                  "close": 181.6,
+                  "volume": 235518949
+                },
+                {
+                  "time": 1756353600,
+                  "open": 180.82,
+                  "high": 184.47,
+                  "low": 176.41,
+                  "close": 180.17,
+                  "volume": 281787824
+                },
+                {
+                  "time": 1756440000,
+                  "open": 178.11,
+                  "high": 178.15,
+                  "low": 173.15,
+                  "close": 174.18,
+                  "volume": 243257873
+                },
+                {
+                  "time": 1756785600,
+                  "open": 170,
+                  "high": 172.38,
+                  "low": 167.22,
+                  "close": 170.78,
+                  "volume": 231164853
+                },
+                {
+                  "time": 1756872000,
+                  "open": 171.06,
+                  "high": 172.41,
+                  "low": 168.88,
+                  "close": 170.62,
+                  "volume": 164424873
+                },
+                {
+                  "time": 1756958400,
+                  "open": 170.57,
+                  "high": 171.86,
+                  "low": 169.41,
+                  "close": 171.66,
+                  "volume": 141670144
+                },
+                {
+                  "time": 1757044800,
+                  "open": 168.03,
+                  "high": 169.03,
+                  "low": 164.07,
+                  "close": 167.02,
+                  "volume": 224441435
+                },
+                {
+                  "time": 1757304000,
+                  "open": 167.55,
+                  "high": 170.96,
+                  "low": 167.35,
+                  "close": 168.31,
+                  "volume": 163769133
+                },
+                {
+                  "time": 1757390400,
+                  "open": 169.09,
+                  "high": 170.98,
+                  "low": 166.74,
+                  "close": 170.76,
+                  "volume": 157548392
+                },
+                {
+                  "time": 1757476800,
+                  "open": 176.64,
+                  "high": 179.29,
+                  "low": 175.47,
+                  "close": 177.33,
+                  "volume": 226852020
+                },
+                {
+                  "time": 1757563200,
+                  "open": 179.68,
+                  "high": 180.28,
+                  "low": 176.48,
+                  "close": 177.17,
+                  "volume": 151159274
+                },
+                {
+                  "time": 1757649600,
+                  "open": 177.77,
+                  "high": 178.59,
+                  "low": 176.45,
+                  "close": 177.82,
+                  "volume": 124911026
+                },
+                {
+                  "time": 1757908800,
+                  "open": 175.67,
+                  "high": 178.85,
+                  "low": 174.51,
+                  "close": 177.75,
+                  "volume": 147061559
+                },
+                {
+                  "time": 1757995200,
+                  "open": 177,
+                  "high": 177.5,
+                  "low": 174.38,
+                  "close": 174.88,
+                  "volume": 140737775
+                },
+                {
+                  "time": 1758081600,
+                  "open": 172.64,
+                  "high": 173.2,
+                  "low": 168.41,
+                  "close": 170.29,
+                  "volume": 211843817
+                },
+                {
+                  "time": 1758168000,
+                  "open": 173.98,
+                  "high": 177.1,
+                  "low": 172.96,
+                  "close": 176.24,
+                  "volume": 191763313
+                },
+                {
+                  "time": 1758254400,
+                  "open": 175.77,
+                  "high": 178.08,
+                  "low": 175.18,
+                  "close": 176.67,
+                  "volume": 237182143
+                },
+                {
+                  "time": 1758513600,
+                  "open": 175.3,
+                  "high": 184.55,
+                  "low": 174.71,
+                  "close": 183.61,
+                  "volume": 269637001
+                },
+                {
+                  "time": 1758600000,
+                  "open": 181.97,
+                  "high": 182.42,
+                  "low": 176.21,
+                  "close": 178.43,
+                  "volume": 192559552
+                },
+                {
+                  "time": 1758686400,
+                  "open": 179.77,
+                  "high": 179.78,
+                  "low": 175.4,
+                  "close": 176.97,
+                  "volume": 143564116
+                },
+                {
+                  "time": 1758772800,
+                  "open": 174.48,
+                  "high": 180.26,
+                  "low": 173.12,
+                  "close": 177.69,
+                  "volume": 191586733
+                },
+                {
+                  "time": 1758859200,
+                  "open": 178.17,
+                  "high": 179.77,
+                  "low": 174.93,
+                  "close": 178.19,
+                  "volume": 148573732
+                },
+                {
+                  "time": 1759118400,
+                  "open": 180.43,
+                  "high": 184,
+                  "low": 180.32,
+                  "close": 181.85,
+                  "volume": 193063455
+                },
+                {
+                  "time": 1759204800,
+                  "open": 182.08,
+                  "high": 187.35,
+                  "low": 181.48,
+                  "close": 186.58,
+                  "volume": 236981032
+                },
+                {
+                  "time": 1759291200,
+                  "open": 185.24,
+                  "high": 188.14,
+                  "low": 183.9,
+                  "close": 187.24,
+                  "volume": 173844901
+                },
+                {
+                  "time": 1759377600,
+                  "open": 189.6,
+                  "high": 191.05,
+                  "low": 188.06,
+                  "close": 188.89,
+                  "volume": 136805821
+                },
+                {
+                  "time": 1759464000,
+                  "open": 189.19,
+                  "high": 190.36,
+                  "low": 185.38,
+                  "close": 187.62,
+                  "volume": 137596896
+                }
+              ],
+              "chartType": "candlestick",
+              "showVolume": true,
+              "showMA": false,
+              "autosize": true,
+              "fetched_at": "2025-10-05T22:59:34.579448",
+              "insights": {
+                "symbol": "NVDA",
+                "latest_close": 187.62,
+                "previous_close": 188.89,
+                "change_percent": -0.6723489861824247
+              }
+            },
+            "metadata": {
+              "name": "stock_tracker",
+              "display_name": "Stock Tracker",
+              "description": "Fetch live stock snapshots for planner tickers.",
+              "preview_only": false,
+              "capabilities": [
+                "market_data",
+                "telemetry"
+              ],
+              "outputs": [
+                "tickers",
+                "ready",
+                "insights",
+                "bars",
+                "stock_widget"
+              ],
+              "preview_keys": [
+                "ready",
+                "stock_widget",
+                "tickers"
+              ],
+              "summary": "NVDA close 187.62 (-0.67% vs prior close)"
+            },
+            "error": null,
+            "elapsed_ms": 472,
+            "started_at": "2025-10-05T22:59:34.107668",
+            "completed_at": "2025-10-05T22:59:34.580341",
+            "fatal": false
+          },
+          {
+            "tool": "narrative_synthesizer",
+            "status": "drafting",
+            "payload": {
+              "preview": "Preparing narrative for Revenue"
+            },
+            "metadata": {
+              "name": "narrative_synthesizer",
+              "display_name": "Narrative Synthesizer",
+              "description": "Draft narrative preview text from planned metrics.",
+              "preview_only": true,
+              "capabilities": [
+                "analysis_preview",
+                "telemetry"
+              ],
+              "outputs": [
+                "preview"
+              ],
+              "summary": "Preparing narrative for Revenue",
+              "sample_metrics": [
+                "Revenue"
+              ],
+              "preview_keys": [
+                "preview"
+              ]
+            },
+            "error": null,
+            "elapsed_ms": 0,
+            "started_at": "2025-10-05T22:59:34.107794",
+            "completed_at": "2025-10-05T22:59:34.107804",
+            "fatal": false
+          }
+        ],
+        "stock_widget": {
+          "symbols": [
+            [
+              "NASDAQ:NVDA",
+              "NVDA"
+            ]
+          ],
+          "original": [
+            "NVDA"
+          ],
+          "chartType": "candlestick",
+          "showVolume": true,
+          "showMA": false,
+          "autosize": true,
+          "height": 440,
+          "locale": "en",
+          "generated_at": "2025-10-05T22:59:34.579448",
+          "bars": [
+            {
+              "time": 1755835200,
+              "open": 172.61,
+              "high": 178.59,
+              "low": 171.2,
+              "close": 177.99,
+              "volume": 172789427
+            },
+            {
+              "time": 1756094400,
+              "open": 178.35,
+              "high": 181.91,
+              "low": 176.57,
+              "close": 179.81,
+              "volume": 163012789
+            },
+            {
+              "time": 1756180800,
+              "open": 180.06,
+              "high": 182.39,
+              "low": 178.81,
+              "close": 181.77,
+              "volume": 168688186
+            },
+            {
+              "time": 1756267200,
+              "open": 181.98,
+              "high": 182.49,
+              "low": 179.1,
+              "close": 181.6,
+              "volume": 235518949
+            },
+            {
+              "time": 1756353600,
+              "open": 180.82,
+              "high": 184.47,
+              "low": 176.41,
+              "close": 180.17,
+              "volume": 281787824
+            },
+            {
+              "time": 1756440000,
+              "open": 178.11,
+              "high": 178.15,
+              "low": 173.15,
+              "close": 174.18,
+              "volume": 243257873
+            },
+            {
+              "time": 1756785600,
+              "open": 170,
+              "high": 172.38,
+              "low": 167.22,
+              "close": 170.78,
+              "volume": 231164853
+            },
+            {
+              "time": 1756872000,
+              "open": 171.06,
+              "high": 172.41,
+              "low": 168.88,
+              "close": 170.62,
+              "volume": 164424873
+            },
+            {
+              "time": 1756958400,
+              "open": 170.57,
+              "high": 171.86,
+              "low": 169.41,
+              "close": 171.66,
+              "volume": 141670144
+            },
+            {
+              "time": 1757044800,
+              "open": 168.03,
+              "high": 169.03,
+              "low": 164.07,
+              "close": 167.02,
+              "volume": 224441435
+            },
+            {
+              "time": 1757304000,
+              "open": 167.55,
+              "high": 170.96,
+              "low": 167.35,
+              "close": 168.31,
+              "volume": 163769133
+            },
+            {
+              "time": 1757390400,
+              "open": 169.09,
+              "high": 170.98,
+              "low": 166.74,
+              "close": 170.76,
+              "volume": 157548392
+            },
+            {
+              "time": 1757476800,
+              "open": 176.64,
+              "high": 179.29,
+              "low": 175.47,
+              "close": 177.33,
+              "volume": 226852020
+            },
+            {
+              "time": 1757563200,
+              "open": 179.68,
+              "high": 180.28,
+              "low": 176.48,
+              "close": 177.17,
+              "volume": 151159274
+            },
+            {
+              "time": 1757649600,
+              "open": 177.77,
+              "high": 178.59,
+              "low": 176.45,
+              "close": 177.82,
+              "volume": 124911026
+            },
+            {
+              "time": 1757908800,
+              "open": 175.67,
+              "high": 178.85,
+              "low": 174.51,
+              "close": 177.75,
+              "volume": 147061559
+            },
+            {
+              "time": 1757995200,
+              "open": 177,
+              "high": 177.5,
+              "low": 174.38,
+              "close": 174.88,
+              "volume": 140737775
+            },
+            {
+              "time": 1758081600,
+              "open": 172.64,
+              "high": 173.2,
+              "low": 168.41,
+              "close": 170.29,
+              "volume": 211843817
+            },
+            {
+              "time": 1758168000,
+              "open": 173.98,
+              "high": 177.1,
+              "low": 172.96,
+              "close": 176.24,
+              "volume": 191763313
+            },
+            {
+              "time": 1758254400,
+              "open": 175.77,
+              "high": 178.08,
+              "low": 175.18,
+              "close": 176.67,
+              "volume": 237182143
+            },
+            {
+              "time": 1758513600,
+              "open": 175.3,
+              "high": 184.55,
+              "low": 174.71,
+              "close": 183.61,
+              "volume": 269637001
+            },
+            {
+              "time": 1758600000,
+              "open": 181.97,
+              "high": 182.42,
+              "low": 176.21,
+              "close": 178.43,
+              "volume": 192559552
+            },
+            {
+              "time": 1758686400,
+              "open": 179.77,
+              "high": 179.78,
+              "low": 175.4,
+              "close": 176.97,
+              "volume": 143564116
+            },
+            {
+              "time": 1758772800,
+              "open": 174.48,
+              "high": 180.26,
+              "low": 173.12,
+              "close": 177.69,
+              "volume": 191586733
+            },
+            {
+              "time": 1758859200,
+              "open": 178.17,
+              "high": 179.77,
+              "low": 174.93,
+              "close": 178.19,
+              "volume": 148573732
+            },
+            {
+              "time": 1759118400,
+              "open": 180.43,
+              "high": 184,
+              "low": 180.32,
+              "close": 181.85,
+              "volume": 193063455
+            },
+            {
+              "time": 1759204800,
+              "open": 182.08,
+              "high": 187.35,
+              "low": 181.48,
+              "close": 186.58,
+              "volume": 236981032
+            },
+            {
+              "time": 1759291200,
+              "open": 185.24,
+              "high": 188.14,
+              "low": 183.9,
+              "close": 187.24,
+              "volume": 173844901
+            },
+            {
+              "time": 1759377600,
+              "open": 189.6,
+              "high": 191.05,
+              "low": 188.06,
+              "close": 188.89,
+              "volume": 136805821
+            },
+            {
+              "time": 1759464000,
+              "open": 189.19,
+              "high": 190.36,
+              "low": 185.38,
+              "close": 187.62,
+              "volume": 137596896
+            }
+          ]
+        },
+        "web_context": {
+          "query": "Nvidia market share in the past 5 years?",
+          "search_id": "mvjiaJWiMJ2gz7IPkdG3-Qs",
+          "summary": "Nvidia has significantly expanded its market share",
+          "snippets": [],
+          "annotations": [],
+          "usage": null,
+          "fetched_at": "2025-10-05T23:00:43.463621",
+          "latency_ms": 8960,
+          "model": "gemini-2.5-flash",
+          "from_cache": false
+        }
+      }
+    },
+    "elapsed_ms": 15159
+  }
+]

@@ -247,12 +247,12 @@ semantic:
           indexed: true
         - name: "calendar_quarter_num"
           type: "integer"
-          description: "Quarter number (1, 2, 3, 4, or NULL for annual)"
+          description: "Quarter number (1–4). Annual figures are computed by aggregating quarterly rows (never NULL)."
           required: false
           indexed: true
         - name: "calendar_quarter"
           type: "string"
-          description: "Quarter label (Q1, Q2, Q3, Q4, or NULL for annual)"
+          description: "Quarter label (Q1–Q4). Annual figures aggregate quarters; label is not NULL."
           required: false
       indexes:
         - name: "idx_ticker_metric_year_quarter"
@@ -277,7 +277,7 @@ semantic:
     max_limit: 10000
     default_years_back: 5
     max_years_back: 10
-    annual_filter: "calendar_quarter_num IS NULL"
+    annual_filter: "calendar_quarter_num IS NOT NULL"
     quarterly_filter: "calendar_quarter_num IS NOT NULL"
     active_companies_filter: "ticker IN ({company_list})"
     recent_data_filter: "calendar_year >= EXTRACT(YEAR FROM CURRENT_DATE) - {years_back}"
@@ -328,7 +328,7 @@ semantic:
       label: "Annual"
       description: "Calendar year aggregates"
       group_by: ["calendar_year"]
-      filter: "calendar_quarter_num IS NULL"
+      filter: "calendar_quarter_num IS NOT NULL"
     quarterly:
       label: "Quarterly"
       description: "Quarterly reporting cadence"
@@ -517,4 +517,4 @@ semantic:
       group_by: ["calendar_year"]
       filters:
         metrics: ["R&D Expense", "Revenue"]
-        granularity_filter: "calendar_quarter_num IS NULL"
+        granularity_filter: "calendar_quarter_num IS NOT NULL"

@@ -76,8 +76,27 @@ export interface SingleAgentFanout {
   runningCount: number;
   lastUpdated?: string;
 }
+export interface WebSearchTopic {
+  label?: string;
+  query: string;
+  reason?: string;
+  summary?: string;
+  search_id?: string;
+  latency_ms?: number | null;
+  snippets: Array<{
+    title?: string;
+    url?: string;
+    snippet?: string;
+    display_url?: string;
+    published_at?: string;
+  }>;
+}
+
 export interface WebSearchResult {
   query?: string;
+  queryTerms?: string;
+  searchTopic?: string;
+  searchTopics?: string[];
   summary?: string;
   snippets: Array<{
     title?: string;
@@ -87,6 +106,7 @@ export interface WebSearchResult {
     published_at?: string;
   }>;
   annotations?: Array<Record<string, any>>;
+  topics?: WebSearchTopic[];
   searchId?: string;
   fromCache?: boolean;
   fetchedAt?: string;

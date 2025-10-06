@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useAnalyticsStream } from './useAnalyticsStream';
+import { applyChartOps } from '../utils';
 import { useProcessSteps } from './useProcessSteps';
 import { STEP_NAME_SQL, STEP_ORDER_SQL } from '../../../constants/analytics';
 
@@ -171,6 +172,26 @@ export const useAnalyticsSqlStream = () => {
             eventData.elapsed_ms ?? eventData.elapsed,
             eventData.ts ?? eventData.timestamp,
           );
+          break;
+        }
+
+        case 'chart_patch': {
+          try {
+            if (Array.isArray(eventData?.ops)) {
+              setChartSpec((prev) => applyChartOps(prev, eventData));
+              streamHook.setCurrentStatus('Chart updated');
+              stepsHook.updateStepStatus(
+                'chart',
+                'in_progress',
+                ['Applied chart patch'],
+                { patch: eventData },
+                eventData.elapsed_ms ?? eventData.elapsed,
+                eventData.ts ?? eventData.timestamp,
+              );
+            }
+          } catch (e) {
+            console.warn('[SQL Stream] Failed to apply chart_patch', e);
+          }
           break;
         }
 

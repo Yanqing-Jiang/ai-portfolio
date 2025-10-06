@@ -1,7 +1,7 @@
 ## Agent Ground Rules & Tooling
 Understand the task before editing: read the full function and its direct call sites, and prefer surgical diffs over speculative refactors. Look into the files, generate a plan of changes first, then execute. Do not add fallback code unless requested; Prioritize PowerShell over Bash. Always do unit test before you mark completion. When generating plan, be more elaborative on concept, use actual examples.
 
-- Snapshot baseline files (e.g. `git show`) before deep edits so expectations like `_sql_phase` stay visible.
+- if user is asking for a plan, write your plan to docs folder for easy read
 - Run targeted `pytest` modules after each change to catch missing mocks (Polygon keys, etc.) before the full suite.
 - Favor JS/TS-aware scripts (e.g. `node -e`) when editing TSX to avoid PowerShell escaping loops.
 

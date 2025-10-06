@@ -27,8 +27,8 @@ describe('WebSearchCard', () => {
 
     render(<WebSearchCard result={result} />);
 
-    expect(screen.getByText('Search Highlights')).toBeInTheDocument();
-    expect(screen.getByText('latest Nvidia earnings', { exact: false })).toBeInTheDocument();
+    expect(screen.getByText('Market Research')).toBeInTheDocument();
+    expect(screen.getByText(/Question: latest Nvidia earnings/)).toBeInTheDocument();
     expect(screen.getByText('Nvidia Q2 2025 results')).toBeInTheDocument();
     expect(screen.getByText('Nvidia posted $24B in revenue, up 89% year over year.')).toBeInTheDocument();
     expect(screen.getByText('Fresh')).toBeInTheDocument();

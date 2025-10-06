@@ -25,3 +25,27 @@ describe('WebSearchCard provider/model chips', () => {
   });
 });
 
+describe('WebSearchCard topics', () => {
+  it('renders topic sections with snippets', () => {
+    render(
+      <WebSearchCard
+        result={{
+          query: 'AMD market share',
+          searchTopics: ['AMD market share', 'Semiconductor industry outlook'],
+          snippets: [],
+          topics: [
+            {
+              label: 'Company focus',
+              query: 'AMD market share',
+              snippets: [
+                { title: 'Example', url: 'https://example.com', snippet: 'Snippet body', display_url: 'example.com', published_at: '2025-10-01' },
+              ],
+            },
+          ],
+        }}
+      />
+    );
+    expect(screen.getByText('Company focus')).toBeInTheDocument();
+    expect(screen.getByText(/Snippet body/)).toBeInTheDocument();
+  });
+});
