@@ -1,4 +1,4 @@
-ï»¿# Analytics Package Architecture
+# Analytics Package Architecture
 
 ## Purpose
 The analytics package powers the next-generation analytics memory experience. It orchestrates multi-step agent flows, builds SQL with the OpenAI Responses API using YAML templates as guidance, validates and executes warehouse queries, enriches results with Gemini-powered market research, and streams structured telemetry to the frontend for visualization.
@@ -162,12 +162,28 @@ Backend regression tests live under `backend/tests/analytics/` and cover:
 - Search resiliency (`test_web_retriever_adapter.py`) verifies the adapter skips gracefully without API keys and persists cache metadata after a successful lookup.
 - Flow-level hydration (`test_multi_agent_flow.py`) ensures the MultiAgent flow still records web context payloads when orchestration is stubbed.
 
-Frontend analytics components consume the SSE payloads described here; see `components/analytics/` for the hook (`useAnalyticsMemoryStream`) and visualization panels that mirror the telemetry contract.
+
+### Chart Tool: Agent-Driven Presentation Revisions (Frontend)
+
+The frontend now treats charts as a first-class “tool” that agents can revise without re-querying data.
+
+- Event: `{ "event": "chart_patch", "data": { "ops": ChartOp[], "reason"?: string } }`
+- Hooks: both SQL and Memory streams handle `chart_patch` by transforming the current ECharts option in-place.
+  - `components/analytics/hooks/useAnalyticsSqlStream.ts` ? updates `chartSpec` with `applyChartOps(...)`.
+  - `components/analytics/hooks/useAnalyticsMemoryStream.ts` ? same; also syncs `workflowDataRef.current.chartSpec` for ChatHistory messages.
+- Reducer: `components/analytics/utils/chartOptions.ts`
+  - `applyChartOps(base, patch)` applies high-level ops (`set_chart_type`, `set_stack`, `toggle_series`, `set_y_axis_format`, `filter_companies`, etc.) to an existing option.
+- Renderer: `components/analytics/common/ChartCard.tsx`
+  - Uses ECharts `setOption(..., { replaceMerge: ['series','xAxis','yAxis'] })` on updates to avoid stale series/axes when switching types.
+- Memory UX: `components/analytics/memory/Page.tsx` now renders a page-level chart so `chart_patch` updates are visible immediately (in addition to the chat bubble render on final results).
+
+This mechanism keeps datasets stable while allowing the agent to change presentation (e.g., “switch to bar chart”, “stack as %”, “show AMD and NVDA only”) by emitting small, idempotent patches. No backend schema changes are required; flows can optionally emit `chart_patch` events at any time.Frontend analytics components consume the SSE payloads described here; see `components/analytics/` for the hook (`useAnalyticsMemoryStream`) and visualization panels that mirror the telemetry contract.
 
 ## Operational Notes
 - **Configuration** - YAML files in `backend/config/schemas/` (e.g., `queries.yaml`) drive template selection and metric metadata.
 - **Environment** - `DATABASE_URL`, `OPENAI_API_KEY`, `GEMINI_API_KEY`for Gemini search), and optional reasoning overrides (`SUPERVISOR_REASONING_EFFORT`) must be set before running flows.
 - **API integration** - `/api/analytics/memory/stream` (FastAPI) maps query parameters to `analytics_memory_workflow` and streams events directly to the frontend `EventSource` client.
+
 
 
 

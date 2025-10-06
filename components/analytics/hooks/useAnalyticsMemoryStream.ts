@@ -15,7 +15,7 @@ const AGENT_ROLE_CONFIG: Record<string, { stepId: string; lane: string; label: s
 const DEFAULT_AGENT_ROLE = { stepId: 'agent_coordination', lane: 'coordination', label: 'Agent Coordination' };
 
 import { useProcessSteps } from './useProcessSteps';
-import { resolveChartSpecOption } from '../utils';
+import { resolveChartSpecOption, applyChartOps } from '../utils';
 
 export const useAnalyticsMemoryStream = (
   flow: 'planner-executor' | 'single-agent' | 'multi-agent' = 'planner-executor',
@@ -62,18 +62,25 @@ export const useAnalyticsMemoryStream = (
     if (!raw) {
       return null;
     }
+    const coerceString = (value: unknown): string | undefined => {
+      if (typeof value !== 'string') {
+        return undefined;
+      }
+      const trimmed = value.trim();
+      return trimmed.length > 0 ? trimmed : undefined;
+    };
     const snippets = Array.isArray(raw.snippets)
       ? raw.snippets.map((item: any) => ({
-          title: item?.title,
-          url: item?.url,
-          snippet: item?.snippet,
-          display_url: item?.display_url ?? item?.displayUrl,
-          published_at: item?.published_at ?? item?.publishedAt,
+          title: coerceString(item?.title),
+          url: coerceString(item?.url),
+          snippet: coerceString(item?.snippet),
+          display_url: coerceString(item?.display_url) ?? coerceString(item?.displayUrl),
+          published_at: coerceString(item?.published_at) ?? coerceString(item?.publishedAt),
         }))
       : [];
-    const error = typeof raw.error === 'string' ? raw.error : undefined;
-    const reason = typeof raw.reason === 'string' ? raw.reason : (typeof raw.error_stage === 'string' ? raw.error_stage : undefined);
-    let summary = raw.summary as string | undefined;
+    const error = coerceString(raw.error);
+    const reason = coerceString(raw.reason) ?? coerceString(raw.error_stage);
+    let summary = coerceString(raw.summary);
     // Override outdated Responses API summary lines with Gemini wording
     if (summary && /responses api/i.test(summary)) {
       summary = 'Web search unavailable (Gemini search error).';
@@ -81,20 +88,54 @@ export const useAnalyticsMemoryStream = (
     if (!summary && (error === 'search_api_missing' || reason === 'search_api_missing')) {
       summary = 'Web search disabled until Gemini or Google Search API credentials are configured.';
     }
+    const queryTerms = coerceString(raw.query_terms) ?? coerceString(raw.queryTerms);
+    const searchTopic = coerceString(raw.search_topic) ?? coerceString(raw.searchTopic) ?? queryTerms;
+    const query = coerceString(raw.query) ?? queryTerms ?? searchTopic;
+    let searchTopicValue = searchTopic;
+    const searchTopics = Array.isArray(raw.search_topics)
+      ? raw.search_topics.map(coerceString).filter(Boolean) as string[]
+      : (Array.isArray(raw.searchTopics) ? raw.searchTopics.map(coerceString).filter(Boolean) as string[] : undefined);
+    const normalizeSnippet = (item: any) => ({
+      title: coerceString(item?.title),
+      url: coerceString(item?.url),
+      snippet: coerceString(item?.snippet),
+      display_url: coerceString(item?.display_url) ?? coerceString(item?.displayUrl),
+      published_at: coerceString(item?.published_at) ?? coerceString(item?.publishedAt),
+    });
+    const topics = Array.isArray(raw.topics)
+      ? raw.topics
+          .map((topic: any, index: number) => ({
+            label: coerceString(topic?.label) ?? `Topic ${index + 1}`,
+            query: coerceString(topic?.query) ?? '',
+            reason: coerceString(topic?.reason),
+            summary: coerceString(topic?.summary),
+            search_id: coerceString(topic?.search_id) ?? coerceString(topic?.searchId),
+            latency_ms: typeof topic?.latency_ms === 'number' ? topic.latency_ms : (typeof topic?.latencyMs === 'number' ? topic.latencyMs : null),
+            snippets: Array.isArray(topic?.snippets) ? topic.snippets.map(normalizeSnippet) : [],
+          }))
+          .filter((topic: any) => topic.query)
+      : [];
+    if (searchTopics && searchTopics.length && !searchTopicValue) {
+      searchTopicValue = searchTopics[0];
+    }
     return {
-      query: raw.query_terms ?? raw.query,
+      query,
+      queryTerms,
+      searchTopic: searchTopicValue,
+      searchTopics,
       summary,
       error,
       reason,
       snippets,
       annotations: Array.isArray(raw.annotations) ? raw.annotations : [],
-      searchId: raw.search_id ?? raw.searchId,
+      topics,
+      searchId: coerceString(raw.search_id) ?? coerceString(raw.searchId),
       fromCache: raw.from_cache ?? raw.fromCache ?? raw.cache_hit ?? false,
-      fetchedAt: raw.fetched_at ?? raw.fetchedAt,
-      latencyMs: raw.latency_ms ?? raw.latencyMs ?? null,
+      fetchedAt: coerceString(raw.fetched_at) ?? coerceString(raw.fetchedAt),
+      latencyMs: typeof raw.latency_ms === 'number' ? raw.latency_ms : (typeof raw.latencyMs === 'number' ? raw.latencyMs : null),
       ready: raw.ready ?? (error !== 'search_api_missing' && reason !== 'search_api_missing'),
-      provider: raw.provider ?? (raw.model ? 'Gemini' : undefined),
-      model: raw.model,
+      provider: coerceString(raw.provider) ?? (raw.model ? 'Gemini' : undefined),
+      model: coerceString(raw.model) ?? coerceString(raw.model_name) ?? coerceString(raw.modelName),
     };
   };
 
@@ -799,7 +840,7 @@ export const useAnalyticsMemoryStream = (
                   message: statusMessage,
                 }
               : undefined;
-            updateStep(stepInfo.step, 'in_progress', thinkingLogs, detailPayload, stepInfo.elapsed_ms, stepInfo.ts);
+            updateStep((stepInfo.step === 'web_search' ? 'web_research_agent' : stepInfo.step), 'in_progress', thinkingLogs, detailPayload, stepInfo.elapsed_ms, stepInfo.ts);
           }
           break;
           
@@ -1034,16 +1075,97 @@ export const useAnalyticsMemoryStream = (
           );
           break;
         }
+
+        case 'chart_patch': {
+          try {
+            if (Array.isArray(eventData?.ops)) {
+              setChartSpec(prev => {
+                const next = applyChartOps(prev, eventData);
+                // keep workflow data in sync for ChatHistory result messages
+                workflowDataRef.current.chartSpec = next;
+                return next;
+              });
+              // Build human-readable op summaries for the Agent Thinking panel
+              const opLines: string[] = eventData.ops.map((op: any) => {
+                try {
+                  switch (op.op) {
+                    case 'set_chart_type': return `Chart type → ${op.value}`;
+                    case 'set_stack': return `Stacking → ${op.stack ? (op.mode || 'normal') : 'off'}`;
+                    case 'toggle_series': return `Toggle series (${op.visible ? 'show' : 'hide'}): ${Array.isArray(op.names) ? op.names.join(', ') : ''}`;
+                    case 'set_y_axis_format': return `Y format → ${op.valueType}`;
+                    case 'set_x_axis': return `X axis field → ${op.field}`;
+                    case 'filter_companies': return `Companies → ${Array.isArray(op.tickers) ? op.tickers.join(', ') : ''}`;
+                    case 'set_palette': return `Palette set (${Array.isArray(op.palette) ? op.palette.length : 0} colors)`;
+                    case 'set_axis_scale': return `Axis ${op.axis} scale → ${op.scale}`;
+                    case 'select_metrics': {
+                      const inc = op.include === 'ALL' ? 'ALL' : (Array.isArray(op.include) ? op.include.join(', ') : '');
+                      const exc = Array.isArray(op.exclude) ? op.exclude.join(', ') : '';
+                      return `Metrics include=[${inc}] exclude=[${exc}]`;
+                    }
+                    case 'set_grouping': return `Grouping → ${op.grouping}`;
+                    default: return `Patch: ${JSON.stringify(op)}`;
+                  }
+                } catch { return 'Patch applied'; }
+              });
+
+              streamHook.setCurrentStatus('Chart updated');
+              stepsHook.updateStepStatus(
+                'chart_generation',
+                'in_progress',
+                opLines.length ? opLines : ['Applied chart patch'],
+                { patch: eventData },
+                stepInfo.elapsed_ms,
+                stepInfo.ts
+              );
+              // Reflect in Agent Coordination lane for visibility
+              updateAgentCoordination(opLines);
+            }
+          } catch (e) {
+            console.warn('[AnalyticsMemoryStream] Failed to apply chart_patch', e);
+          }
+          break;
+        }
           
-        case 'web_search':
+        case 'web_search': {
+          const stepId = 'web_research_agent';
           if (eventData.web_context) {
             const webContext = normalizeWebContext(eventData.web_context);
             if (webContext) {
               setWebSearch(webContext);
               workflowDataRef.current.webSearch = webContext;
+
+              const thinking: string[] = [];
+              const primaryTopic = webContext.searchTopic || webContext.queryTerms || webContext.query || '';
+              const topicLabels = Array.isArray(webContext.searchTopics) && webContext.searchTopics.length
+                ? webContext.searchTopics
+                : (Array.isArray(webContext.topics) ? webContext.topics.map((t: any) => t?.label || t?.query).filter(Boolean) : []);
+              if (primaryTopic) thinking.push(`Primary topic: ${primaryTopic}`);
+              if (topicLabels && topicLabels.length) {
+                thinking.push(`Topics: ${topicLabels.slice(0, 3).join('; ')}`);
+              }
+              const snippetsCount = Array.isArray(webContext.snippets)
+                ? webContext.snippets.length
+                : (Array.isArray(webContext.topics)
+                    ? webContext.topics.reduce((acc: number, topic: any) => acc + (Array.isArray(topic?.snippets) ? topic.snippets.length : 0), 0)
+                    : 0);
+              thinking.push(`Snippets: ${snippetsCount}`);
+              const latency = typeof webContext.latencyMs === 'number' ? webContext.latencyMs : null;
+              if (latency !== null) {
+                thinking.push(`Latency: ${latency}ms`);
+              }
+              if (webContext.model) {
+                thinking.push(`Model: ${webContext.model}`);
+              }
+              stepsHook.updateStepStatus(stepId, 'completed', thinking, webContext, stepInfo.elapsed_ms, stepInfo.ts);
+            }
+          } else {
+            const msg = eventData.message || '';
+            if (msg) {
+              stepsHook.updateStepStatus(stepId, 'in_progress', [msg], undefined, stepInfo.elapsed_ms, stepInfo.ts);
             }
           }
           break;
+        }
 
         case 'analysis_streaming':
           if (!isThinkingEvent) {
@@ -1360,6 +1482,26 @@ export const useAnalyticsMemoryStream = (
               if (webContext) {
                 setWebSearch(webContext);
                 workflowDataRef.current.webSearch = webContext;
+
+                const stepId = 'web_research_agent';
+                const thinking: string[] = [];
+                const primaryTopic = webContext.searchTopic || webContext.queryTerms || webContext.query || '';
+                const topicLabels = Array.isArray(webContext.searchTopics) && webContext.searchTopics.length
+                  ? webContext.searchTopics
+                  : (Array.isArray(webContext.topics) ? webContext.topics.map((t: any) => t?.label || t?.query).filter(Boolean) : []);
+                if (primaryTopic) thinking.push(`Primary topic: ${primaryTopic}`);
+                if (topicLabels && topicLabels.length) {
+                  thinking.push(`Topics: ${topicLabels.slice(0, 3).join('; ')}`);
+                }
+                const count = Array.isArray(webContext.snippets)
+                  ? webContext.snippets.length
+                  : (Array.isArray(webContext.topics)
+                      ? webContext.topics.reduce((acc: number, topic: any) => acc + (Array.isArray(topic?.snippets) ? topic.snippets.length : 0), 0)
+                      : 0);
+                thinking.push(`Snippets: ${count}`);
+                if (typeof webContext.latencyMs === 'number') thinking.push(`Latency: ${webContext.latencyMs}ms`);
+                if (webContext.model) thinking.push(`Model: ${webContext.model}`);
+                stepsHook.updateStepStatus(stepId, 'completed', thinking, webContext, eventData.elapsed_ms ?? stepInfo.elapsed_ms, stepInfo.ts);
               }
             }
 
@@ -1763,11 +1905,6 @@ export const useAnalyticsMemoryStream = (
     updateChatMessage,
   };
 };
-
-
-
-
-
 
 
 

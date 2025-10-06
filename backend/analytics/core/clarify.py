@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 import uuid
 import asyncio
 import time
@@ -504,32 +504,12 @@ def compute_required_clarifications(
 ) -> List[ClarifyRequestModel]:
     """Wrapper that computes official clarifications deterministically.
     
-    Calls existing detect_missing_slots early and adds confidence-based
-    scope clarification for market share intents. All options/defaults
+    Applies existing detect_missing_slots logic and enforces deterministic sorting by slot priority.
+    All options/defaults come from configs, not LLM suggestions.
     come from configs, not LLM suggestions.
     """
     # Use existing logic to detect missing slots
     clarifications = detect_missing_slots(intent, provisional_plan, template, configs)
-    
-    # Add scope clarification for low-confidence market share
-    if intent.confidence < 0.8 and intent.intent_key in ['market_share_single', 'market_share_all']:
-        # Only add if not already present
-        if not any(c.slot == 'comparison' for c in clarifications):
-            # Determine default based on current plan
-            default = 'All companies' if provisional_plan.comparison == 'all' else 'Single company only'
-            
-            clarifications.append(ClarifyRequestModel(
-                slot='comparison',
-                question='Do you want a single company or all companies?',
-                type='single',
-                options=['Single company only', 'All companies'],
-                default=default,
-                reason='Low confidence on scope; please confirm',
-                required=True,
-                request_id=str(uuid.uuid4()),
-                proposed=None,
-                proposed_confidence=0.0
-            ))
     
     # Sort clarifications by priority: comparison > company > granularity > timeframe > metrics
     priority_map = {

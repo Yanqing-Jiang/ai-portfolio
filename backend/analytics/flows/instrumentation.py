@@ -40,6 +40,7 @@ PARALLEL_GROUP_BY_STEP = {
     "sql_execution": "sql",
     "analysis_generation": "analysis",
     "chart_generation": "chart",
+    "web_search": "web",
 }
 
 def _resolve_parallel_group(event: Dict[str, Any]) -> Optional[str]:

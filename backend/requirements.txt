@@ -10,7 +10,7 @@ langchain
 langchain-core
 langchain-community
 langchain-openai
-google-generativeai
+google-genai
 fastapi-limiter
 redis
 asyncpg

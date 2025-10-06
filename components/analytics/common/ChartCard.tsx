@@ -112,6 +112,20 @@ export const ChartCard: React.FC<ChartCardProps> = ({
     };
   }, []);
 
+  // Apply updates deterministically with replaceMerge to avoid stale series/axes
+  useEffect(() => {
+    const instance = chartRef.current;
+    if (!instance || !chartSpec) return;
+    try {
+      const themed = withLightTheme(chartSpec);
+      // If echarts-for-react already set option via prop, this is a reinforcement to ensure replaceMerge semantics
+      instance.setOption(themed, { replaceMerge: ['series', 'xAxis', 'yAxis'] });
+    } catch (e) {
+      // swallow to avoid breaking UI in edge cases
+      console.warn('[ChartCard] setOption replaceMerge failed', e);
+    }
+  }, [chartSpec]);
+
   return (
     <div ref={containerRef} className="bg-gray-800 border border-gray-700 rounded-xl shadow-2xl p-4 sm:p-6 md:p-8">
       <h2 className="text-lg sm:text-xl md:text-2xl font-semibold text-white mb-4 sm:mb-6">Interactive Visualization</h2>
