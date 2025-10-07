@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import os
 from typing import Any, AsyncGenerator, Callable, Dict, Optional
@@ -6,6 +6,12 @@ from typing import Any, AsyncGenerator, Callable, Dict, Optional
 from .planner_executor import PlannerExecutorFlow
 from .single_agent_tools import SingleAgentToolsFlow
 from .multi_agent import MultiAgentFlow
+from .chart_revision import (
+    infer_analysis_revision_from_query,
+    infer_chart_patch_from_query,
+    is_analysis_revision_query,
+    is_chart_revision_query,
+)
 from .instrumentation import instrument_events
 
 FLOW_FACTORIES: Dict[str, Callable[[], Any]] = {
@@ -74,6 +80,83 @@ async def analytics_memory_workflow(
 ) -> AsyncGenerator[Dict[str, Any], None]:
     selected = flow or os.getenv("ANALYTICS_FLOW_MODE") or DEFAULT_FLOW
     should_instrument = _env_flag("ANALYTICS_MEMORY_INSTRUMENT", default=True)
+
+    if session_id and is_chart_revision_query(query):
+        patch = infer_chart_patch_from_query(query)
+        if patch:
+            factory = _get_flow_factory(selected)
+            flow_instance = factory()
+            revision_kwargs = {"reason": "revision_request", "source": "analytics_memory_workflow"}
+
+            if isinstance(flow_instance, MultiAgentFlow):
+                generator = flow_instance.chart_revision(
+                    query,
+                    session_id=session_id,
+                    patch=patch,
+                    **revision_kwargs,
+                )
+            elif isinstance(flow_instance, SingleAgentToolsFlow):
+                generator = flow_instance.chart_revision(
+                    session_id=session_id,
+                    patch=patch,
+                    query=query,
+                    **revision_kwargs,
+                )
+            elif isinstance(flow_instance, PlannerExecutorFlow):
+                generator = flow_instance.emit_chart_patch(
+                    session_id=session_id,
+                    patch=patch,
+                    **revision_kwargs,
+                )
+            else:
+                generator = flow_instance.emit_chart_patch(
+                    session_id=session_id,
+                    patch=patch,
+                    **revision_kwargs,
+                )
+
+            async for event in generator:
+                yield event
+            return
+
+    if session_id and is_analysis_revision_query(query):
+        analysis_text = infer_analysis_revision_from_query(query)
+        if analysis_text:
+            factory = _get_flow_factory(selected)
+            flow_instance = factory()
+            revision_kwargs = {"reason": "revision_request", "source": "analytics_memory_workflow"}
+
+            if isinstance(flow_instance, MultiAgentFlow):
+                generator = flow_instance.analysis_revision(
+                    query,
+                    session_id=session_id,
+                    analysis=analysis_text,
+                    **revision_kwargs,
+                )
+            elif isinstance(flow_instance, SingleAgentToolsFlow):
+                generator = flow_instance.analysis_revision(
+                    session_id=session_id,
+                    analysis=analysis_text,
+                    query=query,
+                    **revision_kwargs,
+                )
+            elif isinstance(flow_instance, PlannerExecutorFlow):
+                generator = flow_instance.emit_analysis_revision(
+                    session_id=session_id,
+                    analysis=analysis_text,
+                    **revision_kwargs,
+                )
+            else:
+                generator = flow_instance.emit_analysis_revision(
+                    session_id=session_id,
+                    analysis=analysis_text,
+                    **revision_kwargs,
+                )
+
+            async for event in generator:
+                yield event
+            return
+
     async for event in run_flow(
         selected,
         query,
@@ -82,8 +165,4 @@ async def analytics_memory_workflow(
         flow_label=selected,
     ):
         yield event
-
-
-
-
 

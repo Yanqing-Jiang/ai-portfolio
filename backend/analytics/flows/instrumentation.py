@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import uuid
 from datetime import datetime
@@ -39,6 +39,7 @@ PARALLEL_GROUP_BY_STEP = {
     "sql_compilation": "sql",
     "sql_execution": "sql",
     "analysis_generation": "analysis",
+    "analysis_revision": "analysis",
     "chart_generation": "chart",
     "web_search": "web",
 }
@@ -171,6 +172,7 @@ async def instrument_events(
             await repository.save(snapshot)
 
     await repository.save(snapshot)
+
 
 
 

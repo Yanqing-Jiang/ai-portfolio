@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 from typing import AsyncGenerator, Dict, Any, Optional, List, Tuple
 from dataclasses import dataclass, field
 import asyncio
@@ -40,6 +40,7 @@ from analytics.sql.prompt_builder import build_sql_messages, build_sql_retry_mes
 from analytics.agents.schema_clarifier import ClarifierDecision, decide_schema_clarification
 from analytics.core.charting import build_chart_spec, plan_chart_rule_based
 from .tool_bundle import collect_tool_bundle
+from .chart_revision import emit_chart_patch as _chart_revision_emit, emit_analysis_revision as _analysis_revision_emit
 from analytics.core.telemetry import analysis_chunk as log_analysis_chunk
 from analytics.services.response_search import ResponseSearchError, perform_response_search, has_search_api_key, generate_search_topic
 from analytics.core.analysis import summarize, stream_insights_llm
@@ -172,6 +173,8 @@ class PlannerPhaseContext:
     analysis: str = ""
     parallelism_enabled: bool = False
     planner_result: PlannerResultModel = field(default_factory=PlannerResultModel)
+    halted: bool = False
+    halt_reason: Optional[str] = None
 
 AGGREGATE_METRIC_MARKERS = (
     "'r&d expense'",
@@ -231,6 +234,525 @@ class PlannerPipeline:
         self.parallelism_enabled = True
         self.hooks: AnalyticsFlowHooks = NullFlowHooks()
 
+    async def initialize_context(self, query: str, session_id: Optional[str] = None) -> PlannerPhaseContext:
+        return await _initialize_context(self, query, session_id)
+
+    async def emit_chart_patch(
+        self,
+        *,
+        session_id: str,
+        patch: Dict[str, Any],
+        reason: Optional[str] = None,
+        source: Optional[str] = None,
+        repository: Optional[Any] = None,
+        hooks: Optional[AnalyticsFlowHooks] = None,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        stream = _chart_revision_emit(
+            session_id=session_id,
+            patch=patch,
+            reason=reason,
+            source=source,
+            repository=repository,
+        )
+        if hooks is None:
+            async for event in stream:
+                yield event
+            return
+
+        hook_ctx: Dict[str, Any] = {"session_id": session_id}
+        try:
+            async for start_event in hooks.on_flow_start(hook_ctx):
+                yield start_event
+            async for event in stream:
+                async for pre_event in hooks.before_event(hook_ctx, event):
+                    yield pre_event
+                yield event
+                async for post_event in hooks.after_event(hook_ctx, event):
+                    yield post_event
+        except BaseException as exc:
+            async for end_event in hooks.on_flow_end(hook_ctx, error=exc):
+                yield end_event
+            raise
+        else:
+            async for end_event in hooks.on_flow_end(hook_ctx):
+                yield end_event
+
+
+
+
+
+
+    async def run_classification(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[str, Any], None]:
+        async for event in _classification_phase(self, ctx):
+            yield event
+
+    async def run_intent(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[str, Any], None]:
+        async for event in _intent_phase(self, ctx):
+            yield event
+
+    async def run_clarification(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[str, Any], None]:
+        async for event in _clarification_phase(self, ctx):
+            yield event
+
+    async def run_plan(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[str, Any], None]:
+        async for event in _plan_phase(self, ctx):
+            yield event
+
+    async def run_sql_pipeline(
+        self,
+        ctx: PlannerPhaseContext,
+        *,
+        intent: IntentModel,
+        plan: QueryPlanModel,
+        candidate_templates: List[Dict[str, Any]],
+        selected_template_id: Optional[str],
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        timed_emitter = ctx.timed_emitter
+        workflow_start = ctx.workflow_start
+        session_id = ctx.session_id
+        query = ctx.query
+        template = ctx.template
+
+        sql_progress = EventEmitter.progress("sql_compilation", "Generating SQL with Responses API...")
+        sql_progress["data"]["ts"] = datetime.utcnow().isoformat()
+        yield sql_progress
+        timed_emitter.start_step("sql_generation")
+        MAX_SQL_ATTEMPTS = 3
+        sql = ""
+        llm_used = False
+        attempt_logs: List[Dict[str, Any]] = []
+        last_error_code: Optional[str] = None
+        last_error_detail: Optional[str] = None
+        previous_sql: Optional[str] = None
+
+        messages = await build_sql_messages(
+            original_query=query,
+            intent=intent,
+            plan=plan,
+            config_store=self.config_store,
+            templates=candidate_templates,
+        )
+
+        for attempt in range(1, MAX_SQL_ATTEMPTS + 1):
+            attempt_start = time.time()
+            attempt_record: Dict[str, Any] = {"attempt": attempt, "status": "started"}
+            candidate_sql = ""
+            try:
+                if not self.unified_client:
+                    self.unified_client = get_unified_client()
+                if not self.unified_client:
+                    raise RuntimeError("Unified Responses client is not configured")
+                llm_response, _ = await self.unified_client.simple_completion(
+                    messages=messages,
+                    reasoning_effort="medium",
+                )
+                candidate_sql = (extract_sql_from_response(llm_response) or "").strip()
+                candidate_sql = _normalize_calendar_filters(candidate_sql)
+            except Exception as exc:
+                last_error_code = "SQL_GENERATION_ERROR"
+                last_error_detail = str(exc)
+                attempt_record.update(
+                    status="error",
+                    error_code=last_error_code,
+                    error_detail=last_error_detail,
+                    elapsed_ms=int((time.time() - attempt_start) * 1000),
+                )
+                attempt_logs.append(attempt_record)
+                ctx.sql_attempts = attempt_logs
+                ctx.planner_result.sql_attempts = list(attempt_logs)
+                error_event = EventEmitter.error(
+                    "sql_compilation",
+                    "SQL generation failed",
+                    details={"attempt": attempt, "error": last_error_detail},
+                    code=last_error_code,
+                )
+                error_event["data"]["ts"] = datetime.utcnow().isoformat()
+                yield error_event
+            else:
+                if not candidate_sql:
+                    last_error_code = "SQL_EMPTY"
+                    last_error_detail = "Responses API returned no SQL content."
+                    attempt_record.update(
+                        status="empty",
+                        error_code=last_error_code,
+                        error_detail=last_error_detail,
+                        elapsed_ms=int((time.time() - attempt_start) * 1000),
+                    )
+                    attempt_logs.append(attempt_record)
+                    ctx.sql_attempts = attempt_logs
+                    ctx.planner_result.sql_attempts = list(attempt_logs)
+                    empty_notice = EventEmitter.progress(
+                        "sql_compilation",
+                        "SQL attempt returned no content; retrying with additional guidance.",
+                    )
+                    empty_notice["data"].update(
+                        {"ts": datetime.utcnow().isoformat(), "attempt": attempt}
+                    )
+                    yield empty_notice
+                else:
+                    ok, issues, validate_elapsed = _validate_sql(candidate_sql)
+                    attempt_record.update(
+                        status="valid" if ok else "invalid",
+                        elapsed_ms=int((time.time() - attempt_start) * 1000),
+                        validation_elapsed_ms=validate_elapsed,
+                        issues=issues,
+                    )
+                    if not ok:
+                        last_error_code = "SQL_VALIDATION_FAILED"
+                        last_error_detail = "; ".join(issues) if issues else "Validation failed"
+                    attempt_logs.append(attempt_record)
+                    ctx.sql_attempts = attempt_logs
+                    ctx.planner_result.sql_attempts = list(attempt_logs)
+                    if ok:
+                        sql = candidate_sql
+                        ctx.sql = sql
+                        llm_used = True
+                        ctx.llm_used = True
+                        ctx.sql_attempt = attempt
+                        ctx.planner_result.sql_text = sql
+                        compiled_event = EventEmitter.result(
+                            "sql_compiled",
+                            {
+                                "sql_length": len(sql),
+                                "template_fallback": False,
+                                "template_used": selected_template_id,
+                                "attempt": attempt,
+                                "fallback_reason": None,
+                                "llm_used": True,
+                            },
+                        )
+                        compiled_event["event"] = "sql_compiled"
+                        compiled_event["data"].update(
+                            {
+                                "ts": datetime.utcnow().isoformat(),
+                                "elapsed_ms": attempt_record.get("elapsed_ms"),
+                            }
+                        )
+                        yield compiled_event
+                        generated_event = EventEmitter.sql_generated(sql)
+                        generated_event["data"].update(
+                            {
+                                "ts": datetime.utcnow().isoformat(),
+                                "elapsed_ms": attempt_record.get("elapsed_ms"),
+                                "llm_used": True,
+                                "attempt": attempt,
+                            }
+                        )
+                        yield generated_event
+                        break
+                    validation_event = EventEmitter.error(
+                        "sql_validation",
+                        "Generated SQL failed validation",
+                        details={"attempt": attempt, "issues": issues},
+                        code=last_error_code,
+                    )
+                    validation_event["data"]["ts"] = datetime.utcnow().isoformat()
+                    yield validation_event
+                    previous_sql = candidate_sql
+            if sql:
+                break
+            if attempt < MAX_SQL_ATTEMPTS:
+                retry_notice = EventEmitter.progress(
+                    "sql_compilation",
+                    f"Retrying SQL generation (attempt {attempt + 1}/{MAX_SQL_ATTEMPTS})",
+                )
+                retry_notice["data"].update(
+                    {"ts": datetime.utcnow().isoformat(), "last_error": last_error_code}
+                )
+                yield retry_notice
+                messages = await build_sql_retry_messages(
+                    original_query=query,
+                    intent=intent,
+                    plan=plan,
+                    error_code=last_error_code or "unknown_error",
+                    error_detail=last_error_detail or "",
+                    previous_sql=previous_sql,
+                    attempts=attempt_logs,
+                    config_store=self.config_store,
+                    templates=candidate_templates,
+                )
+
+        ctx.sql_attempts = attempt_logs
+        ctx.planner_result.sql_attempts = list(attempt_logs)
+        if not sql:
+            failure_event = EventEmitter.error(
+                "sql_compilation",
+                "Unable to generate valid SQL after 3 attempts",
+                details={"attempts": attempt_logs, "last_error": last_error_code, "last_detail": last_error_detail},
+                code=last_error_code or "SQL_RETRY_EXHAUSTED",
+            )
+            failure_event["data"]["ts"] = datetime.utcnow().isoformat()
+            yield failure_event
+            workflow_abort = EventEmitter.result(
+                "workflow_complete",
+                {
+                    "status": "sql_generation_failed",
+                    "total_elapsed_ms": int((time.time() - workflow_start) * 1000),
+                },
+            )
+            workflow_abort["event"] = "workflow_complete"
+            workflow_abort["data"]["ts"] = datetime.utcnow().isoformat()
+            yield workflow_abort
+            ctx.halted = True
+            ctx.halt_reason = "sql_generation_failed"
+            return
+
+        validation_progress = EventEmitter.progress(
+            "sql_validation", "Validating SQL..."
+        )
+        validation_progress["data"]["ts"] = datetime.utcnow().isoformat()
+        yield validation_progress
+        ok, issues, validate_elapsed = _validate_sql(sql)
+        validation_event = EventEmitter.result(
+            "sql_validated",
+            {
+                "ok": ok,
+                "issues_count": len(issues),
+                "attempt": ctx.sql_attempt,
+                "issues": issues,
+            },
+        )
+        validation_event["event"] = "sql_validated"
+        validation_event["data"].update(
+            {"ts": datetime.utcnow().isoformat(), "elapsed_ms": validate_elapsed}
+        )
+        yield validation_event
+        if not ok:
+            error_event = EventEmitter.error(
+                "sql_validation",
+                "SQL failed validation after retries",
+                details={"attempts": attempt_logs, "issues": issues},
+                code="SQL_VALIDATION_FINAL",
+            )
+            error_event["data"]["ts"] = datetime.utcnow().isoformat()
+            yield error_event
+            workflow_abort = EventEmitter.result(
+                "workflow_complete",
+                {
+                    "status": "sql_validation_failed",
+                    "total_elapsed_ms": int((time.time() - workflow_start) * 1000),
+                },
+            )
+            workflow_abort["event"] = "workflow_complete"
+            workflow_abort["data"]["ts"] = datetime.utcnow().isoformat()
+            yield workflow_abort
+            ctx.halted = True
+            ctx.halt_reason = "sql_validation_failed"
+            return
+
+        execution_progress = EventEmitter.progress(
+            "sql_execution", "Executing query..."
+        )
+        execution_progress["data"]["ts"] = datetime.utcnow().isoformat()
+        yield execution_progress
+        exec_start = time.time()
+        try:
+            data = await execute_sql(sql)
+            exec_elapsed = int((time.time() - exec_start) * 1000)
+            ctx.exec_elapsed_ms = exec_elapsed
+            ctx.planner_result.data_row_count = len(data)
+        except Exception as exec_exc:
+            logger.error(
+                "[SQL_EXECUTION] Execution failed: %s",
+                exec_exc,
+                extra={
+                    "error_code": "SQL_EXECUTION_ERROR",
+                    "flow": self.flow_label,
+                    "session_id": session_id,
+                    "intent_key": intent.intent_key,
+                },
+            )
+            error_event = EventEmitter.error(
+                "sql_execution",
+                "SQL execution failed",
+                details={"error": str(exec_exc)},
+                code="SQL_EXECUTION_ERROR",
+            )
+            error_event["data"]["ts"] = datetime.utcnow().isoformat()
+            yield error_event
+            workflow_abort = EventEmitter.result(
+                "workflow_complete",
+                {
+                    "status": "sql_execution_failed",
+                    "total_elapsed_ms": int((time.time() - workflow_start) * 1000),
+                },
+            )
+            workflow_abort["event"] = "workflow_complete"
+            workflow_abort["data"]["ts"] = datetime.utcnow().isoformat()
+            yield workflow_abort
+            ctx.halted = True
+            ctx.halt_reason = "sql_execution_failed"
+            return
+
+        ctx.llm_used = llm_used or ctx.llm_used
+        ctx.sql = sql
+        ctx.data = data
+
+    async def run_chart_phase(self, ctx: PlannerPhaseContext, *, intent: IntentModel, plan: QueryPlanModel) -> AsyncGenerator[Dict[str, Any], None]:
+        data = ctx.data or []
+        if not data:
+            return
+        query = ctx.query
+        chart_progress = EventEmitter.progress(
+            "chart_generation", "Planning chart..."
+        )
+        chart_progress["data"]["ts"] = datetime.utcnow().isoformat()
+        yield chart_progress
+        chart_start = time.time()
+        chart_plan = plan_chart_rule_based(data, query, intent.intent_key)
+        spec = build_chart_spec(
+            data,
+            chart_plan.dict(),
+            CONFIGS.charts,
+            intent_key=intent.intent_key,
+            comparison=plan.comparison,
+        )
+        ctx.chart_spec = spec
+        chart_design = _generate_chart_design(intent.intent_key, plan, data, spec)
+        spec.setdefault("meta", {}).setdefault("chartDesign", chart_design)
+        ctx.planner_result.chart_summary = {
+            "chart_type": chart_plan.chart_type,
+            "series_count": len(chart_plan.series),
+            "design": chart_design,
+        }
+        chart_elapsed = int((time.time() - chart_start) * 1000)
+        chart_event = EventEmitter.result(
+            "chart_planned",
+            {
+                "chart_type": chart_plan.chart_type,
+                "series_count": len(chart_plan.series),
+            },
+        )
+        chart_event["event"] = "chart_planned"
+        chart_event["data"].update(
+            {
+                "ts": datetime.utcnow().isoformat(),
+                "elapsed_ms": chart_elapsed,
+            }
+        )
+        yield chart_event
+        try:
+            ChartSpecModel(**spec)
+            generated_chart = EventEmitter.result(
+                "chart_generated",
+                {
+                    "chart_type": spec.get("meta", {}).get("chartDesign", {}).get(
+                        "chart_type", "unknown"
+                    ),
+                    "chart_spec": spec,
+                },
+                key="chart_spec",
+            )
+            generated_chart["event"] = "chart_generated"
+            generated_chart["data"]["ts"] = datetime.utcnow().isoformat()
+            yield generated_chart
+        except ValidationError as ve:
+            warning_event = EventEmitter.progress(
+                "warning", f"Chart spec validation warning: {str(ve)}"
+            )
+            warning_event["data"]["ts"] = datetime.utcnow().isoformat()
+            yield warning_event
+            fallback_chart = EventEmitter.result(
+                "chart_generated",
+                {
+                    "chart_type": spec.get("meta", {}).get("chartDesign", {}).get(
+                        "chart_type", "unknown"
+                    ),
+                    "chart_spec": spec,
+                },
+                key="chart_spec",
+            )
+            fallback_chart["event"] = "chart_generated"
+            fallback_chart["data"]["ts"] = datetime.utcnow().isoformat()
+            yield fallback_chart
+
+    async def run_analysis_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[str, Any], None]:
+        data = ctx.data or []
+        if not data:
+            return
+        session_id = ctx.session_id
+        query = ctx.query
+        sql = ctx.sql
+        analysis_progress = EventEmitter.progress(
+            "analysis_generation", "Generating insights..."
+        )
+        analysis_progress["data"]["ts"] = datetime.utcnow().isoformat()
+        yield analysis_progress
+        analysis_start = time.time()
+        full_analysis = ""
+        async for text_chunk in stream_insights_llm(
+            data,
+            sql,
+            query,
+            chart_spec=ctx.chart_spec,
+            search_result=ctx.web_search,
+            session_id=session_id,
+        ):
+            if text_chunk:
+                full_analysis += text_chunk
+                streaming_event = {
+                    "event": "analysis_streaming",
+                    "data": {
+                        "step": "analysis_generation",
+                        "partial_analysis": text_chunk,
+                        "chunk_length": len(text_chunk),
+                        "ts": datetime.utcnow().isoformat(),
+                    },
+                }
+                log_analysis_chunk(
+                    chunk=text_chunk,
+                    step="analysis_generation",
+                    role=None,
+                    session_id=session_id,
+                    flow=getattr(self, "flow_label", None),
+                )
+                yield streaming_event
+        analysis_elapsed = int((time.time() - analysis_start) * 1000)
+        ctx.analysis = full_analysis
+        ctx.planner_result.analysis = full_analysis
+        analysis_payload = {
+            "analysis_length": len(full_analysis),
+            "analysis": full_analysis,
+        }
+        tool_bundle = collect_tool_bundle(
+            manifest=getattr(ctx, "tool_parallel_manifest", None),
+            results=getattr(ctx, "tool_parallel_results", None),
+        )
+        if tool_bundle:
+            analysis_payload.update(tool_bundle)
+        if ctx.web_search:
+            web_payload = ctx.web_search.to_payload()
+            analysis_payload['web_context'] = web_payload
+            ctx.planner_result.metadata['web_search'] = web_payload
+        analysis_complete = EventEmitter.result(
+            "analysis_complete",
+            analysis_payload,
+            key="analysis",
+        )
+        analysis_complete["event"] = "analysis_complete"
+        analysis_complete["data"].update(
+            {
+                "ts": datetime.utcnow().isoformat(),
+                "elapsed_ms": analysis_elapsed,
+            }
+        )
+        yield analysis_complete
+        from analytics.core.clarify import get_session_store
+        session_store = await get_session_store()
+        await session_store.cleanup_expired()
+        total_elapsed = int((time.time() - ctx.workflow_start) * 1000)
+        result_event = EventEmitter.result(
+            "planner_result", ctx.planner_result.model_dump()
+        )
+        result_event["event"] = "planner_result"
+        result_event["data"]["ts"] = datetime.utcnow().isoformat()
+        yield result_event
+        workflow_complete = EventEmitter.result(
+            "workflow_complete", {"total_elapsed_ms": total_elapsed}
+        )
+        workflow_complete["event"] = "workflow_complete"
+        workflow_complete["data"]["ts"] = datetime.utcnow().isoformat()
+        yield workflow_complete
 
 
     async def _web_search_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[str, Any], None]:
@@ -327,6 +849,46 @@ class PlannerPipeline:
         else:
             return 'Unknown'
 
+    async def emit_analysis_revision(
+        self,
+        *,
+        session_id: str,
+        analysis: str,
+        reason: Optional[str] = None,
+        source: Optional[str] = None,
+        repository: Optional[Any] = None,
+        hooks: Optional[AnalyticsFlowHooks] = None,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        stream = _analysis_revision_emit(
+            session_id=session_id,
+            analysis=analysis,
+            reason=reason,
+            source=source,
+            repository=repository,
+        )
+        if hooks is None:
+            async for event in stream:
+                yield event
+            return
+
+        hook_ctx: Dict[str, Any] = {"session_id": session_id}
+        try:
+            async for start_event in hooks.on_flow_start(hook_ctx):
+                yield start_event
+            async for event in stream:
+                async for pre_event in hooks.before_event(hook_ctx, event):
+                    yield pre_event
+                yield event
+                async for post_event in hooks.after_event(hook_ctx, event):
+                    yield post_event
+        except BaseException as exc:
+            async for end_event in hooks.on_flow_end(hook_ctx, error=exc):
+                yield end_event
+            raise
+        else:
+            async for end_event in hooks.on_flow_end(hook_ctx):
+                yield end_event
+
     async def events(self, query: str, session_id: Optional[str] = None) -> AsyncGenerator[Dict[str, Any], None]:
         """Enhanced workflow with structured decision events and timing."""
         ctx = await _initialize_context(self, query, session_id)
@@ -334,446 +896,44 @@ class PlannerPipeline:
         timed_emitter = ctx.timed_emitter
         workflow_start = ctx.workflow_start
         yield EventEmitter.session_started(session_id)
-        async for event in _classification_phase(self, ctx):
+        async for event in self.run_classification(ctx):
             yield event
         if not ctx.is_financial_query:
             return
-        async for event in _intent_phase(self, ctx):
+        async for event in self.run_intent(ctx):
             yield event
-        async for event in _clarification_phase(self, ctx):
+        async for event in self.run_clarification(ctx):
             yield event
-        async for event in _plan_phase(self, ctx):
+        async for event in self.run_plan(ctx):
             yield event
         intent = ctx.intent
         provisional_plan = ctx.plan or ctx.provisional_plan
         template = ctx.template
         candidate_templates = ctx.candidate_templates
         selected_template_id = ctx.selected_template_id
+
+
+
         if not intent or not provisional_plan:
             return
-        plan = provisional_plan
-        # 7) SQL Generation Phase
-        sql_progress = EventEmitter.progress("sql_compilation", "Generating SQL with Responses API...")
-        sql_progress["data"]["ts"] = datetime.utcnow().isoformat()
-        yield sql_progress
-        timed_emitter.start_step("sql_generation")
-        MAX_SQL_ATTEMPTS = 3
-        sql = ""
-        llm_used = False
-        attempt_logs: List[Dict[str, Any]] = []
-        last_error_code: Optional[str] = None
-        last_error_detail: Optional[str] = None
-        previous_sql: Optional[str] = None
-
-        messages = await build_sql_messages(
-            original_query=query,
-            intent=intent,
-            plan=plan,
-            config_store=self.config_store,
-            templates=candidate_templates,
-        )
-
-        for attempt in range(1, MAX_SQL_ATTEMPTS + 1):
-            attempt_start = time.time()
-            attempt_record: Dict[str, Any] = {"attempt": attempt, "status": "started"}
-            candidate_sql = ""
-            try:
-                if not self.unified_client:
-                    self.unified_client = get_unified_client()
-                if not self.unified_client:
-                    raise RuntimeError("Unified Responses client is not configured")
-                llm_response, _ = await self.unified_client.simple_completion(
-                    messages=messages,
-                    reasoning_effort="medium",
-                )
-                candidate_sql = (extract_sql_from_response(llm_response) or "").strip()
-                candidate_sql = _normalize_calendar_filters(candidate_sql)
-            except Exception as exc:
-                last_error_code = "SQL_GENERATION_ERROR"
-                last_error_detail = str(exc)
-                attempt_record.update(
-                    status="error",
-                    error_code=last_error_code,
-                    error_detail=last_error_detail,
-                    elapsed_ms=int((time.time() - attempt_start) * 1000),
-                )
-                attempt_logs.append(attempt_record)
-                ctx.sql_attempts = attempt_logs
-                ctx.planner_result.sql_attempts = list(attempt_logs)
-                error_event = EventEmitter.error(
-                    "sql_compilation",
-                    "SQL generation failed",
-                    details={"attempt": attempt, "error": last_error_detail},
-                    code=last_error_code,
-                )
-                error_event["data"]["ts"] = datetime.utcnow().isoformat()
-                yield error_event
-            else:
-                if not candidate_sql:
-                    last_error_code = "SQL_EMPTY"
-                    last_error_detail = "Responses API returned no SQL content."
-                    attempt_record.update(
-                        status="empty",
-                        error_code=last_error_code,
-                        error_detail=last_error_detail,
-                        elapsed_ms=int((time.time() - attempt_start) * 1000),
-                    )
-                    attempt_logs.append(attempt_record)
-                    ctx.sql_attempts = attempt_logs
-                    ctx.planner_result.sql_attempts = list(attempt_logs)
-                    empty_notice = EventEmitter.progress(
-                        "sql_compilation",
-                        "SQL attempt returned no content; retrying with additional guidance.",
-                    )
-                    empty_notice["data"].update(
-                        {"ts": datetime.utcnow().isoformat(), "attempt": attempt}
-                    )
-                    yield empty_notice
-                else:
-                    ok, issues, validate_elapsed = _validate_sql(candidate_sql)
-                    attempt_record.update(
-                        status="valid" if ok else "invalid",
-                        elapsed_ms=int((time.time() - attempt_start) * 1000),
-                        validation_elapsed_ms=validate_elapsed,
-                    )
-                    if not ok:
-                        last_error_code = "SQL_VALIDATION_FAILED"
-                        last_error_detail = "; ".join(issues) if issues else "Validation failed"
-                    attempt_logs.append(attempt_record)
-                    ctx.sql_attempts = attempt_logs
-                    ctx.planner_result.sql_attempts = list(attempt_logs)
-                    if ok:
-                        sql = candidate_sql
-                        ctx.sql = sql
-                        ctx.llm_used = True
-                        ctx.sql_attempt = attempt
-                        ctx.planner_result.sql_text = sql
-                        compiled_event = EventEmitter.result(
-                            "sql_compiled",
-                            {
-                                "sql_length": len(sql),
-                                "template_fallback": False,
-                                "template_used": selected_template_id,
-                                "attempt": attempt,
-                                "fallback_reason": None,
-                                "llm_used": True,
-                            },
-                        )
-                        compiled_event["event"] = "sql_compiled"
-                        compiled_event["data"].update(
-                            {
-                                "ts": datetime.utcnow().isoformat(),
-                                "elapsed_ms": attempt_record.get("elapsed_ms"),
-                            }
-                        )
-                        yield compiled_event
-                        generated_event = EventEmitter.sql_generated(sql)
-                        generated_event["data"].update(
-                            {
-                                "ts": datetime.utcnow().isoformat(),
-                                "elapsed_ms": attempt_record.get("elapsed_ms"),
-                                "llm_used": True,
-                                "attempt": attempt,
-                            }
-                        )
-                        yield generated_event
-                        break
-                    validation_event = EventEmitter.error(
-                        "sql_validation",
-                        "Generated SQL failed validation",
-                        details={"attempt": attempt, "issues": issues},
-                        code=last_error_code,
-                    )
-                    validation_event["data"]["ts"] = datetime.utcnow().isoformat()
-                    yield validation_event
-                    previous_sql = candidate_sql
-            if sql:
-                break
-            if attempt < MAX_SQL_ATTEMPTS:
-                retry_notice = EventEmitter.progress(
-                    "sql_compilation",
-                    f"Retrying SQL generation (attempt {attempt + 1}/{MAX_SQL_ATTEMPTS})",
-                )
-                retry_notice["data"].update(
-                    {"ts": datetime.utcnow().isoformat(), "last_error": last_error_code}
-                )
-                yield retry_notice
-                messages = await build_sql_retry_messages(
-                    original_query=query,
-                    intent=intent,
-                    plan=plan,
-                    error_code=last_error_code or "unknown_error",
-                    error_detail=last_error_detail or "",
-                    previous_sql=previous_sql,
-                    attempts=attempt_logs,
-                    config_store=self.config_store,
-                    templates=candidate_templates,
-                )
-
-        ctx.sql_attempts = attempt_logs
-        ctx.planner_result.sql_attempts = list(attempt_logs)
-        if not sql:
-            failure_event = EventEmitter.error(
-                "sql_compilation",
-                "Unable to generate valid SQL after 3 attempts",
-                details={"attempts": attempt_logs, "last_error": last_error_code, "last_detail": last_error_detail},
-                code=last_error_code or "SQL_RETRY_EXHAUSTED",
-            )
-            failure_event["data"]["ts"] = datetime.utcnow().isoformat()
-            yield failure_event
-            workflow_abort = EventEmitter.result(
-                "workflow_complete",
-                {
-                    "status": "sql_generation_failed",
-                    "total_elapsed_ms": int((time.time() - workflow_start) * 1000),
-                },
-            )
-            workflow_abort["event"] = "workflow_complete"
-            workflow_abort["data"]["ts"] = datetime.utcnow().isoformat()
-            yield workflow_abort
+        active_plan = ctx.plan or ctx.provisional_plan
+        async for event in self.run_sql_pipeline(
+            ctx,
+            intent=ctx.intent,
+            plan=active_plan,
+            candidate_templates=ctx.candidate_templates,
+            selected_template_id=ctx.selected_template_id,
+        ):
+            yield event
+        if ctx.halted:
             return
-
-        # 8) SQL Validation Phase
-        validation_progress = EventEmitter.progress(
-            "sql_validation", "Validating SQL..."
-        )
-        validation_progress["data"]["ts"] = datetime.utcnow().isoformat()
-        yield validation_progress
-        ok, issues, validate_elapsed = _validate_sql(sql)
-        validation_event = EventEmitter.result(
-            "sql_validated",
-            {
-                "ok": ok,
-                "issues_count": len(issues),
-                "attempt": ctx.sql_attempt,
-                "issues": issues,
-            },
-        )
-        validation_event["event"] = "sql_validated"
-        validation_event["data"].update(
-            {"ts": datetime.utcnow().isoformat(), "elapsed_ms": validate_elapsed}
-        )
-        yield validation_event
-        if not ok:
-            error_event = EventEmitter.error(
-                "sql_validation",
-                "SQL failed validation after retries",
-                details={"attempts": attempt_logs, "issues": issues},
-                code="SQL_VALIDATION_FINAL",
-            )
-            error_event["data"]["ts"] = datetime.utcnow().isoformat()
-            yield error_event
-            workflow_abort = EventEmitter.result(
-                "workflow_complete",
-                {
-                    "status": "sql_validation_failed",
-                    "total_elapsed_ms": int((time.time() - workflow_start) * 1000),
-                },
-            )
-            workflow_abort["event"] = "workflow_complete"
-            workflow_abort["data"]["ts"] = datetime.utcnow().isoformat()
-            yield workflow_abort
-            return
-
-        # 9) SQL Execution Phase
-        execution_progress = EventEmitter.progress(
-            "sql_execution", "Executing query..."
-        )
-        execution_progress["data"]["ts"] = datetime.utcnow().isoformat()
-        yield execution_progress
-        exec_start = time.time()
-        try:
-            data = await execute_sql(sql)
-            exec_elapsed = int((time.time() - exec_start) * 1000)
-            ctx.planner_result.data_row_count = len(data)
-        except Exception as exec_exc:
-            logger.error(
-                "[SQL_EXECUTION] Execution failed: %s",
-                exec_exc,
-                extra={
-                    "error_code": "SQL_EXECUTION_ERROR",
-                    "flow": self.flow_label,
-                    "session_id": session_id,
-                    "intent_key": intent.intent_key,
-                },
-            )
-            error_event = EventEmitter.error(
-                "sql_execution",
-                "SQL execution failed",
-                details={"error": str(exec_exc)},
-                code="SQL_EXECUTION_ERROR",
-            )
-            error_event["data"]["ts"] = datetime.utcnow().isoformat()
-            yield error_event
-            workflow_abort = EventEmitter.result(
-                "workflow_complete",
-                {
-                    "status": "sql_execution_failed",
-                    "total_elapsed_ms": int((time.time() - workflow_start) * 1000),
-                },
-            )
-            workflow_abort["event"] = "workflow_complete"
-            workflow_abort["data"]["ts"] = datetime.utcnow().isoformat()
-            yield workflow_abort
-            return
-
-        # 10) Chart Planning Phase
-        chart_progress = EventEmitter.progress(
-            "chart_generation", "Planning chart..."
-        )
-        chart_progress["data"]["ts"] = datetime.utcnow().isoformat()
-        yield chart_progress
-        chart_start = time.time()
-        chart_plan = plan_chart_rule_based(data, query, intent.intent_key)
-        spec = build_chart_spec(
-            data,
-            chart_plan.dict(),
-            CONFIGS.charts,
-            intent_key=intent.intent_key,
-            comparison=plan.comparison,
-        )
-        ctx.chart_spec = spec
-        chart_design = _generate_chart_design(intent.intent_key, plan, data, spec)
-        spec.setdefault("meta", {}).setdefault("chartDesign", chart_design)
-        ctx.planner_result.chart_summary = {
-            "chart_type": chart_plan.chart_type,
-            "series_count": len(chart_plan.series),
-            "design": chart_design,
-        }
-        chart_elapsed = int((time.time() - chart_start) * 1000)
-        chart_event = EventEmitter.result(
-            "chart_planned",
-            {
-                "chart_type": chart_plan.chart_type,
-                "series_count": len(chart_plan.series),
-            },
-        )
-        chart_event["event"] = "chart_planned"
-        chart_event["data"].update(
-            {
-                "ts": datetime.utcnow().isoformat(),
-                "elapsed_ms": chart_elapsed,
-            }
-        )
-        yield chart_event
-        try:
-            ChartSpecModel(**spec)
-            generated_chart = EventEmitter.result(
-                "chart_generated",
-                {
-                    "chart_type": spec.get("meta", {}).get("chartDesign", {}).get(
-                        "chart_type", "unknown"
-                    ),
-                    "chart_spec": spec,
-                },
-                key="chart_spec",
-            )
-            generated_chart["event"] = "chart_generated"
-            generated_chart["data"]["ts"] = datetime.utcnow().isoformat()
-            yield generated_chart
-        except ValidationError as ve:
-            warning_event = EventEmitter.progress(
-                "warning", f"Chart spec validation warning: {str(ve)}"
-            )
-            warning_event["data"]["ts"] = datetime.utcnow().isoformat()
-            yield warning_event
-            fallback_chart = EventEmitter.result(
-                "chart_generated",
-                {
-                    "chart_type": spec.get("meta", {}).get("chartDesign", {}).get(
-                        "chart_type", "unknown"
-                    ),
-                    "chart_spec": spec,
-                },
-                key="chart_spec",
-            )
-            fallback_chart["event"] = "chart_generated"
-            fallback_chart["data"]["ts"] = datetime.utcnow().isoformat()
-            yield fallback_chart
+        async for event in self.run_chart_phase(ctx, intent=ctx.intent, plan=active_plan):
+            yield event
         async for event in self._web_search_phase(ctx):
             yield event
+        async for event in self.run_analysis_phase(ctx):
+            yield event
 
-        # 11) Analysis Generation Phase
-        analysis_progress = EventEmitter.progress(
-            "analysis_generation", "Generating insights..."
-        )
-        analysis_progress["data"]["ts"] = datetime.utcnow().isoformat()
-        yield analysis_progress
-        analysis_start = time.time()
-        full_analysis = ""
-        async for text_chunk in stream_insights_llm(
-            data,
-            sql,
-            query,
-            chart_spec=ctx.chart_spec,
-            search_result=ctx.web_search,
-            session_id=session_id,
-        ):
-            if text_chunk:
-                full_analysis += text_chunk
-                streaming_event = {
-                    "event": "analysis_streaming",
-                    "data": {
-                        "step": "analysis_generation",
-                        "partial_analysis": text_chunk,
-                        "chunk_length": len(text_chunk),
-                        "ts": datetime.utcnow().isoformat(),
-                    },
-                }
-                log_analysis_chunk(
-                    chunk=text_chunk,
-                    step="analysis_generation",
-                    role=None,
-                    session_id=session_id,
-                    flow=getattr(self, "flow_label", None),
-                )
-                yield streaming_event
-        analysis_elapsed = int((time.time() - analysis_start) * 1000)
-        ctx.planner_result.analysis = full_analysis
-        analysis_payload = {
-            "analysis_length": len(full_analysis),
-            "analysis": full_analysis,
-        }
-        tool_bundle = collect_tool_bundle(
-            manifest=getattr(ctx, "tool_parallel_manifest", None),
-            results=getattr(ctx, "tool_parallel_results", None),
-        )
-        if tool_bundle:
-            analysis_payload.update(tool_bundle)
-        if ctx.web_search:
-            web_payload = ctx.web_search.to_payload()
-            analysis_payload['web_context'] = web_payload
-            ctx.planner_result.metadata['web_search'] = web_payload
-        analysis_complete = EventEmitter.result(
-            "analysis_complete",
-            analysis_payload,
-            key="analysis",
-        )
-        analysis_complete["event"] = "analysis_complete"
-        analysis_complete["data"].update(
-            {
-                "ts": datetime.utcnow().isoformat(),
-                "elapsed_ms": analysis_elapsed,
-            }
-        )
-        yield analysis_complete
-        # Cleanup expired sessions
-        from analytics.core.clarify import get_session_store
-        session_store = await get_session_store()
-        await session_store.cleanup_expired()
-        total_elapsed = int((time.time() - workflow_start) * 1000)
-        result_event = EventEmitter.result(
-            "planner_result", ctx.planner_result.model_dump()
-        )
-        result_event["event"] = "planner_result"
-        result_event["data"]["ts"] = datetime.utcnow().isoformat()
-        yield result_event
-        workflow_complete = EventEmitter.result(
-            "workflow_complete", {"total_elapsed_ms": total_elapsed}
-        )
-        workflow_complete["event"] = "workflow_complete"
-        workflow_complete["data"]["ts"] = datetime.utcnow().isoformat()
-        yield workflow_complete
 
 async def _initialize_context(self, query: str, session_id: Optional[str]) -> PlannerPhaseContext:
     workflow_start = time.time()
@@ -1294,6 +1454,51 @@ class PlannerExecutorFlow:
         else:
             super().__setattr__(name, value)
 
+    async def initialize_context(self, query: str, session_id: Optional[str] = None) -> PlannerPhaseContext:
+        return await self._pipeline.initialize_context(query, session_id)
+
+    async def emit_chart_patch(
+        self,
+        *,
+        session_id: str,
+        patch: Dict[str, Any],
+        reason: Optional[str] = None,
+        source: Optional[str] = None,
+        repository: Optional[Any] = None,
+        hooks: Optional[AnalyticsFlowHooks] = None,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        stream = self._pipeline.emit_chart_patch(
+            session_id=session_id,
+            patch=patch,
+            reason=reason,
+            source=source,
+            repository=repository,
+            hooks=hooks,
+        )
+        async for event in stream:
+            yield event
+
+    async def emit_analysis_revision(
+        self,
+        *,
+        session_id: str,
+        analysis: str,
+        reason: Optional[str] = None,
+        source: Optional[str] = None,
+        repository: Optional[Any] = None,
+        hooks: Optional[AnalyticsFlowHooks] = None,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        stream = self._pipeline.emit_analysis_revision(
+            session_id=session_id,
+            analysis=analysis,
+            reason=reason,
+            source=source,
+            repository=repository,
+            hooks=hooks,
+        )
+        async for event in stream:
+            yield event
+
     async def events(
         self,
         query: str,
@@ -1333,6 +1538,13 @@ async def run_planner_executor(query: str, session_id: Optional[str] = None) -> 
     workflow_instance = PlannerExecutorFlow()
     async for event in workflow_instance.events(query, session_id):
         yield event
+
+
+
+
+
+
+
 
 
 
