@@ -62,6 +62,11 @@ class SessionStateSnapshot(BaseModel):
         self.tool_cache[tool] = payload
         self.touch()
 
+    def record_artifacts(self, artifacts: Dict[str, Any]) -> None:
+        analytics_cache = self.tool_cache.setdefault("analytics", {})
+        analytics_cache["artifacts"] = artifacts
+        self.touch()
+
     def record_outputs(
         self,
         *,

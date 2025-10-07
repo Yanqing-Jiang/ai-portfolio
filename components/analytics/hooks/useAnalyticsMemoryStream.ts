@@ -29,6 +29,7 @@ export const useAnalyticsMemoryStream = (
   const [analysis, setAnalysis] = useState('');
   const [sqlQuery, setSqlQuery] = useState('');
   const [dataSample, setDataSample] = useState<any[] | null>(null);
+  const [revisionMode, setRevisionMode] = useState<'none' | 'chart' | 'analysis' | 'mixed'>('none');
   const [streamingText, setStreamingText] = useState('');
   const [webSearch, setWebSearch] = useState<WebSearchResult | null>(null);
   const [singleAgentFanout, setSingleAgentFanout] = useState<SingleAgentFanout | null>(null);
@@ -482,6 +483,18 @@ export const useAnalyticsMemoryStream = (
     }, 50); // 50ms debounce for smooth updates
   };
 
+  const markRevisionMode = useCallback((mode: 'chart' | 'analysis') => {
+    setRevisionMode((prev) => {
+      if (prev === 'none') {
+        return mode;
+      }
+      if (prev === mode) {
+        return prev;
+      }
+      return 'mixed';
+    });
+  }, []);
+
   const resolveAgentConfig = (role: string) => AGENT_ROLE_CONFIG[role] ?? DEFAULT_AGENT_ROLE;
 
   const computeAggregateStatus = (fallback: ProcessStep['status'] = 'pending'): ProcessStep['status'] => {
@@ -701,6 +714,49 @@ export const useAnalyticsMemoryStream = (
     setChatHistory(prev => prev.map(msg => msg.id === id ? { ...msg, ...updates } : msg));
   };
 
+  const appendResultSnapshot = (
+    options: {
+      content: string;
+      analysis?: string | null;
+      chartSpec?: any | null;
+      sqlQuery?: string | null;
+      dataSample?: any[] | null;
+      stockWidgetConfig?: StockWidgetConfig | null;
+      toolFanoutManifest?: ToolFanoutManifest[];
+      toolFanoutResults?: ToolFanoutResult[];
+      webSearch?: WebSearchResult | null;
+    },
+  ) => {
+    const snapshot = workflowDataRef.current;
+    const message: Omit<ChatMessage, 'id' | 'timestamp'> = {
+      type: 'result',
+      content: options.content,
+    };
+
+    const applyField = (
+      field: keyof Omit<ChatMessage, 'id' | 'timestamp' | 'type'>,
+      override: any,
+      fallback: any,
+    ) => {
+      if (override !== undefined) {
+        (message as any)[field] = override;
+      } else if (fallback !== undefined) {
+        (message as any)[field] = fallback;
+      }
+    };
+
+    applyField('analysis', options.analysis, snapshot.analysis);
+    applyField('chartSpec', options.chartSpec, snapshot.chartSpec);
+    applyField('sqlQuery', options.sqlQuery, snapshot.sqlQuery);
+    applyField('dataSample', options.dataSample, snapshot.dataSample);
+    applyField('stockWidgetConfig', options.stockWidgetConfig, snapshot.stockWidget);
+    applyField('toolFanoutManifest', options.toolFanoutManifest, snapshot.toolFanoutManifest);
+    applyField('toolFanoutResults', options.toolFanoutResults, snapshot.toolFanoutResults);
+    applyField('webSearch', options.webSearch, snapshot.webSearch);
+
+    addChatMessage(message);
+  };
+
   const submitClarification = async (value: any, request?: ClarifyRequest) => {
     const req = request || pendingClarification;
     if (!req) return;
@@ -740,6 +796,7 @@ export const useAnalyticsMemoryStream = (
     setProgressiveText('');
     setProgressiveAnalysis('');
     setWebSearch(null);
+    setRevisionMode('none');
     workflowDataRef.current.webSearch = null;
     setPendingClarification(null);
     setCriteria(null);
@@ -1091,48 +1148,116 @@ export const useAnalyticsMemoryStream = (
         }
 
         case 'chart_patch': {
+          const normalizedStatus =
+            typeof eventData?.status === 'string' ? eventData.status.toLowerCase() : '';
+          const hasOps = Array.isArray(eventData?.ops) && eventData.ops.length > 0;
+
           try {
-            if (Array.isArray(eventData?.ops)) {
-              setChartSpec(prev => {
+            let opLines: string[] = [];
+            if (hasOps) {
+              setChartSpec((prev) => {
                 const next = applyChartOps(prev, eventData);
-                // keep workflow data in sync for ChatHistory result messages
                 workflowDataRef.current.chartSpec = next;
                 return next;
               });
-              // Build human-readable op summaries for the Agent Thinking panel
-              const opLines: string[] = eventData.ops.map((op: any) => {
+
+              opLines = eventData.ops.map((op: any) => {
                 try {
                   switch (op.op) {
-                    case 'set_chart_type': return `Chart type -> ${op.value}`;
-                    case 'set_stack': return `Stacking -> ${op.stack ? (op.mode || 'normal') : 'off'}`;
-                    case 'toggle_series': return `Toggle series (${op.visible ? 'show' : 'hide'}): ${Array.isArray(op.names) ? op.names.join(', ') : ''}`;
-                    case 'set_y_axis_format': return `Y format -> ${op.valueType}`;
-                    case 'set_x_axis': return `X axis field -> ${op.field}`;
-                    case 'filter_companies': return `Companies -> ${Array.isArray(op.tickers) ? op.tickers.join(', ') : ''}`;
-                    case 'set_palette': return `Palette set (${Array.isArray(op.palette) ? op.palette.length : 0} colors)`;
-                    case 'set_axis_scale': return `Axis ${op.axis} scale -> ${op.scale}`;
+                    case 'set_chart_type':
+                      return `Chart type -> ${op.value}`;
+                    case 'set_stack':
+                      return `Stacking -> ${op.stack ? op.mode || 'normal' : 'off'}`;
+                    case 'toggle_series':
+                      return `Toggle series (${op.visible ? 'show' : 'hide'}): ${
+                        Array.isArray(op.names) ? op.names.join(', ') : ''
+                      }`;
+                    case 'set_y_axis_format':
+                      return `Y format -> ${op.valueType}`;
+                    case 'set_x_axis':
+                      return `X axis field -> ${op.field}`;
+                    case 'filter_companies':
+                      return `Companies -> ${Array.isArray(op.tickers) ? op.tickers.join(', ') : ''}`;
+                    case 'set_palette':
+                      return `Palette set (${Array.isArray(op.palette) ? op.palette.length : 0} colors)`;
+                    case 'set_axis_scale':
+                      return `Axis ${op.axis} scale -> ${op.scale}`;
                     case 'select_metrics': {
-                      const inc = op.include === 'ALL' ? 'ALL' : (Array.isArray(op.include) ? op.include.join(', ') : '');
+                      const inc =
+                        op.include === 'ALL'
+                          ? 'ALL'
+                          : Array.isArray(op.include)
+                            ? op.include.join(', ')
+                            : '';
                       const exc = Array.isArray(op.exclude) ? op.exclude.join(', ') : '';
                       return `Metrics include=[${inc}] exclude=[${exc}]`;
                     }
-                    case 'set_grouping': return `Grouping -> ${op.grouping}`;
-                    default: return `Patch: ${JSON.stringify(op)}`;
+                    case 'set_grouping':
+                      return `Grouping -> ${op.grouping}`;
+                    default:
+                      return `Patch: ${JSON.stringify(op)}`;
                   }
-                } catch { return 'Patch applied'; }
+                } catch {
+                  return 'Patch applied';
+                }
               });
+            }
 
-              streamHook.setCurrentStatus('Chart updated');
-              stepsHook.updateStepStatus(
-                'chart_revision',
-                'in_progress',
-                opLines.length ? opLines : ['Applied chart patch'],
-                { patch: eventData },
-                stepInfo.elapsed_ms,
-                stepInfo.ts
+            const statusLines = opLines.length ? [...opLines] : [];
+            if (normalizedStatus === 'skipped') {
+              statusLines.push(
+                eventData?.error ? `Revision skipped: ${eventData.error}` : 'Chart revision skipped',
               );
-              // Reflect in Agent Coordination lane for visibility
-              updateAgentCoordination(opLines.length ? opLines : ['Applied chart revision']);
+            } else if (!statusLines.length && hasOps) {
+              statusLines.push('Applied chart revision');
+            }
+
+            const stepStatus: ProcessStep['status'] =
+              normalizedStatus === 'skipped'
+                ? 'error'
+                : hasOps
+                  ? 'completed'
+                  : 'in_progress';
+
+            stepsHook.updateStepStatus(
+              'chart_revision',
+              stepStatus,
+              statusLines.length ? statusLines : ['Chart revision received'],
+              {
+                patch: eventData,
+                status: normalizedStatus || (hasOps ? 'applied' : undefined),
+              },
+              stepInfo.elapsed_ms,
+              stepInfo.ts,
+              sequence,
+              parallelGroup,
+            );
+
+            updateAgentCoordination(
+              statusLines.length ? statusLines : ['Chart revision received'],
+              stepStatus,
+              { ts: stepInfo.ts, elapsed_ms: stepInfo.elapsed_ms, sequence },
+            );
+
+            if (normalizedStatus === 'skipped') {
+              const errorMessage = eventData?.error || 'Chart revision skipped';
+              streamHook.setError(errorMessage);
+            } else if (hasOps) {
+              streamHook.setCurrentStatus('Chart revision applied');
+              emitResultOnce();
+              const revisionLines = opLines.length ? opLines : ['Applied chart revision'];
+              const revisionSummary =
+                ['Revision: Chart updated', ...revisionLines.map((line) => `- ${line}`)].join('\n');
+              appendResultSnapshot({
+                content: revisionSummary,
+                analysis: '',
+                sqlQuery: undefined,
+                stockWidgetConfig: null,
+                toolFanoutManifest: undefined,
+                toolFanoutResults: undefined,
+                webSearch: null,
+              });
+              markRevisionMode('chart');
             }
           } catch (e) {
             console.warn('[AnalyticsMemoryStream] Failed to apply chart_patch', e);
@@ -1141,25 +1266,85 @@ export const useAnalyticsMemoryStream = (
         }
           
         case 'analysis_revision': {
+          const normalizedStatus =
+            typeof eventData?.status === 'string' ? eventData.status.toLowerCase() : '';
+          const revisionApplied = normalizedStatus !== 'skipped';
+
           try {
-            const updatedAnalysis = typeof eventData?.analysis === 'string' ? eventData.analysis : '';
-            if (updatedAnalysis) {
+            const updatedAnalysis =
+              typeof eventData?.analysis === 'string' ? eventData.analysis : '';
+
+            if (revisionApplied && updatedAnalysis) {
               setAnalysis(updatedAnalysis);
               workflowDataRef.current.analysis = updatedAnalysis;
             }
-            const lines: string[] = updatedAnalysis
-              ? [`Analysis -> ${updatedAnalysis.length > 140 ? updatedAnalysis.slice(0, 140).trimEnd() + '...' : updatedAnalysis}`]
-              : ['Applied analysis revision'];
+
+            const summaryLine =
+              updatedAnalysis && revisionApplied
+                ? `Analysis -> ${
+                    updatedAnalysis.length > 140
+                      ? `${updatedAnalysis.slice(0, 140).trimEnd()}...`
+                      : updatedAnalysis
+                  }`
+                : revisionApplied
+                  ? 'Applied analysis revision'
+                  : undefined;
+
+            const lines: string[] = [];
+            if (summaryLine) {
+              lines.push(summaryLine);
+            }
+            if (!revisionApplied) {
+              lines.push(
+                eventData?.error ? `Revision skipped: ${eventData.error}` : 'Analysis revision skipped',
+              );
+            } else if (!lines.length) {
+              lines.push('Analysis revision received');
+            }
+
+            const stepStatus: ProcessStep['status'] = revisionApplied ? 'completed' : 'error';
+
             stepsHook.updateStepStatus(
               'analysis_revision',
-              'completed',
+              stepStatus,
               lines,
-              { analysis: updatedAnalysis, reason: eventData?.reason, source: eventData?.source },
+              {
+                analysis: revisionApplied ? updatedAnalysis : undefined,
+                reason: eventData?.reason,
+                source: eventData?.source,
+                status: normalizedStatus || (revisionApplied ? 'applied' : undefined),
+                error: eventData?.error,
+              },
               stepInfo.elapsed_ms,
-              stepInfo.ts
+              stepInfo.ts,
+              sequence,
+              parallelGroup,
             );
-            updateAgentCoordination(lines.length ? lines : ['Applied analysis revision']);
-            streamHook.setCurrentStatus('Analysis updated');
+
+            updateAgentCoordination(
+              lines.length ? lines : ['Analysis revision received'],
+              stepStatus,
+              { ts: stepInfo.ts, elapsed_ms: stepInfo.elapsed_ms, sequence },
+            );
+
+            if (revisionApplied) {
+              streamHook.setCurrentStatus('Analysis revision applied');
+              emitResultOnce();
+              const summaryLines = lines.length ? lines : ['Analysis revision applied'];
+              const revisionSummary =
+                ['Revision: Analysis updated', ...summaryLines.map((line) => `- ${line}`)].join('\n');
+              appendResultSnapshot({
+                content: revisionSummary,
+                stockWidgetConfig: null,
+                toolFanoutManifest: undefined,
+                toolFanoutResults: undefined,
+                webSearch: null,
+              });
+              markRevisionMode('analysis');
+            } else {
+              const errorMessage = eventData?.error || 'Analysis revision skipped';
+              streamHook.setError(errorMessage);
+            }
           } catch (e) {
             console.warn('[AnalyticsMemoryStream] Failed to apply analysis_revision', e);
           }
@@ -1914,6 +2099,7 @@ export const useAnalyticsMemoryStream = (
     setProgressiveAnalysis('');
     setProgressiveText('');
     setSingleAgentFanout(null);
+    setRevisionMode('none');
 
     // Clear any pending updates
     if (updateTimeoutRef.current) {
@@ -1958,6 +2144,7 @@ export const useAnalyticsMemoryStream = (
     streamingText,
     webSearch,
     singleAgentFanout,
+    revisionMode,
 
     // Progressive rendering state
     progressiveAnalysis,
@@ -1982,5 +2169,10 @@ export const useAnalyticsMemoryStream = (
     updateChatMessage,
   };
 };
+
+
+
+
+
 
 

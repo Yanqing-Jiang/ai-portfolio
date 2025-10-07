@@ -284,3 +284,6 @@ class SingleAgentToolsFlow:
 
 
 
+    def latest_artifacts(self):
+        return self._planner.latest_artifacts()
+

@@ -380,6 +380,10 @@ REVISION_KEYWORDS = (
     "modify",
     "tweak",
     "adjust",
+    "convert",
+    "switch",
+    "turn",
+    "make",
 )
 
 ANALYSIS_REVISION_KEYWORDS = (

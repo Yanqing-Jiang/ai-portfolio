@@ -35,6 +35,24 @@ const FLOW_META: Record<FlowOption, { chip: string; chipClass: string; helper: s
   },
 };
 
+const REVISION_META: Record<'chart' | 'analysis' | 'mixed', { label: string; helper: string; className: string }> = {
+  chart: {
+    label: 'Chart Revision Fast-Path',
+    helper: 'Replaying cached data; only chart specification is being adjusted.',
+    className: 'bg-amber-600/20 text-amber-200 border-amber-500/30',
+  },
+  analysis: {
+    label: 'Analysis Revision Fast-Path',
+    helper: 'Re-using latest data to update narrative only.',
+    className: 'bg-pink-600/20 text-pink-200 border-pink-500/30',
+  },
+  mixed: {
+    label: 'Chart + Analysis Revision',
+    helper: 'Applying cached chart and narrative tweaks without rerunning SQL.',
+    className: 'bg-cyan-600/20 text-cyan-200 border-cyan-500/30',
+  },
+};
+
 const MemoryAnalyticsPage: React.FC = () => {
   const [query, setQuery] = useState('');
   const [showProcessPanel, setShowProcessPanel] = useState(false);
@@ -66,6 +84,9 @@ const MemoryAnalyticsPage: React.FC = () => {
     
     // Process steps
     processSteps,
+
+    // Revision telemetry
+    revisionMode,
     
     // Actions
     handleQuery,
@@ -112,6 +133,15 @@ const MemoryAnalyticsPage: React.FC = () => {
     'How is NVDA R&D expense compare to industry average',
     'How fast is NVDA growing vs industry average?'
   ];
+
+  const processSubtitle =
+    revisionMode === 'chart'
+      ? 'Revision fast-path · chart adjustments without SQL rerun'
+      : revisionMode === 'analysis'
+        ? 'Revision fast-path · narrative refinements on cached data'
+        : revisionMode === 'mixed'
+          ? 'Revision fast-path · chart & narrative tweaks on cached data'
+          : 'Real-time agent reasoning & tool execution';
 
   return (
     <div className="flex h-screen bg-gray-900 text-gray-100 overflow-hidden">
@@ -324,6 +354,14 @@ const MemoryAnalyticsPage: React.FC = () => {
                 <span className="text-xs text-gray-400 hidden lg:block">
                   {FLOW_META[selectedFlow].helper}
                 </span>
+                {revisionMode !== 'none' && (
+                  <span
+                    className={`px-2 py-1 text-xs rounded-full border transition-colors duration-200 ${REVISION_META[revisionMode].className}`}
+                    title={REVISION_META[revisionMode].helper}
+                  >
+                    {REVISION_META[revisionMode].label}
+                  </span>
+                )}
               </div>
               
               {/* Input row */}
@@ -363,7 +401,7 @@ const MemoryAnalyticsPage: React.FC = () => {
         showVisualization={true}
         onClose={() => setShowProcessPanel(false)}
         title="Agent Thinking Process"
-        subtitle="Real-time agent reasoning & tool execution"
+        subtitle={processSubtitle}
       />
 
     </div>

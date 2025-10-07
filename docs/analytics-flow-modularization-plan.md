@@ -27,7 +27,7 @@ Enable Single Agent and Multi-Agent modes to call modular analytics tools (espec
   - Simplified wrappers with minimal duplication of telemetry tables.
 - **Dependencies**: Phase 1 complete.
 - **Status (Oct 6, 2025)**: Added `AnalyticsFlowHooks` lifecycle hooks, refactored single-agent and multi-agent flows to use hook implementations, and validated planner/multi-agent pytest suites.
-- **Status (Oct 7, 2025)**: `PlannerPipeline` now exposes modular phase runners (`run_classification`, `run_intent`, `run_clarification`, `run_plan`, `run_sql_pipeline`, `run_chart_phase`, `run_analysis_phase`) with `PlannerExecutorFlow` delegating to them. SQL/chart/analysis stages stream identical events via the new methods; tool registry wiring deferred.
+- **Status (Oct 7, 2025)**: `PlannerPipeline` now exposes modular phase runners (`run_classification`, `run_intent`, `run_clarification`, `run_plan`, `run_sql_pipeline`, `run_chart_phase`, `run_analysis_phase`) with `PlannerExecutorFlow` delegating to them. SQL/chart/analysis stages stream identical events via the new methods; tool registry wiring deferred. Removed the legacy “is this financial analytics?” preflight gate so both single-agent and multi-agent flows rely on the standard classifier rather than short-circuiting requests.
 
 ## Phase 3 - Tool Registry Integration
 - **Task**: Register core phases as tool descriptors in `backend/analytics/flows/tooling.py` or a new `pipeline_tools.py`.
@@ -50,9 +50,10 @@ Enable Single Agent and Multi-Agent modes to call modular analytics tools (espec
   - Ensure `MultiAgentFlow` orchestrator triggers only relevant agent roles (`chart`, optional `web_research`).
 - **Deliverables**:
   - Revision pipeline functions + SSE emissions.
-  - **Status (Oct 7, 2025)**: Implemented shared revision helpers for charts and analysis (`emit_chart_patch`, `emit_analysis_revision`) so Single Agent and Multi-Agent flows call them directly without replaying the full pipeline. Added `pytest-asyncio` so the revision unit tests run under STRICT asyncio mode.
+- **Status (Oct 7, 2025)**: Implemented shared revision helpers for charts and analysis (`emit_chart_patch`, `emit_analysis_revision`) so Single Agent and Multi-Agent flows call them directly without replaying the full pipeline. Added `pytest-asyncio` so the revision unit tests run under STRICT asyncio mode.
   - Session snapshot updates capturing revision history.
   - Unit tests for revision fast-path.
+- **Follow-up (Oct 7, 2025)**: Session snapshots now persist chart/analysis artifacts for sequential follow-ups (e.g., “last 8 quarters”). Subsequent queries rehydrate ticker, timeframe, and chart specs from the previous result unless the user overrides them, ensuring context continuity across both agents.
 
 ## Phase 5 - Frontend & UX Adjustments
 - **Task**: Ensure Memory page and ProcessPanel handle revision-only sessions.

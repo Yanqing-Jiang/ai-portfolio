@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import hashlib
 import json
@@ -790,6 +790,9 @@ class MultiAgentFlow:
         self._shared_context: Dict[str, Any] = {}
         self._orchestrated = False
 
+    def latest_artifacts(self):
+        return self._planner.latest_artifacts()
+
     async def _forward_with_hooks(
         self,
         stream: AsyncGenerator[Dict[str, Any], None],
@@ -1331,4 +1334,6 @@ class MultiAgentFlow:
 
 
 __all__ = ["MultiAgentFlow"]
+
+
 

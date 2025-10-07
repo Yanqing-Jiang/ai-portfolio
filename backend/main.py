@@ -9,6 +9,7 @@ import os
 from dotenv import load_dotenv
 import json
 from datetime import date as _Date, datetime as _DateTime
+from decimal import Decimal
 import uuid
 import time
 
@@ -746,6 +747,8 @@ async def analytics_stream_endpoint(query: str, request: Request, _: None = Depe
         def _to_serializable(obj):
             if isinstance(obj, (_Date, _DateTime)):
                 return obj.isoformat()
+            if isinstance(obj, Decimal):
+                return float(obj)
             if isinstance(obj, list):
                 return [_to_serializable(x) for x in obj]
             if isinstance(obj, tuple):
