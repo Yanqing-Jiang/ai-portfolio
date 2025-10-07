@@ -1,5 +1,6 @@
-﻿from __future__ import annotations
-from typing import AsyncGenerator, Dict, Any, Optional, List, Tuple
+from __future__ import annotations
+import json
+from typing import AsyncGenerator, Dict, Any, Optional, List, Sequence, Tuple
 from dataclasses import dataclass, field
 import asyncio
 import re
@@ -7,7 +8,7 @@ import os
 import logging
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, date
 from analytics.core.types import (
     WorkflowState,
     SQLResultModel,
@@ -22,6 +23,19 @@ from analytics.core.types import (
 from analytics.core.context import get_configs
 from analytics.core.config_store import get_config_store
 from analytics.core.events import EventEmitter, TimedEventEmitter
+from analytics.artifacts import (
+    ClassificationArtifact as ClassificationArtifactModel,
+    ClarificationArtifact,
+    IntentArtifact as IntentArtifactModel,
+    PipelineArtifacts,
+    PlanArtifact,
+    SQLExecutionArtifact,
+    SQLGenerationArtifact,
+    ChartArtifact,
+    WebContextArtifact,
+    AnalysisArtifact,
+    MarketArtifact,
+)
 from .hooks import AnalyticsFlowHooks, NullFlowHooks
 from .tooling import run_tool_parallelism
 from ..core.intent import intent_to_sql_criteria
@@ -42,7 +56,24 @@ from analytics.core.charting import build_chart_spec, plan_chart_rule_based
 from .tool_bundle import collect_tool_bundle
 from .chart_revision import emit_chart_patch as _chart_revision_emit, emit_analysis_revision as _analysis_revision_emit
 from analytics.core.telemetry import analysis_chunk as log_analysis_chunk
-from analytics.services.response_search import ResponseSearchError, perform_response_search, has_search_api_key, generate_search_topic
+try:
+    from analytics.services.response_search import (
+        ResponseSearchError,
+        perform_response_search,
+        has_search_api_key,
+        generate_search_topic,
+    )
+except (ModuleNotFoundError, ImportError):  # pragma: no cover - optional dependency for tests
+    ResponseSearchError = RuntimeError  # type: ignore[assignment]
+
+    async def perform_response_search(*args, **kwargs):  # type: ignore[no-redef]
+        raise ResponseSearchError("response_search dependency not available")
+
+    def has_search_api_key() -> bool:  # type: ignore[no-redef]
+        return False
+
+    def generate_search_topic(query: str) -> str:  # type: ignore[no-redef]
+        return query
 from analytics.core.analysis import summarize, stream_insights_llm
 from analytics.core.clarify import (
     detect_missing_slots,
@@ -173,6 +204,7 @@ class PlannerPhaseContext:
     analysis: str = ""
     parallelism_enabled: bool = False
     planner_result: PlannerResultModel = field(default_factory=PlannerResultModel)
+    artifacts: PipelineArtifacts = field(default_factory=PipelineArtifacts)
     halted: bool = False
     halt_reason: Optional[str] = None
 
@@ -198,6 +230,283 @@ def _normalize_calendar_filters(sql: str) -> str:
     if not any(marker in lower_sql for marker in AGGREGATE_METRIC_MARKERS):
         return sql
     return re.sub(r"calendar_quarter_num\s+IS\s+NULL", "calendar_quarter_num IS NOT NULL", sql, flags=re.IGNORECASE)
+
+
+def _safe_year(value: Any) -> Optional[int]:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return int(value)
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped.isdigit() and len(stripped) <= 4:
+            return int(stripped)
+    return None
+
+
+def _safe_date(value: Any) -> Optional[date]:
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None
+        cleaned = stripped.rstrip("Z")
+        try:
+            return datetime.fromisoformat(cleaned).date()
+        except ValueError:
+            return None
+    return None
+
+
+def _summarize_sql_rows(data: Optional[List[Dict[str, Any]]]) -> Dict[str, Any]:
+    if not isinstance(data, list):
+        data = []
+    columns: List[str] = sorted({key for row in data if isinstance(row, dict) for key in row.keys()})
+    sample_rows: List[Dict[str, Any]] = []
+    for row in data[:5]:
+        if isinstance(row, dict):
+            sample_rows.append({column: row.get(column) for column in columns})
+    tickers = sorted(
+        {
+            str(row.get("ticker")).strip()
+            for row in data
+            if isinstance(row, dict) and row.get("ticker")
+        }
+    )
+    metric_keys = ("metric", "metric_name", "series", "measure", "line_item")
+    metrics = sorted(
+        {
+            str(row.get(key)).strip()
+            for row in data
+            if isinstance(row, dict)
+            for key in metric_keys
+            if row.get(key)
+        }
+    )
+    years: List[int] = []
+    dates: List[date] = []
+    for row in data:
+        if not isinstance(row, dict):
+            continue
+        for key, value in row.items():
+            lower = key.lower()
+            if "year" in lower:
+                maybe_year = _safe_year(value)
+                if maybe_year is not None:
+                    years.append(maybe_year)
+            if "date" in lower or "period" in lower:
+                maybe_date = _safe_date(value)
+                if maybe_date is not None:
+                    dates.append(maybe_date)
+    timeframe: Dict[str, Any] = {}
+    if years:
+        timeframe["years"] = {"min": min(years), "max": max(years)}
+    if dates:
+        timeframe["dates"] = {
+            "start": min(dates).isoformat(),
+            "end": max(dates).isoformat(),
+        }
+    return {
+        "columns": columns,
+        "sample_rows": sample_rows,
+        "tickers": tickers,
+        "metrics": metrics,
+        "timeframe": timeframe,
+    }
+
+
+def _set_sql_generation_artifact(
+    ctx: PlannerPhaseContext,
+    *,
+    sql: Optional[str],
+    template_id: Optional[str],
+    attempts: Sequence[Dict[str, Any]],
+    llm_used: bool,
+    last_error_code: Optional[str],
+    last_error_detail: Optional[str],
+    status: str,
+) -> None:
+    ctx.artifacts.sql_generation = SQLGenerationArtifact(
+        query=ctx.query,
+        sql=sql,
+        template_id=template_id,
+        attempts=list(attempts),
+        llm_used=llm_used,
+        last_error=last_error_detail,
+        last_error_code=last_error_code,
+        last_error_detail=last_error_detail,
+        status=status,
+    )
+
+
+def _set_sql_execution_artifact(
+    ctx: PlannerPhaseContext,
+    *,
+    data: Optional[List[Dict[str, Any]]],
+    elapsed_ms: Optional[int],
+    status: str,
+    error: Optional[str] = None,
+    error_code: Optional[str] = None,
+) -> None:
+    summary = _summarize_sql_rows(data)
+    row_count = None if data is None else len(data)
+    ctx.artifacts.sql_execution = SQLExecutionArtifact(
+        query=ctx.query,
+        row_count=row_count,
+        columns=summary["columns"],
+        tickers=summary["tickers"],
+        metrics=summary["metrics"],
+        timeframe=summary["timeframe"],
+        sample_rows=summary["sample_rows"],
+        elapsed_ms=elapsed_ms,
+        status=status,
+        error=error,
+        error_code=error_code,
+    )
+
+
+def _summarize_chart_series(plan: Any, spec: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    series_summary: List[Dict[str, Any]] = []
+    plan_dict: Dict[str, Any] = {}
+    if hasattr(plan, "dict"):
+        try:
+            plan_dict = plan.dict()
+        except Exception:
+            plan_dict = {}
+    elif isinstance(plan, dict):
+        plan_dict = dict(plan)
+    for entry in plan_dict.get("series", []) or []:
+        if isinstance(entry, dict):
+            summary = {
+                key: entry.get(key)
+                for key in ("id", "metric", "measure", "comparison", "axis")
+                if entry.get(key) is not None
+            }
+            if summary:
+                series_summary.append(summary)
+    # Fallback to spec datasets if series empty
+    if not series_summary and isinstance(spec, dict):
+        datasets = spec.get("datasets")
+        if isinstance(datasets, list):
+            for dataset in datasets:
+                if isinstance(dataset, dict):
+                    label = dataset.get("label") or dataset.get("name")
+                    series_summary.append(
+                        {
+                            "label": label,
+                            "id": dataset.get("id"),
+                            "metric": dataset.get("metric"),
+                        }
+                    )
+    return series_summary
+
+
+def _set_chart_artifact(
+    ctx: PlannerPhaseContext,
+    *,
+    spec: Dict[str, Any],
+    chart_plan: Any,
+    chart_design: Dict[str, Any],
+) -> None:
+    series_summary = _summarize_chart_series(chart_plan, spec)
+    chart_type = getattr(chart_plan, "chart_type", None)
+    try:
+        serialized_spec = json.dumps(spec, sort_keys=True)
+    except Exception:
+        serialized_spec = repr(spec)
+    spec_id = None
+    try:
+        spec_id = _make_identifier(ctx.session_id, "chart", serialized_spec)
+        spec.setdefault("meta", {})["artifactSpecId"] = spec_id
+    except Exception:
+        spec_id = None
+    ctx.artifacts.chart = ChartArtifact(
+        query=ctx.query,
+        spec=spec,
+        spec_id=spec_id,
+        design=chart_design or {},
+        datasets_summary=series_summary,
+        series_count=len(series_summary) if series_summary else None,
+        chart_type=chart_type,
+    )
+
+
+def _set_market_artifact(
+    ctx: PlannerPhaseContext,
+    *,
+    widget: Optional[Dict[str, Any]] = None,
+    error: Optional[str] = None,
+    error_code: Optional[str] = None,
+) -> None:
+    tickers: List[str] = []
+    snapshot: Optional[Dict[str, Any]] = None
+    if isinstance(widget, dict):
+        snapshot = widget
+        symbols = widget.get("symbols")
+        if isinstance(symbols, list):
+            tickers = [
+                str(symbol).strip()
+                for symbol in symbols
+                if isinstance(symbol, str) and symbol.strip()
+            ]
+    ctx.artifacts.market = MarketArtifact(
+        query=ctx.query,
+        tickers=tickers,
+        snapshot=snapshot,
+        error=error,
+        error_code=error_code,
+    )
+
+
+def _set_web_artifact(
+    ctx: PlannerPhaseContext,
+    *,
+    payload: Dict[str, Any],
+    topic: Optional[str],
+    search_result: Optional[Any],
+) -> None:
+    metadata = {}
+    if search_result is not None:
+        metadata = dict(getattr(search_result, "metadata", {}) or {})
+    ctx.artifacts.web = WebContextArtifact(
+        query=ctx.query,
+        summary=payload.get("summary"),
+        snippets=list(payload.get("snippets") or []),
+        search_id=payload.get("search_id"),
+        from_cache=payload.get("from_cache"),
+        metadata=metadata,
+        topic=topic,
+    )
+
+
+def _set_analysis_artifact(
+    ctx: PlannerPhaseContext,
+    *,
+    analysis_text: str,
+    fragments: List[str],
+    tool_bundle: Optional[Dict[str, Any]],
+) -> None:
+    stock_widget = None
+    if tool_bundle:
+        stock_widget = tool_bundle.get("stock_widget")
+    web_context = None
+    if ctx.artifacts.web:
+        web_context = ctx.artifacts.web.to_dict()
+    else:
+        # Fall back to latest payload stored on ctx.planner_result
+        web_context = ctx.planner_result.metadata.get("web_search")
+    ctx.artifacts.analysis = AnalysisArtifact(
+        query=ctx.query,
+        analysis_text=analysis_text or None,
+        fragments=fragments,
+        length=len(analysis_text),
+        stock_widget=stock_widget,
+        web_context=web_context,
+        tool_bundle=tool_bundle or None,
+    )
 
 
 
@@ -233,9 +542,16 @@ class PlannerPipeline:
         # Tool fan-out is now the default; legacy ANALYTICS_TOOL_PARALLELISM flag removed
         self.parallelism_enabled = True
         self.hooks: AnalyticsFlowHooks = NullFlowHooks()
+        self._latest_artifacts: Optional[PipelineArtifacts] = None
 
     async def initialize_context(self, query: str, session_id: Optional[str] = None) -> PlannerPhaseContext:
         return await _initialize_context(self, query, session_id)
+
+    def _capture_artifacts(self, ctx: PlannerPhaseContext) -> None:
+        self._latest_artifacts = ctx.artifacts
+
+    def latest_artifacts(self) -> Optional[PipelineArtifacts]:
+        return self._latest_artifacts
 
     async def emit_chart_patch(
         self,
@@ -474,6 +790,18 @@ class PlannerPipeline:
 
         ctx.sql_attempts = attempt_logs
         ctx.planner_result.sql_attempts = list(attempt_logs)
+        generation_status = "generated" if sql else "failed"
+        _set_sql_generation_artifact(
+            ctx,
+            sql=sql if sql else None,
+            template_id=selected_template_id,
+            attempts=attempt_logs,
+            llm_used=llm_used or ctx.llm_used,
+            last_error_code=last_error_code,
+            last_error_detail=last_error_detail,
+            status=generation_status,
+        )
+        self._capture_artifacts(ctx)
         if not sql:
             failure_event = EventEmitter.error(
                 "sql_compilation",
@@ -518,6 +846,17 @@ class PlannerPipeline:
         )
         yield validation_event
         if not ok:
+            _set_sql_generation_artifact(
+                ctx,
+                sql=sql,
+                template_id=selected_template_id,
+                attempts=attempt_logs,
+                llm_used=llm_used or ctx.llm_used,
+                last_error_code="SQL_VALIDATION_FINAL",
+                last_error_detail="; ".join(issues) if issues else None,
+                status="validation_failed",
+            )
+            self._capture_artifacts(ctx)
             error_event = EventEmitter.error(
                 "sql_validation",
                 "SQL failed validation after retries",
@@ -539,6 +878,18 @@ class PlannerPipeline:
             ctx.halted = True
             ctx.halt_reason = "sql_validation_failed"
             return
+        else:
+            _set_sql_generation_artifact(
+                ctx,
+                sql=sql,
+                template_id=selected_template_id,
+                attempts=attempt_logs,
+                llm_used=llm_used or ctx.llm_used,
+                last_error_code=None,
+                last_error_detail=None,
+                status="validated",
+            )
+            self._capture_artifacts(ctx)
 
         execution_progress = EventEmitter.progress(
             "sql_execution", "Executing query..."
@@ -551,7 +902,25 @@ class PlannerPipeline:
             exec_elapsed = int((time.time() - exec_start) * 1000)
             ctx.exec_elapsed_ms = exec_elapsed
             ctx.planner_result.data_row_count = len(data)
+            _set_sql_execution_artifact(
+                ctx,
+                data=data,
+                elapsed_ms=exec_elapsed,
+                status="success",
+            )
+            self._capture_artifacts(ctx)
         except Exception as exec_exc:
+            exec_elapsed = int((time.time() - exec_start) * 1000)
+            ctx.exec_elapsed_ms = exec_elapsed
+            _set_sql_execution_artifact(
+                ctx,
+                data=None,
+                elapsed_ms=exec_elapsed,
+                status="error",
+                error=str(exec_exc),
+                error_code="SQL_EXECUTION_ERROR",
+            )
+            self._capture_artifacts(ctx)
             logger.error(
                 "[SQL_EXECUTION] Execution failed: %s",
                 exec_exc,
@@ -610,6 +979,13 @@ class PlannerPipeline:
         ctx.chart_spec = spec
         chart_design = _generate_chart_design(intent.intent_key, plan, data, spec)
         spec.setdefault("meta", {}).setdefault("chartDesign", chart_design)
+        _set_chart_artifact(
+        ctx,
+        spec=spec,
+        chart_plan=chart_plan,
+        chart_design=chart_design,
+    )
+        self._capture_artifacts(ctx)
         ctx.planner_result.chart_summary = {
             "chart_type": chart_plan.chart_type,
             "series_count": len(chart_plan.series),
@@ -680,6 +1056,7 @@ class PlannerPipeline:
         yield analysis_progress
         analysis_start = time.time()
         full_analysis = ""
+        fragments: List[str] = []
         async for text_chunk in stream_insights_llm(
             data,
             sql,
@@ -690,6 +1067,7 @@ class PlannerPipeline:
         ):
             if text_chunk:
                 full_analysis += text_chunk
+                fragments.append(text_chunk)
                 streaming_event = {
                     "event": "analysis_streaming",
                     "data": {
@@ -718,12 +1096,24 @@ class PlannerPipeline:
             manifest=getattr(ctx, "tool_parallel_manifest", None),
             results=getattr(ctx, "tool_parallel_results", None),
         )
+        stock_widget = None
         if tool_bundle:
+            stock_widget = tool_bundle.get("stock_widget")
             analysis_payload.update(tool_bundle)
         if ctx.web_search:
             web_payload = ctx.web_search.to_payload()
             analysis_payload['web_context'] = web_payload
             ctx.planner_result.metadata['web_search'] = web_payload
+        if stock_widget:
+            _set_market_artifact(ctx, widget=stock_widget)
+            self._capture_artifacts(ctx)
+        _set_analysis_artifact(
+            ctx,
+            analysis_text=full_analysis,
+            fragments=fragments,
+            tool_bundle=tool_bundle or None,
+        )
+        self._capture_artifacts(ctx)
         analysis_complete = EventEmitter.result(
             "analysis_complete",
             analysis_payload,
@@ -770,6 +1160,8 @@ class PlannerPipeline:
                 "error": "search_api_missing",
                 "summary": summary,
             }
+            _set_web_artifact(ctx, payload=payload, topic=None, search_result=None)
+            self._capture_artifacts(ctx)
             result_event = EventEmitter.result("web_search", {"web_context": payload})
             result_event["data"]["ts"] = datetime.utcnow().isoformat()
             yield result_event
@@ -800,6 +1192,7 @@ class PlannerPipeline:
     
         context_hint = " | ".join(context_parts) if context_parts else None
     
+        topic: Optional[str] = None
         try:
             # First, compute and surface the rewritten search topic
             try:
@@ -827,12 +1220,21 @@ class PlannerPipeline:
             )
             error_event["data"]["ts"] = datetime.utcnow().isoformat()
             yield error_event
+            error_payload = {
+                "ready": False,
+                "error": "WEB_SEARCH_ERROR",
+                "summary": str(exc),
+            }
+            _set_web_artifact(ctx, payload=error_payload, topic=None, search_result=None)
+            self._capture_artifacts(ctx)
             return
     
         ctx.web_search = search_result
         payload = search_result.to_payload()
         payload["ready"] = True
         payload["ts"] = datetime.utcnow().isoformat()
+        _set_web_artifact(ctx, payload=payload, topic=topic, search_result=search_result)
+        self._capture_artifacts(ctx)
         yield EventEmitter.result("web_search", {"web_context": payload})
     
     def _get_company_display(self, intent: IntentModel, provisional_plan: Optional[QueryPlanModel] = None) -> str:
@@ -986,6 +1388,15 @@ async def _classification_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerato
     ctx.classification = classification
     ctx.planner_result.metadata['classification'] = classification.model_dump()
     ctx.is_financial_query = bool(getattr(classification, "is_financial_query", False))
+    ctx.artifacts.classification = ClassificationArtifactModel(
+        query=ctx.query,
+        category=getattr(classification, "topic_category", None),
+        confidence=getattr(classification, "confidence", None),
+        is_financial=getattr(classification, "is_financial_query", None),
+        model=model_name,
+        raw=classification.model_dump(),
+    )
+    self._capture_artifacts(ctx)
     reasoning_message = f"LLM classified topic '{classification.topic_category}'"
     yield {
         "event": "classification_reasoning",
@@ -1103,6 +1514,16 @@ async def _intent_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[s
         "missing_slots": schema_decision.missing_slots if schema_decision else [],
         "slot": schema_decision.slot if schema_decision else None,
     }
+    ctx.artifacts.intent = IntentArtifactModel(
+        query=ctx.query,
+        intent_key=getattr(intent, "intent_key", None),
+        confidence=getattr(intent, "confidence", None),
+        slots=dict(getattr(intent, "slots_detected", {}) or {}),
+        clarifications_needed=bool(schema_decision and getattr(schema_decision, "action", None) == "request"),
+        low_confidence=getattr(intent, "low_confidence", None),
+        raw=intent.model_dump(),
+    )
+    self._capture_artifacts(ctx)
 
     if SCHEMA_CLARIFIER_ENABLED:
         clarifier_event = EventEmitter.progress(
@@ -1183,6 +1604,7 @@ async def _clarification_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator
     assumptions = list(ctx.assumptions)
     rounds = ctx.clarification_rounds
     all_answered_slots: set[str] = set()
+    history_entries: List[Dict[str, Any]] = []
     if official_clarifications:
         timed_emitter.start_step("clarification")
         missing_slots = [req.slot for req in official_clarifications]
@@ -1227,6 +1649,7 @@ async def _clarification_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator
             )
             clarification_event["data"]["ts"] = datetime.utcnow().isoformat()
             yield clarification_event
+            history_entry: Dict[str, Any] = {"request": dict(request_payload)}
             try:
                 answer = await asyncio.wait_for(
                     wait_for_answer_blocking(session_id, slot_request.request_id),
@@ -1250,6 +1673,11 @@ async def _clarification_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator
                     )
                 else:
                     official_clarifications.pop(0)
+                    history_entry["response"] = {
+                        "status": "timeout_no_value",
+                        "slot": slot_request.slot,
+                    }
+                    history_entries.append(history_entry)
                     continue
             if answer:
                 is_valid = validate_clarification_answer(answer, slot_request)
@@ -1268,6 +1696,11 @@ async def _clarification_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator
                         intent, provisional_plan, [answer], CONFIGS.__dict__
                     )
                     assumptions.extend(merge_assumptions)
+                    history_entry["response"] = {
+                        "status": "accepted",
+                        "slot": answer.slot,
+                        "value": answer.value,
+                    }
                     template = choose_template(
                         intent, provisional_plan, CONFIGS.__dict__
                     )
@@ -1299,8 +1732,20 @@ async def _clarification_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator
                     error_event["data"]["ts"] = datetime.utcnow().isoformat()
                     yield error_event
                     official_clarifications = official_clarifications[1:]
+                    history_entry["response"] = {
+                        "status": "rejected",
+                        "slot": answer.slot,
+                        "value": answer.value,
+                        "error": error_message,
+                    }
             else:
                 official_clarifications = official_clarifications[1:]
+                history_entry["response"] = {
+                    "status": "no_answer",
+                    "slot": slot_request.slot,
+                }
+            if history_entry not in history_entries:
+                history_entries.append(history_entry)
         clarification_elapsed = timed_emitter.end_step("clarification")
         resolved_event = EventEmitter.intent_resolved(
             key=intent.intent_key,
@@ -1330,6 +1775,32 @@ async def _clarification_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator
     ctx.assumptions = assumptions
     ctx.clarification_rounds = rounds
     ctx.clarifications = official_clarifications
+    decision = ctx.schema_clarifier_decision
+    clarifier_action = None
+    clarifier_missing = []
+    clarifier_slot = None
+    if decision is not None:
+        clarifier_action = getattr(decision, "action", None)
+        clarifier_missing = list(getattr(decision, "missing_slots", []) or [])
+        clarifier_slot = getattr(decision, "slot", None)
+    elif official_clarifications:
+        clarifier_action = "request"
+    else:
+        clarifier_action = "not_required"
+    ctx.artifacts.clarification = ClarificationArtifact(
+        query=ctx.query,
+        clarifier_action=clarifier_action,
+        clarifier_missing_slots=clarifier_missing,
+        clarifier_slot=clarifier_slot,
+        pending=[req.model_dump() for req in official_clarifications],
+        assumptions=list(assumptions),
+        resolved=not official_clarifications,
+        rounds=rounds,
+        answered_slots=sorted(all_answered_slots),
+        history=history_entries,
+    )
+    self._capture_artifacts(ctx)
+
 async def _plan_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[str, Any], None]:
     intent = ctx.intent
     provisional_plan = ctx.provisional_plan
@@ -1350,7 +1821,7 @@ async def _plan_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[str
         intent_finalized_event["data"]["clarification_rounds"] = ctx.clarification_rounds
     yield intent_finalized_event
     criteria_model = intent_to_sql_criteria(intent, CONFIGS.__dict__)
-    criteria_payload = criteria_model.dict()
+    criteria_payload = criteria_model.model_dump()
     criteria_payload["ts"] = datetime.utcnow().isoformat()
     yield {
         "event": "criteria_ready",
@@ -1433,6 +1904,23 @@ async def _plan_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[str
         yield catalog_event
     ctx.candidate_templates = candidate_templates
     ctx.selected_template_id = selected_template_id
+    plan_payload = provisional_plan.model_dump()
+    candidate_payload = [dict(template) for template in candidate_templates]
+    template_payload = template_info or (template if isinstance(template, dict) else None)
+    ctx.artifacts.plan = PlanArtifact(
+        query=ctx.query,
+        plan=plan_payload,
+        candidate_templates=candidate_payload,
+        selected_template_id=selected_template_id,
+        comparison=provisional_plan.comparison,
+        granularity=provisional_plan.granularity,
+        metrics_count=len(provisional_plan.metrics),
+        template=template_payload,
+        parallelism_enabled=ctx.parallelism_enabled,
+        criteria={k: v for k, v in criteria_payload.items() if k != "ts"},
+        catalog_elapsed_ms=catalog_elapsed,
+    )
+    self._capture_artifacts(ctx)
 
 class PlannerExecutorFlow:
     """Backward-compatible wrapper around :class:`PlannerPipeline`."""
@@ -1453,6 +1941,9 @@ class PlannerExecutorFlow:
             setattr(self._pipeline, name, value)
         else:
             super().__setattr__(name, value)
+
+    def latest_artifacts(self) -> Optional[PipelineArtifacts]:
+        return self._pipeline.latest_artifacts()
 
     async def initialize_context(self, query: str, session_id: Optional[str] = None) -> PlannerPhaseContext:
         return await self._pipeline.initialize_context(query, session_id)

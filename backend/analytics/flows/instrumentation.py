@@ -1,10 +1,12 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
+import json
 import uuid
 from datetime import datetime
 from typing import Any, AsyncGenerator, Dict, Optional, Tuple
 
 from analytics.core.session_state import SessionStateSnapshot, get_session_state_repository
+from analytics.artifacts import PipelineArtifacts
 from .planner_executor import PlannerExecutorFlow, run_planner_executor
 
 PARALLEL_GROUP_BY_EVENT = {
@@ -66,6 +68,29 @@ def _resolve_tool_group(event: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+def _extract_latest_artifacts(flow: Any) -> Optional[PipelineArtifacts]:
+    candidates = []
+    obj = flow
+    if hasattr(obj, "latest_artifacts"):
+        candidates.append(getattr(obj, "latest_artifacts"))
+    if hasattr(obj, "_pipeline") and hasattr(obj._pipeline, "latest_artifacts"):
+        candidates.append(obj._pipeline.latest_artifacts)
+    if hasattr(obj, "_planner"):
+        planner = getattr(obj, "_planner")
+        if hasattr(planner, "latest_artifacts"):
+            candidates.append(planner.latest_artifacts)
+        if hasattr(planner, "_pipeline") and hasattr(planner._pipeline, "latest_artifacts"):
+            candidates.append(planner._pipeline.latest_artifacts)
+    for candidate in candidates:
+        try:
+            value = candidate() if callable(candidate) else candidate
+        except Exception:
+            continue
+        if isinstance(value, PipelineArtifacts):
+            return value
+    return None
+
+
 def _enrich_event(
     event: Dict[str, Any],
     *,
@@ -119,8 +144,20 @@ def _maybe_update_session_state(
             updated = True
     elif name == "analysis_complete":
         analysis = data.get("analysis")
-        if analysis:
-            snapshot.record_outputs(analysis=analysis)
+        analysis_text: Optional[str] = None
+        if isinstance(analysis, str) and analysis.strip():
+            analysis_text = analysis
+        elif isinstance(analysis, dict):
+            nested = analysis.get("analysis")
+            if isinstance(nested, str) and nested.strip():
+                analysis_text = nested
+            else:
+                try:
+                    analysis_text = json.dumps(analysis)
+                except Exception:
+                    analysis_text = str(analysis)
+        if analysis_text:
+            snapshot.record_outputs(analysis=analysis_text)
             updated = True
     elif name == "tool_parallel_result":
         tool = (data.get("tool") or "").strip()
@@ -171,7 +208,15 @@ async def instrument_events(
         if _maybe_update_session_state(snapshot, enriched_event, query):
             await repository.save(snapshot)
 
+    artifacts = _extract_latest_artifacts(flow)
+    if artifacts:
+        payload = artifacts.to_dict()
+        if payload:
+            snapshot.record_artifacts(payload)
+
     await repository.save(snapshot)
+
+
 
 
 

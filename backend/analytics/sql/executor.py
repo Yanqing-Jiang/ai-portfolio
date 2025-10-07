@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -25,7 +26,28 @@ def _ensure_env_loaded() -> None:
 _ensure_env_loaded()
 
 
+_ROUND_PATTERN = re.compile(
+    r"ROUND\s*\(\s*([^,]+?)\s*,\s*(\d+)\s*\)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _coerce_round_numeric(sql: str) -> str:
+    """Ensure ROUND() receives a NUMERIC argument for PostgreSQL compatibility."""
+
+    def _repl(match: re.Match[str]) -> str:
+        expression = match.group(1).strip()
+        digits = match.group(2)
+        upper_expr = expression.upper()
+        if "::NUMERIC" in upper_expr or "CAST(" in upper_expr:
+            return match.group(0)
+        return f"ROUND(({expression})::numeric, {digits})"
+
+    return _ROUND_PATTERN.sub(_repl, sql)
+
+
 async def execute_sql(sql: str, *, timeout: float = 15.0) -> List[Dict[str, Any]]:
+    sql = _coerce_round_numeric(sql)
     database_url = os.getenv("DATABASE_URL")
     if not database_url:
         raise ValueError("DATABASE_URL environment variable is required for analytics SQL execution")
