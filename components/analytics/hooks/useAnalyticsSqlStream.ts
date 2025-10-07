@@ -16,6 +16,7 @@ const STEP_ALIASES: Record<string, string> = {
   chart_generation: 'chart',
   chart_rendering: 'chart',
   analysis_generation: 'analysis',
+  analysis_revision: 'analysis',
 };
 
 const normalizeStepId = (rawStep?: string): string => {
@@ -181,9 +182,9 @@ export const useAnalyticsSqlStream = () => {
               setChartSpec((prev) => applyChartOps(prev, eventData));
               streamHook.setCurrentStatus('Chart updated');
               stepsHook.updateStepStatus(
-                'chart',
+                'chart_revision',
                 'in_progress',
-                ['Applied chart patch'],
+                ['Applied chart revision'],
                 { patch: eventData },
                 eventData.elapsed_ms ?? eventData.elapsed,
                 eventData.ts ?? eventData.timestamp,
@@ -213,6 +214,26 @@ export const useAnalyticsSqlStream = () => {
             undefined,
             eventData.elapsed_ms ?? eventData.elapsed,
             eventData.ts ?? eventData.timestamp,
+          );
+          break;
+        }
+
+        case 'analysis_revision': {
+          const revisedAnalysis = typeof eventData?.analysis === 'string' ? eventData.analysis : '';
+          if (revisedAnalysis) {
+            setAnalysis(revisedAnalysis);
+            setStreamingText('');
+          }
+          const resolvedStep = normalizeStepId(eventData.step) || 'analysis';
+          stepsHook.updateStepStatus(
+            resolvedStep,
+            'completed',
+            ['Applied analysis revision'],
+            { analysis: revisedAnalysis, reason: eventData?.reason, source: eventData?.source },
+            eventData.elapsed_ms ?? eventData.elapsed,
+            eventData.ts ?? eventData.timestamp,
+            eventData.sequence ?? eventData.seq,
+            eventData.parallel_group ?? eventData.parallelGroup,
           );
           break;
         }

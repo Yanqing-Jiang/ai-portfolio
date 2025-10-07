@@ -22,7 +22,9 @@ export const STEP_NAME: Record<string, string> = {
   sql_execution: 'Data Retrieval',
   short_financial_analysis: 'Financial Analysis',
   chart_generation: 'Chart Generation',
+  chart_revision: 'Chart Revision',
   analysis_generation: 'Final Analysis',
+  analysis_revision: 'Analysis Revision',
   finalization: 'Workflow Finalization',
 };
 
@@ -47,7 +49,9 @@ export const STEP_ORDER = [
   'sql_execution',
   'short_financial_analysis',
   'chart_generation',
+  'chart_revision',
   'analysis_generation',
+  'analysis_revision',
   'finalization',
 ];
 
@@ -70,9 +74,11 @@ export const STEP_NAME_SQL: Record<string, string> = {
   data_retrieval: 'Data Retrieval',
   chart: 'Chart Creation',
   chart_generation: 'Chart Creation',
+  chart_revision: 'Chart Revision',
   chart_rendering: 'Chart Creation',
   analysis: 'Analysis Generation',
   analysis_generation: 'Analysis Generation',
+  analysis_revision: 'Analysis Revision',
   workflow_complete: 'Workflow Summary',
 };
 
@@ -94,7 +100,10 @@ export const STEP_ORDER_SQL = [
   'data_retrieval',
   'chart',
   'chart_generation',
+  'chart_revision',
   'analysis',
   'analysis_generation',
+  'analysis_revision',
   'workflow_complete',
 ];
+

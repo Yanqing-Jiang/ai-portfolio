@@ -5,18 +5,24 @@ import time
 from typing import Any, AsyncGenerator, Dict, Optional
 
 from analytics.core.telemetry import tool_iteration as log_tool_iteration
+from analytics.core.session_state import get_session_state_repository
 from .hooks import AnalyticsFlowHooks
 from .planner_executor import PlannerExecutorFlow, run_planner_executor
+from .pipeline_tools import get_planner_tool_registry
 
 
 class _SingleAgentToolHooks(AnalyticsFlowHooks):
-    def __init__(self, flow: "SingleAgentToolsFlow") -> None:
+    def __init__(self, flow: "SingleAgentToolsFlow", session_id: Optional[str] = None) -> None:
         self._flow = flow
         self._timers: Dict[str, float] = {}
         self._sql_compile_details: Dict[str, Any] = {}
-        self._session_id: Optional[str] = None
+        self._session_id: Optional[str] = session_id
 
     async def on_flow_start(self, ctx: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
+        if ctx.get("session_id") and not self._session_id:
+            session = ctx.get("session_id")
+            if isinstance(session, str) and session:
+                self._session_id = session
         if False:
             yield {}
 
@@ -129,7 +135,9 @@ class SingleAgentToolsFlow:
         "sql_validation": "sql_validator",
         "sql_execution": "sql_executor",
         "chart_generation": "chart_designer",
+        "chart_revision": "chart_designer",
         "analysis_generation": "analysis_writer",
+        "analysis_revision": "analysis_writer",
     }
 
     TOOL_END_EVENTS = {
@@ -141,12 +149,65 @@ class SingleAgentToolsFlow:
         "sql_validated": "sql_validator",
         "execution_stats": "sql_executor",
         "chart_generated": "chart_designer",
+        "chart_patch": "chart_designer",
+        "analysis_revision": "analysis_writer",
         "analysis_complete": "analysis_writer",
     }
 
     def __init__(self) -> None:
         self._planner = PlannerExecutorFlow()
         self.flow_label = "single-agent"
+        self.planner_tool_manifest = get_planner_tool_registry().describe_tools()
+
+    async def _forward_with_hooks(
+        self,
+        stream: AsyncGenerator[Dict[str, Any], None],
+        hooks: _SingleAgentToolHooks,
+        session_id: Optional[str],
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        hook_ctx: Dict[str, Any] = {"session_id": session_id}
+        try:
+            async for start_event in hooks.on_flow_start(hook_ctx):
+                yield start_event
+            async for event in stream:
+                async for pre_event in hooks.before_event(hook_ctx, event):
+                    yield pre_event
+                yield event
+                if event.get("event") == "session_started":
+                    data = event.get("data") or {}
+                    hook_ctx["session_id"] = data.get("session_id", hook_ctx.get("session_id"))
+                async for post_event in hooks.after_event(hook_ctx, event):
+                    yield post_event
+        except BaseException as exc:
+            async for end_event in hooks.on_flow_end(hook_ctx, error=exc):
+                yield end_event
+            raise
+        else:
+            async for end_event in hooks.on_flow_end(hook_ctx):
+                yield end_event
+
+    async def _resolve_session_query(self, session_id: str) -> str:
+        repository = get_session_state_repository()
+        snapshot = await repository.load(session_id)
+        if snapshot and snapshot.last_query:
+            return snapshot.last_query
+        return ""
+
+    async def _invoke_planner_tool(
+        self,
+        tool_name: str,
+        *,
+        session_id: str,
+        query: Optional[str],
+        hooks: _SingleAgentToolHooks,
+        **kwargs: Any,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        resolved_query = query if query is not None else await self._resolve_session_query(session_id)
+        ctx = await self._planner.initialize_context(resolved_query or "", session_id=session_id)
+        registry = get_planner_tool_registry()
+        tool_stream = registry.invoke(tool_name, self._planner._pipeline, ctx, **kwargs)
+        async for event in self._forward_with_hooks(tool_stream, hooks, session_id):
+            yield event
 
     async def events(
         self,
@@ -154,13 +215,72 @@ class SingleAgentToolsFlow:
         session_id: Optional[str] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         planner_events = getattr(self._planner, "events", None)
-        hooks = _SingleAgentToolHooks(self)
+        hooks = _SingleAgentToolHooks(self, session_id=session_id)
         if callable(planner_events):
-            async for event in planner_events(query, session_id=session_id, hooks=hooks):
-                yield event
+            try:
+                async for event in planner_events(query, session_id=session_id, hooks=hooks):
+                    yield event
+                return
+            except TypeError:
+                planner_stream = planner_events(query, session_id=session_id)
         else:
             planner_stream = run_planner_executor(query, session_id=session_id)
-            async for event in planner_stream:
-                yield event
+
+        async for event in self._forward_with_hooks(planner_stream, hooks, session_id):
+            yield event
+
+    async def chart_revision(
+        self,
+        *,
+        session_id: str,
+        patch: Dict[str, Any],
+        reason: Optional[str] = None,
+        source: Optional[str] = None,
+        query: Optional[str] = None,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        hooks = _SingleAgentToolHooks(self, session_id=session_id)
+        async for event in self._invoke_planner_tool(
+            "chart_revision",
+            session_id=session_id,
+            query=query,
+            hooks=hooks,
+            patch=patch,
+            reason=reason,
+            source=source,
+        ):
+            yield event
+
+    async def analysis_revision(
+        self,
+        *,
+        session_id: str,
+        analysis: str,
+        reason: Optional[str] = None,
+        source: Optional[str] = None,
+        query: Optional[str] = None,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        hooks = _SingleAgentToolHooks(self, session_id=session_id)
+        async for event in self._invoke_planner_tool(
+            "analysis_revision",
+            session_id=session_id,
+            query=query,
+            hooks=hooks,
+            analysis=analysis,
+            reason=reason,
+            source=source,
+        ):
+            yield event
+
+
+
+
+
+
+
+
+
+
+
+
 
 

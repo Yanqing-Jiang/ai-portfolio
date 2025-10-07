@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from 'react';
+﻿import { useState, useRef, useCallback, useEffect } from 'react';
 import { ChatMessage, ClarifyRequest, ClarifyAnswer, ToolCallTelemetry, AgentTurnTelemetry, AgentReasoningTelemetry, ProcessStep, ToolFanoutManifest, ToolFanoutResult, StockWidgetConfig, WebSearchResult, SingleAgentFanout, SingleAgentFanoutBranch, FanoutBranchStatus } from '../types';
 import { apiService } from '../../../services/apiService';
 import { useAnalyticsStream } from './useAnalyticsStream';
@@ -1103,20 +1103,20 @@ export const useAnalyticsMemoryStream = (
               const opLines: string[] = eventData.ops.map((op: any) => {
                 try {
                   switch (op.op) {
-                    case 'set_chart_type': return `Chart type → ${op.value}`;
-                    case 'set_stack': return `Stacking → ${op.stack ? (op.mode || 'normal') : 'off'}`;
+                    case 'set_chart_type': return `Chart type -> ${op.value}`;
+                    case 'set_stack': return `Stacking -> ${op.stack ? (op.mode || 'normal') : 'off'}`;
                     case 'toggle_series': return `Toggle series (${op.visible ? 'show' : 'hide'}): ${Array.isArray(op.names) ? op.names.join(', ') : ''}`;
-                    case 'set_y_axis_format': return `Y format → ${op.valueType}`;
-                    case 'set_x_axis': return `X axis field → ${op.field}`;
-                    case 'filter_companies': return `Companies → ${Array.isArray(op.tickers) ? op.tickers.join(', ') : ''}`;
+                    case 'set_y_axis_format': return `Y format -> ${op.valueType}`;
+                    case 'set_x_axis': return `X axis field -> ${op.field}`;
+                    case 'filter_companies': return `Companies -> ${Array.isArray(op.tickers) ? op.tickers.join(', ') : ''}`;
                     case 'set_palette': return `Palette set (${Array.isArray(op.palette) ? op.palette.length : 0} colors)`;
-                    case 'set_axis_scale': return `Axis ${op.axis} scale → ${op.scale}`;
+                    case 'set_axis_scale': return `Axis ${op.axis} scale -> ${op.scale}`;
                     case 'select_metrics': {
                       const inc = op.include === 'ALL' ? 'ALL' : (Array.isArray(op.include) ? op.include.join(', ') : '');
                       const exc = Array.isArray(op.exclude) ? op.exclude.join(', ') : '';
                       return `Metrics include=[${inc}] exclude=[${exc}]`;
                     }
-                    case 'set_grouping': return `Grouping → ${op.grouping}`;
+                    case 'set_grouping': return `Grouping -> ${op.grouping}`;
                     default: return `Patch: ${JSON.stringify(op)}`;
                   }
                 } catch { return 'Patch applied'; }
@@ -1124,7 +1124,7 @@ export const useAnalyticsMemoryStream = (
 
               streamHook.setCurrentStatus('Chart updated');
               stepsHook.updateStepStatus(
-                'chart_generation',
+                'chart_revision',
                 'in_progress',
                 opLines.length ? opLines : ['Applied chart patch'],
                 { patch: eventData },
@@ -1132,10 +1132,36 @@ export const useAnalyticsMemoryStream = (
                 stepInfo.ts
               );
               // Reflect in Agent Coordination lane for visibility
-              updateAgentCoordination(opLines);
+              updateAgentCoordination(opLines.length ? opLines : ['Applied chart revision']);
             }
           } catch (e) {
             console.warn('[AnalyticsMemoryStream] Failed to apply chart_patch', e);
+          }
+          break;
+        }
+          
+        case 'analysis_revision': {
+          try {
+            const updatedAnalysis = typeof eventData?.analysis === 'string' ? eventData.analysis : '';
+            if (updatedAnalysis) {
+              setAnalysis(updatedAnalysis);
+              workflowDataRef.current.analysis = updatedAnalysis;
+            }
+            const lines: string[] = updatedAnalysis
+              ? [`Analysis -> ${updatedAnalysis.length > 140 ? updatedAnalysis.slice(0, 140).trimEnd() + '...' : updatedAnalysis}`]
+              : ['Applied analysis revision'];
+            stepsHook.updateStepStatus(
+              'analysis_revision',
+              'completed',
+              lines,
+              { analysis: updatedAnalysis, reason: eventData?.reason, source: eventData?.source },
+              stepInfo.elapsed_ms,
+              stepInfo.ts
+            );
+            updateAgentCoordination(lines.length ? lines : ['Applied analysis revision']);
+            streamHook.setCurrentStatus('Analysis updated');
+          } catch (e) {
+            console.warn('[AnalyticsMemoryStream] Failed to apply analysis_revision', e);
           }
           break;
         }
@@ -1956,9 +1982,5 @@ export const useAnalyticsMemoryStream = (
     updateChatMessage,
   };
 };
-
-
-
-
 
 

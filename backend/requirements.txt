@@ -17,3 +17,4 @@ asyncpg
 sqlglot
 python-jose[cryptography]
 fakeredis
+pytest-asyncio>=0.23.6

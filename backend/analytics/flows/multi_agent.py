@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import hashlib
 import json
@@ -17,6 +17,13 @@ from analytics.services.response_search import ResponseSearchError, perform_resp
 from .planner_executor import PlannerExecutorFlow, run_planner_executor
 from .hooks import AnalyticsFlowHooks
 from .tool_bundle import collect_tool_bundle
+from .pipeline_tools import get_planner_tool_registry
+from .chart_revision import (
+    infer_analysis_revision_from_query,
+    infer_chart_patch_from_query,
+    is_analysis_revision_query,
+    is_chart_revision_query,
+)
 from .task_plan import AgentTaskPlan, AgentTaskStep
 from .orchestrator import (
     AgentExecutionOrchestrator,
@@ -33,15 +40,19 @@ _MAX_ANALYSIS_STORED = 1200
 
 
 class _MultiAgentHooks(AnalyticsFlowHooks):
-    def __init__(self, flow: "MultiAgentFlow", query: str) -> None:
+    def __init__(self, flow: "MultiAgentFlow", query: str, session_id: Optional[str] = None) -> None:
         self._flow = flow
         self._query = query
-        self._active_session: Optional[str] = None
+        self._active_session: Optional[str] = session_id
 
     async def on_flow_start(self, ctx: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
+        self._flow._prepare_context(self._query)
+        if ctx.get("session_id") and not self._active_session:
+            session = ctx.get("session_id")
+            if isinstance(session, str) and session:
+                self._active_session = session
         if False:
             yield {}
-        self._flow._prepare_context(self._query)
 
     async def before_event(self, ctx: Dict[str, Any], event: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
         if False:
@@ -135,15 +146,6 @@ def _needs_web_refresh(query: str, web_ctx: Dict[str, Any]) -> bool:
     return not bool(snippets)
 
 
-def _is_chart_revision(query: Optional[str]) -> bool:
-    if not query:
-        return False
-    normalized = query.lower()
-    keywords = ["revise chart", "update chart", "adjust chart", "change chart", "tweak chart"]
-    return any(keyword in normalized for keyword in keywords)
-
-
-
 def _derive_tasks(
     planner_ctx: Dict[str, Any],
     sql_ctx: Dict[str, Any],
@@ -167,14 +169,31 @@ def _derive_tasks(
     else:
         plan.add_step("query", "skip", reason="no_sql_attempts")
 
-    chart_revision = _is_chart_revision(query)
+    chart_revision = is_chart_revision_query(query)
+    revision_patch = infer_chart_patch_from_query(query) if chart_revision else None
 
     analysis_ready = bool(analysis_ctx.get("final"))
     chart_ready = bool(chart_ctx.get("spec_summary")) and (sql_ctx.get("row_count", 0) > 0)
     tickers = planner_ctx.get("tickers", []) or market_ctx.get("tickers", []) or []
     market_ctx["tickers"] = tickers
 
+    if analysis_revision:
+        if analysis_revision_text:
+            analysis_ctx["revision_text"] = analysis_revision_text
+        plan.add_step("analyst", "run", reason="analysis_revision")
+        plan.add_step("chart", "reuse", reason="analysis_revision")
+        plan.add_step(
+            "market",
+            "skip",
+            reason="analysis_revision",
+            metadata={"tickers": tickers},
+        )
+        plan.add_step("web_research", "skip", reason="analysis_revision")
+        return plan
+
     if chart_revision:
+        if revision_patch:
+            chart_ctx["revision_patch"] = revision_patch
         plan.add_step("chart", "run", reason="chart_revision")
         plan.add_step("analyst", "skip", reason="chart_revision")
         plan.add_step(
@@ -729,7 +748,9 @@ class MultiAgentFlow:
         "sql_validation": "risk_controller",
         "sql_execution": "data_engineer",
         "chart_generation": "viz_designer",
+        "chart_revision": "viz_designer",
         "analysis_generation": "insight_reviewer",
+        "analysis_revision": "insight_reviewer",
     }
 
     AGENT_END_EVENTS = {
@@ -742,6 +763,8 @@ class MultiAgentFlow:
         "execution_stats": "data_engineer",
         "sql_attempts": "query_agent",
         "chart_generated": "viz_designer",
+        "chart_patch": "viz_designer",
+        "analysis_revision": "insight_reviewer",
         "analysis_complete": "insight_reviewer",
     }
 
@@ -756,6 +779,7 @@ class MultiAgentFlow:
     def __init__(self) -> None:
         self._planner = PlannerExecutorFlow()
         self.flow_label = "multi-agent"
+        self._planner_tool_manifest = get_planner_tool_registry().describe_tools()
         self._timers: Dict[str, float] = {}
         self._agent_registry = _build_default_agent_registry()
         self._orchestrator = AgentExecutionOrchestrator(self._agent_registry)
@@ -766,35 +790,39 @@ class MultiAgentFlow:
         self._shared_context: Dict[str, Any] = {}
         self._orchestrated = False
 
+    async def _forward_with_hooks(
+        self,
+        stream: AsyncGenerator[Dict[str, Any], None],
+        hooks: _MultiAgentHooks,
+        query: str,
+        session_id: Optional[str],
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        hook_ctx: Dict[str, Any] = {"query": query, "session_id": session_id}
+        try:
+            async for start_event in hooks.on_flow_start(hook_ctx):
+                yield start_event
+            async for event in stream:
+                async for pre_event in hooks.before_event(hook_ctx, event):
+                    yield pre_event
+                yield event
+                if event.get("event") == "session_started":
+                    data = event.get("data") or {}
+                    hook_ctx["session_id"] = data.get("session_id", hook_ctx.get("session_id"))
+                async for post_event in hooks.after_event(hook_ctx, event):
+                    yield post_event
+        except BaseException as exc:
+            async for end_event in hooks.on_flow_end(hook_ctx, error=exc):
+                yield end_event
+            raise
+        else:
+            async for end_event in hooks.on_flow_end(hook_ctx):
+                yield end_event
 
     async def events(
         self, query: str, session_id: Optional[str] = None
     ) -> AsyncGenerator[Dict[str, Any], None]:
         planner_events = getattr(self._planner, "events", None)
-        hooks = _MultiAgentHooks(self, query)
-
-        async def forward_with_hooks(stream: AsyncGenerator[Dict[str, Any], None]):
-            hook_ctx: Dict[str, Any] = {"query": query, "session_id": session_id}
-            try:
-                async for start_event in hooks.on_flow_start(hook_ctx):
-                    yield start_event
-                async for event in stream:
-                    async for pre_event in hooks.before_event(hook_ctx, event):
-                        yield pre_event
-                    yield event
-                    if event.get("event") == "session_started":
-                        data = event.get("data") or {}
-                        hook_ctx["session_id"] = data.get("session_id", hook_ctx.get("session_id"))
-                    async for post_event in hooks.after_event(hook_ctx, event):
-                        yield post_event
-            except BaseException as exc:
-                async for end_event in hooks.on_flow_end(hook_ctx, error=exc):
-                    yield end_event
-                raise
-            else:
-                async for end_event in hooks.on_flow_end(hook_ctx):
-                    yield end_event
-
+        hooks = _MultiAgentHooks(self, query, session_id=session_id)
         if callable(planner_events):
             try:
                 async for event in planner_events(query, session_id=session_id, hooks=hooks):
@@ -802,12 +830,62 @@ class MultiAgentFlow:
                 return
             except TypeError:
                 planner_stream = planner_events(query, session_id=session_id)
-                async for event in forward_with_hooks(planner_stream):
+                async for event in self._forward_with_hooks(planner_stream, hooks, query, session_id):
                     yield event
                 return
 
         planner_stream = run_planner_executor(query, session_id=session_id)
-        async for event in forward_with_hooks(planner_stream):
+        async for event in self._forward_with_hooks(planner_stream, hooks, query, session_id):
+            yield event
+
+    async def chart_revision(
+        self,
+        query: str,
+        *,
+        session_id: Optional[str],
+        patch: Dict[str, Any],
+        reason: Optional[str] = None,
+        source: Optional[str] = None,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        if session_id is None:
+            raise ValueError("chart_revision requires an existing session_id")
+        hooks = _MultiAgentHooks(self, query, session_id=session_id)
+        ctx = await self._planner.initialize_context(query, session_id=session_id)
+        registry = get_planner_tool_registry()
+        tool_stream = registry.invoke(
+            "chart_revision",
+            self._planner._pipeline,
+            ctx,
+            patch=patch,
+            reason=reason,
+            source=source,
+        )
+        async for event in self._forward_with_hooks(tool_stream, hooks, query, session_id):
+            yield event
+
+    async def analysis_revision(
+        self,
+        query: str,
+        *,
+        session_id: Optional[str],
+        analysis: str,
+        reason: Optional[str] = None,
+        source: Optional[str] = None,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        if session_id is None:
+            raise ValueError("analysis_revision requires an existing session_id")
+        hooks = _MultiAgentHooks(self, query, session_id=session_id)
+        ctx = await self._planner.initialize_context(query, session_id=session_id)
+        registry = get_planner_tool_registry()
+        tool_stream = registry.invoke(
+            "analysis_revision",
+            self._planner._pipeline,
+            ctx,
+            analysis=analysis,
+            reason=reason,
+            source=source,
+        )
+        async for event in self._forward_with_hooks(tool_stream, hooks, query, session_id):
             yield event
 
     def _prepare_context(self, query: str) -> None:
@@ -821,7 +899,7 @@ class MultiAgentFlow:
             'analysis': {'fragments': [], 'final': None},
             'market': preserved_market or {},
             'web': preserved_web or {},
-            'tool_manifest': None,
+            'tool_manifest': self._planner_tool_manifest,
             'tool_results': [],
             'stock_widget': None,
             'agents': {},
@@ -834,9 +912,6 @@ class MultiAgentFlow:
             },
         }
         self._orchestrated = False
-
-
-
 
     def _capture_event(self, event: Dict[str, Any]) -> None:
         name = event.get("event")
@@ -1256,6 +1331,4 @@ class MultiAgentFlow:
 
 
 __all__ = ["MultiAgentFlow"]
-
-
 

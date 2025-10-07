@@ -22,7 +22,6 @@ vi.mock('./useAnalyticsStream', () => {
       setCurrentStatus: vi.fn(),
       setError: vi.fn(),
       startStream: async (_endpoint: string, onEvent: (data: any) => void) => {
-        // no-op by default; individual tests inject events via globals
         const events = (globalThis as any).__TEST_EVENTS__ as any[] | undefined;
         if (Array.isArray(events)) {
           for (const e of events) {
@@ -37,7 +36,7 @@ vi.mock('./useAnalyticsStream', () => {
 });
 
 function HookHarness({ query, flow }: { query: string; flow: 'planner-executor' | 'single-agent' | 'multi-agent' }) {
-  const { handleQuery, chatHistory } = useAnalyticsMemoryStream(flow);
+  const { handleQuery, chatHistory, processSteps } = useAnalyticsMemoryStream(flow);
 
   React.useEffect(() => {
     (async () => {
@@ -51,6 +50,11 @@ function HookHarness({ query, flow }: { query: string; flow: 'planner-executor' 
     <div>
       <div data-testid="result-count">{chatHistory.filter((m) => m.type === 'result').length}</div>
       <div data-testid="message-count">{chatHistory.length}</div>
+      <ul data-testid="step-ids">
+        {processSteps.map((step) => (
+          <li key={step.id}>{`${step.id}:`}</li>
+        ))}
+      </ul>
     </div>
   );
 }
@@ -83,5 +87,32 @@ describe('useAnalyticsMemoryStream result deduping', () => {
     const resultCount = Number(screen.getByTestId('result-count').textContent);
     expect(resultCount).toBe(1);
   });
-});
 
+  it('records a chart revision step when chart_patch arrives', async () => {
+    (globalThis as any).__TEST_EVENTS__ = [
+      { event: 'chart_patch', data: { ops: [{ op: 'set_chart_type', value: 'bar' }] } },
+      { event: 'workflow_complete' },
+    ];
+
+    await act(async () => {
+      render(<HookHarness query="revise chart" flow="single-agent" />);
+    });
+
+    const stepIds = Array.from(screen.getByTestId('step-ids').querySelectorAll('li')).map((li) => li.textContent || '');
+    expect(stepIds.some((id) => id.startsWith('chart_revision'))).toBe(true);
+  });
+
+  it('records an analysis revision step when analysis_revision arrives', async () => {
+    (globalThis as any).__TEST_EVENTS__ = [
+      { event: 'analysis_revision', data: { analysis: 'Updated summary' } },
+      { event: 'workflow_complete' },
+    ];
+
+    await act(async () => {
+      render(<HookHarness query="revise analysis" flow="single-agent" />);
+    });
+
+    const stepIds = Array.from(screen.getByTestId('step-ids').querySelectorAll('li')).map((li) => li.textContent || '');
+    expect(stepIds.some((id) => id.startsWith('analysis_revision'))).toBe(true);
+  });
+});
