@@ -23,6 +23,9 @@ class PlannerToolDefinition:
     telemetry_step: Optional[str] = None
     inputs: Sequence[str] = field(default_factory=tuple)
     outputs: Sequence[str] = field(default_factory=tuple)
+    output_artifacts: Sequence[str] = field(default_factory=tuple)
+    latency_budget_ms: Optional[int] = None
+    concurrency_limit: Optional[int] = None
 
 
 class PlannerToolRegistry:
@@ -50,7 +53,8 @@ class PlannerToolRegistry:
         executed: Optional[Set[str]] = None,
         **kwargs: Any,
     ) -> AsyncGenerator[Dict[str, Any], None]:
-        executed = executed or set()
+        if executed is None:
+            executed = set()
         if name in executed:
             return
 
@@ -74,6 +78,9 @@ class PlannerToolRegistry:
                 "telemetry_step": definition.telemetry_step,
                 "inputs": list(definition.inputs),
                 "outputs": list(definition.outputs),
+                "output_artifacts": list(definition.output_artifacts or definition.outputs),
+                "latency_budget_ms": definition.latency_budget_ms,
+                "concurrency_limit": definition.concurrency_limit,
             }
             for definition in self.list_tools()
         )
@@ -169,6 +176,9 @@ def _bootstrap_registry(registry: PlannerToolRegistry) -> None:
             telemetry_step="classification",
             inputs=("query",),
             outputs=("classification",),
+            output_artifacts=("classification",),
+            latency_budget_ms=500,
+            concurrency_limit=1,
         )
     )
     registry.register(
@@ -180,6 +190,9 @@ def _bootstrap_registry(registry: PlannerToolRegistry) -> None:
             telemetry_step="intent_detection",
             inputs=("classification",),
             outputs=("intent",),
+            output_artifacts=("intent",),
+            latency_budget_ms=1500,
+            concurrency_limit=1,
         )
     )
     registry.register(
@@ -191,6 +204,9 @@ def _bootstrap_registry(registry: PlannerToolRegistry) -> None:
             telemetry_step="clarification",
             inputs=("intent",),
             outputs=("clarifications",),
+            output_artifacts=("clarification",),
+            latency_budget_ms=2000,
+            concurrency_limit=1,
         )
     )
     registry.register(
@@ -202,6 +218,9 @@ def _bootstrap_registry(registry: PlannerToolRegistry) -> None:
             telemetry_step="plan_generation",
             inputs=("clarifications",),
             outputs=("plan",),
+            output_artifacts=("plan",),
+            latency_budget_ms=2000,
+            concurrency_limit=1,
         )
     )
     registry.register(
@@ -213,6 +232,9 @@ def _bootstrap_registry(registry: PlannerToolRegistry) -> None:
             telemetry_step="sql_generation",
             inputs=("plan",),
             outputs=("sql",),
+            output_artifacts=("sql_generation", "sql_execution"),
+            latency_budget_ms=7000,
+            concurrency_limit=1,
         )
     )
     registry.register(
@@ -224,6 +246,9 @@ def _bootstrap_registry(registry: PlannerToolRegistry) -> None:
             telemetry_step="chart_generation",
             inputs=("sql",),
             outputs=("chart_spec",),
+            output_artifacts=("chart",),
+            latency_budget_ms=1500,
+            concurrency_limit=1,
         )
     )
     registry.register(
@@ -235,6 +260,9 @@ def _bootstrap_registry(registry: PlannerToolRegistry) -> None:
             telemetry_step="analysis_generation",
             inputs=("chart_spec",),
             outputs=("analysis",),
+            output_artifacts=("analysis",),
+            latency_budget_ms=5000,
+            concurrency_limit=1,
         )
     )
     registry.register(
@@ -246,6 +274,9 @@ def _bootstrap_registry(registry: PlannerToolRegistry) -> None:
             telemetry_step="chart_revision",
             inputs=("patch",),
             outputs=("chart_patch",),
+            output_artifacts=("revision",),
+            latency_budget_ms=800,
+            concurrency_limit=2,
         )
     )
 
@@ -258,6 +289,9 @@ def _bootstrap_registry(registry: PlannerToolRegistry) -> None:
             telemetry_step="analysis_revision",
             inputs=("analysis",),
             outputs=("analysis",),
+            output_artifacts=("revision",),
+            latency_budget_ms=1200,
+            concurrency_limit=2,
         )
     )
 
@@ -270,6 +304,9 @@ def _bootstrap_registry(registry: PlannerToolRegistry) -> None:
             telemetry_step="sql_regeneration",
             inputs=("plan",),
             outputs=("sql",),
+            output_artifacts=("sql_generation", "sql_execution"),
+            latency_budget_ms=7000,
+            concurrency_limit=1,
         )
     )
 

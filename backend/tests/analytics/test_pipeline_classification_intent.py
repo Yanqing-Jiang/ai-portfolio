@@ -58,6 +58,75 @@ def test_classification_phase_populates_artifact(monkeypatch: pytest.MonkeyPatch
     asyncio.run(_run())
 
 
+def test_pipeline_events_runs_tools_in_order(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _run() -> None:
+        pipeline = planner_executor.PlannerPipeline()
+        order: list[str] = []
+
+        async def fake_run_classification(ctx):
+            order.append("classification")
+            ctx.is_financial_query = True
+            yield {"event": "classification_complete"}
+
+        async def fake_run_intent(ctx):
+            order.append("intent_detection")
+            ctx.intent = object()
+            yield {"event": "intent_complete"}
+
+        async def fake_run_clarification(ctx):
+            order.append("clarification")
+            yield {"event": "clarification_complete"}
+
+        async def fake_run_plan(ctx):
+            order.append("plan_generation")
+            ctx.plan = object()
+            yield {"event": "plan_complete"}
+
+        async def fake_run_sql(ctx, intent, plan, candidate_templates, selected_template_id):
+            order.append("sql_generation")
+            ctx.halted = False
+            yield {"event": "sql_compiled"}
+
+        async def fake_run_chart(ctx, intent, plan):
+            order.append("chart_generation")
+            yield {"event": "chart_generated"}
+
+        async def fake_web_search(ctx):
+            order.append("web_search")
+            yield {"event": "web_search_complete"}
+
+        async def fake_run_analysis(ctx):
+            order.append("analysis_generation")
+            yield {"event": "analysis_complete"}
+
+        monkeypatch.setattr(pipeline, "run_classification", fake_run_classification)
+        monkeypatch.setattr(pipeline, "run_intent", fake_run_intent)
+        monkeypatch.setattr(pipeline, "run_clarification", fake_run_clarification)
+        monkeypatch.setattr(pipeline, "run_plan", fake_run_plan)
+        monkeypatch.setattr(pipeline, "run_sql_pipeline", fake_run_sql)
+        monkeypatch.setattr(pipeline, "run_chart_phase", fake_run_chart)
+        monkeypatch.setattr(pipeline, "_web_search_phase", fake_web_search)
+        monkeypatch.setattr(pipeline, "run_analysis_phase", fake_run_analysis)
+
+        async for _ in pipeline.events("test pipeline ordering"):
+            pass
+
+        expected = [
+            "classification",
+            "intent_detection",
+            "clarification",
+            "plan_generation",
+            "sql_generation",
+            "chart_generation",
+            "web_search",
+            "analysis_generation",
+        ]
+
+        assert order == expected, f"order={order!r}"
+
+    asyncio.run(_run())
+
+
 def test_intent_phase_populates_artifact(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _run() -> None:
         pipeline = planner_executor.PlannerPipeline()

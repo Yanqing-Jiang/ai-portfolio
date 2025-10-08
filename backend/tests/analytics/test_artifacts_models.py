@@ -76,5 +76,12 @@ def test_session_snapshot_record_artifacts():
     artifacts = PipelineArtifacts(classification=ClassificationArtifact(query="q"))
     payload = artifacts.to_dict()
     snapshot.record_artifacts(payload)
-    assert snapshot.tool_cache.setdefault("analytics", {}).get("artifacts") == payload
+    analytics_cache = snapshot.tool_cache.setdefault("analytics", {})
+    assert analytics_cache.get("artifacts") == payload
+    assert analytics_cache.get("artifact_version") == 1
+    history = analytics_cache.get("artifacts_history")
+    assert isinstance(history, list)
+    assert len(history) == 1
+    assert history[0]["version"] == 1
+    assert history[0]["artifacts"] == payload
 

@@ -5,6 +5,7 @@ import asyncio
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 
 from analytics.flows.multi_agent import MultiAgentFlow
+from analytics.flows.orchestrator import AgentResult
 
 
 class DummyPlannerFlow:
@@ -83,3 +84,44 @@ def test_multi_agent_flow_handles_web_context(monkeypatch):
     web_context = flow._shared_context.get("web")
     assert web_context is not None
     assert web_context.get("summary") == "NVIDIA guidance commentary"
+
+
+def test_multi_agent_cohesive_result_payload(monkeypatch):
+    flow = MultiAgentFlow()
+    flow._prepare_context("AMD market share")
+    flow._shared_context["analysis"]["final"] = "TLDR: AMD gains share."
+    flow._shared_context["analysis"]["length"] = 24
+    flow._shared_context["chart"]["spec"] = {"title": "Share"}
+    flow._shared_context["chart"]["spec_id"] = "chart-123"
+    flow._shared_context["sql"]["sql"] = "SELECT * FROM market_share"
+    flow._shared_context["sql"]["row_count"] = 8
+    flow._shared_context["sql"]["sample_data"] = [{"year": 2024, "share": 0.32}]
+    flow._shared_context["stock_widget"] = {"symbols": ["NASDAQ:AMD"]}
+    flow._shared_context["web"] = {"summary": "Industry roundup"}
+    flow._shared_context["tool_manifest"] = [{"name": "stock_tracker"}]
+    flow._shared_context["tool_results"] = [{"tool": "stock_tracker", "status": "completed"}]
+
+    async def fake_run(plan, context):
+        return {
+            "planner_phase": AgentResult(name="planner", output={"bundle": {"query": context.query, "chart_id": "chart-123"}}),
+            "chart_phase": AgentResult(name="chart", output={"status": "complete"}),
+            "analyst_phase": AgentResult(name="analyst", output={"status": "complete"}),
+            "query_phase": AgentResult(name="query", output={"status": "complete"}),
+        }
+
+    monkeypatch.setattr(flow._orchestrator, "run", fake_run)
+
+    # _run_agent_orchestration returns an async generator; collect events
+    async def collect():
+        payloads = []
+        async for evt in flow._run_agent_orchestration("AMD market share", session_id="sess-001"):
+            payloads.append(evt)
+        return payloads
+
+    emitted = asyncio.run(collect())
+    cohesive = next(evt for evt in emitted if evt.get("event") == "cohesive_result")
+    data = cohesive["data"]
+    assert data["analysis"] == "TLDR: AMD gains share."
+    assert data["chart_spec"]["title"] == "Share"
+    assert data["sql"] == "SELECT * FROM market_share"
+    assert data["stock_widget"]["symbols"] == ["NASDAQ:AMD"]

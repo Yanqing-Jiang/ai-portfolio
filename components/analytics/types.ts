@@ -11,6 +11,9 @@ export interface ToolCallTelemetry {
   sequence?: number;
   parallelGroup?: string;
   toolGroup?: string;
+  latencyBudgetMs?: number;
+  concurrencyLimit?: number;
+  outputArtifacts?: string[];
 }
 
 export interface AgentTurnTelemetry {
@@ -21,6 +24,9 @@ export interface AgentTurnTelemetry {
   summary?: Record<string, any> | string;
   sequence?: number;
   parallelGroup?: string;
+  latencyBudgetMs?: number;
+  concurrencyLimit?: number;
+  outputArtifacts?: string[];
 }
 
 export interface ToolFanoutManifest {

@@ -8,8 +8,8 @@ export const PROJECT_DATA: ProjectYear[] = [
       {
         id: 'next-gen-analytics-memory',
         title: 'Next Gen Analytics (Memory)',
-        description: `Three agentic workflows: Direct (fast path), single-agent (multi-tool use), multi-agent (supervisor + specialists).\nHuman-in-the-loop: Compact choice widget for peers/metrics/range with one-tap approvals and reruns.\nExplainable thinking process panel: Plan graph with per-step trace.\nFinancial scope: AMD, AVGO, INTC, MU, NVDA, QCOM, TXN.\nMemory optimization: Cached queries, vectorized prompts, result reuse.`,
-        technologies: ['Single Agent workflow', 'Multi-agent workflow', 'Human-in-loop', 'RAG', 'long term memory'],
+        description: `Three agentic workflows: Direct (fixed path), single-agent (multi-tool use), multi-agent (supervisor + specialists).\nHuman-in-the-loop: Compact choice widget for peers/metrics/range with one-tap approvals and reruns.\nExplainable thinking process panel: Plan graph with per-step trace.\nFinancial scope: AMD, AVGO, INTC, MU, NVDA, QCOM, TXN.\nMemory optimization: Cached queries, vectorized prompts, result reuse.`,
+        technologies: ['Single Agent workflow', 'Multi-agent workflow', 'Human-in-loop', 'RAG', 'web search'],
         systemInstruction: `You are the AI assistant for **Next Gen Analytics (Memory)**. You have full knowledge of the project described below. Use this embedded reference to answer questions with detail and accuracy. Quote or paraphrase the content to explain features, tech stack, workflow and technical implementation.
 
 +--------------------
@@ -86,7 +86,7 @@ Result:
 Interactive financial analysis for AMD, AVGO, INTC, MU, NVDA, QCOM, TXN with optimized performance.
 Real-time streaming analytics with comprehensive charting and data export.
 Direct database queries enable intelligent chart generation and detailed financial commentary.`,
-        technologies: ['Direct SQL workflow', 'Query analysis', 'Chart generation', 'Real-time streaming', 'Data exports', 'Financial insights'],
+        technologies: ['Agentic Workflow', 'LangGraph', 'State Management', 'RAG', 'Smart SQL'],
         systemInstruction: `You are the AI assistant for **Next Gen Analytics (SQL)**. You have full knowledge of the project described below. Use this embedded reference to answer questions with detail and accuracy. Quote or paraphrase the content to explain features, tech stack, workflow and technical implementation.
 
 +--------------------

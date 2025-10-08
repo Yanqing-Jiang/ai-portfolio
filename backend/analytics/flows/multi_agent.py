@@ -7,8 +7,8 @@ import time
 import copy
 import os
 import asyncio
-from datetime import datetime
-from typing import Any, AsyncGenerator, Dict, List, Optional
+from datetime import datetime, date
+from typing import Any, AsyncGenerator, Dict, Iterable, List, Mapping, Optional, Sequence
 
 from analytics.core.session_state import SessionStateSnapshot, get_session_state_repository
 from analytics.core.telemetry import analysis_chunk as log_analysis_chunk, agent_handoff, policy_decision
@@ -18,6 +18,64 @@ from .planner_executor import PlannerExecutorFlow, run_planner_executor
 from .hooks import AnalyticsFlowHooks
 from .tool_bundle import collect_tool_bundle
 from .pipeline_tools import get_planner_tool_registry
+
+
+def _build_tool_metadata(manifest: Any) -> Dict[str, Dict[str, Any]]:
+    metadata: Dict[str, Dict[str, Any]] = {}
+    try:
+        iterable = list(manifest)
+    except TypeError:
+        return metadata
+    for entry in iterable:
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("name")
+        if not isinstance(name, str):
+            continue
+        metadata[name] = {
+            "latency_budget_ms": entry.get("latency_budget_ms"),
+            "output_artifacts": entry.get("output_artifacts"),
+            "concurrency_limit": entry.get("concurrency_limit"),
+        }
+    return metadata
+
+
+def _sanitize_for_transport(value: Any) -> Any:
+    """Convert complex objects into JSON-safe payloads."""
+    if isinstance(value, Mapping):
+        sanitized: Dict[str, Any] = {}
+        for key, item in value.items():
+            sanitized[str(key)] = _sanitize_for_transport(item)
+        return sanitized
+    if isinstance(value, (list, tuple, set)):
+        return [_sanitize_for_transport(item) for item in value]
+    if isinstance(value, slice):
+        return {
+            "start": value.start,
+            "stop": value.stop,
+            "step": value.step,
+        }
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if hasattr(value, "model_dump"):
+        try:
+            return _sanitize_for_transport(value.model_dump())
+        except Exception:
+            return str(value)
+    if hasattr(value, "dict"):
+        try:
+            return _sanitize_for_transport(value.dict())
+        except Exception:
+            return str(value)
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    try:
+        json.dumps(value)
+        return value
+    except TypeError:
+        return str(value)
 from .chart_revision import (
     infer_analysis_revision_from_query,
     infer_chart_patch_from_query,
@@ -330,9 +388,10 @@ def _create_planner_bundle(
         visuals['web_context'] = copy.deepcopy(web_context)
     if visuals:
         bundle['visuals'] = visuals
-    serialized = json.dumps(bundle, sort_keys=True, default=str)
-    bundle['id'] = _make_identifier(session_id, 'bundle', serialized)
-    return bundle
+    sanitized_bundle = _sanitize_for_transport(bundle)
+    serialized = json.dumps(sanitized_bundle, sort_keys=True, default=str)
+    sanitized_bundle['id'] = _make_identifier(session_id, 'bundle', serialized)
+    return sanitized_bundle
 
 
 
@@ -768,6 +827,47 @@ class MultiAgentFlow:
         "analysis_complete": "insight_reviewer",
     }
 
+    TOOL_METADATA_STEP_MAP = {
+        "intent_detection": "intent_detection",
+        "clarification": "clarification",
+        "sql_compilation": "sql_generation",
+        "sql_validation": "sql_generation",
+        "sql_execution": "sql_generation",
+        "chart_generation": "chart_generation",
+        "chart_revision": "chart_revision",
+        "analysis_generation": "analysis_generation",
+        "analysis_revision": "analysis_revision",
+    }
+
+    TOOL_METADATA_EVENT_MAP = {
+        "intent_detection_complete": "intent_detection",
+        "clarification_resolved": "clarification",
+        "clarification_skipped": "clarification",
+        "clarification_timeout": "clarification",
+        "sql_generated": "sql_generation",
+        "sql_validated": "sql_generation",
+        "execution_stats": "sql_generation",
+        "sql_attempts": "sql_generation",
+        "chart_generated": "chart_generation",
+        "chart_patch": "chart_revision",
+        "analysis_revision": "analysis_revision",
+        "analysis_complete": "analysis_generation",
+    }
+
+    TOOL_METADATA_ROLE_MAP = {
+        "planner_agent": "plan_generation",
+        "intent_analyst": "intent_detection",
+        "user_liaison": "clarification",
+        "sql_specialist": "sql_generation",
+        "risk_controller": "sql_generation",
+        "data_engineer": "sql_generation",
+        "viz_designer": "chart_generation",
+        "analyst_agent": "analysis_generation",
+        "insight_reviewer": "analysis_generation",
+        "query_agent": "sql_generation",
+        "market_agent": "chart_generation",
+    }
+
     ORCHESTRATION_ROLES: Dict[str, str] = {
         "planner_phase": "planner_agent",
         "query_phase": "query_agent",
@@ -779,7 +879,14 @@ class MultiAgentFlow:
     def __init__(self) -> None:
         self._planner = PlannerExecutorFlow()
         self.flow_label = "multi-agent"
-        self._planner_tool_manifest = get_planner_tool_registry().describe_tools()
+        registry = get_planner_tool_registry()
+        self._planner_tool_manifest = registry.describe_tools()
+        self._tool_metadata_by_registry = _build_tool_metadata(self._planner_tool_manifest)
+        self._tool_metadata_by_role = {
+            role: self._tool_metadata_by_registry.get(registry_name)
+            for role, registry_name in self.TOOL_METADATA_ROLE_MAP.items()
+            if registry_name in self._tool_metadata_by_registry
+        }
         self._timers: Dict[str, float] = {}
         self._agent_registry = _build_default_agent_registry()
         self._orchestrator = AgentExecutionOrchestrator(self._agent_registry)
@@ -789,6 +896,33 @@ class MultiAgentFlow:
         self._session_snapshot: Optional[SessionStateSnapshot] = None
         self._shared_context: Dict[str, Any] = {}
         self._orchestrated = False
+
+    def _get_tool_metadata_for_step(self, step: Optional[str]) -> Optional[Dict[str, Any]]:
+        if not step:
+            return None
+        registry_name = self.TOOL_METADATA_STEP_MAP.get(step)
+        if not registry_name:
+            return None
+        return self._tool_metadata_by_registry.get(registry_name)
+
+    def _get_tool_metadata_for_event(self, event_name: Optional[str]) -> Optional[Dict[str, Any]]:
+        if not event_name:
+            return None
+        registry_name = self.TOOL_METADATA_EVENT_MAP.get(event_name)
+        if not registry_name:
+            return None
+        return self._tool_metadata_by_registry.get(registry_name)
+
+    def _get_tool_metadata_for_role(self, role: Optional[str]) -> Optional[Dict[str, Any]]:
+        if not role:
+            return None
+        metadata = self._tool_metadata_by_role.get(role)
+        if metadata:
+            return metadata
+        registry_name = self.TOOL_METADATA_ROLE_MAP.get(role)
+        if registry_name:
+            return self._tool_metadata_by_registry.get(registry_name)
+        return None
 
     def latest_artifacts(self):
         return self._planner.latest_artifacts()
@@ -954,6 +1088,7 @@ class MultiAgentFlow:
             sql_ctx["template_fallback"] = data.get("template_fallback")
             sql_ctx["generated"] = True
             if sql_text:
+                sql_ctx["sql"] = sql_text
                 sql_ctx["id"] = _make_identifier(self._session_id, "sql", sql_text)
                 self._record_snapshot(sql=sql_text)
         elif name == "sql_validated":
@@ -967,11 +1102,19 @@ class MultiAgentFlow:
         elif name == "execution_stats":
             sql_ctx["row_count"] = data.get("row_count")
             sql_ctx["status"] = 'success'
+        elif name == "data_retrieved":
+            sample = data.get("sample_data")
+            if isinstance(sample, Sequence) and not isinstance(sample, (str, bytes)):
+                sql_ctx["sample_data"] = list(sample)
+            columns = data.get("columns")
+            if isinstance(columns, Sequence) and not isinstance(columns, (str, bytes)):
+                sql_ctx["columns"] = list(columns)
         elif name == "chart_generated":
             spec = data.get("chart_spec")
             if spec is not None:
                 identifier = _make_identifier(self._session_id, "chart", json.dumps(spec, sort_keys=True))
                 chart_ctx["spec_id"] = identifier
+                chart_ctx["spec"] = spec
                 chart_ctx["spec_summary"] = {
                     "chart_type": data.get("chart_type"),
                     "series_count": len(spec.get("datasets", [])) if isinstance(spec, dict) else None,
@@ -1067,6 +1210,14 @@ class MultiAgentFlow:
         query: str,
         session_id: Optional[str],
     ) -> AsyncGenerator[Dict[str, Any], None]:
+        sql_ctx = self._shared_context.get("sql", {})
+        chart_ctx = self._shared_context.get("chart", {})
+        analysis_ctx = self._shared_context.get("analysis", {})
+        stock_widget = self._shared_context.get("stock_widget")
+        web_context = self._shared_context.get("web")
+        tool_manifest = self._shared_context.get("tool_manifest")
+        tool_results = self._shared_context.get("tool_results")
+
         for task in self._base_plan:
             role = self.ORCHESTRATION_ROLES.get(task.name)
             if role:
@@ -1108,6 +1259,26 @@ class MultiAgentFlow:
                 metadata={'summary': agent_output.get('summary'), 'tickers': agent_output.get('tickers')},
             )
 
+        final_payload = {
+            "analysis": analysis_ctx.get("final"),
+            "analysis_length": analysis_ctx.get("length"),
+            "chart_spec": chart_ctx.get("spec"),
+            "chart_spec_id": chart_ctx.get("spec_id"),
+            "sql": sql_ctx.get("sql"),
+            "sql_row_count": sql_ctx.get("row_count"),
+            "data_sample": sql_ctx.get("sample_data"),
+            "columns": sql_ctx.get("columns"),
+            "stock_widget": stock_widget,
+            "web_context": web_context,
+            "tool_manifest": tool_manifest,
+            "tool_results": tool_results,
+            "bundle": bundle,
+            "query": query,
+        }
+        sanitized_payload = _sanitize_for_transport(final_payload)
+        if any(value is not None for key, value in final_payload.items() if key not in {"query", "bundle"}):
+            yield {"event": "cohesive_result", "data": sanitized_payload}
+
         await self._persist_bundle(bundle)
 
     def _maybe_agent_turn_start(self, event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -1118,7 +1289,7 @@ class MultiAgentFlow:
         if not role:
             return None
         self._timers[role] = time.time()
-        return {
+        payload: Dict[str, Any] = {
             "event": "agent_turn",
             "data": {
                 "role": role,
@@ -1127,6 +1298,12 @@ class MultiAgentFlow:
                 "ts": datetime.utcnow().isoformat(),
             },
         }
+        metadata = self._get_tool_metadata_for_step(step)
+        if metadata:
+            payload["data"]["latency_budget_ms"] = metadata.get("latency_budget_ms")
+            payload["data"]["output_artifacts"] = metadata.get("output_artifacts")
+            payload["data"]["concurrency_limit"] = metadata.get("concurrency_limit")
+        return payload
 
     def _maybe_agent_turn_end(self, event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         role = self.AGENT_END_EVENTS.get(event.get("event"))
@@ -1144,6 +1321,11 @@ class MultiAgentFlow:
             payload["summary"] = summary
         if elapsed is not None:
             payload["elapsed_ms"] = elapsed
+        metadata = self._get_tool_metadata_for_event(event.get("event")) or self._get_tool_metadata_for_role(role)
+        if metadata:
+            payload["latency_budget_ms"] = metadata.get("latency_budget_ms")
+            payload["output_artifacts"] = metadata.get("output_artifacts")
+            payload["concurrency_limit"] = metadata.get("concurrency_limit")
         return {"event": "agent_turn", "data": payload}
 
     def _agent_reasoning(self, event: Dict[str, Any], session_id: Optional[str]) -> Optional[Dict[str, Any]]:
