@@ -652,7 +652,12 @@ def _resolve_concurrency_limit(ctx: "PlannerPhaseContext", default: int = 5) -> 
         return default
     return min(limit, len(get_default_tool_adapters()))
 
-async def run_tool_parallelism(ctx: "PlannerPhaseContext") -> AsyncGenerator[Dict[str, Any], None]:
+async def run_tool_parallelism(
+    ctx: "PlannerPhaseContext",
+    *,
+    adapters: Optional[Sequence[BaseToolAdapter]] = None,
+    concurrency_override: Optional[int] = None,
+) -> AsyncGenerator[Dict[str, Any], None]:
     """Execute the registered tool adapters and yield telemetry events."""
 
     intent = getattr(ctx, "intent", None)
@@ -660,7 +665,12 @@ async def run_tool_parallelism(ctx: "PlannerPhaseContext") -> AsyncGenerator[Dic
     if not intent or not plan:
         return
 
-    adapters = get_default_tool_adapters()
+    selected_adapters: Tuple[BaseToolAdapter, ...] = (
+        tuple(adapters) if adapters is not None else get_default_tool_adapters()
+    )
+    if not selected_adapters:
+        return
+
     execution_context = ToolExecutionContext(
         session_id=ctx.session_id,
         query=ctx.query,
@@ -670,12 +680,18 @@ async def run_tool_parallelism(ctx: "PlannerPhaseContext") -> AsyncGenerator[Dic
         configs=getattr(ctx, "configs", {}),
     )
 
-    tool_manifests = [adapter.get_metadata() for adapter in adapters]
+    tool_manifests = [adapter.get_metadata() for adapter in selected_adapters]
 
-    concurrency_limit = _resolve_concurrency_limit(ctx, default=len(adapters))
-    ctx.tool_parallel_manifest = tool_manifests
+    default_concurrency = len(selected_adapters)
+    concurrency_limit = concurrency_override or _resolve_concurrency_limit(ctx, default=default_concurrency)
+    if adapters is None:
+        ctx.tool_parallel_manifest = tool_manifests
+        ctx.tool_parallel_results = []
+    else:
+        existing_manifest = getattr(ctx, "tool_parallel_manifest", []) or []
+        ctx.tool_parallel_manifest = [*existing_manifest, *tool_manifests]
+        ctx.tool_parallel_results = getattr(ctx, "tool_parallel_results", []) or []
     ctx.tool_parallel_concurrency = concurrency_limit
-    ctx.tool_parallel_results = []
     telemetry.tool_parallelism(
         stage="start",
         session_id=getattr(ctx, "session_id", None),
@@ -683,7 +699,7 @@ async def run_tool_parallelism(ctx: "PlannerPhaseContext") -> AsyncGenerator[Dic
         payload={
             "tool_group": "single_agent",
             "parallel_group": "tool_fanout",
-            "tool_count": len(adapters),
+            "tool_count": len(selected_adapters),
             "concurrency_limit": concurrency_limit,
             "tools": tool_manifests,
         },
@@ -693,14 +709,14 @@ async def run_tool_parallelism(ctx: "PlannerPhaseContext") -> AsyncGenerator[Dic
         "data": {
             "tool_group": "single_agent",
             "parallel_group": "tool_fanout",
-            "tool_count": len(adapters),
+            "tool_count": len(selected_adapters),
             "concurrency_limit": concurrency_limit,
             "tools": tool_manifests,
             "ts": datetime.utcnow().isoformat(),
         },
     }
 
-    task_group = ToolTaskGroup(adapters, concurrency_limit=concurrency_limit)
+    task_group = ToolTaskGroup(selected_adapters, concurrency_limit=concurrency_limit)
     results = await task_group.run(execution_context)
 
     fatal_detected = any(result.status == "error" and result.fatal for result in results)

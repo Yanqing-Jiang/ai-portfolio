@@ -1,6 +1,6 @@
 from __future__ import annotations
 import json
-from typing import AsyncGenerator, Dict, Any, Optional, List, Sequence, Tuple
+from typing import AsyncGenerator, Dict, Any, Optional, List, Sequence, Tuple, Set
 from dataclasses import dataclass, field
 import asyncio
 import re
@@ -23,6 +23,7 @@ from analytics.core.types import (
 from analytics.core.context import get_configs
 from analytics.core.config_store import get_config_store
 from analytics.core.events import EventEmitter, TimedEventEmitter
+from analytics.core.session_state import SessionStateSnapshot, get_session_state_repository
 from analytics.artifacts import (
     ClassificationArtifact as ClassificationArtifactModel,
     ClarificationArtifact,
@@ -37,7 +38,7 @@ from analytics.artifacts import (
     MarketArtifact,
 )
 from .hooks import AnalyticsFlowHooks, NullFlowHooks
-from .tooling import run_tool_parallelism
+from .tooling import run_tool_parallelism, get_default_tool_adapters
 from ..core.intent import intent_to_sql_criteria
 from analytics.core.intent import (
     detect_intent,
@@ -541,6 +542,38 @@ class PlannerPipeline:
         self.flow_label = "planner-executor"
         # Tool fan-out is now the default; legacy ANALYTICS_TOOL_PARALLELISM flag removed
         self.parallelism_enabled = True
+
+    async def _persist_session_state(
+        self,
+        ctx: PlannerPhaseContext,
+        *,
+        record_sql: bool = False,
+        record_chart: bool = False,
+        record_analysis: bool = False,
+        tool_bundle: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        session_id = getattr(ctx, "session_id", None)
+        if not session_id:
+            return
+        repository = get_session_state_repository()
+        snapshot = await repository.load(session_id)
+        if snapshot is None:
+            snapshot = SessionStateSnapshot(session_id=session_id)
+        updated = False
+        if record_sql and ctx.sql:
+            snapshot.record_outputs(sql=ctx.sql)
+            updated = True
+        if record_chart and ctx.chart_spec:
+            snapshot.record_outputs(chart_spec=ctx.chart_spec)
+            updated = True
+        if record_analysis and ctx.analysis:
+            snapshot.record_outputs(analysis=ctx.analysis)
+            updated = True
+        if tool_bundle:
+            snapshot.record_tool_result("planner_bundle", tool_bundle)
+            updated = True
+        if updated:
+            await repository.save(snapshot)
         self.hooks: AnalyticsFlowHooks = NullFlowHooks()
         self._latest_artifacts: Optional[PipelineArtifacts] = None
 
@@ -802,6 +835,8 @@ class PlannerPipeline:
             status=generation_status,
         )
         self._capture_artifacts(ctx)
+        if sql:
+            await self._persist_session_state(ctx, record_sql=True)
         if not sql:
             failure_event = EventEmitter.error(
                 "sql_compilation",
@@ -980,12 +1015,13 @@ class PlannerPipeline:
         chart_design = _generate_chart_design(intent.intent_key, plan, data, spec)
         spec.setdefault("meta", {}).setdefault("chartDesign", chart_design)
         _set_chart_artifact(
-        ctx,
-        spec=spec,
-        chart_plan=chart_plan,
-        chart_design=chart_design,
-    )
+            ctx,
+            spec=spec,
+            chart_plan=chart_plan,
+            chart_design=chart_design,
+        )
         self._capture_artifacts(ctx)
+        await self._persist_session_state(ctx, record_chart=True)
         ctx.planner_result.chart_summary = {
             "chart_type": chart_plan.chart_type,
             "series_count": len(chart_plan.series),
@@ -1042,10 +1078,39 @@ class PlannerPipeline:
             fallback_chart["data"]["ts"] = datetime.utcnow().isoformat()
             yield fallback_chart
 
+    async def _ensure_analysis_dependencies(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[str, Any], None]:
+        required_tools: List[str] = []
+        if ctx.parallelism_enabled:
+            existing = getattr(ctx, "tool_parallel_results", []) or []
+
+            def _has_completed(tool_name: str) -> bool:
+                return any(
+                    result.get("tool") == tool_name and result.get("status") == "completed"
+                    for result in existing
+                )
+
+            if not _has_completed("stock_tracker"):
+                required_tools.append("stock_tracker")
+            if not _has_completed("web_retriever"):
+                required_tools.append("web_retriever")
+
+        if required_tools:
+            adapter_lookup = {adapter.name: adapter for adapter in get_default_tool_adapters()}
+            subset = [adapter_lookup[name] for name in required_tools if name in adapter_lookup]
+            if subset:
+                async for event in run_tool_parallelism(ctx, adapters=subset, concurrency_override=len(subset)):
+                    yield event
+
+        if ctx.web_search is None:
+            async for event in self._web_search_phase(ctx):
+                yield event
+
     async def run_analysis_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[str, Any], None]:
         data = ctx.data or []
         if not data:
             return
+        async for dependency_event in self._ensure_analysis_dependencies(ctx):
+            yield dependency_event
         session_id = ctx.session_id
         query = ctx.query
         sql = ctx.sql
@@ -1114,6 +1179,7 @@ class PlannerPipeline:
             tool_bundle=tool_bundle or None,
         )
         self._capture_artifacts(ctx)
+        await self._persist_session_state(ctx, record_analysis=True, tool_bundle=tool_bundle or None)
         analysis_complete = EventEmitter.result(
             "analysis_complete",
             analysis_payload,
@@ -1296,44 +1362,38 @@ class PlannerPipeline:
         ctx = await _initialize_context(self, query, session_id)
         session_id = ctx.session_id
         timed_emitter = ctx.timed_emitter
-        workflow_start = ctx.workflow_start
         yield EventEmitter.session_started(session_id)
-        async for event in self.run_classification(ctx):
+
+        from .pipeline_tools import get_planner_tool_registry  # Local import to avoid circular dependency
+
+        registry = get_planner_tool_registry()
+        executed: Set[str] = set()
+
+        async for event in registry.invoke("classification", self, ctx, executed=executed):
             yield event
         if not ctx.is_financial_query:
             return
-        async for event in self.run_intent(ctx):
-            yield event
-        async for event in self.run_clarification(ctx):
-            yield event
-        async for event in self.run_plan(ctx):
-            yield event
-        intent = ctx.intent
-        provisional_plan = ctx.plan or ctx.provisional_plan
-        template = ctx.template
-        candidate_templates = ctx.candidate_templates
-        selected_template_id = ctx.selected_template_id
 
+        for tool_name in ("intent_detection", "clarification", "plan_generation"):
+            async for event in registry.invoke(tool_name, self, ctx, executed=executed):
+                yield event
 
-
-        if not intent or not provisional_plan:
+        if ctx.intent is None or (ctx.plan or ctx.provisional_plan) is None:
             return
         active_plan = ctx.plan or ctx.provisional_plan
-        async for event in self.run_sql_pipeline(
-            ctx,
-            intent=ctx.intent,
-            plan=active_plan,
-            candidate_templates=ctx.candidate_templates,
-            selected_template_id=ctx.selected_template_id,
-        ):
+
+        async for event in registry.invoke("sql_generation", self, ctx, executed=executed):
             yield event
         if ctx.halted:
             return
-        async for event in self.run_chart_phase(ctx, intent=ctx.intent, plan=active_plan):
+
+        async for event in registry.invoke("chart_generation", self, ctx, executed=executed):
             yield event
+
         async for event in self._web_search_phase(ctx):
             yield event
-        async for event in self.run_analysis_phase(ctx):
+
+        async for event in registry.invoke("analysis_generation", self, ctx, executed=executed):
             yield event
 
 

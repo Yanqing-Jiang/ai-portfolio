@@ -45,6 +45,8 @@ interface ProcessNodeData {
   currentDuration?: string;
   currentTimestamp?: string;
   progressPercent?: number;
+  parallelGroup?: string;
+  sequence?: number;
 }
 
 const statusAccent = (status: ProcessStep['status']) => {

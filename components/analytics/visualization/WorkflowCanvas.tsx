@@ -62,6 +62,8 @@ interface ProcessNodeData {
   currentDuration?: string;
   currentTimestamp?: string;
   progressPercent?: number;
+  parallelGroup?: string;
+  sequence?: number;
 }
 
 const nodeTypes = {
@@ -120,6 +122,84 @@ const FLOW_LAYOUT: Record<FlowMode, { columns: number; horizontalGap: number; ve
   'planner-executor': { columns: 4, horizontalGap: 420, verticalGap: 280 },
   'single-agent': { columns: 5, horizontalGap: 400, verticalGap: 270 },
   'multi-agent': { columns: 5, horizontalGap: 400, verticalGap: 280 },
+};
+
+type HubLaneKey = 'fanout' | 'planner' | 'query' | 'analyst' | 'chart' | 'web' | 'market' | 'overview';
+
+interface HubLaneGeometry {
+  angle: number;
+  baseRadius: number;
+  branchSpacing: number;
+  lateralSpacing?: number;
+}
+
+const HUB_LANE_CONFIG: Record<HubLaneKey, HubLaneGeometry> = {
+  fanout: { angle: -150, baseRadius: 380, branchSpacing: 180, lateralSpacing: 36 },
+  planner: { angle: -100, baseRadius: 430, branchSpacing: 190, lateralSpacing: 42 },
+  query: { angle: -40, baseRadius: 440, branchSpacing: 190, lateralSpacing: 42 },
+  analyst: { angle: 10, baseRadius: 450, branchSpacing: 190, lateralSpacing: 42 },
+  chart: { angle: 60, baseRadius: 440, branchSpacing: 190, lateralSpacing: 42 },
+  web: { angle: 105, baseRadius: 430, branchSpacing: 190, lateralSpacing: 42 },
+  market: { angle: 150, baseRadius: 420, branchSpacing: 190, lateralSpacing: 42 },
+  overview: { angle: 0, baseRadius: 520, branchSpacing: 210, lateralSpacing: 40 },
+};
+
+const STEP_LANE_OVERRIDES: Record<string, HubLaneKey | 'coordination'> = {
+  agent_coordination: 'coordination',
+  planner_agent: 'planner',
+  planner_phase: 'planner',
+  query_agent: 'query',
+  query_phase: 'query',
+  analyst_agent: 'analyst',
+  analyst_phase: 'analyst',
+  chart_agent: 'chart',
+  chart_phase: 'chart',
+  web_research_agent: 'web',
+  web_research_phase: 'web',
+  market_agent: 'market',
+  market_phase: 'market',
+  tool_fanout: 'fanout',
+  sql_compilation: 'planner',
+  sql_validation: 'planner',
+  sql_execution: 'query',
+  chart_generation: 'chart',
+  analysis_generation: 'analyst',
+  analysis_revision: 'analyst',
+};
+
+const inferHubLane = (step: ProcessStep): HubLaneKey | 'coordination' => {
+  if (STEP_LANE_OVERRIDES[step.id]) {
+    return STEP_LANE_OVERRIDES[step.id];
+  }
+  if (step.parallelGroup && STEP_LANE_OVERRIDES[step.parallelGroup]) {
+    return STEP_LANE_OVERRIDES[step.parallelGroup] as HubLaneKey | 'coordination';
+  }
+  if (typeof step.parallelGroup === 'string' && HUB_LANE_CONFIG[step.parallelGroup as HubLaneKey]) {
+    return step.parallelGroup as HubLaneKey;
+  }
+  const id = step.id || '';
+  if (id.includes('planner') || id.includes('clarification') || id.includes('plan')) {
+    return 'planner';
+  }
+  if (id.includes('query') || id.includes('sql')) {
+    return 'query';
+  }
+  if (id.includes('analysis') || id.includes('insight')) {
+    return 'analyst';
+  }
+  if (id.includes('chart')) {
+    return 'chart';
+  }
+  if (id.includes('web')) {
+    return 'web';
+  }
+  if (id.includes('market')) {
+    return 'market';
+  }
+  if (id.includes('fanout') || id.includes('parallel')) {
+    return 'fanout';
+  }
+  return 'overview';
 };
 
 const SNAP_GRID = 40;
@@ -259,18 +339,41 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
       let laneKey: (typeof LANE_ORDER)[number] | undefined;
 
       if (useLaneLayout) {
-        const rawLane = (parallelGroup as (typeof LANE_ORDER)[number]) || 'overview';
-        laneKey = LANE_ORDER.includes(rawLane) ? rawLane : 'overview';
-        const laneIndex = LANE_ORDER.indexOf(laneKey);
-        const currentCount = laneCounts[laneKey] ?? 0;
-        laneCounts[laneKey] = currentCount + 1;
-        placement = {
-          position: { x: laneIndex * layout.horizontalGap, y: currentCount * layout.verticalGap },
-          row: currentCount,
-          stepInRow: laneIndex,
-          columnsInRow: 1,
-          isEvenRow: true,
-        };
+        const resolvedLane = inferHubLane(step);
+        if (resolvedLane === 'coordination') {
+          const currentCount = laneCounts['coordination'] ?? 0;
+          laneCounts['coordination'] = currentCount + 1;
+          placement = {
+            position: { x: 0, y: currentCount * (layout.verticalGap / 3) },
+            row: currentCount,
+            stepInRow: 0,
+            columnsInRow: 1,
+            isEvenRow: true,
+          };
+          laneKey = 'coordination';
+        } else {
+          const config = HUB_LANE_CONFIG[resolvedLane] ?? HUB_LANE_CONFIG.overview;
+          const currentCount = laneCounts[resolvedLane] ?? 0;
+          laneCounts[resolvedLane] = currentCount + 1;
+          const radius = config.baseRadius + currentCount * config.branchSpacing;
+          const angleRad = (config.angle * Math.PI) / 180;
+          const perpendicular = angleRad + Math.PI / 2;
+          const lateralSpacing = config.lateralSpacing ?? 0;
+          const lateralIndex = Math.floor((currentCount + 1) / 2);
+          const lateralDirection = currentCount % 2 === 0 ? 1 : -1;
+          const lateralOffset = lateralSpacing ? lateralIndex * lateralSpacing * lateralDirection : 0;
+          const x = Math.cos(angleRad) * radius + Math.cos(perpendicular) * lateralOffset;
+          const y = Math.sin(angleRad) * radius + Math.sin(perpendicular) * lateralOffset;
+
+          placement = {
+            position: { x, y },
+            row: currentCount,
+            stepInRow: 0,
+            columnsInRow: 1,
+            isEvenRow: true,
+          };
+          laneKey = resolvedLane as (typeof LANE_ORDER)[number] | undefined;
+        }
       } else {
         placement = computeSerpentinePlacement(
           index,
@@ -286,7 +389,7 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
       const isCompleted = step.status === 'completed';
       const hasError = step.status === 'error';
 
-      const laneGroup = useLaneLayout ? laneKey : parallelGroup;
+      const laneGroup = useLaneLayout ? (laneKey ?? inferHubLane(step)) : parallelGroup;
 
       return {
         step,
@@ -466,8 +569,52 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
       });
     }
 
+    if (flowMode === 'multi-agent' && layoutMode === 'lanes') {
+      const hubNode = processedSteps.find((node) => node.step.id === 'agent_coordination');
+      if (hubNode) {
+        const added = new Set<string>();
+        processedSteps.forEach((node) => {
+          if (node.step.id === hubNode.step.id) {
+            return;
+          }
+          const lane = node.parallelGroup;
+          if (!lane || lane === 'coordination') {
+            return;
+          }
+          const edgeId = `hub-${hubNode.step.id}-${node.step.id}`;
+          if (added.has(edgeId)) {
+            return;
+          }
+          added.add(edgeId);
+          const laneActive = node.step.status === 'in_progress';
+          const laneCompleted = node.step.status === 'completed';
+          sequentialEdges.push({
+            id: edgeId,
+            source: hubNode.step.id,
+            target: node.step.id,
+            type: 'default',
+            sourceHandle: 'right',
+            targetHandle: 'left',
+            animated: laneActive,
+            style: {
+              stroke: laneActive ? theme.edgeActive : laneCompleted ? theme.edgeCompleted : theme.edgeIdle,
+              strokeWidth: laneActive ? 2.6 : laneCompleted ? 2 : 1.4,
+              strokeDasharray: laneCompleted ? '12 10' : undefined,
+              filter: laneActive ? 'drop-shadow(0 0 8px rgba(192,132,252,0.35))' : undefined,
+            },
+            markerEnd: {
+              type: 'arrowclosed',
+              color: laneActive ? theme.edgeActive : laneCompleted ? theme.edgeCompleted : theme.edgeIdle,
+              width: 16,
+              height: 16,
+            },
+          });
+        });
+      }
+    }
+
     setEdges(sequentialEdges);
-  }, [processedSteps, setEdges, theme]);
+  }, [processedSteps, setEdges, theme, flowMode, layoutMode]);
 
   useEffect(() => {
     if (!isVisible) {

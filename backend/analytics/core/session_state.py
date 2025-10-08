@@ -27,6 +27,7 @@ __all__ = [
 DEFAULT_TTL_MINUTES = 5
 MIN_TTL_MINUTES = 1
 MAX_TTL_MINUTES = 15
+MAX_ARTIFACT_HISTORY = 5
 
 
 class SessionStateSnapshot(BaseModel):
@@ -64,7 +65,19 @@ class SessionStateSnapshot(BaseModel):
 
     def record_artifacts(self, artifacts: Dict[str, Any]) -> None:
         analytics_cache = self.tool_cache.setdefault("analytics", {})
+        history = analytics_cache.setdefault("artifacts_history", [])
+        version = int(analytics_cache.get("artifact_version", 0)) + 1
+        history.append(
+            {
+                "version": version,
+                "recorded_at": datetime.now(timezone.utc).isoformat(),
+                "artifacts": artifacts,
+            }
+        )
+        if len(history) > MAX_ARTIFACT_HISTORY:
+            analytics_cache["artifacts_history"] = history[-MAX_ARTIFACT_HISTORY:]
         analytics_cache["artifacts"] = artifacts
+        analytics_cache["artifact_version"] = version
         self.touch()
 
     def record_outputs(

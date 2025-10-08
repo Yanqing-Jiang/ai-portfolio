@@ -561,6 +561,20 @@ export const useAnalyticsMemoryStream = (
       parallelGroup: meta?.parallel_group ?? payload.parallel_group,
       toolGroup: meta?.tool_group ?? payload.tool_group,
     };
+    const latencyBudget = typeof payload.latency_budget_ms === 'number' ? payload.latency_budget_ms : undefined;
+    const concurrencyLimit = typeof payload.concurrency_limit === 'number' ? payload.concurrency_limit : undefined;
+    const outputArtifacts = Array.isArray(payload.output_artifacts)
+      ? (payload.output_artifacts as unknown[]).map((value) => String(value))
+      : (Array.isArray(payload.outputs) ? (payload.outputs as unknown[]).map((value) => String(value)) : undefined);
+    if (latencyBudget !== undefined) {
+      entry.latencyBudgetMs = latencyBudget;
+    }
+    if (concurrencyLimit !== undefined) {
+      entry.concurrencyLimit = concurrencyLimit;
+    }
+    if (outputArtifacts && outputArtifacts.length) {
+      entry.outputArtifacts = outputArtifacts;
+    }
 
     toolTelemetryRef.current = [...toolTelemetryRef.current, entry].slice(-15);
 
@@ -568,7 +582,18 @@ export const useAnalyticsMemoryStream = (
     const ts = meta?.ts || payload.ts;
     const statusLabel = payload.status === 'start' ? 'started' : payload.status === 'end' ? 'completed' : payload.status;
     const durationText = elapsed ? ` (${elapsed}ms)` : '';
-    const message = `Tool ${payload.tool} ${statusLabel}${durationText}`;
+    const metadataSegments: string[] = [];
+    if (entry.latencyBudgetMs !== undefined) {
+      metadataSegments.push(`budget ${entry.latencyBudgetMs}ms`);
+    }
+    if (entry.concurrencyLimit !== undefined) {
+      metadataSegments.push(`concurrency ${entry.concurrencyLimit}`);
+    }
+    if (entry.outputArtifacts && entry.outputArtifacts.length) {
+      metadataSegments.push(`outputs ${entry.outputArtifacts.slice(0, 3).join(', ')}`);
+    }
+    const metadataText = metadataSegments.length ? ` [${metadataSegments.join(' • ')}]` : '';
+    const message = `Tool ${payload.tool} ${statusLabel}${durationText}${metadataText}`;
 
     stepsHook.updateStepStatus(
       'tool_execution',
@@ -592,6 +617,10 @@ export const useAnalyticsMemoryStream = (
     const ts = meta?.ts || payload.ts;
     const elapsed = meta?.elapsed_ms ?? payload.elapsed_ms;
     const sequence = meta?.sequence ?? payload.sequence;
+    const latencyBudget = typeof payload.latency_budget_ms === 'number' ? payload.latency_budget_ms : undefined;
+    const outputArtifacts = Array.isArray(payload.output_artifacts)
+      ? (payload.output_artifacts as unknown[]).map((value) => String(value)).filter(Boolean)
+      : undefined;
 
     const entry: AgentTurnTelemetry = {
       role: payload.role,
@@ -602,6 +631,16 @@ export const useAnalyticsMemoryStream = (
       sequence,
       parallelGroup: meta?.parallel_group ?? payload.parallel_group ?? config.lane,
     };
+    const concurrencyLimit = typeof payload.concurrency_limit === 'number' ? payload.concurrency_limit : undefined;
+    if (latencyBudget !== undefined) {
+      entry.latencyBudgetMs = latencyBudget;
+    }
+    if (concurrencyLimit !== undefined) {
+      entry.concurrencyLimit = concurrencyLimit;
+    }
+    if (outputArtifacts && outputArtifacts.length) {
+      entry.outputArtifacts = outputArtifacts;
+    }
     agentTurnsRef.current = [...agentTurnsRef.current, entry].slice(-15);
 
     const status: ProcessStep['status'] = payload.status === 'complete'
@@ -618,11 +657,22 @@ export const useAnalyticsMemoryStream = (
     const summaryText = typeof rawSummary === 'string'
       ? rawSummary
       : rawSummary
-        ? JSON.stringify(rawSummary)
-        : undefined;
-    const laneMessage = summaryText
+      ? JSON.stringify(rawSummary)
+      : undefined;
+    const metadataParts: string[] = [];
+    if (latencyBudget !== undefined) {
+      metadataParts.push(`budget ${latencyBudget}ms`);
+    }
+    if (concurrencyLimit !== undefined) {
+      metadataParts.push(`concurrency ${concurrencyLimit}`);
+    }
+    if (outputArtifacts && outputArtifacts.length) {
+      metadataParts.push(`outputs ${outputArtifacts.slice(0, 3).join(', ')}`);
+    }
+    const baseMessage = summaryText
       ? `${config.label}: ${summaryText}`
       : `${config.label}: ${payload.status}`;
+    const laneMessage = metadataParts.length ? `${baseMessage} [${metadataParts.join(' • ')}]` : baseMessage;
 
     stepsHook.updateStepStatus(
       config.stepId,
