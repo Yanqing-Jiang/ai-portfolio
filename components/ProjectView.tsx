@@ -5,8 +5,7 @@ import Chat from './Chat';
 import { Page as AnalyticsSqlPage } from './analytics/sql';
 import { Page as AnalyticsMemoryPage } from './analytics/memory';
 import LegacyProjectPage from './LegacyProjectPage';
-// @ts-ignore
-import { Helmet } from 'react-helmet-async';
+import ProjectHelmet from './ProjectHelmet';
 
 interface ProjectViewProps {
   project: Project;
@@ -31,14 +30,7 @@ const ProjectView: React.FC<ProjectViewProps> = ({ project }) => {
   if (project.id === 'next-gen-analytics-sql') {
     return (
       <>
-        <Helmet>
-          <title>{`${project.title} — Yanqing Jiang | AI ML Portfolio`}</title>
-          <meta name="description" content={project.description.slice(0, 160)} />
-          <meta name="keywords" content={project.technologies.join(', ')} />
-          <meta name="author" content="Yanqing Jiang" />
-          <meta name="robots" content="index, follow" />
-          <link rel="canonical" href={`https://ai.jiangyanqing.com/project/${project.id}`} />
-        </Helmet>
+        <ProjectHelmet project={project} />
         <AnalyticsSqlPage />
       </>
     );
@@ -47,14 +39,7 @@ const ProjectView: React.FC<ProjectViewProps> = ({ project }) => {
   if (project.id === 'next-gen-analytics-memory') {
     return (
       <>
-        <Helmet>
-          <title>{`${project.title} — Yanqing Jiang | AI ML Portfolio`}</title>
-          <meta name="description" content={project.description.slice(0, 160)} />
-          <meta name="keywords" content={project.technologies.join(', ')} />
-          <meta name="author" content="Yanqing Jiang" />
-          <meta name="robots" content="index, follow" />
-          <link rel="canonical" href={`https://ai.jiangyanqing.com/project/${project.id}`} />
-        </Helmet>
+        <ProjectHelmet project={project} />
         <AnalyticsMemoryPage />
       </>
     );
@@ -66,50 +51,14 @@ const ProjectView: React.FC<ProjectViewProps> = ({ project }) => {
 
   return (
     <>
-    <Helmet>
-      <title>{`${project.title} — Yanqing Jiang | AI ML Portfolio`}</title>
-      <meta name="description" content={project.description.slice(0, 160)} />
-      <meta name="keywords" content={project.technologies.join(', ')} />
-      <meta name="author" content="Yanqing Jiang" />
-      <meta name="robots" content="index, follow" />
-      <link rel="canonical" href={`https://ai.jiangyanqing.com/project/${project.id}`} />
-      <meta property="og:title" content={`${project.title} — Yanqing Jiang | AI ML Portfolio`} />
-      <meta property="og:description" content={project.description.slice(0, 160)} />
-      <meta property="og:type" content="article" />
-      <meta property="og:url" content={`https://ai.jiangyanqing.com/project/${project.id}`} />
-      <meta property="og:site_name" content="Yanqing Jiang AI & ML Portfolio" />
-      {project.coverUrl && (
-        <>
-          <meta name="image" property="og:image" content={project.coverUrl} />
-          <meta property="og:image:width" content="1200" />
-          <meta property="og:image:height" content="630" />
-          <meta property="og:image:alt" content={`${project.title} - AI/ML project by Yanqing Jiang`} />
-        </>
-      )}
-      <meta name="twitter:card" content="summary_large_image" />
-      <meta name="twitter:site" content="@yanqing_j" />
-      <meta name="twitter:creator" content="@yanqing_j" />
-      <meta name="twitter:title" content={`${project.title} — Yanqing Jiang | AI ML Portfolio`} />
-      <meta name="twitter:description" content={project.description.slice(0, 160)} />
-      {project.coverUrl && (
-        <>
-          <meta name="twitter:image" content={project.coverUrl} />
-          <meta name="twitter:image:alt" content={`${project.title} - AI/ML project by Yanqing Jiang`} />
-        </>
-      )}
-      {project.technologies && (
-        <meta property="article:tag" content={project.technologies.join(', ')} />
-      )}
-      <meta property="article:author" content="Yanqing Jiang" />
-      <meta name="theme-color" content="#111827" />
-    </Helmet>
-    <div className="flex flex-col h-full overflow-hidden">
-      <motion.div
-        initial={false}
-        animate={isHeaderCollapsed ? { height: 60 } : { height: 'auto' }}
-        transition={{ duration: 0.3, ease: 'easeInOut' }}
-        className="flex-shrink-0 border-b border-gray-800 bg-gray-900 overflow-hidden"
-      >
+      <ProjectHelmet project={project} />
+      <div className="flex flex-col h-full overflow-hidden">
+        <motion.div
+          initial={false}
+          animate={isHeaderCollapsed ? { height: 60 } : { height: 'auto' }}
+          transition={{ duration: 0.3, ease: 'easeInOut' }}
+          className="flex-shrink-0 border-b border-gray-800 bg-gray-900 overflow-hidden"
+        >
         {isHeaderCollapsed ? (
           <div className="h-full flex items-center justify-between px-4 md:px-6 lg:px-8">
             <div className="flex items-center gap-3 min-w-0 flex-1">

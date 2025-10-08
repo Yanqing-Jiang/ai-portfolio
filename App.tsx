@@ -131,15 +131,15 @@ const Layout: React.FC = () => {
 };
 
 // Root component -------------------------------------------------
+export const AppRoutes: React.FC = () => <Layout />;
+
 const App: React.FC = () => (
   <HelmetProvider>
     <BrowserRouter>
-      <Layout />
+      <AppRoutes />
     </BrowserRouter>
   </HelmetProvider>
 );
 
 export default App;
-
-
 
