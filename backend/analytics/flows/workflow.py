@@ -3,6 +3,8 @@
 import os
 from typing import Any, AsyncGenerator, Callable, Dict, Optional
 
+from analytics.core.session_state import get_session_state_repository
+from analytics.routing import FollowUpClassifier, FollowUpRoute
 from .planner_executor import PlannerExecutorFlow
 from .single_agent_tools import SingleAgentToolsFlow
 from .multi_agent import MultiAgentFlow
@@ -157,12 +159,36 @@ async def analytics_memory_workflow(
                 yield event
             return
 
-    async for event in run_flow(
-        selected,
-        query,
-        session_id=session_id,
-        instrument=should_instrument,
-        flow_label=selected,
-    ):
-        yield event
+    snapshot = None
+    if session_id:
+        repository = get_session_state_repository()
+        snapshot = await repository.load(session_id)
+    classifier = FollowUpClassifier()
+    route = classifier.classify(query, snapshot)
+    factory = _get_flow_factory(selected)
+    flow_instance = factory()
+    if hasattr(flow_instance, "prime_with_snapshot"):
+        flow_instance.prime_with_snapshot(snapshot)
+    if hasattr(flow_instance, "set_follow_up_route"):
+        flow_instance.set_follow_up_route(route)
+    follow_up_event = {
+        "event": "follow_up_route",
+        "data": {
+            "route": route.value,
+            "flow": selected,
+        },
+    }
+    yield follow_up_event
+    if should_instrument:
+        label = selected
+        async for event in instrument_events(
+            flow_instance,
+            query,
+            session_id=session_id,
+            flow_label=label,
+        ):
+            yield event
+    else:
+        async for event in flow_instance.events(query, session_id=session_id):
+            yield event
 

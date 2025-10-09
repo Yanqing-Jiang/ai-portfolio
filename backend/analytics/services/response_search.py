@@ -19,7 +19,7 @@ from analytics.core.telemetry import gemini_call
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_MODEL = os.getenv('GEMINI_SEARCH_MODEL', 'gemini-2.5-flash')
+_DEFAULT_MODEL = os.getenv('GEMINI_SEARCH_MODEL', 'gemini-2.5-flash-lite')
 _MAX_SNIPPETS = int(os.getenv('WEB_SEARCH_MAX_SNIPPETS', '5'))
 _MAX_TOPICS = int(os.getenv('WEB_SEARCH_MAX_TOPICS', '2'))
 _MAX_ATTEMPTS = int(os.getenv('WEB_SEARCH_RETRY_ATTEMPTS', '2'))
