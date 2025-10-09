@@ -1,6 +1,7 @@
 from __future__ import annotations
 from typing import Dict, Any, List, AsyncGenerator, Optional
 import json
+import re
 from .openai_client import get_openai_client
 def _prepare_data_preview(rows: List[Dict[str, Any]], limit: int = 8) -> str:
     if not rows:
@@ -64,6 +65,25 @@ def _summarize_search_result(search_result: Optional[Any], article_limit: int = 
     if not summary_lines:
         return "External search completed but produced no snippets."
     return "\n".join(summary_lines)
+
+_PROMPT_INSTRUCTIONS = (
+    "You are an equity research assistant. Fuse fundamentals, chart behaviour, and fresh headlines into a single cohesive story.\n"
+    "Output requirements:\n"
+    "1. Begin with `TL;DR:` followed by two concise sentences covering SQL metrics, the chart direction, and headline sentiment.\n"
+    "2. Add a `Key points:` heading and provide 3-5 markdown bullets (each starting with `- `) mixing SQL values, chart takeaways, and headline references using bracketed [n] citations.\n"
+    "3. When fundamentals and headlines diverge, append a `Watchouts:` sentence after the bullets.\n"
+    "4. Return clean markdown only - avoid raw JSON or code fences unless explicitly asked."
+)
+
+
+def _normalize_analysis_chunk(chunk: str) -> str:
+    if not chunk:
+        return chunk
+    normalized = chunk.replace("\r\n", "\n")
+    normalized = re.sub(r"\n{3,}", "\n\n", normalized)
+    if normalized.lstrip().startswith("```json"):
+        normalized = normalized.replace("```json", "```", 1)
+    return normalized
 def _build_analysis_prompt(
     *,
     query: str,
@@ -80,12 +100,9 @@ Sample of result rows:
 {data_preview}
 Chart summary:
 {chart_summary}
-Latest external news:
+Headline summary (ordered for references):
 {news_summary}
-Instructions:
-1. Start with a concise TLDR (2-3 sentences) blending the SQL metrics, chart trend, and news context.
-2. Provide 2-3 bullet points that quantify the SQL findings, reference the chart behaviour, and relate them to the cited headlines ([n] corresponds to the order above).
-3. Highlight any divergences between fundamentals and the latest headlines when relevant.
+{_PROMPT_INSTRUCTIONS}
 """.strip()
 def summarize(data: List[Dict[str, Any]], sql: str, query: str) -> str:
     return "Analysis will stream here (Phase 2/3)."
@@ -103,14 +120,13 @@ async def stream_insights_llm(
     news_summary = _summarize_search_result(search_result)
     client = get_openai_client()
     if not client:
-        yield "- Analysis unavailable (no OpenAI API key configured).\n"
+        yield "TL;DR: Analysis unavailable because no OpenAI credentials are configured.\n"
+        yield "Key points:\n"
         yield f"- SQL insight preview: {data_preview[:240]}...\n"
         yield f"- Chart summary: {chart_summary}\n"
-        yield f"- News summary: {news_summary}\n"
+        yield f"- Headlines: {news_summary}\n"
         return
-    system_prompt = (
-        "You are an equity research assistant. Fuse fundamentals, chart behaviour, and fresh headlines into a single cohesive story."
-    )
+    system_prompt = "You are an equity research assistant who writes concise markdown narratives with TL;DR and bullet points."
     user_prompt = _build_analysis_prompt(
         query=query,
         sql=sql,
@@ -124,4 +140,4 @@ async def stream_insights_llm(
     ]
     async for chunk in client.stream_completion(messages, session_id=session_id):
         if chunk:
-            yield chunk
+            yield _normalize_analysis_chunk(chunk)

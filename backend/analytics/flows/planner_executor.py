@@ -37,6 +37,7 @@ from analytics.artifacts import (
     AnalysisArtifact,
     MarketArtifact,
 )
+from analytics.routing import FollowUpRoute
 from .hooks import AnalyticsFlowHooks, NullFlowHooks
 from .tooling import run_tool_parallelism, get_default_tool_adapters
 from ..core.intent import intent_to_sql_criteria
@@ -57,6 +58,7 @@ from analytics.core.charting import build_chart_spec, plan_chart_rule_based
 from .tool_bundle import collect_tool_bundle
 from .chart_revision import emit_chart_patch as _chart_revision_emit, emit_analysis_revision as _analysis_revision_emit
 from analytics.core.telemetry import analysis_chunk as log_analysis_chunk
+from .schedulers import FlowMode, get_mode_config, apply_mode_metadata
 try:
     from analytics.services.response_search import (
         ResponseSearchError,
@@ -179,6 +181,7 @@ class PlannerPhaseContext:
     session_id: str
     workflow_start: float
     timed_emitter: TimedEventEmitter
+    flow_mode: FlowMode = FlowMode.DIRECT
     configs: Dict[str, Any] = field(default_factory=dict)
     classification: Optional[OffTopicClassifierSchema] = None
     is_financial_query: bool = True
@@ -205,7 +208,11 @@ class PlannerPhaseContext:
     analysis: str = ""
     parallelism_enabled: bool = False
     planner_result: PlannerResultModel = field(default_factory=PlannerResultModel)
+    follow_up_route: FollowUpRoute = FollowUpRoute.FULL_PIPELINE
+    reuse_sql: bool = False
+    stock_only: bool = False
     artifacts: PipelineArtifacts = field(default_factory=PipelineArtifacts)
+    snapshot_artifacts: Optional[PipelineArtifacts] = None
     halted: bool = False
     halt_reason: Optional[str] = None
 
@@ -405,6 +412,34 @@ def _summarize_chart_series(plan: Any, spec: Optional[Dict[str, Any]]) -> List[D
     return series_summary
 
 
+def _derive_scope_banner(ctx: PlannerPhaseContext, spec: Dict[str, Any]) -> Optional[str]:
+    tickers: List[str] = []
+    market_artifact = getattr(ctx.artifacts, "market", None)
+    if market_artifact and market_artifact.tickers:
+        tickers.extend(market_artifact.tickers)
+    datasets = spec.get("datasets")
+    if not tickers and isinstance(datasets, list):
+        for dataset in datasets:
+            if isinstance(dataset, dict):
+                symbol = dataset.get("ticker") or dataset.get("symbol")
+                if isinstance(symbol, str):
+                    tickers.append(symbol)
+    if not tickers and ctx.data:
+        for row in ctx.data:
+            symbol = row.get("ticker")
+            if isinstance(symbol, str):
+                tickers.append(symbol)
+    deduped: List[str] = []
+    for symbol in tickers:
+        upper = symbol.strip().upper()
+        if upper and upper not in deduped:
+            deduped.append(upper)
+    if not deduped:
+        return None
+    basis = ", ".join(deduped[:7])
+    return f"Basis: Revenue share across {basis}"
+
+
 def _set_chart_artifact(
     ctx: PlannerPhaseContext,
     *,
@@ -424,6 +459,9 @@ def _set_chart_artifact(
         spec.setdefault("meta", {})["artifactSpecId"] = spec_id
     except Exception:
         spec_id = None
+    scope_banner = _derive_scope_banner(ctx, spec)
+    if scope_banner:
+        spec.setdefault("meta", {})["scopeBanner"] = scope_banner
     ctx.artifacts.chart = ChartArtifact(
         query=ctx.query,
         spec=spec,
@@ -432,6 +470,7 @@ def _set_chart_artifact(
         datasets_summary=series_summary,
         series_count=len(series_summary) if series_summary else None,
         chart_type=chart_type,
+        scope_banner=scope_banner,
     )
 
 
@@ -510,6 +549,36 @@ def _set_analysis_artifact(
     )
 
 
+def _artifacts_from_snapshot(snapshot: Optional[SessionStateSnapshot]) -> Optional[PipelineArtifacts]:
+    if snapshot is None:
+        return None
+    analytics_cache = snapshot.tool_cache.get("analytics", {}) if hasattr(snapshot, "tool_cache") else {}
+    artifacts_payload = analytics_cache.get("artifacts")
+    if isinstance(artifacts_payload, dict):
+        try:
+            return PipelineArtifacts.from_dict(artifacts_payload)
+        except Exception:
+            return None
+    return None
+
+
+def _hydrate_context_from_snapshot(ctx: PlannerPhaseContext, artifacts: Optional[PipelineArtifacts]) -> None:
+    if artifacts is None:
+        return
+    ctx.artifacts = artifacts
+    ctx.snapshot_artifacts = artifacts
+    if artifacts.sql_generation and artifacts.sql_generation.sql:
+        ctx.sql = artifacts.sql_generation.sql
+    if artifacts.sql_execution:
+        ctx.data = list(artifacts.sql_execution.sample_rows)
+    if artifacts.chart and artifacts.chart.spec:
+        ctx.chart_spec = artifacts.chart.spec
+    if artifacts.analysis and artifacts.analysis.analysis_text:
+        ctx.analysis = artifacts.analysis.analysis_text
+    if artifacts.web:
+        ctx.planner_result.metadata["web_search"] = artifacts.web.to_dict()
+
+
 
 
 def _build_schema_clarifier_request(decision: ClarifierDecision, session_id: str) -> Optional[ClarifyRequestModel]:
@@ -536,12 +605,23 @@ def _build_schema_clarifier_request(decision: ClarifierDecision, session_id: str
 class PlannerPipeline:
     """Phase 2 workflow that emits SSE-friendly events for the memory pipeline."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        flow_mode: FlowMode = FlowMode.DIRECT,
+        parallelism_enabled: Optional[bool] = None,
+    ) -> None:
         self.unified_client = get_unified_client()
         self.config_store = CONFIG_STORE
         self.flow_label = "planner-executor"
-        # Tool fan-out is now the default; legacy ANALYTICS_TOOL_PARALLELISM flag removed
-        self.parallelism_enabled = True
+        self.flow_mode = flow_mode
+        self.follow_up_route = FollowUpRoute.FULL_PIPELINE
+        self._prefetched_snapshot: Optional[SessionStateSnapshot] = None
+        mode_config = get_mode_config(flow_mode)
+        # Tool fan-out defaults to the scheduler mode unless explicitly overridden.
+        self.parallelism_enabled = mode_config.parallelism_enabled if parallelism_enabled is None else parallelism_enabled
+        self.hooks: AnalyticsFlowHooks = NullFlowHooks()
+        self._latest_artifacts: Optional[PipelineArtifacts] = None
 
     async def _persist_session_state(
         self,
@@ -551,6 +631,7 @@ class PlannerPipeline:
         record_chart: bool = False,
         record_analysis: bool = False,
         tool_bundle: Optional[Dict[str, Any]] = None,
+        record_artifacts: bool = True,
     ) -> None:
         session_id = getattr(ctx, "session_id", None)
         if not session_id:
@@ -572,10 +653,13 @@ class PlannerPipeline:
         if tool_bundle:
             snapshot.record_tool_result("planner_bundle", tool_bundle)
             updated = True
+        if record_artifacts:
+            artifacts_payload = ctx.artifacts.to_dict()
+            if artifacts_payload:
+                snapshot.record_artifacts(artifacts_payload)
+                updated = True
         if updated:
             await repository.save(snapshot)
-        self.hooks: AnalyticsFlowHooks = NullFlowHooks()
-        self._latest_artifacts: Optional[PipelineArtifacts] = None
 
     async def initialize_context(self, query: str, session_id: Optional[str] = None) -> PlannerPhaseContext:
         return await _initialize_context(self, query, session_id)
@@ -585,6 +669,43 @@ class PlannerPipeline:
 
     def latest_artifacts(self) -> Optional[PipelineArtifacts]:
         return self._latest_artifacts
+
+    def prime_with_snapshot(self, snapshot: Optional[SessionStateSnapshot]) -> None:
+        self._prefetched_snapshot = snapshot
+
+    def set_follow_up_route(self, route: FollowUpRoute) -> None:
+        self.follow_up_route = route
+
+    def _mark_delta_event(self, event: Dict[str, Any]) -> Dict[str, Any]:
+        data = event.setdefault("data", {})
+        data["delta"] = True
+        data.setdefault("parallel_group", "accessory_delta")
+        return event
+
+    async def _emit_post_analysis_accessories(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[str, Any], None]:
+        mode_config = get_mode_config(ctx.flow_mode)
+        if mode_config.accessories_in_critical_path:
+            return
+
+        accessory_tools = {"web_retriever", "stock_tracker"}
+        existing_results = getattr(ctx, "tool_parallel_results", []) or []
+        completed_tools = {result.get("tool") for result in existing_results}
+        pending_tools = [tool for tool in accessory_tools if tool not in completed_tools]
+        if pending_tools:
+            adapter_lookup = {adapter.name: adapter for adapter in get_default_tool_adapters()}
+            adapters = [adapter_lookup[name] for name in pending_tools if name in adapter_lookup]
+            if adapters:
+                async for event in run_tool_parallelism(
+                    ctx,
+                    adapters=tuple(adapters),
+                    concurrency_override=len(adapters),
+                ):
+                    yield self._mark_delta_event(event)
+
+        if ctx.web_search is None:
+            async for event in self._web_search_phase(ctx):
+                yield self._mark_delta_event(event)
+        await self._persist_session_state(ctx, record_artifacts=True)
 
     async def emit_chart_patch(
         self,
@@ -1080,6 +1201,7 @@ class PlannerPipeline:
 
     async def _ensure_analysis_dependencies(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[str, Any], None]:
         required_tools: List[str] = []
+        mode_config = get_mode_config(ctx.flow_mode)
         if ctx.parallelism_enabled:
             existing = getattr(ctx, "tool_parallel_results", []) or []
 
@@ -1101,7 +1223,7 @@ class PlannerPipeline:
                 async for event in run_tool_parallelism(ctx, adapters=subset, concurrency_override=len(subset)):
                     yield event
 
-        if ctx.web_search is None:
+        if ctx.web_search is None and mode_config.accessories_in_critical_path:
             async for event in self._web_search_phase(ctx):
                 yield event
 
@@ -1193,6 +1315,8 @@ class PlannerPipeline:
             }
         )
         yield analysis_complete
+        async for accessory_event in self._emit_post_analysis_accessories(ctx):
+            yield accessory_event
         from analytics.core.clarify import get_session_store
         session_store = await get_session_store()
         await session_store.cleanup_expired()
@@ -1368,15 +1492,18 @@ class PlannerPipeline:
 
         registry = get_planner_tool_registry()
         executed: Set[str] = set()
+        mode_config = get_mode_config(self.flow_mode)
 
         async for event in registry.invoke("classification", self, ctx, executed=executed):
             yield event
+        await self._persist_session_state(ctx, record_artifacts=True)
         if not ctx.is_financial_query:
             return
 
         for tool_name in ("intent_detection", "clarification", "plan_generation"):
             async for event in registry.invoke(tool_name, self, ctx, executed=executed):
                 yield event
+            await self._persist_session_state(ctx, record_artifacts=True)
 
         if ctx.intent is None or (ctx.plan or ctx.provisional_plan) is None:
             return
@@ -1384,31 +1511,44 @@ class PlannerPipeline:
 
         async for event in registry.invoke("sql_generation", self, ctx, executed=executed):
             yield event
+        await self._persist_session_state(ctx, record_sql=bool(ctx.sql), record_artifacts=True)
         if ctx.halted:
             return
 
         async for event in registry.invoke("chart_generation", self, ctx, executed=executed):
             yield event
+        await self._persist_session_state(ctx, record_chart=ctx.chart_spec is not None, record_artifacts=True)
 
-        async for event in self._web_search_phase(ctx):
-            yield event
+        if mode_config.accessories_in_critical_path:
+            async for event in self._web_search_phase(ctx):
+                yield event
+            await self._persist_session_state(ctx, record_artifacts=True)
 
         async for event in registry.invoke("analysis_generation", self, ctx, executed=executed):
             yield event
+        await self._persist_session_state(ctx, record_analysis=bool(ctx.analysis), record_artifacts=True)
 
 
 async def _initialize_context(self, query: str, session_id: Optional[str]) -> PlannerPhaseContext:
     workflow_start = time.time()
     resolved_session = session_id or str(uuid.uuid4())
     timed_emitter = TimedEventEmitter(session_id=resolved_session, flow=self.flow_label)
-    return PlannerPhaseContext(
+    ctx = PlannerPhaseContext(
         query=query,
         session_id=resolved_session,
         workflow_start=workflow_start,
         timed_emitter=timed_emitter,
+        flow_mode=self.flow_mode,
         configs=CONFIGS.__dict__,
         parallelism_enabled=self.parallelism_enabled,
+        follow_up_route=self.follow_up_route,
+        reuse_sql=self.follow_up_route == FollowUpRoute.REUSE_SQL,
+        stock_only=self.follow_up_route == FollowUpRoute.STOCK_ONLY,
     )
+    snapshot_artifacts = _artifacts_from_snapshot(getattr(self, "_prefetched_snapshot", None))
+    if snapshot_artifacts:
+        _hydrate_context_from_snapshot(ctx, snapshot_artifacts)
+    return ctx
 
 
 async def _classification_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[str, Any], None]:
@@ -1985,8 +2125,15 @@ async def _plan_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[str
 class PlannerExecutorFlow:
     """Backward-compatible wrapper around :class:`PlannerPipeline`."""
 
-    def __init__(self) -> None:
-        self._pipeline = PlannerPipeline()
+    def __init__(
+        self,
+        *,
+        flow_mode: FlowMode = FlowMode.DIRECT,
+        parallelism_enabled: Optional[bool] = None,
+    ) -> None:
+        self._pipeline = PlannerPipeline(flow_mode=flow_mode, parallelism_enabled=parallelism_enabled)
+        self.flow_mode = flow_mode
+        self.follow_up_route = FollowUpRoute.FULL_PIPELINE
 
     def __getattr__(self, name: str):
         try:
@@ -2004,6 +2151,13 @@ class PlannerExecutorFlow:
 
     def latest_artifacts(self) -> Optional[PipelineArtifacts]:
         return self._pipeline.latest_artifacts()
+
+    def prime_with_snapshot(self, snapshot: Optional[SessionStateSnapshot]) -> None:
+        self._pipeline.prime_with_snapshot(snapshot)
+
+    def set_follow_up_route(self, route: FollowUpRoute) -> None:
+        self.follow_up_route = route
+        self._pipeline.set_follow_up_route(route)
 
     async def initialize_context(self, query: str, session_id: Optional[str] = None) -> PlannerPhaseContext:
         return await self._pipeline.initialize_context(query, session_id)
@@ -2050,6 +2204,12 @@ class PlannerExecutorFlow:
         async for event in stream:
             yield event
 
+    def _annotate(self, event: Dict[str, Any]) -> Dict[str, Any]:
+        annotated = apply_mode_metadata(event, self.flow_mode)
+        data = annotated.setdefault("data", {})
+        data.setdefault("follow_up_route", self.follow_up_route.value)
+        return annotated
+
     async def events(
         self,
         query: str,
@@ -2060,49 +2220,36 @@ class PlannerExecutorFlow:
         stream = self._pipeline.events(query, session_id)
         if hooks is None:
             async for event in stream:
-                yield event
+                yield self._annotate(event)
             return
 
         hook_ctx: Dict[str, Any] = {"query": query, "session_id": session_id}
         try:
             async for start_event in hooks.on_flow_start(hook_ctx):
-                yield start_event
+                yield self._annotate(start_event)
             async for event in stream:
                 async for pre_event in hooks.before_event(hook_ctx, event):
-                    yield pre_event
-                yield event
+                    yield self._annotate(pre_event)
+                annotated = self._annotate(event)
+                yield annotated
                 if event.get("event") == "session_started":
                     data = event.get("data") or {}
                     hook_ctx["session_id"] = data.get("session_id", hook_ctx.get("session_id"))
                 async for post_event in hooks.after_event(hook_ctx, event):
-                    yield post_event
+                    yield self._annotate(post_event)
         except BaseException as exc:
             async for end_event in hooks.on_flow_end(hook_ctx, error=exc):
-                yield end_event
+                yield self._annotate(end_event)
             raise
         else:
             async for end_event in hooks.on_flow_end(hook_ctx):
-                yield end_event
+                yield self._annotate(end_event)
 # Standalone wrapper function for main.py
 async def run_planner_executor(query: str, session_id: Optional[str] = None) -> AsyncGenerator[Dict[str, Any], None]:
     """Helper to stream planner-executor events without referencing the registry."""
     workflow_instance = PlannerExecutorFlow()
     async for event in workflow_instance.events(query, session_id):
         yield event
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 

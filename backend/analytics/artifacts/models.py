@@ -139,6 +139,7 @@ class ChartArtifact(BaseArtifact):
     datasets_summary: List[Dict[str, Any]] = field(default_factory=list)
     series_count: Optional[int] = None
     chart_type: Optional[str] = None
+    scope_banner: Optional[str] = None
 
 
 @dataclass

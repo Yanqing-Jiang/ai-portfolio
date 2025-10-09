@@ -5,10 +5,12 @@ import time
 from typing import Any, AsyncGenerator, Dict, Optional
 
 from analytics.core.telemetry import tool_iteration as log_tool_iteration
-from analytics.core.session_state import get_session_state_repository
+from analytics.core.session_state import SessionStateSnapshot, get_session_state_repository
+from analytics.routing import FollowUpRoute
 from .hooks import AnalyticsFlowHooks
 from .planner_executor import PlannerExecutorFlow, run_planner_executor
 from .pipeline_tools import get_planner_tool_registry
+from .schedulers import FlowMode, apply_mode_metadata
 
 
 def _build_tool_metadata(manifest: Any) -> Dict[str, Dict[str, Any]]:
@@ -82,7 +84,9 @@ class _SingleAgentToolHooks(AnalyticsFlowHooks):
             payload["latency_budget_ms"] = metadata.get("latency_budget_ms")
             payload["output_artifacts"] = metadata.get("output_artifacts")
             payload["concurrency_limit"] = metadata.get("concurrency_limit")
-        yield {"event": "tool_call", "data": payload}
+        annotated = apply_mode_metadata({"event": "tool_call", "data": payload}, self._flow.flow_mode)
+        annotated["data"]["follow_up_route"] = self._flow.follow_up_route.value
+        yield annotated
 
     async def after_event(self, ctx: Dict[str, Any], event: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
         if False:
@@ -120,7 +124,9 @@ class _SingleAgentToolHooks(AnalyticsFlowHooks):
             elapsed_ms=elapsed,
             details=payload.get("details") or payload,
         )
-        yield {"event": "tool_call", "data": payload}
+        annotated_end = apply_mode_metadata({"event": "tool_call", "data": payload}, self._flow.flow_mode)
+        annotated_end["data"]["follow_up_route"] = self._flow.follow_up_route.value
+        yield annotated_end
 
     async def on_flow_end(
         self,
@@ -231,7 +237,10 @@ class SingleAgentToolsFlow:
     }
 
     def __init__(self) -> None:
-        self._planner = PlannerExecutorFlow()
+        self._planner = PlannerExecutorFlow(flow_mode=FlowMode.SINGLE_AGENT)
+        self.follow_up_route = FollowUpRoute.FULL_PIPELINE
+        self._planner.set_follow_up_route(self.follow_up_route)
+        self.flow_mode = FlowMode.SINGLE_AGENT
         self.flow_label = "single-agent"
         registry = get_planner_tool_registry()
         self.planner_tool_manifest = registry.describe_tools()
@@ -241,6 +250,13 @@ class SingleAgentToolsFlow:
             metadata = self._tool_metadata_by_registry.get(registry_name)
             if metadata:
                 self.tool_metadata[alias] = metadata
+
+    def prime_with_snapshot(self, snapshot: Optional[SessionStateSnapshot]) -> None:
+        self._planner.prime_with_snapshot(snapshot)
+
+    def set_follow_up_route(self, route: FollowUpRoute) -> None:
+        self.follow_up_route = route
+        self._planner.set_follow_up_route(route)
 
     async def _forward_with_hooks(
         self,

@@ -14,10 +14,13 @@ from analytics.core.session_state import SessionStateSnapshot, get_session_state
 from analytics.core.telemetry import analysis_chunk as log_analysis_chunk, agent_handoff, policy_decision
 from analytics.services.polygon import PolygonMarketDataClient, PolygonError, fetch_daily_snapshot
 from analytics.services.response_search import ResponseSearchError, perform_response_search
+from analytics.routing import FollowUpRoute
+from analytics.validators import CohesiveResultValidationError, CohesiveResultValidator, sanitize_for_json
 from .planner_executor import PlannerExecutorFlow, run_planner_executor
 from .hooks import AnalyticsFlowHooks
 from .tool_bundle import collect_tool_bundle
 from .pipeline_tools import get_planner_tool_registry
+from .schedulers import FlowMode, apply_mode_metadata
 
 
 def _build_tool_metadata(manifest: Any) -> Dict[str, Dict[str, Any]]:
@@ -40,42 +43,6 @@ def _build_tool_metadata(manifest: Any) -> Dict[str, Dict[str, Any]]:
     return metadata
 
 
-def _sanitize_for_transport(value: Any) -> Any:
-    """Convert complex objects into JSON-safe payloads."""
-    if isinstance(value, Mapping):
-        sanitized: Dict[str, Any] = {}
-        for key, item in value.items():
-            sanitized[str(key)] = _sanitize_for_transport(item)
-        return sanitized
-    if isinstance(value, (list, tuple, set)):
-        return [_sanitize_for_transport(item) for item in value]
-    if isinstance(value, slice):
-        return {
-            "start": value.start,
-            "stop": value.stop,
-            "step": value.step,
-        }
-    if isinstance(value, (datetime, date)):
-        return value.isoformat()
-    if hasattr(value, "model_dump"):
-        try:
-            return _sanitize_for_transport(value.model_dump())
-        except Exception:
-            return str(value)
-    if hasattr(value, "dict"):
-        try:
-            return _sanitize_for_transport(value.dict())
-        except Exception:
-            return str(value)
-    if isinstance(value, bytes):
-        return value.decode("utf-8", errors="replace")
-    if isinstance(value, (str, int, float, bool)) or value is None:
-        return value
-    try:
-        json.dumps(value)
-        return value
-    except TypeError:
-        return str(value)
 from .chart_revision import (
     infer_analysis_revision_from_query,
     infer_chart_patch_from_query,
@@ -388,7 +355,7 @@ def _create_planner_bundle(
         visuals['web_context'] = copy.deepcopy(web_context)
     if visuals:
         bundle['visuals'] = visuals
-    sanitized_bundle = _sanitize_for_transport(bundle)
+    sanitized_bundle = sanitize_for_json(bundle)
     serialized = json.dumps(sanitized_bundle, sort_keys=True, default=str)
     sanitized_bundle['id'] = _make_identifier(session_id, 'bundle', serialized)
     return sanitized_bundle
@@ -877,8 +844,12 @@ class MultiAgentFlow:
     }
 
     def __init__(self) -> None:
-        self._planner = PlannerExecutorFlow()
+        self._planner = PlannerExecutorFlow(flow_mode=FlowMode.MULTI_AGENT)
+        self.follow_up_route = FollowUpRoute.FULL_PIPELINE
+        self._planner.set_follow_up_route(self.follow_up_route)
+        self.flow_mode = FlowMode.MULTI_AGENT
         self.flow_label = "multi-agent"
+        self._cohesive_validator = CohesiveResultValidator()
         registry = get_planner_tool_registry()
         self._planner_tool_manifest = registry.describe_tools()
         self._tool_metadata_by_registry = _build_tool_metadata(self._planner_tool_manifest)
@@ -896,6 +867,19 @@ class MultiAgentFlow:
         self._session_snapshot: Optional[SessionStateSnapshot] = None
         self._shared_context: Dict[str, Any] = {}
         self._orchestrated = False
+
+    def prime_with_snapshot(self, snapshot: Optional[SessionStateSnapshot]) -> None:
+        self._planner.prime_with_snapshot(snapshot)
+
+    def set_follow_up_route(self, route: FollowUpRoute) -> None:
+        self.follow_up_route = route
+        self._planner.set_follow_up_route(route)
+
+    def _annotate(self, event: Dict[str, Any]) -> Dict[str, Any]:
+        annotated = apply_mode_metadata(event, self.flow_mode)
+        data = annotated.setdefault("data", {})
+        data.setdefault("follow_up_route", self.follow_up_route.value)
+        return annotated
 
     def _get_tool_metadata_for_step(self, step: Optional[str]) -> Optional[Dict[str, Any]]:
         if not step:
@@ -937,23 +921,23 @@ class MultiAgentFlow:
         hook_ctx: Dict[str, Any] = {"query": query, "session_id": session_id}
         try:
             async for start_event in hooks.on_flow_start(hook_ctx):
-                yield start_event
+                yield self._annotate(start_event)
             async for event in stream:
                 async for pre_event in hooks.before_event(hook_ctx, event):
-                    yield pre_event
-                yield event
+                    yield self._annotate(pre_event)
+                yield self._annotate(event)
                 if event.get("event") == "session_started":
                     data = event.get("data") or {}
                     hook_ctx["session_id"] = data.get("session_id", hook_ctx.get("session_id"))
                 async for post_event in hooks.after_event(hook_ctx, event):
-                    yield post_event
+                    yield self._annotate(post_event)
         except BaseException as exc:
             async for end_event in hooks.on_flow_end(hook_ctx, error=exc):
-                yield end_event
+                yield self._annotate(end_event)
             raise
         else:
             async for end_event in hooks.on_flow_end(hook_ctx):
-                yield end_event
+                yield self._annotate(end_event)
 
     async def events(
         self, query: str, session_id: Optional[str] = None
@@ -1275,9 +1259,21 @@ class MultiAgentFlow:
             "bundle": bundle,
             "query": query,
         }
-        sanitized_payload = _sanitize_for_transport(final_payload)
         if any(value is not None for key, value in final_payload.items() if key not in {"query", "bundle"}):
-            yield {"event": "cohesive_result", "data": sanitized_payload}
+            try:
+                validated_payload = self._cohesive_validator.ensure(final_payload)
+            except CohesiveResultValidationError as exc:
+                error_event = {
+                    "event": "cohesive_result_error",
+                    "data": {
+                        "message": str(exc),
+                        "missing": list(self._cohesive_validator.required_keys),
+                    },
+                }
+                yield self._annotate(error_event)
+                return
+            sanitized_payload = sanitize_for_json(validated_payload)
+            yield self._annotate({"event": "cohesive_result", "data": sanitized_payload})
 
         await self._persist_bundle(bundle)
 

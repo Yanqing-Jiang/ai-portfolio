@@ -12,6 +12,10 @@ Refactor the analytics workflow so every core phase (classification, intent, SQL
 - Multi-agent flow uses the Agents SDK supervisor + specialists; each specialist calls the appropriate tool handlers.
 - Telemetry, SSE events, and session persistence work off artifact payloads.
 
+## Oct 9, 2025 Updates �?? Slot + Chart Directives
+- **LLM slot guidance:** update the structured intent prompt so that when a user query starts with or contains “who”, “which”, or “what” plus verbs like “lead/leader/top/highest/rank”, the model must return `comparison="all"`, `statistic="ranking_latest"`, and include the configured default ticker list in `tickers`. This guarantees the SQL templates pull every peer before sorting.
+- **Ranking chart expectation:** add a `ranking_bar` preset (horizontal bar, tickers on Y, metric on X) in `charts.yaml` and teach `charting_impl.plan_chart_rule_based` / `charting.build_chart_spec` to emit that preset whenever `statistic="ranking_latest"` and multi-ticker rows return a single numeric measure. This keeps leaderboard answers (EPS, dividend payout ratio, operating leverage, etc.) aligned between SQL output and visualization.
+
 ## Phase Breakdown
 
 ### Phase 0 – Discovery & Spike (1–2 days)
@@ -113,3 +117,44 @@ Refactor the analytics workflow so every core phase (classification, intent, SQL
 - Analysis outputs must follow the TL;DR + 3-5 bullet narrative format that blends SQL metrics, stock movement, and headline context; enforce this in both prompt construction and frontend rendering.
 - Persist session snapshots after each artifact phase to unblock follow-up chart/analysis revisions and guard against `CHART_REVISION_MISSING_SESSION`.
 
+## Plan Evaluation & Next Steps (October 9, 2025)
+
+### Mode-specific scheduling differentiation
+- **Shared DAG, mode-specific scheduling:** The proposal keeps the artifact DAG fixed (`Classification → Intent → SQL → Chart → Analysis`) while differentiating concurrency per delivery mode. This aligns with Phases 2 and 4—codify the DAG once, then inject mode schedulers (`DirectScheduler`, `SingleAgentScheduler`, `MultiAgentScheduler`) that live alongside the registry. Example: for the AMD market-share run, the direct mode will run sequentially while the single-agent path can trigger `web_retriever` + `stock_tracker` as soon as `SQLPlanArtifact` is available.
+- **Direct (Deterministic) mode:** Sequential execution plus post-analysis accessories reinforces the “Deterministic” badge already planned for the ProcessPanel. Action: add a `deterministic=true` flag to direct-mode SSE payloads and assert in golden-event tests (`tests/analytics/test_planner_executor_direct.py`).
+- **Single agent mode:** Early fan-out plus artifact-scoped revisions map directly to the persistence fixes already queued. Example follow-up: “Show AMD chart in stacked area” should replay only `ChartArtifact` using `SessionStateSnapshot.last_sql`, not re-run the SQL compiler. Requires: persisted manifests + revision router (Phase 4 focus).
+- **Multi agent mode:** Supervisor + specialist concurrency is consistent with the Agents SDK plan; add hedged tasks (e.g., dual SQL prompts) guarded by latency budgets already exposed via `PlannerToolDefinition`. Update WorkflowCanvas to label hedged tasks (`cache_hit`, `hedged_web`) for transparency.
+- **Current progress (Oct 9):** Introduced a shared `FlowMode` infrastructure and annotated SSE with `mode`/`follow_up_route` badges. Direct mode now defers accessory fan-out until post-analysis, while single- and multi-agent flows keep concurrency badges surfaced through hooks. Cohesive result validation and follow-up routing metadata are wired into planner, single-agent, and multi-agent flows.
+
+### Cohesive result contract and sanitization
+- Promote the cohesive-result guardrail into a hard contract: no `analysis_complete`/`workflow_complete` without `{sql_sample, chart_spec_id, stock_widget, web_context}` populated. Implement a `CohesiveResultValidator` that fails fast when any artifact is missing or non-JSON-serializable.
+- Serialization fixes: extend bundle sanitization to coerce slices/datetimes/dataclasses before `_create_planner_bundle`. Regression: replay `agent-process-ledger (14).json` through `MultiAgentFlow.events()` to ensure `unknown/error` disappears and `cohesive_result` emits once.
+- Allow accessory deltas: web/stock updates can continue streaming after the initial cohesive payload; annotate ProcessPanel entries as `delta_web`, `delta_stock` so cards patch in place instead of re-rendering.
+- Chart sanity checks: guard Chart artifacts with axis/data validation (e.g., AMD run currently set `["Q1","Q2","Q3","Q4"]` against multi-year data). Add `validate_axis_bindings(raw_data, chart_spec)` before emit and cover with snapshot tests.
+- **Current progress (Oct 9):** Added reusable `CohesiveResultValidator` and JSON sanitization helpers, updated `MultiAgentFlow` to gate `cohesive_result` emission on the validator, emitted explicit `cohesive_result_error`, and layered chart scope banners plus artifact snapshots to persist across revisions.
+
+### Persistence, revisions, and follow-up routing
+- Persistence: treat `SessionStateSnapshot.record_outputs()` as blocking for every phase; fail revisions if persistence errors occur rather than falling back silently. Add coverage (`test_revision_snapshot_reuse.py`) that issues a chart tweak immediately after a run and asserts success.
+- Follow-up routing classifier: implement lightweight heuristics (`stock_only`, `reuse_sql`, `full_pipeline`) keyed off artifact diffs. Example: prompt “How did AMD stock move last year?” should reuse `SQLExecutionArtifact` while re-running stock + analysis only. Surface chosen route in telemetry lane badges.
+- Model/latency tuning: switch default Gemini helper to `gemini-2.5-flash-lite` for cached/parallel research and issue two parallel `web_retriever` calls (cached + live) using the new concurrency metadata.
+- **Current progress (Oct 9):** Session persistence now records artifacts after each phase, context hydration pulls cached artifacts from snapshots, and a `FollowUpClassifier` + routing metadata thread follow-up intent through planner, single-agent, and multi-agent flows.
+
+### Narrative output + UX framing
+- Enforce TL;DR plus 3–5 bullet layout across all modes; ensure Markdown normalizer strips JSON remnants and attaches inline citations `[1]` etc. Add backend prompt unit covering NVDA 5-year scenario verifying TL;DR + bullet contract.
+- Add a scoped banner above charts (`Basis: Revenue share across AMD, AVGO, INTC, MU, NVDA, QCOM, TXN`) so users can reconcile dataset membership with the TL;DR narrative.
+
+### Updated next steps
+1. **Scheduler abstraction (Phase 4 extension):** Land mode-specific scheduler interfaces and update SSE badges (`deterministic`, `fanout`, `supervisor`). Example acceptance: direct NVDA run emits sequential timestamps; multi-agent shows parallel groupings with `hedged_web`.
+2. **Cohesive-result validator:** Add guard + regression replay for the AMD ledger to prove JSON-safe payloads and absence of `unknown` errors.
+3. **Persistence & routing:** Finish artifact persistence guarantees and introduce the follow-up classifier backed by targeted pytest coverage for chart revision + stock-only follow-ups.
+4. **Narrative polish:** Ship TL;DR formatter, Markdown normalizer, and scope banner update, validating via Storybook snapshot and backend prompt test.
+
+### Execution playbook (Updated Oct 9, 2025)
+- **Progress log:** Mode-aware events now ship `mode`/`follow_up_route` badges; snapshot hydration keeps reuse_sql/stock_only paths fast; cohesive bundle validator protects multi-agent payloads; chart artifacts embed a scope banner derived from persisted tickers; Gemini defaults to `gemini-2.5-flash-lite` and sanitizer regressions are covered by unit tests.
+- **Focus area 1 – Mode scheduler abstraction:** Harden `backend/analytics/flows/schedulers.py` and add golden-ledger tests ensuring direct runs stay sequential while single/multi-agent show early fan-out and hedged branches (`test_planner_schedulers.py`).
+- **Focus area 2 – Cohesive result contract:** Leverage `backend/analytics/validators/cohesive_result.py` in planner + multi-agent flows, replay the AMD ledger to prove JSON safety, and extend pytest coverage for validator errors vs. sanitized emits.
+- **Focus area 3 – Persistence & follow-up routing:** Persist artifacts after every phase via `SessionStateSnapshot.record_artifacts`, expose `FollowUpClassifier` heuristics, and add telemetry assertions (`test_follow_up_classifier.py`, upcoming `test_follow_up_routing.py`).
+- **Focus area 4 – Narrative & chart fidelity:** Enforce TL;DR + Key points via `backend/analytics/core/analysis.py`, add chart scope banners, and line up frontend banner + Markdown snapshot coverage.
+- **Focus area 5 – Research latency guardrails:** Default to `gemini-2.5-flash-lite`, parallelize cached/live searches, and validate hedged telemetry plus merged snippets in `backend/tests/analytics/test_web_research.py`.
+- **Acceptance checklist:** deterministic direct ledger; single-agent revision reuse; multi-agent cohesive payload with all artifacts; TL;DR card + scope banner; hedged web searches with improved p50 latency.
+- **Testing cadence:** targeted pytest modules per feature (validators, bundles, routing, schedulers), weekly `pytest backend/tests/analytics -m "not slow"`, and focused frontend Jest suites (`WorkflowCanvas`, scope banner, AnalysisCard) once UI hooks land.

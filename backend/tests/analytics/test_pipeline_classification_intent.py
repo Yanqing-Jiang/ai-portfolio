@@ -118,7 +118,6 @@ def test_pipeline_events_runs_tools_in_order(monkeypatch: pytest.MonkeyPatch) ->
             "plan_generation",
             "sql_generation",
             "chart_generation",
-            "web_search",
             "analysis_generation",
         ]
 
