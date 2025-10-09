@@ -44,6 +44,7 @@ class SessionStateSnapshot(BaseModel):
     tool_cache: Dict[str, Any] = Field(default_factory=dict)
     routing: Dict[str, Any] = Field(default_factory=dict)
     messages: List[Dict[str, Any]] = Field(default_factory=list)
+    schedule_history: List[Dict[str, Any]] = Field(default_factory=list)
 
     model_config = {
         "extra": "allow",
@@ -93,6 +94,30 @@ class SessionStateSnapshot(BaseModel):
             self.last_chart_spec = chart_spec
         if analysis is not None:
             self.last_analysis = analysis
+        self.touch()
+
+    def record_schedule_stage(
+        self,
+        *,
+        stage: Optional[str],
+        parallel_group: Optional[str],
+        event: Optional[str] = None,
+        ts: Optional[str] = None,
+        flow_mode: Optional[str] = None,
+    ) -> None:
+        if not stage:
+            return
+        entry = {
+            "stage": stage,
+            "parallel_group": parallel_group,
+            "event": event,
+            "ts": ts,
+            "flow_mode": flow_mode,
+        }
+        history = self.schedule_history
+        history.append(entry)
+        if len(history) > 50:
+            self.schedule_history = history[-50:]
         self.touch()
 
     def should_trigger_web_refresh(self, new_query: str) -> bool:

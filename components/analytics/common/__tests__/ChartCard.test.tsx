@@ -18,6 +18,7 @@ vi.mock('echarts-for-react', () => {
 });
 
 const sampleSpec = {
+  chart_type: 'line',
   xAxis: { type: 'category', data: ['A', 'B'] },
   yAxis: { type: 'value' },
   series: [{ type: 'line', data: [1, 2] }],
@@ -37,6 +38,23 @@ describe('ChartCard', () => {
   it('renders the Interactive Visualization header', async () => {
     render(<ChartCard chartSpec={sampleSpec as any} />);
     expect(screen.getByText('Interactive Visualization')).toBeInTheDocument();
+  });
+
+  it('renders scope banner and ranking pill when metadata provided', async () => {
+    const rankingSpec = {
+      ...sampleSpec,
+      chart_type: 'ranking_bar',
+      meta: {
+        ...sampleSpec.meta,
+        scopeBanner: 'Ranking latest operating leverage across AMD, NVDA',
+        chartDesign: { statistic: 'ranking_latest' },
+        ranking: { metric: 'operating_margin', tickers: ['NVDA', 'AMD'] },
+      },
+    };
+    render(<ChartCard chartSpec={rankingSpec as any} enableDropdown />);
+    expect(screen.getByTestId('chart-scope-banner')).toHaveTextContent('Ranking latest operating leverage across AMD, NVDA');
+    expect(screen.getByTestId('chart-ranking-pill')).toHaveTextContent(/operating margin/i);
+    expect(screen.getByTestId('chart-ranking-pill')).toHaveTextContent(/NVDA/i);
   });
 });
 

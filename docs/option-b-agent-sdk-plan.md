@@ -125,6 +125,7 @@ Refactor the analytics workflow so every core phase (classification, intent, SQL
 - **Single agent mode:** Early fan-out plus artifact-scoped revisions map directly to the persistence fixes already queued. Example follow-up: “Show AMD chart in stacked area” should replay only `ChartArtifact` using `SessionStateSnapshot.last_sql`, not re-run the SQL compiler. Requires: persisted manifests + revision router (Phase 4 focus).
 - **Multi agent mode:** Supervisor + specialist concurrency is consistent with the Agents SDK plan; add hedged tasks (e.g., dual SQL prompts) guarded by latency budgets already exposed via `PlannerToolDefinition`. Update WorkflowCanvas to label hedged tasks (`cache_hit`, `hedged_web`) for transparency.
 - **Current progress (Oct 9):** Introduced a shared `FlowMode` infrastructure and annotated SSE with `mode`/`follow_up_route` badges. Direct mode now defers accessory fan-out until post-analysis, while single- and multi-agent flows keep concurrency badges surfaced through hooks. Cohesive result validation and follow-up routing metadata are wired into planner, single-agent, and multi-agent flows.
+- **Scheduler registry (Oct 9):** Added `FlowStage`/`FlowSchedule` helpers plus `get_mode_schedule()` summaries in `backend/analytics/flows/schedulers.py`, delivering canonical ordering for direct/single/multi-agent modes and surfacing hedged accessory details (e.g., cached vs. live web retrievers). Regression coverage lives in `backend/tests/analytics/test_planner_schedulers.py`.
 
 ### Cohesive result contract and sanitization
 - Promote the cohesive-result guardrail into a hard contract: no `analysis_complete`/`workflow_complete` without `{sql_sample, chart_spec_id, stock_widget, web_context}` populated. Implement a `CohesiveResultValidator` that fails fast when any artifact is missing or non-JSON-serializable.
@@ -144,7 +145,7 @@ Refactor the analytics workflow so every core phase (classification, intent, SQL
 - Add a scoped banner above charts (`Basis: Revenue share across AMD, AVGO, INTC, MU, NVDA, QCOM, TXN`) so users can reconcile dataset membership with the TL;DR narrative.
 
 ### Updated next steps
-1. **Scheduler abstraction (Phase 4 extension):** Land mode-specific scheduler interfaces and update SSE badges (`deterministic`, `fanout`, `supervisor`). Example acceptance: direct NVDA run emits sequential timestamps; multi-agent shows parallel groupings with `hedged_web`.
+1. **Scheduler abstraction (Phase 4 extension):** Wire the new `FlowSchedule` registry into planner/multi-agent timeline emitters and expand ledger snapshots so golden tests assert sequential vs. fan-out groupings (direct vs. single/multi). Example acceptance: direct NVDA run emits sequential timestamps; multi-agent shows parallel groupings with `hedged_web`.
 2. **Cohesive-result validator:** Add guard + regression replay for the AMD ledger to prove JSON-safe payloads and absence of `unknown` errors.
 3. **Persistence & routing:** Finish artifact persistence guarantees and introduce the follow-up classifier backed by targeted pytest coverage for chart revision + stock-only follow-ups.
 4. **Narrative polish:** Ship TL;DR formatter, Markdown normalizer, and scope banner update, validating via Storybook snapshot and backend prompt test.
@@ -158,3 +159,15 @@ Refactor the analytics workflow so every core phase (classification, intent, SQL
 - **Focus area 5 – Research latency guardrails:** Default to `gemini-2.5-flash-lite`, parallelize cached/live searches, and validate hedged telemetry plus merged snippets in `backend/tests/analytics/test_web_research.py`.
 - **Acceptance checklist:** deterministic direct ledger; single-agent revision reuse; multi-agent cohesive payload with all artifacts; TL;DR card + scope banner; hedged web searches with improved p50 latency.
 - **Testing cadence:** targeted pytest modules per feature (validators, bundles, routing, schedulers), weekly `pytest backend/tests/analytics -m "not slow"`, and focused frontend Jest suites (`WorkflowCanvas`, scope banner, AnalysisCard) once UI hooks land.
+### Oct 9, 2025 instrumentation update
+- Scheduler helpers now expose stage indexes so instrumentation and downstream ledger writers can key events by `schedule_stage`.
+- Analytics instrumentation streams apply the schedule metadata when enriching SSE payloads (parallel_group, schedule_stage, hedged awareness) without dropping the legacy fallback.
+- Regression coverage: `pytest backend/tests/analytics/test_planner_schedulers.py tests/analytics/test_instrumentation_schedule.py -q` captures mode schedule summaries and instrumentation annotations.
+- `apply_mode_metadata` consumes the cached stage index so all modes emit `parallel_group`, `schedule_stage`, and `stage_allows_parallel` without relying on instrumentation helpers.
+
+
+### Oct 9, 2025 delivery increments
+- Added `analytics.scripts.schedule_replay` CLI for annotating event exports with scheduler metadata to support manual ledger reviews.
+- Session snapshots now retain up to 50 schedule-stage checkpoints so follow-up routing can reuse cached artifacts without replaying earlier phases.
+- Follow-up classifier heuristics tap cached schedule history in addition to SQL/chart artifacts when deciding between `reuse_sql`, `stock_only`, and `full_pipeline` routes.
+

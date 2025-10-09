@@ -233,7 +233,7 @@ def test_sql_pipeline_artifacts(monkeypatch: pytest.MonkeyPatch) -> None:
         def dict(self) -> Dict[str, Any]:
             return {"series": self.series}
 
-    def fake_build_chart_spec(data, plan_dict, charts_config, intent_key, comparison):
+    def fake_build_chart_spec(data, plan_dict, charts_config, intent_key, comparison, statistic=None):
         return {
             "datasets": [
                 {"id": "gross_margin", "label": "Gross Margin", "metric": "gross_margin"}
@@ -298,7 +298,7 @@ def test_sql_pipeline_artifacts(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(
             planner_executor,
             "plan_chart_rule_based",
-            lambda data, query, intent_key: FakeChartPlan(),
+            lambda data, query, intent_key, statistic=None: FakeChartPlan(),
         )
         monkeypatch.setattr(
             planner_executor,

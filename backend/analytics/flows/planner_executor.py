@@ -122,6 +122,15 @@ def _generate_chart_design(intent_key: Optional[str], plan: QueryPlanModel, data
         'defaultLegendSelection': {},
         'color_by': 'ticker' if has_multiple_tickers else 'metric'
     }
+    if getattr(plan, "statistic", None) == "ranking_latest":
+        primary_metric = (plan.metrics or [None])[0]
+        design.update({
+            'chart_type': 'ranking_bar',
+            'grouping': 'ticker',
+            'y_axis': {'type': 'single'},
+            'measure': primary_metric,
+            'statistic': plan.statistic,
+        })
     # Intent-specific configurations
     if intent_key == 'market_share_all':
         design.update({
@@ -1124,13 +1133,19 @@ class PlannerPipeline:
         chart_progress["data"]["ts"] = datetime.utcnow().isoformat()
         yield chart_progress
         chart_start = time.time()
-        chart_plan = plan_chart_rule_based(data, query, intent.intent_key)
+        chart_plan = plan_chart_rule_based(
+            data,
+            query,
+            intent.intent_key,
+            statistic=getattr(plan, "statistic", None),
+        )
         spec = build_chart_spec(
             data,
             chart_plan.dict(),
             CONFIGS.charts,
             intent_key=intent.intent_key,
             comparison=plan.comparison,
+            statistic=getattr(plan, "statistic", None),
         )
         ctx.chart_spec = spec
         chart_design = _generate_chart_design(intent.intent_key, plan, data, spec)

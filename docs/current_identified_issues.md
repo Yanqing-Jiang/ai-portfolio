@@ -80,3 +80,11 @@
 ---
 
 **Next Steps:** Prioritize Workstreams 1-3 in the upcoming sprint, then tackle the multi-agent bundle fixes above before adding follow-up routing and performance tuning. Document changes in `docs/option-b-agent-sdk-plan.md` after implementation.
+## Hedged accessories follow-up (Oct 9, 2025)
+- Multi-agent ledger (17) still loops with unknown stages; stage metadata must be injected into ledger serialization.
+- Add `hedged_accessories_complete` events when cached/live web retrievers finish; block cohesive_result until that event fires.
+- Expose sanitized bundles and schedule history for follow-up routing via `/api/analytics/schedules/<session_id>`.
+- Frontend: render schedule stage + mode pills in ProcessPanel and add zoom presets for WorkflowCanvas; highlight cohesive bundle presence in the analysis card.
+\n- Inflight fix: multi-agent now emits 'hedged_accessories_complete' and sanitizes bundles; retest ledgers 18+ after redeploy to confirm no lingering 'unknown' slice errors.\n
+- Added artifact-ready events for multi-agent (sql/chart/stock/web). Next validation: capture a fresh ledger (20+) and confirm the new events appear before cohesive_result; update ProcessPanel to visualize them.
+

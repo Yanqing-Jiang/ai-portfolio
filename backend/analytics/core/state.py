@@ -111,6 +111,7 @@ class QueryPlanModel(BaseModel):
     timeframe: TimeframeModel = Field(default_factory=TimeframeModel)
     granularity: Literal["annual", "quarterly"] = "annual"
     comparison: Optional[str] = None
+    statistic: Optional[str] = None
     group_by: List[str] = Field(default_factory=list)
     filters: Dict[str, Any] = Field(default_factory=dict)
     limit: int = 500
@@ -134,6 +135,8 @@ class ChartSeriesModel(BaseModel):
     low_column: Optional[str] = None
     close_column: Optional[str] = None
     volume_column: Optional[str] = None
+    ticker_filter: Optional[str] = None
+    sort: Optional[Literal["ascending", "descending"]] = None
 
     model_config = ConfigDict(extra="ignore")
 
@@ -144,11 +147,13 @@ class ChartAxisModel(BaseModel):
 
 
 class ChartPlanModel(BaseModel):
-    chart_type: Literal["line", "bar", "scatter", "pie", "heatmap", "candlestick"] = "line"
+    chart_type: Literal["line", "bar", "scatter", "pie", "heatmap", "candlestick", "ranking_bar"] = "line"
     x_axis: ChartAxisModel = Field(default_factory=ChartAxisModel)
     series: List[ChartSeriesModel] = Field(default_factory=list)
     title: str = "Analytics"
     highlight_rules: List[Dict[str, Any]] = Field(default_factory=list)
+    statistic: Optional[str] = None
+    ranking_metric: Optional[str] = None
 
     model_config = ConfigDict(extra="ignore")
 

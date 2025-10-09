@@ -7,7 +7,9 @@ from typing import Any, AsyncGenerator, Dict, Optional, Tuple
 
 from analytics.core.session_state import SessionStateSnapshot, get_session_state_repository
 from analytics.artifacts import PipelineArtifacts
+from analytics.validators import sanitize_for_json
 from .planner_executor import PlannerExecutorFlow, run_planner_executor
+from .schedulers import FlowMode, FlowStageIndex, get_stage_index, resolve_stage
 
 PARALLEL_GROUP_BY_EVENT = {
     "session_started": "session",
@@ -21,18 +23,32 @@ PARALLEL_GROUP_BY_EVENT = {
     "clarification_request": "clarification",
     "clarification_resolved": "clarification",
     "clarification_timeout": "clarification",
+    "clarification": "clarification",
+    "schema_validation": "intent",
+    "schema_clarifier": "classification",
+    "schema_clarifier_result": "classification",
     "sql_compiled": "sql",
     "sql_generated": "sql",
     "sql_validated": "sql",
     "execution_stats": "sql",
+    "sql_ready": "sql",
     "chart_planned": "chart",
     "chart_generated": "chart",
+    "chart_ready": "chart",
     "analysis_complete": "analysis",
     "analysis_streaming": "analysis",
+    "analysis_chunk": "analysis",
+    "analysis_ready": "analysis",
     "workflow_complete": "workflow",
     "tool_call": "tools",
+    "tool_fanout": "web",
+    "tool_execution": "web",
     "agent_turn": "agents",
     "agent_reasoning": "agents",
+    "web_research_agent": "web",
+    "web_ready": "web",
+    "stock_ready": "web",
+    "hedged_accessories_complete": "web",
 }
 
 PARALLEL_GROUP_BY_STEP = {
@@ -46,14 +62,38 @@ PARALLEL_GROUP_BY_STEP = {
     "web_search": "web",
 }
 
-def _resolve_parallel_group(event: Dict[str, Any]) -> Optional[str]:
+def _resolve_flow_mode(flow: Any) -> FlowMode:
+    raw_mode = getattr(flow, "flow_mode", FlowMode.DIRECT)
+    if isinstance(raw_mode, FlowMode):
+        return raw_mode
+    if isinstance(raw_mode, str):
+        try:
+            return FlowMode(raw_mode)
+        except ValueError:
+            return FlowMode.DIRECT
+    return FlowMode.DIRECT
+
+
+def _resolve_parallel_group(
+    event: Dict[str, Any],
+    *,
+    stage_index: Optional[FlowStageIndex] = None,
+) -> Tuple[Optional[str], Optional[str], Optional[bool]]:
+    stage = None
+    if stage_index is not None:
+        name = event.get("event")
+        data = event.get("data") or {}
+        step = data.get("step")
+        stage = resolve_stage(stage_index, event_name=name if isinstance(name, str) else None, step_name=step if isinstance(step, str) else None)
+        if stage is not None:
+            return stage.parallel_group, stage.key, stage.allows_parallel
     name = event.get("event")
     if isinstance(name, str) and name in PARALLEL_GROUP_BY_EVENT:
-        return PARALLEL_GROUP_BY_EVENT[name]
+        return PARALLEL_GROUP_BY_EVENT[name], None, None
     step = (event.get("data") or {}).get("step")
     if isinstance(step, str) and step in PARALLEL_GROUP_BY_STEP:
-        return PARALLEL_GROUP_BY_STEP[step]
-    return None
+        return PARALLEL_GROUP_BY_STEP[step], None, None
+    return None, None, None
 
 
 def _resolve_tool_group(event: Dict[str, Any]) -> Optional[str]:
@@ -97,6 +137,8 @@ def _enrich_event(
     sequence: int,
     parallel_group: Optional[str] = None,
     tool_group: Optional[str] = None,
+    stage_key: Optional[str] = None,
+    stage_allows_parallel: Optional[bool] = None,
 ) -> Tuple[Dict[str, Any], int]:
     seq = sequence + 1
     data = event.setdefault("data", {})
@@ -107,6 +149,11 @@ def _enrich_event(
         data["parallel_group"] = parallel_group
     if tool_group:
         data["tool_group"] = tool_group
+    if stage_key:
+        data.setdefault("schedule_stage", stage_key)
+    if stage_allows_parallel is not None:
+        data.setdefault("stage_allows_parallel", stage_allows_parallel)
+    event["data"] = sanitize_for_json(data)
     return event, seq
 
 
@@ -118,10 +165,23 @@ def _maybe_update_session_state(
     snapshot: SessionStateSnapshot,
     event: Dict[str, Any],
     query: str,
+    *,
+    flow_mode: FlowMode,
 ) -> bool:
     name = event.get("event")
     data = event.get("data") or {}
     updated = False
+    schedule_stage = data.get("schedule_stage")
+    parallel_group = data.get("parallel_group")
+    if schedule_stage:
+        snapshot.record_schedule_stage(
+            stage=schedule_stage,
+            parallel_group=parallel_group,
+            event=name if isinstance(name, str) else None,
+            ts=data.get("ts"),
+            flow_mode=flow_mode.value,
+        )
+        updated = True
 
     if name == "intent_detection_complete":
         snapshot.record_query(query, data.get("intent_key"))
@@ -186,6 +246,8 @@ async def instrument_events(
         await repository.save(snapshot)
 
     sequence = 0
+    flow_mode = _resolve_flow_mode(flow)
+    stage_index = get_stage_index(flow_mode)
 
     if hasattr(flow, "events") and callable(getattr(flow, "events")):
         event_stream = flow.events(query, session_id=resolved_session)
@@ -195,17 +257,19 @@ async def instrument_events(
         raise AttributeError("Flow object does not expose an events() coroutine")
 
     async for raw_event in event_stream:
-        parallel_group = _resolve_parallel_group(raw_event)
+        parallel_group, stage_key, stage_allows_parallel = _resolve_parallel_group(raw_event, stage_index=stage_index)
         tool_group = _resolve_tool_group(raw_event)
         enriched_event, sequence = _enrich_event(
             raw_event,
             sequence=sequence,
             parallel_group=parallel_group,
             tool_group=tool_group,
+            stage_key=stage_key,
+            stage_allows_parallel=stage_allows_parallel,
         )
         yield enriched_event
 
-        if _maybe_update_session_state(snapshot, enriched_event, query):
+        if _maybe_update_session_state(snapshot, enriched_event, query, flow_mode=flow_mode):
             await repository.save(snapshot)
 
     artifacts = _extract_latest_artifacts(flow)

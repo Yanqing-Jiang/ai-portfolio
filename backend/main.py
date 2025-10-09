@@ -1,5 +1,6 @@
-﻿import asyncio
+import asyncio
 import logging
+from typing import Any, Dict, List, Tuple, Optional
 from fastapi import FastAPI, Request, Depends, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, Response, JSONResponse
@@ -14,6 +15,23 @@ import uuid
 import time
 
 logger = logging.getLogger(__name__)
+
+BASE_DIR = Path(__file__).resolve().parents[1]
+AI_FACTS_PATH = BASE_DIR / "public" / "ai-projects.json"
+AI_CRAWLER_PATTERNS = (
+    "gptbot",
+    "chatgpt-user",
+    "google-extended",
+    "claudebot",
+    "perplexitybot",
+    "amazonbot",
+    "bytespider",
+    "dataforseobot",
+)
+AI_CRAWLER_ALLOWLIST = {"gptbot", "chatgpt-user", "google-extended", "claudebot", "perplexitybot", "amazonbot"}
+
+_ai_facts_cache: Optional[List[Dict[str, Any]]] = None
+_ai_facts_mtime: float = 0.0
 
 # Always load the .env file located in the backend directory (same folder as this file)
 env_path = Path(__file__).resolve().parent / ".env"
@@ -31,7 +49,7 @@ from analytics.core.clarify import put_answer
 from analytics.core.types import ClarifyAnswerModel
 
 from langchain.callbacks.base import BaseCallbackHandler
-from typing import List, Tuple, Optional
+
 
 
 
@@ -44,6 +62,28 @@ logging.basicConfig(
 )
 
 app = FastAPI()
+
+
+def _match_ai_crawlers(user_agent: str) -> List[str]:
+    if not user_agent:
+        return []
+    lowered = user_agent.lower()
+    return [pattern for pattern in AI_CRAWLER_PATTERNS if pattern in lowered]
+
+
+def load_ai_facts_cache() -> List[Dict[str, Any]]:
+    global _ai_facts_cache, _ai_facts_mtime
+    try:
+        stat = AI_FACTS_PATH.stat()
+    except FileNotFoundError:
+        _ai_facts_cache = []
+        _ai_facts_mtime = 0.0
+        return _ai_facts_cache or []
+    if _ai_facts_cache is None or stat.st_mtime > _ai_facts_mtime:
+        with AI_FACTS_PATH.open(encoding="utf-8") as fp:
+            _ai_facts_cache = json.load(fp)
+        _ai_facts_mtime = stat.st_mtime
+    return _ai_facts_cache or []
 
 # Use the global session store from analytics.core.clarify
 
@@ -68,6 +108,26 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.middleware("http")
+async def ai_crawler_middleware(request: Request, call_next):
+    user_agent = request.headers.get("user-agent", "")
+    matches = _match_ai_crawlers(user_agent)
+    if matches:
+        logger.info(
+            "[AI_CRAWLER] matches=%s path=%s allowed=%s",
+            matches,
+            request.url.path,
+            bool(AI_CRAWLER_ALLOWLIST.intersection(matches)),
+        )
+        request.state.ai_crawler_matches = matches
+    response = await call_next(request)
+    if matches:
+        response.headers["X-AI-Crawler-Matched"] = ",".join(matches)
+        policy = "allow" if AI_CRAWLER_ALLOWLIST.intersection(matches) else "monitor"
+        response.headers["X-AI-Crawler-Policy"] = policy
+    return response
+
 class ResearchRequest(BaseModel):
     query: str
     chat_history: List[Tuple[str, str]] = []
@@ -91,6 +151,18 @@ class TTSStreamRequest(BaseModel):
 
 # In-memory chat sessions storage
 chat_sessions = {}
+
+
+@app.get("/api/ai-facts.json")
+async def ai_facts_endpoint():
+    facts = load_ai_facts_cache()
+    return JSONResponse(
+        {
+            "updated": _DateTime.utcnow().isoformat(),
+            "count": len(facts),
+            "facts": facts,
+        }
+    )
 
 class StreamingCallbackHandler(BaseCallbackHandler):
     def __init__(self):

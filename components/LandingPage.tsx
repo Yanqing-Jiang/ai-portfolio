@@ -7,6 +7,14 @@ import { motion } from 'framer-motion';
 import Style2MorphWords from './hero/Style2MorphWords';
 // @ts-ignore
 import { Helmet } from 'react-helmet-async';
+import {
+  DEFAULT_OG_IMAGE,
+  DEFAULT_THEME_COLOR,
+  DEFAULT_TWITTER_HANDLE,
+  LANDING_SEO,
+  SITE_NAME,
+} from '../constants/seo';
+import { buildLandingSchemas, toNavigationFromProjects } from '../constants/structuredData';
 
 const contactLinks = [
   {
@@ -62,8 +70,20 @@ interface LandingPageProps {
 }
 
 const LandingPage: React.FC<LandingPageProps> = ({ projectData, onSelectProject }) => {
-  const preAiProjects = useMemo(() => projectData.find(group => group.label === 'Pre-AI Projects')?.projects ?? [], [projectData]);
-  const allProjects = useMemo(() => projectData.filter(group => !group.hiddenOnLanding).flatMap(year => year.projects), [projectData]);
+  const preAiProjects = useMemo(
+    () => projectData.find(group => group.label === 'Pre-AI Projects')?.projects ?? [],
+    [projectData]
+  );
+  const allProjects = useMemo(
+    () => projectData.filter(group => !group.hiddenOnLanding).flatMap(year => year.projects),
+    [projectData]
+  );
+  const navigationLinks = useMemo(() => toNavigationFromProjects(allProjects), [allProjects]);
+  const landingSchemas = useMemo(
+    () => buildLandingSchemas(allProjects, navigationLinks),
+    [allProjects, navigationLinks]
+  );
+  const landingKeywords = useMemo(() => LANDING_SEO.keywords.join(', '), []);
   
   const [currentIndex, setCurrentIndex] = useState(0);
   const heroRef = useRef<HTMLElement | null>(null);
@@ -113,76 +133,53 @@ const LandingPage: React.FC<LandingPageProps> = ({ projectData, onSelectProject 
   return (
     <>
     <Helmet>
-      <title>Yanqing Jiang | AI ML Portfolio & Data Projects</title>
-      <meta name="description" content="Explore AI & ML projects, data analytics, and LLM applications by Yanqing Jiang, including live demos and code." />
-      <meta name="keywords" content="AI, ML, machine learning, data analytics, portfolio, langchain, React, FastAPI" />
-      <meta name="author" content="Yanqing Jiang" />
+      <title>{LANDING_SEO.title}</title>
+      <meta name="description" content={LANDING_SEO.description} />
+      <meta name="keywords" content={landingKeywords} />
+      <meta name="author" content={LANDING_SEO.author} />
+      <meta name="subject" content={LANDING_SEO.subject} />
+      <meta name="category" content={LANDING_SEO.category} />
       <meta name="robots" content="index, follow" />
-      <link rel="canonical" href="https://ai.jiangyanqing.com/" />
-      
+      <link rel="canonical" href={LANDING_SEO.canonical} />
+      <link rel="alternate" hrefLang="en-us" href={LANDING_SEO.canonical} />
+      {LANDING_SEO.sameAs?.map((profile) => (
+        <link key={profile} rel="me" href={profile} />
+      ))}
+
       {/* Open Graph tags */}
-      <meta property="og:title" content="Yanqing Jiang | AI ML Portfolio & Data Projects" />
-      <meta property="og:description" content="Explore AI & ML projects, data analytics, and LLM applications by Yanqing Jiang, including live demos and code." />
       <meta property="og:type" content="website" />
-      <meta property="og:url" content="https://ai.jiangyanqing.com/" />
-      <meta property="og:site_name" content="Yanqing Jiang AI & ML Portfolio" />
-      <meta name="image" property="og:image" content="https://yanqinghot.blob.core.windows.net/public-access/OG-Page.png" />
-      <meta property="og:image:secure_url" content="https://yanqinghot.blob.core.windows.net/public-access/OG-Page.png" />
+      <meta property="og:title" content={LANDING_SEO.title} />
+      <meta property="og:description" content={LANDING_SEO.description} />
+      <meta property="og:url" content={LANDING_SEO.canonical} />
+      <meta property="og:site_name" content={SITE_NAME} />
+      <meta property="og:locale" content={LANDING_SEO.locale} />
+      <meta property="og:updated_time" content={LANDING_SEO.updatedTime} />
+      <meta property="og:image" content={DEFAULT_OG_IMAGE} />
+      <meta property="og:image:secure_url" content={DEFAULT_OG_IMAGE} />
       <meta property="og:image:type" content="image/png" />
       <meta property="og:image:width" content="1200" />
       <meta property="og:image:height" content="630" />
-      <meta property="og:image:alt" content="Yanqing Jiang AI & ML Portfolio - Showcasing AI, machine learning, data analytics projects" />
-      
+      <meta property="og:image:alt" content="AI systems and analytics automation portfolio by Yanqing Jiang" />
+
       {/* Twitter Card tags */}
       <meta name="twitter:card" content="summary_large_image" />
-      <meta name="twitter:site" content="@yanqing_j" />
-      <meta name="twitter:creator" content="@yanqing_j" />
-      <meta name="twitter:title" content="Yanqing Jiang | AI ML Portfolio & Data Projects" />
-      <meta name="twitter:description" content="Explore AI & ML projects, data analytics, and LLM applications by Yanqing Jiang, including live demos and code." />
-      <meta name="twitter:image" content="https://yanqinghot.blob.core.windows.net/public-access/OG-Page.png" />
-      <meta name="twitter:image:alt" content="Yanqing Jiang AI & ML Portfolio - Showcasing AI, machine learning, data analytics projects" />
-      
+      <meta name="twitter:site" content={DEFAULT_TWITTER_HANDLE} />
+      <meta name="twitter:creator" content={DEFAULT_TWITTER_HANDLE} />
+      <meta name="twitter:title" content={LANDING_SEO.title} />
+      <meta name="twitter:description" content={LANDING_SEO.description} />
+      <meta name="twitter:image" content={DEFAULT_OG_IMAGE} />
+      <meta name="twitter:image:alt" content="Yanqing Jiang AI systems and analytics automation showcase" />
+
       {/* Additional SEO tags */}
-      <meta name="theme-color" content="#111827" />
-      <meta name="msapplication-TileColor" content="#111827" />
-      
+      <meta name="theme-color" content={DEFAULT_THEME_COLOR} />
+      <meta name="msapplication-TileColor" content={DEFAULT_THEME_COLOR} />
+
       {/* Structured Data (JSON-LD) */}
-      <script type="application/ld+json">
-        {JSON.stringify({
-          "@context": "https://schema.org",
-          "@type": "Portfolio",
-          "name": "Yanqing Jiang AI & ML Portfolio",
-          "description": "AI, machine learning, data analytics projects by Yanqing Jiang",
-          "url": "https://ai.jiangyanqing.com",
-          "author": {
-            "@type": "Person",
-            "name": "Yanqing Jiang",
-            "jobTitle": "Machine Learning Engineer",
-            "description": "AI and ML professional specializing in machine learning, LangChain, and data-driven solutions",
-            "sameAs": [
-              "https://www.linkedin.com/in/jiangyanqing/",
-              "https://medium.com/@yanqing_j"
-            ]
-          },
-          "mainEntity": {
-            "@type": "ItemList",
-            "name": "AI and ML Projects",
-            "itemListElement": allProjects.map((project, index) => ({
-              "@type": "CreativeWork",
-              "position": index + 1,
-              "name": project.title,
-              "description": project.description,
-              "url": `https://ai.jiangyanqing.com/project/${project.id}`,
-              "image": project.coverUrl || project.imageUrl,
-              "keywords": project.technologies.join(', '),
-              "author": {
-                "@type": "Person",
-                "name": "Yanqing Jiang"
-              }
-            }))
-          }
-        })}
-      </script>
+      {landingSchemas.map((schema, index) => (
+        <script key={`landing-schema-${index}`} type="application/ld+json">
+          {JSON.stringify(schema)}
+        </script>
+      ))}
     </Helmet>
     <div
       ref={pageRef}

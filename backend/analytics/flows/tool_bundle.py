@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 import copy
+from analytics.validators import sanitize_for_json
 
 
 def _extract_stock_widget(results: Optional[List[Dict[str, Any]]]) -> Optional[Dict[str, Any]]:
@@ -187,5 +188,5 @@ def collect_tool_bundle(
         bundle["stock_widget"] = copy.deepcopy(stock_widget)
     if web_context:
         bundle["web_context"] = copy.deepcopy(web_context)
-    return bundle
+    return sanitize_for_json(bundle)
 

@@ -28,6 +28,8 @@ class SlotsModel(BaseModel):
     metrics: Optional[List[str]] = None
     granularity: Optional[str] = None
     tickers: Optional[List[str]] = None
+    comparison: Optional[Literal['single', 'all']] = None
+    statistic: Optional[str] = None
 
 
 class ClarificationSuggestionModel(BaseModel):
@@ -96,6 +98,7 @@ class SqlCriteriaModel(BaseModel):
     granularity: Literal['annual', 'quarterly'] = 'annual'
     tickers: List[str] = Field(default_factory=list)
     metrics: List[str] = Field(default_factory=list)
+    statistic: Optional[str] = None
 
 
 class LLMClarificationSuggestionModel(BaseModel):
@@ -215,6 +218,12 @@ def intent_to_sql_criteria(intent: IntentModel, configs: Dict[str, Any]) -> SqlC
     else:
         metrics = []
 
+    statistic = slots.get('statistic')
+    if isinstance(statistic, str):
+        statistic = statistic.strip() or None
+    else:
+        statistic = None
+
     return SqlCriteriaModel(
         intent_key=intent.intent_key or '',
         company=company,
@@ -223,4 +232,5 @@ def intent_to_sql_criteria(intent: IntentModel, configs: Dict[str, Any]) -> SqlC
         granularity=granularity,
         tickers=tickers,
         metrics=metrics,
+        statistic=statistic,
     )

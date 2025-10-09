@@ -125,3 +125,50 @@ describe('useAnalyticsMemoryStream result deduping', () => {
     expect(screen.getByTestId('revision-mode').textContent).toBe('analysis');
   });
 });
+
+describe('useAnalyticsMemoryStream specialist readiness', () => {
+  it('keeps completion status after ready events even when later progress arrives', async () => {
+    vi.useFakeTimers();
+    const chartSpec = { chart_type: 'line', datasets: [] };
+    (globalThis as any).__TEST_EVENTS__ = [
+      { event: 'status', step: 'sql_execution', message: 'Running SQL' },
+      { event: 'sql_ready', data: { sql: 'SELECT 1', row_count: 10 } },
+      { event: 'chart_ready', data: { chart_spec: chartSpec, chart_summary: { chart_type: 'line' } } },
+      {
+        event: 'stock_ready',
+        data: { stock_widget: { symbols: ['NVDA'], chartType: 'candlestick', ready: true } },
+      },
+      {
+        event: 'web_ready',
+        data: {
+          web_context: {
+            summary: 'NVDA growth beats peers',
+            snippets: [{ title: 'Headline', snippet: 'NVDA up' }],
+          },
+        },
+      },
+      { event: 'analysis_ready', data: { analysis: 'NVDA beats peers' } },
+      { event: 'progress', step: 'web_research_agent', message: 'Formatting excerpts' },
+      { event: 'progress', step: 'sql_execution', message: 'Finalizing' },
+    ];
+
+    await act(async () => {
+      render(<HookHarness query="nvda peers" flow="multi-agent" />);
+    });
+
+    await act(async () => {
+      vi.runAllTimers();
+      await Promise.resolve();
+    });
+    vi.useRealTimers();
+
+    const stepItems = Array.from(screen.getByTestId('step-ids').querySelectorAll('li')).map((li) =>
+      li.textContent || '',
+    );
+
+    expect(stepItems).toContain('sql_execution:completed');
+    expect(stepItems).toContain('chart_generation:completed');
+    expect(stepItems).toContain('web_research_agent:completed');
+    expect(stepItems).toContain('analysis_generation:completed');
+  });
+});

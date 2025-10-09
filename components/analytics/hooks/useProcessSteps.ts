@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ProcessStep } from '../types';
+import { FlowMode, ProcessStep } from '../types';
 import { STEP_NAME, STEP_ORDER } from '../../../constants/analytics';
 
 interface StepConfig {
@@ -31,6 +31,32 @@ const mergeThinking = (current: string[], incoming: string[]) => {
   return next;
 };
 
+const STATUS_PRIORITY: Record<ProcessStep['status'], number> = {
+  pending: 1,
+  in_progress: 2,
+  stopped: 3,
+  completed: 4,
+  error: 5,
+};
+
+const shouldUpgradeStatus = (current: ProcessStep['status'], incoming: ProcessStep['status']) => {
+  if (!incoming) {
+    return false;
+  }
+  if (!current) {
+    return true;
+  }
+  const incomingRank = STATUS_PRIORITY[incoming] ?? 0;
+  const currentRank = STATUS_PRIORITY[current] ?? 0;
+  if (incomingRank > currentRank) {
+    return true;
+  }
+  if (incomingRank < currentRank) {
+    return false;
+  }
+  return incoming !== current;
+};
+
 export const useProcessSteps = (config?: StepConfig) => {
   const [processSteps, setProcessSteps] = useState<ProcessStep[]>([]);
 
@@ -46,6 +72,8 @@ export const useProcessSteps = (config?: StepConfig) => {
     timestamp?: string,
     sequence?: number,
     parallelGroup?: string,
+    scheduleStage?: string,
+    flowMode?: FlowMode,
   ) => {
     setProcessSteps((prev) => {
       const existing = prev.find((s) => s.id === stepId);
@@ -60,15 +88,19 @@ export const useProcessSteps = (config?: StepConfig) => {
             return step;
           }
 
+          const nextStatus = shouldUpgradeStatus(step.status, status) ? status : step.status;
+
           return {
             ...step,
-            status,
+            status: nextStatus,
             thinking: mergeThinking(step.thinking, thinking),
             details: mergedDetails,
             elapsed_ms: elapsed_ms ?? step.elapsed_ms,
             timestamp: timestamp ?? step.timestamp,
             sequence: sequence ?? step.sequence,
             parallelGroup: parallelGroup ?? step.parallelGroup,
+            scheduleStage: scheduleStage ?? step.scheduleStage,
+            flowMode: flowMode ?? step.flowMode,
           };
         });
       }
@@ -85,6 +117,8 @@ export const useProcessSteps = (config?: StepConfig) => {
           timestamp,
           sequence,
           parallelGroup,
+          scheduleStage,
+          flowMode,
         },
       ];
 

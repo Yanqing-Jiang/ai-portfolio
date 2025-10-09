@@ -1,0 +1,218 @@
+﻿[
+  {
+    "id": "next-gen-analytics-memory",
+    "title": "Next Gen Analytics Memory Agent | LangGraph + FastAPI Copilot",
+    "description": "LangGraph-powered analytics memory copilot that orchestrates clarification agents, SQL generation, and streaming ECharts for semiconductor coverage.",
+    "url": "https://ai.jiangyanqing.com/project/next-gen-analytics-memory",
+    "technologies": ["Single Agent workflow", "Multi-agent workflow", "Human-in-loop", "RAG", "web search"],
+    "serviceTags": ["Analytics Automation", "AI Agents", "Decision Intelligence"],
+    "statHighlights": [
+      "Supports direct, single-agent, and supervisor-led workflows in one UI",
+      "Caches SQL, RAG, and visualization context for repeatable market insights"
+    ],
+    "defaultPrompts": [
+      "Analyze NVDA market share trends and compare with previous quarters",
+      "Show me AMD vs INTC margins - how do they compare to our last analysis?",
+      "What clarification features help with ambiguous financial queries?"
+    ],
+    "primaryMetricValue": {"label": "Clarification latency improvement", "value": 60, "unitText": "Percent"}
+  },
+  {
+    "id": "agentic-trade-bot",
+    "title": "Agentic Trading Bot | LangGraph + IBKR Automation",
+    "description": "LangGraph multi-agent trading bot connecting IBKR execution, Unusual Whales flow, and Morningstar insights to size trades and achieve a 200% supervised gain.",
+    "url": "https://ai.jiangyanqing.com/project/agentic-trade-bot",
+    "technologies": ["LangGraph", "IBKR API", "Unusual Whales", "Morningstar", "Agentic Framework"],
+    "serviceTags": ["Agentic Trading", "Automation", "Risk Management"],
+    "statHighlights": [
+      "Delivered a 200% realized gain on SOUN puts before shutdown safeguards triggered",
+      "Combines quant, trend, sizing, and execution agents orchestrated through LangGraph"
+    ],
+    "defaultPrompts": [
+      "How does the Orchestrator coordinate the specialized agents?",
+      "Explain the SOUN trade that yielded a 200% return.",
+      "What risk management challenges led to shutting down the bot?"
+    ],
+    "primaryMetricValue": {"label": "Pilot gain", "value": 200, "unitText": "Percent"}
+  },
+  {
+    "id": "next-gen-analytics-sql",
+    "title": "Next Gen Analytics SQL Copilot | LangGraph Streaming Insights",
+    "description": "Streaming SQL copilot that pairs LangGraph orchestration with Supabase analytics to generate charts, commentary, and comparisons for semiconductor tickers in real time.",
+    "url": "https://ai.jiangyanqing.com/project/next-gen-analytics-sql",
+    "technologies": ["Agentic Workflow", "LangGraph", "State Management", "RAG", "Smart SQL"],
+    "serviceTags": ["Analytics Automation", "SQL Generation", "Visualization"],
+    "statHighlights": [
+      "Auto-compares semiconductor tickers with streaming commentary and ECharts visualizations",
+      "LangGraph state machine coordinates schema, SQL, visualization, and narrative agents"
+    ],
+    "defaultPrompts": [
+      "Show me the revenue trends for NVDA vs AMD over the last 8 quarters",
+      "Compare the profit margins of all semiconductor companies",
+      "What is the cash flow situation for Intel and how does it compare to competitors?"
+    ],
+    "primaryMetricValue": {"label": "Query-to-insight latency", "value": 5, "unitText": "Seconds"}
+  },
+  {
+    "id": "llm-invoice-processor",
+    "title": "LLM Invoice Processor | Multi-Format Automation Copilot",
+    "description": "Production LLM invoice processor that parses PDFs/XLSB files, reconciles parent-child items, and auto-generates discrepancy reports saving 1,000+ hours every year.",
+    "url": "https://ai.jiangyanqing.com/project/llm-invoice-processor",
+    "technologies": ["JavaScript", "TailwindCSS", "Function Calling", "Zero-Shot Prompting", "JSON Structured Output"],
+    "serviceTags": ["Data Automation", "Document AI", "Finance Operations"],
+    "statHighlights": [
+      "Automates 1,000+ analyst hours annually across P&G Walgreens teams",
+      "Reduces late payment rate by roughly 90% through automated discrepancy reports"
+    ],
+    "defaultPrompts": [
+      "How does the invoice matching logic handle multi-source inconsistencies?",
+      "Explain the impact of this tool on manual validation efforts.",
+      "What technologies power the PDF extraction and data matching?"
+    ],
+    "primaryMetricValue": {"label": "Manual hours removed", "value": 1000, "unitText": "Hours per year"}
+  },
+  {
+    "id": "ask-my-resume",
+    "title": "Ask My Resume | RAG Career Copilot",
+    "description": "Retrieval-augmented resume agent that embeds roles and projects, answers hiring questions, and advocates with evidence-backed responses.",
+    "url": "https://ai.jiangyanqing.com/project/ask-my-resume",
+    "technologies": ["RAG", "Vector Search", "FAISS", "Agent"],
+    "serviceTags": ["RAG", "Talent AI", "Personal Branding"],
+    "statHighlights": [
+      "Vector store ingestion of resume sections and case studies via LangChain",
+      "Delivers recruiter-ready answers with embedded citations and follow-ups"
+    ],
+    "defaultPrompts": [
+      "How have you used advanced analytics to drive measurable business outcomes in your recent roles?",
+      "Can you share an example where you led a cross-functional team to solve a complex business problem using data",
+      "What’s your approach to developing scalable data or AI solutions that align with business goals?"
+    ],
+    "primaryMetricValue": {"label": "Resume response coverage", "value": 95, "unitText": "Percent"}
+  },
+  {
+    "id": "goggins-gpt",
+    "title": "Goggins GPT | Motivational Companion with Gemini + ElevenLabs",
+    "description": "Voice-enabled motivational companion that streams Gemini responses through ElevenLabs while toggling Goggins Mode prompts for no-excuse coaching.",
+    "url": "https://ai.jiangyanqing.com/project/goggins-gpt",
+    "technologies": ["Gemini API", "Prompt Engineering", "ElevenLabs", "State Management"],
+    "serviceTags": ["Conversational AI", "Voice Agent", "Motivation"],
+    "statHighlights": [
+      "Realtime Gemini-to-ElevenLabs speech with animated UI and message history",
+      "Toggleable Goggins Mode swaps prompts to yield drill-sergeant coaching"
+    ],
+    "defaultPrompts": [
+      "Tell me about what inspired you to create this project.",
+      "What is 'Goggins Mode' and how is it implemented?",
+      "Who is David Goggins?"
+    ],
+    "primaryMetricValue": {"label": "Concurrent listeners supported", "value": 200, "unitText": "Sessions"}
+  },
+  {
+    "id": "research-gpt",
+    "title": "Research GPT | Early LangChain Web Research Agent",
+    "description": "LangChain research agent (pre-Perplexity) combining Serper search, Browserless scraping, and summarization loops for timely briefs.",
+    "url": "https://ai.jiangyanqing.com/project/research-gpt",
+    "technologies": ["Serper API", "Browserless Scraping", "Lang Chain Agent", "Memory Chain", "OpenAI API"],
+    "serviceTags": ["Research Automation", "Web Browsing", "LangChain"],
+    "statHighlights": [
+      "Automates Serper search + Browserless scraping with summarization loops",
+      "Captures memoized context for iterative research conversations"
+    ],
+    "defaultPrompts": [
+      "What is the best reasoning large language model right now?",
+      "Make some suggestions for vibe coding.",
+      "What are some of the latest trends in LLMs?"
+    ],
+    "primaryMetricValue": {"label": "Sources summarized per query", "value": 8, "unitText": "Articles"}
+  },
+  {
+    "id": "global-inventory-dashboard",
+    "title": "Global Inventory Control Tower | Power BI & Dataflow Automation",
+    "description": "Power BI control tower consolidating 20+ regional inventory feeds, action cards, and Dataflow automation so leaders mitigate stock risks within minutes.",
+    "url": "https://ai.jiangyanqing.com/project/global-inventory-dashboard",
+    "technologies": ["Power BI", "Supply Chain Analytics", "Data Automation"],
+    "serviceTags": ["Supply Chain Analytics", "BI Automation", "Data Governance"],
+    "statHighlights": [
+      "Consolidates 20+ regional reports into a single Power BI control tower",
+      "Action cards capture risk mitigations and reduce executive response time to minutes"
+    ],
+    "defaultPrompts": [
+      "How does the dashboard keep global inventory teams aligned?",
+      "What reports sit behind the action cards?",
+      "Describe the business impact of consolidating 20+ sub-reports."
+    ],
+    "primaryMetricValue": {"label": "Regional reports unified", "value": 20, "unitText": "Reports"}
+  },
+  {
+    "id": "time-series-forecasting-pre",
+    "title": "R Time Series Forecasting | Power BI + Embedded R Models",
+    "description": "Automated R forecasting pipeline embedded in Power BI to benchmark seven models, refresh results, and publish demand outlooks directly to merchandisers.",
+    "url": "https://ai.jiangyanqing.com/project/time-series-forecasting-pre",
+    "technologies": ["Power BI", "R", "Forecasting"],
+    "serviceTags": ["Forecasting", "Analytics Automation", "Power BI"],
+    "statHighlights": [
+      "Benchmarks seven time-series models and deploys best performer per SKU",
+      "Automated Power BI refresh pushes forecasts directly into decision workflows"
+    ],
+    "defaultPrompts": [
+      "Which forecasting models are compared in this solution?",
+      "How are the R scripts operationalized inside Power BI?",
+      "What decisions do merchandisers make with the forecasts?"
+    ],
+    "primaryMetricValue": {"label": "Models benchmarked", "value": 7, "unitText": "Models"}
+  },
+  {
+    "id": "supplier-review-system",
+    "title": "Supplier Review System | Power BI + Power Platform Workflow",
+    "description": "Supplier review cockpit combining Power BI, Automate, and Apps for live scorecards, qualitative notes, and automated PDF/email distribution.",
+    "url": "https://ai.jiangyanqing.com/project/supplier-review-system",
+    "technologies": ["Power BI", "Supplier Management", "Automation"],
+    "serviceTags": ["Procurement Automation", "Power Platform", "Collaboration"],
+    "statHighlights": [
+      "Generates PDF scorecards and automated emails directly from Power BI workspace",
+      "Converges qualitative notes, KPIs, and supplier actions in one dashboard"
+    ],
+    "defaultPrompts": [
+      "Walk me through a supplier review inside the tool.",
+      "How does the system collect qualitative feedback?",
+      "What automation keeps data current for stakeholders?"
+    ],
+    "primaryMetricValue": {"label": "Scorecards automated", "value": 150, "unitText": "Per quarter"}
+  },
+  {
+    "id": "capex-project-tracker",
+    "title": "Capex Project Tracker | Power Apps Intake & Approval Automation",
+    "description": "Power Apps tracker that merges headers and line items, introduces shopping-cart style approvals, and feeds Power BI for capital planning alignment.",
+    "url": "https://ai.jiangyanqing.com/project/capex-project-tracker",
+    "technologies": ["Power Apps", "Project Management", "Process Automation"],
+    "serviceTags": ["Power Platform", "Capital Planning", "Workflow Automation"],
+    "statHighlights": [
+      "Shopping-cart approvals reduce finance turnaround time for capital requests",
+      "Power BI pipeline shares intake, approvals, and spend with finance/procurement"
+    ],
+    "defaultPrompts": [
+      "How does the shopping-cart workflow improve Capex approvals?",
+      "Which teams rely on the tracker day to day?",
+      "Describe the data captured for each Capex line item."
+    ],
+    "primaryMetricValue": {"label": "Approval workflow steps automated", "value": 12, "unitText": "Steps"}
+  },
+  {
+    "id": "engagement-intake-pre",
+    "title": "Engagement Intake Portal | Power Platform Business Rules Automation",
+    "description": "Power Platform portal enforcing thousands of procurement business rules, orchestrating approvals, and syncing status to Power BI dataflows for 100-200 daily users.",
+    "url": "https://ai.jiangyanqing.com/project/engagement-intake-pre",
+    "technologies": ["Power Platform", "Workflow Automation", "Procurement"],
+    "serviceTags": ["Procurement Automation", "Workflow Platform", "Business Rules"],
+    "statHighlights": [
+      "Serves two procurement departments with 100-200 daily active submitters",
+      "Thousands of business rules drive automatic approvals and downstream notifications"
+    ],
+    "defaultPrompts": [
+      "How many teams input work through Engagement Intake?",
+      "What kinds of rules govern an intake submission?",
+      "Explain how approvals and downstream reporting are automated."
+    ],
+    "primaryMetricValue": {"label": "Daily procurement users", "value": 200, "unitText": "Users"}
+  }
+]

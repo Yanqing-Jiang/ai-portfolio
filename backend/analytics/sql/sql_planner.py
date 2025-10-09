@@ -30,10 +30,17 @@ def _fallback_plan_defaults(slots: Dict[str, Any]) -> Dict[str, Any]:
     if isinstance(timeframe_slot, dict):
         timeframe.update(timeframe_slot)
     timeframe.setdefault("years_back", years_back)
+    statistic = slots.get("statistic")
+    if isinstance(statistic, str):
+        statistic = statistic.strip() or None
+    else:
+        statistic = None
+
     return {
         "metrics": ["Revenue"],
         "derived_metrics": [],
         "comparison": None,
+        "statistic": statistic,
         "granularity": granularity,
         "timeframe": timeframe,
         "group_by": time_grain.group_by,
@@ -46,9 +53,16 @@ def plan_sql_rule_based(intent: IntentModel, configs: Optional[Dict[str, Any]] =
     _ = configs or CONFIGS.__dict__
     slots = _coerce_slots(intent)
     intent_spec = SEMANTIC_CATALOG.get_intent_spec(intent.intent_key)
+    statistic = slots.get("statistic")
+    if isinstance(statistic, str):
+        statistic = statistic.strip() or None
+    else:
+        statistic = None
 
     if not intent_spec:
-        return _fallback_plan_defaults(slots)
+        slots_with_stat = dict(slots)
+        slots_with_stat["statistic"] = statistic
+        return _fallback_plan_defaults(slots_with_stat)
 
     defaults = SEMANTIC_CATALOG.query_defaults()
 
@@ -96,6 +110,7 @@ def plan_sql_rule_based(intent: IntentModel, configs: Optional[Dict[str, Any]] =
         "timeframe": timeframe,
         "granularity": granularity,
         "comparison": intent_spec.comparison,
+        "statistic": statistic,
         "group_by": group_by,
         "filters": filters,
         "limit": limit,

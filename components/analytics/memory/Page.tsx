@@ -2,12 +2,11 @@ import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import {
   AnalysisCard,
-  SqlCard,
   ProcessPanel
 } from '../common';
 import { ChatHistory } from './';
+import { LiveArtifacts } from './LiveArtifacts';
 import { useAnalyticsMemoryStream } from '../hooks';
-import { isValidChartSpec } from '../utils';
 import type { FlowMode } from '../types';
 
 
@@ -75,6 +74,10 @@ const MemoryAnalyticsPage: React.FC = () => {
     sqlQuery,
     dataSample,
     streamingText,
+    webSearch,
+    stockWidget,
+    progressiveAnalysis,
+    progressiveText,
     singleAgentFanout,
     
     // Stream state
@@ -274,8 +277,19 @@ const MemoryAnalyticsPage: React.FC = () => {
         {/* Main Content Area */}
         <div className="flex-1 overflow-auto p-4 sm:p-6 lg:p-8 pb-32 md:pb-6 bg-gray-900">
           <div className="w-full max-w-5xl mx-auto space-y-4 sm:space-y-6 overflow-hidden">
-            {/* Chart renders only inside ChatHistory result bubbles */}
-            {/* Chat History Section - All content is now embedded here */}
+            <LiveArtifacts
+              chartSpec={chartSpec}
+              dataSample={dataSample}
+              sqlQuery={sqlQuery}
+              analysis={analysis}
+              progressiveAnalysis={progressiveAnalysis}
+              progressiveText={progressiveText}
+              webSearch={webSearch}
+              stockWidget={stockWidget}
+              isLoading={isLoading}
+              flowMode={selectedFlow}
+            />
+
             <ChatHistory 
               messages={chatHistory} 
               isLoading={isLoading} 
