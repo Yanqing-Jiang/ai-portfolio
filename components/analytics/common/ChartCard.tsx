@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import EChartsReact from 'echarts-for-react';
 import { ChartCardProps } from '../types';
 import { ChartErrorBoundary } from './ChartErrorBoundary';
@@ -79,6 +79,47 @@ export const ChartCard: React.FC<ChartCardProps> = ({
     }
   };
 
+  const scopeBanner = chartSpec?.meta?.scopeBanner;
+  const statistic = chartSpec?.meta?.chartDesign?.statistic ?? chartSpec?.statistic;
+  const rankingMeta = chartSpec?.meta?.ranking;
+  const isRankingChart = statistic === 'ranking_latest' || chartSpec?.chart_type === 'ranking_bar';
+  const scheduleStage =
+    chartSpec?.meta?.scheduleStage ??
+    chartSpec?.meta?.schedule_stage ??
+    chartSpec?.meta?.chartStage ??
+    chartSpec?.schedule_stage;
+  const parallelGroup =
+    chartSpec?.meta?.parallelGroup ??
+    chartSpec?.meta?.parallel_group ??
+    chartSpec?.meta?.telemetryGroup ??
+    chartSpec?.parallel_group;
+  const flowMode =
+    chartSpec?.meta?.flowMode ??
+    chartSpec?.meta?.mode ??
+    chartSpec?.flow_mode;
+  const rankingSummary = useMemo(() => {
+    if (!isRankingChart) return null;
+    const metricLabel = rankingMeta?.metric?.replace(/_/g, ' ').replace(/\b\w/g, (m: string) => m.toUpperCase());
+    const leader = rankingMeta?.tickers?.[0];
+    if (metricLabel && leader) {
+      return `${metricLabel} leader: ${leader}`;
+    }
+    if (metricLabel) {
+      return `${metricLabel} leaderboard`;
+    }
+    return 'Ranking leaderboard';
+  }, [isRankingChart, rankingMeta]);
+  const scheduleLabel = useMemo(() => {
+    if (!flowMode && !scheduleStage && !parallelGroup) {
+      return null;
+    }
+    const parts: string[] = [];
+    if (flowMode) parts.push(flowMode.replace(/[-_]/g, ' '));
+    if (parallelGroup) parts.push(parallelGroup.replace(/[-_]/g, ' '));
+    if (scheduleStage) parts.push(scheduleStage.replace(/[-_]/g, ' '));
+    return parts.join(' • ');
+  }, [flowMode, scheduleStage, parallelGroup]);
+
   const handleCsvDownload = () => {
     const data = extractDataFromChartSpec(chartSpec);
     downloadCsv(data, 'analytics_data.csv');
@@ -128,7 +169,49 @@ export const ChartCard: React.FC<ChartCardProps> = ({
 
   return (
     <div ref={containerRef} className="bg-gray-800 border border-gray-700 rounded-xl shadow-2xl p-4 sm:p-6 md:p-8">
-      <h2 className="text-lg sm:text-xl md:text-2xl font-semibold text-white mb-4 sm:mb-6">Interactive Visualization</h2>
+      <div className="flex flex-col gap-3 mb-3 sm:mb-4">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+          <h2 className="text-lg sm:text-xl md:text-2xl font-semibold text-white">Interactive Visualization</h2>
+          {rankingSummary && (
+            <span
+              data-testid="chart-ranking-pill"
+              className="inline-flex items-center gap-2 rounded-full bg-emerald-500/20 text-emerald-200 px-3 py-1 text-xs font-medium uppercase tracking-wide"
+            >
+              <span className="h-2 w-2 rounded-full bg-emerald-300" />
+              {rankingSummary}
+            </span>
+          )}
+          {!rankingSummary && scheduleLabel && (
+            <span
+              data-testid="chart-schedule-pill"
+              className="inline-flex items-center gap-2 rounded-full bg-indigo-500/20 text-indigo-200 px-3 py-1 text-xs font-medium uppercase tracking-wide"
+            >
+              <span className="h-2 w-2 rounded-full bg-indigo-300" />
+              {scheduleLabel}
+            </span>
+          )}
+          {rankingSummary && scheduleLabel && (
+            <span
+              data-testid="chart-schedule-pill"
+              className="inline-flex items-center gap-2 rounded-full bg-indigo-500/20 text-indigo-200 px-3 py-1 text-xs font-medium uppercase tracking-wide"
+            >
+              <span className="h-2 w-2 rounded-full bg-indigo-300" />
+              {scheduleLabel}
+            </span>
+          )}
+        </div>
+        {scopeBanner && (
+          <div
+            data-testid="chart-scope-banner"
+            className="rounded-lg border border-emerald-400/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-100"
+          >
+            <span className="font-semibold uppercase tracking-wide text-xs text-emerald-300 mr-2">
+              Scope
+            </span>
+            {scopeBanner}
+          </div>
+        )}
+      </div>
       <div className={`${height} bg-white rounded-lg p-2 sm:p-3`}>
         {/* Controls row */}
         {(enableDropdown || enableCsvDownload) && (

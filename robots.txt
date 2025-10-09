@@ -1,3 +1,32 @@
+# Updated: 2025-10-09
+
+# --- AI answer-engine allowlist ---
+User-agent: GPTBot
+Allow: /
+
+User-agent: ChatGPT-User
+Allow: /
+
+User-agent: Google-Extended
+Allow: /
+
+User-agent: ClaudeBot
+Allow: /
+
+User-agent: PerplexityBot
+Allow: /
+
+User-agent: Amazonbot
+Allow: /
+
+# --- Training / high-volume crawlers to monitor ---
+User-agent: Bytespider
+Disallow: /
+
+User-agent: DataForSeoBot
+Disallow: /
+
+# --- General rules ---
 User-agent: *
 Allow: /
 
@@ -5,11 +34,11 @@ Allow: /
 Disallow: /backend/
 Disallow: /venv/
 Disallow: /node_modules/
-Disallow: /*.json$
 Disallow: /*.config.*$
 
-# Sitemap location
+# Sitemaps
 Sitemap: https://ai.jiangyanqing.com/sitemap.xml
+Sitemap: https://ai.jiangyanqing.com/sitemap-projects.xml
 
 # Crawl-delay to be respectful to server resources
-Crawl-delay: 1 
+Crawl-delay: 1

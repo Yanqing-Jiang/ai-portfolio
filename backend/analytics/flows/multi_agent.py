@@ -62,6 +62,7 @@ from .orchestrator import (
 _HASH_PREFIX = "analytics"
 _MAX_FRAGMENT_COUNT = 5
 _MAX_ANALYSIS_STORED = 1200
+HEDGED_WEB_TOOLS = ("web_retriever_cached", "web_retriever_live")
 
 
 class _MultiAgentHooks(AnalyticsFlowHooks):
@@ -112,6 +113,8 @@ class _MultiAgentHooks(AnalyticsFlowHooks):
             ):
                 yield orchestrated_event
             self._flow._orchestrated = True
+        for artifact_event in self._flow._drain_artifact_events():
+            yield self._flow._annotate(artifact_event)
 
     async def on_flow_end(
         self,
@@ -867,6 +870,152 @@ class MultiAgentFlow:
         self._session_snapshot: Optional[SessionStateSnapshot] = None
         self._shared_context: Dict[str, Any] = {}
         self._orchestrated = False
+        self._hedged_completion: Dict[str, bool] = {}
+        self._pending_artifact_events: List[Dict[str, Any]] = []
+
+    def _hedged_tool_aliases(self) -> List[str]:
+        manifest = self._shared_context.get("tool_manifest") or []
+        aliases: List[str] = []
+        for entry in manifest:
+            if not isinstance(entry, dict):
+                continue
+            name = str(entry.get("name") or "").strip()
+            if not name:
+                continue
+            lowered = name.lower()
+            if lowered in HEDGED_WEB_TOOLS or lowered.startswith("web_retriever"):
+                aliases.append(lowered)
+        if aliases:
+            return sorted(set(aliases))
+        return list(HEDGED_WEB_TOOLS)
+
+    def _hedged_accessories_ready(self) -> bool:
+        results = self._shared_context.get("tool_results") or []
+        if not isinstance(results, list):
+            return False
+        aliases = self._hedged_tool_aliases()
+        if not aliases:
+            self._hedged_completion = {}
+            self._shared_context["hedged_accessories_status"] = {}
+            return True
+        seen: Dict[str, bool] = {alias: False for alias in aliases}
+
+        def mark_ready(alias_key: str) -> None:
+            if alias_key in seen:
+                seen[alias_key] = True
+
+        for entry in results:
+            tool = str(entry.get("tool") or "").strip().lower()
+            status = str(entry.get("status") or "").lower()
+            ready_payload = bool(entry.get("payload")) or status in {"complete", "completed", "success", "ok"}
+            if not ready_payload or status in {"error", "cancelled"}:
+                continue
+            if tool in seen:
+                mark_ready(tool)
+                continue
+            if tool.startswith("web_retriever"):
+                for alias in seen:
+                    if alias.startswith("web_retriever"):
+                        mark_ready(alias)
+
+        web_ctx = self._shared_context.get("web") or {}
+        if isinstance(web_ctx, dict) and web_ctx.get("ready"):
+            for alias in seen:
+                if alias.startswith("web_retriever"):
+                    mark_ready(alias)
+
+        missing = [alias for alias, ready in seen.items() if not ready]
+        self._hedged_completion = seen
+        self._shared_context["hedged_accessories_status"] = seen
+        return not missing
+
+    def _queue_artifact_event(self, event_name: str, payload: Dict[str, Any]) -> None:
+        event = {
+            "event": event_name,
+            "data": sanitize_for_json(payload),
+        }
+        self._pending_artifact_events.append(event)
+
+    def _drain_artifact_events(self) -> List[Dict[str, Any]]:
+        pending = self._pending_artifact_events
+        self._pending_artifact_events = []
+        return pending
+
+    def _sql_preview(self, sql_ctx: Dict[str, Any]) -> Dict[str, Any]:
+        sample = sql_ctx.get("sample_data")
+        if isinstance(sample, list):
+            sample_preview = sample[:20]
+        else:
+            sample_preview = sample
+        return {
+            "sql": sql_ctx.get("sql"),
+            "sql_id": sql_ctx.get("id"),
+            "row_count": sql_ctx.get("row_count"),
+            "columns": sql_ctx.get("columns"),
+            "sample_data": sample_preview,
+        }
+
+    def _chart_preview(self, chart_ctx: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "chart_spec": chart_ctx.get("spec"),
+            "chart_spec_id": chart_ctx.get("spec_id"),
+            "chart_summary": chart_ctx.get("spec_summary"),
+        }
+
+    def _maybe_queue_sql_ready(self) -> None:
+        sql_ctx = self._shared_context.get("sql", {})
+        if sql_ctx.get("_emitted_ready"):
+            return
+        if sql_ctx.get("sql") and sql_ctx.get("row_count") is not None:
+            payload = self._sql_preview(sql_ctx)
+            payload["schedule_stage"] = "sql"
+            self._queue_artifact_event("sql_ready", payload)
+            sql_ctx["_emitted_ready"] = True
+
+    def _maybe_queue_chart_ready(self) -> None:
+        chart_ctx = self._shared_context.get("chart", {})
+        if chart_ctx.get("_emitted_ready"):
+            return
+        if chart_ctx.get("spec"):
+            payload = self._chart_preview(chart_ctx)
+            payload["schedule_stage"] = "chart"
+            self._queue_artifact_event("chart_ready", payload)
+            chart_ctx["_emitted_ready"] = True
+
+    def _maybe_queue_stock_ready(self) -> None:
+        widget = self._shared_context.get("stock_widget")
+        if not widget:
+            return
+        meta = self._shared_context.setdefault("_artifact_meta", {})
+        if meta.get("stock_ready"):
+            return
+        payload = {"stock_widget": widget, "schedule_stage": "hedged_accessories"}
+        self._queue_artifact_event("stock_ready", payload)
+        meta["stock_ready"] = True
+
+    def _maybe_queue_web_ready(self) -> None:
+        web_ctx = self._shared_context.get("web")
+        if not web_ctx:
+            return
+        meta = self._shared_context.setdefault("_artifact_meta", {})
+        if meta.get("web_ready"):
+            return
+        payload = {"web_context": web_ctx, "schedule_stage": "hedged_accessories"}
+        self._queue_artifact_event("web_ready", payload)
+        meta["web_ready"] = True
+
+    def _maybe_queue_analysis_ready(self) -> None:
+        analysis_ctx = self._shared_context.get("analysis", {})
+        if analysis_ctx.get("_emitted_ready"):
+            return
+        if analysis_ctx.get("final"):
+            payload = {
+                "analysis": analysis_ctx.get("final"),
+                "analysis_length": analysis_ctx.get("length"),
+                "schedule_stage": "analysis",
+            }
+            self._queue_artifact_event("analysis_ready", payload)
+            analysis_ctx["_emitted_ready"] = True
 
     def prime_with_snapshot(self, snapshot: Optional[SessionStateSnapshot]) -> None:
         self._planner.prime_with_snapshot(snapshot)
@@ -1134,6 +1283,7 @@ class MultiAgentFlow:
                 web_ctx.update(tool_bundle["web_context"])
             if tool_bundle and self._session_snapshot:
                 self._session_snapshot.record_tool_result("visual_bundle", tool_bundle)
+            self._maybe_queue_analysis_ready()
 
         elif name == "web_search":
             payload = data.get("web_context") or {}
@@ -1188,6 +1338,10 @@ class MultiAgentFlow:
             if bundle_update.get('web_context'):
                 web_ctx = self._shared_context.setdefault('web', {})
                 web_ctx.update(bundle_update['web_context'])
+        self._maybe_queue_sql_ready()
+        self._maybe_queue_chart_ready()
+        self._maybe_queue_stock_ready()
+        self._maybe_queue_web_ready()
 
     async def _run_agent_orchestration(
         self,
@@ -1259,6 +1413,27 @@ class MultiAgentFlow:
             "bundle": bundle,
             "query": query,
         }
+        hedged_ready = self._hedged_accessories_ready()
+        if hedged_ready and not self._shared_context.get("hedged_accessories_emitted"):
+            completion_event = {
+                "event": "hedged_accessories_complete",
+                "data": {
+                    "tools": list(self._hedged_completion.keys()),
+                    "ts": datetime.utcnow().isoformat(),
+                },
+            }
+            yield self._annotate(completion_event)
+            self._shared_context["hedged_accessories_emitted"] = True
+        if not hedged_ready:
+            warning = {
+                "event": "cohesive_result_error",
+                "data": {
+                    "message": "hedged_accessories incomplete; delaying cohesive_result",
+                    "missing_tools": [tool for tool, ready in self._hedged_completion.items() if not ready],
+                },
+            }
+            yield self._annotate(warning)
+            return
         if any(value is not None for key, value in final_payload.items() if key not in {"query", "bundle"}):
             try:
                 validated_payload = self._cohesive_validator.ensure(final_payload)

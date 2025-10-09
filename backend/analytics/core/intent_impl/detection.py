@@ -46,6 +46,37 @@ REQUIRES_COMPANY_SLOTS = {
 
 HEURISTIC_CONFIDENCE_THRESHOLD = 0.70  # Minimum confidence to short-circuit LLM intent lookup
 
+RANKING_PRONOUNS = {"who", "which", "what"}
+RANKING_KEYWORDS = {
+    "lead",
+    "leads",
+    "leading",
+    "leader",
+    "leaders",
+    "top",
+    "highest",
+    "best",
+    "rank",
+    "ranking",
+    "ranks",
+    "dominates",
+    "dominant",
+    "biggest",
+}
+
+
+def _is_ranking_query(query: str) -> bool:
+    if not query:
+        return False
+    lowered = query.lower()
+    pronoun_hit = any(token in lowered for token in RANKING_PRONOUNS)
+    keyword_hit = any(token in lowered for token in RANKING_KEYWORDS)
+    if pronoun_hit and keyword_hit:
+        return True
+    # Fallback: look for explicit "top N" phrases or "leaderboard"
+    if keyword_hit and ("top " in lowered or "leaderboard" in lowered):
+        return True
+    return False
 
 
 def _build_company_clarification(companies: List[str]) -> ClarificationSuggestionModel:
@@ -118,6 +149,13 @@ def heuristic_intent(query: str, configs: Dict[str, Any]) -> IntentModel:
     clarifications: List[ClarificationSuggestionModel] = []
     if intent_key in REQUIRES_COMPANY_SLOTS and not detected_company:
         clarifications.append(_build_company_clarification(companies))
+
+    if _is_ranking_query(query):
+        slots["comparison"] = "all"
+        slots["statistic"] = "ranking_latest"
+        reasoning.append("Detected ranking-style request; defaulting to peer comparison")
+        if not slots.get("metrics"):
+            slots["metrics"] = []
 
     confidence = 0.75 if intent_key else 0.2
     return IntentModel(
@@ -386,6 +424,7 @@ async def detect_intent_fast_async(
         "- If a company-specific intent lacks a company, add ONE clarification with slot 'company'.\n"
         "- Keep clarification questions short and decisive.\n"
         "- Do not ask for optional context (e.g. timeframe) unless it is explicitly required and missing.\n"
+        "- When the user asks who/which/what along with ranking cues (top, lead/leader, highest, best, rank, dominant), set slots_detected.comparison=\"all\", slots_detected.statistic=\"ranking_latest\", and include the default ticker list unless the user specifies a narrower one.\n"
         "Return JSON only."
     )
 

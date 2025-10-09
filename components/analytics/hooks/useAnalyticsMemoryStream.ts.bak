@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { ChatMessage, ClarifyRequest, ClarifyAnswer, ToolCallTelemetry, AgentTurnTelemetry, AgentReasoningTelemetry, ProcessStep, ToolFanoutManifest, ToolFanoutResult, StockWidgetConfig, WebSearchResult, SingleAgentFanout, SingleAgentFanoutBranch, FanoutBranchStatus, FlowMode } from '../types';
+import { ChatMessage, ClarifyRequest, ClarifyAnswer, ToolCallTelemetry, AgentTurnTelemetry, AgentReasoningTelemetry, ProcessStep, ToolFanoutManifest, ToolFanoutResult, StockWidgetConfig, WebSearchResult, SingleAgentFanout, SingleAgentFanoutBranch, FanoutBranchStatus } from '../types';
 import { apiService } from '../../../services/apiService';
 import { useAnalyticsStream } from './useAnalyticsStream';
 
@@ -32,7 +32,6 @@ export const useAnalyticsMemoryStream = (
   const [revisionMode, setRevisionMode] = useState<'none' | 'chart' | 'analysis' | 'mixed'>('none');
   const [streamingText, setStreamingText] = useState('');
   const [webSearch, setWebSearch] = useState<WebSearchResult | null>(null);
-  const [stockWidget, setStockWidget] = useState<StockWidgetConfig | null>(null);
   const [singleAgentFanout, setSingleAgentFanout] = useState<SingleAgentFanout | null>(null);
   const resultSentRef = useRef<boolean>(false);
   const summarySentRef = useRef<boolean>(false);
@@ -149,8 +148,6 @@ export const useAnalyticsMemoryStream = (
     chartSpec?: any;
     sqlQuery?: string;
     dataSample?: any[];
-    stockWidget?: StockWidgetConfig | null;
-    webSearch?: WebSearchResult | null;
   }>({});
 
   const toolTelemetryRef = useRef<ToolCallTelemetry[]>([]);
@@ -427,7 +424,6 @@ export const useAnalyticsMemoryStream = (
     toolFanoutManifest: ToolFanoutManifest[];
     toolFanoutResults: ToolFanoutResult[];
     concurrencyLimit: number;
-    webSearch: WebSearchResult | null;
   }>({
     chartSpec: null,
     analysis: '',
@@ -439,7 +435,7 @@ export const useAnalyticsMemoryStream = (
     toolFanoutManifest: [],
     toolFanoutResults: [],
     concurrencyLimit: 0,
-    webSearch: null,
+    webSearch: null
   });
 
   const streamHook = useAnalyticsStream();
@@ -480,14 +476,6 @@ export const useAnalyticsMemoryStream = (
       if (pending.dataSample !== undefined) {
         setDataSample(pending.dataSample);
         workflowDataRef.current.dataSample = pending.dataSample;
-      }
-      if (pending.stockWidget !== undefined) {
-        setStockWidget(pending.stockWidget ?? null);
-        workflowDataRef.current.stockWidget = pending.stockWidget ?? null;
-      }
-      if (pending.webSearch !== undefined) {
-        setWebSearch(pending.webSearch);
-        workflowDataRef.current.webSearch = pending.webSearch;
       }
 
       // Clear pending updates
@@ -604,7 +592,7 @@ export const useAnalyticsMemoryStream = (
     if (entry.outputArtifacts && entry.outputArtifacts.length) {
       metadataSegments.push(`outputs ${entry.outputArtifacts.slice(0, 3).join(', ')}`);
     }
-    const metadataText = metadataSegments.length ? ` [${metadataSegments.join('  ')}]` : '';
+    const metadataText = metadataSegments.length ? ` [${metadataSegments.join(' • ')}]` : '';
     const message = `Tool ${payload.tool} ${statusLabel}${durationText}${metadataText}`;
 
     stepsHook.updateStepStatus(
@@ -684,7 +672,7 @@ export const useAnalyticsMemoryStream = (
     const baseMessage = summaryText
       ? `${config.label}: ${summaryText}`
       : `${config.label}: ${payload.status}`;
-    const laneMessage = metadataParts.length ? `${baseMessage} [${metadataParts.join('  ')}]` : baseMessage;
+    const laneMessage = metadataParts.length ? `${baseMessage} [${metadataParts.join(' • ')}]` : baseMessage;
 
     stepsHook.updateStepStatus(
       config.stepId,
@@ -858,7 +846,6 @@ export const useAnalyticsMemoryStream = (
     setProgressiveText('');
     setProgressiveAnalysis('');
     setWebSearch(null);
-    setStockWidget(null);
     setRevisionMode('none');
     workflowDataRef.current.webSearch = null;
     setPendingClarification(null);
@@ -1140,75 +1127,6 @@ export const useAnalyticsMemoryStream = (
           } catch {}
           break;
           
-        case 'sql_ready': {
-          const sqlPreview = eventData.sql ? [`SQL ready (${eventData.sql.length} chars)`] : ['SQL ready'];
-          scheduleProgressiveUpdate({
-            sqlQuery: eventData.sql ?? workflowDataRef.current.sqlQuery,
-            dataSample: eventData.sample_data ?? workflowDataRef.current.dataSample,
-          });
-          if (Array.isArray(eventData.columns)) {
-            workflowDataRef.current.dataSample = eventData.sample_data ?? workflowDataRef.current.dataSample;
-          }
-          updateStep('sql_execution', 'completed', [
-            eventData.row_count != null ? `Rows: ${eventData.row_count}` : sqlPreview[0],
-          ], eventData, stepInfo.elapsed_ms, stepInfo.ts);
-          break;
-        }
-          
-        case 'chart_ready': {
-          if (eventData.chart_spec) {
-            scheduleProgressiveUpdate({ chartSpec: eventData.chart_spec });
-          }
-          const chartSummary = eventData.chart_summary?.chart_type
-            ? [`Chart ${eventData.chart_summary.chart_type}`]
-            : ['Chart ready'];
-          updateStep(
-            'chart_generation',
-            'completed',
-            chartSummary,
-            eventData,
-            stepInfo.elapsed_ms,
-            stepInfo.ts,
-          );
-          break;
-        }
-
-        case 'stock_ready': {
-          if (eventData.stock_widget) {
-            scheduleProgressiveUpdate({ stockWidget: eventData.stock_widget as StockWidgetConfig });
-            const widgetPayload = eventData.stock_widget as StockWidgetConfig;
-            setStockWidget(widgetPayload);
-            workflowDataRef.current.stockWidget = widgetPayload;
-          }
-          updateStep('tool_execution', 'completed', ['Stock widget ready'], eventData, stepInfo.elapsed_ms, stepInfo.ts);
-          break;
-        }
-
-        case 'web_ready': {
-          const webContext = normalizeWebContext(eventData.web_context || eventData);
-          if (webContext) {
-            scheduleProgressiveUpdate({ webSearch: webContext });
-            workflowDataRef.current.webSearch = webContext;
-          }
-          updateStep('web_research_agent', 'completed', ['Web context ready'], eventData, stepInfo.elapsed_ms, stepInfo.ts);
-          break;
-        }
-
-        case 'analysis_ready': {
-          if (typeof eventData.analysis === 'string') {
-            scheduleProgressiveUpdate({ analysis: eventData.analysis });
-          }
-          updateStep('analysis_generation', 'completed', ['Analysis ready'], eventData, stepInfo.elapsed_ms, stepInfo.ts);
-          break;
-        }
-
-        case 'hedged_accessories_complete': {
-          const missing = Array.isArray(eventData.missing_tools) ? eventData.missing_tools : [];
-          const thinking = missing.length ? [`Hedged accessories pending: ${missing.join(', ')}`] : ['Hedged accessories complete'];
-          updateStep('tool_fanout', missing.length ? 'in_progress' : 'completed', thinking, eventData, stepInfo.elapsed_ms, stepInfo.ts);
-          break;
-        }
-
         case 'echarts_complete': {
           const normalizedChartSpec =
             resolveChartSpecOption(eventData) ??
@@ -1630,9 +1548,6 @@ export const useAnalyticsMemoryStream = (
             }
             if ('stock_widget' in bundle) {
               const widgetPayload = bundle.stock_widget as StockWidgetConfig | null | undefined;
-              if (widgetPayload !== undefined) {
-                setStockWidget(widgetPayload ?? null);
-              }
               workflowDataRef.current.stockWidget = widgetPayload ? widgetPayload : null;
             }
             if (bundle.criteria) {
@@ -1702,11 +1617,9 @@ export const useAnalyticsMemoryStream = (
 
             if (!isThinkingEvent) {
               if (eventData.stock_widget !== undefined) {
-                const widgetPayload = eventData.stock_widget
+                workflowDataRef.current.stockWidget = eventData.stock_widget
                   ? (eventData.stock_widget as StockWidgetConfig)
                   : null;
-                setStockWidget(widgetPayload);
-                workflowDataRef.current.stockWidget = widgetPayload;
               }
 
               if (eventData.web_context) {
@@ -1889,7 +1802,6 @@ export const useAnalyticsMemoryStream = (
             const payloadForWidget = (eventData.payload ?? {}) as Record<string, unknown>;
             if (payloadForWidget && 'stock_widget' in payloadForWidget) {
               const widgetCandidate = (payloadForWidget as { stock_widget?: StockWidgetConfig | null }).stock_widget;
-              setStockWidget(widgetCandidate ?? null);
               workflowDataRef.current.stockWidget = widgetCandidate ?? null;
             }
 
@@ -2259,8 +2171,6 @@ export const useAnalyticsMemoryStream = (
     setStreamingText('');
     setProgressiveAnalysis('');
     setProgressiveText('');
-    setWebSearch(null);
-    setStockWidget(null);
     setSingleAgentFanout(null);
     setRevisionMode('none');
 
@@ -2306,7 +2216,6 @@ export const useAnalyticsMemoryStream = (
     criteria,
     streamingText,
     webSearch,
-    stockWidget,
     singleAgentFanout,
     revisionMode,
 

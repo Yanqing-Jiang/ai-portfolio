@@ -274,32 +274,179 @@ def _build_candlestick_spec(
     return spec, None
 
 
+def _format_scope_banner(metric_label: str, tickers: List[str]) -> str:
+    metric_label = metric_label.strip() if metric_label else "metric"
+    if len(tickers) <= 6:
+        tickers_fragment = ", ".join(tickers)
+    else:
+        tickers_fragment = ", ".join(tickers[:5]) + f", +{len(tickers) - 5} more"
+    return f"Ranking latest {metric_label} across {tickers_fragment}"
+
+
+def _build_ranking_bar_spec(
+    data: List[Dict[str, Any]],
+    chart_plan: Dict[str, Any],
+    charts_cfg: Dict[str, Any],
+    intent_key: Optional[str],
+    comparison: Optional[str],
+    statistic: Optional[str],
+) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+    series_list = chart_plan.get('series') or []
+    if not series_list:
+        fallback = dict(chart_plan)
+        fallback['chart_type'] = 'bar'
+        fallback.setdefault('x_axis', {'field': 'ticker', 'type': 'category'})
+        return None, fallback
+
+    primary = series_list[0]
+    metric_col = chart_plan.get('ranking_metric') or primary.get('data_column')
+    if not metric_col:
+        fallback = dict(chart_plan)
+        fallback['chart_type'] = 'bar'
+        fallback.setdefault('x_axis', {'field': 'ticker', 'type': 'category'})
+        return None, fallback
+
+    value_type = primary.get('value_type', 'number')
+    entries: List[Tuple[str, Optional[float]]] = []
+    for row in data:
+        ticker = row.get('ticker')
+        if not ticker:
+            continue
+        raw_val = row.get(metric_col)
+        try:
+            val = float(raw_val)
+        except (TypeError, ValueError):
+            val = None
+        entries.append((str(ticker), val))
+
+    filtered = [(ticker, val) for ticker, val in entries if val is not None]
+    if not filtered:
+        fallback = dict(chart_plan)
+        fallback['chart_type'] = 'bar'
+        fallback.setdefault('x_axis', {'field': 'ticker', 'type': 'category'})
+        return None, fallback
+
+    filtered.sort(key=lambda item: item[1], reverse=True)
+    tickers_sorted = [ticker for ticker, _ in filtered]
+    values_sorted = [val for _, val in filtered]
+
+    palette = charts_cfg.get('themes', {}).get('light', {}).get('chart_colors', {}).get('primary_palette')
+    if not isinstance(palette, list) or not palette:
+        palette = ['#5470C6', '#91CC75', '#FAC858', '#EE6666', '#73C0DE']
+    colors = [palette[i % len(palette)] for i in range(len(values_sorted))]
+
+    label_formatter = '{c}'
+    if value_type == 'percent':
+        label_formatter = '{c}%'
+
+    series = [{
+        'name': primary.get('name') or metric_col.replace('_', ' ').title(),
+        'type': 'bar',
+        'data': [
+            {'value': val, 'itemStyle': {'color': colors[idx]}}
+            for idx, val in enumerate(values_sorted)
+        ],
+        'label': {
+            'show': True,
+            'position': 'right',
+            'formatter': label_formatter,
+        },
+        'emphasis': {'focus': 'series'},
+    }]
+
+    metric_label = primary.get('name') or metric_col.replace('_', ' ').title()
+    scope_banner = _format_scope_banner(metric_label, tickers_sorted)
+
+    meta = {
+        'chartDesign': {
+            'chart_type': 'ranking_bar',
+            'intent': intent_key,
+            'comparison': comparison or ('all' if statistic == 'ranking_latest' else None),
+            'statistic': statistic,
+            'metric': metric_col,
+        },
+        'scopeBanner': scope_banner,
+        'ranking': {
+            'ordering': 'descending',
+            'metric': metric_col,
+            'statistic': statistic,
+            'tickers': tickers_sorted,
+        },
+        'seriesValueType': {series[0]['name']: value_type},
+        'rawData': data,
+    }
+
+    spec = {
+        'title': {'left': 'center', 'top': '5%', 'text': chart_plan.get('title') or 'Ranking'},
+        'tooltip': {'trigger': 'axis', 'axisPointer': {'type': 'shadow'}},
+        'grid': {'left': '5%', 'right': '8%', 'bottom': '5%', 'top': '18%', 'containLabel': True},
+        'xAxis': {
+            'type': 'value',
+            'axisLabel': {'formatter': '{value}%' if value_type == 'percent' else '{value}'},
+        },
+        'yAxis': {
+            'type': 'category',
+            'data': tickers_sorted,
+            'axisLabel': {'interval': 0},
+            'inverse': False,
+        },
+        'series': series,
+        'legend': {'show': False},
+        'meta': meta,
+    }
+    return spec, None
+
+
 # Wrapper to convert shared function result to ChartPlanModel
 def plan_chart_rule_based(
     data: List[Dict[str, Any]],
     query: str,
     intent_key: Optional[str] = None,
+    *,
+    statistic: Optional[str] = None,
 ) -> ChartPlanModel:
     """Wrapper around the shared chart planning logic that returns ChartPlanModel."""
-    result = _plan_chart_rule_based_dict(data, query, intent_key)
+    result = _plan_chart_rule_based_dict(data, query, intent_key, statistic=statistic)
 
     # Convert dict result to ChartPlanModel
     return ChartPlanModel(
         chart_type=result.get('chart_type', 'line'),
         x_axis=result.get('x_axis', {'field': 'calendar_year', 'type': 'category'}),
         title=result.get('title', 'Financial Analytics'),
-        series=result.get('series', [])
+        series=result.get('series', []),
+        statistic=statistic or result.get('statistic'),
+        ranking_metric=result.get('ranking_metric'),
     )
 
 # Alias for backward compatibility
 
 
-def build_chart_spec(data: List[Dict[str, Any]], chart_plan: Dict[str, Any], charts_cfg: Dict[str, Any], 
-                     intent_key: Optional[str] = None, comparison: Optional[str] = None) -> Dict[str, Any]:
+def build_chart_spec(
+    data: List[Dict[str, Any]],
+    chart_plan: Dict[str, Any],
+    charts_cfg: Dict[str, Any],
+    intent_key: Optional[str] = None,
+    comparison: Optional[str] = None,
+    statistic: Optional[str] = None,
+) -> Dict[str, Any]:
     """Enhanced chart spec builder with dual axes and primary series detection."""
     chart_type = chart_plan.get('chart_type')
     if chart_type == 'candlestick':
         spec_result, fallback_plan = _build_candlestick_spec(data, chart_plan, charts_cfg, intent_key, comparison)
+        if spec_result is not None:
+            return spec_result
+        if fallback_plan is not None:
+            chart_plan = fallback_plan
+            chart_type = chart_plan.get('chart_type')
+    if chart_type == 'ranking_bar':
+        spec_result, fallback_plan = _build_ranking_bar_spec(
+            data,
+            chart_plan,
+            charts_cfg,
+            intent_key,
+            comparison,
+            statistic,
+        )
         if spec_result is not None:
             return spec_result
         if fallback_plan is not None:

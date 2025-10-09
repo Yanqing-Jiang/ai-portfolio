@@ -74,6 +74,21 @@ chart_types:
         show: true
         position: "top"
 
+  ranking_bar:
+    type: "bar"
+    name: "Ranking Leaderboard"
+    description: "Horizontal leaderboard that ranks tickers on the X-axis values"
+    
+    default_options:
+      orient: "horizontal"
+      barWidth: "55%"
+      label:
+        show: true
+        position: "right"
+        formatter: "{c}"
+      itemStyle:
+        borderRadius: [0, 6, 6, 0]
+
 # Layout configurations
 layouts:
   default:

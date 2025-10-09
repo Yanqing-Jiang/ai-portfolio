@@ -14,6 +14,15 @@
   seoDescription?: string;
   seoKeywords?: string[];
   ogImage?: string;
+  datePublished?: string;
+  dateModified?: string;
+  serviceTags?: string[];
+  statHighlights?: string[];
+  primaryMetricValue?: {
+    label?: string;
+    value: number;
+    unitText?: string;
+  };
 }
 
 export interface ProjectYear {

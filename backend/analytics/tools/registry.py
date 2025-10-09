@@ -490,16 +490,17 @@ class SupervisorTools:
             }
 
     # -------- Charting --------
-    def plan_chart(self, data, query: str, intent_key: Optional[str]):
-        return plan_chart_rule_based(data, query, intent_key)
+    def plan_chart(self, data, query: str, intent_key: Optional[str], statistic: Optional[str] = None):
+        return plan_chart_rule_based(data, query, intent_key, statistic=statistic)
 
-    def build_chart(self, data, chart_plan, comparison: Optional[str], intent_key: Optional[str]):
+    def build_chart(self, data, chart_plan, comparison: Optional[str], intent_key: Optional[str], statistic: Optional[str] = None):
         return build_chart_spec(
             data,
             chart_plan.dict() if hasattr(chart_plan, 'dict') else chart_plan,
             CONFIGS.charts,
             intent_key=intent_key,
             comparison=comparison,
+            statistic=statistic,
         )
 
     # -------- Analysis --------

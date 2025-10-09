@@ -6,6 +6,27 @@ Contains shared chart planning logic used by both analytics_memory and analytics
 
 from typing import Dict, Any, List, Optional
 
+_RANKING_KEYWORDS = {
+    'ranking_latest',
+    'ranking',
+    'leaderboard',
+}
+
+
+def _looks_like_ranking_stat(statistic: Optional[str], query: str) -> bool:
+    if statistic and statistic.lower() in _RANKING_KEYWORDS:
+        return True
+    lowered = (query or "").lower()
+    if not lowered:
+        return False
+    if any(token in lowered for token in ('who', 'which', 'what')) and any(
+        cue in lowered for cue in ('top', 'lead', 'leader', 'leading', 'highest', 'best', 'rank', 'ranking')
+    ):
+        return True
+    if 'leaderboard' in lowered:
+        return True
+    return False
+
 
 # Intent-based chart titles
 INTENT_TITLES = {
@@ -161,7 +182,13 @@ def detect_time_axis(columns: List[str]) -> Optional[str]:
     return None
 
 
-def plan_chart_rule_based(data: List[Dict[str, Any]], query: str, intent_key: str = None) -> Dict[str, Any]:
+def plan_chart_rule_based(
+    data: List[Dict[str, Any]],
+    query: str,
+    intent_key: str = None,
+    *,
+    statistic: Optional[str] = None,
+) -> Dict[str, Any]:
     """
     Plan chart configuration based on data structure and intent.
 
@@ -228,6 +255,38 @@ def plan_chart_rule_based(data: List[Dict[str, Any]], query: str, intent_key: st
         has_multiple_tickers = len(unique_tickers) > 1
 
     series = []
+
+    ranking_requested = _looks_like_ranking_stat(statistic, query)
+
+    if has_multiple_tickers and ranking_requested and not has_time:
+        primary_metric = None
+        if 'value' in cols:
+            primary_metric = 'value'
+        else:
+            for c in cols:
+                if c not in {'ticker', 'metric', 'date'}:
+                    v = data[0].get(c)
+                    if isinstance(v, (int, float)):
+                        primary_metric = c
+                        break
+        if primary_metric:
+            value_type = 'percent' if any(
+                token in primary_metric.lower() for token in ['margin', 'share', 'ratio', 'growth', 'percent', 'pct']
+            ) else 'number'
+            title = generate_descriptive_title(intent_key, [primary_metric])
+            return {
+                'chart_type': 'ranking_bar',
+                'title': title,
+                'series': [{
+                    'name': primary_metric.replace('_', ' ').title(),
+                    'data_column': primary_metric,
+                    'value_type': value_type,
+                    'sort': 'descending',
+                }],
+                'x_axis': {'field': 'ticker', 'type': 'category'},
+                'statistic': statistic or 'ranking_latest',
+                'ranking_metric': primary_metric,
+            }
 
     if has_multiple_tickers and intent_key != 'revenue_growth_vs_avg':
         # Multi-ticker data: create one series per ticker

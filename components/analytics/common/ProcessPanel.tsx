@@ -122,6 +122,13 @@ const formatTimestamp = (value?: string) => {
   return parsed.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 };
 
+const formatScheduleStage = (value?: string) => {
+  if (!value) {
+     return '';
+  }
+  return value.replace(/[_-]/g, ' ').replace(/\b\w/g, (match) => match.toUpperCase());
+};
+
 const isBrowser = typeof window !== 'undefined';
 
 const exportStepsToCsv = (steps: ProcessStep[]) => {
@@ -520,7 +527,19 @@ export const ProcessPanel: React.FC<ProcessPanelProps> = ({
                                 <span className="rounded-full bg-gray-800/50 px-2 py-0.5 text-[10px] text-gray-300">#{step.sequence}</span>
                               )}
                               {step.parallelGroup && (
-                                <span className="rounded-full bg-gray-800/50 px-2 py-0.5 text-[10px] uppercase tracking-wide text-gray-200">Lane {step.parallelGroup}</span>
+                                <span className="rounded-full bg-gray-800/50 px-2 py-0.5 text-[10px] uppercase tracking-wide text-gray-200">
+                                  Lane {step.parallelGroup}
+                                </span>
+                              )}
+                              {step.scheduleStage && (
+                                <span className="rounded-full bg-indigo-800/50 px-2 py-0.5 text-[10px] uppercase tracking-wide text-indigo-200">
+                                  Stage {formatScheduleStage(step.scheduleStage)}
+                                </span>
+                              )}
+                              {step.flowMode && (
+                                <span className="rounded-full bg-purple-800/50 px-2 py-0.5 text-[10px] uppercase tracking-wide text-purple-200">
+                                  {formatScheduleStage(step.flowMode)}
+                                </span>
                               )}
                             </div>
                             {step.thinking?.length ? (
@@ -536,6 +555,9 @@ export const ProcessPanel: React.FC<ProcessPanelProps> = ({
                           {durationLabel && <span>{durationLabel}</span>}
                           {typeof step.sequence === 'number' && <span>{`Seq ${step.sequence}`}</span>}
                           {step.parallelGroup && <span className="uppercase text-gray-300">{`Lane ${step.parallelGroup}`}</span>}
+                          {step.scheduleStage && (
+                            <span className="uppercase text-indigo-300">{formatScheduleStage(step.scheduleStage)}</span>
+                          )}
                           <span>Toggle for full insight</span>
                         </div>
                       </div>

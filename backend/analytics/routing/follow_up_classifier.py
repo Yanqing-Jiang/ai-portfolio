@@ -36,12 +36,18 @@ class FollowUpClassifier:
         "update chart",
     )
 
+    def _stage_seen(self, snapshot: Optional[SessionStateSnapshot], stage: str) -> bool:
+        if not snapshot:
+            return False
+        history = getattr(snapshot, "schedule_history", []) or []
+        return any((entry.get("stage") == stage) for entry in history)
+
     def classify(self, query: str, snapshot: Optional[SessionStateSnapshot]) -> FollowUpRoute:
         normalized_query = (query or "").strip().lower()
         if not normalized_query:
             return FollowUpRoute.FULL_PIPELINE
-        has_sql = bool(snapshot and snapshot.last_sql)
-        has_chart = bool(snapshot and snapshot.last_chart_spec)
+        has_sql = bool(snapshot and snapshot.last_sql) or self._stage_seen(snapshot, "sql")
+        has_chart = bool(snapshot and snapshot.last_chart_spec) or self._stage_seen(snapshot, "chart")
         if has_sql and _contains_any(normalized_query, self.stock_keywords):
             return FollowUpRoute.STOCK_ONLY
         if has_chart and has_sql and _contains_any(normalized_query, self.chart_keywords):

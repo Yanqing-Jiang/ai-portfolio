@@ -190,6 +190,8 @@ export interface ProcessStep {
   timestamp?: string;
   sequence?: number;
   parallelGroup?: string;
+  scheduleStage?: string;
+  flowMode?: FlowMode;
 }
 
 export interface ChatMessage {

@@ -51,7 +51,29 @@ Memory System: Session-based conversation persistence with context awareness
           'What clarification features help with ambiguous financial queries?',
         ],
         coverUrl: 'https://yanqinghot.blob.core.windows.net/public-access/Agent%20demo.gif',
-        imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/Agent%20demo.gif'
+        imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/Agent%20demo.gif',
+        seoTitle: 'Next Gen Analytics Memory Agent | LangGraph + FastAPI Copilot',
+        seoDescription:
+          'LangGraph-powered analytics memory copilot that orchestrates clarification agents, SQL generation, and streaming ECharts for semiconductor coverage.',
+        seoKeywords: [
+          'LangGraph analytics',
+          'memory agent',
+          'analytics copilot',
+          'FastAPI Supabase',
+          'multi-agent workflow',
+        ],
+        datePublished: '2025-06-01',
+        dateModified: '2025-09-15',
+        serviceTags: ['Analytics Automation', 'AI Agents', 'Decision Intelligence'],
+        statHighlights: [
+          'Supports direct, single-agent, and supervisor-led workflows in one UI',
+          'Caches SQL, RAG, and visualization context for repeatable market insights',
+        ],
+        primaryMetricValue: {
+          label: 'Clarification latency improvement',
+          value: 60,
+          unitText: 'Percent',
+        },
       },
       {
         id: 'agentic-trade-bot',
@@ -66,7 +88,29 @@ Memory System: Session-based conversation persistence with context awareness
           'What risk management challenges led to shutting down the bot?',
         ],
         imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/Agentic%20Trading%20Pic.png',
-        coverUrl: 'https://yanqinghot.blob.core.windows.net/public-access/Agentic%20Trading%20Pic.png'
+        coverUrl: 'https://yanqinghot.blob.core.windows.net/public-access/Agentic%20Trading%20Pic.png',
+        seoTitle: 'Agentic Trading Bot | LangGraph + IBKR Automation',
+        seoDescription:
+          'LangGraph multi-agent trading bot connecting IBKR execution, Unusual Whales flow, and Morningstar insights to size trades and achieve a 200% supervised gain.',
+        seoKeywords: [
+          'agentic trading bot',
+          'LangGraph automation',
+          'IBKR API',
+          'options flow intelligence',
+          'AI trading copilot',
+        ],
+        datePublished: '2025-05-10',
+        dateModified: '2025-09-12',
+        serviceTags: ['Agentic Trading', 'Automation', 'Risk Management'],
+        statHighlights: [
+          'Delivered a 200% realized gain on SOUN puts before shutdown safeguards triggered',
+          'Combines quant, trend, sizing, and execution agents orchestrated through LangGraph',
+        ],
+        primaryMetricValue: {
+          label: 'Pilot gain',
+          value: 200,
+          unitText: 'Percent',
+        },
       }
     ],
   },
@@ -124,7 +168,29 @@ Time Series: Quarterly financial data
           'What is the cash flow situation for Intel and how does it compare to competitors?',
         ],
         coverUrl: 'https://yanqinghot.blob.core.windows.net/public-access/next-gen-sql.png',
-        imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/next-gen-sql.png'
+        imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/next-gen-sql.png',
+        seoTitle: 'Next Gen Analytics SQL Copilot | LangGraph Streaming Insights',
+        seoDescription:
+          'Streaming SQL copilot that pairs LangGraph orchestration with Supabase analytics to generate charts, commentary, and comparisons for semiconductor tickers in real time.',
+        seoKeywords: [
+          'analytics sql copilot',
+          'LangGraph workflow',
+          'Supabase financial data',
+          'RAG SQL agent',
+          'streaming analytics app',
+        ],
+        datePublished: '2024-11-15',
+        dateModified: '2025-08-20',
+        serviceTags: ['Analytics Automation', 'SQL Generation', 'Visualization'],
+        statHighlights: [
+          'Auto-compares semiconductor tickers with streaming commentary and ECharts visualizations',
+          'LangGraph state machine coordinates schema, SQL, visualization, and narrative agents',
+        ],
+        primaryMetricValue: {
+          label: 'Query-to-insight latency',
+          value: 5,
+          unitText: 'Seconds',
+        },
       },
       {
         id: 'llm-invoice-processor',
@@ -165,7 +231,29 @@ This production-grade web application automates the invoice validation and match
         ],
         coverUrl: 'https://yanqinghot.blob.core.windows.net/public-access/Deal%20Matching%20Cover',
         gifUrl: 'https://yanqinghot.blob.core.windows.net/public-access/Deal%20Matching%20GIF',
-        imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/Deal%20Matching%20GIF'
+        imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/Deal%20Matching%20GIF',
+        seoTitle: 'LLM Invoice Processor | Multi-Format Automation Copilot',
+        seoDescription:
+          'Production LLM invoice processor that parses PDFs/XLSB files, reconciles parent-child items, and auto-generates discrepancy reports saving 1,000+ hours every year.',
+        seoKeywords: [
+          'invoice automation',
+          'LLM function calling',
+          'Azure blob storage',
+          'LangChain matching',
+          'finance workflow automation',
+        ],
+        datePublished: '2024-08-12',
+        dateModified: '2025-07-20',
+        serviceTags: ['Data Automation', 'Document AI', 'Finance Operations'],
+        statHighlights: [
+          'Automates 1,000+ analyst hours annually across P&G Walgreens teams',
+          'Reduces late payment rate by roughly 90% through automated discrepancy reports',
+        ],
+        primaryMetricValue: {
+          label: 'Manual hours removed',
+          value: 1000,
+          unitText: 'Hours per year',
+        },
       }
     ],
   },
@@ -185,7 +273,29 @@ This production-grade web application automates the invoice validation and match
             "What’s your approach to developing scalable data or AI solutions that align with business goals?",
         ],
         imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/Yanqing%20Exp%20Retrival.png',
-        coverUrl: 'https://yanqinghot.blob.core.windows.net/public-access/Yanqing%20Exp%20Retrival.png'
+        coverUrl: 'https://yanqinghot.blob.core.windows.net/public-access/Yanqing%20Exp%20Retrival.png',
+        seoTitle: 'Ask My Resume | RAG Career Copilot',
+        seoDescription:
+          'Retrieval-augmented resume agent that embeds roles and projects, answers hiring questions, and advocates with evidence-backed responses.',
+        seoKeywords: [
+          'career rag agent',
+          'resume chatbot',
+          'LangChain vector search',
+          'FAISS retrieval',
+          'AI interview copilot',
+        ],
+        datePublished: '2023-09-01',
+        dateModified: '2025-07-15',
+        serviceTags: ['RAG', 'Talent AI', 'Personal Branding'],
+        statHighlights: [
+          'Vector store ingestion of resume sections and case studies via LangChain',
+          'Delivers recruiter-ready answers with embedded citations and follow-ups',
+        ],
+        primaryMetricValue: {
+          label: 'Resume response coverage',
+          value: 95,
+          unitText: 'Percent',
+        },
       },
       {
         id: 'goggins-gpt',
@@ -199,7 +309,29 @@ This production-grade web application automates the invoice validation and match
             "Who is David Goggins?",
         ],
         imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/David%20Goggins.png',
-        coverUrl: 'https://yanqinghot.blob.core.windows.net/public-access/Goggins%20GPT%20Diagram'
+        coverUrl: 'https://yanqinghot.blob.core.windows.net/public-access/Goggins%20GPT%20Diagram',
+        seoTitle: 'Goggins GPT | Motivational Companion with Gemini + ElevenLabs',
+        seoDescription:
+          'Voice-enabled motivational companion that streams Gemini responses through ElevenLabs while toggling “Goggins Mode” prompts for no-excuse coaching.',
+        seoKeywords: [
+          'motivational ai companion',
+          'Gemini flash chatbot',
+          'ElevenLabs streaming',
+          'Goggins mode prompt',
+          'react fastapi voice agent',
+        ],
+        datePublished: '2023-06-20',
+        dateModified: '2025-07-05',
+        serviceTags: ['Conversational AI', 'Voice Agent', 'Motivation'],
+        statHighlights: [
+          'Realtime Gemini-to-ElevenLabs speech with animated UI and message history',
+          'Toggleable Goggins Mode swaps prompts to yield drill-sergeant coaching',
+        ],
+        primaryMetricValue: {
+          label: 'Concurrent listeners supported',
+          value: 200,
+          unitText: 'Sessions',
+        },
       },
     ],
   },
@@ -219,7 +351,29 @@ This production-grade web application automates the invoice validation and match
                 "What are some of the latest trends in LLMs?"
             ],
             coverUrl: 'https://yanqinghot.blob.core.windows.net/public-access/research%20GPT%20Diagram.png',
-            imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/research%20GPT%20Diagram.png'
+            imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/research%20GPT%20Diagram.png',
+            seoTitle: 'Research GPT | Early LangChain Web Research Agent',
+            seoDescription:
+              'LangChain research agent (pre-Perplexity) combining Serper search, Browserless scraping, and summarization loops for timely briefs.',
+            seoKeywords: [
+              'LangChain research agent',
+              'Serper API search',
+              'Browserless scraping',
+              'LLM memoization',
+              'research copilot',
+            ],
+            datePublished: '2022-10-05',
+            dateModified: '2025-07-10',
+            serviceTags: ['Research Automation', 'Web Browsing', 'LangChain'],
+            statHighlights: [
+              'Automates Serper search + Browserless scraping with summarization loops',
+              'Captures memoized context for iterative research conversations',
+            ],
+            primaryMetricValue: {
+              label: 'Sources summarized per query',
+              value: 8,
+              unitText: 'Articles',
+            },
         }
     ]
   },
@@ -259,7 +413,29 @@ This production-grade web application automates the invoice validation and match
               <p>PBIX dataset -> Power BI Dataflow (Cloud) -> unified SQL queries across multiple databases. The Dataflow approach bypasses the 2 GB PBIX limit and lets other teams reuse the curated schema.</p>
             </div>
           </div>
-        </div>`
+        </div>`,
+        seoTitle: 'Global Inventory Control Tower | Power BI & Dataflow Automation',
+        seoDescription:
+          'Power BI control tower consolidating 20+ regional inventory feeds, action cards, and Dataflow automation so leaders mitigate stock risks within minutes.',
+        seoKeywords: [
+          'inventory dashboard',
+          'power bi control tower',
+          'supply chain analytics',
+          'dataflow automation',
+          'action card workflow',
+        ],
+        datePublished: '2021-10-01',
+        dateModified: '2025-07-01',
+        serviceTags: ['Supply Chain Analytics', 'BI Automation', 'Data Governance'],
+        statHighlights: [
+          'Consolidates 20+ regional reports into a single Power BI control tower',
+          'Action cards capture risk mitigations and reduce executive response time to minutes',
+        ],
+        primaryMetricValue: {
+          label: 'Regional reports unified',
+          value: 20,
+          unitText: 'Reports',
+        },
       },
       {
         id: 'time-series-forecasting-pre',
@@ -290,7 +466,29 @@ This production-grade web application automates the invoice validation and match
           <div class='legacy-gallery'>
             <img src='https://yanqinghot.blob.core.windows.net/public-access/R-Time-Series/PBI%20advance%20forecasting.png' alt='Power BI advanced forecasting report' loading='lazy' />
           </div>
-        </div>`
+        </div>`,
+        seoTitle: 'R Time Series Forecasting | Power BI + Embedded R Models',
+        seoDescription:
+          'Automated R forecasting pipeline embedded in Power BI to benchmark seven models, refresh results, and publish demand outlooks directly to merchandisers.',
+        seoKeywords: [
+          'time series forecasting',
+          'Power BI R scripts',
+          'Auto ARIMA',
+          'Prophet forecasting',
+          'demand planning automation',
+        ],
+        datePublished: '2021-05-01',
+        dateModified: '2025-06-20',
+        serviceTags: ['Forecasting', 'Analytics Automation', 'Power BI'],
+        statHighlights: [
+          'Benchmarks seven time-series models and deploys best performer per SKU',
+          'Automated Power BI refresh pushes forecasts directly into decision workflows',
+        ],
+        primaryMetricValue: {
+          label: 'Models benchmarked',
+          value: 7,
+          unitText: 'Models',
+        },
       },
       {
         id: 'supplier-review-system',
@@ -316,7 +514,29 @@ This production-grade web application automates the invoice validation and match
             <li>Supplier reviews, notes, and PDF scorecards generated from one screen.</li>
             <li>Periodic business review and email automation functions built in.</li>
           </ul>
-          <img class="legacy-hero" src="https://yanqinghot.blob.core.windows.net/public-access/supplier-review-system/Email-PDF-Blurred-pbi.gif" alt="Supplier review automation workflow" loading="lazy" />        </div>`
+          <img class="legacy-hero" src="https://yanqinghot.blob.core.windows.net/public-access/supplier-review-system/Email-PDF-Blurred-pbi.gif" alt="Supplier review automation workflow" loading="lazy" />        </div>`,
+        seoTitle: 'Supplier Review System | Power BI + Power Platform Workflow',
+        seoDescription:
+          'Supplier review cockpit combining Power BI, Automate, and Apps for live scorecards, qualitative notes, and automated PDF/email distribution.',
+        seoKeywords: [
+          'supplier review automation',
+          'power platform workflow',
+          'Power BI scorecards',
+          'Power Automate email',
+          'procurement analytics',
+        ],
+        datePublished: '2021-04-10',
+        dateModified: '2025-06-20',
+        serviceTags: ['Procurement Automation', 'Power Platform', 'Collaboration'],
+        statHighlights: [
+          'Generates PDF scorecards and automated emails directly from Power BI workspace',
+          'Converges qualitative notes, KPIs, and supplier actions in one dashboard',
+        ],
+        primaryMetricValue: {
+          label: 'Scorecards automated',
+          value: 150,
+          unitText: 'Per quarter',
+        },
       },
       {
         id: 'capex-project-tracker',
@@ -343,7 +563,29 @@ This production-grade web application automates the invoice validation and match
           <img class="legacy-hero" src="https://yanqinghot.blob.core.windows.net/public-access/capex-tracker/Capex-Project.gif" alt="Capex request intake workflow" loading="lazy" />
           <img class="legacy-hero" src="https://yanqinghot.blob.core.windows.net/public-access/capex-tracker/BC-Approval-Flow2.png" alt="Business case approval flow" loading="lazy" />
           <img class="legacy-hero" src="https://yanqinghot.blob.core.windows.net/public-access/capex-tracker/Power%20Automate.png" alt="Power Automate automation overview" loading="lazy" />
-        </div>`
+        </div>`,
+        seoTitle: 'Capex Project Tracker | Power Apps Intake & Approval Automation',
+        seoDescription:
+          'Power Apps tracker that merges headers and line items, introduces shopping-cart style approvals, and feeds Power BI for capital planning alignment.',
+        seoKeywords: [
+          'capex intake automation',
+          'Power Apps workflow',
+          'Power Automate approvals',
+          'capital project tracker',
+          'finance process automation',
+        ],
+        datePublished: '2021-02-15',
+        dateModified: '2025-06-20',
+        serviceTags: ['Power Platform', 'Capital Planning', 'Workflow Automation'],
+        statHighlights: [
+          'Shopping-cart approvals reduce finance turnaround time for capital requests',
+          'Power BI pipeline shares intake, approvals, and spend with finance/procurement',
+        ],
+        primaryMetricValue: {
+          label: 'Approval workflow steps automated',
+          value: 12,
+          unitText: 'Steps',
+        },
       },
       {
         id: 'engagement-intake-pre',
@@ -370,7 +612,29 @@ This production-grade web application automates the invoice validation and match
           <p>The original portfolio showcases process screenshots covering intake states, approvals, and reporting.</p>
           <img class="legacy-hero" src="https://yanqinghot.blob.core.windows.net/public-access/engagement-tracker/Business%20Case%20Approval%20Flow%20Chart.png" alt="Business case approval flow" loading="lazy" />
           <img class="legacy-hero" src="https://yanqinghot.blob.core.windows.net/public-access/engagement-tracker/after-reject.png" alt="Post-rejection automation workflow" loading="lazy" />
-        </div>`
+        </div>`,
+        seoTitle: 'Engagement Intake Portal | Power Platform Business Rules Automation',
+        seoDescription:
+          'Power Platform portal enforcing thousands of procurement business rules, orchestrating approvals, and syncing status to Power BI dataflows for 100–200 daily users.',
+        seoKeywords: [
+          'procurement intake automation',
+          'Power Platform portal',
+          'business rule engine',
+          'Power Automate approvals',
+          'Power BI dataflows',
+        ],
+        datePublished: '2021-03-10',
+        dateModified: '2025-06-20',
+        serviceTags: ['Procurement Automation', 'Workflow Platform', 'Business Rules'],
+        statHighlights: [
+          'Serves two procurement departments with 100-200 daily active submitters',
+          'Thousands of business rules drive automatic approvals and downstream notifications',
+        ],
+        primaryMetricValue: {
+          label: 'Daily procurement users',
+          value: 200,
+          unitText: 'Users',
+        },
       },
     ],
   },
