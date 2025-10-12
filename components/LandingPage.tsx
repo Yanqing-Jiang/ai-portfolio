@@ -167,28 +167,6 @@ const getTechBadgeClass = (tech: string) => {
   return TECH_CATEGORY_CLASSES.default;
 };
 
-const IMPACT_METRICS = [
-  {
-    label: 'Hours Automated',
-    value: '4K+',
-    description: 'Annual contracted hours removed across automation programs.',
-    accent: 'sky',
-  },
-  {
-    label: 'Revenue Impact',
-    value: '$150M+',
-    secondaryLabel: 'Per Project',
-    description: 'Single project incremental business value delivered.',
-    accent: 'emerald',
-  },
-  {
-    label: 'Efficiency Uplift',
-    value: '90%',
-    description: 'Best-in-class insight generation and automation achieved in a pilot project.',
-    accent: 'purple',
-  },
-] as const;
-
 interface LandingPageProps {
   projectData: ProjectYear[];
   onSelectProject: (project: Project) => void;
@@ -380,52 +358,23 @@ const LandingPage: React.FC<LandingPageProps> = ({ projectData, onSelectProject 
         </section>
         {/* Animation Showcase removed per request */}
 
-        {/* Impact Metrics */}
-        <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 my-12 md:my-16">
-          <div className="grid gap-6 sm:grid-cols-2 sm:gap-6 lg:grid-cols-3 lg:gap-8">
-            {IMPACT_METRICS.map((metric) => {
-              const hoverClass =
-                metric.accent === 'sky'
-                  ? 'hover:border-sky-500/50'
-                  : metric.accent === 'emerald'
-                    ? 'hover:border-emerald-500/50'
-                    : 'hover:border-purple-500/50';
-              return (
-                <div
-                  key={metric.label}
-                  className={`flex flex-col items-center justify-center rounded-xl border border-gray-700/50 bg-gray-900/60 p-8 lg:p-10 text-center transition-colors duration-200 ease-out min-h-[220px] sm:min-h-[230px] md:min-h-[240px] ${hoverClass}`}
-                >
-                  <div className="text-white font-black tracking-tight leading-none text-5xl sm:text-6xl lg:text-7xl">
-                    {metric.value}
-                  </div>
-                  <div className="mt-3 text-lg sm:text-xl lg:text-2xl font-semibold text-gray-100">
-                    {metric.label}
-                  </div>
-                  {'secondaryLabel' in metric && metric.secondaryLabel && (
-                    <div className="text-lg sm:text-xl lg:text-2xl font-semibold text-gray-100">
-                      {metric.secondaryLabel}
-                    </div>
-                  )}
-                  <p className="mt-4 text-sm sm:text-base text-gray-400 leading-relaxed max-w-xs">
-                    {metric.description}
-                  </p>
-                </div>
-              );
-            })}
-          </div>
-        </section>
-
         {/* --- Projects List Section - responsive layout --- */}
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-12 md:py-20">
-          <h2 className="text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-bold text-left mb-8 sm:mb-12 text-balance text-sky-100">
-            AI Project Preview
-          </h2>
+          <div className="flex items-center gap-4 mb-8 sm:mb-12">
+            <div className="h-1 w-12 bg-sky-400 rounded"></div>
+            <h2
+              className="text-2xl sm:text-3xl md:text-4xl lg:text-6xl font-black text-left text-balance text-sky-100"
+              style={{ textShadow: '0 0 40px rgba(56, 189, 248, 0.3)' }}
+            >
+              AI Project Preview
+            </h2>
+          </div>
           <div className="space-y-12 sm:space-y-16">
           {projectData.filter(group => !group.hiddenOnLanding).map(({ year, subtitle, projects, label }) => (
             <div key={year}>
               <div className="flex flex-col sm:flex-row sm:items-baseline mb-6 sm:mb-8">
-                <h3 className="text-lg sm:text-xl md:text-2xl lg:text-3xl font-bold text-white">{label ?? year}</h3>
-                {subtitle && <p className="mt-1 sm:mt-0 sm:ml-3 text-xs sm:text-sm md:text-base text-gray-500">{subtitle}</p>}
+                <h3 className="text-lg sm:text-xl md:text-2xl lg:text-3xl font-extrabold text-sky-100">{label ?? year}</h3>
+                {subtitle && <p className="mt-1 sm:mt-0 sm:ml-3 text-sm sm:text-base md:text-lg text-gray-400">{subtitle}</p>}
               </div>
               <div className="grid grid-cols-1 gap-8 sm:gap-12">
                 {projects.map((project, projectIndex) => {

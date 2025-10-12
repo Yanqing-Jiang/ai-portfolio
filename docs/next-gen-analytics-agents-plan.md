@@ -20,7 +20,7 @@ Rebrand the `next-gen-analytics-memory` surfaces to "Next Gen Analytics (Agents)
    - Typography adjustments:  
      - Hero title → `fontSize: clamp(44px, 4.5vw, 56px)`, `leading-[1.1]`, keep `font-extrabold tracking-[-0.01em]`.  
      - Subtitle credential → bold `text-sky-200` set inline (no pill) using `clamp(17px, 2vw, 22px)`.  
-   - Body/heading typography clean-up: ensure `AI Project Preview` heading uses solid `text-sky-100` while maintaining responsive sizes.  
+   - Hero heading accent: add a sky-blue divider bar, upgrade to `font-black`, bump to `lg:text-6xl`, and layer `textShadow: '0 0 40px rgba(56, 189, 248, 0.3)'` for depth.  
    - Update body/project description copy to `text-gray-300`, `leading-[1.7]`, and cap width via `max-w-prose`; revisit truncation threshold to 180-200 chars or remove.  
    - Ensure contact icons breathe by enforcing the specified gap rhythm.
 
@@ -34,15 +34,7 @@ Rebrand the `next-gen-analytics-memory` surfaces to "Next Gen Analytics (Agents)
    - Update base text colors: default body copy → `text-gray-300` on `bg-slate-950` (ratio ~11.9:1), subtitle retains `text-sky-200`.  
    - Remove remaining non-essential gradients so animated morphing text keeps the spotlight.
 
-5. **Impact Metrics Layout**  
-   - Insert a metrics row between the hero and `AI Project Preview` heading within the same `max-w-7xl` container (`my-12 md:my-16`).  
-   - Layout requirements:  
-     - Mobile: stacked cards with 24px gaps; Tablet: two columns wrapping; Desktop (≥1024px): three equal columns with 32px gaps.  
-     - Cards: min-height 220-240px, padding 32px (mobile) / 40px (desktop), `rounded-xl`, centered content, no click action.  
-   - Interaction spec: default border `border-gray-700/50`, hover transitions (200ms ease) intensify border color per card (`border-sky-500/50`, `border-emerald-500/50`, `border-purple-500/50`).  
-   - Card copy: "4K+ Hours Automated", "$150M+ / Per Project Revenue Impact", and "90% Efficiency Uplift" with supporting descriptions.
-
-6. **Regression Checks**  
+5. **Regression Checks**  
    - Run `npm run lint` (or `npm run test` if lint unavailable) to ensure TypeScript/React changes compile.  
    - Manually spot-check that the rebranded project still renders in the project gallery and the analytics page loads without runtime errors.
 
@@ -53,7 +45,6 @@ Rebrand the `next-gen-analytics-memory` surfaces to "Next Gen Analytics (Agents)
 ## Current Status (as of 2025-10-12)
 - ✅ Step 1 (Update Agent Workflow Metadata) — helper copy and `projectData.description` updated in `components/analytics/memory/Page.tsx`.
 - ✅ Step 2 (Resync Portfolio Data Sources) — title/description/SEO strings refreshed for `next-gen-analytics-memory` entry in `constants.ts` and mirrored in `public/ai-projects.json`.
-- ✅ Step 3 (Rebuild Landing Hero Layout) — hero grid, typography, and spotlight simplified per spec with credential text inline.
+- ✅ Step 3 (Rebuild Landing Hero Layout) — hero grid, typography, divider accent, and spotlight simplified per spec with credential text inline.
 - ✅ Step 4 (Color System & Badge Semantics) — semantic badge helper with WCAG-friendly palettes deployed in `components/LandingPage.tsx`.
-- ✅ Step 5 (Impact Metrics Layout) — three-card metrics row restored with hover accents and updated copy.
-- ✅ Step 6 (Regression Checks) — `npm run lint` unavailable; ran `npm run test` (vitest) successfully to validate the React build.
+- ✅ Step 5 (Regression Checks) — `npm run lint` unavailable; ran `npm run test` (vitest) successfully to validate the React build.

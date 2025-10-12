@@ -4,7 +4,7 @@
     "title": "Next Gen Analytics Agents | LangGraph + FastAPI Copilot",
     "description": "LangGraph-powered analytics agents copilot orchestrating direct, single-agent, and supervisor workflows with RAG-backed SQL and streaming telemetry.",
     "url": "https://ai.jiangyanqing.com/project/next-gen-analytics-memory",
-    "technologies": ["LangGraph", "Agent Orchestration", "RAG", "FastAPI", "Supabase"],
+    "technologies": ["Single Agent Workflow", "Multi-Agent Workflow", "Human-in-the-Loop", "RAG", "Long-Term Memory"],
     "serviceTags": ["Analytics Automation", "AI Agents", "Decision Intelligence"],
     "statHighlights": [
       "Supports direct, single-agent, and supervisor-led workflows in one UI",
