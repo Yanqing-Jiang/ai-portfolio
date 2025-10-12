@@ -9,6 +9,7 @@ export const PROJECT_DATA: ProjectYear[] = [
         id: 'next-gen-analytics-memory',
         title: 'Next Gen Analytics (Agents)',
         description: `Three Agentic Workflows:\nDirect (fixed path): no flexibility on tools, run through all tools all at once\nSingle-Agent (multi-tool use): ability to pick tools, revise single/multiple analytic element\nMulti-Agent (supervisor + specialists): workload delegation & orchestration\nHuman-in-the-loop: Compact widget for clarification on peers/metrics/range\nExplainable thinking process panel: plan graph + per-step trace.\nSQL database financials: AMD, AVGO, INTC, MU, NVDA, QCOM, TXN.\nMemory optimization: RAG optimized, Cached queries, vectorized prompts, stateful nodes`,
+        cardDescription: '60% faster clarifications with direct, single-agent, and supervisor workflows in one memory UI.',
         technologies: ['Single Agent Workflow', 'Multi-Agent Workflow', 'Human-in-the-Loop', 'RAG', 'Long-Term Memory'],
         systemInstruction: `You are the AI assistant for **Next Gen Analytics (Agents)**. You have full knowledge of the project described below. Use this embedded reference to answer questions with detail and accuracy. Quote or paraphrase the content to explain features, tech stack, workflow and technical implementation.
 
@@ -80,6 +81,7 @@ Memory System: Session-based conversation persistence with context awareness
         title: 'Agentic Trading Bot',
         // Medium link first line so it appears on top of detail page
         description: `I built an ambitious AI trading bot using LangGraph agents. In one trade, it achieved a jaw-dropping profit of 200%. But just as quickly, I had to pull the plug.\n\nFeel free to ask how I built it, why it worked so well, and the hard lessons that forced me to shut it down.\n\nhttps://medium.com/@yanqing_j/i-built-an-agentic-trading-bot-that-made-200-in-days-heres-why-i-shut-it-down-f9acae222ee5`,
+        cardDescription: '200% supervised gain on SOUN puts before safety rails forced a shutdown.',
         technologies: ['LangGraph', 'IBKR API', 'Unusual Whales', 'Morningstar', 'Agentic Framework'],
         systemInstruction: `You are the AI assistant for **Agentic Trade Bot**. You have full knowledge of the project described below. Use this embedded reference to answer questions with detail and accuracy. Quote or paraphrase the content to explain features, tech stack, workflow and lessons learned.\n\n+--------------------\nEMBEDDED PROJECT DOC\n🔧 Tech Stack\nCore: Python, LangChain / LangGraph\nBroker: Interactive Brokers (IBKR) API for order routing\nData Feeds: TradingView chart snapshots, Unusual Whales option flow, Morningstar news\nAgents:\n• Orchestrator – central coordinator\n• Quant Agent – parses chart images, computes technical indicators, issues signals\n• Trend Agent – gauges macro momentum (SPY/QQQ)\n• Trade Sizing Agent – allocates capital & sets stops\n• Function-Calling Agent – converts signals to executable orders\nExecution: Orders sent to IBKR via Trade Execution module every 5 min.\n\n📘 Project Phases\nPhase 1 – Stock momentum trades. Profitable but underperformed SP500.\nPhase 2 – Options momentum trades. Achieved 200 % gain on SOUN puts by spotting lower-high trend & negative fundamentals.\n\n⚠️ Lessons Learned\n• Risk agents were too conservative → removed, but then system lacked safeguards.\n• Required manual overrides to lock profits and avoid over-exposure.\n• Next step: hybrid design blending discipline of Phase 1 with upside of Phase 2.\n+--------------------`,
         defaultPrompts: [
@@ -130,6 +132,7 @@ Result:
 Interactive financial analysis for AMD, AVGO, INTC, MU, NVDA, QCOM, TXN with optimized performance.
 Real-time streaming analytics with comprehensive charting and data export.
 Direct database queries enable intelligent chart generation and detailed financial commentary.`,
+        cardDescription: '5-second query-to-insight streaming SQL copilot for semiconductor coverage.',
         technologies: ['Agentic Workflow', 'LangGraph', 'State Management', 'RAG', 'Smart SQL'],
         systemInstruction: `You are the AI assistant for **Next Gen Analytics (SQL)**. You have full knowledge of the project described below. Use this embedded reference to answer questions with detail and accuracy. Quote or paraphrase the content to explain features, tech stack, workflow and technical implementation.
 
@@ -196,6 +199,7 @@ Time Series: Quarterly financial data
         id: 'llm-invoice-processor',
         title: 'LLM Invoice Processor',
         description: `• Accounting team struggled to validate invoices with complex parent-child item numbers.\n• Millions of dollars in invoices were delayed or unpaid due to mismatches.\n\nResult:\n\n• Automates 1,000+ hours of manual work every year.\n• Dramatically reduces late payment rate by 90%.`,
+        cardDescription: 'Automates 1,000 analyst hours and slashes late payments 90% with PDF-to-ledger reconciliation.',
         technologies: ['JavaScript', 'TailwindCSS', 'Function Calling', 'Zero-Shot Prompting', 'JSON Structured Output'],
         systemInstruction: `You are an expert invoice-processing AI assistant. You have full knowledge of the **LLM Invoice Processor** project described below. Use this embedded reference to answer questions with detail and accuracy. You may quote or paraphrase the content to explain features, tech stack and impact.
 
@@ -265,6 +269,7 @@ This production-grade web application automates the invoice validation and match
         id: 'ask-my-resume',
         title: 'Ask My Resume',
         description: `• AI HR Agent powered by my full resume & project history that anyone can chat with freely.\n• Uses LangChain to embed every resume section & work sample into a vector store.\n• When a question arrives, the agent performs similarity search → retrieves the most relevant chunks → crafts a concise, evidence-based answer that advocates for my candidacy.\n• Result: interviewers get instant, accurate insights about my career and projects.`,
+        cardDescription: '95% resume coverage answers recruiter questions with citations in seconds.',
         technologies: ['RAG', 'Vector Search', 'FAISS', 'Agent'],
         systemInstruction: "Hello, I am Yanqing's AI assistant. I have access to his resume data. Please ask me any questions you would have as a hiring manager.",
         defaultPrompts: [
@@ -301,6 +306,7 @@ This production-grade web application automates the invoice validation and match
         id: 'goggins-gpt',
         title: 'Goggins GPT',
         description: `Inspired by David Goggins and the surge of “AI companion” apps (Character AI).\n• Purpose: create a personal drill-sergeant that shouts no-excuse motivation on demand.\n• Voice: ElevenLabs multilingual-v2 model streams real-time TTS.\n• Click "Unleash Goggins Mode" to try it out!`,
+        cardDescription: 'Voice drill sergeant streaming Gemini responses through ElevenLabs for instant Goggins-mode motivation.',
         technologies: ['Gemini API', 'Prompt Engineering', 'ElevenLabs', 'State Management'],
         systemInstruction: `You created “Goggins GPT”. You'll answer as "I".  Provide clear, concise answers about: \n• Architecture & tech stack – React&nbsp;+ Tailwind&nbsp;+ Framer-Motion on the client, FastAPI backend, Gemini Flash LLM via Google GenAI SDK, and ElevenLabs multilingual-v2 TTS for the voice. \n• Data flow – chat → Gemini → FastAPI /api/tts → audio stream to browser. \n• Motivation – born from the trend of "AI girlfriends"/Character AI, but pivoted to embody David Goggins’ mindset so users get hardcore motivation instead of coddling. \n• Features – toggleable Goggins Mode (system prompt swap), real-time speech, animated UI, message history. \nWhen asked, emphasise how Goggins Mode loads a different system instruction and triggers TTS playback.`,
         defaultPrompts: [
@@ -343,6 +349,7 @@ This production-grade web application automates the invoice validation and match
             id: 'research-gpt',
             title: 'Research GPT',
             description: `Equip GPT 3.5 (2022) with web browsing capabilities (before Perplexity)\n  • Search Tool: Sends the query to Serper API to retrieve current links & articles.\n  • Scraping Tool: Fetches and parses content from URLs using Browserless.\n  • Summary Loop: LangChainAgent agent & memoery chain`,
+            cardDescription: 'Pre-Perplexity (2022) web research agent pairing Serper search with Browserless scraping for live briefs.',
             technologies: ['Serper API', 'Browserless Scraping', 'Lang Chain Agent', 'Memory Chain', 'OpenAI API'],
             systemInstruction: 'You are the "Research GPT" AI. You are a powerful research agent connected to a live backend. When a user gives you a research topic, you will use your tools to browse the internet, gather information, and provide a comprehensive, fact-based answer. Your capabilities are powered by LangChain and the OpenAI API, running on a custom FastAPI server. Start by asking the user what they would like to research.',
             defaultPrompts: [
