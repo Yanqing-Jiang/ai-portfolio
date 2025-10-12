@@ -360,15 +360,12 @@ const LandingPage: React.FC<LandingPageProps> = ({ projectData, onSelectProject 
 
         {/* --- Projects List Section - responsive layout --- */}
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-12 md:py-20">
-          <div className="flex items-center gap-4 mb-8 sm:mb-12">
-            <div className="h-1 w-12 bg-sky-400 rounded"></div>
-            <h2
-              className="text-2xl sm:text-3xl md:text-4xl lg:text-6xl font-black text-left text-balance text-sky-100"
-              style={{ textShadow: '0 0 40px rgba(56, 189, 248, 0.3)' }}
-            >
-              AI Project Preview
-            </h2>
-          </div>
+          <h2
+            className="font-black text-left text-balance bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-purple-500"
+            style={{ fontSize: 'clamp(44px, 4.5vw, 56px)', textShadow: '0 0 40px rgba(56, 189, 248, 0.3)' }}
+          >
+            AI Project Preview
+          </h2>
           <div className="space-y-12 sm:space-y-16">
           {projectData.filter(group => !group.hiddenOnLanding).map(({ year, subtitle, projects, label }) => (
             <div key={year}>
