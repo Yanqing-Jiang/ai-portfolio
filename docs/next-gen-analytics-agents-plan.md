@@ -26,12 +26,12 @@ Rebrand the `next-gen-analytics-memory` surfaces to "Next Gen Analytics (Agents)
 
 4. **Color System & Badge Semantics**  
    - Introduce a `getTechBadgeClass(tech)` helper inside `LandingPage.tsx` that maps technologies to semantic categories with accessible contrast (target ≥7:1):  
-     - **AI / Agent Frameworks (Blue):** `bg-sky-500/20 text-sky-300 border-sky-500/30 hover:bg-sky-500/30`.  
+     - **AI / Agent Frameworks (Emerald):** `bg-emerald-600/20 text-emerald-300 border-emerald-500/30 hover:bg-emerald-600/30`.  
      - **Data / Backend (Green):** `bg-emerald-500/20 text-emerald-300 border-emerald-500/30 hover:bg-emerald-500/30`.  
      - **Frontend / UI (Purple):** `bg-purple-500/20 text-purple-300 border-purple-500/30 hover:bg-purple-500/30`.  
      - **Infrastructure / DevOps (Orange):** `bg-orange-500/20 text-orange-300 border-orange-500/30 hover:bg-orange-500/30`.  
      - **ML / Analytics (Pink):** `bg-pink-500/20 text-pink-300 border-pink-500/30 hover:bg-pink-500/30`.  
-   - Update base text colors: default body copy → `text-gray-300` on `bg-slate-950` (ratio ~11.9:1), subtitle retains `text-sky-200`.  
+   - Update base text colors → `text-gray-300` on `bg-slate-950` (ratio ~11.9:1), subtitle retains `text-sky-200`.  
    - Remove remaining non-essential gradients so animated morphing text keeps the spotlight.
 
 5. **Regression Checks**  
