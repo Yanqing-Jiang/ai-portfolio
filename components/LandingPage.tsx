@@ -404,7 +404,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ projectData, onSelectProject 
                       </div>
                       <div className="flex-1 p-4 sm:p-6 lg:p-8 flex flex-col justify-center">
                         <h4 className="text-base sm:text-lg md:text-xl lg:text-2xl font-bold text-white mb-2 sm:mb-3">{project.title}</h4>
-                        <p className="text-gray-300 text-pretty text-xs sm:text-sm md:text-base lg:text-lg leading-[1.7] mb-4 max-w-prose">
+                        <p className="text-gray-300 text-pretty whitespace-pre-line text-xs sm:text-sm md:text-base lg:text-lg leading-[1.7] mb-4 max-w-prose">
                           {truncatedDescription}
                         </p>
                         <div className="flex flex-wrap gap-1.5 sm:gap-2 mt-auto">
@@ -453,7 +453,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ projectData, onSelectProject 
                   </div>
                   <div className="flex-1 p-4 sm:p-6 flex flex-col">
                     <h3 className="text-lg sm:text-xl font-bold text-white mb-3">{project.title}</h3>
-                    <p className="text-gray-300 text-sm sm:text-base leading-[1.7] mb-6">
+                    <p className="text-gray-300 text-sm whitespace-pre-line sm:text-base leading-[1.7] mb-6">
                       {truncatedDescription}
                     </p>
                     <div className="mt-auto">
