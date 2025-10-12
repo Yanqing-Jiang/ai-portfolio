@@ -20,7 +20,7 @@ Rebrand the `next-gen-analytics-memory` surfaces to "Next Gen Analytics (Agents)
    - Typography adjustments:  
      - Hero title → `fontSize: clamp(44px, 4.5vw, 56px)`, `leading-[1.1]`, keep `font-extrabold tracking-[-0.01em]`.  
      - Subtitle credential → bold `text-sky-200` set inline (no pill) using `clamp(17px, 2vw, 22px)`.  
-   - Hero heading accent: add a sky-blue divider bar, upgrade to `font-black`, bump to `lg:text-6xl`, and layer `textShadow: '0 0 40px rgba(56, 189, 248, 0.3)'` for depth.  
+   - Hero heading accent: match the sidebar brand gradient (bg-gradient-to-r from-blue-400 to-purple-500), upgrade to `font-black`, reuse the hero's `fontSize: clamp(44px, 4.5vw, 56px)`, and layer `textShadow: '0 0 40px rgba(56, 189, 248, 0.3)'` for depth.  
    - Update body/project description copy to `text-gray-300`, `leading-[1.7]`, and cap width via `max-w-prose`; revisit truncation threshold to 180-200 chars or remove.  
    - Ensure contact icons breathe by enforcing the specified gap rhythm.
 
