@@ -67,7 +67,7 @@ const capabilities = [
 type TechCategory = 'ai' | 'data' | 'frontend' | 'infra' | 'ml' | 'default';
 
 const TECH_CATEGORY_CLASSES: Record<TechCategory, string> = {
-  ai: 'border bg-sky-500/20 text-sky-200 border-sky-500/30 hover:bg-sky-500/30',
+  ai: 'border bg-lime-500/20 text-lime-200 border-lime-500/30 hover:bg-lime-500/30',
   data: 'border bg-emerald-500/20 text-emerald-200 border-emerald-500/30 hover:bg-emerald-500/30',
   frontend: 'border bg-purple-500/20 text-purple-200 border-purple-500/30 hover:bg-purple-500/30',
   infra: 'border bg-orange-500/20 text-orange-200 border-orange-500/30 hover:bg-orange-500/30',
