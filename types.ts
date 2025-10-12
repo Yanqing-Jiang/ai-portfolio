@@ -2,6 +2,7 @@
   id: string;
   title: string;
   description: string;
+  cardDescription?: string;
   technologies: string[];
   systemInstruction: string;
   defaultPrompts: string[];

@@ -376,6 +376,9 @@ const LandingPage: React.FC<LandingPageProps> = ({ projectData, onSelectProject 
               <div className="grid grid-cols-1 gap-8 sm:gap-12">
                 {projects.map((project, projectIndex) => {
                   const useContainLayout = project.id === 'next-gen-analytics-memory' || project.id === 'next-gen-analytics-sql';
+                  const previewDescription = project.cardDescription ?? project.description;
+                  const truncatedDescription =
+                    previewDescription.length > 200 ? `${previewDescription.substring(0, 200)}...` : previewDescription;
 
                   return (
                     <div
@@ -402,7 +405,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ projectData, onSelectProject 
                       <div className="flex-1 p-4 sm:p-6 lg:p-8 flex flex-col justify-center">
                         <h4 className="text-base sm:text-lg md:text-xl lg:text-2xl font-bold text-white mb-2 sm:mb-3">{project.title}</h4>
                         <p className="text-gray-300 text-pretty text-xs sm:text-sm md:text-base lg:text-lg leading-[1.7] mb-4 max-w-prose">
-                          {project.description.length > 200 ? `${project.description.substring(0, 200)}...` : project.description}
+                          {truncatedDescription}
                         </p>
                         <div className="flex flex-wrap gap-1.5 sm:gap-2 mt-auto">
                           {project.technologies.slice(0, 5).map(tech => (
@@ -431,7 +434,11 @@ const LandingPage: React.FC<LandingPageProps> = ({ projectData, onSelectProject 
               Pre-AI Projects
             </h2>
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-8 sm:gap-10">
-              {preAiProjects.map((project) => (
+              {preAiProjects.map((project) => {
+                const previewDescription = project.cardDescription ?? project.description;
+                const truncatedDescription =
+                  previewDescription.length > 200 ? `${previewDescription.substring(0, 200)}...` : previewDescription;
+                return (
                 <div
                   key={project.id}
                   className="bg-gray-800/50 rounded-lg overflow-hidden transform hover:-translate-y-1 transition-transform duration-300 shadow-lg hover:shadow-blue-500/20 border border-gray-700/50 flex flex-col"
@@ -447,7 +454,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ projectData, onSelectProject 
                   <div className="flex-1 p-4 sm:p-6 flex flex-col">
                     <h3 className="text-lg sm:text-xl font-bold text-white mb-3">{project.title}</h3>
                     <p className="text-gray-300 text-sm sm:text-base leading-[1.7] mb-6">
-                      {project.description.length > 200 ? `${project.description.substring(0, 200)}...` : project.description}
+                      {truncatedDescription}
                     </p>
                     <div className="mt-auto">
                       <button
@@ -464,7 +471,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ projectData, onSelectProject 
                     </div>
                   </div>
                 </div>
-              ))}
+              )})}
             </div>
           </div>
         </section>
