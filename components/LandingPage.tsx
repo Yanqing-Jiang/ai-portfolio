@@ -167,6 +167,28 @@ const getTechBadgeClass = (tech: string) => {
   return TECH_CATEGORY_CLASSES.default;
 };
 
+const IMPACT_METRICS = [
+  {
+    label: 'Hours Automated',
+    value: '4K+',
+    description: 'Annual contracted hours removed across automation programs.',
+    accent: 'sky',
+  },
+  {
+    label: 'Revenue Impact',
+    value: '$150M+',
+    secondaryLabel: 'Per Project',
+    description: 'Single project incremental business value delivered.',
+    accent: 'emerald',
+  },
+  {
+    label: 'Efficiency Uplift',
+    value: '90%',
+    description: 'Best-in-class insight generation and automation achieved in a pilot project.',
+    accent: 'purple',
+  },
+] as const;
+
 interface LandingPageProps {
   projectData: ProjectYear[];
   onSelectProject: (project: Project) => void;
@@ -309,13 +331,11 @@ const LandingPage: React.FC<LandingPageProps> = ({ projectData, onSelectProject 
               >
                 Yanqing Jiang
               </h1>
-              <div className="mt-4 self-start w-fit">
-                <span
-                  className="inline-flex items-center rounded-full border border-sky-500/30 bg-sky-500/10 px-4 py-1.5 font-bold text-sky-200 transition-colors duration-200 hover:border-sky-400/60 hover:bg-sky-500/20 hover:text-sky-100"
-                  style={{ fontSize: 'clamp(17px, 2vw, 22px)' }}
-                >
-                  Advanced Analytics @ P&amp;G
-                </span>
+              <div
+                className="mt-4 font-bold text-sky-200"
+                style={{ fontSize: 'clamp(17px, 2vw, 22px)' }}
+              >
+                Advanced Analytics @ P&amp;G
               </div>
               <div className="mt-5 flex flex-wrap items-center gap-5 text-gray-400">
                 {contactLinks.map((item) => (
@@ -359,6 +379,41 @@ const LandingPage: React.FC<LandingPageProps> = ({ projectData, onSelectProject 
           </div>
         </section>
         {/* Animation Showcase removed per request */}
+
+        {/* Impact Metrics */}
+        <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 my-12 md:my-16">
+          <div className="grid gap-6 sm:grid-cols-2 sm:gap-6 lg:grid-cols-3 lg:gap-8">
+            {IMPACT_METRICS.map((metric) => {
+              const hoverClass =
+                metric.accent === 'sky'
+                  ? 'hover:border-sky-500/50'
+                  : metric.accent === 'emerald'
+                    ? 'hover:border-emerald-500/50'
+                    : 'hover:border-purple-500/50';
+              return (
+                <div
+                  key={metric.label}
+                  className={`flex flex-col items-center justify-center rounded-xl border border-gray-700/50 bg-gray-900/60 p-8 lg:p-10 text-center transition-colors duration-200 ease-out min-h-[220px] sm:min-h-[230px] md:min-h-[240px] ${hoverClass}`}
+                >
+                  <div className="text-white font-black tracking-tight leading-none text-5xl sm:text-6xl lg:text-7xl">
+                    {metric.value}
+                  </div>
+                  <div className="mt-3 text-lg sm:text-xl lg:text-2xl font-semibold text-gray-100">
+                    {metric.label}
+                  </div>
+                  {'secondaryLabel' in metric && metric.secondaryLabel && (
+                    <div className="text-lg sm:text-xl lg:text-2xl font-semibold text-gray-100">
+                      {metric.secondaryLabel}
+                    </div>
+                  )}
+                  <p className="mt-4 text-sm sm:text-base text-gray-400 leading-relaxed max-w-xs">
+                    {metric.description}
+                  </p>
+                </div>
+              );
+            })}
+          </div>
+        </section>
 
         {/* --- Projects List Section - responsive layout --- */}
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-12 md:py-20">
