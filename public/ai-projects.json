@@ -1,10 +1,10 @@
 ﻿[
   {
     "id": "next-gen-analytics-memory",
-    "title": "Next Gen Analytics Memory Agent | LangGraph + FastAPI Copilot",
-    "description": "LangGraph-powered analytics memory copilot that orchestrates clarification agents, SQL generation, and streaming ECharts for semiconductor coverage.",
+    "title": "Next Gen Analytics Agents | LangGraph + FastAPI Copilot",
+    "description": "LangGraph-powered analytics agents copilot orchestrating direct, single-agent, and supervisor workflows with RAG-backed SQL and streaming telemetry.",
     "url": "https://ai.jiangyanqing.com/project/next-gen-analytics-memory",
-    "technologies": ["Single Agent workflow", "Multi-agent workflow", "Human-in-loop", "RAG", "web search"],
+    "technologies": ["LangGraph", "Agent Orchestration", "RAG", "FastAPI", "Supabase"],
     "serviceTags": ["Analytics Automation", "AI Agents", "Decision Intelligence"],
     "statHighlights": [
       "Supports direct, single-agent, and supervisor-led workflows in one UI",

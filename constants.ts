@@ -7,10 +7,10 @@ export const PROJECT_DATA: ProjectYear[] = [
     projects: [
       {
         id: 'next-gen-analytics-memory',
-        title: 'Next Gen Analytics (Memory)',
-        description: `Three agentic workflows: Direct (fixed path), single-agent (multi-tool use), multi-agent (supervisor + specialists).\nHuman-in-the-loop: Compact choice widget for peers/metrics/range with one-tap approvals and reruns.\nExplainable thinking process panel: Plan graph with per-step trace.\nFinancial scope: AMD, AVGO, INTC, MU, NVDA, QCOM, TXN.\nMemory optimization: Cached queries, vectorized prompts, result reuse.`,
-        technologies: ['Single Agent workflow', 'Multi-agent workflow', 'Human-in-loop', 'RAG', 'web search'],
-        systemInstruction: `You are the AI assistant for **Next Gen Analytics (Memory)**. You have full knowledge of the project described below. Use this embedded reference to answer questions with detail and accuracy. Quote or paraphrase the content to explain features, tech stack, workflow and technical implementation.
+        title: 'Next Gen Analytics (Agents)',
+        description: `Three Agentic Workflows:\nDirect (fixed path): no flexibility on tools, run through all tools all at once\nSingle-Agent (multi-tool use): ability to pick tools, revise single/multiple analytic element\nMulti-Agent (supervisor + specialists): workload delegation & orchestration\nHuman-in-the-loop: Compact widget for clarification on peers/metrics/range\nExplainable thinking process panel: plan graph + per-step trace.\nSQL database financials: AMD, AVGO, INTC, MU, NVDA, QCOM, TXN.\nMemory optimization: RAG optimized, Cached queries, vectorized prompts, stateful nodes`,
+        technologies: ['LangGraph', 'Agent Orchestration', 'RAG', 'FastAPI', 'Supabase'],
+        systemInstruction: `You are the AI assistant for **Next Gen Analytics (Agents)**. You have full knowledge of the project described below. Use this embedded reference to answer questions with detail and accuracy. Quote or paraphrase the content to explain features, tech stack, workflow and technical implementation.
 
 +--------------------
 EMBEDDED PROJECT DOC
@@ -52,13 +52,13 @@ Memory System: Session-based conversation persistence with context awareness
         ],
         coverUrl: 'https://yanqinghot.blob.core.windows.net/public-access/Agent%20demo.gif',
         imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/Agent%20demo.gif',
-        seoTitle: 'Next Gen Analytics Memory Agent | LangGraph + FastAPI Copilot',
+        seoTitle: 'Next Gen Analytics Agents | LangGraph + FastAPI Copilot',
         seoDescription:
-          'LangGraph-powered analytics memory copilot that orchestrates clarification agents, SQL generation, and streaming ECharts for semiconductor coverage.',
+          'LangGraph-powered analytics agents copilot that orchestrates clarification, RAG-backed SQL, and streaming ECharts for semiconductor coverage.',
         seoKeywords: [
           'LangGraph analytics',
-          'memory agent',
-          'analytics copilot',
+          'analytics agents',
+          'agentic copilot',
           'FastAPI Supabase',
           'multi-agent workflow',
         ],

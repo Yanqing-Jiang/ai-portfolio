@@ -17,19 +17,19 @@ const FLOW_META: Record<FlowOption, { chip: string; chipClass: string; helper: s
   'planner-executor': {
     chip: 'Direct Workflow',
     chipClass: 'bg-emerald-600/20 text-emerald-300 border-emerald-500/30',
-    helper: 'Deterministic direct workflow with YAML-backed SQL guidance.',
+    helper: 'Direct fixed workflow with RAG-backed SQL guidance.',
     placeholder: 'Ask about financial data (direct workflow)',
   },
   'single-agent': {
     chip: 'Single Agent + Tools',
     chipClass: 'bg-blue-600/20 text-blue-300 border-blue-500/30',
-    helper: 'Claude-style agent calling structured tools with live telemetry.',
+    helper: 'Claude-Code style single LLM agent with multiple tool calling capability.',
     placeholder: 'Ask about financial data (single-agent tools flow)',
   },
   'multi-agent': {
     chip: 'Multi-Agent Orchestration',
     chipClass: 'bg-purple-600/20 text-purple-300 border-purple-500/30',
-    helper: 'Lightweight collaboration across planner, analyst, and charting agents.',
+    helper: 'Supervisor agent collaboration across multiple specialists: financial analyst, charting specialist, stock watcher, web researcher, SQL analyst.',
     placeholder: 'Ask about financial data (multi-agent orchestration)',
   },
 };
@@ -99,13 +99,16 @@ const MemoryAnalyticsPage: React.FC = () => {
 
   // Project data for the analytics memory project
   const projectData = {
-    title: 'Next Gen Analytics (Memory)',
-    description: `**Three Agentic Workflows**: Direct (fast path), Single-Agent (multi-tool use), Multi-Agent (supervisor + specialists).
-**Human-in-the-loop**: Compact choice widget for peers/metrics/range; one-tap approvals & reruns.
+    title: 'Next Gen Analytics (Agents)',
+    description: `**Three Agentic Workflows**:
+Direct (fixed path): no flexibility on tools, run through all tools all at once
+Single-Agent (multi-tool use): ability to pick tools, revise single/multiple analytic element
+Multi-Agent (supervisor + specialists): workload delegation & orchestration
+**Human-in-the-loop**: Compact widget for clarification on peers/metrics/range
 **Explainable thinking process panel**: plan graph + per-step trace.
-**Financial scope (peers)**: AMD, AVGO, INTC, MU, NVDA, QCOM, TXN.
-**Memory optimization**: Cached queries, vectorized prompts, result reuse.`,
-    technologies: ['Single Agent workflow', 'Multi-agent workflow', 'Human-in-loop', 'RAG', 'long term memory'],
+**SQL database financials**: AMD, AVGO, INTC, MU, NVDA, QCOM, TXN.
+**Memory optimization**: RAG optimized, Cached queries, vectorized prompts, stateful nodes`,
+    technologies: ['Single Agent Workflow', 'Multi-Agent Workflow', 'Human-in-the-Loop', 'RAG', 'Long-Term Memory'],
     imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/Agent%20demo.gif'
   };
 
@@ -277,19 +280,6 @@ const MemoryAnalyticsPage: React.FC = () => {
         {/* Main Content Area */}
         <div className="flex-1 overflow-auto p-4 sm:p-6 lg:p-8 pb-32 md:pb-6 bg-gray-900">
           <div className="w-full max-w-5xl mx-auto space-y-4 sm:space-y-6 overflow-hidden">
-            <LiveArtifacts
-              chartSpec={chartSpec}
-              dataSample={dataSample}
-              sqlQuery={sqlQuery}
-              analysis={analysis}
-              progressiveAnalysis={progressiveAnalysis}
-              progressiveText={progressiveText}
-              webSearch={webSearch}
-              stockWidget={stockWidget}
-              isLoading={isLoading}
-              flowMode={selectedFlow}
-            />
-
             <ChatHistory 
               messages={chatHistory} 
               isLoading={isLoading} 
