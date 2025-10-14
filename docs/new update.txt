@@ -1,0 +1,25 @@
+single agent: C:\Users\Y_J\Desktop\ai-portfolio-main\docs\agent-process-ledger (33).json
+for the market share analysis: sql chart: there is a market share percent that does not show anything. dorpdown series do not work. the label work in the chart. SQL template: Make this template default to pull annual aggregate. 
+check sequence of this process. make sure market research and stock chart genration process is concurrent. The generation doesn't have to be sequencial 
+single agent follow up failure:
+C:\Users\Y_J\Desktop\ai-portfolio-main\docs\agent-process-ledger (34).json
+
+multi-agent: C:\Users\Y_J\Desktop\ai-portfolio-main\docs\agent-process-ledger (35).json
+no sql chart, no generated sql show up. There was a "Web Context Ready | Topic: How's Nvidia margin growth compare to industry average? | Source: Gemini
+Financial Analysis" that is not needed. A "Market Research" card is not wide enough. sql, stock and web research runed twice. 
+After orchestration, the supervisor emits a sanitized `cohesive_result` containing:
+
+  - Final analysis with: 1. sql data 2. online search data 3. stock data
+
+all the following could be emitted by specialists before supervisor's finan analysis, by their own cards/chat result (make sure to show that in chat):
+
+  - stock Chart
+  - Web Chart
+  - SQL Chart
+  - Generated SQL Card
+
+
+multi-agent revision:
+too many element showed up: chart that was generated before (but success with bar chart generation). Stock chart. Another Financial Analysis
+(was requested) and  Revision: Chart updated - Chart type -> bar with Financial Analysis
+ and generated sql query again. I believe the first iteration is for live agent demo and need to be integrated or the 2nd generation is not needed. Give me some options to choose once you dig through my code base. 

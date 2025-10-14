@@ -1,4 +1,4 @@
-export type FlowMode = 'planner-executor' | 'single-agent' | 'multi-agent';
+﻿export type FlowMode = 'planner-executor' | 'single-agent' | 'multi-agent';
 
 export interface FlowVisualTheme {\n  id: FlowMode;\n  accent: string;\n  nodeGradient: [string, string];\n  nodeBorder: string;\n  nodeGlow: string;\n  edgeIdle: string;\n  edgeActive: string;\n  edgeCompleted: string;\n  badgeClass: string;\n  pulseClass: string;\n}\n\n// Shared types for analytics components
 
@@ -122,6 +122,68 @@ export interface WebSearchResult {
   reason?: string;
   provider?: string;
   model?: string;
+  latencyStats?: { total_ms?: number; p50_ms?: number; max_ms?: number; min_ms?: number; samples?: number };
+}
+
+export interface AnalysisOverview {
+  tldr?: string;
+  highlights?: string[];
+  keyNumbers?: string[];
+  riskWatch?: string[];
+  nextSteps?: string[];
+  evidence?: AnalysisEvidenceLink[];
+}
+
+export interface AnalysisEvidenceLink {
+  sourceUrl: string;
+  title?: string;
+  displayUrl?: string;
+  snippet?: string;
+  claim?: string;
+  publishedAt?: string;
+  confidence?: number;
+}
+
+export interface LatencyGuardrail {
+  status: 'ok' | 'violation';
+  violations?: string[];
+  observed?: {
+    total_ms?: number;
+    p50_ms?: number;
+    p95_ms?: number;
+    max_ms?: number;
+    samples?: number;
+  };
+  thresholds: {
+    p50_ms: number;
+    p95_ms: number;
+  };
+}
+
+export interface FollowUpBanner {
+  title: string;
+  message: string;
+  route: string;
+}
+
+export interface SpecialistCard {
+  type: string;
+  state?: string;
+  title?: string;
+  message?: string;
+  topic?: string;
+  summary?: string;
+  snippets?: Array<{
+    title?: string;
+    snippet?: string;
+    url?: string;
+    display_url?: string;
+    published_at?: string;
+  }>;
+  symbols?: string[];
+  ready?: boolean;
+  ts?: string;
+  meta?: Record<string, any>;
 }
 
 export interface StockWidgetConfig {
@@ -178,6 +240,10 @@ export interface ProcessStepDetails {
   tool_fanout_results?: ToolFanoutResult[];
   concurrency_limit?: number;
   stock_widget?: StockWidgetConfig;
+  banner?: FollowUpBanner;
+  analysis_overview?: AnalysisOverview;
+  specialist_card?: SpecialistCard;
+  latency_guardrail?: LatencyGuardrail;
 }
 
 export interface ProcessStep {
@@ -198,6 +264,7 @@ export interface ChatMessage {
   id: string;
   type: 'user' | 'clarification' | 'result' | 'assistant';
   content: string;
+  flowMode?: FlowMode;
   timestamp: string;
   clarifications?: ClarifyRequest[];
   answers?: Record<string, any>;
@@ -209,6 +276,10 @@ export interface ChatMessage {
   toolFanoutManifest?: ToolFanoutManifest[];
   toolFanoutResults?: ToolFanoutResult[];
   webSearch?: WebSearchResult | null;
+  analysisOverview?: AnalysisOverview | null;
+  banner?: FollowUpBanner | null;
+  specialistCards?: SpecialistCard[];
+  latencyGuardrail?: LatencyGuardrail | null;
 }
 
 export interface ClarifyRequest {
@@ -264,6 +335,7 @@ export interface ProcessPanelProps {
   show: boolean;
   onClose: () => void;
   showElapsedTime?: boolean;
+  followUpBanner?: FollowUpBanner | null;
 }
 
 export interface PromptBarProps {

@@ -2,11 +2,28 @@ import asyncio
 import logging
 from typing import Any, Dict
 
+import pytest
 import sys
 from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 
 from analytics.services import response_search
+
+
+@pytest.fixture(autouse=True)
+def reset_response_search_state():
+    original_state = (
+        response_search._model,
+        response_search._model_name,
+        response_search._genai_configured,
+        response_search._DEFAULT_MODEL,
+    )
+    response_search._model = None
+    response_search._model_name = None
+    response_search._genai_configured = False
+    yield
+    response_search._model, response_search._model_name, response_search._genai_configured, response_search._DEFAULT_MODEL = original_state
+
 
 
 class DummyGenerativeModel:
@@ -373,3 +390,17 @@ def test_perform_response_search_logs_steps(monkeypatch, caplog):
     assert result.snippets
     assert result.model == "gemini-amd-news"
 
+
+
+def test_default_model_guardrail(monkeypatch):
+    DummyGenerativeModel.created_instances = []
+    monkeypatch.delenv("GEMINI_SEARCH_MODEL", raising=False)
+    monkeypatch.setenv("GEMINI_API_KEY", "guardrail-key")
+    monkeypatch.setattr(response_search.genai, "configure", lambda **kwargs: None)
+    monkeypatch.setattr(response_search.genai, "GenerativeModel", DummyGenerativeModel)
+
+    result = asyncio.run(response_search.perform_response_search("Do guardrails use flash lite by default?"))
+
+    assert result.model == "gemini-2.5-flash-lite"
+    assert DummyGenerativeModel.created_instances
+    assert DummyGenerativeModel.created_instances[0].model_name == "gemini-2.5-flash-lite"

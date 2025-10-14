@@ -1,9 +1,9 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+﻿import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import Draggable from 'react-draggable';
 import { WorkflowCanvas } from '../visualization/WorkflowCanvas';
 import { SingleAgentFanoutCanvas } from '../visualization/SingleAgentFanoutCanvas';
-import { ProcessStep, FlowMode, SingleAgentFanout } from '../types';
+import { ProcessStep, FlowMode, SingleAgentFanout, FollowUpBanner, AnalysisOverview, SpecialistCard } from '../types';
 
 interface ProcessPanelProps {
   singleAgentFanout?: SingleAgentFanout | null;
@@ -19,6 +19,7 @@ interface ProcessPanelProps {
   defaultWidth?: number;
   minWidth?: number;
   maxWidth?: number;
+  followUpBanner?: FollowUpBanner | null;
 }
 
 interface PanelState {
@@ -179,6 +180,7 @@ export const ProcessPanel: React.FC<ProcessPanelProps> = ({
   defaultWidth = 420,
   minWidth = 320,
   maxWidth = 1180,
+  followUpBanner = null,
 }) => {
   const nodeRef = useRef<HTMLDivElement>(null);
   const [panelState, setPanelState] = useState<PanelState>(() => {
@@ -419,7 +421,20 @@ export const ProcessPanel: React.FC<ProcessPanelProps> = ({
   );
 
   const renderLedgerDetails = (step: ProcessStep) => {
-    const detailEntries = Object.entries(step.details ?? {}).filter(([, value]) => {
+    const details = (step.details ?? {}) as {
+      banner?: FollowUpBanner;
+      analysis_overview?: AnalysisOverview;
+      specialist_card?: SpecialistCard;
+      latency?: { total_ms?: number; p50_ms?: number; max_ms?: number; min_ms?: number; samples?: number };
+      [key: string]: any;
+    };
+    const { banner, analysis_overview, specialist_card, latency, latency_guardrail, web_context: _webContext, ...otherDetails } = details;
+    const evidenceEntries = analysis_overview?.evidence ?? [];
+    const hasEvidence = evidenceEntries.length > 0;
+    const lowConfidenceEvidence =
+      hasEvidence && evidenceEntries.every((entry) => (entry.confidence ?? 0) < 0.35);
+
+    const detailEntries = Object.entries(otherDetails).filter(([, value]) => {
       if (value === undefined || value === null) {
         return false;
       }
@@ -445,6 +460,168 @@ export const ProcessPanel: React.FC<ProcessPanelProps> = ({
                 <li key={idx} className="leading-relaxed">- {thought}</li>
               ))}
             </ul>
+          </div>
+        ) : null}
+        {banner ? (
+          <div className="rounded-xl border border-amber-400/40 bg-amber-500/10 p-3 text-amber-100 shadow-inner">
+            <div className="flex items-center gap-2 text-[10px] uppercase tracking-wide text-amber-300">
+              <span className="font-semibold">{banner.title}</span>
+              <span className="rounded-full border border-amber-300/60 px-2 py-0.5 text-[9px] font-semibold text-amber-200">
+                {formatScheduleStage(banner.route)}
+              </span>
+            </div>
+            <div className="mt-1 text-[11px] leading-relaxed">{banner.message}</div>
+          </div>
+        ) : null}
+        {analysis_overview ? (
+          <div className="rounded-xl border border-emerald-500/40 bg-emerald-500/10 p-3 text-emerald-100/90">
+            {analysis_overview.tldr ? (
+              <div>
+                <div className="text-[10px] uppercase tracking-wide text-emerald-300">Quick Take</div>
+                <div className="mt-1 text-[11px] leading-relaxed">{analysis_overview.tldr}</div>
+              </div>
+            ) : null}
+            {analysis_overview.highlights?.length ? (
+              <div className="mt-2">
+                <div className="text-[10px] uppercase tracking-wide text-emerald-300">Key Highlights</div>
+                <ul className="mt-1 space-y-1 text-[11px] leading-relaxed">
+                  {analysis_overview.highlights.slice(0, 3).map((highlight, idx) => (
+                    <li key={idx}>- {highlight}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            {analysis_overview.keyNumbers?.length ? (
+              <div className="mt-2">
+                <div className="text-[10px] uppercase tracking-wide text-cyan-300">Key Numbers</div>
+                <ul className="mt-1 space-y-1 text-[11px] leading-relaxed text-cyan-100/90">
+                  {analysis_overview.keyNumbers.map((entry, idx) => (
+                    <li key={idx}>- {entry}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            {analysis_overview.riskWatch?.length ? (
+              <div className="mt-2">
+                <div className="text-[10px] uppercase tracking-wide text-amber-300">Risk Watch</div>
+                <ul className="mt-1 space-y-1 text-[11px] leading-relaxed text-amber-100/90">
+                  {analysis_overview.riskWatch.map((entry, idx) => (
+                    <li key={idx}>- {entry}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            {analysis_overview.nextSteps?.length ? (
+              <div className="mt-2">
+                <div className="text-[10px] uppercase tracking-wide text-sky-300">Next Steps</div>
+                <ul className="mt-1 space-y-1 text-[11px] leading-relaxed text-sky-100/90">
+                  {analysis_overview.nextSteps.map((entry, idx) => (
+                    <li key={idx}>- {entry}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            {hasEvidence ? (
+              <div className="mt-2">
+                <div className="text-[10px] uppercase tracking-wide text-emerald-200">Sources</div>
+                <ul className="mt-1 space-y-1 text-[11px] leading-relaxed text-emerald-100/90">
+                  {evidenceEntries.map((entry, idx) => (
+                    <li key={`${entry.sourceUrl}-${idx}`} className="flex flex-col">
+                      <a
+                        href={entry.sourceUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-emerald-200 underline hover:text-emerald-100"
+                      >
+                        {entry.title ?? entry.displayUrl ?? `Source ${idx + 1}`}
+                      </a>
+                      {(entry.claim || entry.snippet) && (
+                        <span className="text-[10px] text-emerald-200/80">{entry.claim || entry.snippet}</span>
+                      )}
+                      {typeof entry.confidence === 'number' && (
+                        <span className="text-[10px] text-emerald-200/60">
+                          Confidence: {Math.round(entry.confidence * 100)}%
+                        </span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+                {lowConfidenceEvidence && (
+                  <div className="mt-2 text-[11px] text-amber-300">
+                    Sources flagged for low confidence—consider re-running web research.
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="mt-2 text-[11px] text-amber-200">
+                No grounded sources returned. Consider re-running web research to collect citations.
+              </div>
+            )}
+          </div>
+        ) : null}
+        {latency ? (
+          <div className="rounded-xl border border-amber-300/40 bg-amber-500/10 p-3 text-amber-100/90">
+            <div className="text-[10px] uppercase tracking-wide text-amber-300">Web Search Latency</div>
+            <div className="mt-1 text-[11px] leading-relaxed space-y-1">
+              {typeof latency.total_ms === 'number' ? <div>Total: {latency.total_ms} ms</div> : null}
+              {typeof latency.p50_ms === 'number' ? <div>p50: {latency.p50_ms} ms</div> : null}
+              {typeof latency.max_ms === 'number' ? <div>Max: {latency.max_ms} ms</div> : null}
+              {typeof latency.min_ms === 'number' ? <div>Min: {latency.min_ms} ms</div> : null}
+              {typeof latency.samples === 'number' ? <div>Samples: {latency.samples}</div> : null}
+            </div>
+          </div>
+        ) : null}
+        {latency_guardrail ? (
+          <div
+            className={`rounded-xl border p-3 ${
+              latency_guardrail.status === 'violation'
+                ? 'border-amber-500/50 bg-amber-600/10 text-amber-100/90'
+                : 'border-emerald-500/40 bg-emerald-600/10 text-emerald-100/90'
+            }`}
+          >
+            <div className="text-[10px] uppercase tracking-wide">
+              Guardrail Status: {latency_guardrail.status === 'violation' ? 'Exceeded' : 'Within Thresholds'}
+            </div>
+            {latency_guardrail.violations?.length ? (
+              <div className="mt-1 text-[11px] leading-relaxed">
+                Tripped: {latency_guardrail.violations.join(', ')}
+              </div>
+            ) : null}
+            <div className="mt-1 text-[11px] leading-relaxed text-emerald-200/80">
+              Targets: p50 ≤ {latency_guardrail.thresholds.p50_ms} ms · p95 ≤ {latency_guardrail.thresholds.p95_ms} ms
+            </div>
+          </div>
+        ) : null}
+        {specialist_card ? (
+          <div className="rounded-xl border border-sky-500/40 bg-sky-500/10 p-3 text-sky-100/90">
+            <div className="flex items-center justify-between text-[10px] uppercase tracking-wide text-sky-200">
+              <span className="font-semibold">
+                {specialist_card.title ?? formatScheduleStage(specialist_card.type)}
+              </span>
+              {specialist_card.state && <span>{formatScheduleStage(specialist_card.state)}</span>}
+            </div>
+            {specialist_card.message && (
+              <div className="mt-1 text-[11px] leading-relaxed">{specialist_card.message}</div>
+            )}
+            {specialist_card.topic && (
+              <div className="mt-1 text-[10px] uppercase tracking-wide text-sky-300/90">
+                Focus: <span className="normal-case text-sky-100/90">{specialist_card.topic}</span>
+              </div>
+            )}
+            {specialist_card.summary && (
+              <div className="mt-1 text-[11px] leading-relaxed text-sky-100/90">
+                {specialist_card.summary}
+              </div>
+            )}
+            {specialist_card.snippets?.length ? (
+              <ul className="mt-2 space-y-1 text-[11px] leading-relaxed">
+                {specialist_card.snippets.slice(0, 2).map((snippet, idx) => (
+                  <li key={idx} className="border-l-2 border-sky-400/50 pl-2">
+                    {snippet.title || snippet.snippet}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
           </div>
         ) : null}
         {detailEntries.length ? (
@@ -695,6 +872,19 @@ export const ProcessPanel: React.FC<ProcessPanelProps> = ({
                 <div className={`text-lg font-semibold ${flowMeta.accent}`}>{flowMeta.title}</div>
                 <div className="text-[11px] text-gray-500">{subtitle}</div>
                 <div className="text-[11px] text-gray-600">{flowMeta.description}</div>
+                {followUpBanner && (
+                  <div className="mt-2 rounded-lg border border-amber-400/40 bg-amber-500/10 px-3 py-2 shadow-sm">
+                    <div className="flex items-center gap-2 text-[10px] uppercase tracking-wide text-amber-300">
+                      <span className="font-semibold">{followUpBanner.title}</span>
+                      <span className="rounded-full border border-amber-400/50 px-2 py-0.5 text-[9px] font-semibold text-amber-200">
+                        {formatScheduleStage(followUpBanner.route)}
+                      </span>
+                    </div>
+                    <div className="mt-1 text-[11px] leading-relaxed text-amber-100/90">
+                      {followUpBanner.message}
+                    </div>
+                  </div>
+                )}
               </div>
               <div className="flex flex-col items-end gap-2 text-xs text-gray-400">
                 <div className="flex items-center gap-2">

@@ -2,8 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import EChartsReact from 'echarts-for-react';
 import { ChartCardProps } from '../types';
 import { ChartErrorBoundary } from './ChartErrorBoundary';
-import { withLightTheme } from '../utils';
-import { downloadCsv, extractDataFromChartSpec } from '../utils';
+import { withLightTheme, hydrateChartSpec, downloadCsv, extractDataFromChartSpec } from '../utils';
 
 export const ChartCard: React.FC<ChartCardProps> = ({
   chartSpec,
@@ -17,8 +16,10 @@ export const ChartCard: React.FC<ChartCardProps> = ({
   const [chartRetryCount, setChartRetryCount] = useState(0);
   const chartRef = useRef<any>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const resolvedSpec = useMemo(() => hydrateChartSpec(chartSpec), [chartSpec]);
+  const spec = resolvedSpec;
 
-  console.log('[ChartCard] Rendered with chartSpec:', !!chartSpec, 'useAltChart:', useAltChart);
+  console.log('[ChartCard] Rendered with chartSpec:', !!spec, 'useAltChart:', useAltChart);
 
   const handleChartError = (error: any) => {
     console.log('[ChartCard] Chart error boundary triggered:', error);
@@ -79,24 +80,24 @@ export const ChartCard: React.FC<ChartCardProps> = ({
     }
   };
 
-  const scopeBanner = chartSpec?.meta?.scopeBanner;
-  const statistic = chartSpec?.meta?.chartDesign?.statistic ?? chartSpec?.statistic;
-  const rankingMeta = chartSpec?.meta?.ranking;
-  const isRankingChart = statistic === 'ranking_latest' || chartSpec?.chart_type === 'ranking_bar';
+  const scopeBanner = spec?.meta?.scopeBanner;
+  const statistic = spec?.meta?.chartDesign?.statistic ?? spec?.statistic;
+  const rankingMeta = spec?.meta?.ranking;
+  const isRankingChart = statistic === 'ranking_latest' || spec?.chart_type === 'ranking_bar';
   const scheduleStage =
-    chartSpec?.meta?.scheduleStage ??
-    chartSpec?.meta?.schedule_stage ??
-    chartSpec?.meta?.chartStage ??
-    chartSpec?.schedule_stage;
+    spec?.meta?.scheduleStage ??
+    spec?.meta?.schedule_stage ??
+    spec?.meta?.chartStage ??
+    spec?.schedule_stage;
   const parallelGroup =
-    chartSpec?.meta?.parallelGroup ??
-    chartSpec?.meta?.parallel_group ??
-    chartSpec?.meta?.telemetryGroup ??
-    chartSpec?.parallel_group;
+    spec?.meta?.parallelGroup ??
+    spec?.meta?.parallel_group ??
+    spec?.meta?.telemetryGroup ??
+    spec?.parallel_group;
   const flowMode =
-    chartSpec?.meta?.flowMode ??
-    chartSpec?.meta?.mode ??
-    chartSpec?.flow_mode;
+    spec?.meta?.flowMode ??
+    spec?.meta?.mode ??
+    spec?.flow_mode;
   const rankingSummary = useMemo(() => {
     if (!isRankingChart) return null;
     const metricLabel = rankingMeta?.metric?.replace(/_/g, ' ').replace(/\b\w/g, (m: string) => m.toUpperCase());
@@ -121,11 +122,11 @@ export const ChartCard: React.FC<ChartCardProps> = ({
   }, [flowMode, scheduleStage, parallelGroup]);
 
   const handleCsvDownload = () => {
-    const data = extractDataFromChartSpec(chartSpec);
+    const data = extractDataFromChartSpec(spec);
     downloadCsv(data, 'analytics_data.csv');
   };
 
-  if (!chartSpec || useAltChart) {
+  if (!spec || useAltChart) {
     return null;
   }
 
@@ -156,16 +157,16 @@ export const ChartCard: React.FC<ChartCardProps> = ({
   // Apply updates deterministically with replaceMerge to avoid stale series/axes
   useEffect(() => {
     const instance = chartRef.current;
-    if (!instance || !chartSpec) return;
+    if (!instance || !spec) return;
     try {
-      const themed = withLightTheme(chartSpec);
+      const themed = withLightTheme(spec);
       // If echarts-for-react already set option via prop, this is a reinforcement to ensure replaceMerge semantics
       instance.setOption(themed, { replaceMerge: ['series', 'xAxis', 'yAxis'] });
     } catch (e) {
       // swallow to avoid breaking UI in edge cases
       console.warn('[ChartCard] setOption replaceMerge failed', e);
     }
-  }, [chartSpec]);
+  }, [spec]);
 
   return (
     <div ref={containerRef} className="bg-gray-800 border border-gray-700 rounded-xl shadow-2xl p-4 sm:p-6 md:p-8">
@@ -222,10 +223,10 @@ export const ChartCard: React.FC<ChartCardProps> = ({
                 <select
                   className="bg-gray-100 border border-gray-300 rounded px-2 sm:px-3 py-1 sm:py-1.5 text-sm sm:text-base min-h-[32px] sm:min-h-[36px]"
                   onChange={(e) => handleMetricChange(e.target.value)}
-                  defaultValue={((chartSpec.meta?.defaultColumns || []).map((c: string) => c.replace(/_/g, ' ').replace(/\b\w/g, (m: string) => m.toUpperCase())))[0]}
+                  defaultValue={((spec.meta?.defaultColumns || []).map((c: string) => c.replace(/_/g, ' ').replace(/\b\w/g, (m: string) => m.toUpperCase())))[0]}
                 >
                   {/* Always show metrics */}
-                  {(chartSpec.meta?.includedColumns || []).map((c: string) => {
+                  {(spec.meta?.includedColumns || []).map((c: string) => {
                     const label = c.replace(/_/g, ' ').replace(/\b\w/g, (m: string) => m.toUpperCase());
                     return <option key={c} value={label}>{label}</option>;
                   })}
@@ -244,11 +245,11 @@ export const ChartCard: React.FC<ChartCardProps> = ({
         )}
         
         <ChartErrorBoundary 
-          key={`chart-${chartRetryCount}-${JSON.stringify(chartSpec)?.substring(0,50)}`} 
+          key={`chart-${chartRetryCount}-${JSON.stringify(spec)?.substring(0,50)}`} 
           onError={handleChartError}
         >
           <EChartsReact 
-            option={withLightTheme(chartSpec)} 
+            option={withLightTheme(spec)} 
             style={{ 
               height: enableDropdown || enableCsvDownload ? 'calc(100% - 36px)' : 'calc(100% - 4px)', 
               width: '100%' 
@@ -267,3 +268,8 @@ export const ChartCard: React.FC<ChartCardProps> = ({
     </div>
   );
 };
+
+
+
+
+

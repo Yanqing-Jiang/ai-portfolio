@@ -37,6 +37,7 @@ vi.mock('./useAnalyticsStream', () => {
 
 function HookHarness({ query, flow }: { query: string; flow: 'planner-executor' | 'single-agent' | 'multi-agent' }) {
   const { handleQuery, chatHistory, processSteps, revisionMode } = useAnalyticsMemoryStream(flow);
+  const firstResult = chatHistory.find((m) => m.type === 'result');
 
   React.useEffect(() => {
     (async () => {
@@ -56,6 +57,8 @@ function HookHarness({ query, flow }: { query: string; flow: 'planner-executor' 
           <li key={step.id}>{`${step.id}:${step.status}`}</li>
         ))}
       </ul>
+      <div data-testid="first-result-evidence">{firstResult?.analysisOverview ? JSON.stringify(firstResult.analysisOverview.evidence || []) : ''}</div>
+      <div data-testid="latency-guardrail-status">{firstResult?.latencyGuardrail?.status ?? ''}</div>
     </div>
   );
 }
@@ -73,6 +76,43 @@ describe('useAnalyticsMemoryStream result deduping', () => {
 
     const resultCount = Number(screen.getByTestId('result-count').textContent);
     expect(resultCount).toBe(1);
+  });
+
+  it('parses evidence entries from analysis_overview payloads', async () => {
+    (globalThis as any).__TEST_EVENTS__ = [
+      {
+        event: 'analysis_complete',
+        analysis: 'Narrative with evidence.',
+        analysis_overview: {
+          tldr: 'Key takeaway supported by source.',
+          evidence: [
+            {
+              source_url: 'https://example.com/report',
+              title: 'Example report',
+              snippet: 'The report confirms the growth metric.',
+              confidence: 0.6,
+            },
+          ],
+        },
+        latency_guardrail: {
+          status: 'violation',
+          violations: ['p95_ms'],
+          thresholds: { p50_ms: 500, p95_ms: 1500 },
+        },
+      },
+    ];
+
+    await act(async () => {
+      render(<HookHarness query="evidence check" flow="planner-executor" />);
+    });
+
+    const evidenceText = screen.getByTestId('first-result-evidence').textContent || '[]';
+    const evidence = JSON.parse(evidenceText);
+    expect(evidence).toHaveLength(1);
+    expect(evidence[0].sourceUrl).toBe('https://example.com/report');
+    expect(evidence[0].title).toBe('Example report');
+    expect(evidence[0].confidence).toBe(0.6);
+    expect(screen.getByTestId('latency-guardrail-status').textContent).toBe('violation');
   });
 
   it('emits a single result for cohesive_result followed by workflow_complete', async () => {
@@ -170,5 +210,31 @@ describe('useAnalyticsMemoryStream specialist readiness', () => {
     expect(stepItems).toContain('chart_generation:completed');
     expect(stepItems).toContain('web_research_agent:completed');
     expect(stepItems).toContain('analysis_generation:completed');
+  });
+});
+
+describe('useAnalyticsMemoryStream follow-up guidance', () => {
+  it('tracks follow-up route stage and banner metadata', async () => {
+    (globalThis as any).__TEST_EVENTS__ = [
+      { event: 'follow_up_route', data: { route: 'reuse_sql', flow: 'planner-executor' } },
+      {
+        event: 'progress',
+        data: {
+          step: 'follow_up_route',
+          banner: {
+            title: 'Reusing Validated SQL',
+            message: 'Keeping the last dataset so revisions publish faster without full regeneration.',
+            route: 'reuse_sql',
+          },
+        },
+      },
+    ];
+
+    await act(async () => {
+      render(<HookHarness query="follow up summary" flow="planner-executor" />);
+    });
+
+    const stepIds = Array.from(screen.getByTestId('step-ids').querySelectorAll('li')).map((li) => li.textContent || '');
+    expect(stepIds).toContain('follow_up_route:completed');
   });
 });

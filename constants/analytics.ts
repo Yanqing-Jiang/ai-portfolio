@@ -25,6 +25,7 @@ export const STEP_NAME: Record<string, string> = {
   chart_revision: 'Chart Revision',
   analysis_generation: 'Final Analysis',
   analysis_revision: 'Analysis Revision',
+  follow_up_route: 'Follow-Up Guidance',
   finalization: 'Workflow Finalization',
 };
 
@@ -52,6 +53,7 @@ export const STEP_ORDER = [
   'chart_revision',
   'analysis_generation',
   'analysis_revision',
+  'follow_up_route',
   'finalization',
 ];
 
@@ -79,6 +81,7 @@ export const STEP_NAME_SQL: Record<string, string> = {
   analysis: 'Analysis Generation',
   analysis_generation: 'Analysis Generation',
   analysis_revision: 'Analysis Revision',
+  follow_up_route: 'Follow-Up Guidance',
   workflow_complete: 'Workflow Summary',
 };
 
@@ -104,6 +107,7 @@ export const STEP_ORDER_SQL = [
   'analysis',
   'analysis_generation',
   'analysis_revision',
+  'follow_up_route',
   'workflow_complete',
 ];
 

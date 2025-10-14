@@ -34,11 +34,100 @@ export const resolveChartSpecOption = (payload: any): any | null => {
   return null;
 };
 
+export const hydrateChartSpec = (spec: any) => {
+  if (!spec || typeof spec !== 'object') return spec;
+  const rawData = spec.meta?.rawData;
+  const displayNames = spec.meta?.displayNames || {};
+  const includedColumns = spec.meta?.includedColumns || Object.keys(displayNames || {});
+  if (!Array.isArray(rawData) || rawData.length === 0 || !Array.isArray(spec.series)) {
+    return spec;
+  }
+
+  const toLabel = (row: Record<string, any>) => {
+    const year = row?.calendar_year ?? row?.fiscal_year ?? row?.year;
+    const quarter = row?.calendar_quarter ?? row?.fiscal_quarter ?? row?.quarter;
+    if (quarter && year) {
+      return `${quarter} ${year}`;
+    }
+    if (year !== undefined && year !== null) {
+      return `${year}`;
+    }
+    const month = row?.calendar_month ?? row?.month;
+    if (year !== undefined && month) {
+      try {
+        const date = new Date(Date.UTC(Number(year), Number(month) - 1, 1));
+        if (!Number.isNaN(date.valueOf())) {
+          return date.toLocaleString('en-US', { month: 'short', year: 'numeric' });
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    const period = row?.period ?? row?.period_end_date ?? row?.date ?? row?.timestamp;
+    if (period) {
+      return String(period);
+    }
+    return 'Value';
+  };
+
+  const hydrated = JSON.parse(JSON.stringify(spec));
+  const labels = rawData.map(toLabel);
+
+  if (Array.isArray(hydrated.xAxis)) {
+    hydrated.xAxis = hydrated.xAxis.map((axis: any) => ({ ...(axis || {}), data: labels }));
+  } else {
+    hydrated.xAxis = { ...(hydrated.xAxis || {}), data: labels };
+  }
+
+  const displayToField = new Map<string, string>();
+  Object.entries(displayNames || {}).forEach(([field, name]) => {
+    if (name) {
+      displayToField.set(String(name), field);
+    }
+  });
+
+  hydrated.series = hydrated.series.map((series: any) => {
+    const seriesName = String(series?.name ?? '');
+    const field = series.meta?.field || displayToField.get(seriesName) || includedColumns.find((column: string) => {
+      const normalized = column.replace(/_/g, ' ').toLowerCase();
+      return seriesName.toLowerCase().includes(normalized);
+    });
+
+    if (!field) {
+      return series;
+    }
+
+    const values = rawData.map((row: any) => {
+      const value = row?.[field];
+      if (typeof value === 'number' || value === null) {
+        return value;
+      }
+      if (value === undefined) {
+        return null;
+      }
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? parsed : null;
+    });
+
+    return {
+      ...series,
+      data: values,
+    };
+  });
+
+  return hydrated;
+};
 export const isValidChartSpec = (spec: any) => {
   try {
-    if (!spec || typeof spec !== 'object') return false;
-    if (spec.series && !Array.isArray(spec.series)) return false;
-    return true;
+    const option = resolveChartSpecOption(spec) ?? (looksLikeChartSpec(spec) ? spec : null);
+    if (!option || typeof option !== 'object') return false;
+    if (option.series && !Array.isArray(option.series)) return false;
+    const hasSeriesData = Array.isArray(option.series)
+      ? option.series.some((series: any) => Array.isArray(series?.data) && series.data.some((value: any) => value !== null && value !== undefined))
+      : false;
+    const hasDataset = Array.isArray((option as any).dataset) ? (option as any).dataset.length > 0 : false;
+    const hasDatasets = Array.isArray((option as any).datasets) ? (option as any).datasets.length > 0 : false;
+    return hasSeriesData || hasDataset || hasDatasets;
   } catch {
     return false;
   }
@@ -383,3 +472,5 @@ export function applyChartOps(base: any, patch: ChartPatch): any {
   }
   return option;
 }
+
+

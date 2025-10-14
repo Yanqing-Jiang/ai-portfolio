@@ -459,10 +459,9 @@ def build_chart_spec(
     seen = set()
     for row in data:
         xv = row.get(x_field)
-        if xv is None:
-            # Try composite for quarterly
-            if x_field == 'calendar_quarter' and row.get('calendar_year') and row.get('calendar_quarter'):
-                xv = f"{row.get('calendar_year')} {row.get('calendar_quarter')}"
+        # Always normalize quarterly axis to "YYYY Qn" when year information exists
+        if x_field == 'calendar_quarter' and row.get('calendar_year') and row.get('calendar_quarter'):
+            xv = f"{row.get('calendar_year')} {row.get('calendar_quarter')}"
         if xv is None:
             continue
         s = str(xv)
@@ -471,6 +470,26 @@ def build_chart_spec(
             x_vals.append(s)
 
     x_vals = _sort_axis_values(x_vals, x_field)
+
+    # Guardrail: if quarterly axis ended up as plain Q1..Q4 while data spans multiple years,
+    # rebuild labels as composite year+quarter.
+    try:
+        if x_field == 'calendar_quarter' and x_vals and all(v in {'Q1','Q2','Q3','Q4'} for v in x_vals):
+            years = [int(r.get('calendar_year')) for r in data if r.get('calendar_year') is not None]
+            if years and (max(years) != min(years)):
+                seen = set()
+                rebuilt: List[str] = []
+                for r in data:
+                    if r.get('calendar_year') and r.get('calendar_quarter'):
+                        label = f"{r.get('calendar_year')} {r.get('calendar_quarter')}"
+                        if label not in seen:
+                            seen.add(label)
+                            rebuilt.append(label)
+                if rebuilt:
+                    x_vals = _sort_axis_values(rebuilt, 'calendar_quarter')
+    except Exception:
+        # Non-fatal; continue with current x_vals
+        pass
 
     # Colors - enhanced with primary/secondary distinction and company colors
     colors = (charts_cfg.get('themes', {}).get('light', {}).get('chart_colors', {}).get('primary_palette') or
@@ -645,7 +664,20 @@ def build_chart_spec(
                 if str(r_x) == xv:
                     found = row
                     break
-            vals.append(found.get(col) if found and col in found else None)
+            # Support derived percent series when only a ratio exists (e.g., market_share -> market_share_percent)
+            value: Any = None
+            if found:
+                if col in found:
+                    value = found.get(col)
+                elif col.endswith('_percent'):
+                    base = col[:-8]  # strip "_percent"
+                    if base in found:
+                        try:
+                            raw = found.get(base)
+                            value = float(raw) * 100.0 if raw is not None else None
+                        except Exception:
+                            value = None
+            vals.append(value)
         
         # Determine axis index (0=left, 1=right)
         y_axis_index = 1 if series_axes.get(name) == 'right' else 0

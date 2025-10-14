@@ -1,0 +1,241 @@
+[
+  {
+    "id": "chart_revision",
+    "name": "Chart Revision",
+    "status": "completed",
+    "thinking": [
+      "Chart type -> bar"
+    ],
+    "details": {
+      "patch": {
+        "step": "chart_patch",
+        "ts": "2025-10-14T14:19:44.239166",
+        "ops": [
+          {
+            "op": "set_chart_type",
+            "value": "bar"
+          }
+        ],
+        "status": "applied",
+        "session_id": "4169e910-da80-45bd-8a08-588f31790121",
+        "reason": "revision_request",
+        "source": "analytics_memory_workflow",
+        "mode": "multi_agent",
+        "badges": {
+          "mode": "Supervisor",
+          "mode_schedule": {
+            "parallel_group": "specialist_parallel"
+          },
+          "hedging": "enabled"
+        },
+        "schedule": {
+          "mode": "multi_agent",
+          "default_parallelism": true,
+          "accessory_strategy": "specialist_parallel",
+          "hedging_enabled": true,
+          "stages": [
+            {
+              "key": "supervisor",
+              "label": "Supervisor Kickoff",
+              "parallel_group": "supervisor",
+              "allows_parallel": false,
+              "steps": [],
+              "accessories": [],
+              "hedged_tools": [],
+              "emits": [
+                "agent_supervisor_started",
+                "agent_turn",
+                "agent_reasoning",
+                "agent_coordination"
+              ],
+              "description": "Supervisor agent sets up shared artifacts and objectives."
+            },
+            {
+              "key": "classification",
+              "label": "Classification Specialist",
+              "parallel_group": "specialist_sequential",
+              "allows_parallel": true,
+              "steps": [
+                "classification"
+              ],
+              "accessories": [],
+              "hedged_tools": [],
+              "emits": [
+                "classification",
+                "classification_started",
+                "classification_complete",
+                "schema_clarifier",
+                "schema_clarifier_result"
+              ],
+              "description": "Specialist handles classification while other tasks queue."
+            },
+            {
+              "key": "intent_sql",
+              "label": "Intent + SQL Specialists",
+              "parallel_group": "specialist_core",
+              "allows_parallel": true,
+              "steps": [
+                "intent_detection",
+                "clarification",
+                "sql_compilation",
+                "sql_execution"
+              ],
+              "accessories": [],
+              "hedged_tools": [],
+              "emits": [
+                "intent_detection",
+                "intent_detection_complete",
+                "clarification",
+                "clarification_progress",
+                "clarification_resolved",
+                "clarification_skipped",
+                "clarification_timeout",
+                "plan_and_select_template",
+                "schema_validation",
+                "sql_compilation",
+                "sql_compiled",
+                "sql_execution",
+                "sql_generated",
+                "sql_validated",
+                "execution_stats",
+                "sql_ready"
+              ],
+              "description": "Intent and SQL specialists coordinate under supervisor guidance."
+            },
+            {
+              "key": "hedged_accessories",
+              "label": "Hedged Accessories",
+              "parallel_group": "specialist_fanout",
+              "allows_parallel": true,
+              "steps": [
+                "web_search"
+              ],
+              "accessories": [
+                "web_retriever_cached",
+                "web_retriever_live",
+                "stock_tracker"
+              ],
+              "hedged_tools": [
+                "web_retriever_cached",
+                "web_retriever_live"
+              ],
+              "emits": [
+                "tool_parallel_start",
+                "tool_parallel_result",
+                "tool_parallel_complete",
+                "tool_fanout",
+                "tool_execution",
+                "web_research_agent",
+                "hedged_accessories_complete",
+                "stock_ready",
+                "web_ready"
+              ],
+              "description": "Supervisor launches hedged web retrievers plus stock tracker in parallel."
+            },
+            {
+              "key": "chart",
+              "label": "Chart Specialist",
+              "parallel_group": "specialist_chart",
+              "allows_parallel": true,
+              "steps": [
+                "chart_generation"
+              ],
+              "accessories": [],
+              "hedged_tools": [],
+              "emits": [
+                "chart_generation",
+                "chart_planned",
+                "chart_spec_ready",
+                "chart_generated",
+                "chart_ready"
+              ],
+              "description": "Chart specialist consumes SQL outputs and accessory deltas."
+            },
+            {
+              "key": "analysis",
+              "label": "Analysis + Cohesive Result",
+              "parallel_group": "analysis_stream",
+              "allows_parallel": true,
+              "steps": [
+                "analysis_generation",
+                "analysis_revision",
+                "follow_up_route"
+              ],
+              "accessories": [],
+              "hedged_tools": [],
+              "emits": [
+                "analysis_generation",
+                "analysis_chunk",
+                "analysis_streaming",
+                "analysis_complete",
+                "follow_up_route",
+                "workflow_complete",
+                "cohesive_result",
+                "cohesive_result_error",
+                "short_financial_analysis",
+                "analysis_ready"
+              ],
+              "description": "Supervisor aggregates chart + accessory data into cohesive result."
+            }
+          ]
+        },
+        "accessory_strategy": "specialist_parallel",
+        "supports_deltas": true,
+        "follow_up_route": "full_pipeline"
+      },
+      "status": "applied"
+    },
+    "timestamp": "2025-10-14T14:19:44.239166",
+    "flowMode": "multi_agent"
+  },
+  {
+    "id": "agent_coordination",
+    "name": "Agent Coordination",
+    "status": "completed",
+    "thinking": [
+      "Agent Coordination: start [budget 800ms  concurrency 2  outputs revision]",
+      "Chart type -> bar",
+      "Agent Coordination: {\"chart_type\":null} [budget 800ms  concurrency 2  outputs revision]"
+    ],
+    "details": {
+      "agent_turns": [
+        {
+          "role": "viz_designer",
+          "status": "start",
+          "ts": "2025-10-14T14:19:40.181271",
+          "parallelGroup": "supervisor",
+          "latencyBudgetMs": 800,
+          "concurrencyLimit": 2,
+          "outputArtifacts": [
+            "revision"
+          ]
+        },
+        {
+          "role": "viz_designer",
+          "status": "complete",
+          "ts": "2025-10-14T14:19:44.239573",
+          "elapsed_ms": 4058,
+          "summary": {
+            "chart_type": null
+          },
+          "parallelGroup": "supervisor",
+          "latencyBudgetMs": 800,
+          "concurrencyLimit": 2,
+          "outputArtifacts": [
+            "revision"
+          ]
+        }
+      ],
+      "agent_reasoning": [],
+      "latest_summary": {
+        "chart_type": null
+      },
+      "agent_status": {
+        "agent_coordination": "completed"
+      }
+    },
+    "elapsed_ms": 4058,
+    "timestamp": "2025-10-14T14:19:44.239573",
+    "parallelGroup": "coordination"
+  }
+]

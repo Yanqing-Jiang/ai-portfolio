@@ -125,3 +125,47 @@ def test_multi_agent_cohesive_result_payload(monkeypatch):
     assert data["chart_spec"]["title"] == "Share"
     assert data["sql"] == "SELECT * FROM market_share"
     assert data["stock_widget"]["symbols"] == ["NASDAQ:AMD"]
+
+
+def test_chart_generated_normalizes_wrapped_spec():
+    flow = MultiAgentFlow()
+    flow._prepare_context("Normalize chart spec")
+    wrapped_spec = {
+        "chart_type": "line_multi",
+        "chart_spec": {
+            "title": {"text": "Market Share"},
+            "xAxis": {"type": "category", "data": ["2024 Q1"]},
+            "series": [{"name": "Market Share %", "type": "line", "data": [11.9]}],
+        },
+    }
+    event = {"event": "chart_generated", "data": {"chart_spec": wrapped_spec, "chart_type": "line_multi"}}
+
+    flow._capture_event(event)
+
+    stored_spec = flow._shared_context["chart"]["spec"]
+    assert isinstance(stored_spec, dict)
+    assert stored_spec["series"][0]["data"] == [11.9]
+    summary = flow._shared_context["chart"]["spec_summary"]
+    assert summary["chart_type"] == "line_multi"
+    assert summary["series_count"] == 1
+    assert event["data"]["chart_spec"] == stored_spec
+    assert "chart_spec_id" in event["data"]
+
+
+def test_sql_attempts_are_sanitized():
+    flow = MultiAgentFlow()
+    flow._prepare_context("Sanitize attempts")
+    event = {
+        "event": "sql_attempts",
+        "data": {
+            "attempts": [
+                {"status": "retry", "window": slice(None, 1200, None)},
+            ]
+        },
+    }
+
+    flow._capture_event(event)
+
+    attempts = flow._shared_context["sql"]["attempts"]
+    assert isinstance(attempts, list)
+    assert attempts[0]["window"] == {"start": None, "stop": 1200, "step": None}

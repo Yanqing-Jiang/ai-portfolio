@@ -1,0 +1,4883 @@
+[
+  {
+    "id": "classification",
+    "name": "classification",
+    "status": "completed",
+    "thinking": [
+      "Starting query classification...",
+      "LLM classified topic 'financial_analytics'",
+      "Query classified as financial analytics"
+    ],
+    "details": {
+      "model": "gpt-5-nano-2025-08-07",
+      "confidence": 0.78,
+      "category": "financial_analytics",
+      "is_financial": true
+    },
+    "elapsed_ms": 2670,
+    "timestamp": "2025-10-14T14:15:35.604225"
+  },
+  {
+    "id": "schema_clarifier",
+    "name": "schema_clarifier",
+    "status": "in_progress",
+    "thinking": [],
+    "timestamp": "2025-10-14T14:15:35.608641",
+    "sequence": 10,
+    "flowMode": "multi_agent"
+  },
+  {
+    "id": "clarification",
+    "name": "Requirements Clarification",
+    "status": "completed",
+    "thinking": [
+      "Clarifications resolved",
+      "All required slots satisfied"
+    ],
+    "details": {
+      "step": "intent_detection",
+      "ts": "2025-10-14T14:15:35.609026",
+      "key": "margin_growth_vs_peers",
+      "confidence": 0.75,
+      "clarifications_needed": false,
+      "low_confidence": true,
+      "schema_clarifier_action": "skip",
+      "elapsed_ms": 1,
+      "mode": "multi_agent",
+      "badges": {
+        "mode": "Supervisor",
+        "mode_schedule": {
+          "parallel_group": "specialist_parallel"
+        },
+        "hedging": "enabled"
+      },
+      "schedule": {
+        "mode": "multi_agent",
+        "default_parallelism": true,
+        "accessory_strategy": "specialist_parallel",
+        "hedging_enabled": true,
+        "stages": [
+          {
+            "key": "supervisor",
+            "label": "Supervisor Kickoff",
+            "parallel_group": "supervisor",
+            "allows_parallel": false,
+            "steps": [],
+            "accessories": [],
+            "hedged_tools": [],
+            "emits": [
+              "agent_supervisor_started",
+              "agent_turn",
+              "agent_reasoning",
+              "agent_coordination"
+            ],
+            "description": "Supervisor agent sets up shared artifacts and objectives."
+          },
+          {
+            "key": "classification",
+            "label": "Classification Specialist",
+            "parallel_group": "specialist_sequential",
+            "allows_parallel": true,
+            "steps": [
+              "classification"
+            ],
+            "accessories": [],
+            "hedged_tools": [],
+            "emits": [
+              "classification",
+              "classification_started",
+              "classification_complete",
+              "schema_clarifier",
+              "schema_clarifier_result"
+            ],
+            "description": "Specialist handles classification while other tasks queue."
+          },
+          {
+            "key": "intent_sql",
+            "label": "Intent + SQL Specialists",
+            "parallel_group": "specialist_core",
+            "allows_parallel": true,
+            "steps": [
+              "intent_detection",
+              "clarification",
+              "sql_compilation",
+              "sql_execution"
+            ],
+            "accessories": [],
+            "hedged_tools": [],
+            "emits": [
+              "intent_detection",
+              "intent_detection_complete",
+              "clarification",
+              "clarification_progress",
+              "clarification_resolved",
+              "clarification_skipped",
+              "clarification_timeout",
+              "plan_and_select_template",
+              "schema_validation",
+              "sql_compilation",
+              "sql_compiled",
+              "sql_execution",
+              "sql_generated",
+              "sql_validated",
+              "execution_stats",
+              "sql_ready"
+            ],
+            "description": "Intent and SQL specialists coordinate under supervisor guidance."
+          },
+          {
+            "key": "hedged_accessories",
+            "label": "Hedged Accessories",
+            "parallel_group": "specialist_fanout",
+            "allows_parallel": true,
+            "steps": [
+              "web_search"
+            ],
+            "accessories": [
+              "web_retriever_cached",
+              "web_retriever_live",
+              "stock_tracker"
+            ],
+            "hedged_tools": [
+              "web_retriever_cached",
+              "web_retriever_live"
+            ],
+            "emits": [
+              "tool_parallel_start",
+              "tool_parallel_result",
+              "tool_parallel_complete",
+              "tool_fanout",
+              "tool_execution",
+              "web_research_agent",
+              "hedged_accessories_complete",
+              "stock_ready",
+              "web_ready"
+            ],
+            "description": "Supervisor launches hedged web retrievers plus stock tracker in parallel."
+          },
+          {
+            "key": "chart",
+            "label": "Chart Specialist",
+            "parallel_group": "specialist_chart",
+            "allows_parallel": true,
+            "steps": [
+              "chart_generation"
+            ],
+            "accessories": [],
+            "hedged_tools": [],
+            "emits": [
+              "chart_generation",
+              "chart_planned",
+              "chart_spec_ready",
+              "chart_generated",
+              "chart_ready"
+            ],
+            "description": "Chart specialist consumes SQL outputs and accessory deltas."
+          },
+          {
+            "key": "analysis",
+            "label": "Analysis + Cohesive Result",
+            "parallel_group": "analysis_stream",
+            "allows_parallel": true,
+            "steps": [
+              "analysis_generation",
+              "analysis_revision",
+              "follow_up_route"
+            ],
+            "accessories": [],
+            "hedged_tools": [],
+            "emits": [
+              "analysis_generation",
+              "analysis_chunk",
+              "analysis_streaming",
+              "analysis_complete",
+              "follow_up_route",
+              "workflow_complete",
+              "cohesive_result",
+              "cohesive_result_error",
+              "short_financial_analysis",
+              "analysis_ready"
+            ],
+            "description": "Supervisor aggregates chart + accessory data into cohesive result."
+          }
+        ]
+      },
+      "accessory_strategy": "specialist_parallel",
+      "supports_deltas": true,
+      "parallel_group": "specialist_core",
+      "schedule_stage": "intent_sql",
+      "stage_allows_parallel": true,
+      "follow_up_route": "full_pipeline",
+      "sequence": 11
+    },
+    "elapsed_ms": 1,
+    "timestamp": "2025-10-14T14:15:35.609782",
+    "sequence": 11,
+    "parallelGroup": "specialist_core",
+    "scheduleStage": "intent_sql",
+    "flowMode": "multi_agent"
+  },
+  {
+    "id": "intent_detection",
+    "name": "Intent Detection",
+    "status": "completed",
+    "thinking": [
+      "Detecting query intent...",
+      "Intent: margin_growth_vs_peers (75%)",
+      "Intent and schema finalized"
+    ],
+    "details": {
+      "intent_key": "margin_growth_vs_peers",
+      "confidence": 0.75,
+      "slots_detected": {
+        "tickers": [
+          "NVDA",
+          "AMD",
+          "INTC",
+          "MU",
+          "QCOM",
+          "AVGO",
+          "TXN"
+        ],
+        "granularity": "annual",
+        "timeframe": {
+          "years_back": 5
+        },
+        "company": "NVDA",
+        "original_query": "How's Nvidia margin growth compare to industry average?"
+      },
+      "step": "intent_detection",
+      "ts": "2025-10-14T14:15:35.610708",
+      "key": "margin_growth_vs_peers",
+      "clarifications_needed": false,
+      "low_confidence": true,
+      "schema_clarifier_action": "skip",
+      "elapsed_ms": 1,
+      "mode": "multi_agent",
+      "badges": {
+        "mode": "Supervisor",
+        "mode_schedule": {
+          "parallel_group": "specialist_parallel"
+        },
+        "hedging": "enabled"
+      },
+      "schedule": {
+        "mode": "multi_agent",
+        "default_parallelism": true,
+        "accessory_strategy": "specialist_parallel",
+        "hedging_enabled": true,
+        "stages": [
+          {
+            "key": "supervisor",
+            "label": "Supervisor Kickoff",
+            "parallel_group": "supervisor",
+            "allows_parallel": false,
+            "steps": [],
+            "accessories": [],
+            "hedged_tools": [],
+            "emits": [
+              "agent_supervisor_started",
+              "agent_turn",
+              "agent_reasoning",
+              "agent_coordination"
+            ],
+            "description": "Supervisor agent sets up shared artifacts and objectives."
+          },
+          {
+            "key": "classification",
+            "label": "Classification Specialist",
+            "parallel_group": "specialist_sequential",
+            "allows_parallel": true,
+            "steps": [
+              "classification"
+            ],
+            "accessories": [],
+            "hedged_tools": [],
+            "emits": [
+              "classification",
+              "classification_started",
+              "classification_complete",
+              "schema_clarifier",
+              "schema_clarifier_result"
+            ],
+            "description": "Specialist handles classification while other tasks queue."
+          },
+          {
+            "key": "intent_sql",
+            "label": "Intent + SQL Specialists",
+            "parallel_group": "specialist_core",
+            "allows_parallel": true,
+            "steps": [
+              "intent_detection",
+              "clarification",
+              "sql_compilation",
+              "sql_execution"
+            ],
+            "accessories": [],
+            "hedged_tools": [],
+            "emits": [
+              "intent_detection",
+              "intent_detection_complete",
+              "clarification",
+              "clarification_progress",
+              "clarification_resolved",
+              "clarification_skipped",
+              "clarification_timeout",
+              "plan_and_select_template",
+              "schema_validation",
+              "sql_compilation",
+              "sql_compiled",
+              "sql_execution",
+              "sql_generated",
+              "sql_validated",
+              "execution_stats",
+              "sql_ready"
+            ],
+            "description": "Intent and SQL specialists coordinate under supervisor guidance."
+          },
+          {
+            "key": "hedged_accessories",
+            "label": "Hedged Accessories",
+            "parallel_group": "specialist_fanout",
+            "allows_parallel": true,
+            "steps": [
+              "web_search"
+            ],
+            "accessories": [
+              "web_retriever_cached",
+              "web_retriever_live",
+              "stock_tracker"
+            ],
+            "hedged_tools": [
+              "web_retriever_cached",
+              "web_retriever_live"
+            ],
+            "emits": [
+              "tool_parallel_start",
+              "tool_parallel_result",
+              "tool_parallel_complete",
+              "tool_fanout",
+              "tool_execution",
+              "web_research_agent",
+              "hedged_accessories_complete",
+              "stock_ready",
+              "web_ready"
+            ],
+            "description": "Supervisor launches hedged web retrievers plus stock tracker in parallel."
+          },
+          {
+            "key": "chart",
+            "label": "Chart Specialist",
+            "parallel_group": "specialist_chart",
+            "allows_parallel": true,
+            "steps": [
+              "chart_generation"
+            ],
+            "accessories": [],
+            "hedged_tools": [],
+            "emits": [
+              "chart_generation",
+              "chart_planned",
+              "chart_spec_ready",
+              "chart_generated",
+              "chart_ready"
+            ],
+            "description": "Chart specialist consumes SQL outputs and accessory deltas."
+          },
+          {
+            "key": "analysis",
+            "label": "Analysis + Cohesive Result",
+            "parallel_group": "analysis_stream",
+            "allows_parallel": true,
+            "steps": [
+              "analysis_generation",
+              "analysis_revision",
+              "follow_up_route"
+            ],
+            "accessories": [],
+            "hedged_tools": [],
+            "emits": [
+              "analysis_generation",
+              "analysis_chunk",
+              "analysis_streaming",
+              "analysis_complete",
+              "follow_up_route",
+              "workflow_complete",
+              "cohesive_result",
+              "cohesive_result_error",
+              "short_financial_analysis",
+              "analysis_ready"
+            ],
+            "description": "Supervisor aggregates chart + accessory data into cohesive result."
+          }
+        ]
+      },
+      "accessory_strategy": "specialist_parallel",
+      "supports_deltas": true,
+      "parallel_group": "specialist_core",
+      "schedule_stage": "intent_sql",
+      "stage_allows_parallel": true,
+      "follow_up_route": "full_pipeline",
+      "sequence": 14,
+      "assumptions": []
+    },
+    "elapsed_ms": 1,
+    "timestamp": "2025-10-14T14:15:35.610708",
+    "sequence": 11,
+    "parallelGroup": "specialist_core",
+    "scheduleStage": "intent_sql",
+    "flowMode": "multi_agent"
+  },
+  {
+    "id": "schema_validation",
+    "name": "Schema & Criteria Validation",
+    "status": "completed",
+    "thinking": [
+      "SQL criteria ready"
+    ],
+    "details": {
+      "intent_key": "margin_growth_vs_peers",
+      "company": "NVDA",
+      "comparison": null,
+      "timeframe": {
+        "years_back": 5,
+        "start_year": null,
+        "end_year": null
+      },
+      "granularity": "annual",
+      "tickers": [
+        "NVDA",
+        "AMD",
+        "INTC",
+        "MU",
+        "QCOM",
+        "AVGO",
+        "TXN"
+      ],
+      "metrics": [],
+      "statistic": null,
+      "ts": "2025-10-14T14:15:35.611058",
+      "mode": "multi_agent",
+      "badges": {
+        "mode": "Supervisor",
+        "mode_schedule": {
+          "parallel_group": "specialist_parallel"
+        },
+        "hedging": "enabled"
+      },
+      "schedule": {
+        "mode": "multi_agent",
+        "default_parallelism": true,
+        "accessory_strategy": "specialist_parallel",
+        "hedging_enabled": true,
+        "stages": [
+          {
+            "key": "supervisor",
+            "label": "Supervisor Kickoff",
+            "parallel_group": "supervisor",
+            "allows_parallel": false,
+            "steps": [],
+            "accessories": [],
+            "hedged_tools": [],
+            "emits": [
+              "agent_supervisor_started",
+              "agent_turn",
+              "agent_reasoning",
+              "agent_coordination"
+            ],
+            "description": "Supervisor agent sets up shared artifacts and objectives."
+          },
+          {
+            "key": "classification",
+            "label": "Classification Specialist",
+            "parallel_group": "specialist_sequential",
+            "allows_parallel": true,
+            "steps": [
+              "classification"
+            ],
+            "accessories": [],
+            "hedged_tools": [],
+            "emits": [
+              "classification",
+              "classification_started",
+              "classification_complete",
+              "schema_clarifier",
+              "schema_clarifier_result"
+            ],
+            "description": "Specialist handles classification while other tasks queue."
+          },
+          {
+            "key": "intent_sql",
+            "label": "Intent + SQL Specialists",
+            "parallel_group": "specialist_core",
+            "allows_parallel": true,
+            "steps": [
+              "intent_detection",
+              "clarification",
+              "sql_compilation",
+              "sql_execution"
+            ],
+            "accessories": [],
+            "hedged_tools": [],
+            "emits": [
+              "intent_detection",
+              "intent_detection_complete",
+              "clarification",
+              "clarification_progress",
+              "clarification_resolved",
+              "clarification_skipped",
+              "clarification_timeout",
+              "plan_and_select_template",
+              "schema_validation",
+              "sql_compilation",
+              "sql_compiled",
+              "sql_execution",
+              "sql_generated",
+              "sql_validated",
+              "execution_stats",
+              "sql_ready"
+            ],
+            "description": "Intent and SQL specialists coordinate under supervisor guidance."
+          },
+          {
+            "key": "hedged_accessories",
+            "label": "Hedged Accessories",
+            "parallel_group": "specialist_fanout",
+            "allows_parallel": true,
+            "steps": [
+              "web_search"
+            ],
+            "accessories": [
+              "web_retriever_cached",
+              "web_retriever_live",
+              "stock_tracker"
+            ],
+            "hedged_tools": [
+              "web_retriever_cached",
+              "web_retriever_live"
+            ],
+            "emits": [
+              "tool_parallel_start",
+              "tool_parallel_result",
+              "tool_parallel_complete",
+              "tool_fanout",
+              "tool_execution",
+              "web_research_agent",
+              "hedged_accessories_complete",
+              "stock_ready",
+              "web_ready"
+            ],
+            "description": "Supervisor launches hedged web retrievers plus stock tracker in parallel."
+          },
+          {
+            "key": "chart",
+            "label": "Chart Specialist",
+            "parallel_group": "specialist_chart",
+            "allows_parallel": true,
+            "steps": [
+              "chart_generation"
+            ],
+            "accessories": [],
+            "hedged_tools": [],
+            "emits": [
+              "chart_generation",
+              "chart_planned",
+              "chart_spec_ready",
+              "chart_generated",
+              "chart_ready"
+            ],
+            "description": "Chart specialist consumes SQL outputs and accessory deltas."
+          },
+          {
+            "key": "analysis",
+            "label": "Analysis + Cohesive Result",
+            "parallel_group": "analysis_stream",
+            "allows_parallel": true,
+            "steps": [
+              "analysis_generation",
+              "analysis_revision",
+              "follow_up_route"
+            ],
+            "accessories": [],
+            "hedged_tools": [],
+            "emits": [
+              "analysis_generation",
+              "analysis_chunk",
+              "analysis_streaming",
+              "analysis_complete",
+              "follow_up_route",
+              "workflow_complete",
+              "cohesive_result",
+              "cohesive_result_error",
+              "short_financial_analysis",
+              "analysis_ready"
+            ],
+            "description": "Supervisor aggregates chart + accessory data into cohesive result."
+          }
+        ]
+      },
+      "accessory_strategy": "specialist_parallel",
+      "supports_deltas": true,
+      "follow_up_route": "full_pipeline",
+      "sequence": 15
+    },
+    "timestamp": "2025-10-14T14:15:35.611058"
+  },
+  {
+    "id": "tool_execution",
+    "name": "Agent Tool Execution",
+    "status": "completed",
+    "thinking": [
+      "Stock widget ready"
+    ],
+    "details": {
+      "stock_widget": {
+        "symbols": [
+          [
+            "NASDAQ:NVDA",
+            "NVDA"
+          ]
+        ],
+        "original": [
+          "NVDA"
+        ],
+        "chartType": "candlestick",
+        "showVolume": true,
+        "showMA": false,
+        "autosize": true,
+        "height": 440,
+        "locale": "en",
+        "generated_at": "2025-10-14T14:15:36.140329",
+        "bars": [
+          {
+            "time": 1756785600,
+            "open": 170,
+            "high": 172.38,
+            "low": 167.22,
+            "close": 170.78,
+            "volume": 231164853
+          },
+          {
+            "time": 1756872000,
+            "open": 171.06,
+            "high": 172.41,
+            "low": 168.88,
+            "close": 170.62,
+            "volume": 164424873
+          },
+          {
+            "time": 1756958400,
+            "open": 170.57,
+            "high": 171.86,
+            "low": 169.41,
+            "close": 171.66,
+            "volume": 141670144
+          },
+          {
+            "time": 1757044800,
+            "open": 168.03,
+            "high": 169.03,
+            "low": 164.07,
+            "close": 167.02,
+            "volume": 224441435
+          },
+          {
+            "time": 1757304000,
+            "open": 167.55,
+            "high": 170.96,
+            "low": 167.35,
+            "close": 168.31,
+            "volume": 163769133
+          },
+          {
+            "time": 1757390400,
+            "open": 169.09,
+            "high": 170.98,
+            "low": 166.74,
+            "close": 170.76,
+            "volume": 157548392
+          },
+          {
+            "time": 1757476800,
+            "open": 176.64,
+            "high": 179.29,
+            "low": 175.47,
+            "close": 177.33,
+            "volume": 226852020
+          },
+          {
+            "time": 1757563200,
+            "open": 179.68,
+            "high": 180.28,
+            "low": 176.48,
+            "close": 177.17,
+            "volume": 151159274
+          },
+          {
+            "time": 1757649600,
+            "open": 177.77,
+            "high": 178.59,
+            "low": 176.45,
+            "close": 177.82,
+            "volume": 124911026
+          },
+          {
+            "time": 1757908800,
+            "open": 175.67,
+            "high": 178.85,
+            "low": 174.51,
+            "close": 177.75,
+            "volume": 147061559
+          },
+          {
+            "time": 1757995200,
+            "open": 177,
+            "high": 177.5,
+            "low": 174.38,
+            "close": 174.88,
+            "volume": 140737775
+          },
+          {
+            "time": 1758081600,
+            "open": 172.64,
+            "high": 173.2,
+            "low": 168.41,
+            "close": 170.29,
+            "volume": 211843817
+          },
+          {
+            "time": 1758168000,
+            "open": 173.98,
+            "high": 177.1,
+            "low": 172.96,
+            "close": 176.24,
+            "volume": 191763313
+          },
+          {
+            "time": 1758254400,
+            "open": 175.77,
+            "high": 178.08,
+            "low": 175.18,
+            "close": 176.67,
+            "volume": 237182143
+          },
+          {
+            "time": 1758513600,
+            "open": 175.3,
+            "high": 184.55,
+            "low": 174.71,
+            "close": 183.61,
+            "volume": 269637001
+          },
+          {
+            "time": 1758600000,
+            "open": 181.97,
+            "high": 182.42,
+            "low": 176.21,
+            "close": 178.43,
+            "volume": 192559552
+          },
+          {
+            "time": 1758686400,
+            "open": 179.77,
+            "high": 179.78,
+            "low": 175.4,
+            "close": 176.97,
+            "volume": 143564116
+          },
+          {
+            "time": 1758772800,
+            "open": 174.48,
+            "high": 180.26,
+            "low": 173.12,
+            "close": 177.69,
+            "volume": 191586733
+          },
+          {
+            "time": 1758859200,
+            "open": 178.17,
+            "high": 179.77,
+            "low": 174.93,
+            "close": 178.19,
+            "volume": 148573732
+          },
+          {
+            "time": 1759118400,
+            "open": 180.43,
+            "high": 184,
+            "low": 180.32,
+            "close": 181.85,
+            "volume": 193063455
+          },
+          {
+            "time": 1759204800,
+            "open": 182.08,
+            "high": 187.35,
+            "low": 181.48,
+            "close": 186.58,
+            "volume": 236981032
+          },
+          {
+            "time": 1759291200,
+            "open": 185.24,
+            "high": 188.14,
+            "low": 183.9,
+            "close": 187.24,
+            "volume": 173844901
+          },
+          {
+            "time": 1759377600,
+            "open": 189.6,
+            "high": 191.05,
+            "low": 188.06,
+            "close": 188.89,
+            "volume": 136805821
+          },
+          {
+            "time": 1759464000,
+            "open": 189.19,
+            "high": 190.36,
+            "low": 185.38,
+            "close": 187.62,
+            "volume": 137596896
+          },
+          {
+            "time": 1759723200,
+            "open": 185.5,
+            "high": 187.23,
+            "low": 183.33,
+            "close": 185.54,
+            "volume": 157678104
+          },
+          {
+            "time": 1759809600,
+            "open": 186.23,
+            "high": 189.06,
+            "low": 184,
+            "close": 185.04,
+            "volume": 140088008
+          },
+          {
+            "time": 1759896000,
+            "open": 186.57,
+            "high": 189.6,
+            "low": 186.54,
+            "close": 189.11,
+            "volume": 130168861
+          },
+          {
+            "time": 1759982400,
+            "open": 192.22,
+            "high": 195.3,
+            "low": 191.06,
+            "close": 192.57,
+            "volume": 182997234
+          },
+          {
+            "time": 1760068800,
+            "open": 193.5,
+            "high": 195.62,
+            "low": 182.05,
+            "close": 183.16,
+            "volume": 268774359
+          },
+          {
+            "time": 1760328000,
+            "open": 187.97,
+            "high": 190.11,
+            "low": 185.96,
+            "close": 188.32,
+            "volume": 153482755
+          }
+        ]
+      },
+      "schedule_stage": "hedged_accessories",
+      "mode": "multi_agent",
+      "badges": {
+        "mode": "Supervisor",
+        "mode_schedule": {
+          "parallel_group": "specialist_parallel"
+        },
+        "hedging": "enabled"
+      },
+      "schedule": {
+        "mode": "multi_agent",
+        "default_parallelism": true,
+        "accessory_strategy": "specialist_parallel",
+        "hedging_enabled": true,
+        "stages": [
+          {
+            "key": "supervisor",
+            "label": "Supervisor Kickoff",
+            "parallel_group": "supervisor",
+            "allows_parallel": false,
+            "steps": [],
+            "accessories": [],
+            "hedged_tools": [],
+            "emits": [
+              "agent_supervisor_started",
+              "agent_turn",
+              "agent_reasoning",
+              "agent_coordination"
+            ],
+            "description": "Supervisor agent sets up shared artifacts and objectives."
+          },
+          {
+            "key": "classification",
+            "label": "Classification Specialist",
+            "parallel_group": "specialist_sequential",
+            "allows_parallel": true,
+            "steps": [
+              "classification"
+            ],
+            "accessories": [],
+            "hedged_tools": [],
+            "emits": [
+              "classification",
+              "classification_started",
+              "classification_complete",
+              "schema_clarifier",
+              "schema_clarifier_result"
+            ],
+            "description": "Specialist handles classification while other tasks queue."
+          },
+          {
+            "key": "intent_sql",
+            "label": "Intent + SQL Specialists",
+            "parallel_group": "specialist_core",
+            "allows_parallel": true,
+            "steps": [
+              "intent_detection",
+              "clarification",
+              "sql_compilation",
+              "sql_execution"
+            ],
+            "accessories": [],
+            "hedged_tools": [],
+            "emits": [
+              "intent_detection",
+              "intent_detection_complete",
+              "clarification",
+              "clarification_progress",
+              "clarification_resolved",
+              "clarification_skipped",
+              "clarification_timeout",
+              "plan_and_select_template",
+              "schema_validation",
+              "sql_compilation",
+              "sql_compiled",
+              "sql_execution",
+              "sql_generated",
+              "sql_validated",
+              "execution_stats",
+              "sql_ready"
+            ],
+            "description": "Intent and SQL specialists coordinate under supervisor guidance."
+          },
+          {
+            "key": "hedged_accessories",
+            "label": "Hedged Accessories",
+            "parallel_group": "specialist_fanout",
+            "allows_parallel": true,
+            "steps": [
+              "web_search"
+            ],
+            "accessories": [
+              "web_retriever_cached",
+              "web_retriever_live",
+              "stock_tracker"
+            ],
+            "hedged_tools": [
+              "web_retriever_cached",
+              "web_retriever_live"
+            ],
+            "emits": [
+              "tool_parallel_start",
+              "tool_parallel_result",
+              "tool_parallel_complete",
+              "tool_fanout",
+              "tool_execution",
+              "web_research_agent",
+              "hedged_accessories_complete",
+              "stock_ready",
+              "web_ready"
+            ],
+            "description": "Supervisor launches hedged web retrievers plus stock tracker in parallel."
+          },
+          {
+            "key": "chart",
+            "label": "Chart Specialist",
+            "parallel_group": "specialist_chart",
+            "allows_parallel": true,
+            "steps": [
+              "chart_generation"
+            ],
+            "accessories": [],
+            "hedged_tools": [],
+            "emits": [
+              "chart_generation",
+              "chart_planned",
+              "chart_spec_ready",
+              "chart_generated",
+              "chart_ready"
+            ],
+            "description": "Chart specialist consumes SQL outputs and accessory deltas."
+          },
+          {
+            "key": "analysis",
+            "label": "Analysis + Cohesive Result",
+            "parallel_group": "analysis_stream",
+            "allows_parallel": true,
+            "steps": [
+              "analysis_generation",
+              "analysis_revision",
+              "follow_up_route"
+            ],
+            "accessories": [],
+            "hedged_tools": [],
+            "emits": [
+              "analysis_generation",
+              "analysis_chunk",
+              "analysis_streaming",
+              "analysis_complete",
+              "follow_up_route",
+              "workflow_complete",
+              "cohesive_result",
+              "cohesive_result_error",
+              "short_financial_analysis",
+              "analysis_ready"
+            ],
+            "description": "Supervisor aggregates chart + accessory data into cohesive result."
+          }
+        ]
+      },
+      "accessory_strategy": "specialist_parallel",
+      "supports_deltas": true,
+      "parallel_group": "specialist_fanout",
+      "stage_allows_parallel": true,
+      "follow_up_route": "full_pipeline",
+      "ts": "2025-10-14T14:15:41.170529",
+      "sequence": 23
+    },
+    "timestamp": "2025-10-14T14:15:41.170529",
+    "sequence": 23,
+    "parallelGroup": "specialist_fanout",
+    "scheduleStage": "hedged_accessories",
+    "flowMode": "multi_agent"
+  },
+  {
+    "id": "tool_fanout",
+    "name": "Tool Fan-Out Telemetry",
+    "status": "completed",
+    "thinking": [
+      "Fan-out launched with 5 tools (limit 5).",
+      "sql_planner status: planned",
+      "chart_builder status: awaiting_data",
+      "web_retriever status: completed",
+      "stock_tracker status: completed",
+      "narrative_synthesizer status: drafting",
+      "Fan-out complete."
+    ],
+    "details": {
+      "tool_manifest": [
+        {
+          "name": "sql_planner",
+          "display_name": "SQL Planner",
+          "description": "Preview metrics and comparisons before execution.",
+          "preview_only": true,
+          "capabilities": [
+            "plan_summary",
+            "telemetry"
+          ],
+          "outputs": [
+            "intent",
+            "metrics_count",
+            "comparison",
+            "granularity"
+          ]
+        },
+        {
+          "name": "chart_builder",
+          "display_name": "Chart Builder",
+          "description": "Echo chart scaffolding before data arrives.",
+          "preview_only": true,
+          "capabilities": [
+            "chart_stub",
+            "telemetry"
+          ],
+          "outputs": [
+            "group_by",
+            "timeframe"
+          ]
+        },
+        {
+          "name": "web_retriever",
+          "display_name": "Web Search",
+          "description": "Fetch fresh external context using Gemini (Google Search retrieval).",
+          "preview_only": false,
+          "capabilities": [
+            "web_context",
+            "telemetry"
+          ],
+          "outputs": [
+            "query_terms",
+            "ready",
+            "summary",
+            "snippets",
+            "search_id",
+            "annotations",
+            "from_cache"
+          ]
+        },
+        {
+          "name": "stock_tracker",
+          "display_name": "Stock Tracker",
+          "description": "Fetch live stock snapshots for planner tickers.",
+          "preview_only": true,
+          "capabilities": [
+            "market_data",
+            "telemetry"
+          ],
+          "outputs": [
+            "tickers",
+            "ready",
+            "insights",
+            "bars",
+            "stock_widget"
+          ]
+        },
+        {
+          "name": "narrative_synthesizer",
+          "display_name": "Narrative Synthesizer",
+          "description": "Draft narrative preview text from planned metrics.",
+          "preview_only": true,
+          "capabilities": [
+            "analysis_preview",
+            "telemetry"
+          ],
+          "outputs": [
+            "preview"
+          ]
+        }
+      ],
+      "concurrency_limit": 5,
+      "tool_fanout_results": [
+        {
+          "tool": "sql_planner",
+          "status": "planned",
+          "elapsed_ms": 0,
+          "started_at": "2025-10-14T14:15:35.612442",
+          "completed_at": "2025-10-14T14:15:35.612459",
+          "fatal": false,
+          "error": null,
+          "metadata": {
+            "name": "sql_planner",
+            "display_name": "SQL Planner",
+            "description": "Preview metrics and comparisons before execution.",
+            "preview_only": true,
+            "capabilities": [
+              "plan_summary",
+              "telemetry"
+            ],
+            "outputs": [
+              "intent",
+              "metrics_count",
+              "comparison",
+              "granularity"
+            ],
+            "summary": "4 metrics planned",
+            "preview_keys": [
+              "intent",
+              "metrics_count",
+              "comparison",
+              "granularity"
+            ],
+            "sample_metrics": [
+              "Revenue",
+              "Gross Profit",
+              "Operating Income"
+            ]
+          },
+          "payload": {
+            "intent": "margin_growth_vs_peers",
+            "metrics_count": 4,
+            "comparison": "vs_avg",
+            "granularity": "annual"
+          }
+        },
+        {
+          "tool": "chart_builder",
+          "status": "awaiting_data",
+          "elapsed_ms": 0,
+          "started_at": "2025-10-14T14:15:35.612473",
+          "completed_at": "2025-10-14T14:15:35.612483",
+          "fatal": false,
+          "error": null,
+          "metadata": {
+            "name": "chart_builder",
+            "display_name": "Chart Builder",
+            "description": "Echo chart scaffolding before data arrives.",
+            "preview_only": true,
+            "capabilities": [
+              "chart_stub",
+              "telemetry"
+            ],
+            "outputs": [
+              "group_by",
+              "timeframe"
+            ],
+            "summary": "3 groupings staged",
+            "timeframe": {
+              "years_back": 5,
+              "start_year": null,
+              "end_year": null
+            },
+            "group_by_preview": [
+              "calendar_year",
+              "calendar_quarter_num",
+              "calendar_quarter"
+            ],
+            "preview_keys": [
+              "group_by",
+              "timeframe"
+            ]
+          },
+          "payload": {
+            "group_by": [
+              "calendar_year",
+              "calendar_quarter_num",
+              "calendar_quarter"
+            ],
+            "timeframe": {
+              "years_back": 5,
+              "start_year": null,
+              "end_year": null
+            }
+          }
+        },
+        {
+          "tool": "web_retriever",
+          "status": "completed",
+          "elapsed_ms": 5544,
+          "started_at": "2025-10-14T14:15:35.612492",
+          "completed_at": "2025-10-14T14:15:41.157320",
+          "fatal": false,
+          "error": null,
+          "metadata": {
+            "name": "web_retriever",
+            "display_name": "Web Search",
+            "description": "Fetch fresh external context using Gemini (Google Search retrieval).",
+            "preview_only": false,
+            "capabilities": [
+              "web_context",
+              "telemetry"
+            ],
+            "outputs": [
+              "query_terms",
+              "ready",
+              "summary",
+              "snippets",
+              "search_id",
+              "annotations",
+              "from_cache"
+            ],
+            "preview_keys": [
+              "query_terms",
+              "ready",
+              "query",
+              "search_topic",
+              "search_topics",
+              "search_id",
+              "summary",
+              "snippets",
+              "annotations",
+              "topics",
+              "usage",
+              "fetched_at",
+              "latency_ms",
+              "model",
+              "from_cache"
+            ],
+            "summary": "Primary question: Nvidia's gross profit margin has shown a strong upward trend, reaching 75.0% in January 2025, significantly exceeding the semiconductor industry average of 42.3%. In Q2 2025, Nvidia's net profit margin was 56.53%, placing it second within the semiconductor industry. This performance is notably higher than the 2021 semiconductor industry average profit margin of 19.8%. Nvidia's revenue growth of 55.6% also surpasses the industry average of 27.71%.\n\nIndustry context: The semiconductor industry is poised for significant growth in 2025, with global sales projected to reach approximately $697 billion, an 11% increase year-over-year. This surge is primarily driven by the escalating demand for Artificial Intelligence (AI) and data center technologies. While AI and high-bandwidth memory (HBM) are expected to see substantial growth, with HBM revenue potentially increasing by up to 70%, demand from the PC and smartphone markets may remain muted. Companies are investing heavily in capital expenditures, with an estimated $185 billion allocated to expand manufacturing capacity. However, potential supply chain imbalances and competition from startups pose challenges.",
+            "snippets_count": 5,
+            "latency_ms": 4754,
+            "search_id": "CFvuaLbmIcfBz7IPiPHL2QU",
+            "provider": "Gemini",
+            "model": "gemini-2.5-flash-lite"
+          },
+          "payload": {
+            "query_terms": "How's Nvidia margin growth compare to industry average?",
+            "ready": true,
+            "query": "How's Nvidia margin growth compare to industry average?",
+            "search_topic": "How's Nvidia margin growth compare to industry average?",
+            "search_topics": [
+              "How's Nvidia margin growth compare to industry average?",
+              "How's semiconductor industry outlook 2025"
+            ],
+            "search_id": "CFvuaLbmIcfBz7IPiPHL2QU",
+            "summary": "Primary question: Nvidia's gross profit margin has shown a strong upward trend, reaching 75.0% in January 2025, significantly exceeding the semiconductor industry average of 42.3%. In Q2 2025, Nvidia's net profit margin was 56.53%, placing it second within the semiconductor industry. This performance is notably higher than the 2021 semiconductor industry average profit margin of 19.8%. Nvidia's revenue growth of 55.6% also surpasses the industry average of 27.71%.\n\nIndustry context: The semiconductor industry is poised for significant growth in 2025, with global sales projected to reach approximately $697 billion, an 11% increase year-over-year. This surge is primarily driven by the escalating demand for Artificial Intelligence (AI) and data center technologies. While AI and high-bandwidth memory (HBM) are expected to see substantial growth, with HBM revenue potentially increasing by up to 70%, demand from the PC and smartphone markets may remain muted. Companies are investing heavily in capital expenditures, with an estimated $185 billion allocated to expand manufacturing capacity. However, potential supply chain imbalances and competition from startups pose challenges.",
+            "snippets": [
+              {
+                "title": "finbox.com",
+                "url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFi4NcWsBFywNBDR9VYEtigNHtuf_vT1k5Ql_fW42uWfwap5hzklUNVK0PPKQjZ7YZTtf-nDUjHW5Ooq0y_cHlCNAsTLgs3NS0PRMKbksA5JpRhH0sXT0J6KSlx0ld2wBNBJJD1N3ZcXYGmqzMlxxA=",
+                "snippet": "Nvidia's gross profit margin has shown a strong upward trend, reaching 75.0% in January 2025, significantly exceeding the semiconductor industry average of 42.3%",
+                "display_url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFi4NcWsBFywNBDR9VYEtigNHtuf_vT1k5Ql_fW42uWfwap5hzklUNVK0PPKQjZ7YZTtf-nDUjHW5Ooq0y_cHlCNAsTLgs3NS0PRMKbksA5JpRhH0sXT0J6KSlx0ld2wBNBJJD1N3ZcXYGmqzMlxxA=",
+                "published_at": null,
+                "annotation": {
+                  "confidence_scores": null,
+                  "grounding_chunk_indices": [
+                    0,
+                    1,
+                    2
+                  ],
+                  "segment": {
+                    "end_index": 161,
+                    "part_index": null,
+                    "start_index": null,
+                    "text": "Nvidia's gross profit margin has shown a strong upward trend, reaching 75.0% in January 2025, significantly exceeding the semiconductor industry average of 42.3%"
+                  }
+                }
+              },
+              {
+                "title": "csimarket.com",
+                "url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFS4t8NuqSbm5DVoQZWX8isLIPtVzNsgbB-0J4cnFpIrqoxOdb6HiSnEMCZjFL1i7S_xPXPksz_Nz7P45zVvR26AhHYlDAFZk9mTBeBC2O2TVLEV8nlEAeC4bs168pHbCrHJ-_gsjTovGFybuD2RVR-8Kwmzd7Lci52PS4sNJnkbTOKAg==",
+                "snippet": "In Q2 2025, Nvidia's net profit margin was 56.53%, placing it second within the semiconductor industry",
+                "display_url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFS4t8NuqSbm5DVoQZWX8isLIPtVzNsgbB-0J4cnFpIrqoxOdb6HiSnEMCZjFL1i7S_xPXPksz_Nz7P45zVvR26AhHYlDAFZk9mTBeBC2O2TVLEV8nlEAeC4bs168pHbCrHJ-_gsjTovGFybuD2RVR-8Kwmzd7Lci52PS4sNJnkbTOKAg==",
+                "published_at": null,
+                "annotation": {
+                  "confidence_scores": null,
+                  "grounding_chunk_indices": [
+                    3
+                  ],
+                  "segment": {
+                    "end_index": 265,
+                    "part_index": null,
+                    "start_index": 163,
+                    "text": "In Q2 2025, Nvidia's net profit margin was 56.53%, placing it second within the semiconductor industry"
+                  }
+                }
+              },
+              {
+                "title": "digitimes.com",
+                "url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQEr-FB_Dq-p6gv-GbX2meoLRHOn-1Ios1nhCGtGFzX0M9UxiiYPMs392t7qLLwoE-zCLXJBj5BwTii8fmkb1Ed6j0wS8dXEMO1i7gZLtQKssYjbpQU_wXfRTHC5ltn0G2QsuA7Pa0IBUsxN8Dhnt1DCGlnLiONWaT2cADYG01R3AkLh5Q==",
+                "snippet": "This performance is notably higher than the 2021 semiconductor industry average profit margin of 19.8%",
+                "display_url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQEr-FB_Dq-p6gv-GbX2meoLRHOn-1Ios1nhCGtGFzX0M9UxiiYPMs392t7qLLwoE-zCLXJBj5BwTii8fmkb1Ed6j0wS8dXEMO1i7gZLtQKssYjbpQU_wXfRTHC5ltn0G2QsuA7Pa0IBUsxN8Dhnt1DCGlnLiONWaT2cADYG01R3AkLh5Q==",
+                "published_at": null,
+                "annotation": {
+                  "confidence_scores": null,
+                  "grounding_chunk_indices": [
+                    4
+                  ],
+                  "segment": {
+                    "end_index": 369,
+                    "part_index": null,
+                    "start_index": 267,
+                    "text": "This performance is notably higher than the 2021 semiconductor industry average profit margin of 19.8%"
+                  }
+                }
+              },
+              {
+                "title": "benzinga.com",
+                "url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFvVougiHOLlUuwRVKp-G9VljkmAAlZJ9zKdFXSYcd723HYZghI3XHQGhQhRwvKGG0RuhdfD-XYp8K0PK6H1D7TAdGvuDlfj_r891kHNQkdl1Vnhu7sBRPOJLoen-neLAjIHGFBKCaltPY6lioawQsfnA6sI1ATT-ihXb4WuZeLY1P3C-RfKM1zc2X13bo4a6BXKYml3Odv2Yd9AatchUpRqfc3VLER24kdOTOky_HvBUNfll4quC6EraZgJIDOwMsWsPkn8QjBVDvmc0GKLVohY4gQgXc=",
+                "snippet": "Nvidia's revenue growth of 55.6% also surpasses the industry average of 27.71%",
+                "display_url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFvVougiHOLlUuwRVKp-G9VljkmAAlZJ9zKdFXSYcd723HYZghI3XHQGhQhRwvKGG0RuhdfD-XYp8K0PK6H1D7TAdGvuDlfj_r891kHNQkdl1Vnhu7sBRPOJLoen-neLAjIHGFBKCaltPY6lioawQsfnA6sI1ATT-ihXb4WuZeLY1P3C-RfKM1zc2X13bo4a6BXKYml3Odv2Yd9AatchUpRqfc3VLER24kdOTOky_HvBUNfll4quC6EraZgJIDOwMsWsPkn8QjBVDvmc0GKLVohY4gQgXc=",
+                "published_at": null,
+                "annotation": {
+                  "confidence_scores": null,
+                  "grounding_chunk_indices": [
+                    5
+                  ],
+                  "segment": {
+                    "end_index": 449,
+                    "part_index": null,
+                    "start_index": 371,
+                    "text": "Nvidia's revenue growth of 55.6% also surpasses the industry average of 27.71%"
+                  }
+                }
+              },
+              {
+                "title": "infosys.com",
+                "url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFThDjk_oElbhj3yG6rbWTciEE1-U_3iuLyGo83SOaOIXibzziYTCHwEABl5thQsJv4BK-K6KxxhKgBj2vO7eQyeD1-CwCQUivwQklLnFbWa0pOJqidonzFM2btmvpXeE_weh0DxEkOGyHPnPvjznNgu8Tp00DbaGXqo4pHWhBot-S_tKWhtvY=",
+                "snippet": "The semiconductor industry is poised for significant growth in 2025, with global sales projected to reach approximately $697 billion, an 11% increase year-over-year",
+                "display_url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFThDjk_oElbhj3yG6rbWTciEE1-U_3iuLyGo83SOaOIXibzziYTCHwEABl5thQsJv4BK-K6KxxhKgBj2vO7eQyeD1-CwCQUivwQklLnFbWa0pOJqidonzFM2btmvpXeE_weh0DxEkOGyHPnPvjznNgu8Tp00DbaGXqo4pHWhBot-S_tKWhtvY=",
+                "published_at": null,
+                "annotation": {
+                  "confidence_scores": null,
+                  "grounding_chunk_indices": [
+                    0,
+                    1,
+                    2
+                  ],
+                  "segment": {
+                    "end_index": 164,
+                    "part_index": null,
+                    "start_index": null,
+                    "text": "The semiconductor industry is poised for significant growth in 2025, with global sales projected to reach approximately $697 billion, an 11% increase year-over-year"
+                  }
+                }
+              }
+            ],
+            "annotations": [
+              {
+                "confidence_scores": null,
+                "grounding_chunk_indices": [
+                  0,
+                  1,
+                  2
+                ],
+                "segment": {
+                  "end_index": 161,
+                  "part_index": null,
+                  "start_index": null,
+                  "text": "Nvidia's gross profit margin has shown a strong upward trend, reaching 75.0% in January 2025, significantly exceeding the semiconductor industry average of 42.3%"
+                }
+              },
+              {
+                "confidence_scores": null,
+                "grounding_chunk_indices": [
+                  3
+                ],
+                "segment": {
+                  "end_index": 265,
+                  "part_index": null,
+                  "start_index": 163,
+                  "text": "In Q2 2025, Nvidia's net profit margin was 56.53%, placing it second within the semiconductor industry"
+                }
+              },
+              {
+                "confidence_scores": null,
+                "grounding_chunk_indices": [
+                  4
+                ],
+                "segment": {
+                  "end_index": 369,
+                  "part_index": null,
+                  "start_index": 267,
+                  "text": "This performance is notably higher than the 2021 semiconductor industry average profit margin of 19.8%"
+                }
+              },
+              {
+                "confidence_scores": null,
+                "grounding_chunk_indices": [
+                  5
+                ],
+                "segment": {
+                  "end_index": 449,
+                  "part_index": null,
+                  "start_index": 371,
+                  "text": "Nvidia's revenue growth of 55.6% also surpasses the industry average of 27.71%"
+                }
+              },
+              {
+                "confidence_scores": null,
+                "grounding_chunk_indices": [
+                  0,
+                  1,
+                  2
+                ],
+                "segment": {
+                  "end_index": 164,
+                  "part_index": null,
+                  "start_index": null,
+                  "text": "The semiconductor industry is poised for significant growth in 2025, with global sales projected to reach approximately $697 billion, an 11% increase year-over-year"
+                }
+              },
+              {
+                "confidence_scores": null,
+                "grounding_chunk_indices": [
+                  0,
+                  3,
+                  1,
+                  4,
+                  5
+                ],
+                "segment": {
+                  "end_index": 283,
+                  "part_index": null,
+                  "start_index": 166,
+                  "text": "This surge is primarily driven by the escalating demand for Artificial Intelligence (AI) and data center technologies"
+                }
+              },
+              {
+                "confidence_scores": null,
+                "grounding_chunk_indices": [
+                  3
+                ],
+                "segment": {
+                  "end_index": 418,
+                  "part_index": null,
+                  "start_index": 285,
+                  "text": "While AI and high-bandwidth memory (HBM) are expected to see substantial growth, with HBM revenue potentially increasing by up to 70%"
+                }
+              },
+              {
+                "confidence_scores": null,
+                "grounding_chunk_indices": [
+                  6,
+                  2
+                ],
+                "segment": {
+                  "end_index": 478,
+                  "part_index": null,
+                  "start_index": 418,
+                  "text": ", demand from the PC and smartphone markets may remain muted"
+                }
+              },
+              {
+                "confidence_scores": null,
+                "grounding_chunk_indices": [
+                  0
+                ],
+                "segment": {
+                  "end_index": 610,
+                  "part_index": null,
+                  "start_index": 480,
+                  "text": "Companies are investing heavily in capital expenditures, with an estimated $185 billion allocated to expand manufacturing capacity"
+                }
+              },
+              {
+                "confidence_scores": null,
+                "grounding_chunk_indices": [
+                  6,
+                  3
+                ],
+                "segment": {
+                  "end_index": 700,
+                  "part_index": null,
+                  "start_index": 612,
+                  "text": "However, potential supply chain imbalances and competition from startups pose challenges"
+                }
+              }
+            ],
+            "topics": [
+              {
+                "label": "Primary question",
+                "query": "How's Nvidia margin growth compare to industry average?",
+                "reason": null,
+                "summary": "Nvidia's gross profit margin has shown a strong upward trend, reaching 75.0% in January 2025, significantly exceeding the semiconductor industry average of 42.3%. In Q2 2025, Nvidia's net profit margin was 56.53%, placing it second within the semiconductor industry. This performance is notably higher than the 2021 semiconductor industry average profit margin of 19.8%. Nvidia's revenue growth of 55.6% also surpasses the industry average of 27.71%.",
+                "snippets": [
+                  {
+                    "title": "finbox.com",
+                    "url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFi4NcWsBFywNBDR9VYEtigNHtuf_vT1k5Ql_fW42uWfwap5hzklUNVK0PPKQjZ7YZTtf-nDUjHW5Ooq0y_cHlCNAsTLgs3NS0PRMKbksA5JpRhH0sXT0J6KSlx0ld2wBNBJJD1N3ZcXYGmqzMlxxA=",
+                    "snippet": "Nvidia's gross profit margin has shown a strong upward trend, reaching 75.0% in January 2025, significantly exceeding the semiconductor industry average of 42.3%",
+                    "display_url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFi4NcWsBFywNBDR9VYEtigNHtuf_vT1k5Ql_fW42uWfwap5hzklUNVK0PPKQjZ7YZTtf-nDUjHW5Ooq0y_cHlCNAsTLgs3NS0PRMKbksA5JpRhH0sXT0J6KSlx0ld2wBNBJJD1N3ZcXYGmqzMlxxA=",
+                    "published_at": null,
+                    "annotation": {
+                      "confidence_scores": null,
+                      "grounding_chunk_indices": [
+                        0,
+                        1,
+                        2
+                      ],
+                      "segment": {
+                        "end_index": 161,
+                        "part_index": null,
+                        "start_index": null,
+                        "text": "Nvidia's gross profit margin has shown a strong upward trend, reaching 75.0% in January 2025, significantly exceeding the semiconductor industry average of 42.3%"
+                      }
+                    }
+                  },
+                  {
+                    "title": "csimarket.com",
+                    "url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFS4t8NuqSbm5DVoQZWX8isLIPtVzNsgbB-0J4cnFpIrqoxOdb6HiSnEMCZjFL1i7S_xPXPksz_Nz7P45zVvR26AhHYlDAFZk9mTBeBC2O2TVLEV8nlEAeC4bs168pHbCrHJ-_gsjTovGFybuD2RVR-8Kwmzd7Lci52PS4sNJnkbTOKAg==",
+                    "snippet": "In Q2 2025, Nvidia's net profit margin was 56.53%, placing it second within the semiconductor industry",
+                    "display_url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFS4t8NuqSbm5DVoQZWX8isLIPtVzNsgbB-0J4cnFpIrqoxOdb6HiSnEMCZjFL1i7S_xPXPksz_Nz7P45zVvR26AhHYlDAFZk9mTBeBC2O2TVLEV8nlEAeC4bs168pHbCrHJ-_gsjTovGFybuD2RVR-8Kwmzd7Lci52PS4sNJnkbTOKAg==",
+                    "published_at": null,
+                    "annotation": {
+                      "confidence_scores": null,
+                      "grounding_chunk_indices": [
+                        3
+                      ],
+                      "segment": {
+                        "end_index": 265,
+                        "part_index": null,
+                        "start_index": 163,
+                        "text": "In Q2 2025, Nvidia's net profit margin was 56.53%, placing it second within the semiconductor industry"
+                      }
+                    }
+                  },
+                  {
+                    "title": "digitimes.com",
+                    "url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQEr-FB_Dq-p6gv-GbX2meoLRHOn-1Ios1nhCGtGFzX0M9UxiiYPMs392t7qLLwoE-zCLXJBj5BwTii8fmkb1Ed6j0wS8dXEMO1i7gZLtQKssYjbpQU_wXfRTHC5ltn0G2QsuA7Pa0IBUsxN8Dhnt1DCGlnLiONWaT2cADYG01R3AkLh5Q==",
+                    "snippet": "This performance is notably higher than the 2021 semiconductor industry average profit margin of 19.8%",
+                    "display_url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQEr-FB_Dq-p6gv-GbX2meoLRHOn-1Ios1nhCGtGFzX0M9UxiiYPMs392t7qLLwoE-zCLXJBj5BwTii8fmkb1Ed6j0wS8dXEMO1i7gZLtQKssYjbpQU_wXfRTHC5ltn0G2QsuA7Pa0IBUsxN8Dhnt1DCGlnLiONWaT2cADYG01R3AkLh5Q==",
+                    "published_at": null,
+                    "annotation": {
+                      "confidence_scores": null,
+                      "grounding_chunk_indices": [
+                        4
+                      ],
+                      "segment": {
+                        "end_index": 369,
+                        "part_index": null,
+                        "start_index": 267,
+                        "text": "This performance is notably higher than the 2021 semiconductor industry average profit margin of 19.8%"
+                      }
+                    }
+                  },
+                  {
+                    "title": "benzinga.com",
+                    "url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFvVougiHOLlUuwRVKp-G9VljkmAAlZJ9zKdFXSYcd723HYZghI3XHQGhQhRwvKGG0RuhdfD-XYp8K0PK6H1D7TAdGvuDlfj_r891kHNQkdl1Vnhu7sBRPOJLoen-neLAjIHGFBKCaltPY6lioawQsfnA6sI1ATT-ihXb4WuZeLY1P3C-RfKM1zc2X13bo4a6BXKYml3Odv2Yd9AatchUpRqfc3VLER24kdOTOky_HvBUNfll4quC6EraZgJIDOwMsWsPkn8QjBVDvmc0GKLVohY4gQgXc=",
+                    "snippet": "Nvidia's revenue growth of 55.6% also surpasses the industry average of 27.71%",
+                    "display_url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFvVougiHOLlUuwRVKp-G9VljkmAAlZJ9zKdFXSYcd723HYZghI3XHQGhQhRwvKGG0RuhdfD-XYp8K0PK6H1D7TAdGvuDlfj_r891kHNQkdl1Vnhu7sBRPOJLoen-neLAjIHGFBKCaltPY6lioawQsfnA6sI1ATT-ihXb4WuZeLY1P3C-RfKM1zc2X13bo4a6BXKYml3Odv2Yd9AatchUpRqfc3VLER24kdOTOky_HvBUNfll4quC6EraZgJIDOwMsWsPkn8QjBVDvmc0GKLVohY4gQgXc=",
+                    "published_at": null,
+                    "annotation": {
+                      "confidence_scores": null,
+                      "grounding_chunk_indices": [
+                        5
+                      ],
+                      "segment": {
+                        "end_index": 449,
+                        "part_index": null,
+                        "start_index": 371,
+                        "text": "Nvidia's revenue growth of 55.6% also surpasses the industry average of 27.71%"
+                      }
+                    }
+                  }
+                ],
+                "search_id": "CFvuaLbmIcfBz7IPiPHL2QU",
+                "latency_ms": 2585
+              },
+              {
+                "label": "Industry context",
+                "query": "How's semiconductor industry outlook 2025",
+                "reason": "Provide wider sector context",
+                "summary": "The semiconductor industry is poised for significant growth in 2025, with global sales projected to reach approximately $697 billion, an 11% increase year-over-year. This surge is primarily driven by the escalating demand for Artificial Intelligence (AI) and data center technologies. While AI and high-bandwidth memory (HBM) are expected to see substantial growth, with HBM revenue potentially increasing by up to 70%, demand from the PC and smartphone markets may remain muted. Companies are investing heavily in capital expenditures, with an estimated $185 billion allocated to expand manufacturing capacity. However, potential supply chain imbalances and competition from startups pose challenges.",
+                "snippets": [
+                  {
+                    "title": "infosys.com",
+                    "url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFThDjk_oElbhj3yG6rbWTciEE1-U_3iuLyGo83SOaOIXibzziYTCHwEABl5thQsJv4BK-K6KxxhKgBj2vO7eQyeD1-CwCQUivwQklLnFbWa0pOJqidonzFM2btmvpXeE_weh0DxEkOGyHPnPvjznNgu8Tp00DbaGXqo4pHWhBot-S_tKWhtvY=",
+                    "snippet": "The semiconductor industry is poised for significant growth in 2025, with global sales projected to reach approximately $697 billion, an 11% increase year-over-year",
+                    "display_url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFThDjk_oElbhj3yG6rbWTciEE1-U_3iuLyGo83SOaOIXibzziYTCHwEABl5thQsJv4BK-K6KxxhKgBj2vO7eQyeD1-CwCQUivwQklLnFbWa0pOJqidonzFM2btmvpXeE_weh0DxEkOGyHPnPvjznNgu8Tp00DbaGXqo4pHWhBot-S_tKWhtvY=",
+                    "published_at": null,
+                    "annotation": {
+                      "confidence_scores": null,
+                      "grounding_chunk_indices": [
+                        0,
+                        1,
+                        2
+                      ],
+                      "segment": {
+                        "end_index": 164,
+                        "part_index": null,
+                        "start_index": null,
+                        "text": "The semiconductor industry is poised for significant growth in 2025, with global sales projected to reach approximately $697 billion, an 11% increase year-over-year"
+                      }
+                    }
+                  },
+                  {
+                    "title": "infosys.com",
+                    "url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFThDjk_oElbhj3yG6rbWTciEE1-U_3iuLyGo83SOaOIXibzziYTCHwEABl5thQsJv4BK-K6KxxhKgBj2vO7eQyeD1-CwCQUivwQklLnFbWa0pOJqidonzFM2btmvpXeE_weh0DxEkOGyHPnPvjznNgu8Tp00DbaGXqo4pHWhBot-S_tKWhtvY=",
+                    "snippet": "This surge is primarily driven by the escalating demand for Artificial Intelligence (AI) and data center technologies",
+                    "display_url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFThDjk_oElbhj3yG6rbWTciEE1-U_3iuLyGo83SOaOIXibzziYTCHwEABl5thQsJv4BK-K6KxxhKgBj2vO7eQyeD1-CwCQUivwQklLnFbWa0pOJqidonzFM2btmvpXeE_weh0DxEkOGyHPnPvjznNgu8Tp00DbaGXqo4pHWhBot-S_tKWhtvY=",
+                    "published_at": null,
+                    "annotation": {
+                      "confidence_scores": null,
+                      "grounding_chunk_indices": [
+                        0,
+                        3,
+                        1,
+                        4,
+                        5
+                      ],
+                      "segment": {
+                        "end_index": 283,
+                        "part_index": null,
+                        "start_index": 166,
+                        "text": "This surge is primarily driven by the escalating demand for Artificial Intelligence (AI) and data center technologies"
+                      }
+                    }
+                  },
+                  {
+                    "title": "a2globalelectronics.com",
+                    "url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQHpKCPtz6GCVXZRX5O6UXtRM2bTQOzl354ipcuJRXSZ0XAdLWcw-AVSCrBo2eBTNhRlBpiPVvk0UEoj-iI3gm9eRZ9sdSsWEzkmYYOkQPge_LfrBRn2RTdNtYGhc41q4TERt88BoFw-trXQK1eJHK6pG6loxpSP7bjcM1ICmshJv9rzEyMq5mnJN-WYbS0DEJfKuzZrsWY=",
+                    "snippet": "While AI and high-bandwidth memory (HBM) are expected to see substantial growth, with HBM revenue potentially increasing by up to 70%",
+                    "display_url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQHpKCPtz6GCVXZRX5O6UXtRM2bTQOzl354ipcuJRXSZ0XAdLWcw-AVSCrBo2eBTNhRlBpiPVvk0UEoj-iI3gm9eRZ9sdSsWEzkmYYOkQPge_LfrBRn2RTdNtYGhc41q4TERt88BoFw-trXQK1eJHK6pG6loxpSP7bjcM1ICmshJv9rzEyMq5mnJN-WYbS0DEJfKuzZrsWY=",
+                    "published_at": null,
+                    "annotation": {
+                      "confidence_scores": null,
+                      "grounding_chunk_indices": [
+                        3
+                      ],
+                      "segment": {
+                        "end_index": 418,
+                        "part_index": null,
+                        "start_index": 285,
+                        "text": "While AI and high-bandwidth memory (HBM) are expected to see substantial growth, with HBM revenue potentially increasing by up to 70%"
+                      }
+                    }
+                  },
+                  {
+                    "title": "deloitte.com",
+                    "url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQHmIGpfBca8EuzvR9URgddyTMfpa_ad6lVqDI32Zw_6OBtCPrIa9rhseOGjt87b6iQ8NugycdJTRqrQ3f_W7_hVSjAcV11G7eXu0UK3zfXpxNXMpjtyHrlBg_27pTl5LJ69RkgJ2HfyXRQfcubxxL33-uf6H-q51k8RkvjCvTpGIwHM7hBdmWcMppcrosdpk_brXWqcLu2ZBU33ALU81CoBAjoXCJwgM7Fn",
+                    "snippet": ", demand from the PC and smartphone markets may remain muted",
+                    "display_url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQHmIGpfBca8EuzvR9URgddyTMfpa_ad6lVqDI32Zw_6OBtCPrIa9rhseOGjt87b6iQ8NugycdJTRqrQ3f_W7_hVSjAcV11G7eXu0UK3zfXpxNXMpjtyHrlBg_27pTl5LJ69RkgJ2HfyXRQfcubxxL33-uf6H-q51k8RkvjCvTpGIwHM7hBdmWcMppcrosdpk_brXWqcLu2ZBU33ALU81CoBAjoXCJwgM7Fn",
+                    "published_at": null,
+                    "annotation": {
+                      "confidence_scores": null,
+                      "grounding_chunk_indices": [
+                        6,
+                        2
+                      ],
+                      "segment": {
+                        "end_index": 478,
+                        "part_index": null,
+                        "start_index": 418,
+                        "text": ", demand from the PC and smartphone markets may remain muted"
+                      }
+                    }
+                  },
+                  {
+                    "title": "infosys.com",
+                    "url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFThDjk_oElbhj3yG6rbWTciEE1-U_3iuLyGo83SOaOIXibzziYTCHwEABl5thQsJv4BK-K6KxxhKgBj2vO7eQyeD1-CwCQUivwQklLnFbWa0pOJqidonzFM2btmvpXeE_weh0DxEkOGyHPnPvjznNgu8Tp00DbaGXqo4pHWhBot-S_tKWhtvY=",
+                    "snippet": "Companies are investing heavily in capital expenditures, with an estimated $185 billion allocated to expand manufacturing capacity",
+                    "display_url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFThDjk_oElbhj3yG6rbWTciEE1-U_3iuLyGo83SOaOIXibzziYTCHwEABl5thQsJv4BK-K6KxxhKgBj2vO7eQyeD1-CwCQUivwQklLnFbWa0pOJqidonzFM2btmvpXeE_weh0DxEkOGyHPnPvjznNgu8Tp00DbaGXqo4pHWhBot-S_tKWhtvY=",
+                    "published_at": null,
+                    "annotation": {
+                      "confidence_scores": null,
+                      "grounding_chunk_indices": [
+                        0
+                      ],
+                      "segment": {
+                        "end_index": 610,
+                        "part_index": null,
+                        "start_index": 480,
+                        "text": "Companies are investing heavily in capital expenditures, with an estimated $185 billion allocated to expand manufacturing capacity"
+                      }
+                    }
+                  },
+                  {
+                    "title": "deloitte.com",
+                    "url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQHmIGpfBca8EuzvR9URgddyTMfpa_ad6lVqDI32Zw_6OBtCPrIa9rhseOGjt87b6iQ8NugycdJTRqrQ3f_W7_hVSjAcV11G7eXu0UK3zfXpxNXMpjtyHrlBg_27pTl5LJ69RkgJ2HfyXRQfcubxxL33-uf6H-q51k8RkvjCvTpGIwHM7hBdmWcMppcrosdpk_brXWqcLu2ZBU33ALU81CoBAjoXCJwgM7Fn",
+                    "snippet": "However, potential supply chain imbalances and competition from startups pose challenges",
+                    "display_url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQHmIGpfBca8EuzvR9URgddyTMfpa_ad6lVqDI32Zw_6OBtCPrIa9rhseOGjt87b6iQ8NugycdJTRqrQ3f_W7_hVSjAcV11G7eXu0UK3zfXpxNXMpjtyHrlBg_27pTl5LJ69RkgJ2HfyXRQfcubxxL33-uf6H-q51k8RkvjCvTpGIwHM7hBdmWcMppcrosdpk_brXWqcLu2ZBU33ALU81CoBAjoXCJwgM7Fn",
+                    "published_at": null,
+                    "annotation": {
+                      "confidence_scores": null,
+                      "grounding_chunk_indices": [
+                        6,
+                        3
+                      ],
+                      "segment": {
+                        "end_index": 700,
+                        "part_index": null,
+                        "start_index": 612,
+                        "text": "However, potential supply chain imbalances and competition from startups pose challenges"
+                      }
+                    }
+                  }
+                ],
+                "search_id": "ClvuaMqELJvBz7IP6pnYuQY",
+                "latency_ms": 2169
+              }
+            ],
+            "usage": null,
+            "fetched_at": "2025-10-14T14:15:41.156917",
+            "latency_ms": 4754,
+            "model": "gemini-2.5-flash-lite",
+            "from_cache": false
+          }
+        },
+        {
+          "tool": "stock_tracker",
+          "status": "completed",
+          "elapsed_ms": 528,
+          "started_at": "2025-10-14T14:15:35.612662",
+          "completed_at": "2025-10-14T14:15:36.141118",
+          "fatal": false,
+          "error": null,
+          "metadata": {
+            "name": "stock_tracker",
+            "display_name": "Stock Tracker",
+            "description": "Fetch live stock snapshots for planner tickers.",
+            "preview_only": false,
+            "capabilities": [
+              "market_data",
+              "telemetry"
+            ],
+            "outputs": [
+              "tickers",
+              "ready",
+              "insights",
+              "bars",
+              "stock_widget"
+            ],
+            "preview_keys": [
+              "ready",
+              "stock_widget",
+              "tickers"
+            ],
+            "summary": "NVDA close 188.32 (+2.82% vs prior close)"
+          },
+          "payload": {
+            "tickers": [
+              "NVDA"
+            ],
+            "ready": true,
+            "stock_widget": {
+              "symbols": [
+                [
+                  "NASDAQ:NVDA",
+                  "NVDA"
+                ]
+              ],
+              "original": [
+                "NVDA"
+              ],
+              "chartType": "candlestick",
+              "showVolume": true,
+              "showMA": false,
+              "autosize": true,
+              "height": 440,
+              "locale": "en"
+            },
+            "symbol": "NVDA",
+            "latest_close": 188.32,
+            "previous_close": 183.16,
+            "change_percent": 2.817208997597727,
+            "bars": [
+              {
+                "time": 1756785600,
+                "open": 170,
+                "high": 172.38,
+                "low": 167.22,
+                "close": 170.78,
+                "volume": 231164853
+              },
+              {
+                "time": 1756872000,
+                "open": 171.06,
+                "high": 172.41,
+                "low": 168.88,
+                "close": 170.62,
+                "volume": 164424873
+              },
+              {
+                "time": 1756958400,
+                "open": 170.57,
+                "high": 171.86,
+                "low": 169.41,
+                "close": 171.66,
+                "volume": 141670144
+              },
+              {
+                "time": 1757044800,
+                "open": 168.03,
+                "high": 169.03,
+                "low": 164.07,
+                "close": 167.02,
+                "volume": 224441435
+              },
+              {
+                "time": 1757304000,
+                "open": 167.55,
+                "high": 170.96,
+                "low": 167.35,
+                "close": 168.31,
+                "volume": 163769133
+              },
+              {
+                "time": 1757390400,
+                "open": 169.09,
+                "high": 170.98,
+                "low": 166.74,
+                "close": 170.76,
+                "volume": 157548392
+              },
+              {
+                "time": 1757476800,
+                "open": 176.64,
+                "high": 179.29,
+                "low": 175.47,
+                "close": 177.33,
+                "volume": 226852020
+              },
+              {
+                "time": 1757563200,
+                "open": 179.68,
+                "high": 180.28,
+                "low": 176.48,
+                "close": 177.17,
+                "volume": 151159274
+              },
+              {
+                "time": 1757649600,
+                "open": 177.77,
+                "high": 178.59,
+                "low": 176.45,
+                "close": 177.82,
+                "volume": 124911026
+              },
+              {
+                "time": 1757908800,
+                "open": 175.67,
+                "high": 178.85,
+                "low": 174.51,
+                "close": 177.75,
+                "volume": 147061559
+              },
+              {
+                "time": 1757995200,
+                "open": 177,
+                "high": 177.5,
+                "low": 174.38,
+                "close": 174.88,
+                "volume": 140737775
+              },
+              {
+                "time": 1758081600,
+                "open": 172.64,
+                "high": 173.2,
+                "low": 168.41,
+                "close": 170.29,
+                "volume": 211843817
+              },
+              {
+                "time": 1758168000,
+                "open": 173.98,
+                "high": 177.1,
+                "low": 172.96,
+                "close": 176.24,
+                "volume": 191763313
+              },
+              {
+                "time": 1758254400,
+                "open": 175.77,
+                "high": 178.08,
+                "low": 175.18,
+                "close": 176.67,
+                "volume": 237182143
+              },
+              {
+                "time": 1758513600,
+                "open": 175.3,
+                "high": 184.55,
+                "low": 174.71,
+                "close": 183.61,
+                "volume": 269637001
+              },
+              {
+                "time": 1758600000,
+                "open": 181.97,
+                "high": 182.42,
+                "low": 176.21,
+                "close": 178.43,
+                "volume": 192559552
+              },
+              {
+                "time": 1758686400,
+                "open": 179.77,
+                "high": 179.78,
+                "low": 175.4,
+                "close": 176.97,
+                "volume": 143564116
+              },
+              {
+                "time": 1758772800,
+                "open": 174.48,
+                "high": 180.26,
+                "low": 173.12,
+                "close": 177.69,
+                "volume": 191586733
+              },
+              {
+                "time": 1758859200,
+                "open": 178.17,
+                "high": 179.77,
+                "low": 174.93,
+                "close": 178.19,
+                "volume": 148573732
+              },
+              {
+                "time": 1759118400,
+                "open": 180.43,
+                "high": 184,
+                "low": 180.32,
+                "close": 181.85,
+                "volume": 193063455
+              },
+              {
+                "time": 1759204800,
+                "open": 182.08,
+                "high": 187.35,
+                "low": 181.48,
+                "close": 186.58,
+                "volume": 236981032
+              },
+              {
+                "time": 1759291200,
+                "open": 185.24,
+                "high": 188.14,
+                "low": 183.9,
+                "close": 187.24,
+                "volume": 173844901
+              },
+              {
+                "time": 1759377600,
+                "open": 189.6,
+                "high": 191.05,
+                "low": 188.06,
+                "close": 188.89,
+                "volume": 136805821
+              },
+              {
+                "time": 1759464000,
+                "open": 189.19,
+                "high": 190.36,
+                "low": 185.38,
+                "close": 187.62,
+                "volume": 137596896
+              },
+              {
+                "time": 1759723200,
+                "open": 185.5,
+                "high": 187.23,
+                "low": 183.33,
+                "close": 185.54,
+                "volume": 157678104
+              },
+              {
+                "time": 1759809600,
+                "open": 186.23,
+                "high": 189.06,
+                "low": 184,
+                "close": 185.04,
+                "volume": 140088008
+              },
+              {
+                "time": 1759896000,
+                "open": 186.57,
+                "high": 189.6,
+                "low": 186.54,
+                "close": 189.11,
+                "volume": 130168861
+              },
+              {
+                "time": 1759982400,
+                "open": 192.22,
+                "high": 195.3,
+                "low": 191.06,
+                "close": 192.57,
+                "volume": 182997234
+              },
+              {
+                "time": 1760068800,
+                "open": 193.5,
+                "high": 195.62,
+                "low": 182.05,
+                "close": 183.16,
+                "volume": 268774359
+              },
+              {
+                "time": 1760328000,
+                "open": 187.97,
+                "high": 190.11,
+                "low": 185.96,
+                "close": 188.32,
+                "volume": 153482755
+              }
+            ],
+            "chartType": "candlestick",
+            "showVolume": true,
+            "showMA": false,
+            "autosize": true,
+            "fetched_at": "2025-10-14T14:15:36.140329",
+            "insights": {
+              "symbol": "NVDA",
+              "latest_close": 188.32,
+              "previous_close": 183.16,
+              "change_percent": 2.817208997597727
+            }
+          }
+        },
+        {
+          "tool": "narrative_synthesizer",
+          "status": "drafting",
+          "elapsed_ms": 0,
+          "started_at": "2025-10-14T14:15:35.612764",
+          "completed_at": "2025-10-14T14:15:35.612775",
+          "fatal": false,
+          "error": null,
+          "metadata": {
+            "name": "narrative_synthesizer",
+            "display_name": "Narrative Synthesizer",
+            "description": "Draft narrative preview text from planned metrics.",
+            "preview_only": true,
+            "capabilities": [
+              "analysis_preview",
+              "telemetry"
+            ],
+            "outputs": [
+              "preview"
+            ],
+            "summary": "Preparing narrative for Revenue, Gross Profit, Operating Income",
+            "sample_metrics": [
+              "Revenue",
+              "Gross Profit",
+              "Operating Income"
+            ],
+            "preview_keys": [
+              "preview"
+            ]
+          },
+          "payload": {
+            "preview": "Preparing narrative for Revenue, Gross Profit, Operating Income"
+          }
+        }
+      ]
+    },
+    "elapsed_ms": 0,
+    "timestamp": "2025-10-14T14:15:41.174824",
+    "sequence": 25,
+    "parallelGroup": "specialist_fanout",
+    "scheduleStage": "hedged_accessories",
+    "flowMode": "multi_agent"
+  },
+  {
+    "id": "sql_compilation",
+    "name": "SQL Compilation",
+    "status": "completed",
+    "thinking": [
+      "SQL compiled (len: 3330)",
+      "SQL ready (attempt 1)"
+    ],
+    "details": {
+      "sql_length": 3330,
+      "template_used": "Margin Growth (pp) vs Industry Average",
+      "template_fallback": false,
+      "attempt": 1,
+      "llm_used": true,
+      "sql": "WITH metrics AS (\n  SELECT\n    ticker,\n    calendar_year,\n    metric,\n    SUM(value) AS value\n  FROM comp_financials\n  WHERE metric IN ('Revenue','Gross Profit','Operating Income','Net Income')\n    AND ticker IN ('NVDA','AMD','INTC','MU','QCOM','AVGO','TXN')\n    AND calendar_quarter_num IS NOT NULL\n    AND calendar_year >= (EXTRACT(YEAR FROM CURRENT_DATE)::int - 5)\n  GROUP BY ticker, calendar_year, metric\n),\npivoted AS (\n  SELECT\n    ticker,\n    calendar_year,\n    SUM(CASE WHEN metric = 'Revenue' THEN value END) AS revenue,\n    SUM(CASE WHEN metric = 'Gross Profit' THEN value END) AS gross_profit,\n    SUM(CASE WHEN metric = 'Operating Income' THEN value END) AS operating_income,\n    SUM(CASE WHEN metric = 'Net Income' THEN value END) AS net_income\n  FROM metrics\n  GROUP BY ticker, calendar_year\n),\nmargins AS (\n  SELECT\n    ticker,\n    calendar_year,\n    revenue::numeric AS revenue,\n    gross_profit::numeric AS gross_profit,\n    operating_income::numeric AS operating_income,\n    net_income::numeric AS net_income,\n    (gross_profit::numeric / NULLIF(revenue::numeric, 0)) AS gross_margin,\n    (operating_income::numeric / NULLIF(revenue::numeric, 0)) AS operating_margin,\n    (net_income::numeric / NULLIF(revenue::numeric, 0)) AS net_margin\n  FROM pivoted\n),\nmargins_yoy AS (\n  SELECT\n    ticker,\n    calendar_year,\n    gross_margin,\n    operating_margin,\n    net_margin,\n    gross_margin - LAG(gross_margin) OVER (PARTITION BY ticker ORDER BY calendar_year) AS gross_margin_yoy_pp,\n    operating_margin - LAG(operating_margin) OVER (PARTITION BY ticker ORDER BY calendar_year) AS operating_margin_yoy_pp,\n    net_margin - LAG(net_margin) OVER (PARTITION BY ticker ORDER BY calendar_year) AS net_margin_yoy_pp\n  FROM margins\n),\nindustry_avg AS (\n  SELECT\n    calendar_year,\n    AVG(gross_margin) AS gross_margin_avg,\n    AVG(operating_margin) AS operating_margin_avg,\n    AVG(net_margin) AS net_margin_avg\n  FROM margins\n  WHERE ticker IN ('AMD','INTC','MU','QCOM','AVGO','TXN')\n  GROUP BY calendar_year\n),\nindustry_avg_yoy AS (\n  SELECT\n    calendar_year,\n    gross_margin_avg,\n    operating_margin_avg,\n    net_margin_avg,\n    gross_margin_avg - LAG(gross_margin_avg) OVER (ORDER BY calendar_year) AS gross_margin_yoy_pp,\n    operating_margin_avg - LAG(operating_margin_avg) OVER (ORDER BY calendar_year) AS operating_margin_yoy_pp,\n    net_margin_avg - LAG(net_margin_avg) OVER (ORDER BY calendar_year) AS net_margin_yoy_pp\n  FROM industry_avg\n)\nSELECT\n  m.calendar_year,\n  m.gross_margin_yoy_pp::numeric AS nvidia_gross_margin_yoy_pp,\n  i.gross_margin_yoy_pp::numeric AS industry_gross_margin_yoy_pp,\n  (m.gross_margin_yoy_pp - i.gross_margin_yoy_pp)::numeric AS gross_margin_yoy_vs_industry_pp,\n  m.operating_margin_yoy_pp::numeric AS nvidia_operating_margin_yoy_pp,\n  i.operating_margin_yoy_pp::numeric AS industry_operating_margin_yoy_pp,\n  (m.operating_margin_yoy_pp - i.operating_margin_yoy_pp)::numeric AS operating_margin_yoy_vs_industry_pp,\n  m.net_margin_yoy_pp::numeric AS nvidia_net_margin_yoy_pp,\n  i.net_margin_yoy_pp::numeric AS industry_net_margin_yoy_pp,\n  (m.net_margin_yoy_pp - i.net_margin_yoy_pp)::numeric AS net_margin_yoy_vs_industry_pp\nFROM margins_yoy m\nLEFT JOIN industry_avg_yoy i\n  ON m.calendar_year = i.calendar_year\nWHERE m.ticker = 'NVDA'\nORDER BY m.calendar_year DESC\nLIMIT 1000;"
+    },
+    "elapsed_ms": 97527,
+    "timestamp": "2025-10-14T14:17:30.885821",
+    "sequence": 29,
+    "parallelGroup": "specialist_core",
+    "scheduleStage": "intent_sql",
+    "flowMode": "multi_agent"
+  },
+  {
+    "id": "sql_validation",
+    "name": "SQL Validation",
+    "status": "completed",
+    "thinking": [
+      "SQL validation passed (attempt 1)"
+    ],
+    "details": {
+      "ok": true,
+      "issues": [],
+      "issues_count": 0,
+      "attempt": 1
+    },
+    "elapsed_ms": 9,
+    "timestamp": "2025-10-14T14:17:30.897981",
+    "sequence": 34,
+    "flowMode": "multi_agent"
+  },
+  {
+    "id": "sql_execution",
+    "name": "Data Retrieval",
+    "status": "in_progress",
+    "thinking": [],
+    "timestamp": "2025-10-14T14:17:30.899244",
+    "sequence": 38,
+    "parallelGroup": "specialist_core",
+    "scheduleStage": "intent_sql",
+    "flowMode": "multi_agent"
+  },
+  {
+    "id": "chart_generation",
+    "name": "Chart Generation",
+    "status": "completed",
+    "thinking": [
+      "Chart line_multi"
+    ],
+    "details": {
+      "chart_spec": {
+        "title": {
+          "left": "center",
+          "top": "5%",
+          "text": "Margin Growth vs Industry"
+        },
+        "tooltip": {
+          "trigger": "axis",
+          "axisPointer": {
+            "type": "cross"
+          }
+        },
+        "legend": {
+          "top": "10%",
+          "left": "center",
+          "data": [
+            "Nvidia Gross Margin Yoy Pp",
+            "Industry Gross Margin Yoy Pp",
+            "Gross Margin Yoy Vs Industry Pp",
+            "Nvidia Operating Margin Yoy Pp"
+          ],
+          "selected": {
+            "Nvidia Gross Margin Yoy Pp": true,
+            "Industry Gross Margin Yoy Pp": false,
+            "Gross Margin Yoy Vs Industry Pp": false,
+            "Nvidia Operating Margin Yoy Pp": false
+          }
+        },
+        "grid": {
+          "left": "3%",
+          "right": "8%",
+          "bottom": "3%",
+          "top": "20%",
+          "containLabel": true
+        },
+        "xAxis": {
+          "type": "category",
+          "data": [
+            "2020",
+            "2021",
+            "2022",
+            "2023",
+            "2024",
+            "2025"
+          ],
+          "axisLabel": {
+            "rotate": 45
+          }
+        },
+        "yAxis": [
+          {
+            "type": "value",
+            "name": "Percentage",
+            "position": "left",
+            "axisLabel": {
+              "formatter": "{value}%"
+            }
+          }
+        ],
+        "series": [
+          {
+            "name": "Nvidia Gross Margin Yoy Pp",
+            "type": "line",
+            "data": [
+              null,
+              "-0.17940683792375035690",
+              "-0.03720605590278425361",
+              "0.05631211986795706488",
+              "0.09716267584414814168",
+              "-0.04157357620451509150"
+            ],
+            "yAxisIndex": 0,
+            "lineStyle": {
+              "color": "#5470C6",
+              "width": 3,
+              "opacity": 1
+            },
+            "itemStyle": {
+              "color": "#5470C6"
+            },
+            "emphasis": {
+              "lineStyle": {
+                "width": 4
+              }
+            }
+          },
+          {
+            "name": "Industry Gross Margin Yoy Pp",
+            "type": "line",
+            "data": [
+              null,
+              "-0.03656402419483316611",
+              "-0.01029554455917929944",
+              "-0.12064421285679624646",
+              "0.03941009770373209982",
+              "0.26096594051275515453"
+            ],
+            "yAxisIndex": 0,
+            "lineStyle": {
+              "color": "#FAC858",
+              "width": 1,
+              "opacity": 0.6,
+              "type": "dashed"
+            },
+            "itemStyle": {
+              "color": "#FAC858"
+            },
+            "emphasis": {
+              "lineStyle": {
+                "width": 2
+              }
+            }
+          },
+          {
+            "name": "Gross Margin Yoy Vs Industry Pp",
+            "type": "line",
+            "data": [
+              null,
+              "-0.14284281372891719079",
+              "-0.02691051134360495417",
+              "0.17695633272475331134",
+              "0.05775257814041604186",
+              "-0.30253951671727024603"
+            ],
+            "yAxisIndex": 0,
+            "lineStyle": {
+              "color": "#EE6666",
+              "width": 1,
+              "opacity": 0.6,
+              "type": "dashed"
+            },
+            "itemStyle": {
+              "color": "#EE6666"
+            },
+            "emphasis": {
+              "lineStyle": {
+                "width": 2
+              }
+            }
+          },
+          {
+            "name": "Nvidia Operating Margin Yoy Pp",
+            "type": "line",
+            "data": [
+              null,
+              "-0.00768662209301813398",
+              "-0.09149192724736896952",
+              "0.12752547591630600626",
+              "0.23991221780375212205",
+              "-0.01933167448056083310"
+            ],
+            "yAxisIndex": 0,
+            "lineStyle": {
+              "color": "#73C0DE",
+              "width": 1,
+              "opacity": 0.6,
+              "type": "dashed"
+            },
+            "itemStyle": {
+              "color": "#73C0DE"
+            },
+            "emphasis": {
+              "lineStyle": {
+                "width": 2
+              }
+            }
+          }
+        ],
+        "meta": {
+          "primarySeries": [
+            "Nvidia Gross Margin Yoy Pp"
+          ],
+          "seriesAxis": {
+            "Nvidia Gross Margin Yoy Pp": "right",
+            "Industry Gross Margin Yoy Pp": "right",
+            "Gross Margin Yoy Vs Industry Pp": "right",
+            "Nvidia Operating Margin Yoy Pp": "right"
+          },
+          "defaultLegendSelection": {
+            "Nvidia Gross Margin Yoy Pp": true,
+            "Industry Gross Margin Yoy Pp": false,
+            "Gross Margin Yoy Vs Industry Pp": false,
+            "Nvidia Operating Margin Yoy Pp": false
+          },
+          "annotations": [
+            {
+              "series": "Nvidia Gross Margin Yoy Pp",
+              "type": "last",
+              "label": "Current: -0.0%"
+            }
+          ],
+          "highlightRules": {
+            "emphasizePrimary": true,
+            "mutedSecondary": true
+          },
+          "seriesValueType": {
+            "Nvidia Gross Margin Yoy Pp": "percent",
+            "Industry Gross Margin Yoy Pp": "percent",
+            "Gross Margin Yoy Vs Industry Pp": "percent",
+            "Nvidia Operating Margin Yoy Pp": "percent"
+          },
+          "includedColumns": [
+            "nvidia_gross_margin_yoy_pp",
+            "industry_gross_margin_yoy_pp",
+            "gross_margin_yoy_vs_industry_pp",
+            "nvidia_operating_margin_yoy_pp"
+          ],
+          "displayNames": {
+            "nvidia_gross_margin_yoy_pp": "Nvidia Gross Margin Yoy Pp",
+            "industry_gross_margin_yoy_pp": "Industry Gross Margin Yoy Pp",
+            "gross_margin_yoy_vs_industry_pp": "Gross Margin Yoy Vs Industry Pp",
+            "nvidia_operating_margin_yoy_pp": "Nvidia Operating Margin Yoy Pp"
+          },
+          "defaultColumns": [
+            "nvidia_gross_margin_yoy_pp"
+          ],
+          "rawData": [
+            {
+              "calendar_year": 2025,
+              "nvidia_gross_margin_yoy_pp": "-0.04157357620451509150",
+              "industry_gross_margin_yoy_pp": "0.26096594051275515453",
+              "gross_margin_yoy_vs_industry_pp": "-0.30253951671727024603",
+              "nvidia_operating_margin_yoy_pp": "-0.01933167448056083310",
+              "industry_operating_margin_yoy_pp": "0.18798717179450738317",
+              "operating_margin_yoy_vs_industry_pp": "-0.20731884627506821627",
+              "nvidia_net_margin_yoy_pp": "-0.01678423435948063549",
+              "industry_net_margin_yoy_pp": "0.21556797189807409745",
+              "net_margin_yoy_vs_industry_pp": "-0.23235220625755473294"
+            },
+            {
+              "calendar_year": 2024,
+              "nvidia_gross_margin_yoy_pp": "0.09716267584414814168",
+              "industry_gross_margin_yoy_pp": "0.03941009770373209982",
+              "gross_margin_yoy_vs_industry_pp": "0.05775257814041604186",
+              "nvidia_operating_margin_yoy_pp": "0.23991221780375212205",
+              "industry_operating_margin_yoy_pp": "0.00982421471779585133",
+              "operating_margin_yoy_vs_industry_pp": "0.23008800308595627072",
+              "nvidia_net_margin_yoy_pp": "0.19901690319991763938",
+              "industry_net_margin_yoy_pp": "-0.04123551798706900238",
+              "net_margin_yoy_vs_industry_pp": "0.24025242118698664176"
+            },
+            {
+              "calendar_year": 2023,
+              "nvidia_gross_margin_yoy_pp": "0.05631211986795706488",
+              "industry_gross_margin_yoy_pp": "-0.12064421285679624646",
+              "gross_margin_yoy_vs_industry_pp": "0.17695633272475331134",
+              "nvidia_operating_margin_yoy_pp": "0.12752547591630600626",
+              "industry_operating_margin_yoy_pp": "-0.20501577173704009972",
+              "operating_margin_yoy_vs_industry_pp": "0.33254124765334610598",
+              "nvidia_net_margin_yoy_pp": "0.10944330729499512508",
+              "industry_net_margin_yoy_pp": "-0.19061808365668790399",
+              "net_margin_yoy_vs_industry_pp": "0.30006139095168302907"
+            },
+            {
+              "calendar_year": 2022,
+              "nvidia_gross_margin_yoy_pp": "-0.03720605590278425361",
+              "industry_gross_margin_yoy_pp": "-0.01029554455917929944",
+              "gross_margin_yoy_vs_industry_pp": "-0.02691051134360495417",
+              "nvidia_operating_margin_yoy_pp": "-0.09149192724736896952",
+              "industry_operating_margin_yoy_pp": "-0.00430322151966688766",
+              "operating_margin_yoy_vs_industry_pp": "-0.08718870572770208186",
+              "nvidia_net_margin_yoy_pp": "-0.08791167274347122418",
+              "industry_net_margin_yoy_pp": "0.00180156317539786443",
+              "net_margin_yoy_vs_industry_pp": "-0.08971323591886908861"
+            },
+            {
+              "calendar_year": 2021,
+              "nvidia_gross_margin_yoy_pp": "-0.17940683792375035690",
+              "industry_gross_margin_yoy_pp": "-0.03656402419483316611",
+              "gross_margin_yoy_vs_industry_pp": "-0.14284281372891719079",
+              "nvidia_operating_margin_yoy_pp": "-0.00768662209301813398",
+              "industry_operating_margin_yoy_pp": "0.04493481197813301934",
+              "operating_margin_yoy_vs_industry_pp": "-0.05262143407115115332",
+              "nvidia_net_margin_yoy_pp": "-0.00636025624365373387",
+              "industry_net_margin_yoy_pp": "0.03401607501050198409",
+              "net_margin_yoy_vs_industry_pp": "-0.04037633125415571796"
+            },
+            {
+              "calendar_year": 2020,
+              "nvidia_gross_margin_yoy_pp": null,
+              "industry_gross_margin_yoy_pp": null,
+              "gross_margin_yoy_vs_industry_pp": null,
+              "nvidia_operating_margin_yoy_pp": null,
+              "industry_operating_margin_yoy_pp": null,
+              "operating_margin_yoy_vs_industry_pp": null,
+              "nvidia_net_margin_yoy_pp": null,
+              "industry_net_margin_yoy_pp": null,
+              "net_margin_yoy_vs_industry_pp": null
+            }
+          ],
+          "seriesPercentFormat": {
+            "nvidia_gross_margin_yoy_pp": "pre_multiplied",
+            "industry_gross_margin_yoy_pp": "pre_multiplied",
+            "gross_margin_yoy_vs_industry_pp": "pre_multiplied",
+            "nvidia_operating_margin_yoy_pp": "pre_multiplied"
+          },
+          "chartDesign": {
+            "intent": "margin_growth_vs_peers",
+            "grouping": "metric",
+            "chart_type": "line_multi",
+            "y_axis": {
+              "type": "percent_only"
+            },
+            "legend_order": [],
+            "defaultLegendSelection": {
+              "company_operating_margin_change_pp": true,
+              "company_net_margin_change_pp": true
+            },
+            "color_by": "metric",
+            "measure": [
+              "company_gross_margin_change_pp",
+              "company_operating_margin_change_pp",
+              "company_net_margin_change_pp",
+              "peer_avg_gross_margin_change_pp",
+              "peer_avg_operating_margin_change_pp",
+              "peer_avg_net_margin_change_pp"
+            ]
+          }
+        }
+      },
+      "chart_type": "line_multi",
+      "chart_spec_id": "analytics:chart:c7fcdccc5046",
+      "chart_summary": {
+        "chart_type": "line_multi",
+        "series_count": 4
+      },
+      "schedule_stage": "chart",
+      "mode": "multi_agent",
+      "badges": {
+        "mode": "Supervisor",
+        "mode_schedule": {
+          "parallel_group": "specialist_parallel"
+        },
+        "hedging": "enabled"
+      },
+      "schedule": {
+        "mode": "multi_agent",
+        "default_parallelism": true,
+        "accessory_strategy": "specialist_parallel",
+        "hedging_enabled": true,
+        "stages": [
+          {
+            "key": "supervisor",
+            "label": "Supervisor Kickoff",
+            "parallel_group": "supervisor",
+            "allows_parallel": false,
+            "steps": [],
+            "accessories": [],
+            "hedged_tools": [],
+            "emits": [
+              "agent_supervisor_started",
+              "agent_turn",
+              "agent_reasoning",
+              "agent_coordination"
+            ],
+            "description": "Supervisor agent sets up shared artifacts and objectives."
+          },
+          {
+            "key": "classification",
+            "label": "Classification Specialist",
+            "parallel_group": "specialist_sequential",
+            "allows_parallel": true,
+            "steps": [
+              "classification"
+            ],
+            "accessories": [],
+            "hedged_tools": [],
+            "emits": [
+              "classification",
+              "classification_started",
+              "classification_complete",
+              "schema_clarifier",
+              "schema_clarifier_result"
+            ],
+            "description": "Specialist handles classification while other tasks queue."
+          },
+          {
+            "key": "intent_sql",
+            "label": "Intent + SQL Specialists",
+            "parallel_group": "specialist_core",
+            "allows_parallel": true,
+            "steps": [
+              "intent_detection",
+              "clarification",
+              "sql_compilation",
+              "sql_execution"
+            ],
+            "accessories": [],
+            "hedged_tools": [],
+            "emits": [
+              "intent_detection",
+              "intent_detection_complete",
+              "clarification",
+              "clarification_progress",
+              "clarification_resolved",
+              "clarification_skipped",
+              "clarification_timeout",
+              "plan_and_select_template",
+              "schema_validation",
+              "sql_compilation",
+              "sql_compiled",
+              "sql_execution",
+              "sql_generated",
+              "sql_validated",
+              "execution_stats",
+              "sql_ready"
+            ],
+            "description": "Intent and SQL specialists coordinate under supervisor guidance."
+          },
+          {
+            "key": "hedged_accessories",
+            "label": "Hedged Accessories",
+            "parallel_group": "specialist_fanout",
+            "allows_parallel": true,
+            "steps": [
+              "web_search"
+            ],
+            "accessories": [
+              "web_retriever_cached",
+              "web_retriever_live",
+              "stock_tracker"
+            ],
+            "hedged_tools": [
+              "web_retriever_cached",
+              "web_retriever_live"
+            ],
+            "emits": [
+              "tool_parallel_start",
+              "tool_parallel_result",
+              "tool_parallel_complete",
+              "tool_fanout",
+              "tool_execution",
+              "web_research_agent",
+              "hedged_accessories_complete",
+              "stock_ready",
+              "web_ready"
+            ],
+            "description": "Supervisor launches hedged web retrievers plus stock tracker in parallel."
+          },
+          {
+            "key": "chart",
+            "label": "Chart Specialist",
+            "parallel_group": "specialist_chart",
+            "allows_parallel": true,
+            "steps": [
+              "chart_generation"
+            ],
+            "accessories": [],
+            "hedged_tools": [],
+            "emits": [
+              "chart_generation",
+              "chart_planned",
+              "chart_spec_ready",
+              "chart_generated",
+              "chart_ready"
+            ],
+            "description": "Chart specialist consumes SQL outputs and accessory deltas."
+          },
+          {
+            "key": "analysis",
+            "label": "Analysis + Cohesive Result",
+            "parallel_group": "analysis_stream",
+            "allows_parallel": true,
+            "steps": [
+              "analysis_generation",
+              "analysis_revision",
+              "follow_up_route"
+            ],
+            "accessories": [],
+            "hedged_tools": [],
+            "emits": [
+              "analysis_generation",
+              "analysis_chunk",
+              "analysis_streaming",
+              "analysis_complete",
+              "follow_up_route",
+              "workflow_complete",
+              "cohesive_result",
+              "cohesive_result_error",
+              "short_financial_analysis",
+              "analysis_ready"
+            ],
+            "description": "Supervisor aggregates chart + accessory data into cohesive result."
+          }
+        ]
+      },
+      "accessory_strategy": "specialist_parallel",
+      "supports_deltas": true,
+      "parallel_group": "specialist_chart",
+      "stage_allows_parallel": true,
+      "follow_up_route": "full_pipeline",
+      "ts": "2025-10-14T14:17:31.551865",
+      "sequence": 44
+    },
+    "timestamp": "2025-10-14T14:17:31.551865",
+    "sequence": 44,
+    "parallelGroup": "specialist_chart",
+    "scheduleStage": "chart",
+    "flowMode": "multi_agent"
+  },
+  {
+    "id": "web_research_agent",
+    "name": "Web Research Agent Lane",
+    "status": "completed",
+    "thinking": [
+      "Primary topic: How's Nvidia margin growth compare to industry average?",
+      "Topics: How's Nvidia margin growth compare to industry average?; How's semiconductor industry outlook 2025",
+      "Snippets: 5",
+      "Latency: 4754ms",
+      "Model: gemini-2.5-flash-lite",
+      "Web context ready"
+    ],
+    "details": {
+      "query": "How's Nvidia margin growth compare to industry average?",
+      "queryTerms": "How's Nvidia margin growth compare to industry average?",
+      "searchTopic": "How's Nvidia margin growth compare to industry average?",
+      "searchTopics": [
+        "How's Nvidia margin growth compare to industry average?",
+        "How's semiconductor industry outlook 2025"
+      ],
+      "summary": "Primary question: Nvidia's gross profit margin has shown a strong upward trend, reaching 75.0% in January 2025, significantly exceeding the semiconductor industry average of 42.3%. In Q2 2025, Nvidia's net profit margin was 56.53%, placing it second within the semiconductor industry. This performance is notably higher than the 2021 semiconductor industry average profit margin of 19.8%. Nvidia's revenue growth of 55.6% also surpasses the industry average of 27.71%.\n\nIndustry context: The semiconductor industry is poised for significant growth in 2025, with global sales projected to reach approximately $697 billion, an 11% increase year-over-year. This surge is primarily driven by the escalating demand for Artificial Intelligence (AI) and data center technologies. While AI and high-bandwidth memory (HBM) are expected to see substantial growth, with HBM revenue potentially increasing by up to 70%, demand from the PC and smartphone markets may remain muted. Companies are investing heavily in capital expenditures, with an estimated $185 billion allocated to expand manufacturing capacity. However, potential supply chain imbalances and competition from startups pose challenges.",
+      "snippets": [
+        {
+          "title": "finbox.com",
+          "url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFi4NcWsBFywNBDR9VYEtigNHtuf_vT1k5Ql_fW42uWfwap5hzklUNVK0PPKQjZ7YZTtf-nDUjHW5Ooq0y_cHlCNAsTLgs3NS0PRMKbksA5JpRhH0sXT0J6KSlx0ld2wBNBJJD1N3ZcXYGmqzMlxxA=",
+          "snippet": "Nvidia's gross profit margin has shown a strong upward trend, reaching 75.0% in January 2025, significantly exceeding the semiconductor industry average of 42.3%",
+          "display_url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFi4NcWsBFywNBDR9VYEtigNHtuf_vT1k5Ql_fW42uWfwap5hzklUNVK0PPKQjZ7YZTtf-nDUjHW5Ooq0y_cHlCNAsTLgs3NS0PRMKbksA5JpRhH0sXT0J6KSlx0ld2wBNBJJD1N3ZcXYGmqzMlxxA="
+        },
+        {
+          "title": "csimarket.com",
+          "url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFS4t8NuqSbm5DVoQZWX8isLIPtVzNsgbB-0J4cnFpIrqoxOdb6HiSnEMCZjFL1i7S_xPXPksz_Nz7P45zVvR26AhHYlDAFZk9mTBeBC2O2TVLEV8nlEAeC4bs168pHbCrHJ-_gsjTovGFybuD2RVR-8Kwmzd7Lci52PS4sNJnkbTOKAg==",
+          "snippet": "In Q2 2025, Nvidia's net profit margin was 56.53%, placing it second within the semiconductor industry",
+          "display_url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFS4t8NuqSbm5DVoQZWX8isLIPtVzNsgbB-0J4cnFpIrqoxOdb6HiSnEMCZjFL1i7S_xPXPksz_Nz7P45zVvR26AhHYlDAFZk9mTBeBC2O2TVLEV8nlEAeC4bs168pHbCrHJ-_gsjTovGFybuD2RVR-8Kwmzd7Lci52PS4sNJnkbTOKAg=="
+        },
+        {
+          "title": "digitimes.com",
+          "url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQEr-FB_Dq-p6gv-GbX2meoLRHOn-1Ios1nhCGtGFzX0M9UxiiYPMs392t7qLLwoE-zCLXJBj5BwTii8fmkb1Ed6j0wS8dXEMO1i7gZLtQKssYjbpQU_wXfRTHC5ltn0G2QsuA7Pa0IBUsxN8Dhnt1DCGlnLiONWaT2cADYG01R3AkLh5Q==",
+          "snippet": "This performance is notably higher than the 2021 semiconductor industry average profit margin of 19.8%",
+          "display_url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQEr-FB_Dq-p6gv-GbX2meoLRHOn-1Ios1nhCGtGFzX0M9UxiiYPMs392t7qLLwoE-zCLXJBj5BwTii8fmkb1Ed6j0wS8dXEMO1i7gZLtQKssYjbpQU_wXfRTHC5ltn0G2QsuA7Pa0IBUsxN8Dhnt1DCGlnLiONWaT2cADYG01R3AkLh5Q=="
+        },
+        {
+          "title": "benzinga.com",
+          "url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFvVougiHOLlUuwRVKp-G9VljkmAAlZJ9zKdFXSYcd723HYZghI3XHQGhQhRwvKGG0RuhdfD-XYp8K0PK6H1D7TAdGvuDlfj_r891kHNQkdl1Vnhu7sBRPOJLoen-neLAjIHGFBKCaltPY6lioawQsfnA6sI1ATT-ihXb4WuZeLY1P3C-RfKM1zc2X13bo4a6BXKYml3Odv2Yd9AatchUpRqfc3VLER24kdOTOky_HvBUNfll4quC6EraZgJIDOwMsWsPkn8QjBVDvmc0GKLVohY4gQgXc=",
+          "snippet": "Nvidia's revenue growth of 55.6% also surpasses the industry average of 27.71%",
+          "display_url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFvVougiHOLlUuwRVKp-G9VljkmAAlZJ9zKdFXSYcd723HYZghI3XHQGhQhRwvKGG0RuhdfD-XYp8K0PK6H1D7TAdGvuDlfj_r891kHNQkdl1Vnhu7sBRPOJLoen-neLAjIHGFBKCaltPY6lioawQsfnA6sI1ATT-ihXb4WuZeLY1P3C-RfKM1zc2X13bo4a6BXKYml3Odv2Yd9AatchUpRqfc3VLER24kdOTOky_HvBUNfll4quC6EraZgJIDOwMsWsPkn8QjBVDvmc0GKLVohY4gQgXc="
+        },
+        {
+          "title": "infosys.com",
+          "url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFThDjk_oElbhj3yG6rbWTciEE1-U_3iuLyGo83SOaOIXibzziYTCHwEABl5thQsJv4BK-K6KxxhKgBj2vO7eQyeD1-CwCQUivwQklLnFbWa0pOJqidonzFM2btmvpXeE_weh0DxEkOGyHPnPvjznNgu8Tp00DbaGXqo4pHWhBot-S_tKWhtvY=",
+          "snippet": "The semiconductor industry is poised for significant growth in 2025, with global sales projected to reach approximately $697 billion, an 11% increase year-over-year",
+          "display_url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFThDjk_oElbhj3yG6rbWTciEE1-U_3iuLyGo83SOaOIXibzziYTCHwEABl5thQsJv4BK-K6KxxhKgBj2vO7eQyeD1-CwCQUivwQklLnFbWa0pOJqidonzFM2btmvpXeE_weh0DxEkOGyHPnPvjznNgu8Tp00DbaGXqo4pHWhBot-S_tKWhtvY="
+        }
+      ],
+      "annotations": [
+        {
+          "confidence_scores": null,
+          "grounding_chunk_indices": [
+            0,
+            1,
+            2
+          ],
+          "segment": {
+            "end_index": 161,
+            "part_index": null,
+            "start_index": null,
+            "text": "Nvidia's gross profit margin has shown a strong upward trend, reaching 75.0% in January 2025, significantly exceeding the semiconductor industry average of 42.3%"
+          }
+        },
+        {
+          "confidence_scores": null,
+          "grounding_chunk_indices": [
+            3
+          ],
+          "segment": {
+            "end_index": 265,
+            "part_index": null,
+            "start_index": 163,
+            "text": "In Q2 2025, Nvidia's net profit margin was 56.53%, placing it second within the semiconductor industry"
+          }
+        },
+        {
+          "confidence_scores": null,
+          "grounding_chunk_indices": [
+            4
+          ],
+          "segment": {
+            "end_index": 369,
+            "part_index": null,
+            "start_index": 267,
+            "text": "This performance is notably higher than the 2021 semiconductor industry average profit margin of 19.8%"
+          }
+        },
+        {
+          "confidence_scores": null,
+          "grounding_chunk_indices": [
+            5
+          ],
+          "segment": {
+            "end_index": 449,
+            "part_index": null,
+            "start_index": 371,
+            "text": "Nvidia's revenue growth of 55.6% also surpasses the industry average of 27.71%"
+          }
+        },
+        {
+          "confidence_scores": null,
+          "grounding_chunk_indices": [
+            0,
+            1,
+            2
+          ],
+          "segment": {
+            "end_index": 164,
+            "part_index": null,
+            "start_index": null,
+            "text": "The semiconductor industry is poised for significant growth in 2025, with global sales projected to reach approximately $697 billion, an 11% increase year-over-year"
+          }
+        },
+        {
+          "confidence_scores": null,
+          "grounding_chunk_indices": [
+            0,
+            3,
+            1,
+            4,
+            5
+          ],
+          "segment": {
+            "end_index": 283,
+            "part_index": null,
+            "start_index": 166,
+            "text": "This surge is primarily driven by the escalating demand for Artificial Intelligence (AI) and data center technologies"
+          }
+        },
+        {
+          "confidence_scores": null,
+          "grounding_chunk_indices": [
+            3
+          ],
+          "segment": {
+            "end_index": 418,
+            "part_index": null,
+            "start_index": 285,
+            "text": "While AI and high-bandwidth memory (HBM) are expected to see substantial growth, with HBM revenue potentially increasing by up to 70%"
+          }
+        },
+        {
+          "confidence_scores": null,
+          "grounding_chunk_indices": [
+            6,
+            2
+          ],
+          "segment": {
+            "end_index": 478,
+            "part_index": null,
+            "start_index": 418,
+            "text": ", demand from the PC and smartphone markets may remain muted"
+          }
+        },
+        {
+          "confidence_scores": null,
+          "grounding_chunk_indices": [
+            0
+          ],
+          "segment": {
+            "end_index": 610,
+            "part_index": null,
+            "start_index": 480,
+            "text": "Companies are investing heavily in capital expenditures, with an estimated $185 billion allocated to expand manufacturing capacity"
+          }
+        },
+        {
+          "confidence_scores": null,
+          "grounding_chunk_indices": [
+            6,
+            3
+          ],
+          "segment": {
+            "end_index": 700,
+            "part_index": null,
+            "start_index": 612,
+            "text": "However, potential supply chain imbalances and competition from startups pose challenges"
+          }
+        }
+      ],
+      "topics": [
+        {
+          "label": "Primary question",
+          "query": "How's Nvidia margin growth compare to industry average?",
+          "summary": "Nvidia's gross profit margin has shown a strong upward trend, reaching 75.0% in January 2025, significantly exceeding the semiconductor industry average of 42.3%. In Q2 2025, Nvidia's net profit margin was 56.53%, placing it second within the semiconductor industry. This performance is notably higher than the 2021 semiconductor industry average profit margin of 19.8%. Nvidia's revenue growth of 55.6% also surpasses the industry average of 27.71%.",
+          "search_id": "CFvuaLbmIcfBz7IPiPHL2QU",
+          "latency_ms": 2585,
+          "snippets": [
+            {
+              "title": "finbox.com",
+              "url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFi4NcWsBFywNBDR9VYEtigNHtuf_vT1k5Ql_fW42uWfwap5hzklUNVK0PPKQjZ7YZTtf-nDUjHW5Ooq0y_cHlCNAsTLgs3NS0PRMKbksA5JpRhH0sXT0J6KSlx0ld2wBNBJJD1N3ZcXYGmqzMlxxA=",
+              "snippet": "Nvidia's gross profit margin has shown a strong upward trend, reaching 75.0% in January 2025, significantly exceeding the semiconductor industry average of 42.3%",
+              "display_url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFi4NcWsBFywNBDR9VYEtigNHtuf_vT1k5Ql_fW42uWfwap5hzklUNVK0PPKQjZ7YZTtf-nDUjHW5Ooq0y_cHlCNAsTLgs3NS0PRMKbksA5JpRhH0sXT0J6KSlx0ld2wBNBJJD1N3ZcXYGmqzMlxxA="
+            },
+            {
+              "title": "csimarket.com",
+              "url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFS4t8NuqSbm5DVoQZWX8isLIPtVzNsgbB-0J4cnFpIrqoxOdb6HiSnEMCZjFL1i7S_xPXPksz_Nz7P45zVvR26AhHYlDAFZk9mTBeBC2O2TVLEV8nlEAeC4bs168pHbCrHJ-_gsjTovGFybuD2RVR-8Kwmzd7Lci52PS4sNJnkbTOKAg==",
+              "snippet": "In Q2 2025, Nvidia's net profit margin was 56.53%, placing it second within the semiconductor industry",
+              "display_url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFS4t8NuqSbm5DVoQZWX8isLIPtVzNsgbB-0J4cnFpIrqoxOdb6HiSnEMCZjFL1i7S_xPXPksz_Nz7P45zVvR26AhHYlDAFZk9mTBeBC2O2TVLEV8nlEAeC4bs168pHbCrHJ-_gsjTovGFybuD2RVR-8Kwmzd7Lci52PS4sNJnkbTOKAg=="
+            },
+            {
+              "title": "digitimes.com",
+              "url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQEr-FB_Dq-p6gv-GbX2meoLRHOn-1Ios1nhCGtGFzX0M9UxiiYPMs392t7qLLwoE-zCLXJBj5BwTii8fmkb1Ed6j0wS8dXEMO1i7gZLtQKssYjbpQU_wXfRTHC5ltn0G2QsuA7Pa0IBUsxN8Dhnt1DCGlnLiONWaT2cADYG01R3AkLh5Q==",
+              "snippet": "This performance is notably higher than the 2021 semiconductor industry average profit margin of 19.8%",
+              "display_url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQEr-FB_Dq-p6gv-GbX2meoLRHOn-1Ios1nhCGtGFzX0M9UxiiYPMs392t7qLLwoE-zCLXJBj5BwTii8fmkb1Ed6j0wS8dXEMO1i7gZLtQKssYjbpQU_wXfRTHC5ltn0G2QsuA7Pa0IBUsxN8Dhnt1DCGlnLiONWaT2cADYG01R3AkLh5Q=="
+            },
+            {
+              "title": "benzinga.com",
+              "url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFvVougiHOLlUuwRVKp-G9VljkmAAlZJ9zKdFXSYcd723HYZghI3XHQGhQhRwvKGG0RuhdfD-XYp8K0PK6H1D7TAdGvuDlfj_r891kHNQkdl1Vnhu7sBRPOJLoen-neLAjIHGFBKCaltPY6lioawQsfnA6sI1ATT-ihXb4WuZeLY1P3C-RfKM1zc2X13bo4a6BXKYml3Odv2Yd9AatchUpRqfc3VLER24kdOTOky_HvBUNfll4quC6EraZgJIDOwMsWsPkn8QjBVDvmc0GKLVohY4gQgXc=",
+              "snippet": "Nvidia's revenue growth of 55.6% also surpasses the industry average of 27.71%",
+              "display_url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFvVougiHOLlUuwRVKp-G9VljkmAAlZJ9zKdFXSYcd723HYZghI3XHQGhQhRwvKGG0RuhdfD-XYp8K0PK6H1D7TAdGvuDlfj_r891kHNQkdl1Vnhu7sBRPOJLoen-neLAjIHGFBKCaltPY6lioawQsfnA6sI1ATT-ihXb4WuZeLY1P3C-RfKM1zc2X13bo4a6BXKYml3Odv2Yd9AatchUpRqfc3VLER24kdOTOky_HvBUNfll4quC6EraZgJIDOwMsWsPkn8QjBVDvmc0GKLVohY4gQgXc="
+            }
+          ]
+        },
+        {
+          "label": "Industry context",
+          "query": "How's semiconductor industry outlook 2025",
+          "reason": "Provide wider sector context",
+          "summary": "The semiconductor industry is poised for significant growth in 2025, with global sales projected to reach approximately $697 billion, an 11% increase year-over-year. This surge is primarily driven by the escalating demand for Artificial Intelligence (AI) and data center technologies. While AI and high-bandwidth memory (HBM) are expected to see substantial growth, with HBM revenue potentially increasing by up to 70%, demand from the PC and smartphone markets may remain muted. Companies are investing heavily in capital expenditures, with an estimated $185 billion allocated to expand manufacturing capacity. However, potential supply chain imbalances and competition from startups pose challenges.",
+          "search_id": "ClvuaMqELJvBz7IP6pnYuQY",
+          "latency_ms": 2169,
+          "snippets": [
+            {
+              "title": "infosys.com",
+              "url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFThDjk_oElbhj3yG6rbWTciEE1-U_3iuLyGo83SOaOIXibzziYTCHwEABl5thQsJv4BK-K6KxxhKgBj2vO7eQyeD1-CwCQUivwQklLnFbWa0pOJqidonzFM2btmvpXeE_weh0DxEkOGyHPnPvjznNgu8Tp00DbaGXqo4pHWhBot-S_tKWhtvY=",
+              "snippet": "The semiconductor industry is poised for significant growth in 2025, with global sales projected to reach approximately $697 billion, an 11% increase year-over-year",
+              "display_url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFThDjk_oElbhj3yG6rbWTciEE1-U_3iuLyGo83SOaOIXibzziYTCHwEABl5thQsJv4BK-K6KxxhKgBj2vO7eQyeD1-CwCQUivwQklLnFbWa0pOJqidonzFM2btmvpXeE_weh0DxEkOGyHPnPvjznNgu8Tp00DbaGXqo4pHWhBot-S_tKWhtvY="
+            },
+            {
+              "title": "infosys.com",
+              "url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFThDjk_oElbhj3yG6rbWTciEE1-U_3iuLyGo83SOaOIXibzziYTCHwEABl5thQsJv4BK-K6KxxhKgBj2vO7eQyeD1-CwCQUivwQklLnFbWa0pOJqidonzFM2btmvpXeE_weh0DxEkOGyHPnPvjznNgu8Tp00DbaGXqo4pHWhBot-S_tKWhtvY=",
+              "snippet": "This surge is primarily driven by the escalating demand for Artificial Intelligence (AI) and data center technologies",
+              "display_url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFThDjk_oElbhj3yG6rbWTciEE1-U_3iuLyGo83SOaOIXibzziYTCHwEABl5thQsJv4BK-K6KxxhKgBj2vO7eQyeD1-CwCQUivwQklLnFbWa0pOJqidonzFM2btmvpXeE_weh0DxEkOGyHPnPvjznNgu8Tp00DbaGXqo4pHWhBot-S_tKWhtvY="
+            },
+            {
+              "title": "a2globalelectronics.com",
+              "url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQHpKCPtz6GCVXZRX5O6UXtRM2bTQOzl354ipcuJRXSZ0XAdLWcw-AVSCrBo2eBTNhRlBpiPVvk0UEoj-iI3gm9eRZ9sdSsWEzkmYYOkQPge_LfrBRn2RTdNtYGhc41q4TERt88BoFw-trXQK1eJHK6pG6loxpSP7bjcM1ICmshJv9rzEyMq5mnJN-WYbS0DEJfKuzZrsWY=",
+              "snippet": "While AI and high-bandwidth memory (HBM) are expected to see substantial growth, with HBM revenue potentially increasing by up to 70%",
+              "display_url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQHpKCPtz6GCVXZRX5O6UXtRM2bTQOzl354ipcuJRXSZ0XAdLWcw-AVSCrBo2eBTNhRlBpiPVvk0UEoj-iI3gm9eRZ9sdSsWEzkmYYOkQPge_LfrBRn2RTdNtYGhc41q4TERt88BoFw-trXQK1eJHK6pG6loxpSP7bjcM1ICmshJv9rzEyMq5mnJN-WYbS0DEJfKuzZrsWY="
+            },
+            {
+              "title": "deloitte.com",
+              "url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQHmIGpfBca8EuzvR9URgddyTMfpa_ad6lVqDI32Zw_6OBtCPrIa9rhseOGjt87b6iQ8NugycdJTRqrQ3f_W7_hVSjAcV11G7eXu0UK3zfXpxNXMpjtyHrlBg_27pTl5LJ69RkgJ2HfyXRQfcubxxL33-uf6H-q51k8RkvjCvTpGIwHM7hBdmWcMppcrosdpk_brXWqcLu2ZBU33ALU81CoBAjoXCJwgM7Fn",
+              "snippet": ", demand from the PC and smartphone markets may remain muted",
+              "display_url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQHmIGpfBca8EuzvR9URgddyTMfpa_ad6lVqDI32Zw_6OBtCPrIa9rhseOGjt87b6iQ8NugycdJTRqrQ3f_W7_hVSjAcV11G7eXu0UK3zfXpxNXMpjtyHrlBg_27pTl5LJ69RkgJ2HfyXRQfcubxxL33-uf6H-q51k8RkvjCvTpGIwHM7hBdmWcMppcrosdpk_brXWqcLu2ZBU33ALU81CoBAjoXCJwgM7Fn"
+            },
+            {
+              "title": "infosys.com",
+              "url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFThDjk_oElbhj3yG6rbWTciEE1-U_3iuLyGo83SOaOIXibzziYTCHwEABl5thQsJv4BK-K6KxxhKgBj2vO7eQyeD1-CwCQUivwQklLnFbWa0pOJqidonzFM2btmvpXeE_weh0DxEkOGyHPnPvjznNgu8Tp00DbaGXqo4pHWhBot-S_tKWhtvY=",
+              "snippet": "Companies are investing heavily in capital expenditures, with an estimated $185 billion allocated to expand manufacturing capacity",
+              "display_url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFThDjk_oElbhj3yG6rbWTciEE1-U_3iuLyGo83SOaOIXibzziYTCHwEABl5thQsJv4BK-K6KxxhKgBj2vO7eQyeD1-CwCQUivwQklLnFbWa0pOJqidonzFM2btmvpXeE_weh0DxEkOGyHPnPvjznNgu8Tp00DbaGXqo4pHWhBot-S_tKWhtvY="
+            },
+            {
+              "title": "deloitte.com",
+              "url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQHmIGpfBca8EuzvR9URgddyTMfpa_ad6lVqDI32Zw_6OBtCPrIa9rhseOGjt87b6iQ8NugycdJTRqrQ3f_W7_hVSjAcV11G7eXu0UK3zfXpxNXMpjtyHrlBg_27pTl5LJ69RkgJ2HfyXRQfcubxxL33-uf6H-q51k8RkvjCvTpGIwHM7hBdmWcMppcrosdpk_brXWqcLu2ZBU33ALU81CoBAjoXCJwgM7Fn",
+              "snippet": "However, potential supply chain imbalances and competition from startups pose challenges",
+              "display_url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQHmIGpfBca8EuzvR9URgddyTMfpa_ad6lVqDI32Zw_6OBtCPrIa9rhseOGjt87b6iQ8NugycdJTRqrQ3f_W7_hVSjAcV11G7eXu0UK3zfXpxNXMpjtyHrlBg_27pTl5LJ69RkgJ2HfyXRQfcubxxL33-uf6H-q51k8RkvjCvTpGIwHM7hBdmWcMppcrosdpk_brXWqcLu2ZBU33ALU81CoBAjoXCJwgM7Fn"
+            }
+          ]
+        }
+      ],
+      "searchId": "CFvuaLbmIcfBz7IPiPHL2QU",
+      "fromCache": false,
+      "fetchedAt": "2025-10-14T14:15:41.156917",
+      "latencyMs": 4754,
+      "ready": true,
+      "provider": "Gemini",
+      "model": "gemini-2.5-flash-lite",
+      "web_context": {
+        "query_terms": "How's Nvidia margin growth compare to industry average?",
+        "ready": true,
+        "query": "How's Nvidia margin growth compare to industry average?",
+        "search_topic": "How's Nvidia margin growth compare to industry average?",
+        "search_topics": [
+          "How's Nvidia margin growth compare to industry average?",
+          "How's semiconductor industry outlook 2025"
+        ],
+        "search_id": "CFvuaLbmIcfBz7IPiPHL2QU",
+        "summary": "Primary question: Nvidia's gross profit margin has shown a strong upward trend, reaching 75.0% in January 2025, significantly exceeding the semiconductor industry average of 42.3%. In Q2 2025, Nvidia's net profit margin was 56.53%, placing it second within the semiconductor industry. This performance is notably higher than the 2021 semiconductor industry average profit margin of 19.8%. Nvidia's revenue growth of 55.6% also surpasses the industry average of 27.71%.\n\nIndustry context: The semiconductor industry is poised for significant growth in 2025, with global sales projected to reach approximately $697 billion, an 11% increase year-over-year. This surge is primarily driven by the escalating demand for Artificial Intelligence (AI) and data center technologies. While AI and high-bandwidth memory (HBM) are expected to see substantial growth, with HBM revenue potentially increasing by up to 70%, demand from the PC and smartphone markets may remain muted. Companies are investing heavily in capital expenditures, with an estimated $185 billion allocated to expand manufacturing capacity. However, potential supply chain imbalances and competition from startups pose challenges.",
+        "snippets": [
+          {
+            "title": "finbox.com",
+            "url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFi4NcWsBFywNBDR9VYEtigNHtuf_vT1k5Ql_fW42uWfwap5hzklUNVK0PPKQjZ7YZTtf-nDUjHW5Ooq0y_cHlCNAsTLgs3NS0PRMKbksA5JpRhH0sXT0J6KSlx0ld2wBNBJJD1N3ZcXYGmqzMlxxA=",
+            "snippet": "Nvidia's gross profit margin has shown a strong upward trend, reaching 75.0% in January 2025, significantly exceeding the semiconductor industry average of 42.3%",
+            "display_url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFi4NcWsBFywNBDR9VYEtigNHtuf_vT1k5Ql_fW42uWfwap5hzklUNVK0PPKQjZ7YZTtf-nDUjHW5Ooq0y_cHlCNAsTLgs3NS0PRMKbksA5JpRhH0sXT0J6KSlx0ld2wBNBJJD1N3ZcXYGmqzMlxxA=",
+            "published_at": null,
+            "annotation": {
+              "confidence_scores": null,
+              "grounding_chunk_indices": [
+                0,
+                1,
+                2
+              ],
+              "segment": {
+                "end_index": 161,
+                "part_index": null,
+                "start_index": null,
+                "text": "Nvidia's gross profit margin has shown a strong upward trend, reaching 75.0% in January 2025, significantly exceeding the semiconductor industry average of 42.3%"
+              }
+            }
+          },
+          {
+            "title": "csimarket.com",
+            "url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFS4t8NuqSbm5DVoQZWX8isLIPtVzNsgbB-0J4cnFpIrqoxOdb6HiSnEMCZjFL1i7S_xPXPksz_Nz7P45zVvR26AhHYlDAFZk9mTBeBC2O2TVLEV8nlEAeC4bs168pHbCrHJ-_gsjTovGFybuD2RVR-8Kwmzd7Lci52PS4sNJnkbTOKAg==",
+            "snippet": "In Q2 2025, Nvidia's net profit margin was 56.53%, placing it second within the semiconductor industry",
+            "display_url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFS4t8NuqSbm5DVoQZWX8isLIPtVzNsgbB-0J4cnFpIrqoxOdb6HiSnEMCZjFL1i7S_xPXPksz_Nz7P45zVvR26AhHYlDAFZk9mTBeBC2O2TVLEV8nlEAeC4bs168pHbCrHJ-_gsjTovGFybuD2RVR-8Kwmzd7Lci52PS4sNJnkbTOKAg==",
+            "published_at": null,
+            "annotation": {
+              "confidence_scores": null,
+              "grounding_chunk_indices": [
+                3
+              ],
+              "segment": {
+                "end_index": 265,
+                "part_index": null,
+                "start_index": 163,
+                "text": "In Q2 2025, Nvidia's net profit margin was 56.53%, placing it second within the semiconductor industry"
+              }
+            }
+          },
+          {
+            "title": "digitimes.com",
+            "url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQEr-FB_Dq-p6gv-GbX2meoLRHOn-1Ios1nhCGtGFzX0M9UxiiYPMs392t7qLLwoE-zCLXJBj5BwTii8fmkb1Ed6j0wS8dXEMO1i7gZLtQKssYjbpQU_wXfRTHC5ltn0G2QsuA7Pa0IBUsxN8Dhnt1DCGlnLiONWaT2cADYG01R3AkLh5Q==",
+            "snippet": "This performance is notably higher than the 2021 semiconductor industry average profit margin of 19.8%",
+            "display_url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQEr-FB_Dq-p6gv-GbX2meoLRHOn-1Ios1nhCGtGFzX0M9UxiiYPMs392t7qLLwoE-zCLXJBj5BwTii8fmkb1Ed6j0wS8dXEMO1i7gZLtQKssYjbpQU_wXfRTHC5ltn0G2QsuA7Pa0IBUsxN8Dhnt1DCGlnLiONWaT2cADYG01R3AkLh5Q==",
+            "published_at": null,
+            "annotation": {
+              "confidence_scores": null,
+              "grounding_chunk_indices": [
+                4
+              ],
+              "segment": {
+                "end_index": 369,
+                "part_index": null,
+                "start_index": 267,
+                "text": "This performance is notably higher than the 2021 semiconductor industry average profit margin of 19.8%"
+              }
+            }
+          },
+          {
+            "title": "benzinga.com",
+            "url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFvVougiHOLlUuwRVKp-G9VljkmAAlZJ9zKdFXSYcd723HYZghI3XHQGhQhRwvKGG0RuhdfD-XYp8K0PK6H1D7TAdGvuDlfj_r891kHNQkdl1Vnhu7sBRPOJLoen-neLAjIHGFBKCaltPY6lioawQsfnA6sI1ATT-ihXb4WuZeLY1P3C-RfKM1zc2X13bo4a6BXKYml3Odv2Yd9AatchUpRqfc3VLER24kdOTOky_HvBUNfll4quC6EraZgJIDOwMsWsPkn8QjBVDvmc0GKLVohY4gQgXc=",
+            "snippet": "Nvidia's revenue growth of 55.6% also surpasses the industry average of 27.71%",
+            "display_url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFvVougiHOLlUuwRVKp-G9VljkmAAlZJ9zKdFXSYcd723HYZghI3XHQGhQhRwvKGG0RuhdfD-XYp8K0PK6H1D7TAdGvuDlfj_r891kHNQkdl1Vnhu7sBRPOJLoen-neLAjIHGFBKCaltPY6lioawQsfnA6sI1ATT-ihXb4WuZeLY1P3C-RfKM1zc2X13bo4a6BXKYml3Odv2Yd9AatchUpRqfc3VLER24kdOTOky_HvBUNfll4quC6EraZgJIDOwMsWsPkn8QjBVDvmc0GKLVohY4gQgXc=",
+            "published_at": null,
+            "annotation": {
+              "confidence_scores": null,
+              "grounding_chunk_indices": [
+                5
+              ],
+              "segment": {
+                "end_index": 449,
+                "part_index": null,
+                "start_index": 371,
+                "text": "Nvidia's revenue growth of 55.6% also surpasses the industry average of 27.71%"
+              }
+            }
+          },
+          {
+            "title": "infosys.com",
+            "url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFThDjk_oElbhj3yG6rbWTciEE1-U_3iuLyGo83SOaOIXibzziYTCHwEABl5thQsJv4BK-K6KxxhKgBj2vO7eQyeD1-CwCQUivwQklLnFbWa0pOJqidonzFM2btmvpXeE_weh0DxEkOGyHPnPvjznNgu8Tp00DbaGXqo4pHWhBot-S_tKWhtvY=",
+            "snippet": "The semiconductor industry is poised for significant growth in 2025, with global sales projected to reach approximately $697 billion, an 11% increase year-over-year",
+            "display_url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFThDjk_oElbhj3yG6rbWTciEE1-U_3iuLyGo83SOaOIXibzziYTCHwEABl5thQsJv4BK-K6KxxhKgBj2vO7eQyeD1-CwCQUivwQklLnFbWa0pOJqidonzFM2btmvpXeE_weh0DxEkOGyHPnPvjznNgu8Tp00DbaGXqo4pHWhBot-S_tKWhtvY=",
+            "published_at": null,
+            "annotation": {
+              "confidence_scores": null,
+              "grounding_chunk_indices": [
+                0,
+                1,
+                2
+              ],
+              "segment": {
+                "end_index": 164,
+                "part_index": null,
+                "start_index": null,
+                "text": "The semiconductor industry is poised for significant growth in 2025, with global sales projected to reach approximately $697 billion, an 11% increase year-over-year"
+              }
+            }
+          }
+        ],
+        "annotations": [
+          {
+            "confidence_scores": null,
+            "grounding_chunk_indices": [
+              0,
+              1,
+              2
+            ],
+            "segment": {
+              "end_index": 161,
+              "part_index": null,
+              "start_index": null,
+              "text": "Nvidia's gross profit margin has shown a strong upward trend, reaching 75.0% in January 2025, significantly exceeding the semiconductor industry average of 42.3%"
+            }
+          },
+          {
+            "confidence_scores": null,
+            "grounding_chunk_indices": [
+              3
+            ],
+            "segment": {
+              "end_index": 265,
+              "part_index": null,
+              "start_index": 163,
+              "text": "In Q2 2025, Nvidia's net profit margin was 56.53%, placing it second within the semiconductor industry"
+            }
+          },
+          {
+            "confidence_scores": null,
+            "grounding_chunk_indices": [
+              4
+            ],
+            "segment": {
+              "end_index": 369,
+              "part_index": null,
+              "start_index": 267,
+              "text": "This performance is notably higher than the 2021 semiconductor industry average profit margin of 19.8%"
+            }
+          },
+          {
+            "confidence_scores": null,
+            "grounding_chunk_indices": [
+              5
+            ],
+            "segment": {
+              "end_index": 449,
+              "part_index": null,
+              "start_index": 371,
+              "text": "Nvidia's revenue growth of 55.6% also surpasses the industry average of 27.71%"
+            }
+          },
+          {
+            "confidence_scores": null,
+            "grounding_chunk_indices": [
+              0,
+              1,
+              2
+            ],
+            "segment": {
+              "end_index": 164,
+              "part_index": null,
+              "start_index": null,
+              "text": "The semiconductor industry is poised for significant growth in 2025, with global sales projected to reach approximately $697 billion, an 11% increase year-over-year"
+            }
+          },
+          {
+            "confidence_scores": null,
+            "grounding_chunk_indices": [
+              0,
+              3,
+              1,
+              4,
+              5
+            ],
+            "segment": {
+              "end_index": 283,
+              "part_index": null,
+              "start_index": 166,
+              "text": "This surge is primarily driven by the escalating demand for Artificial Intelligence (AI) and data center technologies"
+            }
+          },
+          {
+            "confidence_scores": null,
+            "grounding_chunk_indices": [
+              3
+            ],
+            "segment": {
+              "end_index": 418,
+              "part_index": null,
+              "start_index": 285,
+              "text": "While AI and high-bandwidth memory (HBM) are expected to see substantial growth, with HBM revenue potentially increasing by up to 70%"
+            }
+          },
+          {
+            "confidence_scores": null,
+            "grounding_chunk_indices": [
+              6,
+              2
+            ],
+            "segment": {
+              "end_index": 478,
+              "part_index": null,
+              "start_index": 418,
+              "text": ", demand from the PC and smartphone markets may remain muted"
+            }
+          },
+          {
+            "confidence_scores": null,
+            "grounding_chunk_indices": [
+              0
+            ],
+            "segment": {
+              "end_index": 610,
+              "part_index": null,
+              "start_index": 480,
+              "text": "Companies are investing heavily in capital expenditures, with an estimated $185 billion allocated to expand manufacturing capacity"
+            }
+          },
+          {
+            "confidence_scores": null,
+            "grounding_chunk_indices": [
+              6,
+              3
+            ],
+            "segment": {
+              "end_index": 700,
+              "part_index": null,
+              "start_index": 612,
+              "text": "However, potential supply chain imbalances and competition from startups pose challenges"
+            }
+          }
+        ],
+        "topics": [
+          {
+            "label": "Primary question",
+            "query": "How's Nvidia margin growth compare to industry average?",
+            "reason": null,
+            "summary": "Nvidia's gross profit margin has shown a strong upward trend, reaching 75.0% in January 2025, significantly exceeding the semiconductor industry average of 42.3%. In Q2 2025, Nvidia's net profit margin was 56.53%, placing it second within the semiconductor industry. This performance is notably higher than the 2021 semiconductor industry average profit margin of 19.8%. Nvidia's revenue growth of 55.6% also surpasses the industry average of 27.71%.",
+            "snippets": [
+              {
+                "title": "finbox.com",
+                "url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFi4NcWsBFywNBDR9VYEtigNHtuf_vT1k5Ql_fW42uWfwap5hzklUNVK0PPKQjZ7YZTtf-nDUjHW5Ooq0y_cHlCNAsTLgs3NS0PRMKbksA5JpRhH0sXT0J6KSlx0ld2wBNBJJD1N3ZcXYGmqzMlxxA=",
+                "snippet": "Nvidia's gross profit margin has shown a strong upward trend, reaching 75.0% in January 2025, significantly exceeding the semiconductor industry average of 42.3%",
+                "display_url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFi4NcWsBFywNBDR9VYEtigNHtuf_vT1k5Ql_fW42uWfwap5hzklUNVK0PPKQjZ7YZTtf-nDUjHW5Ooq0y_cHlCNAsTLgs3NS0PRMKbksA5JpRhH0sXT0J6KSlx0ld2wBNBJJD1N3ZcXYGmqzMlxxA=",
+                "published_at": null,
+                "annotation": {
+                  "confidence_scores": null,
+                  "grounding_chunk_indices": [
+                    0,
+                    1,
+                    2
+                  ],
+                  "segment": {
+                    "end_index": 161,
+                    "part_index": null,
+                    "start_index": null,
+                    "text": "Nvidia's gross profit margin has shown a strong upward trend, reaching 75.0% in January 2025, significantly exceeding the semiconductor industry average of 42.3%"
+                  }
+                }
+              },
+              {
+                "title": "csimarket.com",
+                "url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFS4t8NuqSbm5DVoQZWX8isLIPtVzNsgbB-0J4cnFpIrqoxOdb6HiSnEMCZjFL1i7S_xPXPksz_Nz7P45zVvR26AhHYlDAFZk9mTBeBC2O2TVLEV8nlEAeC4bs168pHbCrHJ-_gsjTovGFybuD2RVR-8Kwmzd7Lci52PS4sNJnkbTOKAg==",
+                "snippet": "In Q2 2025, Nvidia's net profit margin was 56.53%, placing it second within the semiconductor industry",
+                "display_url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFS4t8NuqSbm5DVoQZWX8isLIPtVzNsgbB-0J4cnFpIrqoxOdb6HiSnEMCZjFL1i7S_xPXPksz_Nz7P45zVvR26AhHYlDAFZk9mTBeBC2O2TVLEV8nlEAeC4bs168pHbCrHJ-_gsjTovGFybuD2RVR-8Kwmzd7Lci52PS4sNJnkbTOKAg==",
+                "published_at": null,
+                "annotation": {
+                  "confidence_scores": null,
+                  "grounding_chunk_indices": [
+                    3
+                  ],
+                  "segment": {
+                    "end_index": 265,
+                    "part_index": null,
+                    "start_index": 163,
+                    "text": "In Q2 2025, Nvidia's net profit margin was 56.53%, placing it second within the semiconductor industry"
+                  }
+                }
+              },
+              {
+                "title": "digitimes.com",
+                "url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQEr-FB_Dq-p6gv-GbX2meoLRHOn-1Ios1nhCGtGFzX0M9UxiiYPMs392t7qLLwoE-zCLXJBj5BwTii8fmkb1Ed6j0wS8dXEMO1i7gZLtQKssYjbpQU_wXfRTHC5ltn0G2QsuA7Pa0IBUsxN8Dhnt1DCGlnLiONWaT2cADYG01R3AkLh5Q==",
+                "snippet": "This performance is notably higher than the 2021 semiconductor industry average profit margin of 19.8%",
+                "display_url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQEr-FB_Dq-p6gv-GbX2meoLRHOn-1Ios1nhCGtGFzX0M9UxiiYPMs392t7qLLwoE-zCLXJBj5BwTii8fmkb1Ed6j0wS8dXEMO1i7gZLtQKssYjbpQU_wXfRTHC5ltn0G2QsuA7Pa0IBUsxN8Dhnt1DCGlnLiONWaT2cADYG01R3AkLh5Q==",
+                "published_at": null,
+                "annotation": {
+                  "confidence_scores": null,
+                  "grounding_chunk_indices": [
+                    4
+                  ],
+                  "segment": {
+                    "end_index": 369,
+                    "part_index": null,
+                    "start_index": 267,
+                    "text": "This performance is notably higher than the 2021 semiconductor industry average profit margin of 19.8%"
+                  }
+                }
+              },
+              {
+                "title": "benzinga.com",
+                "url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFvVougiHOLlUuwRVKp-G9VljkmAAlZJ9zKdFXSYcd723HYZghI3XHQGhQhRwvKGG0RuhdfD-XYp8K0PK6H1D7TAdGvuDlfj_r891kHNQkdl1Vnhu7sBRPOJLoen-neLAjIHGFBKCaltPY6lioawQsfnA6sI1ATT-ihXb4WuZeLY1P3C-RfKM1zc2X13bo4a6BXKYml3Odv2Yd9AatchUpRqfc3VLER24kdOTOky_HvBUNfll4quC6EraZgJIDOwMsWsPkn8QjBVDvmc0GKLVohY4gQgXc=",
+                "snippet": "Nvidia's revenue growth of 55.6% also surpasses the industry average of 27.71%",
+                "display_url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFvVougiHOLlUuwRVKp-G9VljkmAAlZJ9zKdFXSYcd723HYZghI3XHQGhQhRwvKGG0RuhdfD-XYp8K0PK6H1D7TAdGvuDlfj_r891kHNQkdl1Vnhu7sBRPOJLoen-neLAjIHGFBKCaltPY6lioawQsfnA6sI1ATT-ihXb4WuZeLY1P3C-RfKM1zc2X13bo4a6BXKYml3Odv2Yd9AatchUpRqfc3VLER24kdOTOky_HvBUNfll4quC6EraZgJIDOwMsWsPkn8QjBVDvmc0GKLVohY4gQgXc=",
+                "published_at": null,
+                "annotation": {
+                  "confidence_scores": null,
+                  "grounding_chunk_indices": [
+                    5
+                  ],
+                  "segment": {
+                    "end_index": 449,
+                    "part_index": null,
+                    "start_index": 371,
+                    "text": "Nvidia's revenue growth of 55.6% also surpasses the industry average of 27.71%"
+                  }
+                }
+              }
+            ],
+            "search_id": "CFvuaLbmIcfBz7IPiPHL2QU",
+            "latency_ms": 2585
+          },
+          {
+            "label": "Industry context",
+            "query": "How's semiconductor industry outlook 2025",
+            "reason": "Provide wider sector context",
+            "summary": "The semiconductor industry is poised for significant growth in 2025, with global sales projected to reach approximately $697 billion, an 11% increase year-over-year. This surge is primarily driven by the escalating demand for Artificial Intelligence (AI) and data center technologies. While AI and high-bandwidth memory (HBM) are expected to see substantial growth, with HBM revenue potentially increasing by up to 70%, demand from the PC and smartphone markets may remain muted. Companies are investing heavily in capital expenditures, with an estimated $185 billion allocated to expand manufacturing capacity. However, potential supply chain imbalances and competition from startups pose challenges.",
+            "snippets": [
+              {
+                "title": "infosys.com",
+                "url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFThDjk_oElbhj3yG6rbWTciEE1-U_3iuLyGo83SOaOIXibzziYTCHwEABl5thQsJv4BK-K6KxxhKgBj2vO7eQyeD1-CwCQUivwQklLnFbWa0pOJqidonzFM2btmvpXeE_weh0DxEkOGyHPnPvjznNgu8Tp00DbaGXqo4pHWhBot-S_tKWhtvY=",
+                "snippet": "The semiconductor industry is poised for significant growth in 2025, with global sales projected to reach approximately $697 billion, an 11% increase year-over-year",
+                "display_url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFThDjk_oElbhj3yG6rbWTciEE1-U_3iuLyGo83SOaOIXibzziYTCHwEABl5thQsJv4BK-K6KxxhKgBj2vO7eQyeD1-CwCQUivwQklLnFbWa0pOJqidonzFM2btmvpXeE_weh0DxEkOGyHPnPvjznNgu8Tp00DbaGXqo4pHWhBot-S_tKWhtvY=",
+                "published_at": null,
+                "annotation": {
+                  "confidence_scores": null,
+                  "grounding_chunk_indices": [
+                    0,
+                    1,
+                    2
+                  ],
+                  "segment": {
+                    "end_index": 164,
+                    "part_index": null,
+                    "start_index": null,
+                    "text": "The semiconductor industry is poised for significant growth in 2025, with global sales projected to reach approximately $697 billion, an 11% increase year-over-year"
+                  }
+                }
+              },
+              {
+                "title": "infosys.com",
+                "url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFThDjk_oElbhj3yG6rbWTciEE1-U_3iuLyGo83SOaOIXibzziYTCHwEABl5thQsJv4BK-K6KxxhKgBj2vO7eQyeD1-CwCQUivwQklLnFbWa0pOJqidonzFM2btmvpXeE_weh0DxEkOGyHPnPvjznNgu8Tp00DbaGXqo4pHWhBot-S_tKWhtvY=",
+                "snippet": "This surge is primarily driven by the escalating demand for Artificial Intelligence (AI) and data center technologies",
+                "display_url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFThDjk_oElbhj3yG6rbWTciEE1-U_3iuLyGo83SOaOIXibzziYTCHwEABl5thQsJv4BK-K6KxxhKgBj2vO7eQyeD1-CwCQUivwQklLnFbWa0pOJqidonzFM2btmvpXeE_weh0DxEkOGyHPnPvjznNgu8Tp00DbaGXqo4pHWhBot-S_tKWhtvY=",
+                "published_at": null,
+                "annotation": {
+                  "confidence_scores": null,
+                  "grounding_chunk_indices": [
+                    0,
+                    3,
+                    1,
+                    4,
+                    5
+                  ],
+                  "segment": {
+                    "end_index": 283,
+                    "part_index": null,
+                    "start_index": 166,
+                    "text": "This surge is primarily driven by the escalating demand for Artificial Intelligence (AI) and data center technologies"
+                  }
+                }
+              },
+              {
+                "title": "a2globalelectronics.com",
+                "url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQHpKCPtz6GCVXZRX5O6UXtRM2bTQOzl354ipcuJRXSZ0XAdLWcw-AVSCrBo2eBTNhRlBpiPVvk0UEoj-iI3gm9eRZ9sdSsWEzkmYYOkQPge_LfrBRn2RTdNtYGhc41q4TERt88BoFw-trXQK1eJHK6pG6loxpSP7bjcM1ICmshJv9rzEyMq5mnJN-WYbS0DEJfKuzZrsWY=",
+                "snippet": "While AI and high-bandwidth memory (HBM) are expected to see substantial growth, with HBM revenue potentially increasing by up to 70%",
+                "display_url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQHpKCPtz6GCVXZRX5O6UXtRM2bTQOzl354ipcuJRXSZ0XAdLWcw-AVSCrBo2eBTNhRlBpiPVvk0UEoj-iI3gm9eRZ9sdSsWEzkmYYOkQPge_LfrBRn2RTdNtYGhc41q4TERt88BoFw-trXQK1eJHK6pG6loxpSP7bjcM1ICmshJv9rzEyMq5mnJN-WYbS0DEJfKuzZrsWY=",
+                "published_at": null,
+                "annotation": {
+                  "confidence_scores": null,
+                  "grounding_chunk_indices": [
+                    3
+                  ],
+                  "segment": {
+                    "end_index": 418,
+                    "part_index": null,
+                    "start_index": 285,
+                    "text": "While AI and high-bandwidth memory (HBM) are expected to see substantial growth, with HBM revenue potentially increasing by up to 70%"
+                  }
+                }
+              },
+              {
+                "title": "deloitte.com",
+                "url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQHmIGpfBca8EuzvR9URgddyTMfpa_ad6lVqDI32Zw_6OBtCPrIa9rhseOGjt87b6iQ8NugycdJTRqrQ3f_W7_hVSjAcV11G7eXu0UK3zfXpxNXMpjtyHrlBg_27pTl5LJ69RkgJ2HfyXRQfcubxxL33-uf6H-q51k8RkvjCvTpGIwHM7hBdmWcMppcrosdpk_brXWqcLu2ZBU33ALU81CoBAjoXCJwgM7Fn",
+                "snippet": ", demand from the PC and smartphone markets may remain muted",
+                "display_url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQHmIGpfBca8EuzvR9URgddyTMfpa_ad6lVqDI32Zw_6OBtCPrIa9rhseOGjt87b6iQ8NugycdJTRqrQ3f_W7_hVSjAcV11G7eXu0UK3zfXpxNXMpjtyHrlBg_27pTl5LJ69RkgJ2HfyXRQfcubxxL33-uf6H-q51k8RkvjCvTpGIwHM7hBdmWcMppcrosdpk_brXWqcLu2ZBU33ALU81CoBAjoXCJwgM7Fn",
+                "published_at": null,
+                "annotation": {
+                  "confidence_scores": null,
+                  "grounding_chunk_indices": [
+                    6,
+                    2
+                  ],
+                  "segment": {
+                    "end_index": 478,
+                    "part_index": null,
+                    "start_index": 418,
+                    "text": ", demand from the PC and smartphone markets may remain muted"
+                  }
+                }
+              },
+              {
+                "title": "infosys.com",
+                "url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFThDjk_oElbhj3yG6rbWTciEE1-U_3iuLyGo83SOaOIXibzziYTCHwEABl5thQsJv4BK-K6KxxhKgBj2vO7eQyeD1-CwCQUivwQklLnFbWa0pOJqidonzFM2btmvpXeE_weh0DxEkOGyHPnPvjznNgu8Tp00DbaGXqo4pHWhBot-S_tKWhtvY=",
+                "snippet": "Companies are investing heavily in capital expenditures, with an estimated $185 billion allocated to expand manufacturing capacity",
+                "display_url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFThDjk_oElbhj3yG6rbWTciEE1-U_3iuLyGo83SOaOIXibzziYTCHwEABl5thQsJv4BK-K6KxxhKgBj2vO7eQyeD1-CwCQUivwQklLnFbWa0pOJqidonzFM2btmvpXeE_weh0DxEkOGyHPnPvjznNgu8Tp00DbaGXqo4pHWhBot-S_tKWhtvY=",
+                "published_at": null,
+                "annotation": {
+                  "confidence_scores": null,
+                  "grounding_chunk_indices": [
+                    0
+                  ],
+                  "segment": {
+                    "end_index": 610,
+                    "part_index": null,
+                    "start_index": 480,
+                    "text": "Companies are investing heavily in capital expenditures, with an estimated $185 billion allocated to expand manufacturing capacity"
+                  }
+                }
+              },
+              {
+                "title": "deloitte.com",
+                "url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQHmIGpfBca8EuzvR9URgddyTMfpa_ad6lVqDI32Zw_6OBtCPrIa9rhseOGjt87b6iQ8NugycdJTRqrQ3f_W7_hVSjAcV11G7eXu0UK3zfXpxNXMpjtyHrlBg_27pTl5LJ69RkgJ2HfyXRQfcubxxL33-uf6H-q51k8RkvjCvTpGIwHM7hBdmWcMppcrosdpk_brXWqcLu2ZBU33ALU81CoBAjoXCJwgM7Fn",
+                "snippet": "However, potential supply chain imbalances and competition from startups pose challenges",
+                "display_url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQHmIGpfBca8EuzvR9URgddyTMfpa_ad6lVqDI32Zw_6OBtCPrIa9rhseOGjt87b6iQ8NugycdJTRqrQ3f_W7_hVSjAcV11G7eXu0UK3zfXpxNXMpjtyHrlBg_27pTl5LJ69RkgJ2HfyXRQfcubxxL33-uf6H-q51k8RkvjCvTpGIwHM7hBdmWcMppcrosdpk_brXWqcLu2ZBU33ALU81CoBAjoXCJwgM7Fn",
+                "published_at": null,
+                "annotation": {
+                  "confidence_scores": null,
+                  "grounding_chunk_indices": [
+                    6,
+                    3
+                  ],
+                  "segment": {
+                    "end_index": 700,
+                    "part_index": null,
+                    "start_index": 612,
+                    "text": "However, potential supply chain imbalances and competition from startups pose challenges"
+                  }
+                }
+              }
+            ],
+            "search_id": "ClvuaMqELJvBz7IP6pnYuQY",
+            "latency_ms": 2169
+          }
+        ],
+        "usage": null,
+        "fetched_at": "2025-10-14T14:15:41.156917",
+        "latency_ms": 4754,
+        "model": "gemini-2.5-flash-lite",
+        "from_cache": false
+      },
+      "schedule_stage": "hedged_accessories",
+      "mode": "multi_agent",
+      "badges": {
+        "mode": "Supervisor",
+        "mode_schedule": {
+          "parallel_group": "specialist_parallel"
+        },
+        "hedging": "enabled"
+      },
+      "schedule": {
+        "mode": "multi_agent",
+        "default_parallelism": true,
+        "accessory_strategy": "specialist_parallel",
+        "hedging_enabled": true,
+        "stages": [
+          {
+            "key": "supervisor",
+            "label": "Supervisor Kickoff",
+            "parallel_group": "supervisor",
+            "allows_parallel": false,
+            "steps": [],
+            "accessories": [],
+            "hedged_tools": [],
+            "emits": [
+              "agent_supervisor_started",
+              "agent_turn",
+              "agent_reasoning",
+              "agent_coordination"
+            ],
+            "description": "Supervisor agent sets up shared artifacts and objectives."
+          },
+          {
+            "key": "classification",
+            "label": "Classification Specialist",
+            "parallel_group": "specialist_sequential",
+            "allows_parallel": true,
+            "steps": [
+              "classification"
+            ],
+            "accessories": [],
+            "hedged_tools": [],
+            "emits": [
+              "classification",
+              "classification_started",
+              "classification_complete",
+              "schema_clarifier",
+              "schema_clarifier_result"
+            ],
+            "description": "Specialist handles classification while other tasks queue."
+          },
+          {
+            "key": "intent_sql",
+            "label": "Intent + SQL Specialists",
+            "parallel_group": "specialist_core",
+            "allows_parallel": true,
+            "steps": [
+              "intent_detection",
+              "clarification",
+              "sql_compilation",
+              "sql_execution"
+            ],
+            "accessories": [],
+            "hedged_tools": [],
+            "emits": [
+              "intent_detection",
+              "intent_detection_complete",
+              "clarification",
+              "clarification_progress",
+              "clarification_resolved",
+              "clarification_skipped",
+              "clarification_timeout",
+              "plan_and_select_template",
+              "schema_validation",
+              "sql_compilation",
+              "sql_compiled",
+              "sql_execution",
+              "sql_generated",
+              "sql_validated",
+              "execution_stats",
+              "sql_ready"
+            ],
+            "description": "Intent and SQL specialists coordinate under supervisor guidance."
+          },
+          {
+            "key": "hedged_accessories",
+            "label": "Hedged Accessories",
+            "parallel_group": "specialist_fanout",
+            "allows_parallel": true,
+            "steps": [
+              "web_search"
+            ],
+            "accessories": [
+              "web_retriever_cached",
+              "web_retriever_live",
+              "stock_tracker"
+            ],
+            "hedged_tools": [
+              "web_retriever_cached",
+              "web_retriever_live"
+            ],
+            "emits": [
+              "tool_parallel_start",
+              "tool_parallel_result",
+              "tool_parallel_complete",
+              "tool_fanout",
+              "tool_execution",
+              "web_research_agent",
+              "hedged_accessories_complete",
+              "stock_ready",
+              "web_ready"
+            ],
+            "description": "Supervisor launches hedged web retrievers plus stock tracker in parallel."
+          },
+          {
+            "key": "chart",
+            "label": "Chart Specialist",
+            "parallel_group": "specialist_chart",
+            "allows_parallel": true,
+            "steps": [
+              "chart_generation"
+            ],
+            "accessories": [],
+            "hedged_tools": [],
+            "emits": [
+              "chart_generation",
+              "chart_planned",
+              "chart_spec_ready",
+              "chart_generated",
+              "chart_ready"
+            ],
+            "description": "Chart specialist consumes SQL outputs and accessory deltas."
+          },
+          {
+            "key": "analysis",
+            "label": "Analysis + Cohesive Result",
+            "parallel_group": "analysis_stream",
+            "allows_parallel": true,
+            "steps": [
+              "analysis_generation",
+              "analysis_revision",
+              "follow_up_route"
+            ],
+            "accessories": [],
+            "hedged_tools": [],
+            "emits": [
+              "analysis_generation",
+              "analysis_chunk",
+              "analysis_streaming",
+              "analysis_complete",
+              "follow_up_route",
+              "workflow_complete",
+              "cohesive_result",
+              "cohesive_result_error",
+              "short_financial_analysis",
+              "analysis_ready"
+            ],
+            "description": "Supervisor aggregates chart + accessory data into cohesive result."
+          }
+        ]
+      },
+      "accessory_strategy": "specialist_parallel",
+      "supports_deltas": true,
+      "parallel_group": "specialist_fanout",
+      "stage_allows_parallel": true,
+      "follow_up_route": "full_pipeline",
+      "ts": "2025-10-14T14:15:41.163771",
+      "sequence": 21
+    },
+    "elapsed_ms": 5544,
+    "timestamp": "2025-10-14T14:17:32.588677",
+    "sequence": 46,
+    "parallelGroup": "specialist_fanout",
+    "scheduleStage": "hedged_accessories",
+    "flowMode": "multi_agent"
+  },
+  {
+    "id": "analysis_generation",
+    "name": "Final Analysis",
+    "status": "in_progress",
+    "thinking": [
+      "Generating financial analysis..."
+    ],
+    "timestamp": "2025-10-14T14:17:38.165264",
+    "sequence": 49,
+    "parallelGroup": "analysis_stream",
+    "scheduleStage": "analysis",
+    "flowMode": "multi_agent"
+  },
+  {
+    "id": "agent_coordination",
+    "name": "Agent Coordination",
+    "status": "completed",
+    "thinking": [
+      "Agent Coordination: start [budget 1500ms  concurrency 1  outputs intent]",
+      "Agent Coordination: {\"intent_key\":\"margin_growth_vs_peers\",\"confidence\":0.75} [budget 1500ms  concurrency 1  outputs intent]",
+      "Agent Coordination: complete [budget 2000ms  concurrency 1  outputs clarification]",
+      "Agent Coordination: start [budget 7000ms  concurrency 1  outputs sql_generation, sql_execution]",
+      "Agent Coordination: {\"llm_used\":true,\"template_fallback\":null} [budget 7000ms  concurrency 1  outputs sql_generation, sql_execution]",
+      "Agent Coordination: start [budget 7000ms  concurrency 1  outputs sql_generation, sql_execution]",
+      "Agent Coordination: {\"ok\":true,\"issues\":0} [budget 7000ms  concurrency 1  outputs sql_generation, sql_execution]",
+      "Agent Coordination: start [budget 7000ms  concurrency 1  outputs sql_generation, sql_execution]",
+      "Agent Coordination: start [budget 1500ms  concurrency 1  outputs chart]",
+      "Chart generated (type: line_multi), series: 4",
+      "Agent Coordination: {\"chart_type\":null,\"chart_spec_id\":\"analytics:chart:c7fcdccc5046\"} [budget 1500ms  concurrency 1  outputs chart]",
+      "Agent Coordination: start [budget 5000ms  concurrency 1  outputs analysis]",
+      "TL",
+      "Agent Coordination: TL",
+      ";",
+      "Agent Coordination: ;",
+      "DR",
+      "Agent Coordination: DR",
+      ":",
+      "Agent Coordination: :",
+      " Nvidia",
+      "Agent Coordination:  Nvidia",
+      "’s",
+      "Agent Coordination: ’s",
+      " margins",
+      "Agent Coordination:  margins",
+      " are",
+      "Agent Coordination:  are",
+      " materially",
+      "Agent Coordination:  materially",
+      " higher",
+      "Agent Coordination:  higher",
+      " than",
+      "Agent Coordination:  than",
+      " semiconductor",
+      "Agent Coordination:  semiconductor",
+      " peers",
+      "Agent Coordination:  peers",
+      " —",
+      "Agent Coordination:  —",
+      " gross",
+      "Agent Coordination:  gross",
+      " ~",
+      "Agent Coordination:  ~",
+      "69",
+      "Agent Coordination: 69",
+      ".",
+      "Agent Coordination: .",
+      "8",
+      "Agent Coordination: 8",
+      "%,",
+      "Agent Coordination: %,",
+      " operating",
+      "Agent Coordination:  operating",
+      " ~",
+      "Agent Coordination:  ~",
+      "58",
+      "Agent Coordination: 58",
+      ".",
+      "Agent Coordination: .",
+      "1",
+      "Agent Coordination: 1",
+      "%,",
+      "Agent Coordination: %,",
+      " net",
+      "Agent Coordination:  net",
+      " ~",
+      "Agent Coordination:  ~",
+      "52",
+      "Agent Coordination: 52",
+      ".",
+      "Agent Coordination: .",
+      "4",
+      "Agent Coordination: 4",
+      "%",
+      "Agent Coordination: %",
+      " —",
+      "Agent Coordination:  —",
+      " and",
+      "Agent Coordination:  and",
+      " the",
+      "Agent Coordination:  the",
+      " year",
+      "Agent Coordination:  year",
+      "‑",
+      "Agent Coordination: ‑",
+      "over",
+      "Agent Coordination: over",
+      "‑",
+      "Agent Coordination: ‑",
+      "year",
+      "Agent Coordination: year",
+      " chart",
+      "Agent Coordination:  chart",
+      " shows",
+      "Agent Coordination:  shows",
+      " strong",
+      "Agent Coordination:  strong",
+      " out",
+      "Agent Coordination:  out",
+      "performance",
+      "Agent Coordination: performance",
+      " in",
+      "Agent Coordination:  in",
+      " ",
+      "Agent Coordination:  ",
+      "202",
+      "Agent Coordination: 202",
+      "3",
+      "Agent Coordination: 3",
+      "–",
+      "Agent Coordination: –",
+      "24",
+      "Agent Coordination: 24",
+      " but",
+      "Agent Coordination:  but",
+      " a",
+      "Agent Coordination:  a",
+      " pull",
+      "Agent Coordination:  pull",
+      "back",
+      "Agent Coordination: back",
+      " in",
+      "Agent Coordination:  in",
+      " ",
+      "Agent Coordination:  ",
+      "202",
+      "Agent Coordination: 202",
+      "5",
+      "Agent Coordination: 5",
+      ".",
+      "Agent Coordination: .",
+      " Headlines",
+      "Agent Coordination:  Headlines",
+      " point",
+      "Agent Coordination:  point",
+      " to",
+      "Agent Coordination:  to",
+      " AI",
+      "Agent Coordination:  AI",
+      "‑",
+      "Agent Coordination: ‑",
+      "dr",
+      "Agent Coordination: dr",
+      "iven",
+      "Agent Coordination: iven",
+      " industry",
+      "Agent Coordination:  industry",
+      " growth",
+      "Agent Coordination:  growth",
+      " supporting",
+      "Agent Coordination:  supporting",
+      " NVIDIA",
+      "Agent Coordination:  NVIDIA",
+      "’s",
+      "Agent Coordination: ’s",
+      " premium",
+      "Agent Coordination:  premium",
+      " margins",
+      "Agent Coordination:  margins",
+      ",",
+      "Agent Coordination: ,",
+      " but",
+      "Agent Coordination:  but",
+      " the",
+      "Agent Coordination:  the",
+      " latest",
+      "Agent Coordination:  latest",
+      " Yo",
+      "Agent Coordination:  Yo",
+      "Y",
+      "Agent Coordination: Y",
+      " del",
+      "Agent Coordination:  del",
+      "tas",
+      "Agent Coordination: tas",
+      " signal",
+      "Agent Coordination:  signal",
+      " a",
+      "Agent Coordination:  a",
+      " near",
+      "Agent Coordination:  near",
+      "‑",
+      "Agent Coordination: ‑",
+      "term",
+      "Agent Coordination: term",
+      " margin",
+      "Agent Coordination:  margin",
+      " compression",
+      "Agent Coordination:  compression",
+      " versus",
+      "Agent Coordination:  versus",
+      " peers",
+      "Agent Coordination:  peers",
+      " [",
+      "Agent Coordination:  [",
+      "1",
+      "Agent Coordination: 1",
+      "][",
+      "Agent Coordination: ][",
+      "2",
+      "Agent Coordination: 2",
+      "][",
+      "Agent Coordination: ][",
+      "3",
+      "Agent Coordination: 3",
+      "].\n\n",
+      "Agent Coordination: ].\n\n",
+      "Key",
+      "Agent Coordination: Key",
+      " points",
+      "Agent Coordination:  points",
+      ":\n",
+      "Agent Coordination: :\n",
+      "-",
+      "Agent Coordination: -",
+      " SQL",
+      "Agent Coordination:  SQL",
+      " cross",
+      "Agent Coordination:  cross",
+      "‑",
+      "Agent Coordination: ‑",
+      "year",
+      "Agent Coordination: year",
+      " analysis",
+      "Agent Coordination:  analysis",
+      ":",
+      "Agent Coordination: :",
+      " Nvidia",
+      "Agent Coordination:  Nvidia",
+      "’s",
+      "Agent Coordination: ’s",
+      " gross",
+      "Agent Coordination:  gross",
+      "/",
+      "Agent Coordination: /",
+      "oper",
+      "Agent Coordination: oper",
+      "ating",
+      "Agent Coordination: ating",
+      "/net",
+      "Agent Coordination: /net",
+      " margins",
+      "Agent Coordination:  margins",
+      " out",
+      "Agent Coordination:  out",
+      "pace",
+      "Agent Coordination: pace",
+      " peer",
+      "Agent Coordination:  peer",
+      " med",
+      "Agent Coordination:  med",
+      "ians",
+      "Agent Coordination: ians",
+      " by",
+      "Agent Coordination:  by",
+      " large",
+      "Agent Coordination:  large",
+      " margins",
+      "Agent Coordination:  margins",
+      " (",
+      "Agent Coordination:  (",
+      "gross",
+      "Agent Coordination: gross",
+      " ≈",
+      "Agent Coordination:  ≈",
+      "69",
+      "Agent Coordination: 69",
+      ".",
+      "Agent Coordination: .",
+      "8",
+      "Agent Coordination: 8",
+      "%",
+      "Agent Coordination: %",
+      " vs",
+      "Agent Coordination:  vs",
+      " industry",
+      "Agent Coordination:  industry",
+      " ~",
+      "Agent Coordination:  ~",
+      "29",
+      "Agent Coordination: 29",
+      ".",
+      "Agent Coordination: .",
+      "5",
+      "Agent Coordination: 5",
+      "%;",
+      "Agent Coordination: %;",
+      " operating",
+      "Agent Coordination:  operating",
+      " ≈",
+      "Agent Coordination:  ≈",
+      "58",
+      "Agent Coordination: 58",
+      ".",
+      "Agent Coordination: .",
+      "1",
+      "Agent Coordination: 1",
+      "%",
+      "Agent Coordination: %",
+      " vs",
+      "Agent Coordination:  vs",
+      " ~",
+      "Agent Coordination:  ~",
+      "4",
+      "Agent Coordination: 4",
+      ".",
+      "Agent Coordination: .",
+      "2",
+      "Agent Coordination: 2",
+      "%;",
+      "Agent Coordination: %;",
+      " net",
+      "Agent Coordination:  net",
+      " ≈",
+      "Agent Coordination:  ≈",
+      "52",
+      "Agent Coordination: 52",
+      ".",
+      "Agent Coordination: .",
+      "4",
+      "Agent Coordination: 4",
+      "%)",
+      "Agent Coordination: %)",
+      " per",
+      "Agent Coordination:  per",
+      " fundamentals",
+      "Agent Coordination:  fundamentals",
+      " [",
+      "Agent Coordination:  [",
+      "1",
+      "Agent Coordination: 1",
+      "][",
+      "Agent Coordination: ][",
+      "2",
+      "Agent Coordination: 2",
+      "][",
+      "Agent Coordination: ][",
+      "3",
+      "Agent Coordination: 3",
+      "].\n",
+      "Agent Coordination: ].\n",
+      "-",
+      "Agent Coordination: -",
+      " Chart",
+      "Agent Coordination:  Chart",
+      " takeaway",
+      "Agent Coordination:  takeaway",
+      ":",
+      "Agent Coordination: :",
+      " ",
+      "Agent Coordination:  ",
+      "202",
+      "Agent Coordination: 202",
+      "3",
+      "Agent Coordination: 3",
+      "–",
+      "Agent Coordination: –",
+      "24",
+      "Agent Coordination: 24",
+      " show",
+      "Agent Coordination:  show",
+      " strong",
+      "Agent Coordination:  strong",
+      " Yo",
+      "Agent Coordination:  Yo",
+      "Y",
+      "Agent Coordination: Y",
+      " margin",
+      "Agent Coordination:  margin",
+      " expansion",
+      "Agent Coordination:  expansion",
+      " vs",
+      "Agent Coordination:  vs",
+      " industry",
+      "Agent Coordination:  industry",
+      " (",
+      "Agent Coordination:  (",
+      "e",
+      "Agent Coordination: e",
+      ".g",
+      "Agent Coordination: .g",
+      ".,",
+      "Agent Coordination: .,",
+      " ",
+      "Agent Coordination:  ",
+      "202",
+      "Agent Coordination: 202",
+      "4",
+      "Agent Coordination: 4",
+      " gross",
+      "Agent Coordination:  gross",
+      " margin",
+      "Agent Coordination:  margin",
+      " Yo",
+      "Agent Coordination:  Yo",
+      "Y",
+      "Agent Coordination: Y",
+      " +",
+      "Agent Coordination:  +",
+      "9",
+      "Agent Coordination: 9",
+      ".",
+      "Agent Coordination: .",
+      "7",
+      "Agent Coordination: 7",
+      "pp",
+      "Agent Coordination: pp",
+      " vs",
+      "Agent Coordination:  vs",
+      " industry",
+      "Agent Coordination:  industry",
+      " +",
+      "Agent Coordination:  +",
+      "3",
+      "Agent Coordination: 3",
+      ".",
+      "Agent Coordination: .",
+      "9",
+      "Agent Coordination: 9",
+      "pp",
+      "Agent Coordination: pp",
+      ";",
+      "Agent Coordination: ;",
+      " operating",
+      "Agent Coordination:  operating",
+      " +",
+      "Agent Coordination:  +",
+      "24",
+      "Agent Coordination: 24",
+      ".",
+      "Agent Coordination: .",
+      "0",
+      "Agent Coordination: 0",
+      "pp",
+      "Agent Coordination: pp",
+      " vs",
+      "Agent Coordination:  vs",
+      " +",
+      "Agent Coordination:  +",
+      "1",
+      "Agent Coordination: 1",
+      ".",
+      "Agent Coordination: .",
+      "0",
+      "Agent Coordination: 0",
+      "pp",
+      "Agent Coordination: pp",
+      ")",
+      "Agent Coordination: )",
+      " indicating",
+      "Agent Coordination:  indicating",
+      " recent",
+      "Agent Coordination:  recent",
+      " operating",
+      "Agent Coordination:  operating",
+      " leverage",
+      "Agent Coordination:  leverage",
+      ".\n",
+      "Agent Coordination: .\n",
+      "-",
+      "Agent Coordination: -",
+      " Recent",
+      "Agent Coordination:  Recent",
+      " deterioration",
+      "Agent Coordination:  deterioration",
+      ":",
+      "Agent Coordination: :",
+      " ",
+      "Agent Coordination:  ",
+      "202",
+      "Agent Coordination: 202",
+      "5",
+      "Agent Coordination: 5",
+      " data",
+      "Agent Coordination:  data",
+      " shows",
+      "Agent Coordination:  shows",
+      " Nvidia",
+      "Agent Coordination:  Nvidia",
+      " Yo",
+      "Agent Coordination:  Yo",
+      "Y",
+      "Agent Coordination: Y",
+      " margin",
+      "Agent Coordination:  margin",
+      " declines",
+      "Agent Coordination:  declines",
+      " while",
+      "Agent Coordination:  while",
+      " peer",
+      "Agent Coordination:  peer",
+      " averages",
+      "Agent Coordination:  averages",
+      " rose",
+      "Agent Coordination:  rose",
+      " sharply",
+      "Agent Coordination:  sharply",
+      " (",
+      "Agent Coordination:  (",
+      "202",
+      "Agent Coordination: 202",
+      "5",
+      "Agent Coordination: 5",
+      " gross",
+      "Agent Coordination:  gross",
+      " Yo",
+      "Agent Coordination:  Yo",
+      "Y",
+      "Agent Coordination: Y",
+      ":",
+      "Agent Coordination: :",
+      " Nvidia",
+      "Agent Coordination:  Nvidia",
+      " -",
+      "Agent Coordination:  -",
+      "4",
+      "Agent Coordination: 4",
+      ".",
+      "Agent Coordination: .",
+      "16",
+      "Agent Coordination: 16",
+      "pp",
+      "Agent Coordination: pp",
+      " vs",
+      "Agent Coordination:  vs",
+      " industry",
+      "Agent Coordination:  industry",
+      " +",
+      "Agent Coordination:  +",
+      "26",
+      "Agent Coordination: 26",
+      ".",
+      "Agent Coordination: .",
+      "10",
+      "Agent Coordination: 10",
+      "pp",
+      "Agent Coordination: pp",
+      "),",
+      "Agent Coordination: ),",
+      " producing",
+      "Agent Coordination:  producing",
+      " a",
+      "Agent Coordination:  a",
+      " ~",
+      "Agent Coordination:  ~",
+      "‑",
+      "Agent Coordination: ‑",
+      "30",
+      "Agent Coordination: 30",
+      "pp",
+      "Agent Coordination: pp",
+      " gap",
+      "Agent Coordination:  gap",
+      " vs",
+      "Agent Coordination:  vs",
+      " industry",
+      "Agent Coordination:  industry",
+      " for",
+      "Agent Coordination:  for",
+      " gross",
+      "Agent Coordination:  gross",
+      " margin",
+      "Agent Coordination:  margin",
+      " change",
+      "Agent Coordination:  change",
+      ".\n",
+      "Agent Coordination: .\n",
+      "-",
+      "Agent Coordination: -",
+      " Industry",
+      "Agent Coordination:  Industry",
+      " backdrop",
+      "Agent Coordination:  backdrop",
+      ":",
+      "Agent Coordination: :",
+      " Bro",
+      "Agent Coordination:  Bro",
+      "ader",
+      "Agent Coordination: ader",
+      " semiconductor",
+      "Agent Coordination:  semiconductor",
+      " market",
+      "Agent Coordination:  market",
+      " growth",
+      "Agent Coordination:  growth",
+      " (",
+      "Agent Coordination:  (",
+      "AI",
+      "Agent Coordination: AI",
+      "/data",
+      "Agent Coordination: /data",
+      "‑",
+      "Agent Coordination: ‑",
+      "center",
+      "Agent Coordination: center",
+      " cap",
+      "Agent Coordination:  cap",
+      "ex",
+      "Agent Coordination: ex",
+      " and",
+      "Agent Coordination:  and",
+      " sales",
+      "Agent Coordination:  sales",
+      " expansion",
+      "Agent Coordination:  expansion",
+      ")",
+      "Agent Coordination: )",
+      " under",
+      "Agent Coordination:  under",
+      "pins",
+      "Agent Coordination: pins",
+      " structural",
+      "Agent Coordination:  structural",
+      " demand",
+      "Agent Coordination:  demand",
+      " —",
+      "Agent Coordination:  —",
+      " a",
+      "Agent Coordination:  a",
+      " tail",
+      "Agent Coordination:  tail",
+      "wind",
+      "Agent Coordination: wind",
+      " for",
+      "Agent Coordination:  for",
+      " NVIDIA",
+      "Agent Coordination:  NVIDIA",
+      "’s",
+      "Agent Coordination: ’s",
+      " premium",
+      "Agent Coordination:  premium",
+      " pricing",
+      "Agent Coordination:  pricing",
+      " and",
+      "Agent Coordination:  and",
+      " scale",
+      "Agent Coordination:  scale",
+      " [",
+      "Agent Coordination:  [",
+      "headline",
+      "Agent Coordination: headline",
+      " context",
+      "Agent Coordination:  context",
+      "].\n\n",
+      "Agent Coordination: ].\n\n",
+      "Watch",
+      "Agent Coordination: Watch",
+      "outs",
+      "Agent Coordination: outs",
+      ":",
+      "Agent Coordination: :",
+      " Fundamentals",
+      "Agent Coordination:  Fundamentals",
+      " and",
+      "Agent Coordination:  and",
+      " industry",
+      "Agent Coordination:  industry",
+      " headlines",
+      "Agent Coordination:  headlines",
+      " both",
+      "Agent Coordination:  both",
+      " bullish",
+      "Agent Coordination:  bullish",
+      " structur",
+      "Agent Coordination:  structur",
+      "ally",
+      "Agent Coordination: ally",
+      ",",
+      "Agent Coordination: ,",
+      " but",
+      "Agent Coordination:  but",
+      " the",
+      "Agent Coordination:  the",
+      " ",
+      "Agent Coordination:  ",
+      "202",
+      "Agent Coordination: 202",
+      "5",
+      "Agent Coordination: 5",
+      " Yo",
+      "Agent Coordination:  Yo",
+      "Y",
+      "Agent Coordination: Y",
+      " margin",
+      "Agent Coordination:  margin",
+      " contraction",
+      "Agent Coordination:  contraction",
+      " versus",
+      "Agent Coordination:  versus",
+      " peers",
+      "Agent Coordination:  peers",
+      " is",
+      "Agent Coordination:  is",
+      " a",
+      "Agent Coordination:  a",
+      " short",
+      "Agent Coordination:  short",
+      "‑",
+      "Agent Coordination: ‑",
+      "term",
+      "Agent Coordination: term",
+      " red",
+      "Agent Coordination:  red",
+      " flag",
+      "Agent Coordination:  flag",
+      " —",
+      "Agent Coordination:  —",
+      " check",
+      "Agent Coordination:  check",
+      " revenue",
+      "Agent Coordination:  revenue",
+      " mix",
+      "Agent Coordination:  mix",
+      ",",
+      "Agent Coordination: ,",
+      " product",
+      "Agent Coordination:  product",
+      " pricing",
+      "Agent Coordination:  pricing",
+      ",",
+      "Agent Coordination: ,",
+      " and",
+      "Agent Coordination:  and",
+      " one",
+      "Agent Coordination:  one",
+      "‑",
+      "Agent Coordination: ‑",
+      "time",
+      "Agent Coordination: time",
+      " items",
+      "Agent Coordination:  items",
+      " before",
+      "Agent Coordination:  before",
+      " assuming",
+      "Agent Coordination:  assuming",
+      " sustained",
+      "Agent Coordination:  sustained",
+      " margin",
+      "Agent Coordination:  margin",
+      " leadership",
+      "Agent Coordination:  leadership",
+      ".",
+      "Agent Coordination: ."
+    ],
+    "details": {
+      "agent_turns": [
+        {
+          "role": "intent_analyst",
+          "status": "start",
+          "ts": "2025-10-14T14:15:35.605004",
+          "sequence": 5,
+          "parallelGroup": "supervisor",
+          "latencyBudgetMs": 1500,
+          "concurrencyLimit": 1,
+          "outputArtifacts": [
+            "intent"
+          ]
+        },
+        {
+          "role": "intent_analyst",
+          "status": "complete",
+          "ts": "2025-10-14T14:15:35.607719",
+          "elapsed_ms": 2,
+          "summary": {
+            "intent_key": "margin_growth_vs_peers",
+            "confidence": 0.75
+          },
+          "sequence": 9,
+          "parallelGroup": "supervisor",
+          "latencyBudgetMs": 1500,
+          "concurrencyLimit": 1,
+          "outputArtifacts": [
+            "intent"
+          ]
+        },
+        {
+          "role": "user_liaison",
+          "status": "complete",
+          "ts": "2025-10-14T14:15:35.610141",
+          "sequence": 13,
+          "parallelGroup": "supervisor",
+          "latencyBudgetMs": 2000,
+          "concurrencyLimit": 1,
+          "outputArtifacts": [
+            "clarification"
+          ]
+        },
+        {
+          "role": "sql_specialist",
+          "status": "start",
+          "ts": "2025-10-14T14:15:49.321561",
+          "sequence": 28,
+          "parallelGroup": "supervisor",
+          "latencyBudgetMs": 7000,
+          "concurrencyLimit": 1,
+          "outputArtifacts": [
+            "sql_generation",
+            "sql_execution"
+          ]
+        },
+        {
+          "role": "sql_specialist",
+          "status": "complete",
+          "ts": "2025-10-14T14:17:30.886532",
+          "elapsed_ms": 101564,
+          "summary": {
+            "llm_used": true,
+            "template_fallback": null
+          },
+          "sequence": 32,
+          "parallelGroup": "supervisor",
+          "latencyBudgetMs": 7000,
+          "concurrencyLimit": 1,
+          "outputArtifacts": [
+            "sql_generation",
+            "sql_execution"
+          ]
+        },
+        {
+          "role": "risk_controller",
+          "status": "start",
+          "ts": "2025-10-14T14:17:30.888012",
+          "sequence": 33,
+          "parallelGroup": "supervisor",
+          "latencyBudgetMs": 7000,
+          "concurrencyLimit": 1,
+          "outputArtifacts": [
+            "sql_generation",
+            "sql_execution"
+          ]
+        },
+        {
+          "role": "risk_controller",
+          "status": "complete",
+          "ts": "2025-10-14T14:17:30.898651",
+          "elapsed_ms": 10,
+          "summary": {
+            "ok": true,
+            "issues": 0
+          },
+          "sequence": 36,
+          "parallelGroup": "supervisor",
+          "latencyBudgetMs": 7000,
+          "concurrencyLimit": 1,
+          "outputArtifacts": [
+            "sql_generation",
+            "sql_execution"
+          ]
+        },
+        {
+          "role": "data_engineer",
+          "status": "start",
+          "ts": "2025-10-14T14:17:30.899256",
+          "sequence": 37,
+          "parallelGroup": "supervisor",
+          "latencyBudgetMs": 7000,
+          "concurrencyLimit": 1,
+          "outputArtifacts": [
+            "sql_generation",
+            "sql_execution"
+          ]
+        },
+        {
+          "role": "viz_designer",
+          "status": "start",
+          "ts": "2025-10-14T14:17:31.545217",
+          "sequence": 39,
+          "parallelGroup": "supervisor",
+          "latencyBudgetMs": 1500,
+          "concurrencyLimit": 1,
+          "outputArtifacts": [
+            "chart"
+          ]
+        },
+        {
+          "role": "viz_designer",
+          "status": "complete",
+          "ts": "2025-10-14T14:17:31.550832",
+          "elapsed_ms": 5,
+          "summary": {
+            "chart_type": null,
+            "chart_spec_id": "analytics:chart:c7fcdccc5046"
+          },
+          "sequence": 43,
+          "parallelGroup": "supervisor",
+          "latencyBudgetMs": 1500,
+          "concurrencyLimit": 1,
+          "outputArtifacts": [
+            "chart"
+          ]
+        },
+        {
+          "role": "insight_reviewer",
+          "status": "start",
+          "ts": "2025-10-14T14:17:38.165278",
+          "sequence": 48,
+          "parallelGroup": "supervisor",
+          "latencyBudgetMs": 5000,
+          "concurrencyLimit": 1,
+          "outputArtifacts": [
+            "analysis"
+          ]
+        }
+      ],
+      "agent_reasoning": [
+        {
+          "role": "insight_reviewer",
+          "thought": " structur",
+          "ts": "2025-10-14T14:17:51.223857",
+          "sequence": 702,
+          "parallelGroup": "supervisor"
+        },
+        {
+          "role": "insight_reviewer",
+          "thought": "ally",
+          "ts": "2025-10-14T14:17:51.225901",
+          "sequence": 704,
+          "parallelGroup": "supervisor"
+        },
+        {
+          "role": "insight_reviewer",
+          "thought": ",",
+          "ts": "2025-10-14T14:17:51.300026",
+          "sequence": 706,
+          "parallelGroup": "supervisor"
+        },
+        {
+          "role": "insight_reviewer",
+          "thought": " but",
+          "ts": "2025-10-14T14:17:51.306039",
+          "sequence": 708,
+          "parallelGroup": "supervisor"
+        },
+        {
+          "role": "insight_reviewer",
+          "thought": " the",
+          "ts": "2025-10-14T14:17:51.307862",
+          "sequence": 710,
+          "parallelGroup": "supervisor"
+        },
+        {
+          "role": "insight_reviewer",
+          "thought": " ",
+          "ts": "2025-10-14T14:17:51.488091",
+          "sequence": 712,
+          "parallelGroup": "supervisor"
+        },
+        {
+          "role": "insight_reviewer",
+          "thought": "202",
+          "ts": "2025-10-14T14:17:51.490084",
+          "sequence": 714,
+          "parallelGroup": "supervisor"
+        },
+        {
+          "role": "insight_reviewer",
+          "thought": "5",
+          "ts": "2025-10-14T14:17:51.491805",
+          "sequence": 716,
+          "parallelGroup": "supervisor"
+        },
+        {
+          "role": "insight_reviewer",
+          "thought": " Yo",
+          "ts": "2025-10-14T14:17:51.590101",
+          "sequence": 718,
+          "parallelGroup": "supervisor"
+        },
+        {
+          "role": "insight_reviewer",
+          "thought": "Y",
+          "ts": "2025-10-14T14:17:51.592034",
+          "sequence": 720,
+          "parallelGroup": "supervisor"
+        },
+        {
+          "role": "insight_reviewer",
+          "thought": " margin",
+          "ts": "2025-10-14T14:17:51.593955",
+          "sequence": 722,
+          "parallelGroup": "supervisor"
+        },
+        {
+          "role": "insight_reviewer",
+          "thought": " contraction",
+          "ts": "2025-10-14T14:17:51.697291",
+          "sequence": 724,
+          "parallelGroup": "supervisor"
+        },
+        {
+          "role": "insight_reviewer",
+          "thought": " versus",
+          "ts": "2025-10-14T14:17:51.699226",
+          "sequence": 726,
+          "parallelGroup": "supervisor"
+        },
+        {
+          "role": "insight_reviewer",
+          "thought": " peers",
+          "ts": "2025-10-14T14:17:51.802747",
+          "sequence": 728,
+          "parallelGroup": "supervisor"
+        },
+        {
+          "role": "insight_reviewer",
+          "thought": " is",
+          "ts": "2025-10-14T14:17:51.804478",
+          "sequence": 730,
+          "parallelGroup": "supervisor"
+        },
+        {
+          "role": "insight_reviewer",
+          "thought": " a",
+          "ts": "2025-10-14T14:17:51.806277",
+          "sequence": 732,
+          "parallelGroup": "supervisor"
+        },
+        {
+          "role": "insight_reviewer",
+          "thought": " short",
+          "ts": "2025-10-14T14:17:51.882420",
+          "sequence": 734,
+          "parallelGroup": "supervisor"
+        },
+        {
+          "role": "insight_reviewer",
+          "thought": "‑",
+          "ts": "2025-10-14T14:17:51.884349",
+          "sequence": 736,
+          "parallelGroup": "supervisor"
+        },
+        {
+          "role": "insight_reviewer",
+          "thought": "term",
+          "ts": "2025-10-14T14:17:51.931922",
+          "sequence": 738,
+          "parallelGroup": "supervisor"
+        },
+        {
+          "role": "insight_reviewer",
+          "thought": " red",
+          "ts": "2025-10-14T14:17:51.933639",
+          "sequence": 740,
+          "parallelGroup": "supervisor"
+        },
+        {
+          "role": "insight_reviewer",
+          "thought": " flag",
+          "ts": "2025-10-14T14:17:51.985950",
+          "sequence": 742,
+          "parallelGroup": "supervisor"
+        },
+        {
+          "role": "insight_reviewer",
+          "thought": " —",
+          "ts": "2025-10-14T14:17:51.987897",
+          "sequence": 744,
+          "parallelGroup": "supervisor"
+        },
+        {
+          "role": "insight_reviewer",
+          "thought": " check",
+          "ts": "2025-10-14T14:17:52.073851",
+          "sequence": 746,
+          "parallelGroup": "supervisor"
+        },
+        {
+          "role": "insight_reviewer",
+          "thought": " revenue",
+          "ts": "2025-10-14T14:17:52.076587",
+          "sequence": 748,
+          "parallelGroup": "supervisor"
+        },
+        {
+          "role": "insight_reviewer",
+          "thought": " mix",
+          "ts": "2025-10-14T14:17:52.168718",
+          "sequence": 750,
+          "parallelGroup": "supervisor"
+        },
+        {
+          "role": "insight_reviewer",
+          "thought": ",",
+          "ts": "2025-10-14T14:17:52.170526",
+          "sequence": 752,
+          "parallelGroup": "supervisor"
+        },
+        {
+          "role": "insight_reviewer",
+          "thought": " product",
+          "ts": "2025-10-14T14:17:52.172385",
+          "sequence": 754,
+          "parallelGroup": "supervisor"
+        },
+        {
+          "role": "insight_reviewer",
+          "thought": " pricing",
+          "ts": "2025-10-14T14:17:52.212814",
+          "sequence": 756,
+          "parallelGroup": "supervisor"
+        },
+        {
+          "role": "insight_reviewer",
+          "thought": ",",
+          "ts": "2025-10-14T14:17:52.214710",
+          "sequence": 758,
+          "parallelGroup": "supervisor"
+        },
+        {
+          "role": "insight_reviewer",
+          "thought": " and",
+          "ts": "2025-10-14T14:17:52.216379",
+          "sequence": 760,
+          "parallelGroup": "supervisor"
+        },
+        {
+          "role": "insight_reviewer",
+          "thought": " one",
+          "ts": "2025-10-14T14:17:52.253155",
+          "sequence": 762,
+          "parallelGroup": "supervisor"
+        },
+        {
+          "role": "insight_reviewer",
+          "thought": "‑",
+          "ts": "2025-10-14T14:17:52.254990",
+          "sequence": 764,
+          "parallelGroup": "supervisor"
+        },
+        {
+          "role": "insight_reviewer",
+          "thought": "time",
+          "ts": "2025-10-14T14:17:52.299846",
+          "sequence": 766,
+          "parallelGroup": "supervisor"
+        },
+        {
+          "role": "insight_reviewer",
+          "thought": " items",
+          "ts": "2025-10-14T14:17:52.301736",
+          "sequence": 768,
+          "parallelGroup": "supervisor"
+        },
+        {
+          "role": "insight_reviewer",
+          "thought": " before",
+          "ts": "2025-10-14T14:17:52.347900",
+          "sequence": 770,
+          "parallelGroup": "supervisor"
+        },
+        {
+          "role": "insight_reviewer",
+          "thought": " assuming",
+          "ts": "2025-10-14T14:17:52.349646",
+          "sequence": 772,
+          "parallelGroup": "supervisor"
+        },
+        {
+          "role": "insight_reviewer",
+          "thought": " sustained",
+          "ts": "2025-10-14T14:17:52.461753",
+          "sequence": 774,
+          "parallelGroup": "supervisor"
+        },
+        {
+          "role": "insight_reviewer",
+          "thought": " margin",
+          "ts": "2025-10-14T14:17:52.464620",
+          "sequence": 776,
+          "parallelGroup": "supervisor"
+        },
+        {
+          "role": "insight_reviewer",
+          "thought": " leadership",
+          "ts": "2025-10-14T14:17:52.472838",
+          "sequence": 778,
+          "parallelGroup": "supervisor"
+        },
+        {
+          "role": "insight_reviewer",
+          "thought": ".",
+          "ts": "2025-10-14T14:17:52.481648",
+          "sequence": 780,
+          "parallelGroup": "supervisor"
+        }
+      ],
+      "agent_status": {
+        "agent_coordination": "in_progress"
+      },
+      "latest_thought": "."
+    },
+    "elapsed_ms": 5,
+    "timestamp": "2025-10-14T14:17:52.481648",
+    "sequence": 780,
+    "parallelGroup": "coordination"
+  },
+  {
+    "id": "unknown",
+    "name": "unknown",
+    "status": "error",
+    "thinking": [
+      "slice(None, 1200, None)"
+    ],
+    "details": {
+      "error": "slice(None, 1200, None)"
+    },
+    "timestamp": "2025-10-14T14:17:52.607514"
+  },
+  {
+    "id": "plan_and_select_template",
+    "name": "Query Planning & Template Selection",
+    "status": "completed",
+    "thinking": [
+      "Plan built",
+      "Selected template: margin_growth_vs_peers",
+      "YAML catalogue lookup via lookup"
+    ],
+    "details": {
+      "plan": {
+        "metrics_count": 4,
+        "granularity": "annual",
+        "comparison": "vs_avg"
+      },
+      "template": {
+        "id": "margin_growth_vs_peers",
+        "name": "Margin Growth (pp) vs Industry Average",
+        "description": "Year-over-year change in margins (percentage points) compared to industry average"
+      },
+      "candidates": [],
+      "metadata": {}
+    },
+    "elapsed_ms": 8143
+  },
+  {
+    "id": "follow_up_route",
+    "name": "Follow-Up Guidance",
+    "status": "in_progress",
+    "thinking": [
+      "Route selected: full pipeline"
+    ],
+    "details": {
+      "banner": {
+        "title": "Fresh Run Scheduled",
+        "message": "Running SQL, charts, and narrative again to deliver a fully refreshed answer.",
+        "route": "full_pipeline"
+      }
+    }
+  }
+]

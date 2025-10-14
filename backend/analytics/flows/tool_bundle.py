@@ -5,6 +5,7 @@ import copy
 from analytics.validators import sanitize_for_json
 
 
+
 def _extract_stock_widget(results: Optional[List[Dict[str, Any]]]) -> Optional[Dict[str, Any]]:
     if not isinstance(results, list):
         return None
@@ -25,8 +26,8 @@ def _extract_stock_widget(results: Optional[List[Dict[str, Any]]]) -> Optional[D
         else:
             continue
 
-        symbols_value = widget.get("symbols") if isinstance(widget, dict) else None
         symbols: List[Any] = []
+        symbols_value = widget.get("symbols") if isinstance(widget, dict) else None
         if isinstance(symbols_value, list) and symbols_value:
             symbols = copy.deepcopy(symbols_value)
         else:
@@ -92,60 +93,7 @@ def _extract_stock_widget(results: Optional[List[Dict[str, Any]]]) -> Optional[D
 
         return widget
     return None
-    for entry in reversed(results):
-        if not isinstance(entry, dict) or entry.get("tool") != "stock_tracker":
-            continue
-        payload = entry.get("payload") or {}
-        if not isinstance(payload, dict) or not payload.get("ready"):
-            continue
-        symbols: List[str] = []
-        symbol = payload.get("symbol")
-        if isinstance(symbol, str) and symbol.strip():
-            symbols.append(symbol.strip().upper())
-        tickers = payload.get("tickers")
-        if not symbols and isinstance(tickers, list):
-            for candidate in tickers:
-                if isinstance(candidate, str) and candidate.strip():
-                    symbols.append(candidate.strip().upper())
-                    break
-        if not symbols:
-            continue
-        widget: Dict[str, Any] = {"symbols": symbols}
-        if isinstance(tickers, list) and tickers:
-            widget["original"] = [
-                str(ticker).strip().upper()
-                for ticker in tickers
-                if isinstance(ticker, str) and ticker.strip()
-            ]
-        fetched_at = payload.get("fetched_at")
-        if isinstance(fetched_at, str) and fetched_at:
-            widget["generated_at"] = fetched_at
-        locale = payload.get("locale")
-        if isinstance(locale, str) and locale:
-            widget["locale"] = locale
-        color_theme = payload.get("colorTheme") or payload.get("color_theme")
-        if isinstance(color_theme, str) and color_theme:
-            widget["colorTheme"] = color_theme
-        height = payload.get("height")
-        if isinstance(height, (int, float)) and height > 0:
-            widget["height"] = int(height)
-        chart_type = payload.get("chartType") or payload.get("chart_type")
-        if isinstance(chart_type, str) and chart_type:
-            widget["chartType"] = chart_type
-        show_volume = payload.get("showVolume")
-        if isinstance(show_volume, bool):
-            widget["showVolume"] = show_volume
-        show_ma = payload.get("showMA")
-        if isinstance(show_ma, bool):
-            widget["showMA"] = show_ma
-        autosize = payload.get("autosize")
-        if isinstance(autosize, bool):
-            widget["autosize"] = autosize
-        bars = payload.get("bars")
-        if isinstance(bars, list) and bars:
-            widget["bars"] = copy.deepcopy(bars)
-        return widget
-    return None
+
 
 
 def _extract_web_context(results: Optional[List[Dict[str, Any]]]) -> Optional[Dict[str, Any]]:

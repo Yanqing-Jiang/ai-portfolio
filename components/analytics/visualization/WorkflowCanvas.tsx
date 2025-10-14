@@ -424,16 +424,24 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
 
     const positions = processedSteps.map(({ position }) => position);
     const maxX = Math.max(...positions.map(({ x }) => x));
-    const maxY = Math.max(...positions.map(({ y }) => y));
-    const minX = Math.min(...positions.map(({ x }) => x));
+    let maxY = Math.max(...positions.map(({ y }) => y));
+    let minX = Math.min(...positions.map(({ x }) => x));
     const extraWidth = layout.horizontalGap;
     const extraHeight = layout.verticalGap;
+
+    if (flowMode === 'multi-agent' && layoutMode === 'lanes') {
+      const hubPlacement = processedSteps.find((entry) => entry.step.id === 'agent_coordination');
+      if (hubPlacement) {
+        minX = Math.min(minX, hubPlacement.position.x - layout.horizontalGap * 2.5);
+        maxY = Math.max(maxY, hubPlacement.position.y + layout.verticalGap * 1.6);
+      }
+    }
 
     return [
       [Math.min(-basePadX, minX - basePadX), -basePadY],
       [maxX + basePadX + extraWidth, maxY + basePadY + extraHeight],
     ] as [[number, number], [number, number]];
-  }, [processedSteps, layout.horizontalGap, layout.verticalGap]);
+  }, [processedSteps, layout.horizontalGap, layout.verticalGap, flowMode, layoutMode]);
 
 
 
@@ -456,37 +464,144 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
     const totalSteps = processedSteps.length || 1;
     setNodes((prevNodes) => {
       const previous = new Map(prevNodes.map((node) => [node.id, node]));
-      return processedSteps.map(({ step, phase, position, isActive, isCompleted, hasError, latestThinking, index, parallelGroup, sequence }) => {
-        const priorPosition = previous.get(step.id)?.position ?? position;
-        return {
-          id: step.id,
-          type: 'processNode',
-          position: priorPosition,
-          dragHandle: '.process-node__drag-handle',
-          sourcePosition: Position.Right,
-          targetPosition: Position.Left,
-          data: {
-            step,
-            phase,
-            theme,
-            isActive,
-            isCompleted,
-            hasError,
-            statusLabel: toFriendlyStatus(step.status),
-            sequenceIndex: index,
-            totalSteps,
-            latestThinking,
-            currentStatus,
-            currentDuration,
-            currentTimestamp,
-            progressPercent,
-            parallelGroup,
-            sequence,
-          },
-        } as Node<ProcessNodeData>;
-      });
+      const baseNodes = processedSteps.map(
+        ({ step, phase, position, isActive, isCompleted, hasError, latestThinking, index, parallelGroup, sequence }) => {
+          const priorPosition = previous.get(step.id)?.position ?? position;
+          return {
+            id: step.id,
+            type: 'processNode',
+            position: priorPosition,
+            dragHandle: '.process-node__drag-handle',
+            sourcePosition: Position.Right,
+            targetPosition: Position.Left,
+            data: {
+              step,
+              phase,
+              theme,
+              isActive,
+              isCompleted,
+              hasError,
+              statusLabel: toFriendlyStatus(step.status),
+              sequenceIndex: index,
+              totalSteps,
+              latestThinking,
+              currentStatus,
+              currentDuration,
+              currentTimestamp,
+              progressPercent,
+              parallelGroup,
+              sequence,
+            },
+          } as Node<ProcessNodeData>;
+        },
+      );
+
+      if (flowMode === 'multi-agent' && layoutMode === 'lanes') {
+        const hubPlacement = processedSteps.find((entry) => entry.step.id === 'agent_coordination');
+        if (hubPlacement) {
+          const hubPosition = previous.get(hubPlacement.step.id)?.position ?? hubPlacement.position;
+          const supervisorStatus = hubPlacement.step.status;
+          const finalStatus: ProcessStep['status'] =
+            supervisorStatus === 'completed'
+              ? 'completed'
+              : supervisorStatus === 'error'
+                ? 'error'
+                : supervisorStatus === 'in_progress'
+                  ? 'in_progress'
+                  : 'pending';
+
+          const userStep: ProcessStep = {
+            id: 'user_entry',
+            name: 'User Question',
+            status: 'completed',
+            thinking: [],
+            details: { description: 'User prompt captured' },
+          };
+
+          const finalStep: ProcessStep = {
+            id: 'final_response',
+            name: 'Final Response',
+            status: finalStatus,
+            thinking: [],
+            details: { description: 'Supervisor consolidates specialist outputs' },
+          };
+
+          const pseudoTotal = totalSteps + 1;
+          const pseudoNodes: Node<ProcessNodeData>[] = [
+            {
+              id: userStep.id,
+              type: 'processNode',
+              position: { x: hubPosition.x - 520, y: hubPosition.y - 160 },
+              dragHandle: '.process-node__drag-handle',
+              sourcePosition: Position.Right,
+              targetPosition: Position.Left,
+              data: {
+                step: userStep,
+                phase: 'analysis',
+                theme,
+                isActive: false,
+                isCompleted: true,
+                hasError: false,
+                statusLabel: toFriendlyStatus(userStep.status),
+                sequenceIndex: 0,
+                totalSteps: pseudoTotal,
+                latestThinking: 'User prompt received',
+                currentStatus,
+                currentDuration,
+                currentTimestamp,
+                progressPercent,
+                parallelGroup: 'overview',
+              },
+            },
+            {
+              id: finalStep.id,
+              type: 'processNode',
+              position: { x: hubPosition.x - 520, y: hubPosition.y + 160 },
+              dragHandle: '.process-node__drag-handle',
+              sourcePosition: Position.Right,
+              targetPosition: Position.Left,
+              data: {
+                step: finalStep,
+                phase: 'synthesis',
+                theme,
+                isActive: finalStatus === 'in_progress',
+                isCompleted: finalStatus === 'completed',
+                hasError: finalStatus === 'error',
+                statusLabel: toFriendlyStatus(finalStatus),
+                sequenceIndex: pseudoTotal - 1,
+                totalSteps: pseudoTotal,
+                latestThinking:
+                  finalStatus === 'completed'
+                    ? 'Final answer ready'
+                    : finalStatus === 'in_progress'
+                      ? 'Packaging narrative'
+                      : 'Awaiting supervisor output',
+                currentStatus,
+                currentDuration,
+                currentTimestamp,
+                progressPercent,
+                parallelGroup: 'overview',
+              },
+            },
+          ];
+
+          return [...pseudoNodes, ...baseNodes];
+        }
+      }
+
+      return baseNodes;
     });
-  }, [processedSteps, setNodes, theme, currentStatus, currentDuration, currentTimestamp, progressPercent]);
+  }, [
+    processedSteps,
+    setNodes,
+    theme,
+    currentStatus,
+    currentDuration,
+    currentTimestamp,
+    progressPercent,
+    flowMode,
+    layoutMode,
+  ]);
 
   useEffect(() => {
     if (processedSteps.length !== lastStepCountRef.current) {
@@ -570,18 +685,18 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
     }
 
     if (flowMode === 'multi-agent' && layoutMode === 'lanes') {
-      const hubNode = processedSteps.find((node) => node.step.id === 'agent_coordination');
-      if (hubNode) {
+      const hubPlacement = processedSteps.find((node) => node.step.id === 'agent_coordination');
+      if (hubPlacement) {
         const added = new Set<string>();
         processedSteps.forEach((node) => {
-          if (node.step.id === hubNode.step.id) {
+          if (node.step.id === hubPlacement.step.id) {
             return;
           }
           const lane = node.parallelGroup;
           if (!lane || lane === 'coordination') {
             return;
           }
-          const edgeId = `hub-${hubNode.step.id}-${node.step.id}`;
+          const edgeId = `hub-${hubPlacement.step.id}-${node.step.id}`;
           if (added.has(edgeId)) {
             return;
           }
@@ -590,15 +705,15 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
           const laneCompleted = node.step.status === 'completed';
           sequentialEdges.push({
             id: edgeId,
-            source: hubNode.step.id,
+            source: hubPlacement.step.id,
             target: node.step.id,
-            type: 'default',
+            type: 'smoothstep',
             sourceHandle: 'right',
             targetHandle: 'left',
             animated: laneActive,
             style: {
               stroke: laneActive ? theme.edgeActive : laneCompleted ? theme.edgeCompleted : theme.edgeIdle,
-              strokeWidth: laneActive ? 2.6 : laneCompleted ? 2 : 1.4,
+              strokeWidth: laneActive ? 2.6 : laneCompleted ? 2 : 1.6,
               strokeDasharray: laneCompleted ? '12 10' : undefined,
               filter: laneActive ? 'drop-shadow(0 0 8px rgba(192,132,252,0.35))' : undefined,
             },
@@ -609,6 +724,93 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
               height: 16,
             },
           });
+
+          const returnEdgeId = `return-${node.step.id}-${hubPlacement.step.id}`;
+          sequentialEdges.push({
+            id: returnEdgeId,
+            source: node.step.id,
+            target: hubPlacement.step.id,
+            type: 'smoothstep',
+            animated: false,
+            sourceHandle: 'right',
+            targetHandle: 'left',
+            style: {
+              stroke: theme.edgeIdle,
+              strokeWidth: 1.4,
+              strokeDasharray: '6 6',
+              opacity: 0.65,
+            },
+            markerEnd: {
+              type: 'arrowclosed',
+              color: theme.edgeIdle,
+              width: 12,
+              height: 12,
+            },
+          });
+        });
+
+        sequentialEdges.push({
+          id: 'user-entry-to-hub',
+          source: 'user_entry',
+          target: hubPlacement.step.id,
+          type: 'smoothstep',
+          animated: false,
+          sourceHandle: 'right',
+          targetHandle: 'left',
+          style: {
+            stroke: '#f97316',
+            strokeWidth: 2.4,
+            filter: 'drop-shadow(0 0 6px rgba(249,115,22,0.35))',
+          },
+          markerEnd: {
+            type: 'arrowclosed',
+            color: '#f97316',
+            width: 18,
+            height: 18,
+          },
+        });
+
+        sequentialEdges.push({
+          id: 'hub-to-final-response',
+          source: hubPlacement.step.id,
+          target: 'final_response',
+          type: 'smoothstep',
+          animated: hubPlacement.step.status === 'in_progress',
+          sourceHandle: 'right',
+          targetHandle: 'left',
+          style: {
+            stroke: theme.edgeActive,
+            strokeWidth: 2.6,
+            filter: 'drop-shadow(0 0 6px rgba(192,132,252,0.35))',
+          },
+          markerEnd: {
+            type: 'arrowclosed',
+            color: theme.edgeActive,
+            width: 18,
+            height: 18,
+          },
+        });
+
+        sequentialEdges.push({
+          id: 'final-response-to-user',
+          source: 'final_response',
+          target: 'user_entry',
+          type: 'smoothstep',
+          animated: false,
+          sourceHandle: 'right',
+          targetHandle: 'left',
+          style: {
+            stroke: '#f97316',
+            strokeWidth: 1.8,
+            strokeDasharray: '6 6',
+            opacity: 0.85,
+          },
+          markerEnd: {
+            type: 'arrowclosed',
+            color: '#f97316',
+            width: 16,
+            height: 16,
+          },
         });
       }
     }

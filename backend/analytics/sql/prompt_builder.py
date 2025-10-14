@@ -82,6 +82,8 @@ def _render_constraints(plan: QueryPlanModel) -> str:
           - No DDL/DML statements
           - No CROSS JOIN unless justified by templates
           - Use parameterized literals, avoid string concatenation
+          - Do NOT use ROUND(), TRUNC(), TO_CHAR(), or other formatting functions in SQL. Return raw numeric values.
+          - When precision is required, cast using ::numeric or ::decimal instead of formatting.
         """
     ).strip()
 

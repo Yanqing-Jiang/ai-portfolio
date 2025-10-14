@@ -9,6 +9,8 @@ from typing import Any, Dict, List, Optional, Union
 from datetime import datetime
 import time
 
+from analytics.validators import sanitize_for_json
+
 from . import telemetry
 
 class StreamEvent:
@@ -33,10 +35,11 @@ class StreamEvent:
         }
 
         if self.data is not None:
-            if isinstance(self.data, dict):
-                result["data"].update(self.data)
+            sanitized = sanitize_for_json(self.data)
+            if isinstance(sanitized, dict):
+                result["data"].update(sanitized)
             else:
-                result["data"]["payload"] = self.data
+                result["data"]["payload"] = sanitized
         if self.message is not None:
             result["data"]["message"] = self.message
 

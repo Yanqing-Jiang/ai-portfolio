@@ -53,7 +53,24 @@ def test_pipeline_artifacts_nested_roundtrip():
             elapsed_ms=250,
             status="success",
         ),
-        analysis=AnalysisArtifact(query="q1", analysis_text="Summary", length=7, fragments=["Sum"]),
+        analysis=AnalysisArtifact(
+            query="q1",
+            analysis_text="Summary",
+            length=7,
+            fragments=["Sum"],
+            key_numbers=["Revenue up 12%"],
+            risk_watch=["FX volatility could pressure margins"],
+            next_steps=["Monitor FX exposure each quarter"],
+        evidence=[
+            {
+                "claim": "Revenue up 12%",
+                "source_url": "https://example.com/nvda",
+                "title": "NVIDIA earnings beat expectations",
+                "snippet": "NVIDIA reported revenue climbing 12% year over year.",
+                "confidence": 0.85,
+            }
+        ],
+        ),
     )
 
     payload = pipeline.to_dict()
@@ -69,6 +86,18 @@ def test_pipeline_artifacts_nested_roundtrip():
     assert restored.sql_execution.row_count == 120
     assert restored.analysis is not None
     assert restored.analysis.analysis_text == "Summary"
+    assert restored.analysis.key_numbers == ["Revenue up 12%"]
+    assert restored.analysis.risk_watch == ["FX volatility could pressure margins"]
+    assert restored.analysis.next_steps == ["Monitor FX exposure each quarter"]
+    assert restored.analysis.evidence == [
+        {
+            "claim": "Revenue up 12%",
+            "source_url": "https://example.com/nvda",
+            "title": "NVIDIA earnings beat expectations",
+            "snippet": "NVIDIA reported revenue climbing 12% year over year.",
+            "confidence": 0.85,
+        }
+    ]
 
 
 def test_session_snapshot_record_artifacts():
