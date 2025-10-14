@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 import json
 from typing import AsyncGenerator, Dict, Any, Optional, List, Sequence, Tuple, Set
 from dataclasses import dataclass, field
@@ -10,6 +10,7 @@ import time
 import uuid
 import copy
 from datetime import datetime, date
+from types import SimpleNamespace
 from analytics.core.types import (
     WorkflowState,
     SQLResultModel,
@@ -25,6 +26,11 @@ from analytics.core.context import get_configs
 from analytics.core.config_store import get_config_store
 from analytics.core.events import EventEmitter, TimedEventEmitter
 from analytics.core.session_state import SessionStateSnapshot, get_session_state_repository
+from analytics.core.revision_snapshot import (
+    build_intent_signature,
+    extract_revision_snapshot,
+    signatures_equal,
+)
 from analytics.artifacts import (
     ClassificationArtifact as ClassificationArtifactModel,
     ClarificationArtifact,
@@ -214,6 +220,18 @@ class PlannerPhaseContext:
     stock_only: bool = False
     artifacts: PipelineArtifacts = field(default_factory=PipelineArtifacts)
     snapshot_artifacts: Optional[PipelineArtifacts] = None
+    revision_snapshot: Optional[Dict[str, Any]] = None
+    prior_intent_signature: Optional[Dict[str, Any]] = None
+    intent_signature: Optional[Dict[str, Any]] = None
+    criteria_changed: bool = False
+    reuse_snapshot_active: bool = False
+    reused_sql: bool = False
+    reused_chart: bool = False
+    reused_stock: bool = False
+    reused_web: bool = False
+    reused_analysis: bool = False
+    snapshot_age_seconds: Optional[float] = None
+    snapshot_stale: bool = False
     halted: bool = False
     halt_reason: Optional[str] = None
 
@@ -259,6 +277,7 @@ _ACTION_TERMS = (
     "keep an eye",
 )
 _NUMERIC_HINTS = ("%", "bps", "basis point", "million", "billion", "m$", "bn")
+SNAPSHOT_MAX_AGE_SECONDS = int(os.getenv("ANALYTICS_SNAPSHOT_MAX_AGE_SECONDS", "600"))
 
 FOLLOW_UP_BANNERS: Dict[FollowUpRoute, Dict[str, str]] = {
     FollowUpRoute.FULL_PIPELINE: {
@@ -267,7 +286,7 @@ FOLLOW_UP_BANNERS: Dict[FollowUpRoute, Dict[str, str]] = {
     },
     FollowUpRoute.REUSE_SQL: {
         "title": "Reusing Last Dataset",
-        "message": "Skipping the SQL rerun—updating visuals and narrative on top of the validated table.",
+        "message": "Skipping the SQL rerun�updating visuals and narrative on top of the validated table.",
     },
     FollowUpRoute.STOCK_ONLY: {
         "title": "Market Snapshot Only",
@@ -974,6 +993,19 @@ def _build_planner_result_payload(ctx: PlannerPhaseContext) -> Dict[str, Any]:
         }
 
     metadata["follow_up_route"] = ctx.follow_up_route.value
+    metadata["snapshot_reuse"] = {
+        "reused_sql": ctx.reused_sql,
+        "reused_chart": ctx.reused_chart,
+        "reused_stock": ctx.reused_stock,
+        "reused_web": ctx.reused_web,
+        "reused_analysis": ctx.reused_analysis,
+        "criteria_changed": ctx.criteria_changed,
+        "follow_up_route": ctx.follow_up_route.value,
+        "source": "snapshot" if ctx.reuse_snapshot_active else None,
+        "snapshot_age_seconds": ctx.snapshot_age_seconds,
+        "snapshot_stale": ctx.snapshot_stale,
+    }
+    metadata["reuse_snapshot"] = metadata["snapshot_reuse"]
 
     planner_result_model = PlannerResultModel(
         intent=intent_model,
@@ -1012,13 +1044,300 @@ def _dataset_preview_from_snapshot(snapshot: Optional[SessionStateSnapshot]) -> 
     return None
 
 
+def _limit_sample_rows(rows: Optional[Sequence[Dict[str, Any]]], *, limit: int = 50) -> List[Dict[str, Any]]:
+    if not isinstance(rows, Sequence):
+        return []
+    limited: List[Dict[str, Any]] = []
+    for row in rows[:limit]:
+        if isinstance(row, dict):
+            limited.append(copy.deepcopy(row))
+    return limited
+
+
+def _snapshot_age_seconds_from_snapshot(snapshot: Dict[str, Any]) -> Optional[float]:
+    updated_at = snapshot.get("updated_at")
+    if not isinstance(updated_at, str):
+        return None
+    try:
+        stamp = datetime.fromisoformat(updated_at)
+    except ValueError:
+        return None
+    if stamp.tzinfo is None:
+        delta = datetime.utcnow() - stamp
+    else:
+        delta = datetime.now(stamp.tzinfo) - stamp
+    return max(delta.total_seconds(), 0.0)
+
+
+def _is_snapshot_fresh(snapshot: Optional[Dict[str, Any]]) -> bool:
+    if not isinstance(snapshot, dict):
+        return False
+    age_seconds = _snapshot_age_seconds_from_snapshot(snapshot)
+    if age_seconds is None:
+        return False
+    return age_seconds <= SNAPSHOT_MAX_AGE_SECONDS
+
+
+def _build_revision_snapshot_payload(ctx: PlannerPhaseContext) -> Optional[Dict[str, Any]]:
+    signature = ctx.intent_signature or build_intent_signature(ctx.intent, ctx.plan or ctx.provisional_plan)
+    if signature is None:
+        return None
+
+    payload: Dict[str, Any] = {"intent_signature": signature}
+
+    sql_generation = ctx.artifacts.sql_generation
+    if sql_generation and sql_generation.sql:
+        payload["sql"] = sql_generation.sql
+
+    sql_execution = ctx.artifacts.sql_execution
+    if sql_execution:
+        if sql_execution.row_count is not None:
+            payload["sql_row_count"] = sql_execution.row_count
+        if sql_execution.columns:
+            payload["columns"] = list(sql_execution.columns)
+        sample_source = sql_execution.sample_rows or sql_execution.dataset_preview
+        samples = _limit_sample_rows(sample_source)
+        if samples:
+            payload["data_sample"] = samples
+
+    chart_artifact = ctx.artifacts.chart
+    if chart_artifact:
+        if chart_artifact.spec:
+            payload["chart_spec"] = copy.deepcopy(chart_artifact.spec)
+        if chart_artifact.spec_id:
+            payload["chart_spec_id"] = chart_artifact.spec_id
+
+    analysis_artifact = ctx.artifacts.analysis
+    if analysis_artifact:
+        if analysis_artifact.analysis_text:
+            payload["analysis"] = analysis_artifact.analysis_text
+            if analysis_artifact.length is not None:
+                payload["analysis_length"] = analysis_artifact.length
+        if analysis_artifact.stock_widget and analysis_artifact.stock_widget not in ({}, None):
+            payload["stock_widget"] = copy.deepcopy(analysis_artifact.stock_widget)
+        if analysis_artifact.web_context and analysis_artifact.web_context not in ({}, None):
+            payload["web_context"] = copy.deepcopy(analysis_artifact.web_context)
+
+    if ctx.web_search is not None and not payload.get("web_context"):
+        try:
+            payload["web_context"] = ctx.web_search.to_payload()
+        except Exception:
+            pass
+
+    if ctx.artifacts.market and ctx.artifacts.market.snapshot and not payload.get("stock_widget"):
+        payload["stock_widget"] = copy.deepcopy(ctx.artifacts.market.snapshot)
+
+    payload["updated_at"] = datetime.utcnow().isoformat()
+    sanitized = sanitize_for_json(payload)
+    return sanitized if isinstance(sanitized, dict) else None
+
+
+def _compose_sql_ready_payload(ctx: PlannerPhaseContext) -> Optional[Dict[str, Any]]:
+    generation = getattr(ctx.artifacts, "sql_generation", None)
+    execution = getattr(ctx.artifacts, "sql_execution", None)
+    if not generation and not execution:
+        return None
+    payload: Dict[str, Any] = {"reused": True, "schedule_stage": "sql"}
+    if generation and generation.sql:
+        payload["sql"] = generation.sql
+    if execution:
+        if execution.row_count is not None:
+            payload["row_count"] = execution.row_count
+        if execution.columns:
+            payload["columns"] = list(execution.columns)
+        samples = execution.sample_rows or execution.dataset_preview
+        sample_rows = _limit_sample_rows(samples)
+        if sample_rows:
+            payload["sample_data"] = sample_rows
+    if ctx.snapshot_age_seconds is not None:
+        payload["snapshot_age_seconds"] = ctx.snapshot_age_seconds
+    return payload
+
+
+def _compose_chart_ready_payload(ctx: PlannerPhaseContext) -> Optional[Dict[str, Any]]:
+    chart_artifact = getattr(ctx.artifacts, "chart", None)
+    if not chart_artifact or not chart_artifact.spec:
+        return None
+    summary: Dict[str, Any] = {}
+    if chart_artifact.chart_type:
+        summary["chart_type"] = chart_artifact.chart_type
+    if chart_artifact.series_count is not None:
+        summary["series_count"] = chart_artifact.series_count
+    if chart_artifact.design:
+        summary["design"] = copy.deepcopy(chart_artifact.design)
+    payload: Dict[str, Any] = {
+        "chart_spec": copy.deepcopy(chart_artifact.spec),
+        "chart_spec_id": chart_artifact.spec_id,
+        "chart_summary": summary or None,
+        "reused": True,
+        "schedule_stage": "chart",
+    }
+    if ctx.snapshot_age_seconds is not None:
+        payload["snapshot_age_seconds"] = ctx.snapshot_age_seconds
+    return payload
+
+
+
+
+def _compose_stock_ready_payload(ctx: PlannerPhaseContext) -> Optional[Dict[str, Any]]:
+    stock_widget: Optional[Dict[str, Any]] = None
+    if ctx.artifacts.analysis and ctx.artifacts.analysis.stock_widget:
+        stock_widget = copy.deepcopy(ctx.artifacts.analysis.stock_widget)
+    elif ctx.revision_snapshot and ctx.revision_snapshot.get('stock_widget'):
+        stock_widget = copy.deepcopy(ctx.revision_snapshot['stock_widget'])
+    elif ctx.artifacts.market and ctx.artifacts.market.snapshot:
+        stock_widget = copy.deepcopy(ctx.artifacts.market.snapshot)
+    if not stock_widget:
+        return None
+    payload: Dict[str, Any] = {
+        'stock_widget': stock_widget,
+        'reused': True,
+        'schedule_stage': 'hedged_accessories',
+    }
+    if ctx.snapshot_age_seconds is not None:
+        payload['snapshot_age_seconds'] = ctx.snapshot_age_seconds
+    return payload
+
+def _compose_web_ready_payload(ctx: PlannerPhaseContext) -> Optional[Dict[str, Any]]:
+    web_payload: Optional[Dict[str, Any]] = None
+    if ctx.artifacts.analysis and ctx.artifacts.analysis.web_context:
+        web_payload = copy.deepcopy(ctx.artifacts.analysis.web_context)
+    elif ctx.revision_snapshot and ctx.revision_snapshot.get("web_context"):
+        web_payload = copy.deepcopy(ctx.revision_snapshot["web_context"])
+    elif ctx.artifacts.web and ctx.artifacts.web.to_dict():
+        web_payload = ctx.artifacts.web.to_dict()
+    if not web_payload:
+        return None
+    payload = sanitize_for_json(web_payload) or {}
+    if not isinstance(payload, dict):
+        return None
+    payload["reused"] = True
+    payload.setdefault("schedule_stage", "hedged_accessories")
+    if ctx.snapshot_age_seconds is not None:
+        payload["snapshot_age_seconds"] = ctx.snapshot_age_seconds
+    return payload
+
+def _cached_event(
+    name: str,
+    payload: Dict[str, Any],
+    *,
+    schedule_stage: str,
+    flow_mode: FlowMode,
+    parallel_group: Optional[str] = None,
+) -> Dict[str, Any]:
+    sanitized = sanitize_for_json(payload) if isinstance(payload, dict) else {"payload": sanitize_for_json(payload)}
+    if not isinstance(sanitized, dict):
+        sanitized = {"payload": sanitized}
+    sanitized.setdefault("schedule_stage", schedule_stage)
+    if parallel_group:
+        sanitized.setdefault("parallel_group", parallel_group)
+    sanitized.setdefault("flow_mode", flow_mode.value)
+    sanitized.setdefault("reused", True)
+    sanitized.setdefault("ts", datetime.utcnow().isoformat())
+    return {
+        "event": name,
+        "data": sanitized,
+    }
+
 def _hydrate_context_from_snapshot(
     ctx: PlannerPhaseContext,
     snapshot: Optional[SessionStateSnapshot],
     artifacts: Optional[PipelineArtifacts],
 ) -> None:
+    revision_snapshot = extract_revision_snapshot(snapshot)
+    if revision_snapshot:
+        ctx.revision_snapshot = copy.deepcopy(revision_snapshot)
+        ctx.prior_intent_signature = revision_snapshot.get("intent_signature")
+    else:
+        ctx.revision_snapshot = None
+        ctx.prior_intent_signature = None
+
     if artifacts is None:
-        return
+        if ctx.revision_snapshot:
+            artifacts = PipelineArtifacts()
+        else:
+            return
+
+    if ctx.revision_snapshot:
+        chart_spec = ctx.revision_snapshot.get("chart_spec")
+        if chart_spec and artifacts.chart is None:
+            artifacts.chart = ChartArtifact(
+                query=ctx.query,
+                spec=copy.deepcopy(chart_spec),
+                spec_id=ctx.revision_snapshot.get("chart_spec_id"),
+            )
+        if ctx.revision_snapshot.get("sql") and artifacts.sql_generation is None:
+            artifacts.sql_generation = SQLGenerationArtifact(
+                query=ctx.query,
+                sql=ctx.revision_snapshot.get("sql"),
+                status="completed",
+            )
+        if artifacts.sql_execution is None:
+            if ctx.revision_snapshot.get("sql_row_count") is not None or ctx.revision_snapshot.get("data_sample"):
+                artifacts.sql_execution = SQLExecutionArtifact(
+                    query=ctx.query,
+                    row_count=ctx.revision_snapshot.get("sql_row_count"),
+                    columns=list(ctx.revision_snapshot.get("columns") or []),
+                    sample_rows=_limit_sample_rows(ctx.revision_snapshot.get("data_sample") or []),
+                    dataset_preview=_limit_sample_rows(ctx.revision_snapshot.get("data_sample") or []),
+                    status="completed",
+                )
+        if artifacts.analysis is None and (
+            ctx.revision_snapshot.get("analysis")
+            or ctx.revision_snapshot.get("stock_widget")
+            or ctx.revision_snapshot.get("web_context")
+        ):
+            artifacts.analysis = AnalysisArtifact(
+                query=ctx.query,
+                analysis_text=ctx.revision_snapshot.get("analysis"),
+                length=ctx.revision_snapshot.get("analysis_length"),
+                stock_widget=copy.deepcopy(ctx.revision_snapshot.get("stock_widget")) if ctx.revision_snapshot.get("stock_widget") else None,
+                web_context=copy.deepcopy(ctx.revision_snapshot.get("web_context")) if ctx.revision_snapshot.get("web_context") else None,
+            )
+        if artifacts.web is None and isinstance(ctx.revision_snapshot.get("web_context"), dict):
+            web_payload = copy.deepcopy(ctx.revision_snapshot["web_context"])
+            artifacts.web = WebContextArtifact(
+                query=ctx.query,
+                summary=web_payload.get("summary"),
+                snippets=list(web_payload.get("snippets") or []),
+                search_id=web_payload.get("search_id"),
+                from_cache=web_payload.get("from_cache"),
+                metadata=copy.deepcopy(web_payload.get("metadata") or {}),
+                topic=web_payload.get("topic"),
+                latency_stats=web_payload.get("latency_stats"),
+            )
+
+    cached_tool_results: List[Dict[str, Any]] = []
+    if ctx.revision_snapshot:
+        stock_snapshot = ctx.revision_snapshot.get("stock_widget")
+        if stock_snapshot:
+            cached_tool_results.append(
+                {
+                    "tool": "stock_tracker",
+                    "status": "completed",
+                    "payload": {"stock_widget": copy.deepcopy(stock_snapshot)},
+                    "reused": True,
+                }
+            )
+        web_snapshot = ctx.revision_snapshot.get("web_context")
+        if isinstance(web_snapshot, dict) and web_snapshot:
+            cached_tool_results.append(
+                {
+                    "tool": "web_retriever",
+                    "status": "completed",
+                    "payload": copy.deepcopy(web_snapshot),
+                    "reused": True,
+                }
+            )
+    if cached_tool_results:
+        ctx.tool_parallel_results = cached_tool_results
+    if ctx.revision_snapshot and ctx.revision_snapshot.get("web_context") and getattr(ctx, "web_search", None) is None:
+        web_ctx_payload = copy.deepcopy(ctx.revision_snapshot["web_context"])
+        ctx.web_search = SimpleNamespace(
+            to_payload=lambda payload=web_ctx_payload: copy.deepcopy(payload),
+            summary=web_ctx_payload.get("summary"),
+            latency_ms=web_ctx_payload.get("latency_ms"),
+        )
     ctx.artifacts = artifacts
     ctx.snapshot_artifacts = artifacts
     execution_artifact = getattr(ctx.artifacts, "sql_execution", None)
@@ -1125,6 +1444,11 @@ class PlannerPipeline:
             if artifacts_payload:
                 snapshot.record_artifacts(artifacts_payload)
                 updated = True
+        revision_payload = _build_revision_snapshot_payload(ctx)
+        if revision_payload:
+            snapshot.record_revision_snapshot(revision_payload)
+            ctx.revision_snapshot = revision_payload
+            updated = True
         planner_meta = snapshot.tool_cache.setdefault("planner_metadata", {})
         route_value = getattr(ctx, "follow_up_route", FollowUpRoute.FULL_PIPELINE).value
         if planner_meta.get("follow_up_route") != route_value:
@@ -1664,6 +1988,8 @@ class PlannerPipeline:
     async def _ensure_analysis_dependencies(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[str, Any], None]:
         required_tools: List[str] = []
         mode_config = get_mode_config(ctx.flow_mode)
+        has_cached_stock = bool(ctx.artifacts.analysis and ctx.artifacts.analysis.stock_widget)
+        has_cached_web = bool(ctx.artifacts.analysis and ctx.artifacts.analysis.web_context)
         if ctx.parallelism_enabled:
             existing = getattr(ctx, "tool_parallel_results", []) or []
 
@@ -1673,9 +1999,9 @@ class PlannerPipeline:
                     for result in existing
                 )
 
-            if not _has_completed("stock_tracker"):
+            if not _has_completed("stock_tracker") and not has_cached_stock:
                 required_tools.append("stock_tracker")
-            if not _has_completed("web_retriever"):
+            if not _has_completed("web_retriever") and not has_cached_web:
                 required_tools.append("web_retriever")
 
         if required_tools:
@@ -1685,7 +2011,8 @@ class PlannerPipeline:
                 async for event in run_tool_parallelism(ctx, adapters=subset, concurrency_override=len(subset)):
                     yield event
 
-        if ctx.web_search is None and mode_config.accessories_in_critical_path:
+        has_web_context = ctx.web_search is not None or has_cached_web
+        if not has_web_context and mode_config.accessories_in_critical_path:
             async for event in self._web_search_phase(ctx):
                 yield event
 
@@ -2029,13 +2356,62 @@ class PlannerPipeline:
             return
         active_plan = ctx.plan or ctx.provisional_plan
 
-        async for event in registry.invoke("sql_generation", self, ctx, executed=executed):
-            yield event
+        reuse_sql = ctx.reuse_sql and ctx.revision_snapshot is not None
+        if not reuse_sql and ctx.snapshot_stale and ctx.revision_snapshot:
+            stale_progress = EventEmitter.progress("sql_generation", "Cached SQL snapshot expired � rerunning dataset")
+            stale_progress["data"]["ts"] = datetime.utcnow().isoformat()
+            stale_progress["data"]["schedule_stage"] = "sql"
+            stale_progress["data"]["parallel_group"] = "core_sequential"
+            stale_progress["data"]["flow_mode"] = self.flow_mode.value
+            stale_progress["data"]["reused"] = False
+            yield stale_progress
+        if not reuse_sql:
+            async for event in registry.invoke("sql_generation", self, ctx, executed=executed):
+                yield event
+        else:
+            ctx.reused_sql = True
+            reuse_status = EventEmitter.progress("sql_generation", "Reusing cached SQL dataset")
+            reuse_status["data"]["ts"] = datetime.utcnow().isoformat()
+            reuse_status["data"]["schedule_stage"] = "sql"
+            reuse_status["data"]["parallel_group"] = "core_sequential"
+            reuse_status["data"]["flow_mode"] = self.flow_mode.value
+            reuse_status["data"]["reused"] = True
+            yield reuse_status
+            sql_payload = _compose_sql_ready_payload(ctx)
+            if sql_payload:
+                yield _cached_event(
+                    "sql_ready",
+                    sql_payload,
+                    schedule_stage="sql",
+                    flow_mode=self.flow_mode,
+                    parallel_group="core_sequential",
+                )
         await self._persist_session_state(
             ctx,
-            record_sql=bool(ctx.artifacts.sql_generation and ctx.artifacts.sql_generation.sql),
+            record_sql=(not reuse_sql) and bool(ctx.artifacts.sql_generation and ctx.artifacts.sql_generation.sql),
             record_artifacts=True,
         )
+        if reuse_sql:
+            stock_payload = _compose_stock_ready_payload(ctx)
+            if stock_payload:
+                ctx.reused_stock = True
+                yield _cached_event(
+                    "stock_ready",
+                    stock_payload,
+                    schedule_stage="hedged_accessories",
+                    flow_mode=self.flow_mode,
+                    parallel_group="tool_fanout",
+                )
+            web_payload = _compose_web_ready_payload(ctx)
+            if web_payload:
+                ctx.reused_web = True
+                yield _cached_event(
+                    "web_ready",
+                    web_payload,
+                    schedule_stage="hedged_accessories",
+                    flow_mode=self.flow_mode,
+                    parallel_group="tool_fanout",
+                )
         if ctx.halted:
             return
 
@@ -2081,8 +2457,12 @@ async def _initialize_context(self, query: str, session_id: Optional[str]) -> Pl
     )
     snapshot = getattr(self, "_prefetched_snapshot", None)
     snapshot_artifacts = _artifacts_from_snapshot(snapshot)
-    if snapshot_artifacts:
+    revision_snapshot = extract_revision_snapshot(snapshot)
+    if snapshot_artifacts or revision_snapshot:
         _hydrate_context_from_snapshot(ctx, snapshot, snapshot_artifacts)
+    else:
+        ctx.revision_snapshot = None
+        ctx.prior_intent_signature = None
     return ctx
 
 
@@ -2535,6 +2915,30 @@ async def _plan_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[str
     if intent is None or provisional_plan is None:
         return
     ctx.plan = provisional_plan
+    ctx.reused_sql = False
+    ctx.reused_chart = False
+    ctx.reused_stock = False
+    ctx.reused_web = False
+    ctx.reused_analysis = False
+    current_signature = build_intent_signature(intent, ctx.plan)
+    ctx.intent_signature = current_signature
+    prior_signature = ctx.prior_intent_signature
+    if prior_signature and current_signature:
+        ctx.criteria_changed = not signatures_equal(prior_signature, current_signature)
+    elif prior_signature and current_signature is None:
+        ctx.criteria_changed = True
+    else:
+        ctx.criteria_changed = False
+    ctx.snapshot_age_seconds = (
+        _snapshot_age_seconds_from_snapshot(ctx.revision_snapshot) if ctx.revision_snapshot else None
+    )
+    snapshot_fresh = _is_snapshot_fresh(ctx.revision_snapshot)
+    ctx.snapshot_stale = bool(ctx.revision_snapshot) and not snapshot_fresh
+    ctx.reuse_snapshot_active = snapshot_fresh and not ctx.criteria_changed
+    if ctx.follow_up_route == FollowUpRoute.REUSE_SQL and ctx.reuse_snapshot_active:
+        ctx.reuse_sql = current_signature is not None
+    else:
+        ctx.reuse_sql = False
     intent_finalized_event = {
         "event": "intent_finalized",
         "data": {
@@ -2572,7 +2976,8 @@ async def _plan_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[str
         }
     )
     yield plan_event
-    if ctx.parallelism_enabled:
+    should_run_parallel = ctx.parallelism_enabled and not (ctx.reuse_sql and ctx.reuse_snapshot_active)
+    if should_run_parallel:
         async for tool_event in run_tool_parallelism(ctx):
             yield tool_event
 
@@ -2777,6 +3182,8 @@ async def run_planner_executor(query: str, session_id: Optional[str] = None) -> 
     workflow_instance = PlannerExecutorFlow()
     async for event in workflow_instance.events(query, session_id):
         yield event
+
+
 
 
 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { motion } from 'framer-motion';
 import {
   AnalysisCard,
@@ -79,6 +79,7 @@ const MemoryAnalyticsPage: React.FC = () => {
     progressiveText,
     singleAgentFanout,
     followUpBanner,
+    snapshotReuse,
     
     // Stream state
     isLoading,
@@ -111,6 +112,35 @@ Multi-Agent (supervisor + specialists): workload delegation & orchestration
     technologies: ['Single Agent Workflow', 'Multi-Agent Workflow', 'Human-in-the-Loop', 'RAG', 'Long-Term Memory'],
     imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/Agent%20demo.gif'
   };
+
+  const snapshotReuseChips = useMemo(() => {
+    if (!snapshotReuse) return [] as string[];
+    const chips: string[] = [];
+    if (snapshotReuse.reusedSql) chips.push('SQL');
+    if (snapshotReuse.reusedChart) chips.push('Chart');
+    if (snapshotReuse.reusedAnalysis) chips.push('Analysis');
+    if (snapshotReuse.reusedWeb) chips.push('Web');
+    if (snapshotReuse.reusedStock) chips.push('Market');
+    return chips;
+  }, [snapshotReuse]);
+
+  const snapshotReuseBadge = useMemo(() => {
+    if (!snapshotReuse) return null;
+    if (snapshotReuse.criteriaChanged) {
+      return {
+        text: 'Criteria changed — running fresh pipeline',
+        className: 'bg-amber-600/20 text-amber-100 border-amber-500/40',
+      };
+    }
+    if (snapshotReuseChips.length === 0) {
+      return null;
+    }
+    const detail = snapshotReuseChips.join(' · ');
+    return {
+      text: `Reusing cached ${detail}`,
+      className: 'bg-emerald-600/15 text-emerald-200 border-emerald-500/30',
+    };
+  }, [snapshotReuse, snapshotReuseChips]);
 
   const handleAnalyticsQuery = async () => {
     if (!query.trim() || isLoading) return;
@@ -364,6 +394,14 @@ Multi-Agent (supervisor + specialists): workload delegation & orchestration
                     title={REVISION_META[revisionMode].helper}
                   >
                     {REVISION_META[revisionMode].label}
+                  </span>
+                )}
+                {snapshotReuseBadge && (
+                  <span
+                    className={`px-2 py-1 text-xs rounded-full border transition-colors duration-200 ${snapshotReuseBadge.className}`}
+                    title={snapshotReuse?.followUpRoute ? `Route: ${snapshotReuse.followUpRoute}` : 'Snapshot reuse active'}
+                  >
+                    {snapshotReuseBadge.text}
                   </span>
                 )}
               </div>

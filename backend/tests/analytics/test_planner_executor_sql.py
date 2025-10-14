@@ -488,3 +488,57 @@ def test_follow_up_route_persisted(monkeypatch):
     metadata = snapshot.tool_cache.get('planner_metadata', {})
     assert metadata.get('follow_up_route') == FollowUpRoute.REUSE_SQL.value
     asyncio.run(repo.delete(session_id))
+
+
+def test_revision_snapshot_persisted(monkeypatch):
+    repo = get_session_state_repository()
+    session_id = "session-revision-snapshot"
+    flow = _setup_planner_flow(monkeypatch)
+
+    async def _run():
+        async for event in flow.events('Revision snapshot persistence', session_id=session_id):
+            if event.get('event') == 'workflow_complete':
+                break
+
+    asyncio.run(_run())
+    snapshot = asyncio.run(repo.load(session_id))
+    try:
+        assert snapshot is not None
+        analytics_cache = snapshot.tool_cache.get('analytics', {})
+        revision_snapshot = analytics_cache.get('revision_snapshot')
+        assert isinstance(revision_snapshot, dict), "revision_snapshot should be stored in analytics cache"
+        assert revision_snapshot.get('intent_signature'), "intent_signature missing from revision snapshot"
+        assert revision_snapshot.get('sql'), "sql missing from revision snapshot"
+        assert revision_snapshot.get('chart_spec'), "chart_spec missing from revision snapshot"
+        assert revision_snapshot.get('data_sample') is None or isinstance(revision_snapshot.get('data_sample'), list)
+    finally:
+        asyncio.run(repo.delete(session_id))
+
+def test_follow_up_reuses_snapshot_metadata(monkeypatch):
+    repo = get_session_state_repository()
+    session_id = "session-reuse-metadata"
+    flow = _setup_planner_flow(monkeypatch)
+
+    async def _run(query: str):
+        collected = []
+        async for event in flow.events(query, session_id=session_id):
+            collected.append(event)
+            if event.get('event') == 'workflow_complete':
+                break
+        return collected
+
+    asyncio.run(_run('NVDA revenue trend'))
+    flow.follow_up_route = FollowUpRoute.REUSE_SQL
+    reuse_events = asyncio.run(_run('NVDA revenue trend'))
+    try:
+        planner_event = next(evt for evt in reuse_events if evt.get('event') == 'planner_result')
+        metadata = planner_event.get('data', {}).get('metadata', {})
+        reuse_meta = metadata.get('snapshot_reuse') or metadata.get('reuse_snapshot')
+        assert reuse_meta, 'Expected snapshot_reuse metadata'
+        assert reuse_meta.get('reused_sql') is True
+        assert 'snapshot_age_seconds' in reuse_meta
+        sql_ready_event = next(evt for evt in reuse_events if evt.get('event') == 'sql_ready')
+        assert sql_ready_event['data'].get('reused') is True
+        assert 'snapshot_age_seconds' in sql_ready_event['data']
+    finally:
+        asyncio.run(repo.delete(session_id))
