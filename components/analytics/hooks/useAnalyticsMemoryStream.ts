@@ -1,5 +1,5 @@
-import { useState, useRef, useCallback, useEffect } from 'react';
-import { ChatMessage, ClarifyRequest, ClarifyAnswer, ToolCallTelemetry, AgentTurnTelemetry, AgentReasoningTelemetry, ProcessStep, ToolFanoutManifest, ToolFanoutResult, StockWidgetConfig, WebSearchResult, SingleAgentFanout, SingleAgentFanoutBranch, FanoutBranchStatus, FlowMode } from '../types';
+﻿import { useState, useRef, useCallback, useEffect } from 'react';
+import { ChatMessage, ClarifyRequest, ClarifyAnswer, ToolCallTelemetry, AgentTurnTelemetry, AgentReasoningTelemetry, ProcessStep, ToolFanoutManifest, ToolFanoutResult, StockWidgetConfig, WebSearchResult, AnalysisOverview, AnalysisEvidenceLink, FollowUpBanner, SpecialistCard, SingleAgentFanout, SingleAgentFanoutBranch, FanoutBranchStatus, FlowMode, LatencyGuardrail } from '../types';
 import { apiService } from '../../../services/apiService';
 import { useAnalyticsStream } from './useAnalyticsStream';
 
@@ -16,6 +16,21 @@ const DEFAULT_AGENT_ROLE = { stepId: 'agent_coordination', lane: 'coordination',
 
 import { useProcessSteps } from './useProcessSteps';
 import { resolveChartSpecOption, applyChartOps } from '../utils';
+
+const FOLLOW_UP_BANNER_COPY: Record<string, { title: string; message: string }> = {
+  full_pipeline: {
+    title: 'Fresh Run Scheduled',
+    message: 'Running SQL, charts, and narrative again to deliver a fully refreshed answer.',
+  },
+  reuse_sql: {
+    title: 'Reusing Last Dataset',
+    message: 'Skipping the SQL rerun—updating visuals and narrative on top of the validated table.',
+  },
+  stock_only: {
+    title: 'Market Snapshot Only',
+    message: 'Pulling fresh price data while charts and analysis stay pinned to the prior run.',
+  },
+};
 
 export const useAnalyticsMemoryStream = (
   flow: 'planner-executor' | 'single-agent' | 'multi-agent' = 'planner-executor',
@@ -34,6 +49,10 @@ export const useAnalyticsMemoryStream = (
   const [webSearch, setWebSearch] = useState<WebSearchResult | null>(null);
   const [stockWidget, setStockWidget] = useState<StockWidgetConfig | null>(null);
   const [singleAgentFanout, setSingleAgentFanout] = useState<SingleAgentFanout | null>(null);
+  const [analysisOverview, setAnalysisOverview] = useState<AnalysisOverview | null>(null);
+  const [followUpBanner, setFollowUpBanner] = useState<FollowUpBanner | null>(null);
+  const [latencyGuardrail, setLatencyGuardrail] = useState<LatencyGuardrail | null>(null);
+  const [specialistCards, setSpecialistCards] = useState<SpecialistCard[]>([]);
   const resultSentRef = useRef<boolean>(false);
   const summarySentRef = useRef<boolean>(false);
   const emitResultOnce = useCallback(() => {
@@ -44,6 +63,7 @@ export const useAnalyticsMemoryStream = (
       timestamp: new Date().toISOString(),
       type: 'result' as const,
       content: 'Analysis completed! Here are your results:',
+      flowMode: workflowDataRef.current.flowMode ?? flow,
       analysis: workflowDataRef.current.analysis || workflowDataRef.current.streamingText,
       chartSpec: workflowDataRef.current.chartSpec,
       sqlQuery: workflowDataRef.current.sqlQuery,
@@ -52,25 +72,126 @@ export const useAnalyticsMemoryStream = (
       toolFanoutManifest: workflowDataRef.current.toolFanoutManifest,
       toolFanoutResults: workflowDataRef.current.toolFanoutResults,
       webSearch: workflowDataRef.current.webSearch,
+      analysisOverview: workflowDataRef.current.analysisOverview,
+      banner: workflowDataRef.current.followUpBanner,
+      specialistCards: workflowDataRef.current.specialistCards,
+      latencyGuardrail: workflowDataRef.current.latencyGuardrail,
     };
     setChatHistory((prev) => [...prev, newMessage]);
-  }, [setChatHistory]);
+  }, [setChatHistory, flow]);
   
   // Progressive rendering: update state immediately instead of accumulating in refs
   const [progressiveAnalysis, setProgressiveAnalysis] = useState('');
   const [progressiveText, setProgressiveText] = useState('');
 
+  const coerceString = (value: unknown): string | undefined => {
+    if (typeof value !== 'string') {
+      return undefined;
+    }
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+  };
+
+  const coerceNumber = (value: unknown): number | undefined => {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return value;
+    }
+    if (typeof value === 'string') {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) {
+        return parsed;
+      }
+    }
+    return undefined;
+  };
+
+  const coerceStringList = (value: unknown): string[] => {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+    return (value.map((entry) => coerceString(entry)).filter(Boolean) as string[]).filter((entry) => entry.length > 0);
+  };
+
+  const parseAnalysisOverview = (source: any): AnalysisOverview | null => {
+    if (!source || typeof source !== 'object') {
+      return null;
+    }
+    const tldrValue = coerceString(source.tldr ?? source.summary);
+    const highlightsValue = coerceStringList(source.highlights ?? source.bullets);
+    const keyNumbersValue = coerceStringList(source.key_numbers ?? source.keyNumbers);
+    const riskWatchValue = coerceStringList(source.risk_watch ?? source.riskWatch ?? source.watchlist);
+    const nextStepsValue = coerceStringList(source.next_steps ?? source.nextSteps ?? source.actions);
+    const evidenceSource = Array.isArray(source.evidence)
+      ? source.evidence
+      : Array.isArray(source.sources)
+        ? source.sources
+        : [];
+    const evidenceEntries: AnalysisEvidenceLink[] = (evidenceSource as any[])
+      .map((item: any) => {
+        if (!item || typeof item !== 'object') {
+          return null;
+        }
+        const sourceUrl = coerceString(item.source_url ?? item.url);
+        if (!sourceUrl) {
+          return null;
+        }
+        const entry: AnalysisEvidenceLink = {
+          sourceUrl,
+        };
+        const title = coerceString(item.title);
+        if (title) {
+          entry.title = title;
+        }
+        const displayUrl = coerceString(item.display_url ?? item.displayUrl);
+        if (displayUrl) {
+          entry.displayUrl = displayUrl;
+        }
+        const snippet = coerceString(item.snippet ?? item.excerpt);
+        if (snippet) {
+          entry.snippet = snippet.length > 260 ? `${snippet.slice(0, 257).trimEnd()}...` : snippet;
+        }
+        const claim = coerceString(item.claim);
+        if (claim) {
+          entry.claim = claim;
+        }
+        const publishedAt = coerceString(item.published_at ?? item.publishedAt);
+        if (publishedAt) {
+          entry.publishedAt = publishedAt;
+        }
+        const confidenceValue =
+          coerceNumber(item.confidence) ?? coerceNumber(item.confidence_score) ?? coerceNumber(item.short_score);
+        if (confidenceValue !== undefined) {
+          entry.confidence = Math.max(0, Math.min(Number(confidenceValue.toFixed(2)), 1));
+        }
+        return entry;
+      })
+      .filter((entry): entry is AnalysisEvidenceLink => Boolean(entry));
+
+    if (
+      !tldrValue &&
+      !highlightsValue.length &&
+      !keyNumbersValue.length &&
+      !riskWatchValue.length &&
+      !nextStepsValue.length &&
+      !evidenceEntries.length
+    ) {
+      return null;
+    }
+
+    return {
+      tldr: tldrValue || undefined,
+      highlights: highlightsValue.length ? highlightsValue.slice(0, 3) : undefined,
+      keyNumbers: keyNumbersValue.length ? keyNumbersValue.slice(0, 3) : undefined,
+      riskWatch: riskWatchValue.length ? riskWatchValue.slice(0, 3) : undefined,
+      nextSteps: nextStepsValue.length ? nextStepsValue.slice(0, 3) : undefined,
+      evidence: evidenceEntries.length ? evidenceEntries.slice(0, 5) : undefined,
+    };
+  };
+
   const normalizeWebContext = (raw: any): WebSearchResult | null => {
     if (!raw) {
       return null;
     }
-    const coerceString = (value: unknown): string | undefined => {
-      if (typeof value !== 'string') {
-        return undefined;
-      }
-      const trimmed = value.trim();
-      return trimmed.length > 0 ? trimmed : undefined;
-    };
     const snippets = Array.isArray(raw.snippets)
       ? raw.snippets.map((item: any) => ({
           title: coerceString(item?.title),
@@ -120,6 +241,28 @@ export const useAnalyticsMemoryStream = (
     if (searchTopics && searchTopics.length && !searchTopicValue) {
       searchTopicValue = searchTopics[0];
     }
+    const rawLatencyStats =
+      (raw.latency_stats && typeof raw.latency_stats === 'object' ? raw.latency_stats : null) ??
+      (raw.latencyStats && typeof raw.latencyStats === 'object' ? raw.latencyStats : null);
+    let latencyStats: { total_ms?: number; p50_ms?: number; max_ms?: number; min_ms?: number; samples?: number } | undefined;
+    if (rawLatencyStats) {
+      const totalMs = typeof rawLatencyStats.total_ms === 'number' ? rawLatencyStats.total_ms : (typeof rawLatencyStats.totalMs === 'number' ? rawLatencyStats.totalMs : undefined);
+      const p50Ms = typeof rawLatencyStats.p50_ms === 'number' ? rawLatencyStats.p50_ms : (typeof rawLatencyStats.p50Ms === 'number' ? rawLatencyStats.p50Ms : undefined);
+      const maxMs = typeof rawLatencyStats.max_ms === 'number' ? rawLatencyStats.max_ms : (typeof rawLatencyStats.maxMs === 'number' ? rawLatencyStats.maxMs : undefined);
+      const minMs = typeof rawLatencyStats.min_ms === 'number' ? rawLatencyStats.min_ms : (typeof rawLatencyStats.minMs === 'number' ? rawLatencyStats.minMs : undefined);
+      const samples = typeof rawLatencyStats.samples === 'number'
+        ? rawLatencyStats.samples
+        : (typeof rawLatencyStats.latency_samples === 'number'
+            ? rawLatencyStats.latency_samples
+            : (typeof rawLatencyStats.sample_count === 'number' ? rawLatencyStats.sample_count : undefined));
+      latencyStats = {
+        total_ms: totalMs,
+        p50_ms: p50Ms,
+        max_ms: maxMs,
+        min_ms: minMs,
+        samples,
+      };
+    }
     return {
       query,
       queryTerms,
@@ -138,7 +281,62 @@ export const useAnalyticsMemoryStream = (
       ready: raw.ready ?? (error !== 'search_api_missing' && reason !== 'search_api_missing'),
       provider: coerceString(raw.provider) ?? (raw.model ? 'Gemini' : undefined),
       model: coerceString(raw.model) ?? coerceString(raw.model_name) ?? coerceString(raw.modelName),
+      latencyStats,
     };
+  };
+
+  const normalizeSpecialistCard = (raw: any, timestamp?: string): SpecialistCard | null => {
+    if (!raw || typeof raw !== 'object') {
+      return null;
+    }
+    const normalizeSnippet = (item: any) => ({
+      title: coerceString(item?.title),
+      snippet: coerceString(item?.snippet),
+      url: coerceString(item?.url),
+      display_url: coerceString(item?.display_url) ?? coerceString(item?.displayUrl),
+      published_at: coerceString(item?.published_at) ?? coerceString(item?.publishedAt),
+    });
+    const normalizeSymbol = (value: any): string | undefined => {
+      if (typeof value === 'string') {
+        const trimmed = value.trim();
+        return trimmed.length ? trimmed.toUpperCase() : undefined;
+      }
+      if (Array.isArray(value) && value.length) {
+        const primary = value[0];
+        if (typeof primary === 'string') {
+          const trimmed = primary.trim();
+          return trimmed.length ? trimmed.toUpperCase() : undefined;
+        }
+      }
+      return undefined;
+    };
+
+    const snippets = Array.isArray(raw.snippets)
+      ? raw.snippets
+          .map(normalizeSnippet)
+          .filter((entry: any) => entry.title || entry.snippet || entry.url)
+      : undefined;
+    const symbols = Array.isArray(raw.symbols)
+      ? raw.symbols
+          .map(normalizeSymbol)
+          .filter((symbol): symbol is string => Boolean(symbol))
+      : undefined;
+
+    const card: SpecialistCard = {
+      type: coerceString(raw.type) ?? 'accessory',
+      state: coerceString(raw.state),
+      title: coerceString(raw.title),
+      message: coerceString(raw.message),
+      topic: coerceString(raw.topic),
+      summary: coerceString(raw.summary),
+      snippets,
+      symbols,
+      ready: typeof raw.ready === 'boolean' ? raw.ready : undefined,
+      ts: coerceString(raw.ts) ?? timestamp ?? new Date().toISOString(),
+      meta: typeof raw.meta === 'object' && raw.meta !== null ? raw.meta : undefined,
+    };
+
+    return card;
   };
 
   // Ref for debouncing rapid updates
@@ -428,22 +626,51 @@ export const useAnalyticsMemoryStream = (
     toolFanoutResults: ToolFanoutResult[];
     concurrencyLimit: number;
     webSearch: WebSearchResult | null;
-  }>({
-    chartSpec: null,
-    analysis: '',
-    sqlQuery: '',
-    dataSample: null,
+  flowMode: FlowMode;
+  analysisOverview: AnalysisOverview | null;
+  followUpBanner: FollowUpBanner | null;
+  specialistCards: SpecialistCard[];
+  latencyGuardrail: LatencyGuardrail | null;
+}>({
+  chartSpec: null,
+  analysis: '',
+  sqlQuery: '',
+  dataSample: null,
     streamingText: '',
     criteria: null,
     stockWidget: null,
     toolFanoutManifest: [],
     toolFanoutResults: [],
     concurrencyLimit: 0,
-    webSearch: null,
-  });
+  webSearch: null,
+  flowMode: flow,
+  analysisOverview: null,
+  followUpBanner: null,
+  specialistCards: [],
+  latencyGuardrail: null,
+});
+
+  const upsertSpecialistCard = useCallback((card: SpecialistCard) => {
+    setSpecialistCards((prev) => {
+      const existingIndex = prev.findIndex((item) => item.type === card.type);
+      let next: SpecialistCard[];
+      if (existingIndex >= 0) {
+        next = [...prev];
+        next[existingIndex] = { ...prev[existingIndex], ...card };
+      } else {
+        next = [...prev, card];
+      }
+      workflowDataRef.current.specialistCards = next;
+      return next;
+    });
+  }, []);
 
   const streamHook = useAnalyticsStream();
   const stepsHook = useProcessSteps();
+
+  useEffect(() => {
+    workflowDataRef.current.flowMode = flow;
+  }, [flow]);
 
   // Progressive update function with debouncing
   const scheduleProgressiveUpdate = (updates: Partial<typeof pendingUpdatesRef.current>) => {
@@ -776,6 +1003,17 @@ export const useAnalyticsMemoryStream = (
     setChatHistory(prev => prev.map(msg => msg.id === id ? { ...msg, ...updates } : msg));
   };
 
+  // Feature flag: stream specialist outputs as chat bubbles
+  const isLiveSpecialistsEnabled = () => {
+    try {
+      const raw = (typeof window !== 'undefined') ? window.localStorage.getItem('showLiveSpecialists') : null;
+      if (raw === null || raw === undefined) return true; // default on
+      return raw !== 'false';
+    } catch {
+      return true;
+    }
+  };
+
   const appendResultSnapshot = (
     options: {
       content: string;
@@ -787,6 +1025,9 @@ export const useAnalyticsMemoryStream = (
       toolFanoutManifest?: ToolFanoutManifest[];
       toolFanoutResults?: ToolFanoutResult[];
       webSearch?: WebSearchResult | null;
+      analysisOverview?: AnalysisOverview | null;
+      banner?: FollowUpBanner | null;
+      specialistCards?: SpecialistCard[];
     },
   ) => {
     const snapshot = workflowDataRef.current;
@@ -815,6 +1056,9 @@ export const useAnalyticsMemoryStream = (
     applyField('toolFanoutManifest', options.toolFanoutManifest, snapshot.toolFanoutManifest);
     applyField('toolFanoutResults', options.toolFanoutResults, snapshot.toolFanoutResults);
     applyField('webSearch', options.webSearch, snapshot.webSearch);
+    applyField('analysisOverview', options.analysisOverview, snapshot.analysisOverview);
+    applyField('banner', options.banner, snapshot.followUpBanner);
+    applyField('specialistCards', options.specialistCards, snapshot.specialistCards);
 
     addChatMessage(message);
   };
@@ -859,8 +1103,16 @@ export const useAnalyticsMemoryStream = (
     setProgressiveAnalysis('');
     setWebSearch(null);
     setStockWidget(null);
+    setAnalysisOverview(null);
+    setFollowUpBanner(null);
+    setSpecialistCards([]);
     setRevisionMode('none');
+    setLatencyGuardrail(null);
     workflowDataRef.current.webSearch = null;
+    workflowDataRef.current.analysisOverview = null;
+    workflowDataRef.current.followUpBanner = null;
+    workflowDataRef.current.specialistCards = [];
+    workflowDataRef.current.latencyGuardrail = null;
     setPendingClarification(null);
     setCriteria(null);
     stepsHook.resetSteps();
@@ -953,6 +1205,13 @@ export const useAnalyticsMemoryStream = (
           flowModeValue,
         );
       };
+
+      if (eventData.specialist_card) {
+        const normalizedCard = normalizeSpecialistCard(eventData.specialist_card, stepInfo.ts);
+        if (normalizedCard) {
+          upsertSpecialistCard(normalizedCard);
+        }
+      }
       
       switch (eventType) {
         case 'session_started':
@@ -964,6 +1223,29 @@ export const useAnalyticsMemoryStream = (
         case 'progress':
           // Handle both old 'status' and new 'progress' event types
           const statusMessage = eventData.message || data.message || '';
+          const bannerPayload = eventData.banner || data.banner;
+          if (stepInfo.step === 'follow_up_route' || bannerPayload) {
+            const route = coerceString(bannerPayload?.route) ?? 'full_pipeline';
+            const copy = FOLLOW_UP_BANNER_COPY[route] ?? FOLLOW_UP_BANNER_COPY.full_pipeline;
+            const banner: FollowUpBanner = {
+              title: coerceString(bannerPayload?.title) ?? copy.title,
+              message: coerceString(bannerPayload?.message) ?? (statusMessage || copy.message),
+              route,
+            };
+            setFollowUpBanner(banner);
+            workflowDataRef.current.followUpBanner = banner;
+            const thinkingLogs = banner.message ? [banner.message] : statusMessage ? [statusMessage] : [];
+            updateStep(
+              'follow_up_route',
+              isThinkingEvent ? 'in_progress' : 'completed',
+              thinkingLogs,
+              { banner },
+              stepInfo.elapsed_ms,
+              stepInfo.ts,
+            );
+            streamHook.setCurrentStatus(banner.message);
+            break;
+          }
           streamHook.setCurrentStatus(statusMessage);
           if (stepInfo.step) {
             const thinkingLogs: string[] = [];
@@ -999,6 +1281,22 @@ export const useAnalyticsMemoryStream = (
           updateStep('clarification', 'completed', ['Clarifications resolved'], intentData, stepInfo.elapsed_ms, stepInfo.ts);
           setPendingClarification(null);
           break;
+
+        case 'follow_up_route': {
+          const route = coerceString(eventData.route) ?? 'full_pipeline';
+          const copy = FOLLOW_UP_BANNER_COPY[route] ?? FOLLOW_UP_BANNER_COPY.full_pipeline;
+          const banner: FollowUpBanner = {
+            title: copy.title,
+            message: copy.message,
+            route,
+          };
+          setFollowUpBanner(banner);
+          workflowDataRef.current.followUpBanner = banner;
+          const thinking = [`Route selected: ${route.replace(/[_-]/g, ' ')}`];
+          updateStep('follow_up_route', 'in_progress', thinking, { banner }, stepInfo.elapsed_ms, stepInfo.ts);
+          streamHook.setCurrentStatus(copy.message);
+          break;
+        }
           
         case 'clarification_request':
           console.log('?? [DEBUG] Received clarification_request:', eventData);
@@ -1152,12 +1450,37 @@ export const useAnalyticsMemoryStream = (
           updateStep('sql_execution', 'completed', [
             eventData.row_count != null ? `Rows: ${eventData.row_count}` : sqlPreview[0],
           ], eventData, stepInfo.elapsed_ms, stepInfo.ts);
+          // Live specialist bubble (SQL)
+          if (isLiveSpecialistsEnabled() && !isThinkingEvent) {
+            const rows = typeof eventData.row_count === 'number' ? eventData.row_count : (eventData.sample_data?.length ?? undefined);
+            const header = rows != null ? `SQL Ready (rows: ${rows})` : 'SQL Ready';
+            addChatMessage({
+              type: 'assistant',
+              content: header,
+              sqlQuery: typeof eventData.sql === 'string' ? eventData.sql : undefined,
+              dataSample: Array.isArray(eventData.sample_data) ? eventData.sample_data.slice(0, 5) : undefined,
+              flowMode: flow,
+              scheduleStage: eventData.schedule_stage || scheduleStage || 'sql',
+              parallelGroup,
+              sequence,
+            });
+          }
           break;
         }
           
         case 'chart_ready': {
-          if (eventData.chart_spec) {
-            scheduleProgressiveUpdate({ chartSpec: eventData.chart_spec });
+          const normalizedChartSpec =
+            resolveChartSpecOption(eventData.chart_spec) ??
+            resolveChartSpecOption(eventData) ??
+            eventData.chart_spec ??
+            (data as any)?.chart_spec ??
+            null;
+          if (normalizedChartSpec) {
+            scheduleProgressiveUpdate({ chartSpec: normalizedChartSpec });
+          } else if (eventData.chart_spec) {
+            console.warn('[AnalyticsMemoryStream] chart_ready event contained an unresolvable chart_spec payload', {
+              event: eventData,
+            });
           }
           const chartSummary = eventData.chart_summary?.chart_type
             ? [`Chart ${eventData.chart_summary.chart_type}`]
@@ -1181,6 +1504,28 @@ export const useAnalyticsMemoryStream = (
             workflowDataRef.current.stockWidget = widgetPayload;
           }
           updateStep('tool_execution', 'completed', ['Stock widget ready'], eventData, stepInfo.elapsed_ms, stepInfo.ts);
+          if (isLiveSpecialistsEnabled() && eventData.stock_widget && !isThinkingEvent) {
+            const sw = eventData.stock_widget as StockWidgetConfig;
+            const symbolList = Array.isArray(sw.symbols)
+              ? sw.symbols
+                  .map((s: any) => (Array.isArray(s) ? s[1] : s))
+                  .filter((s: any) => typeof s === 'string' && s.trim().length > 0)
+                  .join(', ')
+              : '';
+            const parts: string[] = ['Stock Widget Ready'];
+            if (symbolList) parts.push(`Symbols: ${symbolList}`);
+            if (sw.chartType) parts.push(`Chart: ${sw.chartType}`);
+            const header = parts.join(' | ');
+            addChatMessage({
+              type: 'assistant',
+              content: header,
+              stockWidgetConfig: sw,
+              flowMode: flow,
+              scheduleStage: eventData.schedule_stage || scheduleStage || 'hedged_accessories',
+              parallelGroup,
+              sequence,
+            });
+          }
           break;
         }
 
@@ -1191,6 +1536,23 @@ export const useAnalyticsMemoryStream = (
             workflowDataRef.current.webSearch = webContext;
           }
           updateStep('web_research_agent', 'completed', ['Web context ready'], eventData, stepInfo.elapsed_ms, stepInfo.ts);
+          if (isLiveSpecialistsEnabled() && webContext && !isThinkingEvent) {
+            const primaryTopic = webContext.searchTopic || webContext.queryTerms || webContext.query || '';
+            const provider = webContext.provider || '';
+            const parts: string[] = ['Web Context Ready'];
+            if (primaryTopic) parts.push(`Topic: ${primaryTopic}`);
+            if (provider) parts.push(`Source: ${provider}`);
+            const header = parts.join(' | ');
+            addChatMessage({
+              type: 'assistant',
+              content: header,
+              webSearch: webContext,
+              flowMode: flow,
+              scheduleStage: eventData.schedule_stage || scheduleStage || 'hedged_accessories',
+              parallelGroup,
+              sequence,
+            });
+          }
           break;
         }
 
@@ -1247,6 +1609,29 @@ export const useAnalyticsMemoryStream = (
             const msg = `Chart complete${chartType ? ` (type: ${chartType})` : ''}${seriesCount!=null ? `, series: ${seriesCount}` : ''}`;
             updateAgentCoordination([msg]);
           } catch {}
+          // Live specialist bubble (Chart)
+          if (isLiveSpecialistsEnabled() && normalizedChartSpec && !isThinkingEvent) {
+            const seriesCount = Array.isArray(normalizedChartSpec.series) ? normalizedChartSpec.series.length : undefined;
+            const primaryXAxis = Array.isArray((normalizedChartSpec as any)?.xAxis)
+              ? (normalizedChartSpec as any).xAxis[0]
+              : (normalizedChartSpec as any)?.xAxis;
+            const xLen = Array.isArray(primaryXAxis?.data) ? primaryXAxis.data.length : undefined;
+            const title = (normalizedChartSpec as any)?.title?.text || 'Chart Ready';
+            const parts: string[] = [title];
+            if (chartType) parts.push(`Type: ${chartType}`);
+            if (xLen != null) parts.push(`Points: ${xLen}`);
+            if (seriesCount != null) parts.push(`Series: ${seriesCount}`);
+            const header = parts.join(' | ');
+            addChatMessage({
+              type: 'assistant',
+              content: header,
+              chartSpec: normalizedChartSpec,
+              flowMode: flow,
+              scheduleStage: eventData.schedule_stage || scheduleStage || 'chart',
+              parallelGroup,
+              sequence,
+            });
+          }
           break;
         }
 
@@ -1567,13 +1952,32 @@ export const useAnalyticsMemoryStream = (
                 }
               }
               const latency = typeof webContext.latencyMs === 'number' ? webContext.latencyMs : null;
-              if (latency !== null) {
+              const latencyStats = webContext.latencyStats;
+              if (latencyStats) {
+                if (typeof latencyStats.p50_ms === 'number') {
+                  thinking.push(`Latency p50: ${latencyStats.p50_ms}ms`);
+                }
+                if (typeof latencyStats.total_ms === 'number') {
+                  thinking.push(`Latency total: ${latencyStats.total_ms}ms`);
+                } else if (latency !== null) {
+                  thinking.push(`Latency total: ${latency}ms`);
+                }
+                if (typeof latencyStats.samples === 'number') {
+                  thinking.push(`Latency samples: ${latencyStats.samples}`);
+                }
+              } else if (latency !== null) {
                 thinking.push(`Latency: ${latency}ms`);
               }
               if (webContext.model) {
                 thinking.push(`Model: ${webContext.model}`);
               }
-              stepsHook.updateStepStatus(stepId, 'completed', thinking, webContext, stepInfo.elapsed_ms, stepInfo.ts);
+              const detailPayload: Record<string, any> = { web_context: webContext };
+              if (latencyStats) {
+                detailPayload.latency = latencyStats;
+              } else if (latency !== null) {
+                detailPayload.latency = { total_ms: latency };
+              }
+              stepsHook.updateStepStatus(stepId, 'completed', thinking, detailPayload, stepInfo.elapsed_ms, stepInfo.ts);
             }
           } else {
             const msg = eventData.message || '';
@@ -1661,6 +2065,30 @@ export const useAnalyticsMemoryStream = (
                 workflowDataRef.current.webSearch = webContext;
               }
             }
+            if (bundle.analysis_overview && typeof bundle.analysis_overview === 'object') {
+              const overview = parseAnalysisOverview(bundle.analysis_overview);
+              if (overview) {
+                setAnalysisOverview(overview);
+                workflowDataRef.current.analysisOverview = overview;
+              }
+            }
+            if (bundle.latency_guardrail) {
+              const guardrail = bundle.latency_guardrail as LatencyGuardrail;
+              setLatencyGuardrail(guardrail);
+              workflowDataRef.current.latencyGuardrail = guardrail;
+            }
+            if (bundle.banner) {
+              const bannerData = bundle.banner as Record<string, any>;
+              const route = coerceString(bannerData.route) ?? followUpBanner?.route ?? 'full_pipeline';
+              const copy = FOLLOW_UP_BANNER_COPY[route] ?? FOLLOW_UP_BANNER_COPY.full_pipeline;
+              const banner: FollowUpBanner = {
+                title: coerceString(bannerData.title) ?? copy.title,
+                message: coerceString(bannerData.message) ?? followUpBanner?.message ?? copy.message,
+                route,
+              };
+              setFollowUpBanner(banner);
+              workflowDataRef.current.followUpBanner = banner;
+            }
 
             updateStep(
               'analysis_generation',
@@ -1674,6 +2102,9 @@ export const useAnalyticsMemoryStream = (
                 stock_widget: bundle.stock_widget,
                 tool_manifest: workflowDataRef.current.toolFanoutManifest,
                 tool_fanout_results: workflowDataRef.current.toolFanoutResults,
+                analysis_overview: workflowDataRef.current.analysisOverview,
+                banner: workflowDataRef.current.followUpBanner,
+                latency_guardrail: workflowDataRef.current.latencyGuardrail,
               },
               stepInfo.elapsed_ms,
               stepInfo.ts,
@@ -1728,6 +2159,22 @@ export const useAnalyticsMemoryStream = (
                 toolFanoutRef.current.results = fanoutResults;
               }
               refreshFanoutState();
+
+              const overviewCandidate =
+                (eventData.analysis_overview && typeof eventData.analysis_overview === 'object' && eventData.analysis_overview) ||
+                (typeof eventData.analysis === 'object' && eventData.analysis !== null ? eventData.analysis : eventData);
+              const overview = parseAnalysisOverview(overviewCandidate);
+              if (overview) {
+                setAnalysisOverview(overview);
+                workflowDataRef.current.analysisOverview = overview;
+              }
+              const guardrailCandidate =
+                (eventData.latency_guardrail as LatencyGuardrail | undefined) ??
+                (data.latency_guardrail as LatencyGuardrail | undefined);
+              if (guardrailCandidate) {
+                setLatencyGuardrail(guardrailCandidate);
+                workflowDataRef.current.latencyGuardrail = guardrailCandidate;
+              }
             }
 
             setStreamingText('');
@@ -1745,7 +2192,12 @@ export const useAnalyticsMemoryStream = (
               'analysis_generation',
               'completed',
               [],
-              { analysis: finalAnalysis, analysis_length: eventData.analysis_length },
+              {
+                analysis: finalAnalysis,
+                analysis_length: eventData.analysis_length,
+                analysis_overview: workflowDataRef.current.analysisOverview,
+                latency_guardrail: workflowDataRef.current.latencyGuardrail,
+              },
               stepInfo.elapsed_ms
             );
 
@@ -2150,7 +2602,7 @@ export const useAnalyticsMemoryStream = (
           });
           break;
           
-                case 'final_summary':
+        case 'final_summary':
           stepsHook.updateStepStatus('finalization', 'completed', ['Workflow summary generated']);
           const summaryStatusMessage =
             flow === 'single-agent'
@@ -2159,7 +2611,7 @@ export const useAnalyticsMemoryStream = (
                 ? 'Multi-agent workflow completed!'
                 : 'Direct workflow completed!';
           streamHook.setCurrentStatus(summaryStatusMessage);
-          if (!isThinkingEvent && !summarySentRef.current) { /* patched: disable malformed content */
+          if (!isThinkingEvent && !summarySentRef.current && !isSpecialistOnlyMode()) { /* patched: disable malformed content or suppress if specialist-only */
             summarySentRef.current = true;
             const keyFindings = Array.isArray(eventData.key_findings)
               ? (eventData.key_findings as string[]).map((f: string) => ' ' + f).join('\\n')
@@ -2171,7 +2623,25 @@ export const useAnalyticsMemoryStream = (
           }
           break;
 
-                case 'workflow_complete':
+        case 'planner_result': {
+          const metadata = (eventData.metadata ?? {}) as Record<string, any>;
+          const overviewCandidate = metadata.analysis_overview;
+          if (overviewCandidate) {
+            const overview = parseAnalysisOverview(overviewCandidate);
+            if (overview) {
+              setAnalysisOverview(overview);
+              workflowDataRef.current.analysisOverview = overview;
+            }
+          }
+          const guardrailMeta = metadata.web_search_guardrail as LatencyGuardrail | undefined;
+          if (guardrailMeta) {
+            setLatencyGuardrail(guardrailMeta);
+            workflowDataRef.current.latencyGuardrail = guardrailMeta;
+          }
+          break;
+        }
+
+        case 'workflow_complete':
           const workflowStatusMessage =
             flow === 'single-agent'
               ? 'Single-agent tools workflow completed!'
@@ -2192,19 +2662,33 @@ export const useAnalyticsMemoryStream = (
               dataSample: null,
               streamingText: '',
               criteria: null,
+              stockWidget: null,
+              toolFanoutManifest: [],
+              toolFanoutResults: [],
+              concurrencyLimit: 0,
+              webSearch: null,
+              flowMode: flow,
+              analysisOverview: null,
+              followUpBanner: null,
+              specialistCards: [],
+              latencyGuardrail: null,
             };
             setChartSpec(null);
             setAnalysis('');
             setSqlQuery('');
             setDataSample(null);
             setStreamingText('');
+            setAnalysisOverview(null);
+            setFollowUpBanner(null);
+            setSpecialistCards([]);
+            setLatencyGuardrail(null);
           }
           break;
 
         case 'final_answer':
           stepsHook.updateStepStatus('finalization', 'completed', ['Provided final response']);
           streamHook.setCurrentStatus(eventData?.message || 'Completed');
-          if (!isThinkingEvent) {
+          if (!isThinkingEvent && !isSpecialistOnlyMode()) {
             addChatMessage({
               type: 'assistant',
               content: eventData?.message || 'Happy to help with financial analytics questions!',
@@ -2263,6 +2747,10 @@ export const useAnalyticsMemoryStream = (
     setStockWidget(null);
     setSingleAgentFanout(null);
     setRevisionMode('none');
+    setAnalysisOverview(null);
+    setFollowUpBanner(null);
+    setSpecialistCards([]);
+    setLatencyGuardrail(null);
 
     // Clear any pending updates
     if (updateTimeoutRef.current) {
@@ -2290,8 +2778,23 @@ export const useAnalyticsMemoryStream = (
       toolFanoutManifest: [],
       toolFanoutResults: [],
       concurrencyLimit: 0,
-      webSearch: null
+      webSearch: null,
+      flowMode: flow,
+      analysisOverview: null,
+      followUpBanner: null,
+      specialistCards: [],
+      latencyGuardrail: null,
     };
+  };
+
+  // Optional knob to suppress generic model chat in favor of specialist-only chat
+  const isSpecialistOnlyMode = () => {
+    try {
+      const raw = (typeof window !== 'undefined') ? window.localStorage.getItem('specialistOnlyChat') : null;
+      return raw === 'true';
+    } catch {
+      return false;
+    }
   };
 
   return {
@@ -2307,8 +2810,12 @@ export const useAnalyticsMemoryStream = (
     streamingText,
     webSearch,
     stockWidget,
+    analysisOverview,
+    followUpBanner,
+    specialistCards,
     singleAgentFanout,
     revisionMode,
+    latencyGuardrail,
 
     // Progressive rendering state
     progressiveAnalysis,
@@ -2333,6 +2840,9 @@ export const useAnalyticsMemoryStream = (
     updateChatMessage,
   };
 };
+
+
+
 
 
 

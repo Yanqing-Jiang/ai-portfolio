@@ -943,6 +943,9 @@ LIMIT 500
 USER QUERY: {state['query']}
 
 Generate ONLY a valid PostgreSQL SELECT statement:
+Rules:
+- Never use ROUND(), TRUNC(), TO_CHAR(), or other formatting helpers. Return raw numeric values and let downstream layers format.
+- If precision is required, cast expressions using ::numeric or ::decimal instead of formatting.
 """
 
             print("[SQL AGENT] Calling Responses API for SQL generation...")

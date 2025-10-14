@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 import json
 from typing import AsyncGenerator, Dict, Any, Optional, List, Sequence, Tuple, Set
 from dataclasses import dataclass, field
@@ -8,6 +8,7 @@ import os
 import logging
 import time
 import uuid
+import copy
 from datetime import datetime, date
 from analytics.core.types import (
     WorkflowState,
@@ -38,6 +39,7 @@ from analytics.artifacts import (
     MarketArtifact,
 )
 from analytics.routing import FollowUpRoute
+from analytics.validators import sanitize_for_json
 from .hooks import AnalyticsFlowHooks, NullFlowHooks
 from .tooling import run_tool_parallelism, get_default_tool_adapters
 from ..core.intent import intent_to_sql_criteria
@@ -205,18 +207,8 @@ class PlannerPhaseContext:
     plan: Optional[QueryPlanModel] = None
     candidate_templates: List[Dict[str, Any]] = field(default_factory=list)
     selected_template_id: Optional[str] = None
-    sql: str = ""
-    llm_used: bool = False
-    sql_attempt: int = 1
-    sql_attempts: List[Dict[str, Any]] = field(default_factory=list)
-    validation_attempt: int = 1
-    data: List[Dict[str, Any]] = field(default_factory=list)
-    exec_elapsed_ms: Optional[int] = None
-    chart_spec: Optional[Dict[str, Any]] = None
     web_search: Optional[ResponseSearchResult] = None
-    analysis: str = ""
     parallelism_enabled: bool = False
-    planner_result: PlannerResultModel = field(default_factory=PlannerResultModel)
     follow_up_route: FollowUpRoute = FollowUpRoute.FULL_PIPELINE
     reuse_sql: bool = False
     stock_only: bool = False
@@ -234,6 +226,54 @@ AGGREGATE_METRIC_MARKERS = (
     "'operating income'",
     "'net income'",
 )
+
+SQL_DATASET_PREVIEW_LIMIT = 200
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
+_DEFAULT_GUARDRAIL_P50 = int(os.getenv("WEB_SEARCH_GUARDRAIL_P50_MS", "1200"))
+_DEFAULT_GUARDRAIL_P95 = int(os.getenv("WEB_SEARCH_GUARDRAIL_P95_MS", "2500"))
+_RISK_TERMS = (
+    "risk",
+    "headwind",
+    "concern",
+    "pressure",
+    "downside",
+    "volatility",
+    "slowdown",
+    "uncertain",
+    "watchlist",
+    "caution",
+)
+_ACTION_TERMS = (
+    "consider",
+    "monitor",
+    "focus",
+    "plan to",
+    "plan for",
+    "watch",
+    "track",
+    "follow up",
+    "prepare",
+    "should",
+    "next step",
+    "next steps",
+    "keep an eye",
+)
+_NUMERIC_HINTS = ("%", "bps", "basis point", "million", "billion", "m$", "bn")
+
+FOLLOW_UP_BANNERS: Dict[FollowUpRoute, Dict[str, str]] = {
+    FollowUpRoute.FULL_PIPELINE: {
+        "title": "Fresh Run Scheduled",
+        "message": "Running SQL, charts, and narrative again to deliver a fully refreshed answer.",
+    },
+    FollowUpRoute.REUSE_SQL: {
+        "title": "Reusing Last Dataset",
+        "message": "Skipping the SQL rerun—updating visuals and narrative on top of the validated table.",
+    },
+    FollowUpRoute.STOCK_ONLY: {
+        "title": "Market Snapshot Only",
+        "message": "Pulling fresh price data while charts and analysis stay pinned to the prior run.",
+    },
+}
 
 
 def _normalize_calendar_filters(sql: str) -> str:
@@ -368,8 +408,10 @@ def _set_sql_execution_artifact(
     error: Optional[str] = None,
     error_code: Optional[str] = None,
 ) -> None:
-    summary = _summarize_sql_rows(data)
-    row_count = None if data is None else len(data)
+    dataset: List[Dict[str, Any]] = list(data or [])
+    summary = _summarize_sql_rows(dataset)
+    row_count = len(dataset) if dataset else None
+    dataset_preview = dataset[:SQL_DATASET_PREVIEW_LIMIT] if dataset else []
     ctx.artifacts.sql_execution = SQLExecutionArtifact(
         query=ctx.query,
         row_count=row_count,
@@ -378,6 +420,8 @@ def _set_sql_execution_artifact(
         metrics=summary["metrics"],
         timeframe=summary["timeframe"],
         sample_rows=summary["sample_rows"],
+        dataset_preview=dataset_preview,
+        dataset=dataset,
         elapsed_ms=elapsed_ms,
         status=status,
         error=error,
@@ -421,6 +465,225 @@ def _summarize_chart_series(plan: Any, spec: Optional[Dict[str, Any]]) -> List[D
     return series_summary
 
 
+def _get_sql_dataset(ctx: PlannerPhaseContext) -> List[Dict[str, Any]]:
+    execution_artifact = getattr(ctx.artifacts, "sql_execution", None)
+    if execution_artifact is None:
+        return []
+    dataset = getattr(execution_artifact, "dataset", None) or []
+    if dataset:
+        return list(dataset)
+    preview = getattr(execution_artifact, "dataset_preview", None) or []
+    if preview:
+        return list(preview)
+    return list(execution_artifact.sample_rows)
+
+
+def _extract_tldr(text: str) -> Optional[str]:
+    stripped = (text or "").strip()
+    if not stripped:
+        return None
+    first_paragraph = stripped.split("\n\n", 1)[0].strip()
+    first_sentence = first_paragraph.split(". ", 1)[0].strip()
+    return first_sentence[:240] if first_sentence else None
+
+
+def _extract_bullets(text: str, limit: int = 3) -> List[str]:
+    bullets: List[str] = []
+    for line in (text or "").splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped[0] in {"-", "*", "\u2022"}:
+            content = stripped.lstrip("-* \u2022").strip()
+            if content:
+                bullets.append(content)
+        if len(bullets) >= limit:
+            break
+    return bullets
+
+
+def _split_line(line: str) -> List[str]:
+    stripped = line.strip()
+    if not stripped:
+        return []
+    if stripped[0] in {"-", "*", "\u2022"}:
+        cleaned = stripped.lstrip("-*\u2022 ").strip()
+        return [cleaned] if cleaned else []
+    return _SENTENCE_SPLIT.split(stripped)
+
+
+def _normalize_sentence(sentence: str) -> Optional[str]:
+    cleaned = re.sub(r"\s+", " ", sentence or "").strip()
+    return cleaned or None
+
+
+def _collect_sentences(text: str) -> List[str]:
+    sentences: List[str] = []
+    seen: set[str] = set()
+    for raw_line in (text or "").splitlines():
+        for fragment in _split_line(raw_line):
+            normalized = _normalize_sentence(fragment)
+            if not normalized:
+                continue
+            lowered = normalized.lower()
+            if lowered in seen:
+                continue
+            seen.add(lowered)
+            sentences.append(normalized)
+    return sentences
+
+
+def _extract_key_numbers(text: str, limit: int = 3) -> List[str]:
+    sentences = _collect_sentences(text)
+    key_numbers: List[str] = []
+    for sentence in sentences:
+        lowered = sentence.lower()
+        has_numeric = any(char.isdigit() for char in sentence)
+        if not has_numeric and not any(hint in lowered for hint in _NUMERIC_HINTS):
+            continue
+        key_numbers.append(sentence[:240])
+        if len(key_numbers) >= limit:
+            break
+    return key_numbers
+
+
+def _extract_risk_watch(text: str, limit: int = 2) -> List[str]:
+    sentences = _collect_sentences(text)
+    risks: List[str] = []
+    for sentence in sentences:
+        lowered = sentence.lower()
+        if any(term in lowered for term in _RISK_TERMS):
+            risks.append(sentence[:240])
+        if len(risks) >= limit:
+            break
+    return risks
+
+
+def _extract_next_steps(text: str, limit: int = 2) -> List[str]:
+    sentences = _collect_sentences(text)
+    next_steps: List[str] = []
+    for sentence in sentences:
+        lowered = sentence.lower()
+        if any(term in lowered for term in _ACTION_TERMS):
+            next_steps.append(sentence[:240])
+        if len(next_steps) >= limit:
+            break
+    return next_steps
+
+
+def _build_evidence_entries(
+    *,
+    web_context: Optional[Dict[str, Any]],
+    highlights: Optional[List[str]],
+    summary: Optional[str],
+    max_items: int = 5,
+) -> List[Dict[str, Any]]:
+    if not web_context or not isinstance(web_context, dict):
+        return []
+
+    snippets = web_context.get("snippets") or []
+    if not isinstance(snippets, list):
+        return []
+
+    claims: List[str] = []
+    if summary:
+        claims.append(summary)
+    if highlights:
+        claims.extend(highlights)
+
+    evidence: List[Dict[str, Any]] = []
+    seen_urls: set[str] = set()
+
+    for index, raw_snippet in enumerate(snippets):
+        if not isinstance(raw_snippet, dict):
+            continue
+        url = raw_snippet.get("url") or raw_snippet.get("source_url")
+        if not isinstance(url, str) or not url.strip():
+            continue
+        normalized_url = url.strip()
+        if normalized_url in seen_urls:
+            continue
+        title = raw_snippet.get("title") or raw_snippet.get("display_url")
+        snippet_text = raw_snippet.get("snippet") or raw_snippet.get("summary")
+
+        entry: Dict[str, Any] = {
+            "source_url": normalized_url,
+        }
+        if isinstance(title, str) and title.strip():
+            entry["title"] = title.strip()
+        display_url = raw_snippet.get("display_url")
+        if isinstance(display_url, str) and display_url.strip():
+            entry["display_url"] = display_url.strip()
+        if isinstance(snippet_text, str) and snippet_text.strip():
+            excerpt = snippet_text.strip()
+            if len(excerpt) > 260:
+                excerpt = excerpt[:257].rstrip() + "..."
+            entry["snippet"] = excerpt
+        published_at = raw_snippet.get("published_at")
+        if isinstance(published_at, str) and published_at.strip():
+            entry["published_at"] = published_at.strip()
+        if claims:
+            claim_idx = index if index < len(claims) else -1
+            if claim_idx >= 0:
+                entry["claim"] = claims[claim_idx]
+        annotation = raw_snippet.get("annotation") or {}
+        confidence = annotation.get("confidence")
+        if not isinstance(confidence, (int, float)):
+            derived = 1.0 - (0.15 * index)
+            confidence = max(0.1, round(derived, 2))
+        else:
+            confidence = round(max(0.0, min(float(confidence), 1.0)), 2)
+        entry["confidence"] = confidence
+        evidence.append(entry)
+        seen_urls.add(normalized_url)
+        if len(evidence) >= max_items:
+            break
+
+    return evidence
+
+
+def _evaluate_latency_guardrail(
+    stats: Optional[Dict[str, Any]],
+    *,
+    p50_threshold: Optional[int] = None,
+    p95_threshold: Optional[int] = None,
+) -> Optional[Dict[str, Any]]:
+    if not stats or not isinstance(stats, dict):
+        return None
+
+    observed_p50 = stats.get("p50_ms")
+    observed_p95 = stats.get("p95_ms") or stats.get("max_ms")
+    observed_total = stats.get("total_ms")
+    thresholds = {
+        "p50_ms": p50_threshold if p50_threshold is not None else _DEFAULT_GUARDRAIL_P50,
+        "p95_ms": p95_threshold if p95_threshold is not None else _DEFAULT_GUARDRAIL_P95,
+    }
+
+    violations: List[str] = []
+    if isinstance(observed_p50, (int, float)) and observed_p50 > thresholds["p50_ms"]:
+        violations.append("p50_ms")
+    if isinstance(observed_p95, (int, float)) and observed_p95 > thresholds["p95_ms"]:
+        violations.append("p95_ms")
+
+    status = "ok"
+    if violations:
+        status = "violation"
+
+    guardrail_payload: Dict[str, Any] = {
+        "status": status,
+        "violations": violations,
+        "observed": {
+            key: stats.get(key)
+            for key in ("total_ms", "p50_ms", "p95_ms", "max_ms", "samples")
+            if stats.get(key) is not None
+        },
+        "thresholds": thresholds,
+    }
+    if observed_total is not None and guardrail_payload["observed"].get("total_ms") is None:
+        guardrail_payload["observed"]["total_ms"] = observed_total
+    return guardrail_payload
+
+
 def _derive_scope_banner(ctx: PlannerPhaseContext, spec: Dict[str, Any]) -> Optional[str]:
     tickers: List[str] = []
     market_artifact = getattr(ctx.artifacts, "market", None)
@@ -433,8 +696,9 @@ def _derive_scope_banner(ctx: PlannerPhaseContext, spec: Dict[str, Any]) -> Opti
                 symbol = dataset.get("ticker") or dataset.get("symbol")
                 if isinstance(symbol, str):
                     tickers.append(symbol)
-    if not tickers and ctx.data:
-        for row in ctx.data:
+    if not tickers:
+        dataset_rows = _get_sql_dataset(ctx)
+        for row in dataset_rows:
             symbol = row.get("ticker")
             if isinstance(symbol, str):
                 tickers.append(symbol)
@@ -528,6 +792,7 @@ def _set_web_artifact(
         from_cache=payload.get("from_cache"),
         metadata=metadata,
         topic=topic,
+        latency_stats=payload.get("latency_stats"),
     )
 
 
@@ -537,6 +802,11 @@ def _set_analysis_artifact(
     analysis_text: str,
     fragments: List[str],
     tool_bundle: Optional[Dict[str, Any]],
+    summary: Optional[str],
+    bullets: Optional[List[str]],
+    key_numbers: Optional[List[str]],
+    risk_watch: Optional[List[str]],
+    next_steps: Optional[List[str]],
 ) -> None:
     stock_widget = None
     if tool_bundle:
@@ -544,18 +814,178 @@ def _set_analysis_artifact(
     web_context = None
     if ctx.artifacts.web:
         web_context = ctx.artifacts.web.to_dict()
-    else:
-        # Fall back to latest payload stored on ctx.planner_result
-        web_context = ctx.planner_result.metadata.get("web_search")
+    elif ctx.web_search is not None:
+        web_context = ctx.web_search.to_payload()
+    elif ctx.snapshot_artifacts and ctx.snapshot_artifacts.web:
+        web_context = ctx.snapshot_artifacts.web.to_dict()
+    evidence_entries = _build_evidence_entries(
+        web_context=web_context,
+        highlights=bullets,
+        summary=summary,
+    )
     ctx.artifacts.analysis = AnalysisArtifact(
         query=ctx.query,
         analysis_text=analysis_text or None,
         fragments=fragments,
         length=len(analysis_text),
+        summary=summary,
+        highlights=bullets or [],
+        key_numbers=key_numbers or [],
+        risk_watch=risk_watch or [],
+        next_steps=next_steps or [],
+        evidence=evidence_entries,
         stock_widget=stock_widget,
         web_context=web_context,
         tool_bundle=tool_bundle or None,
     )
+
+
+def _build_planner_result_payload(ctx: PlannerPhaseContext) -> Dict[str, Any]:
+    intent_model = ctx.intent
+    if intent_model is not None and not isinstance(intent_model, IntentModel):
+        intent_payload: Optional[Dict[str, Any]] = None
+        if hasattr(intent_model, "model_dump"):
+            intent_payload = intent_model.model_dump()
+        elif hasattr(intent_model, "__dict__"):
+            intent_payload = dict(intent_model.__dict__)
+        if isinstance(intent_payload, dict):
+            try:
+                intent_model = IntentModel(**intent_payload)
+            except Exception:
+                intent_model = None
+
+    clarification_requests_raw = list(ctx.clarifications)
+    clarification_requests: List[ClarifyRequestModel] = []
+    for request in clarification_requests_raw:
+        if isinstance(request, ClarifyRequestModel):
+            clarification_requests.append(request)
+            continue
+        request_payload: Optional[Dict[str, Any]] = None
+        if hasattr(request, "model_dump"):
+            request_payload = request.model_dump()
+        elif isinstance(request, dict):
+            request_payload = request
+        elif hasattr(request, "__dict__"):
+            request_payload = dict(request.__dict__)
+        if isinstance(request_payload, dict):
+            try:
+                clarification_requests.append(ClarifyRequestModel(**request_payload))
+            except Exception:
+                continue
+
+    sql_attempts: List[Dict[str, Any]] = []
+    sql_text: Optional[str] = None
+    if ctx.artifacts.sql_generation:
+        sql_attempts = list(ctx.artifacts.sql_generation.attempts or [])
+        sql_text = ctx.artifacts.sql_generation.sql
+
+    row_count: Optional[int] = None
+    if ctx.artifacts.sql_execution:
+        row_count = ctx.artifacts.sql_execution.row_count
+
+    chart_summary: Optional[Dict[str, Any]] = None
+    if ctx.artifacts.chart:
+        chart_summary = {
+            "chart_type": ctx.artifacts.chart.chart_type,
+            "series_count": ctx.artifacts.chart.series_count,
+            "design": copy.deepcopy(ctx.artifacts.chart.design),
+        }
+        if ctx.artifacts.chart.scope_banner:
+            chart_summary["scope_banner"] = ctx.artifacts.chart.scope_banner
+
+    analysis_text = ctx.artifacts.analysis.analysis_text if ctx.artifacts.analysis else None
+
+    metadata: Dict[str, Any] = {}
+    if ctx.classification is not None:
+        metadata["classification"] = copy.deepcopy(ctx.classification.model_dump())
+
+    web_payload: Optional[Dict[str, Any]] = None
+    if ctx.artifacts.web:
+        web_payload = ctx.artifacts.web.to_dict()
+    elif ctx.web_search is not None:
+        web_payload = ctx.web_search.to_payload()
+    elif ctx.snapshot_artifacts and ctx.snapshot_artifacts.web:
+        web_payload = ctx.snapshot_artifacts.web.to_dict()
+    web_latency: Optional[Dict[str, Any]] = None
+    if web_payload:
+        metadata["web_search"] = copy.deepcopy(web_payload)
+        stats = web_payload.get("latency_stats")
+        if isinstance(stats, dict):
+            web_latency = {
+                "total_ms": stats.get("total_ms") or stats.get("totalMs"),
+                "p50_ms": stats.get("p50_ms") or stats.get("p50Ms"),
+                "max_ms": stats.get("max_ms") or stats.get("maxMs"),
+                "min_ms": stats.get("min_ms") or stats.get("minMs"),
+                "samples": stats.get("samples") or stats.get("latency_samples") or stats.get("sample_count"),
+            }
+    elif ctx.web_search is not None and ctx.web_search.latency_ms is not None:
+        web_latency = {
+            "total_ms": ctx.web_search.latency_ms,
+        }
+
+    if web_latency:
+        cleaned_latency = {key: value for key, value in web_latency.items() if value is not None}
+        if cleaned_latency:
+            metadata["web_search_latency"] = cleaned_latency
+        guardrail_payload = _evaluate_latency_guardrail(web_latency)
+        if guardrail_payload:
+            metadata["web_search_guardrail"] = guardrail_payload
+
+    if ctx.artifacts.analysis:
+        overview: Dict[str, Any] = {}
+        if ctx.artifacts.analysis.summary:
+            overview["tldr"] = ctx.artifacts.analysis.summary
+        if ctx.artifacts.analysis.highlights:
+            overview["highlights"] = list(ctx.artifacts.analysis.highlights)
+        if ctx.artifacts.analysis.key_numbers:
+            overview["key_numbers"] = list(ctx.artifacts.analysis.key_numbers)
+        if ctx.artifacts.analysis.risk_watch:
+            overview["risk_watch"] = list(ctx.artifacts.analysis.risk_watch)
+        if ctx.artifacts.analysis.next_steps:
+            overview["next_steps"] = list(ctx.artifacts.analysis.next_steps)
+        evidence_entries = list(ctx.artifacts.analysis.evidence or [])
+        if not evidence_entries:
+            web_source: Optional[Dict[str, Any]] = None
+            if metadata.get("web_search"):
+                web_candidate = metadata.get("web_search")
+                if isinstance(web_candidate, dict):
+                    web_source = web_candidate
+            elif ctx.artifacts.web:
+                web_source = ctx.artifacts.web.to_dict()
+            evidence_entries = _build_evidence_entries(
+                web_context=web_source,
+                highlights=ctx.artifacts.analysis.highlights,
+                summary=ctx.artifacts.analysis.summary or ctx.artifacts.analysis.analysis_text,
+            )
+            if evidence_entries:
+                ctx.artifacts.analysis.evidence = evidence_entries
+        if evidence_entries:
+            overview["evidence"] = evidence_entries
+        if overview:
+            metadata["analysis_overview"] = overview
+
+    if SCHEMA_CLARIFIER_ENABLED:
+        decision = ctx.schema_clarifier_decision
+        metadata["schema_clarifier"] = {
+            "enabled": True,
+            "action": decision.action if decision else "disabled",
+            "missing_slots": list(decision.missing_slots) if decision and decision.missing_slots else [],
+            "slot": decision.slot if decision else None,
+        }
+
+    metadata["follow_up_route"] = ctx.follow_up_route.value
+
+    planner_result_model = PlannerResultModel(
+        intent=intent_model,
+        clarification_requests=clarification_requests,
+        sql_attempts=sql_attempts,
+        sql_text=sql_text,
+        data_row_count=row_count,
+        chart_summary=chart_summary,
+        analysis=analysis_text,
+        metadata=metadata,
+    )
+    return planner_result_model.model_dump()
 
 
 def _artifacts_from_snapshot(snapshot: Optional[SessionStateSnapshot]) -> Optional[PipelineArtifacts]:
@@ -571,24 +1001,38 @@ def _artifacts_from_snapshot(snapshot: Optional[SessionStateSnapshot]) -> Option
     return None
 
 
-def _hydrate_context_from_snapshot(ctx: PlannerPhaseContext, artifacts: Optional[PipelineArtifacts]) -> None:
+def _dataset_preview_from_snapshot(snapshot: Optional[SessionStateSnapshot]) -> Optional[Dict[str, Any]]:
+    if snapshot is None or not hasattr(snapshot, "tool_cache"):
+        return None
+    preview_payload = snapshot.tool_cache.get("planner_dataset_preview")
+    if isinstance(preview_payload, dict):
+        rows = preview_payload.get("rows")
+        if isinstance(rows, list):
+            return preview_payload
+    return None
+
+
+def _hydrate_context_from_snapshot(
+    ctx: PlannerPhaseContext,
+    snapshot: Optional[SessionStateSnapshot],
+    artifacts: Optional[PipelineArtifacts],
+) -> None:
     if artifacts is None:
         return
     ctx.artifacts = artifacts
     ctx.snapshot_artifacts = artifacts
-    if artifacts.sql_generation and artifacts.sql_generation.sql:
-        ctx.sql = artifacts.sql_generation.sql
-    if artifacts.sql_execution:
-        ctx.data = list(artifacts.sql_execution.sample_rows)
-    if artifacts.chart and artifacts.chart.spec:
-        ctx.chart_spec = artifacts.chart.spec
-    if artifacts.analysis and artifacts.analysis.analysis_text:
-        ctx.analysis = artifacts.analysis.analysis_text
-    if artifacts.web:
-        ctx.planner_result.metadata["web_search"] = artifacts.web.to_dict()
-
-
-
+    execution_artifact = getattr(ctx.artifacts, "sql_execution", None)
+    preview_payload = _dataset_preview_from_snapshot(snapshot)
+    if execution_artifact and preview_payload:
+        rows = list(preview_payload.get("rows") or [])
+        if rows:
+            execution_artifact.dataset_preview = rows
+            if not getattr(execution_artifact, "dataset", None):
+                execution_artifact.dataset = list(rows)
+            if execution_artifact.row_count is None:
+                row_count = preview_payload.get("row_count")
+                if isinstance(row_count, int):
+                    execution_artifact.row_count = row_count
 
 def _build_schema_clarifier_request(decision: ClarifierDecision, session_id: str) -> Optional[ClarifyRequestModel]:
     if not decision.slot or not decision.question:
@@ -650,23 +1094,43 @@ class PlannerPipeline:
         if snapshot is None:
             snapshot = SessionStateSnapshot(session_id=session_id)
         updated = False
-        if record_sql and ctx.sql:
-            snapshot.record_outputs(sql=ctx.sql)
+        sql_artifact = ctx.artifacts.sql_generation if record_sql else None
+        if sql_artifact and sql_artifact.sql:
+            snapshot.record_outputs(sql=sql_artifact.sql)
             updated = True
-        if record_chart and ctx.chart_spec:
-            snapshot.record_outputs(chart_spec=ctx.chart_spec)
+            execution_artifact = ctx.artifacts.sql_execution
+            if execution_artifact and execution_artifact.dataset_preview:
+                sanitized_preview = sanitize_for_json(
+                    {
+                        "rows": execution_artifact.dataset_preview,
+                        "row_count": execution_artifact.row_count,
+                    }
+                )
+                snapshot.record_tool_result("planner_dataset_preview", sanitized_preview)
+                updated = True
+        chart_artifact = ctx.artifacts.chart if record_chart else None
+        if chart_artifact and chart_artifact.spec:
+            snapshot.record_outputs(chart_spec=chart_artifact.spec)
             updated = True
-        if record_analysis and ctx.analysis:
-            snapshot.record_outputs(analysis=ctx.analysis)
+        analysis_artifact = ctx.artifacts.analysis if record_analysis else None
+        if analysis_artifact and analysis_artifact.analysis_text:
+            snapshot.record_outputs(analysis=analysis_artifact.analysis_text)
             updated = True
         if tool_bundle:
-            snapshot.record_tool_result("planner_bundle", tool_bundle)
+            sanitized_bundle = sanitize_for_json(tool_bundle)
+            snapshot.record_tool_result("planner_bundle", sanitized_bundle)
             updated = True
         if record_artifacts:
             artifacts_payload = ctx.artifacts.to_dict()
             if artifacts_payload:
                 snapshot.record_artifacts(artifacts_payload)
                 updated = True
+        planner_meta = snapshot.tool_cache.setdefault("planner_metadata", {})
+        route_value = getattr(ctx, "follow_up_route", FollowUpRoute.FULL_PIPELINE).value
+        if planner_meta.get("follow_up_route") != route_value:
+            planner_meta["follow_up_route"] = route_value
+            snapshot.tool_cache["planner_metadata"] = planner_meta
+            updated = True
         if updated:
             await repository.save(snapshot)
 
@@ -800,6 +1264,7 @@ class PlannerPipeline:
         sql = ""
         llm_used = False
         attempt_logs: List[Dict[str, Any]] = []
+        validated_attempt: Optional[int] = None
         last_error_code: Optional[str] = None
         last_error_detail: Optional[str] = None
         previous_sql: Optional[str] = None
@@ -837,8 +1302,6 @@ class PlannerPipeline:
                     elapsed_ms=int((time.time() - attempt_start) * 1000),
                 )
                 attempt_logs.append(attempt_record)
-                ctx.sql_attempts = attempt_logs
-                ctx.planner_result.sql_attempts = list(attempt_logs)
                 error_event = EventEmitter.error(
                     "sql_compilation",
                     "SQL generation failed",
@@ -858,8 +1321,6 @@ class PlannerPipeline:
                         elapsed_ms=int((time.time() - attempt_start) * 1000),
                     )
                     attempt_logs.append(attempt_record)
-                    ctx.sql_attempts = attempt_logs
-                    ctx.planner_result.sql_attempts = list(attempt_logs)
                     empty_notice = EventEmitter.progress(
                         "sql_compilation",
                         "SQL attempt returned no content; retrying with additional guidance.",
@@ -880,15 +1341,10 @@ class PlannerPipeline:
                         last_error_code = "SQL_VALIDATION_FAILED"
                         last_error_detail = "; ".join(issues) if issues else "Validation failed"
                     attempt_logs.append(attempt_record)
-                    ctx.sql_attempts = attempt_logs
-                    ctx.planner_result.sql_attempts = list(attempt_logs)
                     if ok:
                         sql = candidate_sql
-                        ctx.sql = sql
                         llm_used = True
-                        ctx.llm_used = True
-                        ctx.sql_attempt = attempt
-                        ctx.planner_result.sql_text = sql
+                        validated_attempt = attempt
                         compiled_event = EventEmitter.result(
                             "sql_compiled",
                             {
@@ -951,15 +1407,13 @@ class PlannerPipeline:
                     templates=candidate_templates,
                 )
 
-        ctx.sql_attempts = attempt_logs
-        ctx.planner_result.sql_attempts = list(attempt_logs)
         generation_status = "generated" if sql else "failed"
         _set_sql_generation_artifact(
             ctx,
             sql=sql if sql else None,
             template_id=selected_template_id,
             attempts=attempt_logs,
-            llm_used=llm_used or ctx.llm_used,
+            llm_used=llm_used,
             last_error_code=last_error_code,
             last_error_detail=last_error_detail,
             status=generation_status,
@@ -996,12 +1450,18 @@ class PlannerPipeline:
         validation_progress["data"]["ts"] = datetime.utcnow().isoformat()
         yield validation_progress
         ok, issues, validate_elapsed = _validate_sql(sql)
+        latest_attempt = validated_attempt
+        if latest_attempt is None:
+            for entry in reversed(attempt_logs):
+                if isinstance(entry, dict) and "attempt" in entry:
+                    latest_attempt = entry.get("attempt")
+                    break
         validation_event = EventEmitter.result(
             "sql_validated",
             {
                 "ok": ok,
                 "issues_count": len(issues),
-                "attempt": ctx.sql_attempt,
+                "attempt": latest_attempt,
                 "issues": issues,
             },
         )
@@ -1016,7 +1476,7 @@ class PlannerPipeline:
                 sql=sql,
                 template_id=selected_template_id,
                 attempts=attempt_logs,
-                llm_used=llm_used or ctx.llm_used,
+                llm_used=llm_used,
                 last_error_code="SQL_VALIDATION_FINAL",
                 last_error_detail="; ".join(issues) if issues else None,
                 status="validation_failed",
@@ -1049,7 +1509,7 @@ class PlannerPipeline:
                 sql=sql,
                 template_id=selected_template_id,
                 attempts=attempt_logs,
-                llm_used=llm_used or ctx.llm_used,
+                llm_used=llm_used,
                 last_error_code=None,
                 last_error_detail=None,
                 status="validated",
@@ -1065,8 +1525,6 @@ class PlannerPipeline:
         try:
             data = await execute_sql(sql)
             exec_elapsed = int((time.time() - exec_start) * 1000)
-            ctx.exec_elapsed_ms = exec_elapsed
-            ctx.planner_result.data_row_count = len(data)
             _set_sql_execution_artifact(
                 ctx,
                 data=data,
@@ -1076,7 +1534,6 @@ class PlannerPipeline:
             self._capture_artifacts(ctx)
         except Exception as exec_exc:
             exec_elapsed = int((time.time() - exec_start) * 1000)
-            ctx.exec_elapsed_ms = exec_elapsed
             _set_sql_execution_artifact(
                 ctx,
                 data=None,
@@ -1118,12 +1575,8 @@ class PlannerPipeline:
             ctx.halt_reason = "sql_execution_failed"
             return
 
-        ctx.llm_used = llm_used or ctx.llm_used
-        ctx.sql = sql
-        ctx.data = data
-
     async def run_chart_phase(self, ctx: PlannerPhaseContext, *, intent: IntentModel, plan: QueryPlanModel) -> AsyncGenerator[Dict[str, Any], None]:
-        data = ctx.data or []
+        data = _get_sql_dataset(ctx)
         if not data:
             return
         query = ctx.query
@@ -1147,7 +1600,6 @@ class PlannerPipeline:
             comparison=plan.comparison,
             statistic=getattr(plan, "statistic", None),
         )
-        ctx.chart_spec = spec
         chart_design = _generate_chart_design(intent.intent_key, plan, data, spec)
         spec.setdefault("meta", {}).setdefault("chartDesign", chart_design)
         _set_chart_artifact(
@@ -1158,11 +1610,6 @@ class PlannerPipeline:
         )
         self._capture_artifacts(ctx)
         await self._persist_session_state(ctx, record_chart=True)
-        ctx.planner_result.chart_summary = {
-            "chart_type": chart_plan.chart_type,
-            "series_count": len(chart_plan.series),
-            "design": chart_design,
-        }
         chart_elapsed = int((time.time() - chart_start) * 1000)
         chart_event = EventEmitter.result(
             "chart_planned",
@@ -1243,14 +1690,17 @@ class PlannerPipeline:
                 yield event
 
     async def run_analysis_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[str, Any], None]:
-        data = ctx.data or []
+        data = _get_sql_dataset(ctx)
         if not data:
             return
         async for dependency_event in self._ensure_analysis_dependencies(ctx):
             yield dependency_event
         session_id = ctx.session_id
         query = ctx.query
-        sql = ctx.sql
+        sql_artifact = ctx.artifacts.sql_generation
+        sql = sql_artifact.sql if sql_artifact and sql_artifact.sql else ""
+        chart_artifact = ctx.artifacts.chart
+        chart_spec = chart_artifact.spec if chart_artifact and chart_artifact.spec else None
         analysis_progress = EventEmitter.progress(
             "analysis_generation", "Generating insights..."
         )
@@ -1263,7 +1713,7 @@ class PlannerPipeline:
             data,
             sql,
             query,
-            chart_spec=ctx.chart_spec,
+            chart_spec=chart_spec,
             search_result=ctx.web_search,
             session_id=session_id,
         ):
@@ -1288,12 +1738,25 @@ class PlannerPipeline:
                 )
                 yield streaming_event
         analysis_elapsed = int((time.time() - analysis_start) * 1000)
-        ctx.analysis = full_analysis
-        ctx.planner_result.analysis = full_analysis
         analysis_payload = {
             "analysis_length": len(full_analysis),
             "analysis": full_analysis,
         }
+        tldr_summary = _extract_tldr(full_analysis)
+        if tldr_summary:
+            analysis_payload["tldr"] = tldr_summary
+        bullets = _extract_bullets(full_analysis)
+        if bullets:
+            analysis_payload["bullets"] = bullets
+        key_numbers = _extract_key_numbers(full_analysis)
+        if key_numbers:
+            analysis_payload["key_numbers"] = key_numbers
+        risk_watch = _extract_risk_watch(full_analysis)
+        if risk_watch:
+            analysis_payload["risk_watch"] = risk_watch
+        next_steps = _extract_next_steps(full_analysis)
+        if next_steps:
+            analysis_payload["next_steps"] = next_steps
         tool_bundle = collect_tool_bundle(
             manifest=getattr(ctx, "tool_parallel_manifest", None),
             results=getattr(ctx, "tool_parallel_results", None),
@@ -1302,10 +1765,13 @@ class PlannerPipeline:
         if tool_bundle:
             stock_widget = tool_bundle.get("stock_widget")
             analysis_payload.update(tool_bundle)
+        guardrail_payload = None
         if ctx.web_search:
             web_payload = ctx.web_search.to_payload()
             analysis_payload['web_context'] = web_payload
-            ctx.planner_result.metadata['web_search'] = web_payload
+            guardrail_payload = _evaluate_latency_guardrail(web_payload.get("latency_stats"))
+        elif ctx.artifacts.web:
+            guardrail_payload = _evaluate_latency_guardrail(ctx.artifacts.web.latency_stats)
         if stock_widget:
             _set_market_artifact(ctx, widget=stock_widget)
             self._capture_artifacts(ctx)
@@ -1314,7 +1780,16 @@ class PlannerPipeline:
             analysis_text=full_analysis,
             fragments=fragments,
             tool_bundle=tool_bundle or None,
+            summary=tldr_summary,
+            bullets=bullets,
+            key_numbers=key_numbers,
+            risk_watch=risk_watch,
+            next_steps=next_steps,
         )
+        if ctx.artifacts.analysis and ctx.artifacts.analysis.evidence:
+            analysis_payload["evidence"] = list(ctx.artifacts.analysis.evidence)
+        if guardrail_payload:
+            analysis_payload["latency_guardrail"] = guardrail_payload
         self._capture_artifacts(ctx)
         await self._persist_session_state(ctx, record_analysis=True, tool_bundle=tool_bundle or None)
         analysis_complete = EventEmitter.result(
@@ -1330,14 +1805,25 @@ class PlannerPipeline:
             }
         )
         yield analysis_complete
+        banner_config = FOLLOW_UP_BANNERS.get(ctx.follow_up_route, FOLLOW_UP_BANNERS[FollowUpRoute.FULL_PIPELINE])
+        banner_event = EventEmitter.progress("follow_up_route", banner_config["message"])
+        banner_event["data"]["ts"] = datetime.utcnow().isoformat()
+        banner_event["data"]["schedule_stage"] = "analysis"
+        banner_event["data"]["banner"] = {
+            "title": banner_config["title"],
+            "message": banner_config["message"],
+            "route": ctx.follow_up_route.value,
+        }
+        yield banner_event
         async for accessory_event in self._emit_post_analysis_accessories(ctx):
             yield accessory_event
         from analytics.core.clarify import get_session_store
         session_store = await get_session_store()
         await session_store.cleanup_expired()
         total_elapsed = int((time.time() - ctx.workflow_start) * 1000)
+        planner_payload = _build_planner_result_payload(ctx)
         result_event = EventEmitter.result(
-            "planner_result", ctx.planner_result.model_dump()
+            "planner_result", planner_payload
         )
         result_event["event"] = "planner_result"
         result_event["data"]["ts"] = datetime.utcnow().isoformat()
@@ -1365,10 +1851,17 @@ class PlannerPipeline:
                 "error": "search_api_missing",
                 "summary": summary,
             }
+            card = {
+                "type": "web_context",
+                "state": "error",
+                "message": summary,
+            }
             _set_web_artifact(ctx, payload=payload, topic=None, search_result=None)
             self._capture_artifacts(ctx)
-            result_event = EventEmitter.result("web_search", {"web_context": payload})
+            result_event = EventEmitter.result("web_search", {"web_context": payload, "specialist_card": card})
             result_event["data"]["ts"] = datetime.utcnow().isoformat()
+            result_event["data"]["specialist_card"] = card
+            result_event["data"]["schedule_stage"] = "accessories_post"
             yield result_event
             return
     
@@ -1440,7 +1933,19 @@ class PlannerPipeline:
         payload["ts"] = datetime.utcnow().isoformat()
         _set_web_artifact(ctx, payload=payload, topic=topic, search_result=search_result)
         self._capture_artifacts(ctx)
-        yield EventEmitter.result("web_search", {"web_context": payload})
+        card = {
+            "type": "web_context",
+            "state": "ready",
+            "topic": payload.get("search_topic") or topic,
+            "summary": payload.get("summary"),
+            "snippets": payload.get("snippets", []),
+        }
+        event_payload = {"web_context": payload, "specialist_card": card}
+        result_event = EventEmitter.result("web_search", event_payload)
+        result_event["data"]["ts"] = datetime.utcnow().isoformat()
+        result_event["data"]["specialist_card"] = card
+        result_event["data"]["schedule_stage"] = "accessories_post"
+        yield result_event
     
     def _get_company_display(self, intent: IntentModel, provisional_plan: Optional[QueryPlanModel] = None) -> str:
         """Generate smart company display based on intent and plan context."""
@@ -1526,13 +2031,21 @@ class PlannerPipeline:
 
         async for event in registry.invoke("sql_generation", self, ctx, executed=executed):
             yield event
-        await self._persist_session_state(ctx, record_sql=bool(ctx.sql), record_artifacts=True)
+        await self._persist_session_state(
+            ctx,
+            record_sql=bool(ctx.artifacts.sql_generation and ctx.artifacts.sql_generation.sql),
+            record_artifacts=True,
+        )
         if ctx.halted:
             return
 
         async for event in registry.invoke("chart_generation", self, ctx, executed=executed):
             yield event
-        await self._persist_session_state(ctx, record_chart=ctx.chart_spec is not None, record_artifacts=True)
+        await self._persist_session_state(
+            ctx,
+            record_chart=bool(ctx.artifacts.chart and ctx.artifacts.chart.spec),
+            record_artifacts=True,
+        )
 
         if mode_config.accessories_in_critical_path:
             async for event in self._web_search_phase(ctx):
@@ -1541,7 +2054,13 @@ class PlannerPipeline:
 
         async for event in registry.invoke("analysis_generation", self, ctx, executed=executed):
             yield event
-        await self._persist_session_state(ctx, record_analysis=bool(ctx.analysis), record_artifacts=True)
+        await self._persist_session_state(
+            ctx,
+            record_analysis=bool(
+                ctx.artifacts.analysis and ctx.artifacts.analysis.analysis_text
+            ),
+            record_artifacts=True,
+        )
 
 
 async def _initialize_context(self, query: str, session_id: Optional[str]) -> PlannerPhaseContext:
@@ -1560,9 +2079,10 @@ async def _initialize_context(self, query: str, session_id: Optional[str]) -> Pl
         reuse_sql=self.follow_up_route == FollowUpRoute.REUSE_SQL,
         stock_only=self.follow_up_route == FollowUpRoute.STOCK_ONLY,
     )
-    snapshot_artifacts = _artifacts_from_snapshot(getattr(self, "_prefetched_snapshot", None))
+    snapshot = getattr(self, "_prefetched_snapshot", None)
+    snapshot_artifacts = _artifacts_from_snapshot(snapshot)
     if snapshot_artifacts:
-        _hydrate_context_from_snapshot(ctx, snapshot_artifacts)
+        _hydrate_context_from_snapshot(ctx, snapshot, snapshot_artifacts)
     return ctx
 
 
@@ -1601,7 +2121,6 @@ async def _classification_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerato
     if classification is None:
         raise RuntimeError("Classifier returned no response")
     ctx.classification = classification
-    ctx.planner_result.metadata['classification'] = classification.model_dump()
     ctx.is_financial_query = bool(getattr(classification, "is_financial_query", False))
     ctx.artifacts.classification = ClassificationArtifactModel(
         query=ctx.query,
@@ -1651,7 +2170,8 @@ async def _classification_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerato
         if getattr(classification, "suggested_rephrase", None):
             final_event["data"]["suggested_rephrase"] = classification.suggested_rephrase
         yield final_event
-        result_event = EventEmitter.result("planner_result", ctx.planner_result.model_dump())
+        planner_payload = _build_planner_result_payload(ctx)
+        result_event = EventEmitter.result("planner_result", planner_payload)
         result_event["event"] = "planner_result"
         result_event["data"]["ts"] = datetime.utcnow().isoformat()
         yield result_event
@@ -1687,7 +2207,6 @@ async def _intent_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[s
     )
     intent.slots_detected["original_query"] = ctx.query
     ctx.intent = intent
-    ctx.planner_result.intent = intent
     intent_elapsed = timed_emitter.end_step("intent_detection")
     intent_complete = {
         "event": "intent_detection_complete",
@@ -1723,12 +2242,6 @@ async def _intent_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[s
 
     ctx.clarifier_agent_invoked = bool(schema_decision)
     ctx.schema_clarifier_decision = schema_decision
-    ctx.planner_result.metadata["schema_clarifier"] = {
-        "enabled": SCHEMA_CLARIFIER_ENABLED,
-        "action": schema_decision.action if schema_decision else "disabled",
-        "missing_slots": schema_decision.missing_slots if schema_decision else [],
-        "slot": schema_decision.slot if schema_decision else None,
-    }
     ctx.artifacts.intent = IntentArtifactModel(
         query=ctx.query,
         intent_key=getattr(intent, "intent_key", None),
@@ -1778,7 +2291,6 @@ async def _intent_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[s
         seen_slots.add(request.slot)
         deduped_requests.append(request)
     ctx.clarifications = deduped_requests
-    ctx.planner_result.clarification_requests = list(deduped_requests)
     ctx.assumptions = []
     ctx.clarification_rounds = 0
     clarifications_needed = bool(deduped_requests)

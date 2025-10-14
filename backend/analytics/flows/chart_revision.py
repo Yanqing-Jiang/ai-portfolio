@@ -1,7 +1,7 @@
 ﻿from __future__ import annotations
 
 import copy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
@@ -46,6 +46,7 @@ class RevisionContext:
     last_analysis: Optional[str]
     sql_attempts: List[Dict[str, Any]]
     analysis_history: List[Dict[str, Any]]
+    dataset_preview: List[Dict[str, Any]] = field(default_factory=list)
 
     @classmethod
     async def load(
@@ -65,6 +66,12 @@ class RevisionContext:
         analysis_history = tool_cache.get("analysis_revision_history", [])
         if not isinstance(analysis_history, list):
             analysis_history = []
+        dataset_preview_payload = tool_cache.get("planner_dataset_preview", {})
+        preview_rows: List[Dict[str, Any]] = []
+        if isinstance(dataset_preview_payload, dict):
+            rows = dataset_preview_payload.get("rows")
+            if isinstance(rows, list):
+                preview_rows = [row for row in rows if isinstance(row, dict)]
         return cls(
             session_id=session_id,
             snapshot=snapshot,
@@ -74,6 +81,7 @@ class RevisionContext:
             last_analysis=snapshot.last_analysis,
             sql_attempts=copy.deepcopy(attempts),
             analysis_history=copy.deepcopy(analysis_history),
+            dataset_preview=preview_rows,
         )
 
     def require_chart_spec(self) -> Dict[str, Any]:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import MISSING, asdict, dataclass, field, fields
+import copy
+from dataclasses import MISSING, dataclass, field, fields
 from typing import Any, Dict, List, Optional, Sequence, Type, TypeVar
 
 
@@ -23,9 +24,15 @@ class BaseArtifact:
     """Shared helpers for artifact dataclasses."""
 
     def to_dict(self) -> Dict[str, Any]:
-        payload = asdict(self)
-        # Remove None values for cleaner wire payloads
-        return {key: value for key, value in payload.items() if value is not None}
+        payload: Dict[str, Any] = {}
+        for field_info in fields(self):
+            if field_info.metadata.get("persist", True) is False:
+                continue
+            value = getattr(self, field_info.name)
+            if value is None:
+                continue
+            payload[field_info.name] = copy.deepcopy(value)
+        return payload
 
     @classmethod
     def from_dict(cls: Type[T], payload: Optional[Dict[str, Any]]) -> T:
@@ -113,6 +120,8 @@ class SQLExecutionArtifact(BaseArtifact):
     metrics: List[str] = field(default_factory=list)
     timeframe: Dict[str, Any] = field(default_factory=dict)
     sample_rows: List[Dict[str, Any]] = field(default_factory=list)
+    dataset_preview: List[Dict[str, Any]] = field(default_factory=list)
+    dataset: List[Dict[str, Any]] = field(default_factory=list, metadata={"persist": False})
     elapsed_ms: Optional[int] = None
     status: str = "pending"
     error: Optional[str] = None
@@ -128,6 +137,7 @@ class WebContextArtifact(BaseArtifact):
     from_cache: Optional[bool] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
     topic: Optional[str] = None
+    latency_stats: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -149,6 +159,11 @@ class AnalysisArtifact(BaseArtifact):
     fragments: List[str] = field(default_factory=list)
     length: Optional[int] = None
     summary: Optional[str] = None
+    highlights: List[str] = field(default_factory=list)
+    key_numbers: List[str] = field(default_factory=list)
+    risk_watch: List[str] = field(default_factory=list)
+    next_steps: List[str] = field(default_factory=list)
+    evidence: List[Dict[str, Any]] = field(default_factory=list)
     stock_widget: Optional[Dict[str, Any]] = None
     web_context: Optional[Dict[str, Any]] = None
     tool_bundle: Optional[Dict[str, Any]] = None

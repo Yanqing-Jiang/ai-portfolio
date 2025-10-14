@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from datetime import datetime
+import copy
 import time
-from typing import Any, AsyncGenerator, Dict, Optional
+from typing import Any, AsyncGenerator, Dict, List, Optional
 
+from analytics.artifacts.models import PipelineArtifacts
 from analytics.core.telemetry import tool_iteration as log_tool_iteration
 from analytics.core.session_state import SessionStateSnapshot, get_session_state_repository
+from analytics.validators import sanitize_for_json
 from analytics.routing import FollowUpRoute
 from .hooks import AnalyticsFlowHooks
 from .planner_executor import PlannerExecutorFlow, run_planner_executor
@@ -33,14 +36,132 @@ def _build_tool_metadata(manifest: Any) -> Dict[str, Dict[str, Any]]:
     return metadata
 
 
+
+def _build_single_agent_cohesive_payload(
+    analysis_payload: Dict[str, Any],
+    artifacts: Optional[PipelineArtifacts],
+    *,
+    default_manifest: Optional[List[Dict[str, Any]]] = None,
+) -> Optional[Dict[str, Any]]:
+    if not isinstance(analysis_payload, dict):
+        analysis_payload = {}
+
+    payload: Dict[str, Any] = {}
+
+    analysis_text = analysis_payload.get("analysis")
+    if isinstance(analysis_text, str) and analysis_text.strip():
+        payload["analysis"] = analysis_text
+
+    length_value = analysis_payload.get("analysis_length")
+    if isinstance(length_value, (int, float)):
+        payload["analysis_length"] = int(length_value)
+
+    passthrough_keys = {
+        "tldr",
+        "bullets",
+        "key_numbers",
+        "risk_watch",
+        "next_steps",
+        "latency_guardrail",
+        "analysis_overview",
+        "tool_manifest",
+        "tool_results",
+        "stock_widget",
+        "web_context",
+        "bundle",
+        "banner",
+    }
+    for key in passthrough_keys:
+        if key in analysis_payload and analysis_payload[key] is not None:
+            payload[key] = copy.deepcopy(analysis_payload[key])
+
+    if (not payload.get("tool_manifest")) and default_manifest:
+        payload["tool_manifest"] = copy.deepcopy(default_manifest)
+
+    if artifacts:
+        chart_art = artifacts.chart
+        if chart_art and chart_art.spec:
+            payload.setdefault("chart_spec", copy.deepcopy(chart_art.spec))
+            if chart_art.spec_id:
+                payload.setdefault("chart_spec_id", chart_art.spec_id)
+
+        sql_gen = artifacts.sql_generation
+        if sql_gen and sql_gen.sql:
+            payload.setdefault("sql", sql_gen.sql)
+
+        sql_exec = artifacts.sql_execution
+        if sql_exec:
+            if sql_exec.row_count is not None:
+                payload.setdefault("sql_row_count", sql_exec.row_count)
+            if sql_exec.columns:
+                payload.setdefault("columns", list(sql_exec.columns))
+            sample = sql_exec.sample_rows or sql_exec.dataset_preview
+            if sample:
+                payload.setdefault("data_sample", copy.deepcopy(sample))
+
+        analysis_art = artifacts.analysis
+        if analysis_art:
+            if ("analysis" not in payload or not payload.get("analysis")) and analysis_art.analysis_text:
+                payload["analysis"] = analysis_art.analysis_text
+                if analysis_art.length is not None and "analysis_length" not in payload:
+                    payload["analysis_length"] = analysis_art.length
+            if ("stock_widget" not in payload or not payload.get("stock_widget")) and analysis_art.stock_widget:
+                payload["stock_widget"] = copy.deepcopy(analysis_art.stock_widget)
+            if ("web_context" not in payload or not payload.get("web_context")) and analysis_art.web_context:
+                payload["web_context"] = copy.deepcopy(analysis_art.web_context)
+            if "analysis_overview" not in payload or not payload.get("analysis_overview"):
+                overview: Dict[str, Any] = {}
+                if analysis_art.summary:
+                    overview["tldr"] = analysis_art.summary
+                if analysis_art.highlights:
+                    overview["highlights"] = list(analysis_art.highlights)
+                if analysis_art.key_numbers:
+                    overview["key_numbers"] = list(analysis_art.key_numbers)
+                if analysis_art.risk_watch:
+                    overview["risk_watch"] = list(analysis_art.risk_watch)
+                if analysis_art.next_steps:
+                    overview["next_steps"] = list(analysis_art.next_steps)
+                if analysis_art.evidence:
+                    overview["evidence"] = copy.deepcopy(analysis_art.evidence)
+                if overview:
+                    payload["analysis_overview"] = overview
+            if analysis_art.tool_bundle:
+                bundle = analysis_art.tool_bundle
+                if bundle.get("tool_manifest") and not payload.get("tool_manifest"):
+                    payload["tool_manifest"] = copy.deepcopy(bundle["tool_manifest"])
+                if bundle.get("tool_results") and not payload.get("tool_results"):
+                    payload["tool_results"] = copy.deepcopy(bundle["tool_results"])
+                if bundle.get("stock_widget") and not payload.get("stock_widget"):
+                    payload["stock_widget"] = copy.deepcopy(bundle["stock_widget"])
+                if bundle.get("web_context") and not payload.get("web_context"):
+                    payload["web_context"] = copy.deepcopy(bundle["web_context"])
+
+        market_art = artifacts.market if artifacts else None
+        if market_art and market_art.snapshot and not payload.get("stock_widget"):
+            payload["stock_widget"] = copy.deepcopy(market_art.snapshot)
+
+        web_art = artifacts.web if artifacts else None
+        if web_art and not payload.get("web_context"):
+            payload["web_context"] = web_art.to_dict()
+
+    sanitized = sanitize_for_json(payload)
+    if not sanitized:
+        return None
+    return sanitized
+
+
 class _SingleAgentToolHooks(AnalyticsFlowHooks):
     def __init__(self, flow: "SingleAgentToolsFlow", session_id: Optional[str] = None) -> None:
         self._flow = flow
         self._timers: Dict[str, float] = {}
         self._sql_compile_details: Dict[str, Any] = {}
         self._session_id: Optional[str] = session_id
+        self._emitted_cohesive = False
+        self._last_analysis_payload: Optional[Dict[str, Any]] = None
 
     async def on_flow_start(self, ctx: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
+        self._emitted_cohesive = False
+        self._last_analysis_payload = None
         if ctx.get("session_id") and not self._session_id:
             session = ctx.get("session_id")
             if isinstance(session, str) and session:
@@ -88,6 +209,22 @@ class _SingleAgentToolHooks(AnalyticsFlowHooks):
         annotated["data"]["follow_up_route"] = self._flow.follow_up_route.value
         yield annotated
 
+    def _maybe_emit_cohesive_result(self, analysis_payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        if self._emitted_cohesive:
+            return None
+        cohesive_payload = _build_single_agent_cohesive_payload(
+            analysis_payload=analysis_payload,
+            artifacts=self._flow.latest_artifacts(),
+            default_manifest=self._flow.planner_tool_manifest,
+        )
+        if not cohesive_payload:
+            return None
+        self._emitted_cohesive = True
+        event = {"event": "cohesive_result", "data": cohesive_payload}
+        annotated = apply_mode_metadata(event, self._flow.flow_mode)
+        annotated["data"]["follow_up_route"] = self._flow.follow_up_route.value
+        return annotated
+
     async def after_event(self, ctx: Dict[str, Any], event: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
         if False:
             yield {}
@@ -95,38 +232,56 @@ class _SingleAgentToolHooks(AnalyticsFlowHooks):
         if event_name == "sql_compiled":
             self._sql_compile_details = event.get("data", {}) or {}
             return
+
         tool = self._flow.TOOL_END_EVENTS.get(event_name)
-        if not tool:
+        if tool:
+            start = self._timers.pop(tool, None)
+            elapsed = int((time.time() - start) * 1000) if start else None
+            payload: Dict[str, Any] = {
+                "tool": tool,
+                "status": "end",
+                "ts": datetime.utcnow().isoformat(),
+                "details": self._extract_tool_details(tool, event),
+            }
+            if elapsed is not None:
+                payload["elapsed_ms"] = elapsed
+            metadata = self._flow.get_tool_metadata_for_event(event_name)
+            if not metadata:
+                metadata = self._flow.get_tool_metadata_for_alias(tool)
+            if metadata:
+                payload["latency_budget_ms"] = metadata.get("latency_budget_ms")
+                payload["output_artifacts"] = metadata.get("output_artifacts")
+                payload["concurrency_limit"] = metadata.get("concurrency_limit")
+            log_tool_iteration(
+                tool=tool,
+                status="end",
+                step=event_name,
+                session_id=self._session_id,
+                flow=self._flow.flow_label,
+                elapsed_ms=elapsed,
+                details=payload.get("details") or payload,
+            )
+            annotated_end = apply_mode_metadata({"event": "tool_call", "data": payload}, self._flow.flow_mode)
+            annotated_end["data"]["follow_up_route"] = self._flow.follow_up_route.value
+            yield annotated_end
             return
-        start = self._timers.pop(tool, None)
-        elapsed = int((time.time() - start) * 1000) if start else None
-        payload: Dict[str, Any] = {
-            "tool": tool,
-            "status": "end",
-            "ts": datetime.utcnow().isoformat(),
-            "details": self._extract_tool_details(tool, event),
-        }
-        if elapsed is not None:
-            payload["elapsed_ms"] = elapsed
-        metadata = self._flow.get_tool_metadata_for_event(event_name)
-        if not metadata:
-            metadata = self._flow.get_tool_metadata_for_alias(tool)
-        if metadata:
-            payload["latency_budget_ms"] = metadata.get("latency_budget_ms")
-            payload["output_artifacts"] = metadata.get("output_artifacts")
-            payload["concurrency_limit"] = metadata.get("concurrency_limit")
-        log_tool_iteration(
-            tool=tool,
-            status="end",
-            step=event_name,
-            session_id=self._session_id,
-            flow=self._flow.flow_label,
-            elapsed_ms=elapsed,
-            details=payload.get("details") or payload,
-        )
-        annotated_end = apply_mode_metadata({"event": "tool_call", "data": payload}, self._flow.flow_mode)
-        annotated_end["data"]["follow_up_route"] = self._flow.follow_up_route.value
-        yield annotated_end
+
+        if event_name == "analysis_complete":
+            analysis_payload = copy.deepcopy(event.get("data") or {})
+            if (not analysis_payload.get("tool_manifest")) and self._flow.planner_tool_manifest:
+                analysis_payload["tool_manifest"] = copy.deepcopy(self._flow.planner_tool_manifest)
+            self._last_analysis_payload = analysis_payload
+            cohesive_event = self._maybe_emit_cohesive_result(analysis_payload)
+            if cohesive_event:
+                yield cohesive_event
+            return
+
+        if event_name == "workflow_complete":
+            if self._last_analysis_payload:
+                cohesive_event = self._maybe_emit_cohesive_result(copy.deepcopy(self._last_analysis_payload))
+                if cohesive_event:
+                    yield cohesive_event
+            return
 
     async def on_flow_end(
         self,

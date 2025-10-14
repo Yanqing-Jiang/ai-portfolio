@@ -104,6 +104,13 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
               ? (firstSymbol[1] ?? firstSymbol[0] ?? '').toUpperCase()
               : String(firstSymbol ?? '').toUpperCase()
             : null;
+          const attachmentsAvailable = Boolean(
+            (message.chartSpec && isValidChartSpec(message.chartSpec)) ||
+            (showTradingView && message.stockWidgetConfig) ||
+            combinedAnalysis ||
+            message.webSearch ||
+            message.sqlQuery
+          );
           const bubbleClass = message.type === 'user'
             ? 'bg-gray-800 text-gray-100 rounded-2xl rounded-br-md px-4 py-3'
             : message.type === 'result'
@@ -138,7 +145,7 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
                     )}
                   </div>
 
-                  {message.type === 'result' && (
+                  {attachmentsAvailable && (message.type === 'result' || message.type === 'assistant') && (
                     <div className="mt-3 space-y-4">
                       {message.chartSpec && isValidChartSpec(message.chartSpec) && (
                         <Suspense fallback={<div className="rounded-xl border border-gray-700 bg-gray-800/40 p-6 text-sm text-gray-300">Loading chart...</div>}>

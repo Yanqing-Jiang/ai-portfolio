@@ -357,35 +357,35 @@ semantic:
     revenue:
       source: "Revenue"
       category: "income_statement"
-      default_granularity: "annual"
+      default_granularity: "quarterly"
       allowed_granularities: ["annual", "quarterly"]
       comparisons: ["single", "all", "vs_avg", "leaderboard"]
       dimensions: ["company", "calendar_year", "calendar_quarter"]
     gross_profit:
       source: "Gross Profit"
       category: "income_statement"
-      default_granularity: "annual"
+      default_granularity: "quarterly"
       allowed_granularities: ["annual", "quarterly"]
       comparisons: ["single", "vs_avg"]
       dimensions: ["company", "calendar_year", "calendar_quarter"]
     operating_income:
       source: "Operating Income"
       category: "income_statement"
-      default_granularity: "annual"
+      default_granularity: "quarterly"
       allowed_granularities: ["annual", "quarterly"]
       comparisons: ["single", "vs_avg"]
       dimensions: ["company", "calendar_year", "calendar_quarter"]
     net_income:
       source: "Net Income"
       category: "income_statement"
-      default_granularity: "annual"
+      default_granularity: "quarterly"
       allowed_granularities: ["annual", "quarterly"]
       comparisons: ["single", "vs_avg"]
       dimensions: ["company", "calendar_year", "calendar_quarter"]
     rnd_expense:
       source: "R&D Expense"
       category: "income_statement"
-      default_granularity: "annual"
+      default_granularity: "quarterly"
       allowed_granularities: ["annual", "quarterly"]
       comparisons: ["single", "vs_avg", "leaderboard"]
       dimensions: ["company", "calendar_year", "calendar_quarter"]
@@ -393,28 +393,28 @@ semantic:
     gross_margin:
       source: "gross_margin"
       dependencies: ["gross_profit", "revenue"]
-      default_granularity: "annual"
+      default_granularity: "quarterly"
       allowed_granularities: ["annual", "quarterly"]
       comparisons: ["vs_avg"]
       dimensions: ["company", "calendar_year", "calendar_quarter"]
     operating_margin:
       source: "operating_margin"
       dependencies: ["operating_income", "revenue"]
-      default_granularity: "annual"
+      default_granularity: "quarterly"
       allowed_granularities: ["annual", "quarterly"]
       comparisons: ["vs_avg"]
       dimensions: ["company", "calendar_year", "calendar_quarter"]
     net_margin:
       source: "net_margin"
       dependencies: ["net_income", "revenue"]
-      default_granularity: "annual"
+      default_granularity: "quarterly"
       allowed_granularities: ["annual", "quarterly"]
       comparisons: ["vs_avg"]
       dimensions: ["company", "calendar_year", "calendar_quarter"]
     rnd_intensity:
       source: "rnd_intensity"
       dependencies: ["rnd_expense", "revenue"]
-      default_granularity: "annual"
+      default_granularity: "quarterly"
       allowed_granularities: ["annual", "quarterly"]
       comparisons: ["vs_avg", "leaderboard"]
       dimensions: ["company", "calendar_year", "calendar_quarter"]
@@ -450,61 +450,66 @@ semantic:
       metrics: ["revenue", "gross_profit", "operating_income", "net_income"]
       derived_metrics: ["gross_margin", "operating_margin", "net_margin"]
       comparison: "vs_avg"
-      default_granularity: "annual"
+      default_granularity: "quarterly"
       allowed_granularities: ["annual", "quarterly"]
       default_years_back: 5
       default_limit: 500
-      group_by: ["calendar_year"]
+      group_by: ["calendar_year", "calendar_quarter_num", "calendar_quarter"]
       filters:
         metrics: ["Revenue", "Gross Profit", "Operating Income", "Net Income"]
+        granularity_filter: "calendar_quarter_num IS NOT NULL"
     margin_growth_vs_peers:
       label: "Margin Growth vs Peers"
       metrics: ["revenue", "gross_profit", "operating_income", "net_income"]
       derived_metrics: ["gross_margin", "operating_margin", "net_margin"]
       comparison: "vs_avg"
-      default_granularity: "annual"
+      default_granularity: "quarterly"
       allowed_granularities: ["annual", "quarterly"]
       default_years_back: 5
       default_limit: 500
-      group_by: ["calendar_year"]
+      group_by: ["calendar_year", "calendar_quarter_num", "calendar_quarter"]
       filters:
         metrics: ["Revenue", "Gross Profit", "Operating Income", "Net Income"]
+        granularity_filter: "calendar_quarter_num IS NOT NULL"
     revenue_growth_vs_avg:
       label: "Revenue Growth vs Average"
       metrics: ["revenue"]
       derived_metrics: []
       comparison: "vs_avg"
-      default_granularity: "annual"
+      default_granularity: "quarterly"
       allowed_granularities: ["annual", "quarterly"]
       default_years_back: 5
       default_limit: 500
-      group_by: ["calendar_year"]
+      group_by: ["calendar_year", "calendar_quarter_num", "calendar_quarter"]
       filters:
         metrics: ["Revenue"]
+        granularity_filter: "calendar_quarter_num IS NOT NULL"
     rnd_expense_vs_peers:
       label: "R&D Expense vs Peers"
       metrics: ["rnd_expense"]
       derived_metrics: []
       comparison: "vs_avg"
-      default_granularity: "annual"
+      default_granularity: "quarterly"
       allowed_granularities: ["annual", "quarterly"]
       default_years_back: 5
       default_limit: 500
-      group_by: ["calendar_year"]
+      group_by: ["calendar_year", "calendar_quarter_num", "calendar_quarter"]
       filters:
         metrics: ["R&D Expense"]
+        granularity_filter: "calendar_quarter_num IS NOT NULL"
     rnd_intensity_vs_peers:
       label: "R&D Intensity vs Peers"
       metrics: ["revenue", "rnd_expense"]
       derived_metrics: ["rnd_intensity"]
       comparison: "vs_avg"
-      default_granularity: "annual"
+      default_granularity: "quarterly"
       allowed_granularities: ["annual", "quarterly"]
       default_years_back: 5
       default_limit: 500
-      group_by: ["calendar_year"]
+      group_by: ["calendar_year", "calendar_quarter_num", "calendar_quarter"]
       filters:
         metrics: ["Revenue", "R&D Expense"]
+        granularity_filter: "calendar_quarter_num IS NOT NULL"
     rnd_top_spender:
       label: "Top R&D Spenders"
       metrics: ["rnd_expense", "revenue"]

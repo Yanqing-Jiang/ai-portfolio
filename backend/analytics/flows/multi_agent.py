@@ -7,6 +7,7 @@ import time
 import copy
 import os
 import asyncio
+import statistics
 from datetime import datetime, date
 from typing import Any, AsyncGenerator, Dict, Iterable, List, Mapping, Optional, Sequence
 
@@ -16,7 +17,7 @@ from analytics.services.polygon import PolygonMarketDataClient, PolygonError, fe
 from analytics.services.response_search import ResponseSearchError, perform_response_search
 from analytics.routing import FollowUpRoute
 from analytics.validators import CohesiveResultValidationError, CohesiveResultValidator, sanitize_for_json
-from .planner_executor import PlannerExecutorFlow, run_planner_executor
+from .planner_executor import PlannerExecutorFlow, run_planner_executor, _evaluate_latency_guardrail
 from .hooks import AnalyticsFlowHooks
 from .tool_bundle import collect_tool_bundle
 from .pipeline_tools import get_planner_tool_registry
@@ -138,6 +139,25 @@ def _infer_tickers(query: Optional[str]) -> List[str]:
     tokens = set(re.findall(r"[A-Z]{2,5}", query))
     blacklist = {"WITH", "FROM", "AND", "THE"}
     return sorted(token for token in tokens if token not in blacklist)[:5]
+
+
+def _normalize_chart_spec_payload(payload: Any) -> Optional[Dict[str, Any]]:
+    """Unwrap common chart payload wrappers down to the ECharts option dict."""
+    if payload is None:
+        return None
+    if isinstance(payload, dict):
+        if any(
+            key in payload
+            for key in ("series", "dataset", "datasets", "xAxis", "yAxis", "legend", "tooltip")
+        ):
+            return payload
+        for nested_key in ("chart_spec", "chart", "option", "chartOption", "spec"):
+            nested = payload.get(nested_key)
+            normalized = _normalize_chart_spec_payload(nested)
+            if normalized is not None:
+                return normalized
+        return None
+    return None
 
 
 # Web search is now owned by a specialist agent step in the plan.
@@ -681,11 +701,68 @@ async def _web_research_agent(context: AgentRunContext) -> AgentResult:
     payload['attempts'] = attempts_meta
     web_ctx.update(payload)
 
+    topic_latencies = [
+        topic.latency_ms
+        for topic in (search_result.topics or [])
+        if topic.latency_ms is not None
+    ]
+
+    latency_stats: Optional[Dict[str, Any]] = None
+    if search_result.latency_ms is not None or topic_latencies:
+        latency_stats = {
+            'total_ms': search_result.latency_ms,
+            'per_topic_ms': topic_latencies,
+            'samples': len(topic_latencies) or None,
+        }
+        if topic_latencies:
+            p50 = statistics.median(topic_latencies)
+            latency_stats.update(
+                {
+                    'p50_ms': int(round(p50)),
+                    'max_ms': max(topic_latencies),
+                    'min_ms': min(topic_latencies),
+                }
+            )
+
+    guardrail_payload: Optional[Dict[str, Any]] = None
+    if latency_stats:
+        payload['latency_stats'] = latency_stats
+        guardrail_payload = _evaluate_latency_guardrail(
+            {
+                "total_ms": latency_stats.get("total_ms"),
+                "p50_ms": latency_stats.get("p50_ms"),
+                "p95_ms": latency_stats.get("p95_ms") or latency_stats.get("max_ms"),
+                "max_ms": latency_stats.get("max_ms"),
+                "min_ms": latency_stats.get("min_ms"),
+                "samples": latency_stats.get("samples"),
+            }
+        )
+        if guardrail_payload:
+            payload['latency_guardrail'] = guardrail_payload
+
     if snapshot:
         snapshot.record_tool_result('web_search', payload)
         await repository.save(snapshot)
 
     web_ctx['attempts'] = attempts_meta
+    if latency_stats:
+        web_ctx['latency_stats'] = latency_stats
+    if guardrail_payload:
+        web_ctx['latency_guardrail'] = guardrail_payload
+
+    metrics: Dict[str, Any] = {'latency_ms': search_result.latency_ms}
+    if topic_latencies:
+        median_latency = statistics.median(topic_latencies)
+        metrics.update(
+            {
+                'latency_p50_ms': int(round(median_latency)),
+                'latency_max_ms': max(topic_latencies),
+                'latency_min_ms': min(topic_latencies),
+                'latency_samples': len(topic_latencies),
+            }
+        )
+    if guardrail_payload:
+        metrics['latency_guardrail_status'] = guardrail_payload['status']
 
     return AgentResult(
         name='web_research',
@@ -697,8 +774,9 @@ async def _web_research_agent(context: AgentRunContext) -> AgentResult:
             'from_cache': False,
             'attempts': attempts_meta,
             'attempt_count': len(attempts_meta),
+            'latency_guardrail': guardrail_payload,
         },
-        metrics={'latency_ms': search_result.latency_ms},
+        metrics=metrics,
     )
 
 
@@ -874,9 +952,16 @@ class MultiAgentFlow:
         self._pending_artifact_events: List[Dict[str, Any]] = []
 
     def _hedged_tool_aliases(self) -> List[str]:
-        manifest = self._shared_context.get("tool_manifest") or []
+        manifest = self._shared_context.get("tool_manifest")
         aliases: List[str] = []
-        for entry in manifest:
+        if manifest is not None:
+            try:
+                iterable = list(manifest)
+            except TypeError:
+                iterable = []
+        else:
+            iterable = []
+        for entry in iterable:
             if not isinstance(entry, dict):
                 continue
             name = str(entry.get("name") or "").strip()
@@ -887,6 +972,8 @@ class MultiAgentFlow:
                 aliases.append(lowered)
         if aliases:
             return sorted(set(aliases))
+        if iterable:
+            return []
         return list(HEDGED_WEB_TOOLS)
 
     def _hedged_accessories_ready(self) -> bool:
@@ -1027,7 +1114,12 @@ class MultiAgentFlow:
     def _annotate(self, event: Dict[str, Any]) -> Dict[str, Any]:
         annotated = apply_mode_metadata(event, self.flow_mode)
         data = annotated.setdefault("data", {})
-        data.setdefault("follow_up_route", self.follow_up_route.value)
+        if isinstance(data, Mapping):
+            mutable = dict(data)
+            mutable.setdefault("follow_up_route", self.follow_up_route.value)
+            annotated["data"] = sanitize_for_json(mutable)
+        else:
+            annotated["data"] = data
         return annotated
 
     def _get_tool_metadata_for_step(self, step: Optional[str]) -> Optional[Dict[str, Any]]:
@@ -1228,7 +1320,7 @@ class MultiAgentFlow:
             sql_ctx["validated"] = data.get("ok", False)
             sql_ctx["issues"] = data.get("issues_count", 0)
         elif name == "sql_attempts":
-            attempts = data.get("attempts") or []
+            attempts = sanitize_for_json(data.get("attempts") or [])
             sql_ctx["attempts"] = attempts
             if attempts:
                 sql_ctx["status"] = attempts[-1].get("status")
@@ -1243,19 +1335,45 @@ class MultiAgentFlow:
             if isinstance(columns, Sequence) and not isinstance(columns, (str, bytes)):
                 sql_ctx["columns"] = list(columns)
         elif name == "chart_generated":
-            spec = data.get("chart_spec")
-            if spec is not None:
-                identifier = _make_identifier(self._session_id, "chart", json.dumps(spec, sort_keys=True))
+            raw_spec = data.get("chart_spec")
+            normalized_spec = _normalize_chart_spec_payload(raw_spec) if raw_spec is not None else None
+            if normalized_spec is None and isinstance(raw_spec, dict):
+                normalized_spec = raw_spec
+            chart_type = data.get("chart_type")
+            if isinstance(raw_spec, dict) and not chart_type:
+                chart_type = raw_spec.get("chart_type")
+            if normalized_spec is not None:
+                sanitized_spec = sanitize_for_json(normalized_spec)
+                identifier_source = json.dumps(sanitized_spec, sort_keys=True, default=str)
+                identifier = _make_identifier(self._session_id, "chart", identifier_source)
                 chart_ctx["spec_id"] = identifier
-                chart_ctx["spec"] = spec
+                chart_ctx["spec"] = sanitized_spec
+                series_count: Optional[int] = None
+                if isinstance(sanitized_spec, dict):
+                    if isinstance(sanitized_spec.get("series"), list):
+                        series_count = len(sanitized_spec["series"])
+                    elif isinstance(sanitized_spec.get("datasets"), list):
+                        series_count = len(sanitized_spec["datasets"])
+                    elif isinstance(sanitized_spec.get("dataset"), list):
+                        series_count = len(sanitized_spec["dataset"])
+                inferred_type = None
+                if isinstance(sanitized_spec, dict):
+                    inferred_type = sanitized_spec.get("chart_type")
+                    if not inferred_type:
+                        meta = sanitized_spec.get("meta")
+                        if isinstance(meta, dict):
+                            chart_design = meta.get("chartDesign") or meta.get("chart_design")
+                            if isinstance(chart_design, dict):
+                                inferred_type = chart_design.get("chart_type")
                 chart_ctx["spec_summary"] = {
-                    "chart_type": data.get("chart_type"),
-                    "series_count": len(spec.get("datasets", [])) if isinstance(spec, dict) else None,
+                    "chart_type": chart_type or inferred_type,
+                    "series_count": series_count,
                 }
+                data["chart_spec"] = sanitized_spec
                 data["chart_spec_id"] = identifier
-                self._record_snapshot(chart_spec=spec)
+                self._record_snapshot(chart_spec=sanitized_spec)
             else:
-                chart_ctx["spec_summary"] = {"chart_type": data.get("chart_type")}
+                chart_ctx["spec_summary"] = {"chart_type": chart_type}
         elif name == "analysis_streaming":
             fragment = data.get("partial_analysis")
             if fragment:
@@ -1300,19 +1418,20 @@ class MultiAgentFlow:
         elif name == "tool_parallel_start":
             manifest = data.get("tools") or data.get("tool_manifest")
             if manifest:
-                self._shared_context["tool_manifest"] = manifest
+                self._shared_context["tool_manifest"] = sanitize_for_json(manifest)
                 self._shared_context["tool_results"] = []
 
         elif name == "tool_parallel_result":
             results_list = self._shared_context.setdefault("tool_results", [])
-            results_list.append(copy.deepcopy(data))
+            sanitized_result = sanitize_for_json(data)
+            results_list.append(sanitized_result)
             if len(results_list) > 10:
                 del results_list[0]
-            tool_name = (data.get("tool") or "").strip()
+            tool_name = (sanitized_result.get("tool") or "").strip()
             if tool_name == "web_retriever":
                 web_ctx = self._shared_context.setdefault('web', {})
-                payload = data.get("payload") or {}
-                metadata = data.get("metadata") or {}
+                payload = sanitized_result.get("payload") or {}
+                metadata = sanitized_result.get("metadata") or {}
                 if payload:
                     web_ctx.update(payload)
                     web_ctx['ready'] = payload.get('ready', False)
@@ -1324,9 +1443,9 @@ class MultiAgentFlow:
                 if metadata.get('summary') and not web_ctx.get('summary'):
                     web_ctx['summary'] = metadata.get('summary')
             elif tool_name == "stock_tracker":
-                payload = data.get("payload") or {}
+                payload = sanitized_result.get("payload") or {}
                 if isinstance(payload, dict) and payload.get('ready'):
-                    widget = collect_tool_bundle(results=[data]).get('stock_widget')
+                    widget = collect_tool_bundle(results=[sanitized_result]).get('stock_widget')
                     if widget:
                         self._shared_context['stock_widget'] = widget
             bundle_update = collect_tool_bundle(
@@ -1657,7 +1776,8 @@ class MultiAgentFlow:
         if not bundle or not self._session_snapshot:
             return
         try:
-            self._session_snapshot.record_tool_result("planner_bundle", bundle)
+            sanitized_bundle = sanitize_for_json(bundle)
+            self._session_snapshot.record_tool_result("planner_bundle", sanitized_bundle)
             repository = get_session_state_repository()
             await repository.save(self._session_snapshot)
         except Exception:

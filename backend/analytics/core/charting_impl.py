@@ -6,6 +6,23 @@ Contains shared chart planning logic used by both analytics_memory and analytics
 
 from typing import Dict, Any, List, Optional
 
+
+def _coerce_float(value: Any) -> Optional[float]:
+    """Best-effort numeric coercion used for series detection.
+    Accepts ints/floats/decimal-like strings with commas.
+    """
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        s = str(value).replace(',', '').strip()
+        if not s:
+            return None
+        return float(s)
+    except Exception:
+        return None
+
 _RANKING_KEYWORDS = {
     'ranking_latest',
     'ranking',
@@ -306,6 +323,13 @@ def plan_chart_rule_based(
                         primary_metric = c
                         break
 
+        # Prefer market_share_percent when doing share analysis
+        if not primary_metric and intent_key and intent_key.startswith('market_share'):
+            if 'market_share_percent' in cols:
+                primary_metric = 'market_share_percent'
+            elif 'market_share' in cols:
+                primary_metric = 'market_share_percent'  # derive later in builder
+
         if primary_metric:
             for ticker in sorted(unique_tickers):
                 vtype = 'percent' if any(k in primary_metric.lower() for k in ['margin', 'share', 'ratio', 'growth', 'percent', 'pct']) else 'number'
@@ -323,13 +347,26 @@ def plan_chart_rule_based(
         for c in cols:
             if c in std:
                 continue
-            v = data[0].get(c)
-            if isinstance(v, (int, float)):
+            # Find a representative non-null value in the column
+            representative = None
+            for r in data:
+                if r.get(c) is not None:
+                    representative = r.get(c)
+                    break
+            if _coerce_float(representative) is not None:
                 numeric_cols.append(c)
         if not numeric_cols:
             # fallback to 'value' if present
             if 'value' in cols:
                 numeric_cols = ['value']
+
+        # Ensure market_share_percent is present for share intents
+        if intent_key and intent_key.startswith('market_share'):
+            has_percent = any(col == 'market_share_percent' or col.endswith('_market_share_percent') for col in cols)
+            has_ratio = any(col == 'market_share' or col.endswith('_market_share') for col in cols)
+            if not any(c == 'market_share_percent' for c in numeric_cols) and (has_percent or has_ratio):
+                # Prepend derived column slug; values will be computed in builder if needed
+                numeric_cols = ['market_share_percent'] + numeric_cols
 
         for c in numeric_cols[:4]:  # cap to avoid clutter
             vtype = 'percent' if any(k in c.lower() for k in ['margin', 'share', 'ratio', 'growth', 'percent', 'pct']) else 'number'

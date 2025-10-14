@@ -5,7 +5,6 @@ import {
   ProcessPanel
 } from '../common';
 import { ChatHistory } from './';
-import { LiveArtifacts } from './LiveArtifacts';
 import { useAnalyticsMemoryStream } from '../hooks';
 import type { FlowMode } from '../types';
 
@@ -29,7 +28,7 @@ const FLOW_META: Record<FlowOption, { chip: string; chipClass: string; helper: s
   'multi-agent': {
     chip: 'Multi-Agent Orchestration',
     chipClass: 'bg-purple-600/20 text-purple-300 border-purple-500/30',
-    helper: 'Supervisor agent collaboration across multiple specialists: financial analyst, charting specialist, stock watcher, web researcher, SQL analyst.',
+    helper: 'Supervisor agent collaboration across multiple specialists',
     placeholder: 'Ask about financial data (multi-agent orchestration)',
   },
 };
@@ -79,6 +78,7 @@ const MemoryAnalyticsPage: React.FC = () => {
     progressiveAnalysis,
     progressiveText,
     singleAgentFanout,
+    followUpBanner,
     
     // Stream state
     isLoading,
@@ -401,6 +401,7 @@ Multi-Agent (supervisor + specialists): workload delegation & orchestration
         steps={processSteps}
         flowMode={selectedFlow}
         singleAgentFanout={singleAgentFanout}
+        followUpBanner={followUpBanner}
         show={showProcessPanel}
         showVisualization={true}
         onClose={() => setShowProcessPanel(false)}
