@@ -135,26 +135,23 @@
 
 ## Session State & Revisions
 
-- `SessionStateSnapshot.record_outputs(...)` executes after every planner phase so `last_sql`, `last_chart_spec`, and `last_analysis` are always populated.
+- `SessionStateSnapshot` now stores a concise `analytics.revision_snapshot` bundle after every successful pipeline run. It captures the intent signature, sanitized SQL text/preview, chart spec + ID, analysis text, stock widget, web context, and an `updated_at` timestamp.
 
-- Chart/analysis revisions (`chart_revision.py`) rely on the snapshot; missing snapshots previously triggered `CHART_REVISION_MISSING_SESSION`. Persisting artifacts resolves that error path for multi‑step sessions.
+- `_hydrate_context_from_snapshot` populates planner context with those artifacts (including cached tool results) so chart/analysis revisions continue to work even if the frontend loses local state.
 
-- The multi‑agent flow also writes a `planner_bundle` entry under `tool_cache` so downstream tools and UI panes can reconstruct context without recomputing the bundle.
+- Snapshot reuse only occurs when the intent signature matches **and** the snapshot age (computed from `updated_at`) is at most `ANALYTICS_SNAPSHOT_MAX_AGE_SECONDS` (default 600s). Stale snapshots trigger a rerun of SQL/chart/analysis.
 
-### Follow‑Up vs Re‑Run
+- Planner result metadata includes `snapshot_reuse`/`reuse_snapshot` flags (`reused_sql`, `reused_chart`, etc.), `snapshot_age_seconds`, and `criteria_changed`. These surface in ProcessPanel badges and telemetry.
 
-- Detection: classify each follow‑up as `revision` (presentation‑only) or `new_scope` (data/scope change). Reuse the active `session_id` to load `last_sql`, `last_chart_spec`, and `last_analysis`.
+- Multi-agent orchestration also stores a sanitized `planner_bundle` and reuses cached stock/web payloads when available, reducing specialist churn on revisions.
 
-- Targeted revisions (no data change):
-  - Chart: `chart_revision` mutates the prior ECharts option (for example, “switch to bar; add AMD”).
-  - Stock: `stock_tracker` refreshes widget config for new symbols.
-  - Web: `web_retriever` refreshes snippets.
-  Single‑agent performs a single tool call; multi‑agent activates only the pertinent specialist. SQL is not recomputed.
+### Follow-Up vs Re-Run
 
-- Re‑run (data/scope change):
-  - Re‑enter the SQL sequence (plan → generate → validate → execute), then rebuild the chart. Market/web may refresh in parallel; analysis is updated; snapshot rolls forward.
+- Signature diffing controls the decision: if any tracked slot (ticker, scope, metrics, granularity, timeframe) changes or the snapshot is stale, the planner performs a full rerun (SQL generation -> execution -> chart -> accessories -> analysis).
 
+- Reuse mode (same signature, fresh snapshot) emits cached `sql_ready` / `chart_ready` / `stock_ready` / `web_ready` events with `reused: true`, skips redundant tool calls, and reuses the prior analysis when available. Stock/web accessories re-run only when cached data is missing.
 
+- Rerun mode recomputes everything, then writes a new revision snapshot so subsequent follow-ups can reuse the fresh artifacts.
 
 ## Frontend Contract Highlights
 
