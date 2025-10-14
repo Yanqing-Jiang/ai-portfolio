@@ -34,13 +34,43 @@ export const resolveChartSpecOption = (payload: any): any | null => {
   return null;
 };
 
+const coerceNumeric = (value: any) => {
+  if (typeof value === 'number' || value === null) {
+    return value;
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return null;
+    }
+    const parsed = Number(trimmed);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return value;
+};
+
+const normalizeSeriesNumericValues = (option: any) => {
+  if (!option || !Array.isArray(option.series)) return option;
+  option.series = option.series.map((series: any) => {
+    if (!Array.isArray(series?.data)) {
+      return series;
+    }
+    return {
+      ...series,
+      data: series.data.map(coerceNumeric),
+    };
+  });
+  return option;
+};
+
 export const hydrateChartSpec = (spec: any) => {
   if (!spec || typeof spec !== 'object') return spec;
   const rawData = spec.meta?.rawData;
   const displayNames = spec.meta?.displayNames || {};
   const includedColumns = spec.meta?.includedColumns || Object.keys(displayNames || {});
+  const baseClone = JSON.parse(JSON.stringify(spec));
   if (!Array.isArray(rawData) || rawData.length === 0 || !Array.isArray(spec.series)) {
-    return spec;
+    return normalizeSeriesNumericValues(baseClone);
   }
 
   const toLabel = (row: Record<string, any>) => {
@@ -70,7 +100,7 @@ export const hydrateChartSpec = (spec: any) => {
     return 'Value';
   };
 
-  const hydrated = JSON.parse(JSON.stringify(spec));
+  const hydrated = baseClone;
   const labels = rawData.map(toLabel);
 
   if (Array.isArray(hydrated.xAxis)) {
@@ -115,7 +145,7 @@ export const hydrateChartSpec = (spec: any) => {
     };
   });
 
-  return hydrated;
+  return normalizeSeriesNumericValues(hydrated);
 };
 export const isValidChartSpec = (spec: any) => {
   try {

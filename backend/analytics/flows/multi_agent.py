@@ -134,6 +134,16 @@ def _make_identifier(session_id: Optional[str], prefix: str, payload: str) -> st
     return f"{_HASH_PREFIX}:{prefix}:{digest}"
 
 
+def _canonical_tool_name(name: Optional[str]) -> Optional[str]:
+    if not isinstance(name, str):
+        return name
+    stripped = name.strip()
+    if not stripped:
+        return stripped
+    if stripped.startswith("web_retriever"):
+        return "web_retriever"
+    return stripped
+
 def _infer_tickers(query: Optional[str]) -> List[str]:
     if not query:
         return []
@@ -1022,10 +1032,101 @@ class MultiAgentFlow:
         self._shared_context["hedged_accessories_status"] = seen
         return not missing
 
+    def _build_specialist_card(self, event_name: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        if event_name == "sql_ready":
+            row_count = payload.get("row_count")
+            columns = payload.get("columns") or []
+            message_parts: List[str] = ["SQL dataset ready"]
+            if isinstance(row_count, int):
+                message_parts.append(f"rows: {row_count}")
+            if columns:
+                message_parts.append(f"columns: {min(len(columns), 6)}")
+            return {
+                "type": "sql_executor",
+                "state": "ready",
+                "title": "Generated SQL",
+                "message": " | ".join(message_parts),
+                "metadata": {
+                    "row_count": row_count,
+                    "columns": columns[:10] if isinstance(columns, list) else columns,
+                },
+            }
+        if event_name == "chart_ready":
+            chart_summary = payload.get("chart_summary") or {}
+            chart_type = chart_summary.get("chart_type") if isinstance(chart_summary, dict) else None
+            series_count = chart_summary.get("series_count") if isinstance(chart_summary, dict) else None
+            parts = ["Chart specification ready"]
+            if chart_type:
+                parts.append(f"type: {chart_type}")
+            if isinstance(series_count, int):
+                parts.append(f"series: {series_count}")
+            return {
+                "type": "chart_builder",
+                "state": "ready",
+                "title": "Visualization Ready",
+                "message": " | ".join(parts),
+            }
+        if event_name == "stock_ready":
+            widget = payload.get("stock_widget") or {}
+            raw_symbols = widget.get("symbols") if isinstance(widget, dict) else None
+            symbols: List[str] = []
+            if isinstance(raw_symbols, list):
+                for item in raw_symbols:
+                    if isinstance(item, (list, tuple)) and item:
+                        candidate = item[0]
+                    else:
+                        candidate = item
+                    if isinstance(candidate, str) and candidate.strip():
+                        symbols.append(candidate.strip().upper())
+            message = "Stock widget ready"
+            if symbols:
+                message = f"{message} | symbols: {', '.join(symbols[:3])}"
+            return {
+                "type": "stock_widget",
+                "state": "ready",
+                "title": "Market Tracker",
+                "message": message,
+                "symbols": symbols,
+            }
+        if event_name == "web_ready":
+            web_ctx = payload.get("web_context") or {}
+            if not isinstance(web_ctx, dict):
+                web_ctx = {}
+            snippets = web_ctx.get("snippets")
+            summary = web_ctx.get("summary")
+            topic = web_ctx.get("search_topic") or web_ctx.get("searchTopic") or web_ctx.get("query")
+            normalized_snippets: List[Dict[str, Any]] = []
+            if isinstance(snippets, list):
+                for entry in snippets[:6]:
+                    if not isinstance(entry, dict):
+                        continue
+                    normalized_snippets.append(
+                        {
+                            "title": entry.get("title"),
+                            "snippet": entry.get("snippet"),
+                            "url": entry.get("url"),
+                            "display_url": entry.get("display_url") or entry.get("displayUrl"),
+                            "published_at": entry.get("published_at") or entry.get("publishedAt"),
+                        }
+                    )
+            return {
+                "type": "web_context",
+                "state": "ready",
+                "title": "Online Research",
+                "message": summary or "Web context collected",
+                "topic": topic,
+                "snippets": normalized_snippets,
+            }
+        return None
+
     def _queue_artifact_event(self, event_name: str, payload: Dict[str, Any]) -> None:
+        enriched_payload = dict(payload)
+        specialist_card = self._build_specialist_card(event_name, enriched_payload)
+        if specialist_card:
+            enriched_payload["specialist_card"] = specialist_card
         event = {
             "event": event_name,
-            "data": sanitize_for_json(payload),
+            "data": sanitize_for_json(enriched_payload),
         }
         self._pending_artifact_events.append(event)
 
@@ -1487,10 +1588,24 @@ class MultiAgentFlow:
         elif name == "tool_parallel_result":
             results_list = self._shared_context.setdefault("tool_results", [])
             sanitized_result = sanitize_for_json(data)
+            canonical_tool = _canonical_tool_name(sanitized_result.get("tool"))
+            if canonical_tool:
+                sanitized_result["tool"] = canonical_tool
             results_list.append(sanitized_result)
-            if len(results_list) > 10:
-                del results_list[0]
-            tool_name = (sanitized_result.get("tool") or "").strip()
+            deduped: List[Dict[str, Any]] = []
+            seen_tools: set[str] = set()
+            for entry in reversed(results_list):
+                tool_alias = entry.get("tool")
+                if tool_alias in seen_tools:
+                    continue
+                seen_tools.add(tool_alias)
+                deduped.append(entry)
+            deduped.reverse()
+            if len(deduped) > 10:
+                deduped = deduped[-10:]
+            results_list[:] = deduped
+
+            tool_name = (canonical_tool or "").strip()
             if tool_name == "web_retriever":
                 web_ctx = self._shared_context.setdefault('web', {})
                 payload = sanitized_result.get("payload") or {}

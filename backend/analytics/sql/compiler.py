@@ -70,21 +70,24 @@ def compile_sql_from_plan(
         end_year = plan_dict.get('timeframe', {}).get('end_year')
         sql = sql.replace('{start_year}', 'NULL' if start_year is None else str(start_year))
         sql = sql.replace('{end_year}', 'NULL' if end_year is None else str(end_year))
-        select_clause, group_by_clause, join_clause, order_by_clause = _granularity_clauses(granularity)
+        select_clause, group_by_clause, join_clause, order_by_clause, period_filter_clause = _granularity_clauses(granularity)
         sql = sql.replace('{select_clause}', select_clause)
         sql = sql.replace('{group_by_clause}', group_by_clause)
         sql = sql.replace('{join_clause}', join_clause)
         sql = sql.replace('{order_by_clause}', order_by_clause)
+        sql = sql.replace('{period_filter_clause}', period_filter_clause)
         sql = sql.replace("('AMD','AVGO','INTC','MU','NVDA','QCOM','TXN')", f"({ticker_clause})")
         # If granularity is annual, strip quarterly-only filters to avoid empty results
         if granularity != 'quarterly':
             sql = re.sub(r"\s+AND\s+calendar_quarter_num\s+IS\s+NOT\s+NULL\s*", " ", sql)
+            sql = re.sub(r"\s+AND\s+\{period_filter_clause\}\s*", " ", sql)
+            sql = re.sub(r"\s+AND\s+1\s*=\s*1\s*", " ", sql)
         return sql.strip().rstrip(';')
 
     return _generic_sql(plan, ticker_clause, years_back, granularity)
 
 
-def _granularity_clauses(granularity: str) -> tuple[str, str, str, str]:
+def _granularity_clauses(granularity: str) -> tuple[str, str, str, str, str]:
     if granularity == 'quarterly':
         select_clause = "calendar_year, calendar_quarter_num, calendar_quarter"
         group_by_clause = select_clause
@@ -94,12 +97,14 @@ def _granularity_clauses(granularity: str) -> tuple[str, str, str, str]:
             "cr.calendar_quarter = mr.calendar_quarter"
         )
         order_by_clause = "calendar_year, calendar_quarter_num"
+        period_filter_clause = "calendar_quarter_num IS NOT NULL"
     else:
         select_clause = "calendar_year"
         group_by_clause = select_clause
         join_clause = "cr.calendar_year = mr.calendar_year"
         order_by_clause = "calendar_year"
-    return select_clause, group_by_clause, join_clause, order_by_clause
+        period_filter_clause = "1=1"
+    return select_clause, group_by_clause, join_clause, order_by_clause, period_filter_clause
 
 
 def _generic_sql(plan: QueryPlanModel, ticker_clause: str, years_back: int, granularity: str) -> str:

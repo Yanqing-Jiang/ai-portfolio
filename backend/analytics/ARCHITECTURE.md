@@ -10,7 +10,7 @@
 
 ## High-Level Outcomes
 - Unified chat experience: Specialist outputs surface as inline chat messages (rather than preview-only panels) across all flows, while result bubbles show only consolidated analysis.
-- Prompt & artifact guardrails: SQL prompts forbid formatting helpers (`ROUND`, `TRUNC`, `TO_CHAR`), and chart artifacts are normalized/sanitized before emission, preventing wrapper specs or serialization errors.
+- Prompt & artifact guardrails: SQL prompts forbid formatting helpers (`ROUND`, `TRUNC`, `TO_CHAR`), and chart artifacts are normalized/sanitized before emission (including Decimal → float coercion), preventing wrapper specs or serialization errors.
 - Session continuity: Every flow writes sanitized artifacts and tool bundles to `SessionStateSnapshot`, enabling chart/analysis revisions and follow-up intent routing without recomputation.
 
 
@@ -44,20 +44,22 @@
 
 3. Clarification loop: `core.clarify` merges user responses; the built-in schema clarifier decides whether additional prompts are necessary before planning.
 
-4. Template + plan: `sql.sql_planner` selects YAML patterns; `PlannerResultModel` stores metrics, comparison, and template metadata for downstream reuse.
+4. Template + plan: `sql.sql_planner` selects YAML patterns; `PlannerResultModel` stores metrics, comparison, and template metadata for downstream reuse. Market share intents now default to annual granularity, while quarterly detail is still available via explicit overrides.
 
 5. SQL generation: `sql.prompt_builder` + OpenAI Responses client iterate up to three attempts; every attempt is recorded in the SQL generation artifact (`PipelineArtifacts.sql_generation.attempts`) and the planner result.
 6. SQL validation: `sql.validator.validate_sql` enforces guardrails; failed validation short-circuits with `SQL_VALIDATION_FINAL` telemetry.
 
 7. Execution: `sql.executor.execute_sql` fetches data, emits `execution_stats` and `data_retrieved`, and sets artifacts for later phases.
 
-8. Chart planning + generation: `core.charting.plan_chart_rule_based` chooses encodings; `build_chart_spec` emits the ECharts option; `_set_chart_artifact` stores spec and metadata.
+8. Accessory warm-up: Immediately after SQL execution, the pipeline launches hedged `web_retriever` + `stock_tracker` fan-out so chart generation and analysis can overlap with accessory latency. Snapshot reuse still short-circuits this block when valid stock/web artifacts exist.
 
-9. Web search: `analytics.services.response_search.perform_response_search` (Gemini 2.5 Flash) produces `web_context` snippets when credentials exist; otherwise a disabled payload keeps downstream logic consistent.
+9. Chart planning + generation: `core.charting.plan_chart_rule_based` chooses encodings; `build_chart_spec` emits the ECharts option; `_set_chart_artifact` stores spec and metadata.
 
-10. Analysis: `core.analysis.stream_insights_llm` streams TL;DR + bullets and merges tool bundles (stock widget, web context) into the final `analysis_complete` payload.
+10. Web search: `analytics.services.response_search.perform_response_search` (Gemini 2.5 Flash) produces `web_context` snippets when credentials exist; otherwise a disabled payload keeps downstream logic consistent.
 
-11. Persistence: `PlannerPipeline._persist_session_state` writes SQL, chart, analysis artifacts and tool bundles into `SessionStateSnapshot` after each phase.
+11. Analysis: `core.analysis.stream_insights_llm` streams TL;DR + bullets and merges tool bundles (stock widget, web context) into the final `analysis_complete` payload.
+
+12. Persistence: `PlannerPipeline._persist_session_state` writes SQL, chart, analysis artifacts and tool bundles into `SessionStateSnapshot` after each phase.
 
 
 
@@ -143,7 +145,7 @@
 
 - Planner result metadata includes `snapshot_reuse`/`reuse_snapshot` flags (`reused_sql`, `reused_chart`, etc.), `snapshot_age_seconds`, and `criteria_changed`. These surface in ProcessPanel badges and telemetry.
 
-- Multi-agent orchestration also stores a sanitized `planner_bundle` and reuses cached stock/web payloads when available, reducing specialist churn on revisions.
+- Multi-agent orchestration also stores a sanitized `planner_bundle` and reuses cached stock/web payloads when available, reducing specialist churn on revisions. During live runs the orchestrator canonicalizes tool aliases (e.g. `web_retriever_cached`/`_live`) and deduplicates tool results so each specialist card (SQL, chart, stock, web) surfaces exactly once in the ledger.
 
 ### Follow-Up vs Re-Run
 
@@ -164,6 +166,7 @@
 - Cohesive result: single payload with SQL/chart/stock/web/analysis artifacts ensures the frontend can render the TL;DR analysis card, SQL data viewer, ECharts visualization, and TradingView widget in one step.
 
 - Workflow completion: `workflow_complete` emits when all dependencies finish, regardless of flow mode; errors are surfaced via `EventEmitter.error(...)` with codes for the ledger.
+- WorkflowCanvas controls: zoom, pan, reset, and node dragging are enabled so analysts can inspect orchestration lanes at varying scales or temporarily rearrange nodes while investigating concurrency.
 
 
 

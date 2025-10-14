@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Any, Iterable, Mapping, MutableMapping, Optional, Sequence, Tuple
 
 
@@ -31,6 +32,9 @@ def sanitize_for_json(value: Any) -> Any:
         return _encode_slice(value)
     if isinstance(value, (datetime, date)):
         return value.isoformat()
+    if isinstance(value, Decimal):
+        # Preserve numeric structure for downstream chart specs and analytics payloads
+        return float(value)
     if hasattr(value, "model_dump"):
         try:
             return sanitize_for_json(value.model_dump())

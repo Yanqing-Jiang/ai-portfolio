@@ -332,7 +332,7 @@ semantic:
     quarterly:
       label: "Quarterly"
       description: "Quarterly reporting cadence"
-      group_by: ["calendar_year", "calendar_quarter_num", "calendar_quarter"]
+      group_by: []
       filter: "calendar_quarter_num IS NOT NULL"
   dimensions:
     company:
@@ -424,27 +424,27 @@ semantic:
       metrics: ["revenue"]
       derived_metrics: []
       comparison: "all"
-      default_granularity: "quarterly"
-      allowed_granularities: ["quarterly"]
+      default_granularity: "annual"
+      allowed_granularities: ["annual", "quarterly"]
       default_years_back: 5
       default_limit: 500
-      group_by: ["calendar_year", "calendar_quarter_num", "calendar_quarter"]
+      group_by: ["calendar_year"]
       filters:
         metrics: ["Revenue"]
-        granularity_filter: "calendar_quarter_num IS NOT NULL"
+
     market_share_single:
       label: "Market Share Analysis - Single Company"
       metrics: ["revenue"]
       derived_metrics: []
       comparison: "single"
-      default_granularity: "quarterly"
-      allowed_granularities: ["quarterly"]
+      default_granularity: "annual"
+      allowed_granularities: ["annual", "quarterly"]
       default_years_back: 5
       default_limit: 500
-      group_by: ["calendar_year", "calendar_quarter_num", "calendar_quarter"]
+      group_by: ["calendar_year"]
       filters:
         metrics: ["Revenue"]
-        granularity_filter: "calendar_quarter_num IS NOT NULL"
+
     margins_vs_peers:
       label: "Profit Margins vs Industry Average"
       metrics: ["revenue", "gross_profit", "operating_income", "net_income"]

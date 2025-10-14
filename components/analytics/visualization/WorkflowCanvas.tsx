@@ -3,6 +3,7 @@ import {
   ReactFlow,
   MiniMap,
   Controls,
+  ControlButton,
   Background,
   useNodesState,
   useEdgesState,
@@ -460,6 +461,14 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
     });
   }, []);
 
+  const handleResetView = useCallback(() => {
+    const instance = flowInstanceRef.current;
+    if (!instance) {
+      return;
+    }
+    instance.fitView({ padding: 0.08, includeHiddenNodes: true });
+  }, []);
+
   useEffect(() => {
     const totalSteps = processedSteps.length || 1;
     setNodes((prevNodes) => {
@@ -890,7 +899,17 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
           zoomOnDoubleClick={false}
           elevateEdgesOnSelect
         >
-          <Controls className="bg-gray-800/80 text-white border border-gray-700" showInteractive={false} showFitView={false} />
+          <Controls
+            className="bg-gray-800/80 text-white border border-gray-700"
+            showInteractive
+            showFitView
+            showZoom
+            position="top-right"
+          >
+            <ControlButton onClick={handleResetView} title="Reset view">
+              Reset
+            </ControlButton>
+          </Controls>
           <MiniMap
             className="bg-gray-900/90 border border-gray-700"
             nodeColor={(node) => {
