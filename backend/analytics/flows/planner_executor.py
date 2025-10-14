@@ -1986,6 +1986,8 @@ class PlannerPipeline:
             yield fallback_chart
 
     async def _ensure_analysis_dependencies(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[str, Any], None]:
+        if getattr(ctx, "accessories_prefetched", False):
+            return
         required_tools: List[str] = []
         mode_config = get_mode_config(ctx.flow_mode)
         has_cached_stock = bool(ctx.artifacts.analysis and ctx.artifacts.analysis.stock_widget)
@@ -2015,6 +2017,7 @@ class PlannerPipeline:
         if not has_web_context and mode_config.accessories_in_critical_path:
             async for event in self._web_search_phase(ctx):
                 yield event
+        ctx.accessories_prefetched = True
 
     async def run_analysis_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[str, Any], None]:
         data = _get_sql_dataset(ctx)
@@ -2412,6 +2415,10 @@ class PlannerPipeline:
                     flow_mode=self.flow_mode,
                     parallel_group="tool_fanout",
                 )
+            ctx.accessories_prefetched = True
+        else:
+            async for event in self._ensure_analysis_dependencies(ctx):
+                yield event
         if ctx.halted:
             return
 

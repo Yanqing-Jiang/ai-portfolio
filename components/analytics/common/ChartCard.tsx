@@ -41,40 +41,59 @@ export const ChartCard: React.FC<ChartCardProps> = ({
       const legend = current.legend && current.legend[0];
       if (legend && legend.data) {
         const selectedMap: any = legend.selected || {};
-        
+        const selectedLower = selectedMetric.trim().toLowerCase();
+        const fallbackSelection = Object.entries(selectedMap).find(([, value]: [string, unknown]) => Boolean(value))?.[0];
         // Hide all series first
         legend.data.forEach((name: string) => selectedMap[name] = false);
-        
+        let matched = false;
         // Show series based on selection
         legend.data.forEach((name: string) => {
-          const nameLower = name.toLowerCase();
-          const selectedLower = selectedMetric.toLowerCase();
-          
+          const nameLower = name.trim().toLowerCase();
+
+          if (nameLower === selectedLower) {
+            selectedMap[name] = true;
+            matched = true;
+            return;
+          }
           // Handle different series name patterns
           if (name.endsWith(' - ' + selectedMetric)) {
             // Standard pattern: "Company - Metric"
             selectedMap[name] = true;
+            matched = true;
           } else if (selectedLower === 'yoy growth' && nameLower.includes('yoy growth')) {
             // Revenue growth pattern: show both company and industry average
             selectedMap[name] = true;
+            matched = true;
           } else if (selectedLower === 'company' && nameLower.includes(' - yoy growth') && !nameLower.includes('industry')) {
             // Show only company data for revenue growth
             selectedMap[name] = true;
+            matched = true;
           } else if (selectedLower === 'industry average' && nameLower.includes('industry average')) {
             // Show only industry average data
             selectedMap[name] = true;
+            matched = true;
           } else if (selectedLower.includes('margin change') && nameLower.includes('margin change')) {
             // Margin growth pattern: show both company and industry average
             selectedMap[name] = true;
+            matched = true;
           } else if (selectedLower === 'company' && nameLower.includes(' - ') && nameLower.includes('margin change') && !nameLower.includes('industry')) {
             // Show only company data for margin growth
             selectedMap[name] = true;
+            matched = true;
           } else if (selectedLower === 'industry average' && nameLower.includes('industry average') && nameLower.includes('margin change')) {
             // Show only industry average data for margin growth
             selectedMap[name] = true;
+            matched = true;
           }
         });
-        
+
+        if (!matched) {
+          const fallback = legend.data.find((name: string) => name.trim().toLowerCase() === selectedLower) ?? fallbackSelection ?? legend.data[0];
+          if (fallback) {
+            selectedMap[fallback] = true;
+          }
+        }
+
         instance.setOption({ legend: [{ selected: selectedMap }] });
       }
     }

@@ -23,14 +23,15 @@ def test_intent_spec_market_share_all_has_semantic_defaults():
     assert spec.metrics == ["revenue"]
     assert spec.derived_metrics == []
     assert spec.comparison == "all"
-    assert spec.default_granularity == "quarterly"
-    assert spec.allowed_granularities == ["quarterly"]
+    assert spec.default_granularity == "annual"
+    assert spec.allowed_granularities == ["annual", "quarterly"]
     assert spec.default_years_back == 5
 
     metric_spec = catalog.get_metric("revenue")
     assert metric_spec is not None
     assert metric_spec.source == "Revenue"
     assert "quarterly" in metric_spec.allowed_granularities
+    assert "annual" in metric_spec.allowed_granularities
 
 
 def test_plan_sql_rule_based_uses_semantic_metrics_bundle():
@@ -51,7 +52,16 @@ def test_plan_granularity_override_respects_semantic_allow_list():
 
     assert plan["granularity"] == "quarterly"
     assert "calendar_quarter_num" in plan["group_by"]
-    assert plan["filters"].get("granularity_filter") == "calendar_quarter_num IS NOT NULL"
+    assert plan["filters"].get("time_grain_filter") == "calendar_quarter_num IS NOT NULL"
+
+
+def test_market_share_single_defaults_to_annual():
+    intent = _make_intent("market_share_single")
+    plan = plan_sql_rule_based(intent)
+
+    assert plan["granularity"] == "annual"
+    assert plan["group_by"] == ["calendar_year"]
+    assert plan["filters"].get("time_grain_filter") is None
 
 
 def test_plan_fallback_for_unknown_intent_defaults_to_revenue():

@@ -17,6 +17,9 @@ import pytest
 
 
 from analytics.flows import planner_executor
+from analytics.sql.compiler import compile_sql_from_plan
+from analytics.sql.sql_planner import plan_sql_rule_based, choose_template
+from analytics.core.state import QueryPlanModel, IntentModel
 from analytics.core.session_state import get_session_state_repository
 from analytics.routing import FollowUpRoute
 
@@ -542,3 +545,16 @@ def test_follow_up_reuses_snapshot_metadata(monkeypatch):
         assert 'snapshot_age_seconds' in sql_ready_event['data']
     finally:
         asyncio.run(repo.delete(session_id))
+
+
+def test_market_share_sql_template_emits_annual_columns():
+    intent = IntentModel(intent_key='market_share_single', confidence=0.9, slots_detected={'company': 'NVDA'})
+    plan_dict = plan_sql_rule_based(intent)
+    plan = QueryPlanModel(**plan_dict)
+    template = choose_template(intent, plan)
+    sql = compile_sql_from_plan(plan, intent, template=template)
+
+    assert 'calendar_quarter_num' not in sql
+    assert 'calendar_year' in sql
+    assert 'AND 1=1' not in sql
+

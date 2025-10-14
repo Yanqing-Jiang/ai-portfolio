@@ -17,7 +17,7 @@ query_patterns:
         WHERE 
           metric = 'Revenue'
           AND ticker IN ('AMD','AVGO','INTC','MU','NVDA','QCOM','TXN')
-          AND calendar_quarter_num IS NOT NULL
+          AND {period_filter_clause}
           AND calendar_year >= EXTRACT(YEAR FROM CURRENT_DATE) - {years_back}
           AND value IS NOT NULL
         GROUP BY {group_by_clause}
@@ -31,7 +31,7 @@ query_patterns:
         WHERE 
           metric = 'Revenue'
           AND ticker = '{target_ticker}'
-          AND calendar_quarter_num IS NOT NULL
+          AND {period_filter_clause}
           AND calendar_year >= EXTRACT(YEAR FROM CURRENT_DATE) - {years_back}
           AND value IS NOT NULL
         GROUP BY ticker, {group_by_clause}
@@ -64,7 +64,7 @@ query_patterns:
         WHERE 
           metric = 'Revenue'
           AND ticker IN ('AMD','AVGO','INTC','MU','NVDA','QCOM','TXN')
-          AND calendar_quarter_num IS NOT NULL
+          AND {period_filter_clause}
           AND calendar_year >= EXTRACT(YEAR FROM CURRENT_DATE) - {years_back}
           AND value IS NOT NULL
         GROUP BY {group_by_clause}
@@ -78,7 +78,7 @@ query_patterns:
         WHERE 
           metric = 'Revenue'
           AND ticker IN ('AMD','AVGO','INTC','MU','NVDA','QCOM','TXN')
-          AND calendar_quarter_num IS NOT NULL
+          AND {period_filter_clause}
           AND calendar_year >= EXTRACT(YEAR FROM CURRENT_DATE) - {years_back}
           AND value IS NOT NULL
         GROUP BY ticker, {group_by_clause}
