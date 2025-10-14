@@ -12,6 +12,7 @@ from datetime import datetime, date
 from typing import Any, AsyncGenerator, Dict, Iterable, List, Mapping, Optional, Sequence
 
 from analytics.core.session_state import SessionStateSnapshot, get_session_state_repository
+from analytics.core.revision_snapshot import extract_revision_snapshot
 from analytics.core.telemetry import analysis_chunk as log_analysis_chunk, agent_handoff, policy_decision
 from analytics.services.polygon import PolygonMarketDataClient, PolygonError, fetch_daily_snapshot
 from analytics.services.response_search import ResponseSearchError, perform_response_search
@@ -207,7 +208,10 @@ def _derive_tasks(
     plan = AgentTaskPlan()
     attempts = sql_ctx.get("attempts") or []
     last_attempt = attempts[-1] if attempts else None
-    if attempts:
+    reuse_sql = bool(sql_ctx.get("status") in {"reused", "success"} and (sql_ctx.get("row_count") or 0) > 0)
+    if reuse_sql:
+        plan.add_step("query", "skip", reason="sql_cached")
+    elif attempts:
         plan.add_step(
             "query",
             "run",
@@ -255,21 +259,22 @@ def _derive_tasks(
 
     plan.add_step(
         "analyst",
-        "run" if analysis_ready else "skip",
-        reason="analysis_ready" if analysis_ready else "analysis_not_available",
+        "reuse" if (analysis_ready and reuse_sql) else ("run" if analysis_ready else "skip"),
+        reason="analysis_cached" if (analysis_ready and reuse_sql) else ("analysis_ready" if analysis_ready else "analysis_not_available"),
     )
 
     plan.add_step(
         "chart",
-        "run" if chart_ready else "skip",
-        reason="chart_ready" if chart_ready else "chart_not_available",
+        "reuse" if (chart_ready and reuse_sql) else ("run" if chart_ready else "skip"),
+        reason="chart_cached" if (chart_ready and reuse_sql) else ("chart_ready" if chart_ready else "chart_not_available"),
     )
 
-    market_ready = bool(tickers) and chart_ready
+    stock_cached = bool(market_ctx.get("snapshot") or market_ctx.get("stock_widget"))
+    market_ready = bool(tickers) and chart_ready and not (stock_cached and reuse_sql)
     plan.add_step(
         "market",
-        "run" if market_ready else "skip",
-        reason="tickers_detected" if market_ready else "no_tickers",
+        "run" if market_ready else ("reuse" if stock_cached and reuse_sql else "skip"),
+        reason="tickers_detected" if market_ready else ("market_cached" if stock_cached and reuse_sql else "no_tickers"),
         metadata={"tickers": tickers},
     )
 
@@ -946,6 +951,7 @@ class MultiAgentFlow:
         self._market_client = PolygonMarketDataClient()
         self._market_fetcher = fetch_daily_snapshot
         self._session_snapshot: Optional[SessionStateSnapshot] = None
+        self._prefetched_snapshot: Optional[SessionStateSnapshot] = None
         self._shared_context: Dict[str, Any] = {}
         self._orchestrated = False
         self._hedged_completion: Dict[str, bool] = {}
@@ -1105,6 +1111,7 @@ class MultiAgentFlow:
             analysis_ctx["_emitted_ready"] = True
 
     def prime_with_snapshot(self, snapshot: Optional[SessionStateSnapshot]) -> None:
+        self._prefetched_snapshot = snapshot
         self._planner.prime_with_snapshot(snapshot)
 
     def set_follow_up_route(self, route: FollowUpRoute) -> None:
@@ -1273,6 +1280,62 @@ class MultiAgentFlow:
                 'flow_label': getattr(self, 'flow_label', None),
             },
         }
+        revision_snapshot = extract_revision_snapshot(self._prefetched_snapshot)
+        if isinstance(revision_snapshot, dict):
+            self._shared_context['revision_snapshot'] = copy.deepcopy(revision_snapshot)
+            sql_ctx = self._shared_context.setdefault('sql', {'attempts': []})
+            if revision_snapshot.get('sql'):
+                sql_ctx['sql'] = revision_snapshot['sql']
+                sql_ctx['status'] = 'reused'
+            if revision_snapshot.get('sql_row_count') is not None:
+                sql_ctx['row_count'] = revision_snapshot['sql_row_count']
+            if revision_snapshot.get('columns'):
+                sql_ctx['columns'] = list(revision_snapshot.get('columns') or [])
+            if revision_snapshot.get('data_sample'):
+                sql_ctx['sample_data'] = copy.deepcopy(revision_snapshot['data_sample'])
+            chart_ctx = self._shared_context.setdefault('chart', {})
+            if revision_snapshot.get('chart_spec'):
+                chart_ctx['spec'] = copy.deepcopy(revision_snapshot['chart_spec'])
+                chart_ctx['spec_id'] = revision_snapshot.get('chart_spec_id')
+            analysis_ctx = self._shared_context.setdefault('analysis', {'fragments': [], 'final': None})
+            if revision_snapshot.get('analysis'):
+                analysis_ctx['final'] = revision_snapshot['analysis']
+                analysis_ctx['analysis_length'] = revision_snapshot.get('analysis_length')
+            if revision_snapshot.get('stock_widget'):
+                stock_widget_copy = copy.deepcopy(revision_snapshot['stock_widget'])
+                self._shared_context['stock_widget'] = stock_widget_copy
+                market_ctx = self._shared_context.setdefault('market', {})
+                market_ctx['snapshot'] = copy.deepcopy(stock_widget_copy)
+            web_payload = revision_snapshot.get('web_context') or {}
+            if isinstance(web_payload, dict) and web_payload:
+                web_ctx = self._shared_context.setdefault('web', {})
+                web_ctx.update(copy.deepcopy(web_payload))
+                web_ctx.setdefault('ready', True)
+            tool_results = self._shared_context.setdefault('tool_results', [])
+            if revision_snapshot.get('stock_widget') and not any(res.get('tool') == 'stock_tracker' for res in tool_results):
+                tool_results.append(
+                    {
+                        'tool': 'stock_tracker',
+                        'status': 'completed',
+                        'payload': {'ready': True, 'widget': copy.deepcopy(revision_snapshot['stock_widget'])},
+                        'metadata': {'name': 'stock_tracker'},
+                        'elapsed_ms': 0,
+                    }
+                )
+            if isinstance(web_payload, dict) and web_payload and not any(res.get('tool', '').startswith('web_retriever') for res in tool_results):
+                tool_results.append(
+                    {
+                        'tool': 'web_retriever',
+                        'status': 'completed',
+                        'payload': copy.deepcopy(web_payload),
+                        'metadata': {'name': 'web_retriever'},
+                        'elapsed_ms': 0,
+                    }
+                )
+            meta = self._shared_context.setdefault('_meta', {})
+            meta['prior_intent_signature'] = revision_snapshot.get('intent_signature')
+        else:
+            self._shared_context.pop('revision_snapshot', None)
         self._orchestrated = False
 
     def _capture_event(self, event: Dict[str, Any]) -> None:

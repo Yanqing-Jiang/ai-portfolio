@@ -24,12 +24,23 @@ const FOLLOW_UP_BANNER_COPY: Record<string, { title: string; message: string }> 
   },
   reuse_sql: {
     title: 'Reusing Last Dataset',
-    message: 'Skipping the SQL rerun—updating visuals and narrative on top of the validated table.',
+    message: 'Skipping the SQL rerun-updating visuals and narrative on top of the validated table.',
   },
   stock_only: {
     title: 'Market Snapshot Only',
     message: 'Pulling fresh price data while charts and analysis stay pinned to the prior run.',
   },
+};
+
+type SnapshotReuseInfo = {
+  reusedSql?: boolean;
+  reusedChart?: boolean;
+  reusedStock?: boolean;
+  reusedWeb?: boolean;
+  reusedAnalysis?: boolean;
+  criteriaChanged?: boolean;
+  source?: string | null;
+  followUpRoute?: string | null;
 };
 
 export const useAnalyticsMemoryStream = (
@@ -53,8 +64,10 @@ export const useAnalyticsMemoryStream = (
   const [followUpBanner, setFollowUpBanner] = useState<FollowUpBanner | null>(null);
   const [latencyGuardrail, setLatencyGuardrail] = useState<LatencyGuardrail | null>(null);
   const [specialistCards, setSpecialistCards] = useState<SpecialistCard[]>([]);
+  const [snapshotReuse, setSnapshotReuse] = useState<SnapshotReuseInfo | null>(null);
   const resultSentRef = useRef<boolean>(false);
   const summarySentRef = useRef<boolean>(false);
+  const lastSessionIdRef = useRef<string>('');
   const emitResultOnce = useCallback(() => {
     if (resultSentRef.current) return;
     resultSentRef.current = true;
@@ -101,6 +114,25 @@ export const useAnalyticsMemoryStream = (
       if (Number.isFinite(parsed)) {
         return parsed;
       }
+    }
+    return undefined;
+  };
+
+  const coerceBoolean = (value: unknown): boolean | undefined => {
+    if (typeof value === 'boolean') {
+      return value;
+    }
+    if (typeof value === 'number') {
+      if (!Number.isFinite(value)) {
+        return undefined;
+      }
+      return value !== 0;
+    }
+    if (typeof value === 'string') {
+      const normalized = value.trim().toLowerCase();
+      if (!normalized) return undefined;
+      if (['true', '1', 'yes', 'y', 'on'].includes(normalized)) return true;
+      if (['false', '0', 'no', 'n', 'off'].includes(normalized)) return false;
     }
     return undefined;
   };
@@ -631,6 +663,7 @@ export const useAnalyticsMemoryStream = (
   followUpBanner: FollowUpBanner | null;
   specialistCards: SpecialistCard[];
   latencyGuardrail: LatencyGuardrail | null;
+  snapshotReuse: SnapshotReuseInfo | null;
 }>({
   chartSpec: null,
   analysis: '',
@@ -648,6 +681,7 @@ export const useAnalyticsMemoryStream = (
   followUpBanner: null,
   specialistCards: [],
   latencyGuardrail: null,
+  snapshotReuse: null,
 });
 
   const upsertSpecialistCard = useCallback((card: SpecialistCard) => {
@@ -1067,8 +1101,9 @@ export const useAnalyticsMemoryStream = (
     const req = request || pendingClarification;
     if (!req) return;
     try {
+      const activeSessionId = req.session_id || sessionId || lastSessionIdRef.current;
       const answer: ClarifyAnswer = {
-        session_id: req.session_id || sessionId,
+        session_id: activeSessionId,
         request_id: req.request_id,
         slot: req.slot,
         value,
@@ -1108,11 +1143,13 @@ export const useAnalyticsMemoryStream = (
     setSpecialistCards([]);
     setRevisionMode('none');
     setLatencyGuardrail(null);
+    setSnapshotReuse(null);
     workflowDataRef.current.webSearch = null;
     workflowDataRef.current.analysisOverview = null;
     workflowDataRef.current.followUpBanner = null;
     workflowDataRef.current.specialistCards = [];
     workflowDataRef.current.latencyGuardrail = null;
+    workflowDataRef.current.snapshotReuse = null;
     setPendingClarification(null);
     setCriteria(null);
     stepsHook.resetSteps();
@@ -1130,8 +1167,9 @@ export const useAnalyticsMemoryStream = (
     const baseEndpoint = `/api/analytics/memory/stream`;
 
     const params = new URLSearchParams({ query: query.trim() });
-    if (sessionId) {
-      params.append('session_id', sessionId);
+    const activeSessionId = sessionId || lastSessionIdRef.current;
+    if (activeSessionId) {
+      params.append('session_id', activeSessionId);
     }
     if (flow) {
       params.append('flow', flow);
@@ -1215,7 +1253,13 @@ export const useAnalyticsMemoryStream = (
       
       switch (eventType) {
         case 'session_started':
-          setSessionId(eventData.session_id);
+          {
+            const nextSessionId = coerceString(eventData.session_id);
+            if (nextSessionId) {
+              lastSessionIdRef.current = nextSessionId;
+              setSessionId((prev) => (prev === nextSessionId ? prev : nextSessionId));
+            }
+          }
           break;
           
 
@@ -2625,6 +2669,31 @@ export const useAnalyticsMemoryStream = (
 
         case 'planner_result': {
           const metadata = (eventData.metadata ?? {}) as Record<string, any>;
+          const hasSnapshotReuseField =
+            Object.prototype.hasOwnProperty.call(metadata, 'snapshot_reuse') ||
+            Object.prototype.hasOwnProperty.call(metadata, 'reuse_snapshot');
+          const reuseCandidate = hasSnapshotReuseField
+            ? (metadata.snapshot_reuse ?? metadata.reuse_snapshot)
+            : undefined;
+          if (reuseCandidate && typeof reuseCandidate === 'object') {
+            const reuseInfo: SnapshotReuseInfo = {
+              reusedSql: coerceBoolean((reuseCandidate as any).reused_sql),
+              reusedChart: coerceBoolean((reuseCandidate as any).reused_chart),
+              reusedStock: coerceBoolean((reuseCandidate as any).reused_stock),
+              reusedWeb: coerceBoolean((reuseCandidate as any).reused_web),
+              reusedAnalysis: coerceBoolean((reuseCandidate as any).reused_analysis),
+              criteriaChanged: coerceBoolean((reuseCandidate as any).criteria_changed),
+              source: coerceString((reuseCandidate as any).source),
+              followUpRoute:
+                coerceString((reuseCandidate as any).follow_up_route) ??
+                coerceString(metadata.follow_up_route),
+            };
+            setSnapshotReuse(reuseInfo);
+            workflowDataRef.current.snapshotReuse = reuseInfo;
+          } else if (hasSnapshotReuseField) {
+            setSnapshotReuse((prev) => (prev === null ? prev : null));
+            workflowDataRef.current.snapshotReuse = null;
+          }
           const overviewCandidate = metadata.analysis_overview;
           if (overviewCandidate) {
             const overview = parseAnalysisOverview(overviewCandidate);
@@ -2672,6 +2741,7 @@ export const useAnalyticsMemoryStream = (
               followUpBanner: null,
               specialistCards: [],
               latencyGuardrail: null,
+              snapshotReuse: null,
             };
             setChartSpec(null);
             setAnalysis('');
@@ -2729,10 +2799,14 @@ export const useAnalyticsMemoryStream = (
     stepsHook.stopInProgressSteps();
   };
 
-  const resetAll = () => {
+  const resetAll = (options?: { preserveSession?: boolean }) => {
+    const preserveSession = Boolean(options?.preserveSession);
     streamHook.resetState();
     stepsHook.resetSteps();
-    setSessionId('');
+    if (!preserveSession) {
+      setSessionId('');
+      lastSessionIdRef.current = '';
+    }
     setPendingClarification(null);
     setCriteria(null);
     setChatHistory([]);
@@ -2751,6 +2825,7 @@ export const useAnalyticsMemoryStream = (
     setFollowUpBanner(null);
     setSpecialistCards([]);
     setLatencyGuardrail(null);
+    setSnapshotReuse(null);
 
     // Clear any pending updates
     if (updateTimeoutRef.current) {
@@ -2784,6 +2859,7 @@ export const useAnalyticsMemoryStream = (
       followUpBanner: null,
       specialistCards: [],
       latencyGuardrail: null,
+      snapshotReuse: null,
     };
   };
 
@@ -2816,6 +2892,7 @@ export const useAnalyticsMemoryStream = (
     singleAgentFanout,
     revisionMode,
     latencyGuardrail,
+    snapshotReuse,
 
     // Progressive rendering state
     progressiveAnalysis,
