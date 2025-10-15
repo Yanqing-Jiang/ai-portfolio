@@ -128,13 +128,35 @@ def collect_tool_bundle(
     bundle: Dict[str, Any] = {}
     if manifest:
         bundle["tool_manifest"] = copy.deepcopy(manifest)
+    sources: Dict[str, str] = {}
     if results:
         bundle["tool_results"] = copy.deepcopy(results)
         stock_widget = stock_widget or _extract_stock_widget(results)
         web_context = web_context or _extract_web_context(results)
+        for entry in results:
+            if not isinstance(entry, dict):
+                continue
+            tool_name = str(entry.get("tool") or "").strip()
+            if not tool_name:
+                continue
+            payload = entry.get("payload") or {}
+            status = str(entry.get("status") or "").strip().lower()
+            base_tool = tool_name
+            if base_tool.startswith("web_retriever"):
+                base_tool = "web_retriever"
+            reused_flag = bool(entry.get("reused"))
+            from_cache = bool(payload.get("from_cache"))
+            if reused_flag or from_cache:
+                sources[base_tool] = "cached"
+            elif status in {"completed", "complete", "success"}:
+                sources.setdefault(base_tool, "fanout")
+            elif status in {"queued"}:
+                sources.setdefault(base_tool, "queued")
     if stock_widget:
         bundle["stock_widget"] = copy.deepcopy(stock_widget)
     if web_context:
         bundle["web_context"] = copy.deepcopy(web_context)
+    if sources:
+        bundle["sources"] = copy.deepcopy(sources)
     return sanitize_for_json(bundle)
 

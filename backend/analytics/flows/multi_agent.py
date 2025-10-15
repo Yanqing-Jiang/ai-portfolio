@@ -8,6 +8,7 @@ import copy
 import os
 import asyncio
 import statistics
+import logging
 from datetime import datetime, date
 from typing import Any, AsyncGenerator, Dict, Iterable, List, Mapping, Optional, Sequence
 
@@ -23,6 +24,8 @@ from .hooks import AnalyticsFlowHooks
 from .tool_bundle import collect_tool_bundle
 from .pipeline_tools import get_planner_tool_registry
 from .schedulers import FlowMode, apply_mode_metadata
+
+logger = logging.getLogger(__name__)
 
 
 def _build_tool_metadata(manifest: Any) -> Dict[str, Dict[str, Any]]:
@@ -91,6 +94,10 @@ class _MultiAgentHooks(AnalyticsFlowHooks):
             self._active_session = data.get("session_id") or ctx.get("session_id")
             ctx["session_id"] = self._active_session
         self._flow._capture_event(event)
+        if self._flow._artifact_flush_pending:
+            for artifact_event in self._flow._drain_artifact_events():
+                yield self._flow._annotate(artifact_event)
+            self._flow._artifact_flush_pending = False
         start_event = self._flow._maybe_agent_turn_start(event)
         if start_event:
             yield start_event
@@ -117,6 +124,7 @@ class _MultiAgentHooks(AnalyticsFlowHooks):
             self._flow._orchestrated = True
         for artifact_event in self._flow._drain_artifact_events():
             yield self._flow._annotate(artifact_event)
+        self._flow._artifact_flush_pending = False
 
     async def on_flow_end(
         self,
@@ -280,12 +288,20 @@ def _derive_tasks(
     )
 
     stock_cached = bool(market_ctx.get("snapshot") or market_ctx.get("stock_widget"))
-    market_ready = bool(tickers) and chart_ready and not (stock_cached and reuse_sql)
+    if stock_cached:
+        market_status = "reuse"
+        market_reason = "market_cached"
+    elif bool(tickers) and chart_ready:
+        market_status = "run"
+        market_reason = "tickers_detected"
+    else:
+        market_status = "skip"
+        market_reason = "no_tickers"
     plan.add_step(
         "market",
-        "run" if market_ready else ("reuse" if stock_cached and reuse_sql else "skip"),
-        reason="tickers_detected" if market_ready else ("market_cached" if stock_cached and reuse_sql else "no_tickers"),
-        metadata={"tickers": tickers},
+        market_status,
+        reason=market_reason,
+        metadata={"tickers": tickers, "source": market_ctx.get("source")},
     )
 
     web_context = web_ctx or {}
@@ -584,6 +600,7 @@ async def _market_agent(context: AgentRunContext) -> AgentResult:
                     'bars': [{'time': bar.time, 'close': bar.close} for bar in bars],
                 }
                 market_ctx['snapshot'] = snapshot_payload
+                market_ctx['source'] = 'market_agent'
                 market_ctx['retry_count'] = 0
                 market_ctx.pop('error', None)
                 market_ctx.pop('error_code', None)
@@ -607,6 +624,7 @@ async def _market_agent(context: AgentRunContext) -> AgentResult:
         market_ctx.pop('snapshot', None)
         market_ctx.pop('error', None)
         market_ctx.pop('error_code', None)
+        market_ctx.pop('source', None)
         snapshot_payload = None
 
     output: Dict[str, Any] = {
@@ -616,6 +634,8 @@ async def _market_agent(context: AgentRunContext) -> AgentResult:
     }
     if snapshot_payload:
         output['insights'] = snapshot_payload
+    if market_ctx.get('source'):
+        output['source'] = market_ctx.get('source')
     if error_reason:
         output['error'] = error_reason
         output['error_code'] = error_code or 'UNKNOWN_MARKET_ERROR'
@@ -966,6 +986,7 @@ class MultiAgentFlow:
         self._orchestrated = False
         self._hedged_completion: Dict[str, bool] = {}
         self._pending_artifact_events: List[Dict[str, Any]] = []
+        self._artifact_flush_pending: bool = False
 
     def _hedged_tool_aliases(self) -> List[str]:
         manifest = self._shared_context.get("tool_manifest")
@@ -1002,6 +1023,10 @@ class MultiAgentFlow:
             self._shared_context["hedged_accessories_status"] = {}
             return True
         seen: Dict[str, bool] = {alias: False for alias in aliases}
+        planner_tickers = self._shared_context.get("planner", {}).get("tickers") or []
+        stock_required = bool(planner_tickers)
+        if stock_required:
+            seen.setdefault("stock_tracker", False)
 
         def mark_ready(alias_key: str) -> None:
             if alias_key in seen:
@@ -1020,12 +1045,19 @@ class MultiAgentFlow:
                 for alias in seen:
                     if alias.startswith("web_retriever"):
                         mark_ready(alias)
+                continue
+            if tool == "stock_tracker" and stock_required:
+                mark_ready("stock_tracker")
 
         web_ctx = self._shared_context.get("web") or {}
         if isinstance(web_ctx, dict) and web_ctx.get("ready"):
             for alias in seen:
                 if alias.startswith("web_retriever"):
                     mark_ready(alias)
+        if stock_required and self._shared_context.get("stock_widget"):
+            mark_ready("stock_tracker")
+        elif not stock_required:
+            seen["stock_tracker"] = True
 
         missing = [alias for alias, ready in seen.items() if not ready]
         self._hedged_completion = seen
@@ -1129,6 +1161,7 @@ class MultiAgentFlow:
             "data": sanitize_for_json(enriched_payload),
         }
         self._pending_artifact_events.append(event)
+        self._artifact_flush_pending = True
 
     def _drain_artifact_events(self) -> List[Dict[str, Any]]:
         pending = self._pending_artifact_events
@@ -1163,6 +1196,12 @@ class MultiAgentFlow:
         if sql_ctx.get("sql") and sql_ctx.get("row_count") is not None:
             payload = self._sql_preview(sql_ctx)
             payload["schedule_stage"] = "sql"
+            status = str(sql_ctx.get("status") or "").lower()
+            if status in {"reused", "cached"}:
+                payload["reused"] = True
+                payload["source"] = "cached"
+            else:
+                payload.setdefault("source", "fanout")
             self._queue_artifact_event("sql_ready", payload)
             sql_ctx["_emitted_ready"] = True
 
@@ -1173,6 +1212,12 @@ class MultiAgentFlow:
         if chart_ctx.get("spec"):
             payload = self._chart_preview(chart_ctx)
             payload["schedule_stage"] = "chart"
+            status = str(chart_ctx.get("status") or "").lower()
+            if status in {"reused", "cached"}:
+                payload["reused"] = True
+                payload["source"] = "cached"
+            else:
+                payload.setdefault("source", "fanout")
             self._queue_artifact_event("chart_ready", payload)
             chart_ctx["_emitted_ready"] = True
 
@@ -1184,6 +1229,15 @@ class MultiAgentFlow:
         if meta.get("stock_ready"):
             return
         payload = {"stock_widget": widget, "schedule_stage": "hedged_accessories"}
+        market_ctx = self._shared_context.get('market', {})
+        if isinstance(market_ctx, dict):
+            source = market_ctx.get('source')
+            if source:
+                payload["source"] = source
+                if source in {"revision_snapshot", "cached"}:
+                    payload["reused"] = True
+            elif market_ctx.get('snapshot') and not market_ctx.get('refresh', False):
+                payload.setdefault("source", "fanout")
         self._queue_artifact_event("stock_ready", payload)
         meta["stock_ready"] = True
 
@@ -1195,6 +1249,17 @@ class MultiAgentFlow:
         if meta.get("web_ready"):
             return
         payload = {"web_context": web_ctx, "schedule_stage": "hedged_accessories"}
+        source = None
+        if isinstance(web_ctx, dict):
+            if web_ctx.get("from_cache"):
+                source = "cached"
+                payload["reused"] = True
+            else:
+                source = web_ctx.get("source")
+        if source:
+            payload["source"] = source
+        else:
+            payload.setdefault("source", "fanout")
         self._queue_artifact_event("web_ready", payload)
         meta["web_ready"] = True
 
@@ -1398,6 +1463,7 @@ class MultiAgentFlow:
             if revision_snapshot.get('chart_spec'):
                 chart_ctx['spec'] = copy.deepcopy(revision_snapshot['chart_spec'])
                 chart_ctx['spec_id'] = revision_snapshot.get('chart_spec_id')
+                chart_ctx['status'] = 'reused'
             analysis_ctx = self._shared_context.setdefault('analysis', {'fragments': [], 'final': None})
             if revision_snapshot.get('analysis'):
                 analysis_ctx['final'] = revision_snapshot['analysis']
@@ -1407,11 +1473,16 @@ class MultiAgentFlow:
                 self._shared_context['stock_widget'] = stock_widget_copy
                 market_ctx = self._shared_context.setdefault('market', {})
                 market_ctx['snapshot'] = copy.deepcopy(stock_widget_copy)
+                original_symbols = stock_widget_copy.get('original')
+                if isinstance(original_symbols, list) and original_symbols:
+                    market_ctx['tickers'] = list(original_symbols)
+                market_ctx.setdefault('source', 'revision_snapshot')
             web_payload = revision_snapshot.get('web_context') or {}
             if isinstance(web_payload, dict) and web_payload:
                 web_ctx = self._shared_context.setdefault('web', {})
                 web_ctx.update(copy.deepcopy(web_payload))
                 web_ctx.setdefault('ready', True)
+                web_ctx.setdefault('source', 'revision_snapshot')
             tool_results = self._shared_context.setdefault('tool_results', [])
             if revision_snapshot.get('stock_widget') and not any(res.get('tool') == 'stock_tracker' for res in tool_results):
                 tool_results.append(
@@ -1512,6 +1583,7 @@ class MultiAgentFlow:
                 identifier = _make_identifier(self._session_id, "chart", identifier_source)
                 chart_ctx["spec_id"] = identifier
                 chart_ctx["spec"] = sanitized_spec
+                chart_ctx["status"] = "fresh"
                 series_count: Optional[int] = None
                 if isinstance(sanitized_spec, dict):
                     if isinstance(sanitized_spec.get("series"), list):
@@ -1538,6 +1610,7 @@ class MultiAgentFlow:
                 self._record_snapshot(chart_spec=sanitized_spec)
             else:
                 chart_ctx["spec_summary"] = {"chart_type": chart_type}
+                chart_ctx.setdefault("status", "fresh")
         elif name == "analysis_streaming":
             fragment = data.get("partial_analysis")
             if fragment:
@@ -1560,9 +1633,16 @@ class MultiAgentFlow:
             )
             if tool_bundle.get("stock_widget"):
                 self._shared_context["stock_widget"] = tool_bundle["stock_widget"]
+                sources = tool_bundle.get("sources") or {}
+                if sources.get("stock_tracker") == "cached":
+                    market_ctx = self._shared_context.setdefault("market", {})
+                    market_ctx['source'] = 'cached'
             if tool_bundle.get("web_context"):
                 web_ctx = self._shared_context.setdefault("web", {})
                 web_ctx.update(tool_bundle["web_context"])
+                sources = tool_bundle.get("sources") or {}
+                if sources.get("web_retriever") == "cached":
+                    web_ctx['source'] = 'cached'
             if tool_bundle and self._session_snapshot:
                 self._session_snapshot.record_tool_result("visual_bundle", tool_bundle)
             self._maybe_queue_analysis_ready()
@@ -1614,27 +1694,59 @@ class MultiAgentFlow:
                     web_ctx.update(payload)
                     web_ctx['ready'] = payload.get('ready', False)
                     web_ctx.setdefault('query', payload.get('query_terms'))
+                    if payload.get('from_cache'):
+                        web_ctx['source'] = 'cached'
+                    else:
+                        web_ctx.setdefault('source', 'planner_fanout')
                 elif metadata.get('summary'):
                     web_ctx.setdefault('summary', metadata.get('summary'))
                 if metadata.get('cache_hit') is not None:
+                    if metadata.get('cache_hit'):
+                        web_ctx['source'] = 'cached'
                     web_ctx['cache_hit'] = metadata.get('cache_hit')
+                if sanitized_result.get("reused"):
+                    web_ctx['source'] = 'cached'
                 if metadata.get('summary') and not web_ctx.get('summary'):
                     web_ctx['summary'] = metadata.get('summary')
             elif tool_name == "stock_tracker":
                 payload = sanitized_result.get("payload") or {}
-                if isinstance(payload, dict) and payload.get('ready'):
+                if isinstance(payload, dict) and (payload.get('ready') or payload.get('stock_widget')):
                     widget = collect_tool_bundle(results=[sanitized_result]).get('stock_widget')
                     if widget:
                         self._shared_context['stock_widget'] = widget
+                        market_ctx = self._shared_context.setdefault('market', {})
+                        market_ctx['snapshot'] = copy.deepcopy(widget)
+                        if isinstance(payload.get('tickers'), list) and payload.get('tickers'):
+                            market_ctx['tickers'] = list(payload['tickers'])
+                        elif isinstance(widget.get('original'), list) and widget.get('original'):
+                            market_ctx.setdefault('tickers', list(widget['original']))
+                        if sanitized_result.get("reused"):
+                            market_ctx['source'] = 'cached'
+                        else:
+                            market_ctx.setdefault('source', 'planner_fanout')
             bundle_update = collect_tool_bundle(
                 manifest=self._shared_context.get('tool_manifest'),
                 results=self._shared_context.get('tool_results'),
             )
             if bundle_update.get('stock_widget'):
-                self._shared_context['stock_widget'] = bundle_update['stock_widget']
+                widget = bundle_update['stock_widget']
+                self._shared_context['stock_widget'] = widget
+                market_ctx = self._shared_context.setdefault('market', {})
+                market_ctx['snapshot'] = copy.deepcopy(widget)
+                if isinstance(widget.get('original'), list) and widget.get('original'):
+                    market_ctx.setdefault('tickers', list(widget['original']))
+                sources_meta = bundle_update.get('sources') or {}
+                if sources_meta.get('stock_tracker') == 'cached':
+                    market_ctx['source'] = 'cached'
+                else:
+                    market_ctx.setdefault('source', market_ctx.get('source') or 'planner_fanout')
             if bundle_update.get('web_context'):
                 web_ctx = self._shared_context.setdefault('web', {})
                 web_ctx.update(bundle_update['web_context'])
+                if bundle_update['web_context'].get('from_cache'):
+                    web_ctx['source'] = 'cached'
+                else:
+                    web_ctx.setdefault('source', web_ctx.get('source') or 'planner_fanout')
         self._maybe_queue_sql_ready()
         self._maybe_queue_chart_ready()
         self._maybe_queue_stock_ready()
@@ -1722,6 +1834,15 @@ class MultiAgentFlow:
             yield self._annotate(completion_event)
             self._shared_context["hedged_accessories_emitted"] = True
         if not hedged_ready:
+            pending = [tool for tool, ready in self._hedged_completion.items() if not ready]
+            logger.info(
+                "Cohesive result delayed until accessories finish",
+                extra={
+                    "missing_tools": pending,
+                    "session_id": self._session_id,
+                    "flow": getattr(self, "flow_label", None),
+                },
+            )
             warning = {
                 "event": "cohesive_result_error",
                 "data": {
