@@ -552,6 +552,18 @@ async def _market_agent(context: AgentRunContext) -> AgentResult:
     snapshot_payload: Optional[Dict[str, Any]] = market_ctx.get('snapshot')
     error_reason: Optional[str] = None
     error_code: Optional[str] = None
+    receipts = context.shared.get('tool_receipts') or {}
+    receipt_candidates = [
+        receipts.get('market_question_a'),
+        receipts.get('market_question_b'),
+        receipts.get('stock_tracker'),
+    ]
+    if status == 'run' and any(
+        MultiAgentFlow._receipt_is_fresh(receipt, MultiAgentFlow.RECEIPT_TTL_SECONDS)
+        for receipt in receipt_candidates
+    ):
+        status = 'reuse'
+        market_ctx.setdefault('source', market_ctx.get('source') or 'cached')
 
     if status == 'run' and tickers:
         fetcher = runtime.get('market_fetcher')
@@ -626,6 +638,7 @@ async def _market_agent(context: AgentRunContext) -> AgentResult:
         market_ctx.pop('error_code', None)
         market_ctx.pop('source', None)
         snapshot_payload = None
+    market_ctx['status'] = status
 
     output: Dict[str, Any] = {
         'status': status,
@@ -651,9 +664,27 @@ async def _web_research_agent(context: AgentRunContext) -> AgentResult:
     query = context.shared.get('query', context.query)
     session_id = context.session_id
 
+    planner_output = context.dependencies.get('planner_phase')
+    tasks = planner_output.output.get('tasks', []) if planner_output else []
+    status_hint = _task_status(tasks, 'web_research')
+    receipts = context.shared.get('tool_receipts') or {}
+    receipt = receipts.get('web_retriever')
+    if status_hint == 'skip':
+        web_ctx['status'] = 'skip'
+        web_ctx.pop('error', None)
+        web_ctx['attempts'] = []
+        return AgentResult(
+            name='web_research',
+            output={
+                'status': 'skip',
+                'from_cache': False,
+                'attempts': [],
+                'attempt_count': 0,
+            },
+        )
+
     attempts_meta: List[Dict[str, Any]] = []
 
-    # Always allow specialist agent to attempt web search; errors/caching handled below.
     repository = get_session_state_repository()
     snapshot = await repository.load(session_id) if session_id else None
     cached_payload = None
@@ -662,23 +693,36 @@ async def _web_research_agent(context: AgentRunContext) -> AgentResult:
         if cache and str(cache.get('query') or '').strip().lower() == query.strip().lower():
             cached_payload = cache
 
+    receipt_fresh = MultiAgentFlow._receipt_is_fresh(receipt, MultiAgentFlow.RECEIPT_TTL_SECONDS)
+    should_reuse = status_hint != 'run' or receipt_fresh
     if cached_payload and not _needs_web_refresh(query, web_ctx):
-        web_ctx.update(cached_payload)
-        web_ctx['ready'] = True
-        web_ctx['from_cache'] = True
-        attempts_meta = list(cached_payload.get('attempts', attempts_meta))
-        web_ctx['attempts'] = attempts_meta
-        return AgentResult(
-            name='web_research',
-            output={
-                'status': 'reuse',
-                'summary': cached_payload.get('summary'),
-                'snippets': cached_payload.get('snippets'),
-                'from_cache': True,
-                'attempts': attempts_meta,
-                'attempt_count': len(attempts_meta),
-            },
-        )
+        should_reuse = True
+
+    if should_reuse:
+        reuse_source: Dict[str, Any] = {}
+        if isinstance(cached_payload, dict):
+            reuse_source = copy.deepcopy(cached_payload)
+        elif web_ctx:
+            reuse_source = dict(web_ctx)
+        if reuse_source:
+            web_ctx.update(reuse_source)
+            web_ctx['ready'] = True
+            web_ctx['from_cache'] = True
+            attempts_meta = list(reuse_source.get('attempts', []))
+            web_ctx['attempts'] = attempts_meta
+            web_ctx.setdefault('source', web_ctx.get('source') or 'cached')
+            web_ctx['status'] = 'reuse'
+            return AgentResult(
+                name='web_research',
+                output={
+                    'status': 'reuse',
+                    'summary': web_ctx.get('summary'),
+                    'snippets': web_ctx.get('snippets'),
+                    'from_cache': True,
+                    'attempts': attempts_meta,
+                    'attempt_count': len(attempts_meta),
+                },
+            )
 
     last_error: Optional[Exception] = None
     search_result = None
@@ -735,6 +779,7 @@ async def _web_research_agent(context: AgentRunContext) -> AgentResult:
     payload['from_cache'] = False
     payload['attempts'] = attempts_meta
     web_ctx.update(payload)
+    web_ctx['status'] = 'run'
 
     topic_latencies = [
         topic.latency_ms
@@ -870,10 +915,14 @@ def _build_default_plan() -> List[AgentTask]:
     return [
         AgentTask(name='planner_phase', agent='planner'),
         AgentTask(name='query_phase', agent='query', depends_on=('planner_phase',)),
-        AgentTask(name='analyst_phase', agent='analyst', depends_on=('planner_phase',)),
-        AgentTask(name='chart_phase', agent='chart', depends_on=('planner_phase',)),
-        AgentTask(name='market_phase', agent='market', depends_on=('planner_phase',)),
-        AgentTask(name='web_research_phase', agent='web_research', depends_on=('planner_phase',)),
+        AgentTask(name='chart_phase', agent='chart', depends_on=('query_phase',)),
+        AgentTask(name='market_phase', agent='market', depends_on=('query_phase',)),
+        AgentTask(name='web_research_phase', agent='web_research', depends_on=('query_phase',)),
+        AgentTask(
+            name='analyst_phase',
+            agent='analyst',
+            depends_on=('chart_phase', 'market_phase', 'web_research_phase'),
+        ),
     ]
 
 
@@ -953,11 +1002,60 @@ class MultiAgentFlow:
 
     ORCHESTRATION_ROLES: Dict[str, str] = {
         "planner_phase": "planner_agent",
-        "query_phase": "query_agent",
-        "analyst_phase": "analyst_agent",
-        "chart_phase": "chart_agent",
+        "query_phase": "sql_specialist",
+        "chart_phase": "viz_designer",
         "market_phase": "market_agent",
+        "web_research_phase": "web_research_agent",
+        "analyst_phase": "insight_reviewer",
     }
+    ROLE_PARALLEL_GROUPS: Dict[str, str] = {
+        "planner_agent": "supervisor_intent",
+        "sql_specialist": "supervisor_sql",
+        "viz_designer": "multi_supervisor_fanout",
+        "market_agent": "multi_supervisor_fanout",
+        "web_research_agent": "multi_supervisor_fanout",
+        "insight_reviewer": "supervisor_summary",
+    }
+    ROLE_LANES: Dict[str, str] = {
+        "planner_agent": "intent",
+        "sql_specialist": "sql",
+        "viz_designer": "chart",
+        "market_agent": "market",
+        "web_research_agent": "web",
+        "insight_reviewer": "analysis",
+    }
+    ARTIFACT_LANE_MAP: Dict[str, str] = {
+        "sql_ready": "sql",
+        "chart_ready": "chart",
+        "stock_ready": "market",
+        "web_ready": "web",
+        "analysis_ready": "analysis",
+    }
+    ARTIFACT_PARALLEL_GROUPS: Dict[str, str] = {
+        "sql_ready": "supervisor_sql",
+        "chart_ready": "multi_supervisor_fanout",
+        "stock_ready": "multi_supervisor_fanout",
+        "web_ready": "multi_supervisor_fanout",
+        "analysis_ready": "supervisor_summary",
+    }
+    RECEIPT_TTL_SECONDS: int = 600
+
+    @staticmethod
+    def _receipt_is_fresh(receipt: Optional[Mapping[str, Any]], ttl_seconds: int) -> bool:
+        if not receipt:
+            return False
+        status = str(receipt.get("status") or "").strip().lower()
+        if status not in {"completed", "complete", "success", "reused"}:
+            return False
+        timestamp = receipt.get("timestamp") or receipt.get("completed_at")
+        if not timestamp:
+            return False
+        try:
+            recorded = datetime.fromisoformat(str(timestamp))
+        except ValueError:
+            return False
+        age_seconds = (datetime.utcnow() - recorded).total_seconds()
+        return age_seconds <= ttl_seconds
 
     def __init__(self) -> None:
         self._planner = PlannerExecutorFlow(flow_mode=FlowMode.MULTI_AGENT)
@@ -1156,6 +1254,16 @@ class MultiAgentFlow:
         specialist_card = self._build_specialist_card(event_name, enriched_payload)
         if specialist_card:
             enriched_payload["specialist_card"] = specialist_card
+        lane = self.ARTIFACT_LANE_MAP.get(event_name)
+        if lane:
+            enriched_payload.setdefault("lane", lane)
+            enriched_payload.setdefault("parallel_group", self.ARTIFACT_PARALLEL_GROUPS.get(event_name, "multi_supervisor_fanout"))
+        else:
+            enriched_payload.setdefault("parallel_group", "multi_supervisor_fanout")
+        if "reused" not in enriched_payload:
+            enriched_payload["reused"] = False
+        enriched_payload.setdefault("flow_mode", self.flow_mode.value)
+        enriched_payload.setdefault("ts", datetime.utcnow().isoformat())
         event = {
             "event": event_name,
             "data": sanitize_for_json(enriched_payload),
@@ -1275,6 +1383,86 @@ class MultiAgentFlow:
             }
             self._queue_artifact_event("analysis_ready", payload)
             analysis_ctx["_emitted_ready"] = True
+
+    def _component_status(self) -> Dict[str, bool]:
+        sql_ctx = self._shared_context.get("sql", {}) or {}
+        has_sql = bool(sql_ctx.get("sql"))
+        if not has_sql and sql_ctx.get("sample_data"):
+            has_sql = True
+        if not has_sql:
+            row_count = sql_ctx.get("row_count")
+            has_sql = row_count is not None and row_count != 0
+        if not has_sql and sql_ctx.get("columns"):
+            has_sql = True
+
+        stock_widget = self._shared_context.get("stock_widget")
+        has_stock = bool(stock_widget)
+        if not has_stock:
+            market_ctx = self._shared_context.get("market", {}) or {}
+            if isinstance(market_ctx, dict):
+                has_stock = bool(market_ctx.get("snapshot"))
+        analysis_ctx = self._shared_context.get("analysis", {}) or {}
+        if not has_stock and isinstance(analysis_ctx, dict):
+            bundle = analysis_ctx.get("bundle")
+            if isinstance(bundle, dict) and bundle.get("stock_widget"):
+                has_stock = True
+
+        web_ctx = self._shared_context.get("web") or {}
+        has_web = False
+        if isinstance(web_ctx, dict):
+            if web_ctx.get("summary"):
+                has_web = True
+            else:
+                snippets = web_ctx.get("snippets") or web_ctx.get("articles")
+                if isinstance(snippets, list) and snippets:
+                    has_web = True
+        if not has_web and isinstance(analysis_ctx, dict):
+            bundle = analysis_ctx.get("bundle")
+            if isinstance(bundle, dict):
+                web_bundle = bundle.get("web_context")
+                if isinstance(web_bundle, dict):
+                    if web_bundle.get("summary"):
+                        has_web = True
+                    else:
+                        snippets = web_bundle.get("snippets") or web_bundle.get("articles")
+                        if isinstance(snippets, list) and snippets:
+                            has_web = True
+        return {"sql": has_sql, "stock": has_stock, "web": has_web}
+
+    def _build_final_answer_payload(self, analysis_text: Optional[str]) -> Optional[Dict[str, Any]]:
+        status = self._component_status()
+        missing = [component for component in ("sql", "stock", "web") if not status.get(component, False)]
+        text_value: Optional[str]
+        if isinstance(analysis_text, str):
+            stripped = analysis_text.strip()
+            text_value = stripped or None
+        else:
+            text_value = None
+        human_labels = {
+            "sql": "SQL data",
+            "stock": "stock data",
+            "web": "online research data",
+        }
+        note: Optional[str] = None
+        if missing:
+            readable = ", ".join(human_labels[name] for name in missing)
+            note = f"Pending lanes: {readable}. Ask me to rerun those tools when you're ready."
+        parts: List[str] = []
+        if text_value:
+            parts.append(text_value)
+        if note:
+            parts.append(note)
+        message = "\n\n".join(part for part in parts if part).strip()
+        if not message:
+            if note:
+                message = note
+            else:
+                return None
+        return {
+            "message": message,
+            "missing_components": missing,
+            "analysis_available": bool(text_value),
+        }
 
     def prime_with_snapshot(self, snapshot: Optional[SessionStateSnapshot]) -> None:
         self._prefetched_snapshot = snapshot
@@ -1446,6 +1634,10 @@ class MultiAgentFlow:
                 'flow_label': getattr(self, 'flow_label', None),
             },
         }
+        receipts_cache: Dict[str, Any] = {}
+        if self._prefetched_snapshot and isinstance(self._prefetched_snapshot.tool_cache, dict):
+            receipts_cache = copy.deepcopy(self._prefetched_snapshot.tool_cache.get("tool_receipts") or {})
+        self._shared_context["tool_receipts"] = receipts_cache
         revision_snapshot = extract_revision_snapshot(self._prefetched_snapshot)
         if isinstance(revision_snapshot, dict):
             self._shared_context['revision_snapshot'] = copy.deepcopy(revision_snapshot)
@@ -1686,6 +1878,18 @@ class MultiAgentFlow:
             results_list[:] = deduped
 
             tool_name = (canonical_tool or "").strip()
+            receipts_map = self._shared_context.setdefault("tool_receipts", {})
+            receipt_key = tool_name or sanitized_result.get("tool")
+            if receipt_key:
+                receipt_payload = {
+                    "status": sanitized_result.get("status"),
+                    "reused": bool(sanitized_result.get("reused")),
+                    "elapsed_ms": sanitized_result.get("elapsed_ms"),
+                    "timestamp": sanitized_result.get("completed_at")
+                    or sanitized_result.get("ts")
+                    or datetime.utcnow().isoformat(),
+                }
+                receipts_map[receipt_key] = receipt_payload
             if tool_name == "web_retriever":
                 web_ctx = self._shared_context.setdefault('web', {})
                 payload = sanitized_result.get("payload") or {}
@@ -1779,6 +1983,22 @@ class MultiAgentFlow:
 
         planner_result = results.get("planner_phase")
         bundle = planner_result.output.get("bundle") if planner_result else None
+        analysis_text = analysis_ctx.get("final")
+
+        def _final_answer_event(analysis_text_value: Optional[str]) -> Optional[Dict[str, Any]]:
+            fallback = self._build_final_answer_payload(analysis_text_value)
+            if not fallback:
+                return None
+            payload = {
+                "message": fallback["message"],
+                "missing_components": fallback["missing_components"],
+                "analysis_available": fallback["analysis_available"],
+                "final_answer_only": True,
+                "mode": getattr(self, "flow_mode", FlowMode.MULTI_AGENT).value,
+                "flow_mode": getattr(self, "flow_mode", FlowMode.MULTI_AGENT).value,
+                "ts": datetime.utcnow().isoformat(),
+            }
+            return self._annotate({"event": "final_answer", "data": payload})
 
         for task in self._base_plan:
             role = self.ORCHESTRATION_ROLES.get(task.name)
@@ -1803,7 +2023,11 @@ class MultiAgentFlow:
                 retries=len(agent_output.get('attempts') or []),
                 session_id=session_id,
                 flow=getattr(self, 'flow_label', None),
-                metadata={'summary': agent_output.get('summary'), 'tickers': agent_output.get('tickers')},
+                metadata={
+                    'summary': agent_output.get('summary'),
+                    'tickers': agent_output.get('tickers'),
+                    'parallel_group': self.ROLE_PARALLEL_GROUPS.get(role),
+                },
             )
 
         final_payload = {
@@ -1851,6 +2075,9 @@ class MultiAgentFlow:
                 },
             }
             yield self._annotate(warning)
+            final_event = _final_answer_event(analysis_text)
+            if final_event:
+                yield final_event
             return
         if any(value is not None for key, value in final_payload.items() if key not in {"query", "bundle"}):
             try:
@@ -1864,6 +2091,9 @@ class MultiAgentFlow:
                     },
                 }
                 yield self._annotate(error_event)
+                final_event = _final_answer_event(analysis_text)
+                if final_event:
+                    yield final_event
                 return
             sanitized_payload = sanitize_for_json(validated_payload)
             yield self._annotate({"event": "cohesive_result", "data": sanitized_payload})
@@ -1969,6 +2199,13 @@ class MultiAgentFlow:
             "status": status,
             "ts": datetime.utcnow().isoformat(),
         }
+        parallel_group = self.ROLE_PARALLEL_GROUPS.get(role)
+        if parallel_group:
+            payload["parallel_group"] = parallel_group
+        lane = self.ROLE_LANES.get(role)
+        if lane:
+            payload["lane"] = lane
+        payload["flow_mode"] = self.flow_mode.value
         if summary:
             payload["summary"] = summary
         if elapsed is not None:

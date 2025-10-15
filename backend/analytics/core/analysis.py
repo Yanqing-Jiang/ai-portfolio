@@ -72,7 +72,8 @@ _PROMPT_INSTRUCTIONS = (
     "1. Begin with `TL;DR:` followed by two concise sentences covering SQL metrics, the chart direction, and headline sentiment.\n"
     "2. Add a `Key points:` heading and provide 3-5 markdown bullets (each starting with `- `) mixing SQL values, chart takeaways, and headline references using bracketed [n] citations.\n"
     "3. When fundamentals and headlines diverge, append a `Watchouts:` sentence after the bullets.\n"
-    "4. Return clean markdown only - avoid raw JSON or code fences unless explicitly asked."
+    "4. Return clean markdown only - avoid raw JSON or code fences unless explicitly asked.\n"
+    "5. If the SQL is empty, the row count is zero, or the user question is clearly outside financial analytics, reply with a concise acknowledgement that your tooling focuses on finance and suggest a finance-focused follow-up instead of fabricating numbers."
 )
 
 

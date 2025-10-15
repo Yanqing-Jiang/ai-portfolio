@@ -1,19 +1,32 @@
 from __future__ import annotations
 
+import asyncio
+import contextlib
 from datetime import datetime
 import copy
 import time
-from typing import Any, AsyncGenerator, Dict, List, Optional
+from typing import Any, AsyncGenerator, Dict, Iterable, List, Optional, Set, Tuple, Mapping
 
 from analytics.artifacts.models import PipelineArtifacts
+from analytics.core.events import EventEmitter
 from analytics.core.telemetry import tool_iteration as log_tool_iteration
 from analytics.core.session_state import SessionStateSnapshot, get_session_state_repository
 from analytics.validators import sanitize_for_json
 from analytics.routing import FollowUpRoute
 from .hooks import AnalyticsFlowHooks
-from .planner_executor import PlannerExecutorFlow, run_planner_executor
+from .planner_executor import (
+    _cached_event,
+    _compose_sql_ready_payload,
+    _compose_stock_ready_payload,
+    _compose_web_ready_payload,
+    ToolInvocationReceipt,
+    _hash_payload,
+    PlannerPhaseContext,
+    PlannerExecutorFlow,
+)
 from .pipeline_tools import get_planner_tool_registry
-from .schedulers import FlowMode, apply_mode_metadata
+from .schedulers import FlowMode, apply_mode_metadata, get_mode_config
+from .tooling import StockTrackerAdapter, WebRetrieverAdapter
 
 
 def _build_tool_metadata(manifest: Any) -> Dict[str, Dict[str, Any]]:
@@ -147,7 +160,41 @@ def _build_single_agent_cohesive_payload(
     sanitized = sanitize_for_json(payload)
     if not sanitized:
         return None
+    has_sql = bool(sanitized.get("sql")) or bool(sanitized.get("data_sample")) or bool(sanitized.get("columns"))
+    stock_widget = sanitized.get("stock_widget")
+    has_stock = bool(stock_widget)
+    web_context = sanitized.get("web_context")
+    if isinstance(web_context, dict):
+        has_web = bool(web_context.get("snippets") or web_context.get("summary") or web_context.get("articles"))
+    else:
+        has_web = bool(web_context)
+    if not (has_sql and has_stock and has_web):
+        return None
     return sanitized
+
+
+class MarketQuestionAdapter(StockTrackerAdapter):
+    """Stock tracker wrapper that tags outputs for specific market questions."""
+
+    def __init__(self, alias: str, label: str) -> None:
+        super().__init__()
+        self.name = alias
+        self.display_name = label
+        self._question_id = alias
+
+    async def execute(self, context):  # type: ignore[override]
+        result = await super().execute(context)
+        if isinstance(result.metadata, dict):
+            meta = dict(result.metadata)
+        else:
+            meta = {}
+        meta.setdefault("question_id", self._question_id)
+        result.metadata = meta
+        if isinstance(result.payload, dict):
+            payload = dict(result.payload)
+            payload.setdefault("question_id", self._question_id)
+            result.payload = payload
+        return result
 
 
 class _SingleAgentToolHooks(AnalyticsFlowHooks):
@@ -158,10 +205,12 @@ class _SingleAgentToolHooks(AnalyticsFlowHooks):
         self._session_id: Optional[str] = session_id
         self._emitted_cohesive = False
         self._last_analysis_payload: Optional[Dict[str, Any]] = None
+        self._final_answer_emitted = False
 
     async def on_flow_start(self, ctx: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
         self._emitted_cohesive = False
         self._last_analysis_payload = None
+        self._final_answer_emitted = False
         if ctx.get("session_id") and not self._session_id:
             session = ctx.get("session_id")
             if isinstance(session, str) and session:
@@ -229,6 +278,9 @@ class _SingleAgentToolHooks(AnalyticsFlowHooks):
         if False:
             yield {}
         event_name = event.get("event")
+        if event_name == "final_answer":
+            self._final_answer_emitted = True
+            return
         if event_name == "sql_compiled":
             self._sql_compile_details = event.get("data", {}) or {}
             return
@@ -283,6 +335,131 @@ class _SingleAgentToolHooks(AnalyticsFlowHooks):
                     yield cohesive_event
             return
 
+    def _analysis_text(self) -> Optional[str]:
+        if not self._last_analysis_payload:
+            return None
+        analysis_field = self._last_analysis_payload.get("analysis")
+        if isinstance(analysis_field, str):
+            stripped = analysis_field.strip()
+            return stripped or None
+        if isinstance(analysis_field, Mapping):
+            nested = analysis_field.get("analysis")
+            if isinstance(nested, str):
+                stripped = nested.strip()
+                return stripped or None
+        return None
+
+    @staticmethod
+    def _web_payload_has_content(payload: Any) -> bool:
+        if isinstance(payload, Mapping):
+            summary = payload.get("summary")
+            if isinstance(summary, str) and summary.strip():
+                return True
+            snippets = payload.get("snippets") or payload.get("articles")
+            if isinstance(snippets, list) and len(snippets) > 0:
+                return True
+        return False
+
+    @staticmethod
+    def _payload_has_stock(payload: Any) -> bool:
+        if not isinstance(payload, Mapping):
+            return False
+        widget = payload.get("stock_widget")
+        if isinstance(widget, Mapping):
+            return bool(widget)
+        return False
+
+    def _component_status(self) -> Dict[str, bool]:
+        artifacts = self._flow.latest_artifacts()
+        has_sql = False
+        has_stock = False
+        has_web = False
+
+        if artifacts:
+            sql_generation = getattr(artifacts, "sql_generation", None)
+            if sql_generation and getattr(sql_generation, "sql", None):
+                has_sql = True
+            if not has_sql:
+                sql_execution = getattr(artifacts, "sql_execution", None)
+                if sql_execution:
+                    if getattr(sql_execution, "row_count", None) is not None:
+                        has_sql = True
+                    columns = getattr(sql_execution, "columns", None)
+                    if columns:
+                        has_sql = True
+                    sample_rows = getattr(sql_execution, "sample_rows", None) or getattr(sql_execution, "dataset_preview", None)
+                    if sample_rows:
+                        has_sql = True
+            market_artifact = getattr(artifacts, "market", None)
+            if market_artifact and getattr(market_artifact, "snapshot", None):
+                has_stock = True
+            analysis_artifact = getattr(artifacts, "analysis", None)
+            if analysis_artifact:
+                if not has_stock and getattr(analysis_artifact, "stock_widget", None):
+                    has_stock = True
+                if not has_web and self._web_payload_has_content(getattr(analysis_artifact, "web_context", None)):
+                    has_web = True
+            web_artifact = getattr(artifacts, "web", None)
+            if web_artifact:
+                summary = getattr(web_artifact, "summary", None)
+                if isinstance(summary, str) and summary.strip():
+                    has_web = True
+                snippets = getattr(web_artifact, "snippets", None)
+                if isinstance(snippets, list) and snippets:
+                    has_web = True
+
+        analysis_payload = self._last_analysis_payload or {}
+        if not has_sql:
+            sql_field = analysis_payload.get("sql")
+            if isinstance(sql_field, str) and sql_field.strip():
+                has_sql = True
+            sample = analysis_payload.get("data_sample")
+            if not has_sql and sample:
+                has_sql = True
+            columns_payload = analysis_payload.get("columns")
+            if not has_sql and columns_payload:
+                has_sql = True
+        if not has_stock and self._payload_has_stock(analysis_payload):
+            has_stock = True
+        if not has_web and self._web_payload_has_content(analysis_payload.get("web_context")):
+            has_web = True
+
+        return {
+            "sql": has_sql,
+            "stock": has_stock,
+            "web": has_web,
+        }
+
+    def _build_final_answer_payload(self) -> Optional[Dict[str, Any]]:
+        status = self._component_status()
+        missing = [component for component in ("sql", "stock", "web") if not status.get(component, False)]
+        analysis_text = self._analysis_text()
+        human_labels = {
+            "sql": "SQL data",
+            "stock": "stock data",
+            "web": "online research data",
+        }
+        note: Optional[str] = None
+        if missing:
+            readable = ", ".join(human_labels[name] for name in missing)
+            note = f"Pending lanes: {readable}. Ask me to rerun those tools when you're ready."
+        parts: List[str] = []
+        if analysis_text:
+            parts.append(analysis_text.rstrip())
+        if note:
+            parts.append(note)
+        message = "\n\n".join(part for part in parts if part).strip()
+        if not message:
+            if note:
+                message = note
+            else:
+                return None
+        return {
+            "message": message,
+            "missing_components": missing,
+            "analysis_available": bool(analysis_text),
+        }
+
     async def on_flow_end(
         self,
         ctx: Dict[str, Any],
@@ -291,6 +468,26 @@ class _SingleAgentToolHooks(AnalyticsFlowHooks):
     ) -> AsyncGenerator[Dict[str, Any], None]:
         if False:
             yield {}
+        if error is not None or self._emitted_cohesive or self._final_answer_emitted:
+            return
+        fallback_payload = self._build_final_answer_payload()
+        if not fallback_payload:
+            return
+        event = {
+            "event": "final_answer",
+            "data": {
+                "message": fallback_payload["message"],
+                "missing_components": fallback_payload["missing_components"],
+                "analysis_available": fallback_payload["analysis_available"],
+                "final_answer_only": True,
+                "ts": datetime.utcnow().isoformat(),
+                "flow_mode": self._flow.flow_mode.value,
+            },
+        }
+        annotated = apply_mode_metadata(event, self._flow.flow_mode)
+        annotated["data"]["follow_up_route"] = self._flow.follow_up_route.value
+        self._final_answer_emitted = True
+        yield annotated
 
     def _extract_tool_details(self, tool: str, event: Dict[str, Any]) -> Dict[str, Any]:
         data = event.get("data") or {}
@@ -391,6 +588,20 @@ class SingleAgentController:
         "analysis_writer": "analysis_generation",
     }
 
+    CONCURRENT_LANES: Tuple[str, ...] = ("market", "web")
+    LANE_CACHE_TTL_SECONDS: int = 600
+    LANE_PARALLEL_GROUPS: Dict[str, str] = {
+        "market": "single_agent_market",
+        "web": "single_agent_web",
+    }
+    LANE_TOOL_MAP: Dict[str, Tuple[str, ...]] = {
+        "market": ("market_question_a", "market_question_b", "stock_tracker"),
+        "web": ("web_retriever",),
+    }
+    LANE_TOOL_LOOKUP: Dict[str, str] = {
+        tool.lower(): lane for lane, tools in LANE_TOOL_MAP.items() for tool in tools
+    }
+
     def __init__(self) -> None:
         self._planner = PlannerExecutorFlow(flow_mode=FlowMode.SINGLE_AGENT)
         self.follow_up_route = FollowUpRoute.FULL_PIPELINE
@@ -408,6 +619,283 @@ class SingleAgentController:
 
     def prime_with_snapshot(self, snapshot: Optional[SessionStateSnapshot]) -> None:
         self._planner.prime_with_snapshot(snapshot)
+
+    @classmethod
+    def _lane_for_tool(cls, tool_name: Optional[str]) -> Optional[str]:
+        if not tool_name:
+            return None
+        return cls.LANE_TOOL_LOOKUP.get(str(tool_name).strip().lower())
+
+    @classmethod
+    def _lane_tool_names(cls, lane: str) -> Tuple[str, ...]:
+        return cls.LANE_TOOL_MAP.get(lane, tuple())
+
+    @staticmethod
+    def _receipt_age_seconds(receipt: Optional[ToolInvocationReceipt]) -> Optional[float]:
+        if not receipt or not getattr(receipt, "timestamp", None):
+            return None
+        try:
+            recorded = datetime.fromisoformat(receipt.timestamp)
+        except ValueError:
+            return None
+        delta = datetime.utcnow() - recorded
+        return max(delta.total_seconds(), 0.0)
+
+    def _receipt_is_fresh(self, receipt: Optional[ToolInvocationReceipt]) -> bool:
+        if not receipt:
+            return False
+        if str(getattr(receipt, "status", "")).lower() not in {"completed", "reused"}:
+            return False
+        if getattr(receipt, "error", None):
+            return False
+        age_seconds = self._receipt_age_seconds(receipt)
+        if age_seconds is None:
+            return False
+        return age_seconds <= self.LANE_CACHE_TTL_SECONDS
+
+    def _build_receipt_input_payload(
+        self,
+        ctx: PlannerPhaseContext,
+        lane: str,
+        tool_name: str,
+        metadata: Optional[Mapping[str, Any]],
+    ) -> Dict[str, Any]:
+        plan = getattr(ctx, "plan", None) or getattr(ctx, "provisional_plan", None)
+        if hasattr(plan, "model_dump"):
+            plan_payload = plan.model_dump()
+        elif hasattr(plan, "dict"):
+            plan_payload = plan.dict()
+        else:
+            plan_payload = None
+        payload: Dict[str, Any] = {
+            "query": ctx.query,
+            "intent_key": getattr(getattr(ctx, "intent", None), "intent_key", None),
+            "lane": lane,
+            "tool": tool_name,
+            "plan": plan_payload,
+            "follow_up_route": getattr(getattr(ctx, "follow_up_route", None), "value", None)
+            or getattr(self.follow_up_route, "value", FollowUpRoute.FULL_PIPELINE.value),
+        }
+        if getattr(ctx, "intent_signature", None) is not None:
+            payload["intent_signature"] = ctx.intent_signature
+        if metadata and isinstance(metadata, Mapping):
+            question_id = metadata.get("question_id")
+            if question_id:
+                payload["question_id"] = question_id
+        return payload
+
+    def _ensure_running_receipt(
+        self,
+        ctx: PlannerPhaseContext,
+        lane: str,
+        tool_name: str,
+        metadata: Optional[Mapping[str, Any]],
+    ) -> None:
+        fingerprint = self._build_receipt_input_payload(ctx, lane, tool_name, metadata)
+        receipt = ctx.tool_receipts.get(tool_name)
+        metadata_dict = dict(metadata) if isinstance(metadata, Mapping) else {}
+        metadata_dict.setdefault("lane", lane)
+        if receipt:
+            receipt.status = "running"
+            receipt.reused = False
+            receipt.error = None
+            receipt.output_hash = None
+            receipt.attempts = max(receipt.attempts + 1, 1)
+            receipt.timestamp = datetime.utcnow().isoformat()
+            if not receipt.input_hash:
+                receipt.input_hash = _hash_payload(fingerprint)
+            existing_meta = dict(receipt.metadata or {})
+            existing_meta.update(metadata_dict)
+            receipt.metadata = existing_meta
+        else:
+            receipt = ToolInvocationReceipt(
+                tool=tool_name,
+                status="running",
+                attempts=1,
+                input_hash=_hash_payload(fingerprint),
+                metadata=metadata_dict,
+            )
+        ctx.tool_receipts[tool_name] = receipt
+
+    def _finalize_receipt(
+        self,
+        ctx: PlannerPhaseContext,
+        lane: Optional[str],
+        tool_name: str,
+        event_data: Mapping[str, Any],
+    ) -> None:
+        metadata = event_data.get("metadata")
+        metadata_dict = dict(metadata) if isinstance(metadata, Mapping) else {}
+        if lane:
+            metadata_dict.setdefault("lane", lane)
+        status_value = str(event_data.get("status") or "").strip().lower()
+        normalized_status = (
+            "completed"
+            if status_value in {"completed", "complete", "success"}
+            else status_value or "unknown"
+        )
+        receipt = ctx.tool_receipts.get(tool_name)
+        if receipt:
+            receipt.status = normalized_status
+            receipt.reused = False
+            existing_meta = dict(receipt.metadata or {})
+            existing_meta.update(metadata_dict)
+            receipt.metadata = existing_meta
+        else:
+            fingerprint = self._build_receipt_input_payload(ctx, lane or "unknown", tool_name, metadata_dict)
+            receipt = ToolInvocationReceipt(
+                tool=tool_name,
+                status=normalized_status,
+                attempts=1,
+                input_hash=_hash_payload(fingerprint),
+                metadata=metadata_dict,
+            )
+        receipt.elapsed_ms = event_data.get("elapsed_ms")
+        receipt.error = event_data.get("error")
+        payload = event_data.get("payload")
+        if payload:
+            receipt.output_hash = _hash_payload(payload)
+        ctx.tool_receipts[tool_name] = receipt
+
+    def _mark_lane_reused(self, ctx: PlannerPhaseContext, lane: str) -> None:
+        if lane == "market":
+            ctx.reused_stock = True
+        elif lane == "web":
+            ctx.reused_web = True
+        for tool_name in self._lane_tool_names(lane):
+            receipt = ctx.tool_receipts.get(tool_name)
+            if not receipt:
+                continue
+            receipt.status = "reused"
+            receipt.reused = True
+            receipt.error = None
+            ctx.tool_receipts[tool_name] = receipt
+
+    def _process_tool_parallel_event(
+        self,
+        ctx: PlannerPhaseContext,
+        event: Dict[str, Any],
+        lane_hint: Optional[str] = None,
+    ) -> None:
+        if not isinstance(event, dict):
+            return
+        event_type = event.get("event")
+        if event_type not in {"tool_parallel_start", "tool_parallel_result"}:
+            return
+        data = event.setdefault("data", {})
+        if event_type == "tool_parallel_start":
+            tools_meta = data.get("tools") or []
+            for tool_meta in tools_meta:
+                if isinstance(tool_meta, Mapping):
+                    tool_name = tool_meta.get("name") or tool_meta.get("tool")
+                else:
+                    tool_name = None
+                if not tool_name:
+                    continue
+                lane = lane_hint or self._lane_for_tool(tool_name)
+                if not lane:
+                    continue
+                meta = dict(tool_meta) if isinstance(tool_meta, Mapping) else {}
+                meta.setdefault("lane", lane)
+                self._ensure_running_receipt(ctx, lane, tool_name, meta)
+            return
+
+        tool_name = data.get("tool")
+        if not tool_name:
+            return
+        lane = lane_hint or self._lane_for_tool(tool_name)
+        if lane:
+            data.setdefault("lane", lane)
+            data.setdefault("parallel_group", self.LANE_PARALLEL_GROUPS.get(lane, "single_agent_fanout"))
+            data.setdefault("reused", False)
+        self._finalize_receipt(ctx, lane, tool_name, data)
+
+    def _lane_adapters(self, lane: str) -> Tuple[Any, ...]:
+        if lane == "market":
+            return (
+                MarketQuestionAdapter("market_question_a", "Market Research Question A"),
+                MarketQuestionAdapter("market_question_b", "Market Research Question B"),
+            )
+        if lane == "web":
+            return (WebRetrieverAdapter(),)
+        return tuple()
+
+    def _should_reuse_market(self, ctx: PlannerPhaseContext) -> bool:
+        market_artifact = getattr(ctx.artifacts, "market", None)
+        has_snapshot = bool(market_artifact and getattr(market_artifact, "snapshot", None))
+        if not has_snapshot:
+            return False
+        receipts = [
+            ctx.tool_receipts.get(tool_name)
+            for tool_name in self._lane_tool_names("market")
+        ]
+        if any(self._receipt_is_fresh(receipt) for receipt in receipts):
+            return True
+        age = ctx.snapshot_age_seconds
+        if age is None:
+            return self.follow_up_route == FollowUpRoute.REUSE_SQL
+        return age <= self.LANE_CACHE_TTL_SECONDS
+
+    def _should_reuse_web(self, ctx: PlannerPhaseContext) -> bool:
+        web_artifact = getattr(ctx.artifacts, "web", None)
+        has_web = bool(web_artifact and getattr(web_artifact, "summary", None))
+        if not has_web:
+            analysis_art = getattr(ctx.artifacts, "analysis", None)
+            has_web = bool(analysis_art and getattr(analysis_art, "web_context", None))
+        if not has_web:
+            return False
+        receipt = ctx.tool_receipts.get("web_retriever")
+        if self._receipt_is_fresh(receipt):
+            return True
+        age = ctx.snapshot_age_seconds
+        if age is None:
+            return self.follow_up_route == FollowUpRoute.REUSE_SQL
+        return age <= self.LANE_CACHE_TTL_SECONDS
+
+    def _start_fanout_lanes(
+        self,
+        ctx: PlannerPhaseContext,
+        lanes: Iterable[str],
+    ) -> Dict[str, Tuple[asyncio.Task, Optional[asyncio.Queue]]]:
+        active: Dict[str, Tuple[asyncio.Task, Optional[asyncio.Queue]]] = {}
+        for lane in lanes:
+            adapters = self._lane_adapters(lane)
+            if not adapters:
+                continue
+            task, queue = self._planner._start_tool_parallelism(
+                ctx,
+                adapters=adapters,
+                concurrency_override=len(adapters),
+            )
+            active[lane] = (task, queue)
+        return active
+
+    def _drain_fanout_events(
+        self,
+        ctx: PlannerPhaseContext,
+        fanout_tasks: Dict[str, Tuple[asyncio.Task, Optional[asyncio.Queue]]],
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        for lane, (_, queue) in fanout_tasks.items():
+            if not queue:
+                continue
+            lane_events = self._planner._flush_tool_events(queue)
+            for event in lane_events:
+                data = event.setdefault("data", {})
+                parallel_group = self.LANE_PARALLEL_GROUPS.get(lane, "single_agent_fanout")
+                data.setdefault("parallel_group", parallel_group)
+                data.setdefault("lane", lane)
+                data.setdefault("reused", False)
+                self._process_tool_parallel_event(ctx, event, lane_hint=lane)
+                yield self._planner._annotate(event)
+
+    def _emit_lane_summary(self, lane_states: Dict[str, str]) -> Dict[str, Any]:
+        payload = {
+            "lane_summary": lane_states,
+            "parallel_group": "single_agent_fanout",
+            "ts": datetime.utcnow().isoformat(),
+            "flow_mode": self.flow_mode.value,
+        }
+        return self._planner._annotate({"event": "agent_decision", "data": payload})
 
     def set_follow_up_route(self, route: FollowUpRoute) -> None:
         self.follow_up_route = route
@@ -468,20 +956,290 @@ class SingleAgentController:
         query: str,
         session_id: Optional[str] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
-        planner_events = getattr(self._planner, "events", None)
         hooks = _SingleAgentToolHooks(self, session_id=session_id)
-        if callable(planner_events):
-            try:
-                async for event in planner_events(query, session_id=session_id, hooks=hooks):
-                    yield event
-                return
-            except TypeError:
-                planner_stream = planner_events(query, session_id=session_id)
-        else:
-            planner_stream = run_planner_executor(query, session_id=session_id)
-
-        async for event in self._forward_with_hooks(planner_stream, hooks, session_id):
+        stream = self._agentic_event_stream(query, session_id=session_id)
+        async for event in self._forward_with_hooks(stream, hooks, session_id):
             yield event
+
+    async def _agentic_event_stream(
+        self,
+        query: str,
+        session_id: Optional[str],
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        ctx = await self._planner.initialize_context(query, session_id=session_id)
+        session_identifier = ctx.session_id
+        yield self._planner._annotate(EventEmitter.session_started(session_identifier))
+
+        registry = get_planner_tool_registry()
+        executed: Set[str] = set()
+        mode_config = get_mode_config(self.flow_mode)
+        fanout_tasks: Dict[str, Tuple[asyncio.Task, Optional[asyncio.Queue]]] = {}
+        started_lanes: Set[str] = set()
+        lane_states: Dict[str, str] = {"sql": "pending", "market": "skipped", "web": "skipped"}
+
+        try:
+            async for event in registry.invoke("classification", self._planner, ctx, executed=executed):
+                yield self._planner._annotate(event)
+            await self._planner._persist_session_state(ctx, record_artifacts=True)
+            if not ctx.is_financial_query:
+                return
+
+            for tool_name in ("intent_detection", "clarification", "plan_generation"):
+                async for event in registry.invoke(tool_name, self._planner, ctx, executed=executed):
+                    yield self._planner._annotate(event)
+                await self._planner._persist_session_state(ctx, record_artifacts=True)
+
+            if ctx.intent is None or (ctx.plan or ctx.provisional_plan) is None:
+                return
+
+            reuse_sql = ctx.reuse_sql and ctx.revision_snapshot is not None
+            should_run_parallel = ctx.parallelism_enabled and not (ctx.reuse_sql and ctx.reuse_snapshot_active)
+            market_reuse = self._should_reuse_market(ctx)
+            web_reuse = self._should_reuse_web(ctx)
+            if market_reuse:
+                lane_states["market"] = "reused"
+                self._mark_lane_reused(ctx, "market")
+            if web_reuse:
+                lane_states["web"] = "reused"
+                self._mark_lane_reused(ctx, "web")
+
+            lanes_to_start: Tuple[str, ...] = tuple(
+                lane
+                for lane in self.CONCURRENT_LANES
+                if not (
+                    (lane == "market" and market_reuse)
+                    or (lane == "web" and web_reuse)
+                )
+            )
+
+            if should_run_parallel and not reuse_sql and lanes_to_start:
+                fanout_tasks = self._start_fanout_lanes(ctx, lanes_to_start)
+                started_lanes = set(fanout_tasks.keys())
+                if "market" in started_lanes:
+                    lane_states["market"] = "running"
+                if "web" in started_lanes:
+                    lane_states["web"] = "running"
+                async for fanout_event in self._drain_fanout_events(ctx, fanout_tasks):
+                    yield fanout_event
+            elif should_run_parallel and not reuse_sql and (market_reuse or web_reuse):
+                ctx.accessories_prefetched = True
+
+            if not reuse_sql and ctx.snapshot_stale and ctx.revision_snapshot:
+                stale_progress = EventEmitter.progress("sql_generation", "Cached SQL snapshot expired - rerunning dataset")
+                stale_progress["data"]["ts"] = datetime.utcnow().isoformat()
+                stale_progress["data"]["schedule_stage"] = "sql"
+                stale_progress["data"]["parallel_group"] = "core_sequential"
+                stale_progress["data"]["flow_mode"] = self.flow_mode.value
+                stale_progress["data"]["reused"] = False
+                yield self._planner._annotate(stale_progress)
+                if fanout_tasks:
+                    async for fanout_event in self._drain_fanout_events(fanout_tasks):
+                        yield fanout_event
+
+            if not reuse_sql:
+                lane_states["sql"] = "running"
+                async for event in registry.invoke("sql_generation", self._planner, ctx, executed=executed):
+                    yield self._planner._annotate(event)
+                    if fanout_tasks:
+                        async for fanout_event in self._drain_fanout_events(ctx, fanout_tasks):
+                            yield fanout_event
+                lane_states["sql"] = "fresh"
+            else:
+                ctx.reused_sql = True
+                lane_states["sql"] = "reused"
+                reuse_status = EventEmitter.progress("sql_generation", "Reusing cached SQL dataset")
+                reuse_status["data"]["ts"] = datetime.utcnow().isoformat()
+                reuse_status["data"]["schedule_stage"] = "sql"
+                reuse_status["data"]["parallel_group"] = "core_sequential"
+                reuse_status["data"]["flow_mode"] = self.flow_mode.value
+                reuse_status["data"]["reused"] = True
+                yield self._planner._annotate(reuse_status)
+                receipt = ctx.tool_receipts.get("sql_chain")
+                if receipt:
+                    receipt.status = "reused"
+                    receipt.reused = True
+                    receipt.error = None
+                sql_payload = _compose_sql_ready_payload(ctx)
+                if sql_payload:
+                    cached_sql_event = _cached_event(
+                        "sql_ready",
+                        sql_payload,
+                        schedule_stage="sql",
+                        flow_mode=self.flow_mode,
+                        parallel_group="core_sequential",
+                        lane="sql",
+                    )
+                    yield self._planner._annotate(cached_sql_event)
+                    if fanout_tasks:
+                        async for fanout_event in self._drain_fanout_events(ctx, fanout_tasks):
+                            yield fanout_event
+
+            await self._planner._persist_session_state(
+                ctx,
+                record_sql=(not reuse_sql) and bool(ctx.artifacts.sql_generation and ctx.artifacts.sql_generation.sql),
+                record_artifacts=True,
+            )
+            if not reuse_sql:
+                sql_payload = _compose_sql_ready_payload(ctx)
+                if sql_payload:
+                    sql_payload.setdefault("parallel_group", "core_sequential")
+                    sql_payload.setdefault("flow_mode", self.flow_mode.value)
+                    sql_payload.setdefault("ts", datetime.utcnow().isoformat())
+                    sql_payload.setdefault("lane", "sql")
+                    sql_payload["reused"] = False
+                    yield self._planner._annotate(
+                        {
+                            "event": "sql_ready",
+                            "data": sanitize_for_json(sql_payload),
+                        }
+                    )
+
+            if fanout_tasks:
+                async for fanout_event in self._drain_fanout_events(ctx, fanout_tasks):
+                    yield fanout_event
+
+                for lane in list(fanout_tasks.keys()):
+                    task, queue = fanout_tasks[lane]
+                    if not task:
+                        continue
+                    try:
+                        await task
+                        if lane_states.get(lane) == "running":
+                            lane_states[lane] = "fresh"
+                    except Exception:
+                        lane_states[lane] = "error"
+                        raise
+                    finally:
+                        lane_entry = {lane: (task, queue)}
+                        async for fanout_event in self._drain_fanout_events(ctx, lane_entry):
+                            yield fanout_event
+                        fanout_tasks.pop(lane, None)
+                ctx.accessories_prefetched = bool(started_lanes)
+
+            if reuse_sql:
+                stock_payload = _compose_stock_ready_payload(ctx)
+                if stock_payload:
+                    self._mark_lane_reused(ctx, "market")
+                    lane_states["market"] = "reused"
+                    cached_stock_event = _cached_event(
+                        "stock_ready",
+                        stock_payload,
+                        schedule_stage="hedged_accessories",
+                        flow_mode=self.flow_mode,
+                        parallel_group=self.LANE_PARALLEL_GROUPS.get("market", "tool_fanout"),
+                        lane="market",
+                    )
+                    yield self._planner._annotate(cached_stock_event)
+                web_payload = _compose_web_ready_payload(ctx)
+                if web_payload:
+                    self._mark_lane_reused(ctx, "web")
+                    lane_states["web"] = "reused"
+                    cached_web_event = _cached_event(
+                        "web_ready",
+                        web_payload,
+                        schedule_stage="hedged_accessories",
+                        flow_mode=self.flow_mode,
+                        parallel_group=self.LANE_PARALLEL_GROUPS.get("web", "tool_fanout"),
+                        lane="web",
+                    )
+                    yield self._planner._annotate(cached_web_event)
+                ctx.accessories_prefetched = True
+            elif not started_lanes:
+                async for event in self._planner._ensure_analysis_dependencies(ctx):
+                    data = event.setdefault("data", {})
+                    lane_hint = None
+                    tool_name = data.get("tool")
+                    if tool_name:
+                        lane_hint = self._lane_for_tool(tool_name)
+                    self._process_tool_parallel_event(ctx, event, lane_hint=lane_hint)
+                    lane = data.get("lane") or lane_hint
+                    if not lane:
+                        tools_meta = data.get("tools") or []
+                        for tool_meta in tools_meta:
+                            if not isinstance(tool_meta, Mapping):
+                                continue
+                            candidate = self._lane_for_tool(tool_meta.get("name") or tool_meta.get("tool"))
+                            if candidate:
+                                lane = candidate
+                                break
+                    if lane:
+                        data.setdefault("lane", lane)
+                        data.setdefault("parallel_group", self.LANE_PARALLEL_GROUPS.get(lane, "single_agent_fanout"))
+                        data.setdefault("reused", False)
+                    yield self._planner._annotate(event)
+                ctx.accessories_prefetched = True
+                if lane_states["market"] == "reused":
+                    stock_payload = _compose_stock_ready_payload(ctx)
+                    if stock_payload:
+                        self._mark_lane_reused(ctx, "market")
+                        yield self._planner._annotate(
+                            _cached_event(
+                                "stock_ready",
+                                stock_payload,
+                                schedule_stage="hedged_accessories",
+                                flow_mode=self.flow_mode,
+                                parallel_group=self.LANE_PARALLEL_GROUPS.get("market", "tool_fanout"),
+                                lane="market",
+                            )
+                        )
+                elif ctx.artifacts.market and lane_states["market"] == "skipped":
+                    lane_states["market"] = "fresh"
+                if lane_states["web"] == "reused":
+                    web_payload = _compose_web_ready_payload(ctx)
+                    if web_payload:
+                        self._mark_lane_reused(ctx, "web")
+                        yield self._planner._annotate(
+                            _cached_event(
+                                "web_ready",
+                                web_payload,
+                                schedule_stage="hedged_accessories",
+                                flow_mode=self.flow_mode,
+                                parallel_group=self.LANE_PARALLEL_GROUPS.get("web", "tool_fanout"),
+                                lane="web",
+                            )
+                        )
+                elif ctx.artifacts.web and lane_states["web"] == "skipped":
+                    lane_states["web"] = "fresh"
+            else:
+                if ctx.artifacts.market and lane_states["market"] in {"running", "pending"}:
+                    lane_states["market"] = "fresh"
+                if ctx.artifacts.web and lane_states["web"] in {"running", "pending"}:
+                    lane_states["web"] = "fresh"
+
+            lane_summary_event = self._emit_lane_summary(lane_states)
+            yield lane_summary_event
+
+            if ctx.halted:
+                return
+
+            async for event in registry.invoke("chart_generation", self._planner, ctx, executed=executed):
+                yield self._planner._annotate(event)
+            await self._planner._persist_session_state(
+                ctx,
+                record_chart=bool(ctx.artifacts.chart and ctx.artifacts.chart.spec),
+                record_artifacts=True,
+            )
+
+            if mode_config.accessories_in_critical_path:
+                async for event in self._planner._web_search_phase(ctx):
+                    yield self._planner._annotate(event)
+                await self._planner._persist_session_state(ctx, record_artifacts=True)
+
+            async for event in registry.invoke("analysis_generation", self._planner, ctx, executed=executed):
+                yield self._planner._annotate(event)
+            await self._planner._persist_session_state(
+                ctx,
+                record_analysis=bool(
+                    ctx.artifacts.analysis and ctx.artifacts.analysis.analysis_text
+                ),
+                record_artifacts=True,
+            )
+        finally:
+            for task, _ in fanout_tasks.values():
+                if task and not task.done():
+                    task.cancel()
+                    with contextlib.suppress(Exception):
+                        await task
 
     async def chart_revision(
         self,
@@ -557,4 +1315,5 @@ class SingleAgentController:
 
     def latest_artifacts(self):
         return self._planner.latest_artifacts()
+
 
