@@ -20,6 +20,7 @@ sys.modules["google.genai"] = genai_stub
 sys.modules["google.genai.types"] = genai_types_stub
 
 from analytics.flows.pipeline_tools import get_planner_tool_registry  # noqa: E402
+from analytics.flows.tool_bundle import collect_tool_bundle  # noqa: E402
 
 
 def _select_fields(payload: dict[str, object]) -> dict[str, object]:
@@ -133,3 +134,35 @@ def test_planner_tool_registry_describe_tools_snapshot() -> None:
     }
 
     assert described == expected
+
+
+def test_collect_tool_bundle_sources_reused_and_fanout() -> None:
+    results = [
+        {
+            "tool": "web_retriever",
+            "status": "completed",
+            "payload": {
+                "ready": True,
+                "summary": "Cached context",
+                "snippets": [],
+                "from_cache": True,
+            },
+        },
+        {
+            "tool": "stock_tracker",
+            "status": "completed",
+            "payload": {
+                "ready": True,
+                "stock_widget": {
+                    "symbols": ["NASDAQ:NVDA"],
+                },
+            },
+        },
+    ]
+
+    bundle = collect_tool_bundle(results=results)
+
+    assert bundle["sources"]["web_retriever"] == "cached"
+    assert bundle["sources"]["stock_tracker"] == "fanout"
+    assert bundle["web_context"]["summary"] == "Cached context"
+    assert bundle["stock_widget"]["symbols"] == ["NASDAQ:NVDA"]

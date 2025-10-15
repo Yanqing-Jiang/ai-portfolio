@@ -361,12 +361,15 @@ GOLDEN_EVENTS = [
     {"event": "sql_validated", "stage": "sql"},
 
     {"event": "progress", "stage": "sql"},
+    {"event": "sql_ready", "stage": "sql"},
 
     {"event": "progress", "stage": "chart"},
 
     {"event": "chart_planned", "stage": "chart", "chart_type": "line"},
 
     {"event": "chart_generated", "stage": "chart"},
+
+    {"event": "chart_ready", "stage": "chart"},
 
     {"event": "progress", "stage": "analysis"},
     {"event": "analysis_streaming", "stage": "analysis"},

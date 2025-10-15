@@ -169,3 +169,35 @@ def test_sql_attempts_are_sanitized():
     attempts = flow._shared_context["sql"]["attempts"]
     assert isinstance(attempts, list)
     assert attempts[0]["window"] == {"start": None, "stop": 1200, "step": None}
+
+
+def test_hedged_accessories_ready_with_seeded_artifacts():
+    flow = MultiAgentFlow()
+    flow._prepare_context("Accessories reuse")
+    flow._shared_context.setdefault("planner", {})["tickers"] = ["NVDA"]
+    flow._shared_context["stock_widget"] = {"symbols": ["NASDAQ:NVDA"]}
+    flow._shared_context.setdefault("market", {})["source"] = "planner_fanout"
+    flow._shared_context["tool_manifest"] = [{"name": "web_retriever"}]
+    flow._shared_context["tool_results"] = [
+        {
+            "tool": "web_retriever",
+            "status": "completed",
+            "payload": {"ready": True, "summary": "Fan-out context"},
+        }
+    ]
+
+    assert flow._hedged_accessories_ready() is True
+
+
+def test_stock_ready_event_carries_source_metadata():
+    flow = MultiAgentFlow()
+    flow._prepare_context("Stock event source")
+    flow._shared_context["stock_widget"] = {"symbols": ["NASDAQ:NVDA"]}
+    flow._shared_context.setdefault("market", {})["source"] = "planner_fanout"
+    flow._pending_artifact_events.clear()
+    flow._maybe_queue_stock_ready()
+
+    assert flow._pending_artifact_events
+    stock_event = flow._pending_artifact_events[-1]
+    assert stock_event["event"] == "stock_ready"
+    assert stock_event["data"]["source"] == "planner_fanout"

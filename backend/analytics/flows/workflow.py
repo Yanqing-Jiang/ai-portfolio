@@ -6,7 +6,7 @@ from typing import Any, AsyncGenerator, Callable, Dict, Optional
 from analytics.core.session_state import get_session_state_repository
 from analytics.routing import FollowUpClassifier, FollowUpRoute
 from .planner_executor import PlannerExecutorFlow
-from .single_agent_tools import SingleAgentToolsFlow
+from .single_agent_tools import SingleAgentController
 from .multi_agent import MultiAgentFlow
 from .chart_revision import (
     infer_analysis_revision_from_query,
@@ -18,7 +18,7 @@ from .instrumentation import instrument_events
 
 FLOW_FACTORIES: Dict[str, Callable[[], Any]] = {
     "planner-executor": PlannerExecutorFlow,
-    "single-agent": SingleAgentToolsFlow,
+    "single-agent": SingleAgentController,
     "multi-agent": MultiAgentFlow,
 }
 
@@ -97,7 +97,7 @@ async def analytics_memory_workflow(
                     patch=patch,
                     **revision_kwargs,
                 )
-            elif isinstance(flow_instance, SingleAgentToolsFlow):
+            elif isinstance(flow_instance, SingleAgentController):
                 generator = flow_instance.chart_revision(
                     session_id=session_id,
                     patch=patch,
@@ -135,7 +135,7 @@ async def analytics_memory_workflow(
                     analysis=analysis_text,
                     **revision_kwargs,
                 )
-            elif isinstance(flow_instance, SingleAgentToolsFlow):
+            elif isinstance(flow_instance, SingleAgentController):
                 generator = flow_instance.analysis_revision(
                     session_id=session_id,
                     analysis=analysis_text,

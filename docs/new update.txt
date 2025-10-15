@@ -1,25 +1,28 @@
-single agent: C:\Users\Y_J\Desktop\ai-portfolio-main\docs\agent-process-ledger (33).json
-for the market share analysis: sql chart: there is a market share percent that does not show anything. dorpdown series do not work. the label work in the chart. SQL template: Make this template default to pull annual aggregate. 
-check sequence of this process. make sure market research and stock chart genration process is concurrent. The generation doesn't have to be sequencial 
-single agent follow up failure:
-C:\Users\Y_J\Desktop\ai-portfolio-main\docs\agent-process-ledger (34).json
+single agent: 
+Make sure 1. market research: 2 questions can run concurrently 2. stock chart generation 3. sql events(intent, planning, generation, sql chart) can run concurrently at the same time for these 3 tasks. 
+Make sure Financial Analysis card only show up once, and it has information from 1. sql data 2. online search data 3. stock data
+single agent revision:
+agent make decision on what part of the analysis to rerun, make sure chart re-run is for sql chart. 
 
-multi-agent: C:\Users\Y_J\Desktop\ai-portfolio-main\docs\agent-process-ledger (35).json
-no sql chart, no generated sql show up. There was a "Web Context Ready | Topic: How's Nvidia margin growth compare to industry average? | Source: Gemini
-Financial Analysis" that is not needed. A "Market Research" card is not wide enough. sql, stock and web research runed twice. 
+
+multi-agent: 
+Make sure sql, stock and web research do not runed twice. Make sure 1. market research: 2 questions can run concurrently 2. stock chart generation 3. sql events(intent, planning, generation, sql chart) can run concurrently at the same time for these 3 tasks. 
 After orchestration, the supervisor emits a sanitized `cohesive_result` containing:
 
   - Final analysis with: 1. sql data 2. online search data 3. stock data
 
-all the following could be emitted by specialists before supervisor's finan analysis, by their own cards/chat result (make sure to show that in chat):
+all the following could be emitted by specialists before supervisor's final analysis, by their own cards/chat result (make sure to show that in chat):
 
   - stock Chart
   - Web Chart
   - SQL Chart
   - Generated SQL Card
 
-
-multi-agent revision:
-too many element showed up: chart that was generated before (but success with bar chart generation). Stock chart. Another Financial Analysis
-(was requested) and  Revision: Chart updated - Chart type -> bar with Financial Analysis
- and generated sql query again. I believe the first iteration is for live agent demo and need to be integrated or the 2nd generation is not needed. Give me some options to choose once you dig through my code base. 
+Make sure supervisor agent manage these specailists, make decision on what part of the analysis to rerun, make sure chart re-run is for sql chart:
+  - 1. intent_liaison (LLM) – clarifies any missing slots before planning proceeds.  
+  - 2. SQL chain (sql_planner + sql_generator + sql_validator + sql_executor) – produces validated SQL, columns, sample rows, and counts in sequence 
+  - 3. viz_designer (LLM) – assembles or patches the ECharts visualization spec and enforces a non-null primary series 
+  - 1. market_agent (deterministic with optional LLM commentary) – prepares the TradingView widget for requested symbols 
+  - 1. web_research_agent (LLM) – normalizes search snippets into the shared web context
+  - 4. insight_reviewer (LLM) – composes the TL;DR summary and supporting bullets from the gathered artifacts 
+Make sure the sequence of running these specialists are 1->4 there are 3 1s because they can be run concurrently

@@ -6,6 +6,7 @@ import json
 import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
+from copy import deepcopy
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -63,6 +64,16 @@ class SessionStateSnapshot(BaseModel):
     def record_tool_result(self, tool: str, payload: Dict[str, Any]) -> None:
         self.tool_cache[tool] = payload
         self.touch()
+
+    def record_tool_receipt(self, tool: str, payload: Dict[str, Any]) -> None:
+        receipts = self.tool_cache.setdefault("tool_receipts", {})
+        receipts[tool] = deepcopy(payload)
+        self.touch()
+
+    def get_tool_receipt(self, tool: str) -> Optional[Dict[str, Any]]:
+        receipts = self.tool_cache.get("tool_receipts") or {}
+        receipt = receipts.get(tool)
+        return deepcopy(receipt) if receipt is not None else None
 
     def record_revision_snapshot(self, payload: Dict[str, Any]) -> None:
         analytics_cache = self.tool_cache.setdefault("analytics", {})

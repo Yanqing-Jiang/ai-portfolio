@@ -1,8 +1,11 @@
 from __future__ import annotations
 import json
-from typing import AsyncGenerator, Dict, Any, Optional, List, Sequence, Tuple, Set
+import hashlib
+from typing import AsyncGenerator, Dict, Any, Optional, List, Sequence, Tuple, Set, Mapping
 from dataclasses import dataclass, field
 import asyncio
+import contextlib
+from asyncio import QueueEmpty, Task
 import re
 import os
 import logging
@@ -192,6 +195,69 @@ def _validate_sql(sql: str) -> Tuple[bool, List[str], int]:
     elapsed = int((time.time() - start) * 1000)
     return ok, issues, elapsed
 
+
+@dataclass
+class ToolInvocationReceipt:
+    tool: str
+    status: str
+    attempts: int = 0
+    elapsed_ms: Optional[int] = None
+    input_hash: Optional[str] = None
+    output_hash: Optional[str] = None
+    reused: bool = False
+    error: Optional[str] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    timestamp: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+
+    def to_dict(self) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "tool": self.tool,
+            "status": self.status,
+            "attempts": self.attempts,
+            "elapsed_ms": self.elapsed_ms,
+            "input_hash": self.input_hash,
+            "output_hash": self.output_hash,
+            "reused": self.reused,
+            "error": self.error,
+            "timestamp": self.timestamp,
+        }
+        if self.metadata:
+            payload["metadata"] = sanitize_for_json(self.metadata)
+        return {key: value for key, value in payload.items() if value is not None}
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "ToolInvocationReceipt":
+        metadata = payload.get("metadata") or {}
+        return cls(
+            tool=str(payload.get("tool") or ""),
+            status=str(payload.get("status") or "unknown"),
+            attempts=int(payload.get("attempts") or 0),
+            elapsed_ms=payload.get("elapsed_ms"),
+            input_hash=payload.get("input_hash"),
+            output_hash=payload.get("output_hash"),
+            reused=bool(payload.get("reused", False)),
+            error=payload.get("error"),
+            metadata=dict(metadata) if isinstance(metadata, Mapping) else {},
+            timestamp=str(payload.get("timestamp") or datetime.utcnow().isoformat()),
+        )
+
+
+def _hash_payload(payload: Any) -> str:
+    try:
+        normalized = sanitize_for_json(payload)
+    except Exception:
+        normalized = payload
+    try:
+        encoded = json.dumps(
+            normalized,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+    except TypeError:
+        encoded = json.dumps(str(normalized), sort_keys=True).encode("utf-8")
+    return hashlib.sha1(encoded).hexdigest()
+
 @dataclass
 class PlannerPhaseContext:
     query: str
@@ -214,6 +280,8 @@ class PlannerPhaseContext:
     candidate_templates: List[Dict[str, Any]] = field(default_factory=list)
     selected_template_id: Optional[str] = None
     web_search: Optional[ResponseSearchResult] = None
+    web_search_seeded: bool = False
+    stock_widget_seeded: bool = False
     parallelism_enabled: bool = False
     follow_up_route: FollowUpRoute = FollowUpRoute.FULL_PIPELINE
     reuse_sql: bool = False
@@ -232,6 +300,7 @@ class PlannerPhaseContext:
     reused_analysis: bool = False
     snapshot_age_seconds: Optional[float] = None
     snapshot_stale: bool = False
+    tool_receipts: Dict[str, ToolInvocationReceipt] = field(default_factory=dict)
     halted: bool = False
     halt_reason: Optional[str] = None
 
@@ -815,6 +884,49 @@ def _set_web_artifact(
     )
 
 
+class _PayloadSearchResultProxy:
+    """Minimal wrapper so seeded payloads satisfy the ResponseSearchResult interface."""
+
+    def __init__(self, payload: Dict[str, Any]) -> None:
+        self._payload = copy.deepcopy(payload)
+        self.summary = self._payload.get("summary")
+        self.latency_ms = self._payload.get("latency_ms")
+
+    def to_payload(self) -> Dict[str, Any]:
+        return copy.deepcopy(self._payload)
+
+
+def _seed_web_search_from_payload(ctx: PlannerPhaseContext, payload: Dict[str, Any]) -> None:
+    if not isinstance(payload, dict):
+        return
+    sanitized_payload = sanitize_for_json(payload)
+    ctx.web_search = _PayloadSearchResultProxy(sanitized_payload)
+    ctx.web_search_seeded = True
+    if sanitized_payload.get("from_cache"):
+        ctx.reused_web = True
+    topic = sanitized_payload.get("topic") or sanitized_payload.get("search_topic")
+    _set_web_artifact(ctx, payload=sanitized_payload, topic=topic, search_result=None)
+
+
+def _seed_stock_widget_from_payload(ctx: PlannerPhaseContext, payload: Dict[str, Any]) -> None:
+    if not isinstance(payload, dict):
+        return
+    widget_payload = payload.get("stock_widget")
+    if not isinstance(widget_payload, dict):
+        if not payload.get("ready"):
+            return
+        return
+    sanitized_widget = sanitize_for_json(widget_payload)
+    ctx.stock_widget_seeded = True
+    ctx.reused_stock = ctx.reused_stock or bool(payload.get("from_cache"))
+    _set_market_artifact(
+        ctx,
+        widget=sanitized_widget,
+        error=payload.get("error"),
+        error_code=payload.get("error_code"),
+    )
+
+
 def _set_analysis_artifact(
     ctx: PlannerPhaseContext,
     *,
@@ -1135,9 +1247,26 @@ def _build_revision_snapshot_payload(ctx: PlannerPhaseContext) -> Optional[Dict[
 def _compose_sql_ready_payload(ctx: PlannerPhaseContext) -> Optional[Dict[str, Any]]:
     generation = getattr(ctx.artifacts, "sql_generation", None)
     execution = getattr(ctx.artifacts, "sql_execution", None)
+    snapshot = ctx.revision_snapshot if isinstance(ctx.revision_snapshot, dict) else None
+    if not generation and snapshot and snapshot.get("sql"):
+        generation = SimpleNamespace(sql=snapshot.get("sql"))
+    if not execution and snapshot and (
+        snapshot.get("sql_row_count") is not None
+        or snapshot.get("columns")
+        or snapshot.get("data_sample")
+    ):
+        execution = SimpleNamespace(
+            row_count=snapshot.get("sql_row_count"),
+            columns=list(snapshot.get("columns") or []),
+            sample_rows=_limit_sample_rows(snapshot.get("data_sample") or []),
+            dataset_preview=_limit_sample_rows(snapshot.get("data_sample") or []),
+        )
     if not generation and not execution:
         return None
-    payload: Dict[str, Any] = {"reused": True, "schedule_stage": "sql"}
+    payload: Dict[str, Any] = {
+        "reused": bool(ctx.reused_sql),
+        "schedule_stage": "sql",
+    }
     if generation and generation.sql:
         payload["sql"] = generation.sql
     if execution:
@@ -1151,6 +1280,8 @@ def _compose_sql_ready_payload(ctx: PlannerPhaseContext) -> Optional[Dict[str, A
             payload["sample_data"] = sample_rows
     if ctx.snapshot_age_seconds is not None:
         payload["snapshot_age_seconds"] = ctx.snapshot_age_seconds
+    elif ctx.reused_sql:
+        payload["snapshot_age_seconds"] = 0.0
     return payload
 
 
@@ -1338,6 +1469,10 @@ def _hydrate_context_from_snapshot(
             summary=web_ctx_payload.get("summary"),
             latency_ms=web_ctx_payload.get("latency_ms"),
         )
+    if ctx.revision_snapshot and ctx.revision_snapshot.get("stock_widget"):
+        ctx.stock_widget_seeded = True
+    if ctx.revision_snapshot and ctx.revision_snapshot.get("web_context"):
+        ctx.web_search_seeded = True
     ctx.artifacts = artifacts
     ctx.snapshot_artifacts = artifacts
     execution_artifact = getattr(ctx.artifacts, "sql_execution", None)
@@ -1352,6 +1487,14 @@ def _hydrate_context_from_snapshot(
                 row_count = preview_payload.get("row_count")
                 if isinstance(row_count, int):
                     execution_artifact.row_count = row_count
+    receipts_payload = {}
+    if snapshot and isinstance(snapshot.tool_cache, dict):
+        receipts_payload = snapshot.tool_cache.get("tool_receipts") or {}
+    for tool_name, payload in (receipts_payload or {}).items():
+        try:
+            ctx.tool_receipts[tool_name] = ToolInvocationReceipt.from_dict(payload)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("Unable to hydrate tool receipt for %s: %s", tool_name, exc)
 
 def _build_schema_clarifier_request(decision: ClarifierDecision, session_id: str) -> Optional[ClarifyRequestModel]:
     if not decision.slot or not decision.question:
@@ -1431,6 +1574,13 @@ class PlannerPipeline:
         if chart_artifact and chart_artifact.spec:
             snapshot.record_outputs(chart_spec=chart_artifact.spec)
             updated = True
+        market_artifact = getattr(ctx.artifacts, "market", None)
+        if market_artifact and getattr(market_artifact, "snapshot", None):
+            snapshot.record_tool_result(
+                "planner_stock_widget",
+                sanitize_for_json(market_artifact.snapshot),
+            )
+            updated = True
         analysis_artifact = ctx.artifacts.analysis if record_analysis else None
         if analysis_artifact and analysis_artifact.analysis_text:
             snapshot.record_outputs(analysis=analysis_artifact.analysis_text)
@@ -1454,6 +1604,14 @@ class PlannerPipeline:
         if planner_meta.get("follow_up_route") != route_value:
             planner_meta["follow_up_route"] = route_value
             snapshot.tool_cache["planner_metadata"] = planner_meta
+            updated = True
+        receipts = getattr(ctx, "tool_receipts", None)
+        if receipts:
+            for tool_name, receipt in receipts.items():
+                if isinstance(receipt, ToolInvocationReceipt):
+                    snapshot.record_tool_receipt(tool_name, receipt.to_dict())
+                elif isinstance(receipt, dict):
+                    snapshot.record_tool_receipt(tool_name, sanitize_for_json(receipt))
             updated = True
         if updated:
             await repository.save(snapshot)
@@ -1479,6 +1637,55 @@ class PlannerPipeline:
         data.setdefault("parallel_group", "accessory_delta")
         return event
 
+    def _ingest_tool_event(self, ctx: PlannerPhaseContext, event: Dict[str, Any]) -> None:
+        if not isinstance(event, dict):
+            return
+        if event.get("event") != "tool_parallel_result":
+            return
+        data = event.get("data") or {}
+        tool_name = str(data.get("tool") or "").strip().lower()
+        status = str(data.get("status") or "").strip().lower()
+        payload = data.get("payload") or {}
+        if tool_name == "web_retriever" and status in {"completed", "complete", "success"}:
+            if isinstance(payload, dict) and payload.get("ready"):
+                _seed_web_search_from_payload(ctx, payload)
+        elif tool_name == "stock_tracker" and status in {"completed", "complete", "success"}:
+            if isinstance(payload, dict):
+                _seed_stock_widget_from_payload(ctx, payload)
+
+    def _start_tool_parallelism(
+        self,
+        ctx: PlannerPhaseContext,
+        *,
+        adapters: Optional[Sequence[Any]] = None,
+        concurrency_override: Optional[int] = None,
+    ) -> Tuple[Task, asyncio.Queue]:
+        queue: asyncio.Queue = asyncio.Queue()
+
+        async def runner() -> None:
+            async for event in run_tool_parallelism(
+                ctx,
+                adapters=adapters,
+                concurrency_override=concurrency_override,
+            ):
+                self._ingest_tool_event(ctx, event)
+                await queue.put(event)
+
+        task = asyncio.create_task(runner())
+        return task, queue
+
+    @staticmethod
+    def _flush_tool_events(queue: Optional[asyncio.Queue]) -> List[Dict[str, Any]]:
+        flushed: List[Dict[str, Any]] = []
+        if queue is None:
+            return flushed
+        while True:
+            try:
+                flushed.append(queue.get_nowait())
+            except QueueEmpty:
+                break
+        return flushed
+
     async def _emit_post_analysis_accessories(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[str, Any], None]:
         mode_config = get_mode_config(ctx.flow_mode)
         if mode_config.accessories_in_critical_path:
@@ -1497,9 +1704,10 @@ class PlannerPipeline:
                     adapters=tuple(adapters),
                     concurrency_override=len(adapters),
                 ):
+                    self._ingest_tool_event(ctx, event)
                     yield self._mark_delta_event(event)
 
-        if ctx.web_search is None:
+        if ctx.web_search is None and not getattr(ctx, "web_search_seeded", False):
             async for event in self._web_search_phase(ctx):
                 yield self._mark_delta_event(event)
         await self._persist_session_state(ctx, record_artifacts=True)
@@ -1580,6 +1788,36 @@ class PlannerPipeline:
         query = ctx.query
         template = ctx.template
 
+        plan_payload: Optional[Dict[str, Any]] = None
+        if hasattr(plan, "model_dump"):
+            plan_payload = plan.model_dump()
+        elif hasattr(plan, "dict"):
+            plan_payload = plan.dict()
+        input_payload = {
+            "query": query,
+            "intent": getattr(intent, "intent_key", None),
+            "plan": plan_payload,
+            "selected_template_id": selected_template_id,
+        }
+        receipt = ctx.tool_receipts.get("sql_chain")
+        if receipt:
+            receipt.status = "running"
+            receipt.reused = False
+            if not receipt.input_hash:
+                receipt.input_hash = _hash_payload(input_payload)
+            receipt.attempts = 0
+            receipt.error = None
+            receipt.output_hash = None
+        else:
+            receipt = ToolInvocationReceipt(
+                tool="sql_chain",
+                status="running",
+                attempts=0,
+                input_hash=_hash_payload(input_payload),
+            )
+        start_time = time.time()
+        ctx.tool_receipts["sql_chain"] = receipt
+
         sql_progress = EventEmitter.progress("sql_compilation", "Generating SQL with Responses API...")
         sql_progress["data"]["ts"] = datetime.utcnow().isoformat()
         yield sql_progress
@@ -1605,6 +1843,7 @@ class PlannerPipeline:
             attempt_start = time.time()
             attempt_record: Dict[str, Any] = {"attempt": attempt, "status": "started"}
             candidate_sql = ""
+            receipt.attempts += 1
             try:
                 if not self.unified_client:
                     self.unified_client = get_unified_client()
@@ -1754,6 +1993,9 @@ class PlannerPipeline:
             )
             failure_event["data"]["ts"] = datetime.utcnow().isoformat()
             yield failure_event
+            receipt.status = "failed"
+            receipt.error = last_error_detail or last_error_code or "SQL_RETRY_EXHAUSTED"
+            receipt.elapsed_ms = int((time.time() - start_time) * 1000)
             workflow_abort = EventEmitter.result(
                 "workflow_complete",
                 {
@@ -1814,6 +2056,9 @@ class PlannerPipeline:
             )
             error_event["data"]["ts"] = datetime.utcnow().isoformat()
             yield error_event
+            receipt.status = "failed"
+            receipt.error = "; ".join(issues) if issues else "SQL validation failed"
+            receipt.elapsed_ms = int((time.time() - start_time) * 1000)
             workflow_abort = EventEmitter.result(
                 "workflow_complete",
                 {
@@ -1839,7 +2084,12 @@ class PlannerPipeline:
                 status="validated",
             )
             self._capture_artifacts(ctx)
-
+        if not ctx.halted:
+            receipt.status = "completed"
+            receipt.elapsed_ms = int((time.time() - start_time) * 1000)
+            receipt.error = None
+            if sql:
+                receipt.output_hash = _hash_payload({"sql": sql})
         execution_progress = EventEmitter.progress(
             "sql_execution", "Executing query..."
         )
@@ -1885,6 +2135,9 @@ class PlannerPipeline:
             )
             error_event["data"]["ts"] = datetime.utcnow().isoformat()
             yield error_event
+            receipt.status = "failed"
+            receipt.error = str(exec_exc)
+            receipt.elapsed_ms = int((time.time() - start_time) * 1000)
             workflow_abort = EventEmitter.result(
                 "workflow_complete",
                 {
@@ -1900,8 +2153,60 @@ class PlannerPipeline:
             return
 
     async def run_chart_phase(self, ctx: PlannerPhaseContext, *, intent: IntentModel, plan: QueryPlanModel) -> AsyncGenerator[Dict[str, Any], None]:
+        plan_payload: Optional[Dict[str, Any]] = None
+        if hasattr(plan, "model_dump"):
+            plan_payload = plan.model_dump()
+        elif hasattr(plan, "dict"):
+            plan_payload = plan.dict()
+        input_payload = {
+            "query": ctx.query,
+            "intent": getattr(intent, "intent_key", None),
+            "plan": plan_payload,
+        }
+        receipt = ctx.tool_receipts.get("chart_builder")
+        if ctx.reused_chart:
+            if receipt:
+                receipt.status = "reused"
+                receipt.reused = True
+                receipt.error = None
+            else:
+                receipt = ToolInvocationReceipt(
+                    tool="chart_builder",
+                    status="reused",
+                    attempts=0,
+                    input_hash=_hash_payload(input_payload),
+                    reused=True,
+                )
+            ctx.tool_receipts["chart_builder"] = receipt
+            cached_payload = _compose_chart_ready_payload(ctx)
+            if cached_payload:
+                yield _cached_event(
+                    "chart_ready",
+                    cached_payload,
+                    schedule_stage="chart",
+                    flow_mode=self.flow_mode,
+                    parallel_group="core_sequential",
+                )
+            return
+        if receipt:
+            receipt.status = "running"
+            receipt.reused = False
+            receipt.error = None
+            if not receipt.input_hash:
+                receipt.input_hash = _hash_payload(input_payload)
+        else:
+            receipt = ToolInvocationReceipt(
+                tool="chart_builder",
+                status="running",
+                attempts=0,
+                input_hash=_hash_payload(input_payload),
+            )
+        chart_start = time.time()
+        ctx.tool_receipts["chart_builder"] = receipt
         data = _get_sql_dataset(ctx)
         if not data:
+            receipt.status = "skipped"
+            receipt.elapsed_ms = int((time.time() - chart_start) * 1000)
             return
         query = ctx.query
         chart_progress = EventEmitter.progress(
@@ -1909,7 +2214,6 @@ class PlannerPipeline:
         )
         chart_progress["data"]["ts"] = datetime.utcnow().isoformat()
         yield chart_progress
-        chart_start = time.time()
         chart_plan = plan_chart_rule_based(
             data,
             query,
@@ -1935,6 +2239,9 @@ class PlannerPipeline:
         self._capture_artifacts(ctx)
         await self._persist_session_state(ctx, record_chart=True)
         chart_elapsed = int((time.time() - chart_start) * 1000)
+        receipt.status = "completed"
+        receipt.elapsed_ms = chart_elapsed
+        receipt.output_hash = _hash_payload(spec)
         chart_event = EventEmitter.result(
             "chart_planned",
             {
@@ -1966,6 +2273,7 @@ class PlannerPipeline:
             generated_chart["data"]["ts"] = datetime.utcnow().isoformat()
             yield generated_chart
         except ValidationError as ve:
+            receipt.metadata["validation_warning"] = str(ve)
             warning_event = EventEmitter.progress(
                 "warning", f"Chart spec validation warning: {str(ve)}"
             )
@@ -1984,6 +2292,17 @@ class PlannerPipeline:
             fallback_chart["event"] = "chart_generated"
             fallback_chart["data"]["ts"] = datetime.utcnow().isoformat()
             yield fallback_chart
+        ready_payload = _compose_chart_ready_payload(ctx)
+        if ready_payload:
+            ready_payload["reused"] = False
+            ready_payload.setdefault("schedule_stage", "chart")
+            ready_payload.setdefault("parallel_group", "core_sequential")
+            ready_payload.setdefault("flow_mode", self.flow_mode.value)
+            ready_payload.setdefault("ts", datetime.utcnow().isoformat())
+            yield {
+                "event": "chart_ready",
+                "data": sanitize_for_json(ready_payload),
+            }
 
     async def _ensure_analysis_dependencies(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[str, Any], None]:
         if getattr(ctx, "accessories_prefetched", False):
@@ -1991,6 +2310,11 @@ class PlannerPipeline:
         required_tools: List[str] = []
         mode_config = get_mode_config(ctx.flow_mode)
         has_cached_stock = bool(ctx.artifacts.analysis and ctx.artifacts.analysis.stock_widget)
+        if not has_cached_stock:
+            market_artifact = getattr(ctx.artifacts, "market", None)
+            has_cached_stock = bool(market_artifact and getattr(market_artifact, "snapshot", None))
+        if not has_cached_stock and getattr(ctx, "stock_widget_seeded", False):
+            has_cached_stock = True
         has_cached_web = bool(ctx.artifacts.analysis and ctx.artifacts.analysis.web_context)
         if ctx.parallelism_enabled:
             existing = getattr(ctx, "tool_parallel_results", []) or []
@@ -2011,17 +2335,50 @@ class PlannerPipeline:
             subset = [adapter_lookup[name] for name in required_tools if name in adapter_lookup]
             if subset:
                 async for event in run_tool_parallelism(ctx, adapters=subset, concurrency_override=len(subset)):
+                    self._ingest_tool_event(ctx, event)
                     yield event
 
-        has_web_context = ctx.web_search is not None or has_cached_web
+        has_web_context = (
+            ctx.web_search is not None
+            or has_cached_web
+            or getattr(ctx, "web_search_seeded", False)
+        )
         if not has_web_context and mode_config.accessories_in_critical_path:
             async for event in self._web_search_phase(ctx):
                 yield event
         ctx.accessories_prefetched = True
 
     async def run_analysis_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[str, Any], None]:
+        receipt = ctx.tool_receipts.get("analysis_synthesis")
+        if ctx.reused_analysis:
+            if receipt:
+                receipt.status = "reused"
+                receipt.reused = True
+                receipt.error = None
+            else:
+                receipt = ToolInvocationReceipt(
+                    tool="analysis_synthesis",
+                    status="reused",
+                    attempts=0,
+                    reused=True,
+                )
+            ctx.tool_receipts["analysis_synthesis"] = receipt
+            return
+        if receipt:
+            receipt.status = "running"
+            receipt.reused = False
+            receipt.error = None
+            receipt.output_hash = None
+        else:
+            receipt = ToolInvocationReceipt(
+                tool="analysis_synthesis",
+                status="running",
+                attempts=0,
+            )
+        ctx.tool_receipts["analysis_synthesis"] = receipt
         data = _get_sql_dataset(ctx)
         if not data:
+            receipt.status = "skipped"
             return
         async for dependency_event in self._ensure_analysis_dependencies(ctx):
             yield dependency_event
@@ -2031,6 +2388,15 @@ class PlannerPipeline:
         sql = sql_artifact.sql if sql_artifact and sql_artifact.sql else ""
         chart_artifact = ctx.artifacts.chart
         chart_spec = chart_artifact.spec if chart_artifact and chart_artifact.spec else None
+        input_payload = {
+            "query": query,
+            "sql_hash": _hash_payload(sql) if sql else None,
+            "chart_present": bool(chart_spec),
+            "web_present": bool(ctx.web_search or ctx.artifacts.web),
+        }
+        if not receipt.input_hash:
+            receipt.input_hash = _hash_payload(input_payload)
+        receipt.attempts += 1
         analysis_progress = EventEmitter.progress(
             "analysis_generation", "Generating insights..."
         )
@@ -2072,6 +2438,7 @@ class PlannerPipeline:
             "analysis_length": len(full_analysis),
             "analysis": full_analysis,
         }
+        receipt.elapsed_ms = analysis_elapsed
         tldr_summary = _extract_tldr(full_analysis)
         if tldr_summary:
             analysis_payload["tldr"] = tldr_summary
@@ -2094,6 +2461,15 @@ class PlannerPipeline:
         stock_widget = None
         if tool_bundle:
             stock_widget = tool_bundle.get("stock_widget")
+            sources = tool_bundle.get("sources") or {}
+            if sources:
+                if any(
+                    sources.get(alias) == "cached"
+                    for alias in ("web_retriever", "web_retriever_cached", "web_retriever_live")
+                ):
+                    ctx.reused_web = True
+                if sources.get("stock_tracker") == "cached":
+                    ctx.reused_stock = True
             analysis_payload.update(tool_bundle)
         guardrail_payload = None
         if ctx.web_search:
@@ -2122,6 +2498,10 @@ class PlannerPipeline:
             analysis_payload["latency_guardrail"] = guardrail_payload
         self._capture_artifacts(ctx)
         await self._persist_session_state(ctx, record_analysis=True, tool_bundle=tool_bundle or None)
+        receipt.status = "completed"
+        receipt.error = None
+        receipt.output_hash = _hash_payload(analysis_payload)
+        receipt.metadata["fragment_count"] = len(fragments)
         analysis_complete = EventEmitter.result(
             "analysis_complete",
             analysis_payload,
@@ -2332,7 +2712,7 @@ class PlannerPipeline:
                 yield end_event
 
     async def events(self, query: str, session_id: Optional[str] = None) -> AsyncGenerator[Dict[str, Any], None]:
-        """Enhanced workflow with structured decision events and timing."""
+        "Enhanced workflow with structured decision events and timing."
         ctx = await _initialize_context(self, query, session_id)
         session_id = ctx.session_id
         timed_emitter = ctx.timed_emitter
@@ -2343,107 +2723,162 @@ class PlannerPipeline:
         registry = get_planner_tool_registry()
         executed: Set[str] = set()
         mode_config = get_mode_config(self.flow_mode)
+        tool_task: Optional[Task] = None
+        tool_queue: Optional[asyncio.Queue] = None
 
-        async for event in registry.invoke("classification", self, ctx, executed=executed):
-            yield event
-        await self._persist_session_state(ctx, record_artifacts=True)
-        if not ctx.is_financial_query:
-            return
+        def pending_tool_events() -> List[Dict[str, Any]]:
+            return self._flush_tool_events(tool_queue)
 
-        for tool_name in ("intent_detection", "clarification", "plan_generation"):
-            async for event in registry.invoke(tool_name, self, ctx, executed=executed):
+        try:
+            async for event in registry.invoke("classification", self, ctx, executed=executed):
                 yield event
             await self._persist_session_state(ctx, record_artifacts=True)
+            if not ctx.is_financial_query:
+                return
 
-        if ctx.intent is None or (ctx.plan or ctx.provisional_plan) is None:
-            return
-        active_plan = ctx.plan or ctx.provisional_plan
+            for tool_name in ("intent_detection", "clarification", "plan_generation"):
+                async for event in registry.invoke(tool_name, self, ctx, executed=executed):
+                    yield event
+                await self._persist_session_state(ctx, record_artifacts=True)
 
-        reuse_sql = ctx.reuse_sql and ctx.revision_snapshot is not None
-        if not reuse_sql and ctx.snapshot_stale and ctx.revision_snapshot:
-            stale_progress = EventEmitter.progress("sql_generation", "Cached SQL snapshot expired � rerunning dataset")
-            stale_progress["data"]["ts"] = datetime.utcnow().isoformat()
-            stale_progress["data"]["schedule_stage"] = "sql"
-            stale_progress["data"]["parallel_group"] = "core_sequential"
-            stale_progress["data"]["flow_mode"] = self.flow_mode.value
-            stale_progress["data"]["reused"] = False
-            yield stale_progress
-        if not reuse_sql:
-            async for event in registry.invoke("sql_generation", self, ctx, executed=executed):
+            if ctx.intent is None or (ctx.plan or ctx.provisional_plan) is None:
+                return
+
+            should_run_parallel = ctx.parallelism_enabled and not (ctx.reuse_sql and ctx.reuse_snapshot_active)
+            if should_run_parallel:
+                tool_task, tool_queue = self._start_tool_parallelism(ctx)
+                for tool_event in pending_tool_events():
+                    yield tool_event
+
+            reuse_sql = ctx.reuse_sql and ctx.revision_snapshot is not None
+            if not reuse_sql and ctx.snapshot_stale and ctx.revision_snapshot:
+                stale_progress = EventEmitter.progress("sql_generation", "Cached SQL snapshot expired - rerunning dataset")
+                stale_progress["data"]["ts"] = datetime.utcnow().isoformat()
+                stale_progress["data"]["schedule_stage"] = "sql"
+                stale_progress["data"]["parallel_group"] = "core_sequential"
+                stale_progress["data"]["flow_mode"] = self.flow_mode.value
+                stale_progress["data"]["reused"] = False
+                yield stale_progress
+                for tool_event in pending_tool_events():
+                    yield tool_event
+
+            if not reuse_sql:
+                async for event in registry.invoke("sql_generation", self, ctx, executed=executed):
+                    yield event
+                    for tool_event in pending_tool_events():
+                        yield tool_event
+            else:
+                ctx.reused_sql = True
+                reuse_status = EventEmitter.progress("sql_generation", "Reusing cached SQL dataset")
+                reuse_status["data"]["ts"] = datetime.utcnow().isoformat()
+                reuse_status["data"]["schedule_stage"] = "sql"
+                reuse_status["data"]["parallel_group"] = "core_sequential"
+                reuse_status["data"]["flow_mode"] = self.flow_mode.value
+                reuse_status["data"]["reused"] = True
+                yield reuse_status
+                for tool_event in pending_tool_events():
+                    yield tool_event
+                receipt = ctx.tool_receipts.get("sql_chain")
+                if receipt:
+                    receipt.status = "reused"
+                    receipt.reused = True
+                    receipt.error = None
+                sql_payload = _compose_sql_ready_payload(ctx)
+                if sql_payload:
+                    yield _cached_event(
+                        "sql_ready",
+                        sql_payload,
+                        schedule_stage="sql",
+                        flow_mode=self.flow_mode,
+                        parallel_group="core_sequential",
+                    )
+                    for tool_event in pending_tool_events():
+                        yield tool_event
+
+            await self._persist_session_state(
+                ctx,
+                record_sql=(not reuse_sql) and bool(ctx.artifacts.sql_generation and ctx.artifacts.sql_generation.sql),
+                record_artifacts=True,
+            )
+            if not reuse_sql:
+                sql_payload = _compose_sql_ready_payload(ctx)
+                if sql_payload:
+                    sql_payload.setdefault("parallel_group", "core_sequential")
+                    sql_payload.setdefault("flow_mode", self.flow_mode.value)
+                    sql_payload.setdefault("ts", datetime.utcnow().isoformat())
+                    sql_payload["reused"] = False
+                    yield {
+                        "event": "sql_ready",
+                        "data": sanitize_for_json(sql_payload),
+                    }
+            for tool_event in pending_tool_events():
+                yield tool_event
+
+            if tool_task:
+                await tool_task
+                for tool_event in pending_tool_events():
+                    yield tool_event
+                tool_task = None
+                tool_queue = None
+
+            if reuse_sql:
+                stock_payload = _compose_stock_ready_payload(ctx)
+                if stock_payload:
+                    ctx.reused_stock = True
+                    yield _cached_event(
+                        "stock_ready",
+                        stock_payload,
+                        schedule_stage="hedged_accessories",
+                        flow_mode=self.flow_mode,
+                        parallel_group="tool_fanout",
+                    )
+                web_payload = _compose_web_ready_payload(ctx)
+                if web_payload:
+                    ctx.reused_web = True
+                    yield _cached_event(
+                        "web_ready",
+                        web_payload,
+                        schedule_stage="hedged_accessories",
+                        flow_mode=self.flow_mode,
+                        parallel_group="tool_fanout",
+                    )
+                ctx.accessories_prefetched = True
+            else:
+                async for event in self._ensure_analysis_dependencies(ctx):
+                    yield event
+                    for tool_event in pending_tool_events():
+                        yield tool_event
+
+            if ctx.halted:
+                return
+
+            async for event in registry.invoke("chart_generation", self, ctx, executed=executed):
                 yield event
-        else:
-            ctx.reused_sql = True
-            reuse_status = EventEmitter.progress("sql_generation", "Reusing cached SQL dataset")
-            reuse_status["data"]["ts"] = datetime.utcnow().isoformat()
-            reuse_status["data"]["schedule_stage"] = "sql"
-            reuse_status["data"]["parallel_group"] = "core_sequential"
-            reuse_status["data"]["flow_mode"] = self.flow_mode.value
-            reuse_status["data"]["reused"] = True
-            yield reuse_status
-            sql_payload = _compose_sql_ready_payload(ctx)
-            if sql_payload:
-                yield _cached_event(
-                    "sql_ready",
-                    sql_payload,
-                    schedule_stage="sql",
-                    flow_mode=self.flow_mode,
-                    parallel_group="core_sequential",
-                )
-        await self._persist_session_state(
-            ctx,
-            record_sql=(not reuse_sql) and bool(ctx.artifacts.sql_generation and ctx.artifacts.sql_generation.sql),
-            record_artifacts=True,
-        )
-        if reuse_sql:
-            stock_payload = _compose_stock_ready_payload(ctx)
-            if stock_payload:
-                ctx.reused_stock = True
-                yield _cached_event(
-                    "stock_ready",
-                    stock_payload,
-                    schedule_stage="hedged_accessories",
-                    flow_mode=self.flow_mode,
-                    parallel_group="tool_fanout",
-                )
-            web_payload = _compose_web_ready_payload(ctx)
-            if web_payload:
-                ctx.reused_web = True
-                yield _cached_event(
-                    "web_ready",
-                    web_payload,
-                    schedule_stage="hedged_accessories",
-                    flow_mode=self.flow_mode,
-                    parallel_group="tool_fanout",
-                )
-            ctx.accessories_prefetched = True
-        else:
-            async for event in self._ensure_analysis_dependencies(ctx):
+            await self._persist_session_state(
+                ctx,
+                record_chart=bool(ctx.artifacts.chart and ctx.artifacts.chart.spec),
+                record_artifacts=True,
+            )
+
+            if mode_config.accessories_in_critical_path:
+                async for event in self._web_search_phase(ctx):
+                    yield event
+                await self._persist_session_state(ctx, record_artifacts=True)
+
+            async for event in registry.invoke("analysis_generation", self, ctx, executed=executed):
                 yield event
-        if ctx.halted:
-            return
-
-        async for event in registry.invoke("chart_generation", self, ctx, executed=executed):
-            yield event
-        await self._persist_session_state(
-            ctx,
-            record_chart=bool(ctx.artifacts.chart and ctx.artifacts.chart.spec),
-            record_artifacts=True,
-        )
-
-        if mode_config.accessories_in_critical_path:
-            async for event in self._web_search_phase(ctx):
-                yield event
-            await self._persist_session_state(ctx, record_artifacts=True)
-
-        async for event in registry.invoke("analysis_generation", self, ctx, executed=executed):
-            yield event
-        await self._persist_session_state(
-            ctx,
-            record_analysis=bool(
-                ctx.artifacts.analysis and ctx.artifacts.analysis.analysis_text
-            ),
-            record_artifacts=True,
-        )
+            await self._persist_session_state(
+                ctx,
+                record_analysis=bool(
+                    ctx.artifacts.analysis and ctx.artifacts.analysis.analysis_text
+                ),
+                record_artifacts=True,
+            )
+        finally:
+            if tool_task:
+                tool_task.cancel()
+                with contextlib.suppress(Exception):
+                    await tool_task
 
 
 async def _initialize_context(self, query: str, session_id: Optional[str]) -> PlannerPhaseContext:
@@ -2470,6 +2905,15 @@ async def _initialize_context(self, query: str, session_id: Optional[str]) -> Pl
     else:
         ctx.revision_snapshot = None
         ctx.prior_intent_signature = None
+    if (
+        not snapshot_artifacts
+        and not revision_snapshot
+        and self.follow_up_route == FollowUpRoute.REUSE_SQL
+        and self._latest_artifacts is not None
+    ):
+        cloned_artifacts = copy.deepcopy(self._latest_artifacts)
+        ctx.artifacts = copy.deepcopy(cloned_artifacts)
+        ctx.snapshot_artifacts = copy.deepcopy(cloned_artifacts)
     return ctx
 
 
@@ -2927,6 +3371,8 @@ async def _plan_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[str
     ctx.reused_stock = False
     ctx.reused_web = False
     ctx.reused_analysis = False
+    ctx.web_search_seeded = False
+    ctx.stock_widget_seeded = False
     current_signature = build_intent_signature(intent, ctx.plan)
     ctx.intent_signature = current_signature
     prior_signature = ctx.prior_intent_signature
@@ -2983,11 +3429,6 @@ async def _plan_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[str
         }
     )
     yield plan_event
-    should_run_parallel = ctx.parallelism_enabled and not (ctx.reuse_sql and ctx.reuse_snapshot_active)
-    if should_run_parallel:
-        async for tool_event in run_tool_parallelism(ctx):
-            yield tool_event
-
     template_info = None
     if template and intent.intent_key:
         queries_config = CONFIGS.__dict__.get("queries", {})

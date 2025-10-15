@@ -18,12 +18,12 @@ setattr(google_stub, "genai", genai_stub)
 sys.modules["google.genai"] = genai_stub
 sys.modules["google.genai.types"] = genai_types_stub
 
-from analytics.flows.single_agent_tools import SingleAgentToolsFlow  # noqa: E402
+from analytics.flows.single_agent_tools import SingleAgentController  # noqa: E402
 from analytics.flows.multi_agent import MultiAgentFlow  # noqa: E402
 
 
 def test_single_agent_metadata_lookup() -> None:
-    flow = SingleAgentToolsFlow()
+    flow = SingleAgentController()
 
     sql_step_meta = flow.get_tool_metadata_for_step("sql_compilation")
     assert sql_step_meta is not None

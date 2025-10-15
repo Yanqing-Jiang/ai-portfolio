@@ -151,7 +151,7 @@ def _build_single_agent_cohesive_payload(
 
 
 class _SingleAgentToolHooks(AnalyticsFlowHooks):
-    def __init__(self, flow: "SingleAgentToolsFlow", session_id: Optional[str] = None) -> None:
+    def __init__(self, flow: "SingleAgentController", session_id: Optional[str] = None) -> None:
         self._flow = flow
         self._timers: Dict[str, float] = {}
         self._sql_compile_details: Dict[str, Any] = {}
@@ -318,7 +318,7 @@ class _SingleAgentToolHooks(AnalyticsFlowHooks):
         return data
 
 
-class SingleAgentToolsFlow:
+class SingleAgentController:
     """Augments the planner-executor flow with explicit tool-call telemetry."""
 
     TOOL_START_STEPS = {
