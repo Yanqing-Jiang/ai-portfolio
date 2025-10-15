@@ -1,11 +1,34 @@
 import sys
 from pathlib import Path
 import asyncio
+import types
 
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 
+google_stub = sys.modules.setdefault("google", types.ModuleType("google"))
+google_stub.__path__ = []
+genai_stub = types.ModuleType("google.genai")
+genai_types_stub = types.ModuleType("google.genai.types")
+setattr(genai_stub, "types", genai_types_stub)
+setattr(google_stub, "genai", genai_stub)
+sys.modules["google.genai"] = genai_stub
+sys.modules["google.genai.types"] = genai_types_stub
+
 from analytics.flows.multi_agent import MultiAgentFlow
 from analytics.flows.orchestrator import AgentResult
+
+
+def test_multi_agent_plan_dependencies():
+    flow = MultiAgentFlow()
+    plan_map = {task.name: task for task in flow._base_plan}
+    assert plan_map["chart_phase"].depends_on == ("query_phase",)
+    assert plan_map["market_phase"].depends_on == ("query_phase",)
+    assert plan_map["web_research_phase"].depends_on == ("query_phase",)
+    assert set(plan_map["analyst_phase"].depends_on) == {
+        "chart_phase",
+        "market_phase",
+        "web_research_phase",
+    }
 
 
 class DummyPlannerFlow:
@@ -125,6 +148,67 @@ def test_multi_agent_cohesive_result_payload(monkeypatch):
     assert data["chart_spec"]["title"] == "Share"
     assert data["sql"] == "SELECT * FROM market_share"
     assert data["stock_widget"]["symbols"] == ["NASDAQ:AMD"]
+
+    stock_ready = next((evt for evt in emitted if evt.get("event") == "stock_ready"), None)
+    if stock_ready:
+        assert stock_ready["data"]["lane"] == "market"
+        assert stock_ready["data"]["parallel_group"] == "multi_supervisor_fanout"
+        assert stock_ready["data"]["flow_mode"] == "multi_agent"
+        assert stock_ready["data"]["reused"] is False
+
+    web_ready = next((evt for evt in emitted if evt.get("event") == "web_ready"), None)
+    if web_ready:
+        assert web_ready["data"]["lane"] == "web"
+        assert web_ready["data"]["parallel_group"] == "multi_supervisor_fanout"
+        assert web_ready["data"]["flow_mode"] == "multi_agent"
+        assert web_ready["data"].get("reused", False) is False
+
+    lane_summary = next((evt for evt in emitted if evt.get("event") == "agent_decision"), None)
+    if lane_summary:
+        lane_data = lane_summary.get("data", {})
+        assert lane_data.get("parallel_group") in {"single_agent_fanout", "multi_supervisor_fanout"}
+        assert lane_data.get("ts")
+
+
+def test_multi_agent_emits_final_answer_when_cannot_cohere(monkeypatch):
+    flow = MultiAgentFlow()
+    flow._prepare_context("Tell me a joke")
+    flow._shared_context["analysis"]["final"] = "Our analytics tools focus on finance. Please ask about markets or company metrics."
+    flow._shared_context["analysis"]["length"] = 17
+    flow._shared_context["planner"]["tickers"] = []
+    flow._shared_context["tool_results"] = [
+        {"tool": "web_retriever", "status": "completed", "payload": {"ready": True}}
+    ]
+
+    async def fake_run(plan, context):
+        return {
+            "planner_phase": AgentResult(name="planner", output={}),
+            "query_phase": AgentResult(name="query", output={"status": "complete"}),
+            "analyst_phase": AgentResult(name="analyst", output={"status": "complete"}),
+            "chart_phase": AgentResult(name="chart", output={"status": "skip"}),
+            "market_phase": AgentResult(name="market", output={"status": "skip"}),
+            "web_research_phase": AgentResult(name="web_research", output={"status": "complete"}),
+        }
+
+    monkeypatch.setattr(flow._orchestrator, "run", fake_run)
+
+    async def collect():
+        payloads = []
+        async for evt in flow._run_agent_orchestration("Tell me a joke", session_id="sess-002"):
+            payloads.append(evt)
+        return payloads
+
+    emitted = asyncio.run(collect())
+    assert any(evt.get("event") == "cohesive_result_error" for evt in emitted)
+    final_event = next(evt for evt in emitted if evt.get("event") == "final_answer")
+    message = final_event["data"]["message"]
+    assert message.startswith("Our analytics tools focus on finance.")
+    assert "Pending lanes:" in message
+    assert final_event["data"].get("final_answer_only") is True
+    assert final_event["data"].get("analysis_available") is True
+    assert final_event["data"].get("flow_mode") == "multi_agent"
+    missing = set(final_event["data"].get("missing_components", []))
+    assert missing == {"sql", "stock", "web"}
 
 
 def test_chart_generated_normalizes_wrapped_spec():

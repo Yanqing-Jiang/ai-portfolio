@@ -335,7 +335,7 @@ async def classify_query_async(
     query: str,
     *,
     session_id: Optional[str] = None,
-    model: str = "gpt-5-nano-2025-08-07",
+    model: str = "gpt-5-mini-2025-08-07",
     reasoning_effort: str = "low",
 ) -> OffTopicClassifierSchema:
     """Async helper used by agents that already run inside an event loop."""
@@ -369,7 +369,7 @@ def classify_query(
     query: str,
     *,
     session_id: Optional[str] = None,
-    model: str = "gpt-5-nano-2025-08-07",
+    model: str = "gpt-5-mini-2025-08-07",
     reasoning_effort: str = "low",
 ) -> OffTopicClassifierSchema:
     """Synchronous wrapper for classification."""
@@ -397,7 +397,7 @@ async def detect_intent_fast_async(
     configs: Dict[str, Any],
     *,
     session_id: Optional[str] = None,
-    model: str = "gpt-5-nano-2025-08-07",
+    model: str = "gpt-5-mini-2025-08-07",
     reasoning_effort: str = "low",
 ) -> IntentModel:
     """Fast path: heuristic-first, at most one LLM call, low effort by default."""
@@ -484,7 +484,7 @@ def detect_intent_with_clarifications(
     configs: Dict[str, Any],
     *,
     session_id: Optional[str] = None,
-    model: str = "gpt-5-nano-2025-08-07",
+    model: str = "gpt-5-mini-2025-08-07",
     reasoning_effort: str = "low",
 ) -> IntentModel:
     """Synchronous helper maintained for legacy pipelines."""

@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
@@ -55,7 +55,7 @@ def decide_schema_clarification(
     *,
     session_id: Optional[str] = None,
     template_id: Optional[str] = None,
-    model: str = "gpt-5-nano-2025-08-07",
+    model: str = "gpt-5-mini-2025-08-07",
     reasoning_effort: str = "low",
 ) -> ClarifierDecision:
     required_slots = get_required_slots(intent.intent_key)

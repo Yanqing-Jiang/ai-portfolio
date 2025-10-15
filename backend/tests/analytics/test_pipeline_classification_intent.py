@@ -52,7 +52,7 @@ def test_classification_phase_populates_artifact(monkeypatch: pytest.MonkeyPatch
         assert artifact is not None
         assert artifact.category == "financial_analytics"
         assert artifact.is_financial is True
-        assert artifact.model == "gpt-5-nano-2025-08-07"
+        assert artifact.model == "gpt-5-mini-2025-08-07"
         assert artifact.raw.get("topic_category") == "financial_analytics"
 
     asyncio.run(_run())
@@ -70,7 +70,7 @@ def test_pipeline_events_runs_tools_in_order(monkeypatch: pytest.MonkeyPatch) ->
 
         async def fake_run_intent(ctx):
             order.append("intent_detection")
-            ctx.intent = object()
+            ctx.intent = IntentModel(intent_key="test_intent", confidence=1.0, slots_detected={})
             yield {"event": "intent_complete"}
 
         async def fake_run_clarification(ctx):
@@ -79,7 +79,8 @@ def test_pipeline_events_runs_tools_in_order(monkeypatch: pytest.MonkeyPatch) ->
 
         async def fake_run_plan(ctx):
             order.append("plan_generation")
-            ctx.plan = object()
+            ctx.plan = QueryPlanModel(metrics=["revenue"])
+            ctx.provisional_plan = ctx.plan
             yield {"event": "plan_complete"}
 
         async def fake_run_sql(ctx, intent, plan, candidate_templates, selected_template_id):

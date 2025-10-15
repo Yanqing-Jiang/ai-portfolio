@@ -1355,6 +1355,7 @@ def _cached_event(
     schedule_stage: str,
     flow_mode: FlowMode,
     parallel_group: Optional[str] = None,
+    lane: Optional[str] = None,
 ) -> Dict[str, Any]:
     sanitized = sanitize_for_json(payload) if isinstance(payload, dict) else {"payload": sanitize_for_json(payload)}
     if not isinstance(sanitized, dict):
@@ -1362,6 +1363,8 @@ def _cached_event(
     sanitized.setdefault("schedule_stage", schedule_stage)
     if parallel_group:
         sanitized.setdefault("parallel_group", parallel_group)
+    if lane:
+        sanitized.setdefault("lane", lane)
     sanitized.setdefault("flow_mode", flow_mode.value)
     sanitized.setdefault("reused", True)
     sanitized.setdefault("ts", datetime.utcnow().isoformat())
@@ -1649,7 +1652,10 @@ class PlannerPipeline:
         if tool_name == "web_retriever" and status in {"completed", "complete", "success"}:
             if isinstance(payload, dict) and payload.get("ready"):
                 _seed_web_search_from_payload(ctx, payload)
-        elif tool_name == "stock_tracker" and status in {"completed", "complete", "success"}:
+        elif (
+            tool_name == "stock_tracker"
+            or tool_name.startswith("market_question")
+        ) and status in {"completed", "complete", "success"}:
             if isinstance(payload, dict):
                 _seed_stock_widget_from_payload(ctx, payload)
 
@@ -2186,6 +2192,7 @@ class PlannerPipeline:
                     schedule_stage="chart",
                     flow_mode=self.flow_mode,
                     parallel_group="core_sequential",
+                    lane="chart",
                 )
             return
         if receipt:
@@ -2299,6 +2306,7 @@ class PlannerPipeline:
             ready_payload.setdefault("parallel_group", "core_sequential")
             ready_payload.setdefault("flow_mode", self.flow_mode.value)
             ready_payload.setdefault("ts", datetime.utcnow().isoformat())
+            ready_payload.setdefault("lane", "chart")
             yield {
                 "event": "chart_ready",
                 "data": sanitize_for_json(ready_payload),
@@ -2377,11 +2385,9 @@ class PlannerPipeline:
             )
         ctx.tool_receipts["analysis_synthesis"] = receipt
         data = _get_sql_dataset(ctx)
-        if not data:
-            receipt.status = "skipped"
-            return
-        async for dependency_event in self._ensure_analysis_dependencies(ctx):
-            yield dependency_event
+        if data:
+            async for dependency_event in self._ensure_analysis_dependencies(ctx):
+                yield dependency_event
         session_id = ctx.session_id
         query = ctx.query
         sql_artifact = ctx.artifacts.sql_generation
@@ -2791,6 +2797,7 @@ class PlannerPipeline:
                         schedule_stage="sql",
                         flow_mode=self.flow_mode,
                         parallel_group="core_sequential",
+                        lane="sql",
                     )
                     for tool_event in pending_tool_events():
                         yield tool_event
@@ -2806,6 +2813,7 @@ class PlannerPipeline:
                     sql_payload.setdefault("parallel_group", "core_sequential")
                     sql_payload.setdefault("flow_mode", self.flow_mode.value)
                     sql_payload.setdefault("ts", datetime.utcnow().isoformat())
+                    sql_payload.setdefault("lane", "sql")
                     sql_payload["reused"] = False
                     yield {
                         "event": "sql_ready",
@@ -2831,6 +2839,7 @@ class PlannerPipeline:
                         schedule_stage="hedged_accessories",
                         flow_mode=self.flow_mode,
                         parallel_group="tool_fanout",
+                        lane="market",
                     )
                 web_payload = _compose_web_ready_payload(ctx)
                 if web_payload:
@@ -2841,6 +2850,7 @@ class PlannerPipeline:
                         schedule_stage="hedged_accessories",
                         flow_mode=self.flow_mode,
                         parallel_group="tool_fanout",
+                        lane="web",
                     )
                 ctx.accessories_prefetched = True
             else:
@@ -2921,15 +2931,46 @@ async def _classification_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerato
     timed_emitter = ctx.timed_emitter
     timed_emitter.start_step("classification")
     classification_started_ts = datetime.utcnow().isoformat()
-    model_name = "gpt-5-nano-2025-08-07"
+    flow_mode = getattr(self, "flow_mode", None)
+    agentic_mode = flow_mode in {FlowMode.SINGLE_AGENT, FlowMode.MULTI_AGENT}
+    skip_classifier_flag = os.getenv("ANALYTICS_SINGLE_AGENT_SKIP_CLASSIFIER", "1").strip().lower()
+    skip_classifier = agentic_mode and skip_classifier_flag not in {"0", "false", "off"}
+    model_name = "gpt-5-mini-2025-08-07"
     yield {
         "event": "classification_started",
         "data": {
-            "message": "Starting query classification...",
+            "message": "Bypassing financial qualifier for agentic controller." if skip_classifier else "Starting query classification...",
             "model": model_name,
             "ts": classification_started_ts,
         },
     }
+    if skip_classifier:
+        ctx.classification = None
+        ctx.is_financial_query = True
+        ctx.artifacts.classification = ClassificationArtifactModel(
+            query=ctx.query,
+            category="financial_analytics",
+            confidence=1.0,
+            is_financial=True,
+            model=model_name,
+            raw={"skipped": True},
+        )
+        self._capture_artifacts(ctx)
+        classification_elapsed = timed_emitter.end_step("classification")
+        classification_complete = {
+            "event": "classification_complete",
+            "data": {
+                "is_financial": ctx.is_financial_query,
+                "category": "financial_analytics",
+                "confidence": 1.0,
+                "skipped": True,
+                "ts": datetime.utcnow().isoformat(),
+            },
+        }
+        if classification_elapsed:
+            classification_complete["data"]["elapsed_ms"] = classification_elapsed
+        yield classification_complete
+        return
     classification: Optional[OffTopicClassifierSchema] = None
     try:
         classification = await classify_query_async(
