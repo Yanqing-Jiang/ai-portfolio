@@ -11,6 +11,7 @@ import {
   DEFAULT_OG_IMAGE,
   DEFAULT_THEME_COLOR,
   DEFAULT_TWITTER_HANDLE,
+  LANDING_FAQ,
   LANDING_SEO,
   SITE_NAME,
 } from '../constants/seo';
@@ -183,7 +184,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ projectData, onSelectProject 
   );
   const navigationLinks = useMemo(() => toNavigationFromProjects(allProjects), [allProjects]);
   const landingSchemas = useMemo(
-    () => buildLandingSchemas(allProjects, navigationLinks),
+    () => buildLandingSchemas(allProjects, navigationLinks, LANDING_FAQ),
     [allProjects, navigationLinks]
   );
   const landingKeywords = useMemo(() => LANDING_SEO.keywords.join(', '), []);
@@ -245,6 +246,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ projectData, onSelectProject 
       <meta name="robots" content="index, follow" />
       <link rel="canonical" href={LANDING_SEO.canonical} />
       <link rel="alternate" hrefLang="en-us" href={LANDING_SEO.canonical} />
+      <link rel="manifest" href="/manifest.webmanifest" />
       {LANDING_SEO.sameAs?.map((profile) => (
         <link key={profile} rel="me" href={profile} />
       ))}

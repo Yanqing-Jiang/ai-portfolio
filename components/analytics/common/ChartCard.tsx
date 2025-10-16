@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState, useId } from 'react';
 import EChartsReact from 'echarts-for-react';
 import { ChartCardProps } from '../types';
 import { ChartErrorBoundary } from './ChartErrorBoundary';
@@ -16,6 +16,7 @@ export const ChartCard: React.FC<ChartCardProps> = ({
   const [chartRetryCount, setChartRetryCount] = useState(0);
   const chartRef = useRef<any>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const dropdownId = useId();
   const resolvedSpec = useMemo(() => hydrateChartSpec(chartSpec), [chartSpec]);
   const spec = resolvedSpec;
 
@@ -238,8 +239,9 @@ export const ChartCard: React.FC<ChartCardProps> = ({
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 sm:gap-4 mb-3 sm:mb-2">
             {enableDropdown && (
               <div className="flex items-center gap-2 text-gray-700 text-sm sm:text-base">
-                <label className="font-medium">Series:</label>
+                <label className="font-medium" htmlFor={dropdownId}>Series:</label>
                 <select
+                  id={dropdownId}
                   className="bg-gray-100 border border-gray-300 rounded px-2 sm:px-3 py-1 sm:py-1.5 text-sm sm:text-base min-h-[32px] sm:min-h-[36px]"
                   onChange={(e) => handleMetricChange(e.target.value)}
                   defaultValue={((spec.meta?.defaultColumns || []).map((c: string) => c.replace(/_/g, ' ').replace(/\b\w/g, (m: string) => m.toUpperCase())))[0]}

@@ -89,6 +89,29 @@ export const LANDING_SEO = {
   updatedTime: '2025-10-01T00:00:00Z',
 };
 
+export const LANDING_FAQ = [
+  {
+    question: 'What types of AI systems do you build?',
+    answer:
+      'I ship LangGraph-powered copilots, memory-augmented workflows, and analytics agents that automate research, SQL generation, and decision support for commercial teams.',
+  },
+  {
+    question: 'Which industries have you supported?',
+    answer:
+      'Commerce, retail media, finance, and operations groups rely on my platforms for experimentation, procurement automation, and revenue forecasting.',
+  },
+  {
+    question: 'How do you approach data governance and infrastructure?',
+    answer:
+      'I modernize Supabase and SQL Server foundations with governed views, vector indexes, and telemetry so AI agents and BI tools stay compliant and fast.',
+  },
+  {
+    question: 'Can you integrate with existing analytics stacks?',
+    answer:
+      'Yes. I have integrated FastAPI services, Supabase, Power BI, and bespoke APIs to orchestrate workflows that work alongside the tools teams already use.',
+  },
+];
+
 export const AI_CRAWLER_ALLOWLIST = [
   'GPTBot',
   'ChatGPT-User',

@@ -30,18 +30,39 @@ export interface NavigationDefinition {
   url: string;
 }
 
+export interface FaqItem {
+  question: string;
+  answer: string;
+}
+
+const replaceFancyQuotes = (value: string) =>
+  value
+    .replace(/[\u2018\u2019\u2032\u2035]/g, "'")
+    .replace(/[\u201C\u201D\u2033\u2036]/g, '"')
+    .replace(/[\u2013\u2014]/g, '-')
+    .replace(/\u2026/g, '...');
+
+const sanitizeText = (value?: string) => {
+  if (!value) return '';
+  const normalized = replaceFancyQuotes(value).replace(/[^\x09\x0A\x0D\x20-\x7E]/g, ' ');
+  return normalized.replace(/\s+/g, ' ').trim();
+};
+
+const sanitizeStringList = (values?: string[]) =>
+  values?.map((item) => sanitizeText(item)).filter(Boolean) ?? [];
+
 const toQuantitativeValue = (metric: MetricDefinition) => ({
   '@type': 'QuantitativeValue',
-  name: metric.name,
+  name: sanitizeText(metric.name),
   value: metric.value,
   unitText: metric.unitText ?? 'Unit',
-  description: metric.description,
+  description: sanitizeText(metric.description),
 });
 
 export const buildWebsiteSchema = (projects: Project[]) => {
   const projectPages = projects.map((project, index) => ({
     '@type': 'WebPage',
-    name: project.seoTitle ?? project.title,
+    name: sanitizeText(project.seoTitle ?? project.title),
     url: `${SITE_BASE_URL}/project/${project.id}`,
     datePublished: project.datePublished ?? LANDING_SEO.updatedTime,
     dateModified: project.dateModified ?? LANDING_SEO.updatedTime,
@@ -53,11 +74,11 @@ export const buildWebsiteSchema = (projects: Project[]) => {
     '@type': 'WebSite',
     name: SITE_NAME,
     url: SITE_BASE_URL,
-    description: LANDING_SEO.description,
+    description: sanitizeText(LANDING_SEO.description),
     inLanguage: 'en',
     publisher: {
       '@type': 'Person',
-      name: LANDING_SEO.author,
+      name: sanitizeText(LANDING_SEO.author),
       sameAs: LANDING_SEO.sameAs ?? DEFAULT_SAME_AS,
     },
     sameAs: LANDING_SEO.sameAs ?? DEFAULT_SAME_AS,
@@ -78,21 +99,21 @@ export const buildServiceCatalogSchema = (services: ServiceDefinition[] = LANDIN
   url: SITE_BASE_URL,
   provider: {
     '@type': 'Person',
-    name: LANDING_SEO.author,
+    name: sanitizeText(LANDING_SEO.author),
   },
   itemListElement: services.map((service, index) => ({
     '@type': 'Offer',
     position: index + 1,
     itemOffered: {
       '@type': 'Service',
-      name: service.name,
-      description: service.description,
-      serviceType: service.serviceType ?? service.name,
-      keywords: service.keywords,
+      name: sanitizeText(service.name),
+      description: sanitizeText(service.description),
+      serviceType: sanitizeText(service.serviceType ?? service.name),
+      keywords: sanitizeStringList(service.keywords),
       areaServed: service.areaServed ?? 'Global',
       provider: {
         '@type': 'Person',
-        name: LANDING_SEO.author,
+        name: sanitizeText(LANDING_SEO.author),
       },
     },
   })),
@@ -101,10 +122,10 @@ export const buildServiceCatalogSchema = (services: ServiceDefinition[] = LANDIN
 export const buildSiteNavigationSchema = (routes: NavigationDefinition[]) => ({
   '@context': 'https://schema.org',
   '@type': 'SiteNavigationElement',
-  name: SITE_NAME,
+  name: sanitizeText(SITE_NAME),
   hasPart: routes.map((route) => ({
     '@type': 'SiteNavigationElement',
-    name: route.name,
+    name: sanitizeText(route.name),
     url: route.url,
   })),
 });
@@ -113,12 +134,12 @@ export const buildStatsSchema = (metrics: MetricDefinition[] = LANDING_METRICS) 
   '@context': 'https://schema.org',
   '@type': 'Dataset',
   name: 'AI systems and analytics automation impact metrics',
-  description: 'Key performance metrics for Yanqing Jiang’s AI systems, analytics automation, and experimentation programs.',
+  description: "Key performance metrics for Yanqing Jiang's AI systems, analytics automation, and experimentation programs.",
   creator: {
     '@type': 'Person',
-    name: LANDING_SEO.author,
+    name: sanitizeText(LANDING_SEO.author),
   },
-  includedInDataCatalog: SITE_NAME,
+  includedInDataCatalog: sanitizeText(SITE_NAME),
   measurementTechnique: ['Automation Hours', 'Incremental Revenue', 'Agentic Trading Gains'],
   variableMeasured: metrics.map(toQuantitativeValue),
 });
@@ -129,8 +150,21 @@ export const buildBreadcrumbList = (items: NavigationDefinition[]) => ({
   itemListElement: items.map((item, index) => ({
     '@type': 'ListItem',
     position: index + 1,
-    name: item.name,
+    name: sanitizeText(item.name),
     item: item.url,
+  })),
+});
+
+export const buildFaqSchema = (items: FaqItem[] = []) => ({
+  '@context': 'https://schema.org',
+  '@type': 'FAQPage',
+  mainEntity: items.map((item) => ({
+    '@type': 'Question',
+    name: sanitizeText(item.question),
+    acceptedAnswer: {
+      '@type': 'Answer',
+      text: sanitizeText(item.answer),
+    },
   })),
 });
 
@@ -149,23 +183,25 @@ const ensureDescription = (project: Project) => {
 };
 
 export const buildArticleSchema = (project: Project) => {
-  const keywords = ensureKeywords(project);
-  const description = ensureDescription(project);
+  const keywords = sanitizeStringList(ensureKeywords(project));
+  const description = sanitizeText(ensureDescription(project));
+  const headline = sanitizeText(project.seoTitle ?? `${project.title} | AI Systems Project`);
+  const authorName = sanitizeText(LANDING_SEO.author);
 
   return {
     '@context': 'https://schema.org',
     '@type': 'Article',
-    headline: project.seoTitle ?? `${project.title} | AI Systems Project`,
+    headline,
     description,
     author: {
       '@type': 'Person',
-      name: LANDING_SEO.author,
+      name: authorName,
       url: SITE_BASE_URL,
       sameAs: LANDING_SEO.sameAs ?? DEFAULT_SAME_AS,
     },
     publisher: {
       '@type': 'Organization',
-      name: SITE_NAME,
+      name: sanitizeText(SITE_NAME),
       url: SITE_BASE_URL,
       logo: {
         '@type': 'ImageObject',
@@ -176,23 +212,35 @@ export const buildArticleSchema = (project: Project) => {
     image: project.ogImage ?? project.coverUrl ?? project.imageUrl ?? DEFAULT_OG_IMAGE,
     datePublished: project.datePublished ?? LANDING_SEO.updatedTime,
     dateModified: project.dateModified ?? LANDING_SEO.updatedTime,
-    about: project.serviceTags,
-    mentions: project.statHighlights,
+    about: sanitizeStringList(project.serviceTags),
+    mentions: sanitizeStringList(project.statHighlights),
   };
 };
 
-export const buildLandingSchemas = (projects: Project[], navigation: NavigationDefinition[]) => [
-  buildWebsiteSchema(projects),
-  buildServiceCatalogSchema(),
-  buildSiteNavigationSchema(navigation),
-  buildStatsSchema(),
-];
+export const buildLandingSchemas = (
+  projects: Project[],
+  navigation: NavigationDefinition[],
+  faqItems: FaqItem[] = []
+) => {
+  const schemas = [
+    buildWebsiteSchema(projects),
+    buildServiceCatalogSchema(),
+    buildSiteNavigationSchema(navigation),
+    buildStatsSchema(),
+  ];
+
+  if (faqItems.length) {
+    schemas.push(buildFaqSchema(faqItems));
+  }
+
+  return schemas;
+};
 
 export const toNavigationFromProjects = (projects: Project[]): NavigationDefinition[] => {
   const uniqueProjectsMap = new Map<string, NavigationDefinition>();
   projects.forEach((project) => {
     uniqueProjectsMap.set(project.id, {
-      name: project.title,
+      name: sanitizeText(project.title),
       url: `${SITE_BASE_URL}/project/${project.id}`,
     });
   });
@@ -206,12 +254,12 @@ export const toNavigationFromProjects = (projects: Project[]): NavigationDefinit
 export const buildAiFactsPayload = (projects: Project[]) =>
   projects.map((project) => ({
     id: project.id,
-    title: project.seoTitle ?? project.title,
-    description: ensureDescription(project),
+    title: sanitizeText(project.seoTitle ?? project.title),
+    description: sanitizeText(ensureDescription(project)),
     url: `${SITE_BASE_URL}/project/${project.id}`,
     technologies: project.technologies,
-    serviceTags: project.serviceTags,
-    statHighlights: project.statHighlights,
+    serviceTags: sanitizeStringList(project.serviceTags),
+    statHighlights: sanitizeStringList(project.statHighlights),
     defaultPrompts: project.defaultPrompts,
     primaryMetricValue: project.primaryMetricValue,
   }));

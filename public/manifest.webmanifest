@@ -1,0 +1,18 @@
+{
+  "name": "Yanqing Jiang AI Portfolio",
+  "short_name": "Yanqing AI",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0a101c",
+  "theme_color": "#111827",
+  "description": "AI systems, analytics automation, and data workflow portfolio by Yanqing Jiang.",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "type": "image/svg+xml",
+      "sizes": "any"
+    }
+  ],
+  "lang": "en-US",
+  "scope": "/"
+}

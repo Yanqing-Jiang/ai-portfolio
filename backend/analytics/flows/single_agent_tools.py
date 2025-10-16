@@ -19,6 +19,7 @@ from .planner_executor import (
     _compose_sql_ready_payload,
     _compose_stock_ready_payload,
     _compose_web_ready_payload,
+    _build_analysis_source_summaries,
     ToolInvocationReceipt,
     _hash_payload,
     PlannerPhaseContext,
@@ -77,6 +78,7 @@ def _build_single_agent_cohesive_payload(
         "next_steps",
         "latency_guardrail",
         "analysis_overview",
+        "analysis_sources",
         "tool_manifest",
         "tool_results",
         "stock_widget",
@@ -156,6 +158,33 @@ def _build_single_agent_cohesive_payload(
         web_art = artifacts.web if artifacts else None
         if web_art and not payload.get("web_context"):
             payload["web_context"] = web_art.to_dict()
+
+    existing_sources = payload.get("analysis_sources")
+    if existing_sources:
+        sanitized_sources = sanitize_for_json(existing_sources)
+        if isinstance(sanitized_sources, dict):
+            payload["analysis_sources"] = sanitized_sources
+        else:
+            payload.pop("analysis_sources", None)
+    else:
+        snapshot_reuse = analysis_payload.get("snapshot_reuse")
+        reuse_flags: Dict[str, bool] = {}
+        if isinstance(snapshot_reuse, Mapping):
+            reuse_flags = {
+                "sql": bool(snapshot_reuse.get("reused_sql")),
+                "stock": bool(snapshot_reuse.get("reused_stock")),
+                "web": bool(snapshot_reuse.get("reused_web")),
+            }
+        tool_sources = analysis_payload.get("sources")
+        derived_sources = _build_analysis_source_summaries(
+            artifacts=artifacts,
+            tool_sources=tool_sources if isinstance(tool_sources, Mapping) else None,
+            stock_widget=payload.get("stock_widget") or analysis_payload.get("stock_widget"),
+            web_context=payload.get("web_context") or analysis_payload.get("web_context"),
+            reused_flags=reuse_flags,
+        )
+        if derived_sources:
+            payload["analysis_sources"] = derived_sources
 
     sanitized = sanitize_for_json(payload)
     if not sanitized:
@@ -594,6 +623,10 @@ class SingleAgentController:
         "market": "single_agent_market",
         "web": "single_agent_web",
     }
+    LANE_CONCURRENCY_LIMITS: Dict[str, int] = {
+        "market": 2,
+        "web": 1,
+    }
     LANE_TOOL_MAP: Dict[str, Tuple[str, ...]] = {
         "market": ("market_question_a", "market_question_b", "stock_tracker"),
         "web": ("web_retriever",),
@@ -815,6 +848,7 @@ class SingleAgentController:
             return (
                 MarketQuestionAdapter("market_question_a", "Market Research Question A"),
                 MarketQuestionAdapter("market_question_b", "Market Research Question B"),
+                StockTrackerAdapter(),
             )
         if lane == "web":
             return (WebRetrieverAdapter(),)
@@ -862,13 +896,64 @@ class SingleAgentController:
             adapters = self._lane_adapters(lane)
             if not adapters:
                 continue
+            concurrency_limit = self.LANE_CONCURRENCY_LIMITS.get(lane)
+            if concurrency_limit is None:
+                concurrency_limit = len(adapters)
+            else:
+                concurrency_limit = max(1, min(concurrency_limit, len(adapters)))
             task, queue = self._planner._start_tool_parallelism(
                 ctx,
                 adapters=adapters,
-                concurrency_override=len(adapters),
+                concurrency_override=concurrency_limit,
             )
             active[lane] = (task, queue)
         return active
+
+    def _iter_fresh_accessory_events(
+        self,
+        ctx: PlannerPhaseContext,
+        lane_states: Mapping[str, str],
+    ) -> Iterable[Dict[str, Any]]:
+        if lane_states.get("market") == "fresh" and not getattr(ctx, "stock_widget_announced", False):
+            stock_payload = _compose_stock_ready_payload(ctx)
+            if stock_payload:
+                payload = dict(stock_payload)
+                payload["reused"] = False
+                payload.setdefault("schedule_stage", "hedged_accessories")
+                payload.setdefault("parallel_group", self.LANE_PARALLEL_GROUPS.get("market", "single_agent_market"))
+                payload.setdefault("lane", "market")
+                payload.setdefault("flow_mode", self.flow_mode.value)
+                payload.setdefault("ts", datetime.utcnow().isoformat())
+                sanitized = sanitize_for_json(payload)
+                if not isinstance(sanitized, dict):
+                    sanitized = {"payload": sanitized}
+                ctx.stock_widget_announced = True  # type: ignore[attr-defined]
+                yield self._planner._annotate(
+                    {
+                        "event": "stock_ready",
+                        "data": sanitized,
+                    }
+                )
+        if lane_states.get("web") == "fresh" and not getattr(ctx, "web_context_announced", False):
+            web_payload = _compose_web_ready_payload(ctx)
+            if web_payload:
+                payload = dict(web_payload)
+                payload["reused"] = False
+                payload.setdefault("schedule_stage", "hedged_accessories")
+                payload.setdefault("parallel_group", self.LANE_PARALLEL_GROUPS.get("web", "single_agent_web"))
+                payload.setdefault("lane", "web")
+                payload.setdefault("flow_mode", self.flow_mode.value)
+                payload.setdefault("ts", datetime.utcnow().isoformat())
+                sanitized = sanitize_for_json(payload)
+                if not isinstance(sanitized, dict):
+                    sanitized = {"payload": sanitized}
+                ctx.web_context_announced = True  # type: ignore[attr-defined]
+                yield self._planner._annotate(
+                    {
+                        "event": "web_ready",
+                        "data": sanitized,
+                    }
+                )
 
     def _drain_fanout_events(
         self,
@@ -895,6 +980,21 @@ class SingleAgentController:
             "ts": datetime.utcnow().isoformat(),
             "flow_mode": self.flow_mode.value,
         }
+        rerun_lanes = [
+            lane for lane, status in lane_states.items() if status in {"fresh", "running", "pending", "queued"}
+        ]
+        reuse_lanes = [lane for lane, status in lane_states.items() if status in {"reused", "cached"}]
+        payload["rerun_scope"] = {
+            "rerun": rerun_lanes,
+            "reuse": reuse_lanes,
+            "route": self.follow_up_route.value,
+        }
+        if "chart" in rerun_lanes and "sql" in reuse_lanes:
+            payload["decision"] = "chart_revision"
+        elif rerun_lanes:
+            payload["decision"] = "fresh_execution"
+        else:
+            payload["decision"] = "reuse_snapshot"
         return self._planner._annotate({"event": "agent_decision", "data": payload})
 
     def set_follow_up_route(self, route: FollowUpRoute) -> None:
@@ -975,7 +1075,13 @@ class SingleAgentController:
         mode_config = get_mode_config(self.flow_mode)
         fanout_tasks: Dict[str, Tuple[asyncio.Task, Optional[asyncio.Queue]]] = {}
         started_lanes: Set[str] = set()
-        lane_states: Dict[str, str] = {"sql": "pending", "market": "skipped", "web": "skipped"}
+        lane_states: Dict[str, str] = {
+            "sql": "pending",
+            "chart": "queued",
+            "analysis": "queued",
+            "market": "skipped",
+            "web": "skipped",
+        }
 
         try:
             async for event in registry.invoke("classification", self._planner, ctx, executed=executed):
@@ -1115,6 +1221,8 @@ class SingleAgentController:
                             yield fanout_event
                         fanout_tasks.pop(lane, None)
                 ctx.accessories_prefetched = bool(started_lanes)
+                for accessory_event in self._iter_fresh_accessory_events(ctx, lane_states):
+                    yield accessory_event
 
             if reuse_sql:
                 stock_payload = _compose_stock_ready_payload(ctx)
@@ -1200,11 +1308,15 @@ class SingleAgentController:
                         )
                 elif ctx.artifacts.web and lane_states["web"] == "skipped":
                     lane_states["web"] = "fresh"
+                for accessory_event in self._iter_fresh_accessory_events(ctx, lane_states):
+                    yield accessory_event
             else:
                 if ctx.artifacts.market and lane_states["market"] in {"running", "pending"}:
                     lane_states["market"] = "fresh"
                 if ctx.artifacts.web and lane_states["web"] in {"running", "pending"}:
                     lane_states["web"] = "fresh"
+                for accessory_event in self._iter_fresh_accessory_events(ctx, lane_states):
+                    yield accessory_event
 
             lane_summary_event = self._emit_lane_summary(lane_states)
             yield lane_summary_event
@@ -1212,8 +1324,10 @@ class SingleAgentController:
             if ctx.halted:
                 return
 
+            lane_states["chart"] = "running"
             async for event in registry.invoke("chart_generation", self._planner, ctx, executed=executed):
                 yield self._planner._annotate(event)
+            lane_states["chart"] = "reused" if getattr(ctx, "reused_chart", False) else "fresh"
             await self._planner._persist_session_state(
                 ctx,
                 record_chart=bool(ctx.artifacts.chart and ctx.artifacts.chart.spec),
@@ -1225,8 +1339,13 @@ class SingleAgentController:
                     yield self._planner._annotate(event)
                 await self._planner._persist_session_state(ctx, record_artifacts=True)
 
+            lane_states["analysis"] = "running" if not getattr(ctx, "reused_analysis", False) else "reused"
             async for event in registry.invoke("analysis_generation", self._planner, ctx, executed=executed):
                 yield self._planner._annotate(event)
+            if getattr(ctx, "reused_analysis", False):
+                lane_states["analysis"] = "reused"
+            else:
+                lane_states["analysis"] = "fresh"
             await self._planner._persist_session_state(
                 ctx,
                 record_analysis=bool(

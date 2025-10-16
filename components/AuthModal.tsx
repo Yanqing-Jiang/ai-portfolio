@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { authService } from '../services/auth'
+// @ts-ignore
+import { Helmet } from 'react-helmet-async'
 
 interface AuthModalProps {
   isOpen: boolean
@@ -121,7 +123,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
   const isSignIn = mode === 'signin'
 
   return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+    <>
+      <Helmet>
+        <meta name="robots" content="noindex,nofollow" />
+      </Helmet>
+      <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
       <div className={`
         relative w-full max-w-md transform transition-all duration-300 
         ${isSignIn 
@@ -405,5 +411,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
         </div>
       </div>
     </div>
+  </>
   )
 }

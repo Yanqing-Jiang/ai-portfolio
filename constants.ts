@@ -275,7 +275,7 @@ This production-grade web application automates the invoice validation and match
         defaultPrompts: [
             "How have you used advanced analytics to drive measurable business outcomes in your recent roles?",
             "Can you share an example where you led a cross-functional team to solve a complex business problem using data",
-            "What’s your approach to developing scalable data or AI solutions that align with business goals?",
+          "What's your approach to developing scalable data or AI solutions that align with business goals?",
         ],
         imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/Yanqing%20Exp%20Retrival.png',
         coverUrl: 'https://yanqinghot.blob.core.windows.net/public-access/Yanqing%20Exp%20Retrival.png',

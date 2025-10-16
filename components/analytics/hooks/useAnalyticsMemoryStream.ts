@@ -1,5 +1,5 @@
 ﻿import { useState, useRef, useCallback, useEffect } from 'react';
-import { ChatMessage, ClarifyRequest, ClarifyAnswer, ToolCallTelemetry, AgentTurnTelemetry, AgentReasoningTelemetry, ProcessStep, ToolFanoutManifest, ToolFanoutResult, StockWidgetConfig, WebSearchResult, AnalysisOverview, AnalysisEvidenceLink, FollowUpBanner, SpecialistCard, SingleAgentFanout, SingleAgentFanoutBranch, FanoutBranchStatus, FlowMode, LatencyGuardrail } from '../types';
+import { ChatMessage, ClarifyRequest, ClarifyAnswer, ToolCallTelemetry, AgentTurnTelemetry, AgentReasoningTelemetry, ProcessStep, ToolFanoutManifest, ToolFanoutResult, StockWidgetConfig, WebSearchResult, AnalysisOverview, AnalysisEvidenceLink, AnalysisSources, FollowUpBanner, SpecialistCard, SingleAgentFanout, SingleAgentFanoutBranch, FanoutBranchStatus, FlowMode, LatencyGuardrail } from '../types';
 import { apiService } from '../../../services/apiService';
 import { useAnalyticsStream } from './useAnalyticsStream';
 
@@ -61,6 +61,7 @@ export const useAnalyticsMemoryStream = (
   const [stockWidget, setStockWidget] = useState<StockWidgetConfig | null>(null);
   const [singleAgentFanout, setSingleAgentFanout] = useState<SingleAgentFanout | null>(null);
   const [analysisOverview, setAnalysisOverview] = useState<AnalysisOverview | null>(null);
+  const [analysisSources, setAnalysisSources] = useState<AnalysisSources | null>(null);
   const [followUpBanner, setFollowUpBanner] = useState<FollowUpBanner | null>(null);
   const [latencyGuardrail, setLatencyGuardrail] = useState<LatencyGuardrail | null>(null);
   const [specialistCards, setSpecialistCards] = useState<SpecialistCard[]>([]);
@@ -86,6 +87,7 @@ export const useAnalyticsMemoryStream = (
       toolFanoutResults: workflowDataRef.current.toolFanoutResults,
       webSearch: workflowDataRef.current.webSearch,
       analysisOverview: workflowDataRef.current.analysisOverview,
+      analysisSources: workflowDataRef.current.analysisSources,
       banner: workflowDataRef.current.followUpBanner,
       specialistCards: workflowDataRef.current.specialistCards,
       latencyGuardrail: workflowDataRef.current.latencyGuardrail,
@@ -287,14 +289,67 @@ export const useAnalyticsMemoryStream = (
       return null;
     }
 
-    return {
-      tldr: tldrValue || undefined,
-      highlights: highlightsValue.length ? highlightsValue.slice(0, 3) : undefined,
-      keyNumbers: keyNumbersValue.length ? keyNumbersValue.slice(0, 3) : undefined,
-      riskWatch: riskWatchValue.length ? riskWatchValue.slice(0, 3) : undefined,
-      nextSteps: nextStepsValue.length ? nextStepsValue.slice(0, 3) : undefined,
-      evidence: evidenceEntries.length ? evidenceEntries.slice(0, 5) : undefined,
-    };
+  return {
+    tldr: tldrValue || undefined,
+    highlights: highlightsValue.length ? highlightsValue.slice(0, 3) : undefined,
+    keyNumbers: keyNumbersValue.length ? keyNumbersValue.slice(0, 3) : undefined,
+    riskWatch: riskWatchValue.length ? riskWatchValue.slice(0, 3) : undefined,
+    nextSteps: nextStepsValue.length ? nextStepsValue.slice(0, 3) : undefined,
+    evidence: evidenceEntries.length ? evidenceEntries.slice(0, 5) : undefined,
+  };
+};
+
+  const parseAnalysisSources = (source: any): AnalysisSources | null => {
+    if (!source || typeof source !== 'object') {
+      return null;
+    }
+    const entries: AnalysisSources = {};
+    for (const [rawKey, rawValue] of Object.entries(source as Record<string, any>)) {
+      if (!rawValue || typeof rawValue !== 'object') {
+        continue;
+      }
+      const lane = resolveLane(rawValue, (rawValue as any).lane, rawKey) ?? rawKey;
+      const id = coerceString((rawValue as any).id) ?? coerceString((rawValue as any).lane) ?? coerceString(rawKey) ?? rawKey;
+      const label =
+        coerceString((rawValue as any).label) ??
+        (lane === 'sql'
+          ? 'SQL data'
+          : lane === 'web'
+          ? 'Online research'
+          : lane === 'stock'
+          ? 'Stock data'
+          : undefined);
+      const summary = coerceString((rawValue as any).summary);
+      const reused = resolveReusedFlag(
+        (rawValue as any).reused,
+        (rawValue as any).status,
+        (rawValue as any).source,
+        (rawValue as any).cache_hit,
+        (rawValue as any).from_cache
+      );
+      const rowCount = coerceNumber((rawValue as any).row_count);
+      const columns = coerceStringList((rawValue as any).columns).slice(0, 6);
+      const snippetCount = coerceNumber((rawValue as any).snippet_count);
+      const symbols = coerceStringList((rawValue as any).symbols).slice(0, 4);
+      const latestClose = coerceNumber((rawValue as any).latest_close);
+      const changePercent = coerceNumber((rawValue as any).change_percent);
+      const topic = coerceString((rawValue as any).topic);
+      entries[id] = {
+        id,
+        lane,
+        label,
+        summary: summary ?? undefined,
+        reused: reused ?? undefined,
+        rowCount: rowCount ?? undefined,
+        columns: columns.length ? columns : undefined,
+        snippetCount: typeof snippetCount === 'number' ? snippetCount : undefined,
+        symbols: symbols.length ? symbols : undefined,
+        latestClose: latestClose ?? undefined,
+        changePercent: changePercent ?? undefined,
+        topic: topic ?? undefined,
+      };
+    }
+    return Object.keys(entries).length ? entries : null;
   };
 
   const normalizeWebContext = (raw: any): WebSearchResult | null => {
@@ -1762,6 +1817,16 @@ export const useAnalyticsMemoryStream = (
           if (typeof eventData.analysis === 'string') {
             scheduleProgressiveUpdate({ analysis: eventData.analysis });
           }
+          const readySources = parseAnalysisSources(
+            (eventData.analysis_sources && typeof eventData.analysis_sources === 'object' && eventData.analysis_sources) ??
+              (typeof eventData.analysis === 'object' && eventData.analysis !== null
+                ? (eventData.analysis as any).analysis_sources ?? (eventData.analysis as any).sources
+                : undefined)
+          );
+          if (readySources) {
+            setAnalysisSources(readySources);
+            workflowDataRef.current.analysisSources = readySources;
+          }
           updateStep('analysis_generation', 'completed', ['Analysis ready'], eventData, stepInfo.elapsed_ms, stepInfo.ts);
           break;
         }
@@ -2274,6 +2339,15 @@ export const useAnalyticsMemoryStream = (
                 workflowDataRef.current.analysisOverview = overview;
               }
             }
+            const cohesiveSources = parseAnalysisSources(
+              (bundle.analysis_sources && typeof bundle.analysis_sources === 'object' && bundle.analysis_sources) ||
+                (bundle.analysis_overview && typeof bundle.analysis_overview === 'object' ? (bundle.analysis_overview as any).sources : undefined) ||
+                (bundle.analysis && typeof bundle.analysis === 'object' ? (bundle.analysis as any).analysis_sources ?? (bundle.analysis as any).sources : undefined)
+            );
+            if (cohesiveSources) {
+              setAnalysisSources(cohesiveSources);
+              workflowDataRef.current.analysisSources = cohesiveSources;
+            }
             if (bundle.latency_guardrail) {
               const guardrail = bundle.latency_guardrail as LatencyGuardrail;
               setLatencyGuardrail(guardrail);
@@ -2305,6 +2379,7 @@ export const useAnalyticsMemoryStream = (
                 tool_manifest: workflowDataRef.current.toolFanoutManifest,
                 tool_fanout_results: workflowDataRef.current.toolFanoutResults,
                 analysis_overview: workflowDataRef.current.analysisOverview,
+                analysis_sources: workflowDataRef.current.analysisSources,
                 banner: workflowDataRef.current.followUpBanner,
                 latency_guardrail: workflowDataRef.current.latencyGuardrail,
               },
@@ -2370,6 +2445,17 @@ export const useAnalyticsMemoryStream = (
                 setAnalysisOverview(overview);
                 workflowDataRef.current.analysisOverview = overview;
               }
+              const sourcesCandidate =
+                (eventData.analysis_sources && typeof eventData.analysis_sources === 'object' && eventData.analysis_sources) ??
+                (overviewCandidate && typeof overviewCandidate === 'object' ? (overviewCandidate as any).sources : undefined) ??
+                (typeof eventData.analysis === 'object' && eventData.analysis !== null
+                  ? (eventData.analysis as any).analysis_sources ?? (eventData.analysis as any).sources
+                  : undefined);
+              const sources = parseAnalysisSources(sourcesCandidate);
+              if (sources) {
+                setAnalysisSources(sources);
+                workflowDataRef.current.analysisSources = sources;
+              }
               const guardrailCandidate =
                 (eventData.latency_guardrail as LatencyGuardrail | undefined) ??
                 (data.latency_guardrail as LatencyGuardrail | undefined);
@@ -2398,6 +2484,7 @@ export const useAnalyticsMemoryStream = (
                 analysis: finalAnalysis,
                 analysis_length: eventData.analysis_length,
                 analysis_overview: workflowDataRef.current.analysisOverview,
+                analysis_sources: workflowDataRef.current.analysisSources,
                 latency_guardrail: workflowDataRef.current.latencyGuardrail,
               },
               stepInfo.elapsed_ms
@@ -2896,6 +2983,7 @@ export const useAnalyticsMemoryStream = (
               webSearch: null,
               flowMode: flow,
               analysisOverview: null,
+              analysisSources: null,
               followUpBanner: null,
               specialistCards: [],
               latencyGuardrail: null,
@@ -2907,6 +2995,7 @@ export const useAnalyticsMemoryStream = (
             setDataSample(null);
             setStreamingText('');
             setAnalysisOverview(null);
+            setAnalysisSources(null);
             setFollowUpBanner(null);
             setSpecialistCards([]);
             setLatencyGuardrail(null);
@@ -3025,6 +3114,7 @@ export const useAnalyticsMemoryStream = (
     setSingleAgentFanout(null);
     setRevisionMode('none');
     setAnalysisOverview(null);
+    setAnalysisSources(null);
     setFollowUpBanner(null);
     setSpecialistCards([]);
     setLatencyGuardrail(null);
@@ -3059,6 +3149,7 @@ export const useAnalyticsMemoryStream = (
       webSearch: null,
       flowMode: flow,
       analysisOverview: null,
+      analysisSources: null,
       followUpBanner: null,
       specialistCards: [],
       latencyGuardrail: null,
@@ -3090,6 +3181,7 @@ export const useAnalyticsMemoryStream = (
     webSearch,
     stockWidget,
     analysisOverview,
+    analysisSources,
     followUpBanner,
     specialistCards,
     singleAgentFanout,

@@ -1,0 +1,36 @@
+{
+  "prompt_versions": {
+    "schema_clarifier": "2025-10-16",
+    "multi_agent.supervisor": "2025-10-16"
+  },
+  "scenario": "Rerun chart lane while reusing cached market and web receipts.",
+  "supervisor_response": {
+    "decision": "final_answer",
+    "summary": "Final answer leverages cached market and web insights; rerun the chart lane to refresh visuals before publishing.",
+    "final_answer": "Market and web signals already align on the user question. Trigger a fresh SQL chart to visualize updated trends before sharing.",
+    "rerun_directive": {
+      "rerun": [
+        "chart_lane"
+      ],
+      "reuse": [
+        "market_lane",
+        "web_lane"
+      ]
+    },
+    "guidance": {
+      "final_answer_only": false,
+      "decline_reason": null,
+      "notes": [
+        "Chart lane must rerun to incorporate updated SQL output before presenting the visualization.",
+        "Reuse cached market and web research lanes; they already satisfy the user request."
+      ]
+    }
+  },
+  "telemetry_expectations": {
+    "final_answer_banner_copy": "Final answer uses cached market and web research; rerun chart lane for updated visualization.",
+    "cached_lanes": [
+      "market_lane",
+      "web_lane"
+    ]
+  }
+}

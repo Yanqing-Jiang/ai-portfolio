@@ -35,6 +35,26 @@ const LANE_LABELS: Record<(typeof LANE_ORDER)[number], string> = {
   coordination: 'Coordination',
 };
 
+const isBrowser = typeof window !== 'undefined';
+
+const resolveLaneLabel = (lane?: string) => {
+  if (!lane) {
+    return null;
+  }
+  const normalized = lane as (typeof LANE_ORDER)[number];
+  return LANE_LABELS[normalized] ?? lane;
+};
+
+const buildReusedEdgeTooltip = (step: ProcessStep, lane?: string, parallelGroup?: string) => {
+  const laneCandidate = lane ?? parallelGroup ?? '';
+  const laneLabel = resolveLaneLabel(laneCandidate);
+  const stepName = step.name || 'Cached step';
+  if (laneLabel) {
+    return `Reused ${laneLabel.toLowerCase()} lane from cache (${stepName})`;
+  }
+  return `Reused cached output from ${stepName}`;
+};
+
 interface WorkflowCanvasProps {
   steps: ProcessStep[];
   flowMode: FlowMode;
@@ -706,30 +726,49 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
       const hasTransitioned = current.step.status === 'completed' || current.step.status === 'error';
       const isActiveChain = next.step.status === 'in_progress';
       const shouldAnimate = hasTransitioned || isActiveChain;
+      const targetReused = Boolean(next.reused);
+      const tooltip = targetReused ? buildReusedEdgeTooltip(next.step, next.lane, next.parallelGroup) : undefined;
+
+      const baseStroke = isActiveChain
+        ? theme.edgeActive
+        : hasTransitioned
+        ? theme.edgeCompleted
+        : theme.edgeIdle;
+      const baseStrokeWidth = isActiveChain ? 3 : hasTransitioned ? 2.2 : 1.4;
+
+      const edgeStyle: React.CSSProperties = {
+        stroke: baseStroke,
+        strokeWidth: baseStrokeWidth,
+        strokeDasharray: shouldAnimate && !targetReused ? '16 12' : undefined,
+        filter: shouldAnimate && !targetReused ? 'drop-shadow(0 0 8px rgba(148,163,184,0.35))' : undefined,
+      };
+
+      let markerColor = baseStroke;
+
+      if (targetReused) {
+        edgeStyle.stroke = theme.edgeCompleted;
+        edgeStyle.strokeDasharray = '6 3';
+        edgeStyle.strokeWidth = Math.max(baseStrokeWidth, 2.4);
+        edgeStyle.filter = 'drop-shadow(0 0 6px rgba(250,204,21,0.45))';
+        edgeStyle.opacity = 0.95;
+        edgeStyle.cursor = 'help';
+        markerColor = theme.edgeCompleted;
+      }
 
       sequentialEdges.push({
         id: `${current.step.id}-${next.step.id}`,
         source: current.step.id,
         target: next.step.id,
         sourceHandle: 'right',
-
         targetHandle: 'left',
-
         type: 'smoothstep',
-        animated: shouldAnimate,
-        style: {
-          stroke: isActiveChain
-            ? theme.edgeActive
-            : hasTransitioned
-            ? theme.edgeCompleted
-            : theme.edgeIdle,
-          strokeWidth: isActiveChain ? 3 : hasTransitioned ? 2.2 : 1.4,
-          strokeDasharray: shouldAnimate ? '16 12' : undefined,
-          filter: shouldAnimate ? 'drop-shadow(0 0 8px rgba(148,163,184,0.35))' : undefined,
-        },
+        animated: targetReused ? false : shouldAnimate,
+        style: edgeStyle,
+        className: targetReused ? 'edge-reused' : undefined,
+        data: tooltip ? { tooltip } : undefined,
         markerEnd: {
           type: 'arrowclosed',
-          color: isActiveChain ? theme.edgeActive : hasTransitioned ? theme.edgeCompleted : theme.edgeIdle,
+          color: markerColor,
           width: 18,
           height: 18,
         },
@@ -755,6 +794,26 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
           added.add(edgeId);
           const laneActive = node.step.status === 'in_progress';
           const laneCompleted = node.step.status === 'completed';
+          const laneReused = Boolean(node.reused);
+          const laneTooltip = laneReused ? buildReusedEdgeTooltip(node.step, node.lane, node.parallelGroup) : undefined;
+          const laneStyle: React.CSSProperties = {
+            stroke: laneActive ? theme.edgeActive : laneCompleted ? theme.edgeCompleted : theme.edgeIdle,
+            strokeWidth: laneActive ? 2.6 : laneCompleted ? 2 : 1.6,
+            strokeDasharray: laneCompleted ? '12 10' : undefined,
+            filter: laneActive ? 'drop-shadow(0 0 8px rgba(192,132,252,0.35))' : undefined,
+          };
+          let laneMarkerColor = laneActive ? theme.edgeActive : laneCompleted ? theme.edgeCompleted : theme.edgeIdle;
+
+          if (laneReused) {
+            laneStyle.stroke = theme.edgeCompleted;
+            laneStyle.strokeDasharray = '6 3';
+            laneStyle.strokeWidth = Math.max(laneStyle.strokeWidth ?? 0, 2.4);
+            laneStyle.filter = 'drop-shadow(0 0 6px rgba(250,204,21,0.45))';
+            laneStyle.opacity = 0.95;
+            laneStyle.cursor = 'help';
+            laneMarkerColor = theme.edgeCompleted;
+          }
+
           sequentialEdges.push({
             id: edgeId,
             source: hubPlacement.step.id,
@@ -762,16 +821,13 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
             type: 'smoothstep',
             sourceHandle: 'right',
             targetHandle: 'left',
-            animated: laneActive,
-            style: {
-              stroke: laneActive ? theme.edgeActive : laneCompleted ? theme.edgeCompleted : theme.edgeIdle,
-              strokeWidth: laneActive ? 2.6 : laneCompleted ? 2 : 1.6,
-              strokeDasharray: laneCompleted ? '12 10' : undefined,
-              filter: laneActive ? 'drop-shadow(0 0 8px rgba(192,132,252,0.35))' : undefined,
-            },
+            animated: laneReused ? false : laneActive,
+            style: laneStyle,
+            className: laneReused ? 'edge-reused' : undefined,
+            data: laneTooltip ? { tooltip: laneTooltip } : undefined,
             markerEnd: {
               type: 'arrowclosed',
-              color: laneActive ? theme.edgeActive : laneCompleted ? theme.edgeCompleted : theme.edgeIdle,
+              color: laneMarkerColor,
               width: 16,
               height: 16,
             },
@@ -879,6 +935,26 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
     });
     return () => cancelAnimationFrame(raf);
   }, [isVisible, nodes.length, edges.length]);
+
+  useEffect(() => {
+    if (!isBrowser || !containerRef.current) {
+      return;
+    }
+    edges.forEach((edge) => {
+      const tooltip = (edge.data as { tooltip?: string } | undefined)?.tooltip;
+      const edgeElement = containerRef.current?.querySelector(`[data-id="reactflow__edge-${edge.id}"]`);
+      if (!edgeElement) {
+        return;
+      }
+      if (tooltip) {
+        edgeElement.setAttribute('title', tooltip);
+        edgeElement.setAttribute('data-tooltip', tooltip);
+      } else {
+        edgeElement.removeAttribute('title');
+        edgeElement.removeAttribute('data-tooltip');
+      }
+    });
+  }, [edges]);
 
   const activePhase = useMemo(() => {
     const active = steps.find((step) => step.status === 'in_progress');
