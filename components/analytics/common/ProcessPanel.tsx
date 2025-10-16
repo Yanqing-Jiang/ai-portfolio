@@ -1,9 +1,9 @@
-﻿import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import Draggable from 'react-draggable';
 import { WorkflowCanvas } from '../visualization/WorkflowCanvas';
 import { SingleAgentFanoutCanvas } from '../visualization/SingleAgentFanoutCanvas';
-import { ProcessStep, FlowMode, SingleAgentFanout, FollowUpBanner, AnalysisOverview, SpecialistCard } from '../types';
+import { ProcessStep, FlowMode, SingleAgentFanout, FollowUpBanner, AnalysisOverview, AnalysisSources, SpecialistCard } from '../types';
 
 interface ProcessPanelProps {
   singleAgentFanout?: SingleAgentFanout | null;
@@ -35,6 +35,7 @@ type ExportFormat = 'csv' | 'json';
 
 const STORAGE_KEY = 'processPanelState';
 const PANE_KEY = 'processPanelFocusedPane';
+const FINAL_ANSWER_BANNER_KEY = 'aa.finalAnswerOnlyDismissed';
 
 const FLOW_META: Record<FlowMode, { title: string; accent: string; description: string }> = {
   'planner-executor': {
@@ -132,8 +133,21 @@ const formatScheduleStage = (value?: string) => {
 
 const isBrowser = typeof window !== 'undefined';
 
-const exportStepsToCsv = (steps: ProcessStep[]) => {
-  const header = ['stepNumber', 'id', 'name', 'status', 'timestamp', 'elapsedMs', 'latestThinking', 'sequence', 'parallelGroup'];
+export const exportStepsToCsv = (steps: ProcessStep[]) => {
+  const header = [
+    'stepNumber',
+    'id',
+    'name',
+    'status',
+    'timestamp',
+    'elapsedMs',
+    'latestThinking',
+    'sequence',
+    'parallelGroup',
+    'lane',
+    'reused',
+    'finalAnswerOnly',
+  ];
   const rows = steps.map((step, index) => {
     const latestThought = step.thinking?.slice(-1)[0] ?? '';
     return [
@@ -146,6 +160,9 @@ const exportStepsToCsv = (steps: ProcessStep[]) => {
       latestThought.replace(/"/g, ''),
       step.sequence !== undefined ? String(step.sequence) : '',
       step.parallelGroup ?? '',
+      step.lane ?? '',
+      step.reused === undefined ? '' : String(step.reused),
+      step.finalAnswerOnly === undefined ? '' : String(step.finalAnswerOnly),
     ];
   });
   return [header, ...rows]
@@ -234,6 +251,68 @@ export const ProcessPanel: React.FC<ProcessPanelProps> = ({
   });
 
   const [expandedLedgerSteps, setExpandedLedgerSteps] = useState<Record<string, boolean>>({});
+  const [dismissedFinalAnswerSignature, setDismissedFinalAnswerSignature] = useState<string | null>(() => {
+    if (!isBrowser) {
+      return null;
+    }
+    try {
+      const raw = window.localStorage.getItem(FINAL_ANSWER_BANNER_KEY);
+      if (!raw) {
+        return null;
+      }
+      if (raw === 'true') {
+        return '__legacy__';
+      }
+      return raw;
+    } catch (error) {
+      console.warn('Failed to load final answer banner state', error);
+      return null;
+    }
+  });
+
+  const bannerSignature = useMemo(() => {
+    if (!followUpBanner) {
+      return null;
+    }
+    const signatureParts = [
+      followUpBanner.title ?? '',
+      followUpBanner.message ?? '',
+      followUpBanner.route ?? '',
+      followUpBanner.finalAnswerOnly ? 'final' : '',
+    ];
+    return signatureParts.join('|').toLowerCase();
+  }, [followUpBanner]);
+
+  const shouldRenderFollowUpBanner = useMemo(() => {
+    if (!followUpBanner) {
+      return false;
+    }
+    if (!followUpBanner.finalAnswerOnly) {
+      return true;
+    }
+    if (!bannerSignature) {
+      return dismissedFinalAnswerSignature !== '__any__' && dismissedFinalAnswerSignature !== '__legacy__';
+    }
+    if (dismissedFinalAnswerSignature === '__any__' || dismissedFinalAnswerSignature === '__legacy__') {
+      return false;
+    }
+    return dismissedFinalAnswerSignature !== bannerSignature;
+  }, [followUpBanner, bannerSignature, dismissedFinalAnswerSignature]);
+
+  useEffect(() => {
+    if (!isBrowser) {
+      return;
+    }
+    if (!dismissedFinalAnswerSignature) {
+      window.localStorage.removeItem(FINAL_ANSWER_BANNER_KEY);
+      return;
+    }
+    try {
+      window.localStorage.setItem(FINAL_ANSWER_BANNER_KEY, dismissedFinalAnswerSignature);
+    } catch (error) {
+      console.warn('Failed to persist final answer banner state', error);
+    }
+  }, [dismissedFinalAnswerSignature]);
 
   useEffect(() => {
     if (!isBrowser) {
@@ -401,6 +480,14 @@ export const ProcessPanel: React.FC<ProcessPanelProps> = ({
     }
   }, [displaySteps]);
 
+  const handleDismissFollowUpBanner = useCallback(() => {
+    if (!followUpBanner?.finalAnswerOnly) {
+      return;
+    }
+    const signature = bannerSignature ?? '__any__';
+    setDismissedFinalAnswerSignature(signature);
+  }, [followUpBanner, bannerSignature]);
+
   if (!show) {
     return null;
   }
@@ -428,8 +515,9 @@ export const ProcessPanel: React.FC<ProcessPanelProps> = ({
       latency?: { total_ms?: number; p50_ms?: number; max_ms?: number; min_ms?: number; samples?: number };
       [key: string]: any;
     };
-    const { banner, analysis_overview, specialist_card, latency, latency_guardrail, web_context: _webContext, ...otherDetails } = details;
+    const { banner, analysis_overview, analysis_sources, specialist_card, latency, latency_guardrail, web_context: _webContext, ...otherDetails } = details;
     const evidenceEntries = analysis_overview?.evidence ?? [];
+    const analysisSourceEntries = normalizeAnalysisSources(analysis_sources as AnalysisSources | undefined);
     const hasEvidence = evidenceEntries.length > 0;
     const lowConfidenceEvidence =
       hasEvidence && evidenceEntries.every((entry) => (entry.confidence ?? 0) < 0.35);
@@ -614,7 +702,7 @@ export const ProcessPanel: React.FC<ProcessPanelProps> = ({
                 </ul>
                 {lowConfidenceEvidence && (
                   <div className="mt-2 text-[11px] text-amber-300">
-                    Sources flagged for low confidence—consider re-running web research.
+                    Sources flagged for low confidence�consider re-running web research.
                   </div>
                 )}
               </div>
@@ -654,7 +742,7 @@ export const ProcessPanel: React.FC<ProcessPanelProps> = ({
               </div>
             ) : null}
             <div className="mt-1 text-[11px] leading-relaxed text-emerald-200/80">
-              Targets: p50 ≤ {latency_guardrail.thresholds.p50_ms} ms · p95 ≤ {latency_guardrail.thresholds.p95_ms} ms
+              Targets: p50 = {latency_guardrail.thresholds.p50_ms} ms � p95 = {latency_guardrail.thresholds.p95_ms} ms
             </div>
           </div>
         ) : null}
@@ -980,13 +1068,26 @@ export const ProcessPanel: React.FC<ProcessPanelProps> = ({
                 <div className={`text-lg font-semibold ${flowMeta.accent}`}>{flowMeta.title}</div>
                 <div className="text-[11px] text-gray-500">{subtitle}</div>
                 <div className="text-[11px] text-gray-600">{flowMeta.description}</div>
-                {followUpBanner && (
+                {followUpBanner && shouldRenderFollowUpBanner && (
                   <div className="mt-2 rounded-lg border border-amber-400/40 bg-amber-500/10 px-3 py-2 shadow-sm">
-                    <div className="flex items-center gap-2 text-[10px] uppercase tracking-wide text-amber-300">
-                      <span className="font-semibold">{followUpBanner.title}</span>
-                      <span className="rounded-full border border-amber-400/50 px-2 py-0.5 text-[9px] font-semibold text-amber-200">
-                        {formatScheduleStage(followUpBanner.route)}
-                      </span>
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-center gap-2 text-[10px] uppercase tracking-wide text-amber-300">
+                        <span className="font-semibold">{followUpBanner.title}</span>
+                        <span className="rounded-full border border-amber-400/50 px-2 py-0.5 text-[9px] font-semibold text-amber-200">
+                          {formatScheduleStage(followUpBanner.route)}
+                        </span>
+                      </div>
+                      {followUpBanner.finalAnswerOnly ? (
+                        <button
+                          type="button"
+                          onClick={handleDismissFollowUpBanner}
+                          className="rounded border border-amber-400/40 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-200 transition hover:border-amber-300 hover:text-amber-100"
+                          aria-label="Dismiss final answer guidance"
+                          data-testid="final-answer-banner-dismiss"
+                        >
+                          Dismiss
+                        </button>
+                      ) : null}
                     </div>
                     <div className="mt-1 text-[11px] leading-relaxed text-amber-100/90">
                       {followUpBanner.message}

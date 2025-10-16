@@ -20,7 +20,12 @@ from analytics.services.response_search import ResponseSearchError, perform_resp
 from analytics.routing import FollowUpRoute
 from analytics.validators import CohesiveResultValidationError, CohesiveResultValidator, sanitize_for_json
 from analytics.prompt_versions import get_prompt_versions
-from .planner_executor import PlannerExecutorFlow, run_planner_executor, _evaluate_latency_guardrail
+from .planner_executor import (
+    PlannerExecutorFlow,
+    run_planner_executor,
+    _evaluate_latency_guardrail,
+    _hash_payload,
+)
 from .hooks import AnalyticsFlowHooks
 from .tool_bundle import collect_tool_bundle
 from .pipeline_tools import get_planner_tool_registry
@@ -1285,24 +1290,43 @@ class MultiAgentFlow:
         return None
 
     def _queue_artifact_event(self, event_name: str, payload: Dict[str, Any]) -> None:
-        enriched_payload = dict(payload)
+        sanitized_payload = sanitize_for_json(payload)
+        if not isinstance(sanitized_payload, dict):
+            sanitized_payload = {"value": sanitized_payload}
+
+        lane = self.ARTIFACT_LANE_MAP.get(event_name)
+        fingerprint_seed = {
+            "event": event_name,
+            "lane": lane,
+            "payload": sanitized_payload,
+        }
+        artifact_meta = self._shared_context.setdefault("_artifact_meta", {})
+        hashes: Dict[str, str] = artifact_meta.setdefault("artifact_hashes", {})
+        fingerprint = _hash_payload(fingerprint_seed)
+        if hashes.get(event_name) == fingerprint:
+            return
+        hashes[event_name] = fingerprint
+
+        enriched_payload = dict(sanitized_payload)
         specialist_card = self._build_specialist_card(event_name, enriched_payload)
         if specialist_card:
             enriched_payload["specialist_card"] = specialist_card
-        lane = self.ARTIFACT_LANE_MAP.get(event_name)
         if lane:
             enriched_payload.setdefault("lane", lane)
-            enriched_payload.setdefault("parallel_group", self.ARTIFACT_PARALLEL_GROUPS.get(event_name, "multi_supervisor_fanout"))
+            enriched_payload.setdefault(
+                "parallel_group",
+                self.ARTIFACT_PARALLEL_GROUPS.get(event_name, "multi_supervisor_fanout"),
+            )
         else:
             enriched_payload.setdefault("parallel_group", "multi_supervisor_fanout")
         if "reused" not in enriched_payload:
             enriched_payload["reused"] = False
         enriched_payload.setdefault("flow_mode", self.flow_mode.value)
         enriched_payload.setdefault("ts", datetime.utcnow().isoformat())
-        event = {
-            "event": event_name,
-            "data": sanitize_for_json(enriched_payload),
-        }
+        artifact_meta.setdefault("latest_payloads", {})[event_name] = enriched_payload
+        if lane:
+            artifact_meta.setdefault("latest_sources", {})[lane] = enriched_payload.get("source")
+        event = {"event": event_name, "data": enriched_payload}
         self._pending_artifact_events.append(event)
         self._artifact_flush_pending = True
 
@@ -1900,6 +1924,22 @@ class MultiAgentFlow:
             canonical_tool = _canonical_tool_name(sanitized_result.get("tool"))
             if canonical_tool:
                 sanitized_result["tool"] = canonical_tool
+            tool_key = sanitized_result.get("tool") or canonical_tool
+            artifact_meta = self._shared_context.setdefault("_artifact_meta", {})
+            tool_hashes: Dict[str, str] = artifact_meta.setdefault("tool_result_hashes", {})
+            fingerprint = _hash_payload(
+                {
+                    "tool": tool_key,
+                    "status": sanitized_result.get("status"),
+                    "reused": sanitized_result.get("reused"),
+                    "payload": sanitized_result.get("payload"),
+                    "metadata": sanitized_result.get("metadata"),
+                }
+            )
+            if tool_key and tool_hashes.get(tool_key) == fingerprint:
+                return
+            if tool_key:
+                tool_hashes[tool_key] = fingerprint
             results_list.append(sanitized_result)
             deduped: List[Dict[str, Any]] = []
             seen_tools: set[str] = set()
@@ -2083,6 +2123,32 @@ class MultiAgentFlow:
             "bundle": bundle,
             "query": query,
         }
+        bundle_sources: Dict[str, Any] = {}
+        if isinstance(bundle, Mapping):
+            sanitized_bundle = sanitize_for_json(bundle)
+            bundle_sources = sanitized_bundle.get("sources") or {}
+            final_payload["bundle"] = sanitized_bundle
+        elif bundle is not None:
+            final_payload["bundle"] = sanitize_for_json(bundle)
+        analysis_sources: List[str] = []
+        if sql_ctx.get("sql") and sql_ctx.get("row_count") is not None:
+            analysis_sources.append("sql")
+        if web_context:
+            analysis_sources.append("web")
+        if stock_widget:
+            analysis_sources.append("stock")
+        if bundle_sources:
+            final_payload["sources"] = bundle_sources
+        if analysis_sources:
+            final_payload["analysis_sources"] = sorted(set(analysis_sources))
+        sanitized_cohesive_payload = sanitize_for_json(final_payload)
+        if isinstance(sanitized_cohesive_payload, Mapping):
+            sanitized_cohesive_payload = dict(sanitized_cohesive_payload)
+        validator_debug = {
+            "payload_keys": sorted(sanitized_cohesive_payload.keys()) if isinstance(sanitized_cohesive_payload, Mapping) else [],
+            "analysis_sources": sanitized_cohesive_payload.get("analysis_sources") if isinstance(sanitized_cohesive_payload, Mapping) else None,
+            "sources": sanitized_cohesive_payload.get("sources") if isinstance(sanitized_cohesive_payload, Mapping) else None,
+        }
         hedged_ready = self._hedged_accessories_ready()
         if hedged_ready and not self._shared_context.get("hedged_accessories_emitted"):
             completion_event = {
@@ -2116,10 +2182,25 @@ class MultiAgentFlow:
             if final_event:
                 yield final_event
             return
-        if any(value is not None for key, value in final_payload.items() if key not in {"query", "bundle"}):
+        if isinstance(sanitized_cohesive_payload, Mapping) and any(
+            value is not None for key, value in sanitized_cohesive_payload.items() if key not in {"query", "bundle"}
+        ):
             try:
-                validated_payload = self._cohesive_validator.ensure(final_payload)
+                validated_payload = self._cohesive_validator.ensure(sanitized_cohesive_payload)
+                self._shared_context.setdefault("_meta", {}).setdefault("cohesive_payload", validated_payload)
             except CohesiveResultValidationError as exc:
+                logger.warning(
+                    "Cohesive result validation failed",
+                    extra={
+                        "session_id": self._session_id,
+                        "flow": getattr(self, "flow_label", None),
+                        "missing": list(self._cohesive_validator.required_keys),
+                        "payload_keys": validator_debug.get("payload_keys"),
+                        "analysis_sources": validator_debug.get("analysis_sources"),
+                        "sources": validator_debug.get("sources"),
+                        "error": str(exc),
+                    },
+                )
                 error_event = {
                     "event": "cohesive_result_error",
                     "data": {
@@ -2132,8 +2213,7 @@ class MultiAgentFlow:
                 if final_event:
                     yield final_event
                 return
-            sanitized_payload = sanitize_for_json(validated_payload)
-            yield self._annotate({"event": "cohesive_result", "data": sanitized_payload})
+            yield self._annotate({"event": "cohesive_result", "data": validated_payload})
 
         await self._persist_bundle(bundle)
 

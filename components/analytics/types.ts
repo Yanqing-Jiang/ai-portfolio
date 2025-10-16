@@ -129,6 +129,23 @@ export interface WebSearchResult {
   latencyStats?: { total_ms?: number; p50_ms?: number; max_ms?: number; min_ms?: number; samples?: number };
 }
 
+export interface AnalysisSourceInsight {
+  id: string;
+  lane?: string;
+  label?: string;
+  summary?: string;
+  reused?: boolean;
+  rowCount?: number;
+  columns?: string[];
+  snippetCount?: number;
+  symbols?: string[];
+  latestClose?: number;
+  changePercent?: number;
+  topic?: string;
+}
+
+export type AnalysisSources = Record<string, AnalysisSourceInsight>;
+
 export interface AnalysisOverview {
   tldr?: string;
   highlights?: string[];
@@ -136,6 +153,7 @@ export interface AnalysisOverview {
   riskWatch?: string[];
   nextSteps?: string[];
   evidence?: AnalysisEvidenceLink[];
+  sources?: AnalysisSources;
 }
 
 export interface AnalysisEvidenceLink {
@@ -303,6 +321,7 @@ export interface ChatMessage {
   toolFanoutResults?: ToolFanoutResult[];
   webSearch?: WebSearchResult | null;
   analysisOverview?: AnalysisOverview | null;
+  analysisSources?: AnalysisSources | null;
   banner?: FollowUpBanner | null;
   specialistCards?: SpecialistCard[];
   latencyGuardrail?: LatencyGuardrail | null;
@@ -379,6 +398,7 @@ export interface PromptBarProps {
 
 export interface AnalysisCardProps {
   analysis: string;
+  analysisSources?: AnalysisSources | null;
 }
 
 export interface SqlCardProps {

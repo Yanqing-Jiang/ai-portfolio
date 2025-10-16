@@ -102,6 +102,25 @@ from unified_responses_client import get_unified_client
 CONFIGS = get_configs()
 CONFIG_STORE = get_config_store()
 logger = logging.getLogger(__name__)
+
+_TOOL_TO_ANALYSIS_LANE: Dict[str, str] = {
+    "sql_generator": "sql",
+    "sql_generation": "sql",
+    "sql_executor": "sql",
+    "sql_execution": "sql",
+    "sql_planner": "sql",
+    "chart_designer": "chart",
+    "chart_builder": "chart",
+    "chart_generation": "chart",
+    "stock_tracker": "stock",
+    "market_question_a": "stock",
+    "market_question_b": "stock",
+    "market_research": "stock",
+    "web_retriever": "web",
+    "web_retriever_cached": "web",
+    "web_retriever_live": "web",
+    "web_research": "web",
+}
 def _env_flag(name: str, *, default: bool = False) -> bool:
     # Legacy env flag helper retained for backwards compatibility in logs only.
     # Behavioural flags have been removed; flows use built-in defaults.
@@ -1349,6 +1368,163 @@ def _compose_web_ready_payload(ctx: PlannerPhaseContext) -> Optional[Dict[str, A
         payload["snapshot_age_seconds"] = ctx.snapshot_age_seconds
     return payload
 
+
+def _build_analysis_source_summaries(
+    *,
+    artifacts: Optional[PipelineArtifacts],
+    tool_sources: Optional[Mapping[str, Any]] = None,
+    stock_widget: Optional[Mapping[str, Any]] = None,
+    web_context: Optional[Mapping[str, Any]] = None,
+    reused_flags: Optional[Mapping[str, bool]] = None,
+) -> Dict[str, Any]:
+    if artifacts is None:
+        artifacts = PipelineArtifacts()
+
+    lane_status: Dict[str, str] = {}
+    if isinstance(tool_sources, Mapping):
+        for raw_name, status in tool_sources.items():
+            if not isinstance(raw_name, str):
+                continue
+            tool_name = raw_name.strip().lower()
+            lane = _TOOL_TO_ANALYSIS_LANE.get(tool_name)
+            if not lane:
+                continue
+            normalized = str(status).strip().lower()
+            if not normalized:
+                continue
+            lane_status.setdefault(lane, normalized)
+
+    reused_lookup = {key: bool(value) for key, value in (reused_flags or {}).items()}
+
+    def lane_reused(lane: str) -> bool:
+        if lane in reused_lookup:
+            return reused_lookup[lane]
+        return lane_status.get(lane) == "cached"
+
+    def compact(entry: Dict[str, Any]) -> Dict[str, Any]:
+        cleaned: Dict[str, Any] = {}
+        for key, value in entry.items():
+            if value is None:
+                continue
+            if isinstance(value, (list, dict)) and not value:
+                continue
+            if isinstance(value, str) and not value.strip():
+                continue
+            cleaned[key] = value
+        return cleaned
+
+    sources: Dict[str, Dict[str, Any]] = {}
+
+    sql_execution = getattr(artifacts, "sql_execution", None)
+    if sql_execution:
+        columns = list(sql_execution.columns[:6]) if isinstance(sql_execution.columns, list) else []
+        metrics = list(sql_execution.metrics[:3]) if isinstance(sql_execution.metrics, list) else []
+        timeframe = sql_execution.timeframe if isinstance(sql_execution.timeframe, Mapping) else None
+        summary_parts: List[str] = []
+        if isinstance(sql_execution.row_count, int):
+            summary_parts.append(f"{sql_execution.row_count:,} rows")
+        if columns:
+            summary_parts.append(f"columns: {', '.join(columns[:4])}")
+        if timeframe and timeframe.get("start") and timeframe.get("end"):
+            summary_parts.append(f"timeframe: {timeframe['start']} → {timeframe['end']}")
+        entry = compact(
+            {
+                "lane": "sql",
+                "label": "SQL data",
+                "summary": " | ".join(summary_parts) if summary_parts else None,
+                "row_count": sql_execution.row_count,
+                "columns": columns,
+                "metrics": metrics,
+                "reused": lane_reused("sql"),
+            }
+        )
+        if entry:
+            sources["sql"] = entry
+
+    widget_candidate: Optional[Mapping[str, Any]] = None
+    if isinstance(stock_widget, Mapping):
+        widget_candidate = stock_widget
+    elif artifacts.analysis and isinstance(artifacts.analysis.stock_widget, Mapping):
+        widget_candidate = artifacts.analysis.stock_widget
+    elif artifacts.market and isinstance(artifacts.market.snapshot, Mapping):
+        widget_candidate = artifacts.market.snapshot
+
+    if widget_candidate:
+        symbols: List[str] = []
+        raw_symbols = widget_candidate.get("symbols")
+        if isinstance(raw_symbols, list):
+            for entry in raw_symbols:
+                if isinstance(entry, (list, tuple)) and entry:
+                    candidate = entry[1] if len(entry) > 1 else entry[0]
+                else:
+                    candidate = entry
+                if isinstance(candidate, str) and candidate.strip():
+                    symbols.append(candidate.strip().upper())
+        summary_parts: List[str] = []
+        if symbols:
+            summary_parts.append(f"symbols: {', '.join(symbols[:3])}")
+        insights = widget_candidate.get("insights") if isinstance(widget_candidate.get("insights"), Mapping) else None
+        latest_close = None
+        change_percent = None
+        if insights:
+            latest_close = insights.get("latest_close")
+            change_percent = insights.get("change_percent")
+        else:
+            latest_close = widget_candidate.get("latest_close")
+            change_percent = widget_candidate.get("change_percent")
+        if isinstance(latest_close, (int, float)):
+            summary_parts.append(f"latest close: {latest_close}")
+        if isinstance(change_percent, (int, float)):
+            summary_parts.append(f"change: {change_percent:+.2f}%")
+        entry = compact(
+            {
+                "lane": "stock",
+                "label": "Stock data",
+                "summary": " | ".join(summary_parts) if summary_parts else None,
+                "symbols": symbols[:4],
+                "latest_close": latest_close if isinstance(latest_close, (int, float)) else None,
+                "change_percent": change_percent if isinstance(change_percent, (int, float)) else None,
+                "reused": lane_reused("stock"),
+            }
+        )
+        if entry:
+            sources["stock"] = entry
+
+    context_candidate: Optional[Mapping[str, Any]] = None
+    if isinstance(web_context, Mapping):
+        context_candidate = web_context
+    elif artifacts.analysis and isinstance(artifacts.analysis.web_context, Mapping):
+        context_candidate = artifacts.analysis.web_context
+    elif artifacts.web and isinstance(artifacts.web.to_dict(), dict):
+        context_candidate = artifacts.web.to_dict()
+
+    if context_candidate:
+        summary_text = context_candidate.get("summary")
+        topic = (
+            context_candidate.get("search_topic")
+            or context_candidate.get("searchTopic")
+            or context_candidate.get("query")
+        )
+        snippets = context_candidate.get("snippets") or context_candidate.get("articles")
+        snippet_count = len(snippets) if isinstance(snippets, list) else 0
+        entry = compact(
+            {
+                "lane": "web",
+                "label": "Online research",
+                "summary": summary_text if isinstance(summary_text, str) else None,
+                "topic": topic if isinstance(topic, str) else None,
+                "snippet_count": snippet_count,
+                "reused": lane_reused("web"),
+            }
+        )
+        if entry:
+            sources["web"] = entry
+
+    if not sources:
+        return {}
+    sanitized = sanitize_for_json(sources)
+    return sanitized if isinstance(sanitized, dict) else {}
+
 def _cached_event(
     name: str,
     payload: Dict[str, Any],
@@ -2568,6 +2744,19 @@ class PlannerPipeline:
             guardrail_payload = _evaluate_latency_guardrail(web_payload.get("latency_stats"))
         elif ctx.artifacts.web:
             guardrail_payload = _evaluate_latency_guardrail(ctx.artifacts.web.latency_stats)
+        analysis_sources = _build_analysis_source_summaries(
+            artifacts=ctx.artifacts,
+            tool_sources=tool_bundle.get("sources") if tool_bundle else None,
+            stock_widget=analysis_payload.get("stock_widget"),
+            web_context=analysis_payload.get("web_context"),
+            reused_flags={
+                "sql": ctx.reused_sql,
+                "stock": ctx.reused_stock,
+                "web": ctx.reused_web,
+            },
+        )
+        if analysis_sources:
+            analysis_payload["analysis_sources"] = analysis_sources
         if stock_widget:
             _set_market_artifact(ctx, widget=stock_widget)
             self._capture_artifacts(ctx)

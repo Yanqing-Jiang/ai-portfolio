@@ -155,3 +155,27 @@ def test_market_receipts_expire_when_stale() -> None:
     )
 
     assert not controller._should_reuse_market(ctx)
+
+
+def test_web_receipts_expire_when_stale() -> None:
+    controller = SingleAgentController()
+    freshness_boundary = controller.LANE_CACHE_TTL_SECONDS + 5
+    stale_web = ToolInvocationReceipt(tool="web_retriever", status="completed")
+    cutoff = datetime.utcnow() - timedelta(seconds=freshness_boundary)
+    stale_web.timestamp = cutoff.isoformat()
+
+    artifacts = SimpleNamespace(
+        market=None,
+        web=SimpleNamespace(summary="Cached insight bundle."),
+        analysis=None,
+    )
+    ctx = SimpleNamespace(
+        artifacts=artifacts,
+        snapshot_age_seconds=None,
+        tool_receipts={
+            "web_retriever": stale_web,
+        },
+        revision_snapshot=None,
+    )
+
+    assert not controller._should_reuse_web(ctx)
