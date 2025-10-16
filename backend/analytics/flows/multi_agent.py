@@ -19,6 +19,7 @@ from analytics.services.polygon import PolygonMarketDataClient, PolygonError, fe
 from analytics.services.response_search import ResponseSearchError, perform_response_search
 from analytics.routing import FollowUpRoute
 from analytics.validators import CohesiveResultValidationError, CohesiveResultValidator, sanitize_for_json
+from analytics.prompt_versions import get_prompt_versions
 from .planner_executor import PlannerExecutorFlow, run_planner_executor, _evaluate_latency_guardrail
 from .hooks import AnalyticsFlowHooks
 from .tool_bundle import collect_tool_bundle
@@ -68,6 +69,39 @@ _HASH_PREFIX = "analytics"
 _MAX_FRAGMENT_COUNT = 5
 _MAX_ANALYSIS_STORED = 1200
 HEDGED_WEB_TOOLS = ("web_retriever_cached", "web_retriever_live")
+
+SUPERVISOR_AGENT_SYSTEM_PROMPTS: Dict[str, str] = {
+    "planner": (
+        "Plan the analytics workflow into specialist-ready tasks while keeping payloads light.\n"
+        "- Emit rerun directives that list lanes needing fresh execution in `rerun_directive.rerun` and cached lanes in `rerun_directive.reuse`.\n"
+        "- Reference cached receipts and planner context so reused lanes do not schedule redundant work."
+    ),
+    "query": (
+        "Summarize SQL attempt history and highlight retry outcomes.\n"
+        "- Call out which attempts reused cached receipts versus introduced fresh execution.\n"
+        "- Flag stale receipts so the supervisor can queue reruns in the rerun directive."
+    ),
+    "analyst": (
+        "Summarize findings using planner context and cached notes without re-querying data.\n"
+        "- When required lanes are missing or declined, emit `final_answer_only` guidance that specifies which lanes to rerun and which receipts stay valid.\n"
+        "- Acknowledge reused receipts so analysts know which insights came from cache."
+    ),
+    "chart": (
+        "Convert planner data into chart metadata summaries only when required.\n"
+        "- If `cached_receipts.chart` is fresh, respond with reuse status and concise rationale instead of generating a new spec.\n"
+        "- Explain what changed when a rerun occurs so downstream reviewers can compare versions."
+    ),
+    "market": (
+        "Surface market context for planner tickers while honoring cached receipts.\n"
+        "- Prefer cached snapshots when present; emit status `reuse` and include the receipt timestamp.\n"
+        "- Request reruns only when tickers change or data freshness fails guardrails."
+    ),
+    "web_research": (
+        "Retrieve external signals and citations for the active query.\n"
+        "- Use cached receipts when available to avoid duplicate fetches and mark responses with `reused` metadata.\n"
+        "- When live reruns are required, emit citations that distinguish fresh versus reused sources."
+    ),
+}
 
 
 class _MultiAgentHooks(AnalyticsFlowHooks):
@@ -865,42 +899,42 @@ def _build_default_agent_registry() -> Dict[str, AgentSpec]:
     return {
         'planner': AgentSpec(
             name='planner',
-            system_prompt='Plan the analytics workflow into specialist-ready tasks while keeping payloads light.',
+            system_prompt=SUPERVISOR_AGENT_SYSTEM_PROMPTS['planner'],
             capabilities=('task_planning', 'sql_routing'),
             latency_budget_ms=400,
             entrypoint=_planner_agent,
         ),
         'query': AgentSpec(
             name='query',
-            system_prompt='Summarize SQL attempt history and highlight retry outcomes.',
+            system_prompt=SUPERVISOR_AGENT_SYSTEM_PROMPTS['query'],
             capabilities=('sql_diagnostics',),
             latency_budget_ms=300,
             entrypoint=_query_agent,
         ),
         'analyst': AgentSpec(
             name='analyst',
-            system_prompt='Summarize findings using planner context and cached notes without re-querying data.',
+            system_prompt=SUPERVISOR_AGENT_SYSTEM_PROMPTS['analyst'],
             capabilities=('narrative', 'context_blending'),
             latency_budget_ms=500,
             entrypoint=_analyst_agent,
         ),
         'chart': AgentSpec(
             name='chart',
-            system_prompt='Convert planner data into chart metadata summaries only when required.',
+            system_prompt=SUPERVISOR_AGENT_SYSTEM_PROMPTS['chart'],
             capabilities=('visualization', 'vega_lite'),
             latency_budget_ms=400,
             entrypoint=_chart_agent,
         ),
         'market': AgentSpec(
             name='market',
-            system_prompt='Surface market context for planner tickers without persisting across sessions.',
+            system_prompt=SUPERVISOR_AGENT_SYSTEM_PROMPTS['market'],
             capabilities=('market_data', 'ticker_updates'),
             latency_budget_ms=400,
             entrypoint=_market_agent,
         ),
         'web_research': AgentSpec(
             name='web_research',
-            system_prompt='Retrieve fresh external signals and citations for the active query.',
+            system_prompt=SUPERVISOR_AGENT_SYSTEM_PROMPTS['web_research'],
             capabilities=('web_search', 'context_enrichment'),
             latency_budget_ms=600,
             entrypoint=_web_research_agent,
@@ -1064,6 +1098,7 @@ class MultiAgentFlow:
         self.flow_mode = FlowMode.MULTI_AGENT
         self.flow_label = "multi-agent"
         self._cohesive_validator = CohesiveResultValidator()
+        self._prompt_versions = get_prompt_versions()
         registry = get_planner_tool_registry()
         self._planner_tool_manifest = registry.describe_tools()
         self._tool_metadata_by_registry = _build_tool_metadata(self._planner_tool_manifest)
@@ -1478,6 +1513,7 @@ class MultiAgentFlow:
         if isinstance(data, Mapping):
             mutable = dict(data)
             mutable.setdefault("follow_up_route", self.follow_up_route.value)
+            mutable.setdefault("prompt_versions", dict(self._prompt_versions))
             annotated["data"] = sanitize_for_json(mutable)
         else:
             annotated["data"] = data
@@ -1632,6 +1668,7 @@ class MultiAgentFlow:
             },
             '_meta': {
                 'flow_label': getattr(self, 'flow_label', None),
+                'prompt_versions': dict(self._prompt_versions),
             },
         }
         receipts_cache: Dict[str, Any] = {}

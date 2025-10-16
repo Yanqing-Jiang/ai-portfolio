@@ -74,6 +74,14 @@ export const useProcessSteps = (config?: StepConfig) => {
     parallelGroup?: string,
     scheduleStage?: string,
     flowMode?: FlowMode,
+    extras?: {
+      lane?: string;
+      reused?: boolean;
+      finalAnswerOnly?: boolean;
+      missingComponents?: string[];
+      followUpRoute?: string;
+      analysisAvailable?: boolean;
+    },
   ) => {
     setProcessSteps((prev) => {
       const existing = prev.find((s) => s.id === stepId);
@@ -90,7 +98,7 @@ export const useProcessSteps = (config?: StepConfig) => {
 
           const nextStatus = shouldUpgradeStatus(step.status, status) ? status : step.status;
 
-          return {
+          const updated: ProcessStep = {
             ...step,
             status: nextStatus,
             thinking: mergeThinking(step.thinking, thinking),
@@ -102,6 +110,29 @@ export const useProcessSteps = (config?: StepConfig) => {
             scheduleStage: scheduleStage ?? step.scheduleStage,
             flowMode: flowMode ?? step.flowMode,
           };
+
+          if (extras) {
+            if (extras.lane !== undefined) {
+              updated.lane = extras.lane;
+            }
+            if (extras.reused !== undefined) {
+              updated.reused = extras.reused;
+            }
+            if (extras.finalAnswerOnly !== undefined) {
+              updated.finalAnswerOnly = extras.finalAnswerOnly;
+            }
+            if (extras.missingComponents !== undefined) {
+              updated.missingComponents = extras.missingComponents;
+            }
+            if (extras.followUpRoute !== undefined) {
+              updated.followUpRoute = extras.followUpRoute;
+            }
+            if (extras.analysisAvailable !== undefined) {
+              updated.analysisAvailable = extras.analysisAvailable;
+            }
+          }
+
+          return updated;
         });
       }
 
@@ -119,6 +150,12 @@ export const useProcessSteps = (config?: StepConfig) => {
           parallelGroup,
           scheduleStage,
           flowMode,
+          lane: extras?.lane,
+          reused: extras?.reused,
+          finalAnswerOnly: extras?.finalAnswerOnly,
+          missingComponents: extras?.missingComponents,
+          followUpRoute: extras?.followUpRoute,
+          analysisAvailable: extras?.analysisAvailable,
         },
       ];
 

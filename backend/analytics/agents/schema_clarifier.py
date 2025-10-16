@@ -30,6 +30,16 @@ _DEFAULT_QUESTIONS: Dict[str, Dict[str, Any]] = {
     },
 }
 
+SCHEMA_CLARIFIER_SYSTEM_PROMPT = (
+    "You validate structured analytics inputs for the planner. Reply with JSON fields action, slot, question, reason, options.\n"
+    "- action must be one of skip, clarify, assume, or decline.\n"
+    "- Choose decline when cached receipts or user inputs cannot satisfy the request and upstream lanes must rerun; set reason to an actionable value such as \"insufficient_inputs\".\n"
+    "- When cached receipts already satisfy a missing slot, choose skip so the session can reuse cached data.\n"
+    "- Keep question under 25 words when clarifying and make it specific to the template.\n"
+    "- Use slot identifiers provided in required_slots.\n"
+    "- Provide options only when you can list safe defaults; otherwise return an empty list.\n"
+)
+
 
 @dataclass
 class ClarifierDecision:
@@ -42,7 +52,7 @@ class ClarifierDecision:
 
 
 class ClarifierAgentResponse(BaseModel):
-    action: str = Field(..., description="Action to take: skip, clarify, or assume")
+    action: str = Field(..., description="Action to take: skip, clarify, assume, or decline")
     slot: Optional[str] = Field(default=None)
     question: Optional[str] = Field(default=None)
     reason: Optional[str] = Field(default=None)
@@ -79,11 +89,19 @@ def decide_schema_clarification(
         return _fallback_decision(missing)
 
     action = agent_response.action.lower().strip()
-    if action not in {"skip", "clarify", "assume"}:
+    if action not in {"skip", "clarify", "assume", "decline"}:
         return _fallback_decision(missing)
 
     if action in {"skip", "assume"}:
         return ClarifierDecision(action="skip", missing_slots=missing)
+    if action == "decline":
+        return ClarifierDecision(
+            action="decline",
+            missing_slots=missing,
+            slot=_map_slot_spec_to_request(agent_response.slot or primary_spec),
+            reason=agent_response.reason or "insufficient_inputs",
+            options=list(agent_response.options or []),
+        )
 
     slot_spec = agent_response.slot or primary_spec
     request_slot = _map_slot_spec_to_request(slot_spec)
@@ -123,13 +141,7 @@ def _run_agent(
         "plan": plan.model_dump(mode="json"),
     }
 
-    system_prompt = (
-        "You are validating structured analytics inputs. Return JSON with fields action, slot, question, reason, options.\n"
-        "- action must be skip, clarify, or assume.\n"
-        "- Only choose clarify when a required slot is missing.\n"
-        "- Keep question under 25 words and specific.\n"
-        "- Use slot identifiers provided in required_slots.\n"
-    )
+    system_prompt = SCHEMA_CLARIFIER_SYSTEM_PROMPT
 
     user_prompt = (
         "Intent data:\n"

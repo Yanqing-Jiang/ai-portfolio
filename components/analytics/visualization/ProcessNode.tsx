@@ -47,6 +47,11 @@ interface ProcessNodeData {
   progressPercent?: number;
   parallelGroup?: string;
   sequence?: number;
+  lane?: string;
+  reused?: boolean;
+  finalAnswerOnly?: boolean;
+  missingComponents?: string[];
+  analysisAvailable?: boolean;
 }
 
 const statusAccent = (status: ProcessStep['status']) => {
@@ -83,6 +88,13 @@ const formatDuration = (ms?: number) => {
   return `${ms}ms`;
 };
 
+const formatLaneLabel = (value?: string) => {
+  if (!value) {
+    return undefined;
+  }
+  return value.replace(/[_-]/g, ' ').replace(/\b\w/g, (match) => match.toUpperCase());
+};
+
 export const ProcessNode = memo<NodeProps<ProcessNodeData>>(({ data, selected }) => {
   const [isExpanded, setIsExpanded] = useState(false);
   const {
@@ -101,10 +113,22 @@ export const ProcessNode = memo<NodeProps<ProcessNodeData>>(({ data, selected })
     currentTimestamp,
     parallelGroup,
     sequence,
+    lane,
+    reused,
+    finalAnswerOnly,
+    missingComponents,
+    analysisAvailable,
   } = data;
 
-  const laneLabel = parallelGroup ? LANE_LABELS[parallelGroup] ?? parallelGroup : undefined;
-  const laneBadgeClass = parallelGroup ? LANE_BADGE_CLASS[parallelGroup] ?? defaultLaneBadge : defaultLaneBadge;
+  const laneKey = lane ?? parallelGroup;
+  const laneLabel = laneKey ? LANE_LABELS[laneKey] ?? formatLaneLabel(laneKey) : undefined;
+  const laneBadgeClass = laneKey ? LANE_BADGE_CLASS[laneKey] ?? defaultLaneBadge : defaultLaneBadge;
+  const missingLabel = missingComponents?.length
+    ? missingComponents
+        .map((item) => formatLaneLabel(item) ?? item)
+        .join(', ')
+    : undefined;
+  const analysisPending = analysisAvailable === false;
 
   const confidenceRaw = (step.details as any)?.confidence ?? (step.details as any)?.intent?.confidence;
   const confidenceValue = typeof confidenceRaw === 'number' ? confidenceRaw : undefined;
@@ -227,6 +251,16 @@ export const ProcessNode = memo<NodeProps<ProcessNodeData>>(({ data, selected })
           {laneLabel && (
             <span className={`rounded-full px-2 py-0.5 text-[10px] ${laneBadgeClass}`}>{laneLabel}</span>
           )}
+          {reused && (
+            <span className="rounded-full border border-emerald-400/60 bg-emerald-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-emerald-200">
+              Cached
+            </span>
+          )}
+          {finalAnswerOnly && (
+            <span className="rounded-full border border-amber-400/60 bg-amber-500/20 px-2 py-0.5 text-[10px] uppercase tracking-wide text-amber-200">
+              Guided
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <span className="text-[10px] text-gray-400">{String(sequenceIndex + 1).padStart(2, '0')} / {totalSteps}</span>
@@ -272,7 +306,17 @@ export const ProcessNode = memo<NodeProps<ProcessNodeData>>(({ data, selected })
           {timestampLabel && <span>{timestampLabel}</span>}
           {durationLabel && <span>{durationLabel}</span>}
           {typeof sequence === 'number' && <span>Seq {sequence}</span>}
-          {laneLabel && <span className="uppercase text-gray-200">{laneLabel}</span>}
+          {laneLabel && <span className="uppercase text-gray-200">Lane: {laneLabel}</span>}
+          {missingLabel && (
+            <span className="rounded-full border border-amber-300/60 bg-amber-500/10 px-2 py-0.5 text-[10px] text-amber-200">
+              Missing: {missingLabel}
+            </span>
+          )}
+          {analysisPending && (
+            <span className="rounded-full border border-amber-300/60 bg-amber-500/10 px-2 py-0.5 text-[10px] text-amber-200">
+              Analysis Pending
+            </span>
+          )}
           {typeof confidencePercent === 'number' && (
             <span className="rounded-full bg-gray-900/70 px-2 py-0.5 text-[10px] text-amber-200">Confidence {confidencePercent}%</span>
           )}
