@@ -767,6 +767,8 @@ export const ProcessPanel: React.FC<ProcessPanelProps> = ({
                 const isExpanded = expandedLedgerSteps[step.id];
                 const durationLabel = formatDuration(step.elapsed_ms);
                 const timestampLabel = formatTimestamp(step.timestamp);
+                const rawName = step.name || formatScheduleStage(step.id);
+                const displayName = step.reused ? `${rawName} (cached)` : rawName;
                 const laneLabel = step.lane ?? step.parallelGroup;
                 const laneDisplay = laneLabel ? formatScheduleStage(laneLabel) : null;
                 const missingComponentsLabel = step.missingComponents?.length
@@ -788,7 +790,7 @@ export const ProcessPanel: React.FC<ProcessPanelProps> = ({
                             <div className="flex items-center gap-2 text-xs text-gray-400">
                               <span className={`inline-flex h-2 w-2 rounded-full ${style.indicator}`} />
                               <span className="font-semibold text-gray-100">
-                                {`${String(index + 1).padStart(2, '0')} - ${step.name}`}
+                                {`${String(index + 1).padStart(2, '0')} - ${displayName}`}
                               </span>
                               {typeof step.sequence === 'number' && (
                                 <span className="rounded-full bg-gray-800/50 px-2 py-0.5 text-[10px] text-gray-300">#{step.sequence}</span>
