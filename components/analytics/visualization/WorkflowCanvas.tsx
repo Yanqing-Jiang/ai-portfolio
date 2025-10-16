@@ -65,6 +65,11 @@ interface ProcessNodeData {
   progressPercent?: number;
   parallelGroup?: string;
   sequence?: number;
+  lane?: string;
+  reused?: boolean;
+  finalAnswerOnly?: boolean;
+  missingComponents?: string[];
+  analysisAvailable?: boolean;
 }
 
 const nodeTypes = {
@@ -171,6 +176,17 @@ const STEP_LANE_OVERRIDES: Record<string, HubLaneKey | 'coordination'> = {
 const inferHubLane = (step: ProcessStep): HubLaneKey | 'coordination' => {
   if (STEP_LANE_OVERRIDES[step.id]) {
     return STEP_LANE_OVERRIDES[step.id];
+  }
+  if (step.lane) {
+    if (STEP_LANE_OVERRIDES[step.lane]) {
+      return STEP_LANE_OVERRIDES[step.lane] as HubLaneKey | 'coordination';
+    }
+    if (HUB_LANE_CONFIG[step.lane as HubLaneKey]) {
+      return step.lane as HubLaneKey;
+    }
+    if (step.lane === 'coordination') {
+      return 'coordination';
+    }
   }
   if (step.parallelGroup && STEP_LANE_OVERRIDES[step.parallelGroup]) {
     return STEP_LANE_OVERRIDES[step.parallelGroup] as HubLaneKey | 'coordination';
@@ -335,6 +351,7 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
     return prioritizedSteps.map((step, index) => {
       const phase = STEP_PHASES[step.id] || 'analysis';
       const parallelGroup = step.parallelGroup;
+      const laneHint = step.lane ?? parallelGroup;
 
       let placement: SerpentinePlacement;
       let laneKey: (typeof LANE_ORDER)[number] | undefined;
@@ -390,7 +407,7 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
       const isCompleted = step.status === 'completed';
       const hasError = step.status === 'error';
 
-      const laneGroup = useLaneLayout ? (laneKey ?? inferHubLane(step)) : parallelGroup;
+      const laneGroup = useLaneLayout ? (laneKey ?? inferHubLane(step)) : (laneHint ?? parallelGroup);
 
       return {
         step,
@@ -407,6 +424,11 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
         index,
         parallelGroup: laneGroup,
         sequence: step.sequence,
+        lane: laneHint ?? (typeof laneGroup === 'string' ? laneGroup : undefined),
+        reused: Boolean(step.reused),
+        finalAnswerOnly: Boolean(step.finalAnswerOnly),
+        missingComponents: step.missingComponents,
+        analysisAvailable: step.analysisAvailable,
       };
     });
   }, [steps, layout.columns, layout.horizontalGap, layout.verticalGap, flowMode, layoutMode]);
@@ -474,7 +496,23 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
     setNodes((prevNodes) => {
       const previous = new Map(prevNodes.map((node) => [node.id, node]));
       const baseNodes = processedSteps.map(
-        ({ step, phase, position, isActive, isCompleted, hasError, latestThinking, index, parallelGroup, sequence }) => {
+        ({
+          step,
+          phase,
+          position,
+          isActive,
+          isCompleted,
+          hasError,
+          latestThinking,
+          index,
+          parallelGroup,
+          sequence,
+          lane,
+          reused,
+          finalAnswerOnly,
+          missingComponents,
+          analysisAvailable,
+        }) => {
           const priorPosition = previous.get(step.id)?.position ?? position;
           return {
             id: step.id,
@@ -500,6 +538,11 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
               progressPercent,
               parallelGroup,
               sequence,
+              lane,
+              reused,
+              finalAnswerOnly,
+              missingComponents,
+              analysisAvailable,
             },
           } as Node<ProcessNodeData>;
         },

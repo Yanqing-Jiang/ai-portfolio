@@ -14,6 +14,8 @@ export interface ToolCallTelemetry {
   latencyBudgetMs?: number;
   concurrencyLimit?: number;
   outputArtifacts?: string[];
+  lane?: string;
+  reused?: boolean;
 }
 
 export interface AgentTurnTelemetry {
@@ -27,6 +29,8 @@ export interface AgentTurnTelemetry {
   latencyBudgetMs?: number;
   concurrencyLimit?: number;
   outputArtifacts?: string[];
+  lane?: string;
+  reused?: boolean;
 }
 
 export interface ToolFanoutManifest {
@@ -164,6 +168,11 @@ export interface FollowUpBanner {
   title: string;
   message: string;
   route: string;
+  flowMode?: FlowMode;
+  finalAnswerOnly?: boolean;
+  missingComponents?: string[];
+  analysisAvailable?: boolean;
+  summary?: string;
 }
 
 export interface SpecialistCard {
@@ -184,6 +193,9 @@ export interface SpecialistCard {
   ready?: boolean;
   ts?: string;
   meta?: Record<string, any>;
+  lane?: string;
+  parallelGroup?: string;
+  reused?: boolean;
 }
 
 export interface StockWidgetConfig {
@@ -244,6 +256,14 @@ export interface ProcessStepDetails {
   analysis_overview?: AnalysisOverview;
   specialist_card?: SpecialistCard;
   latency_guardrail?: LatencyGuardrail;
+  lane?: string;
+  parallel_group?: string;
+  reused?: boolean;
+  final_answer_only?: boolean;
+  missing_components?: string[];
+  follow_up_route?: string;
+  analysis_available?: boolean;
+  final_answer_message?: string;
 }
 
 export interface ProcessStep {
@@ -258,6 +278,12 @@ export interface ProcessStep {
   parallelGroup?: string;
   scheduleStage?: string;
   flowMode?: FlowMode;
+  lane?: string;
+  reused?: boolean;
+  finalAnswerOnly?: boolean;
+  missingComponents?: string[];
+  followUpRoute?: string;
+  analysisAvailable?: boolean;
 }
 
 export interface ChatMessage {

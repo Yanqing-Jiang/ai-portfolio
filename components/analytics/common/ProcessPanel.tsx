@@ -433,6 +433,35 @@ export const ProcessPanel: React.FC<ProcessPanelProps> = ({
     const hasEvidence = evidenceEntries.length > 0;
     const lowConfidenceEvidence =
       hasEvidence && evidenceEntries.every((entry) => (entry.confidence ?? 0) < 0.35);
+    const finalAnswerOnly =
+      step.finalAnswerOnly ??
+      (typeof details.final_answer_only === 'boolean'
+        ? details.final_answer_only
+        : typeof details.final_answer_only === 'string'
+        ? details.final_answer_only.toLowerCase() === 'true'
+        : undefined);
+    const missingComponents =
+      step.missingComponents ??
+      (Array.isArray(details.missing_components)
+        ? (details.missing_components as unknown[])
+            .map((component) => (typeof component === 'string' ? component : String(component)))
+            .filter((component) => component.trim().length > 0)
+        : undefined);
+    const followUpRoute =
+      step.followUpRoute ??
+      (typeof details.follow_up_route === 'string' ? details.follow_up_route : banner?.route);
+    const analysisAvailable =
+      step.analysisAvailable ??
+      (typeof details.analysis_available === 'boolean'
+        ? details.analysis_available
+        : undefined);
+    const resolvedFinalAnswerOnly = banner?.finalAnswerOnly ?? finalAnswerOnly;
+    const resolvedMissingComponents = banner?.missingComponents?.length
+      ? banner.missingComponents
+      : missingComponents;
+    const resolvedAnalysisAvailable =
+      banner?.analysisAvailable !== undefined ? banner.analysisAvailable : analysisAvailable;
+    const resolvedFollowUpRoute = banner?.route ?? followUpRoute ?? 'full_pipeline';
 
     const detailEntries = Object.entries(otherDetails).filter(([, value]) => {
       if (value === undefined || value === null) {
@@ -464,13 +493,50 @@ export const ProcessPanel: React.FC<ProcessPanelProps> = ({
         ) : null}
         {banner ? (
           <div className="rounded-xl border border-amber-400/40 bg-amber-500/10 p-3 text-amber-100 shadow-inner">
-            <div className="flex items-center gap-2 text-[10px] uppercase tracking-wide text-amber-300">
+            <div className="flex flex-wrap items-center gap-2 text-[10px] uppercase tracking-wide text-amber-300">
               <span className="font-semibold">{banner.title}</span>
               <span className="rounded-full border border-amber-300/60 px-2 py-0.5 text-[9px] font-semibold text-amber-200">
-                {formatScheduleStage(banner.route)}
+                {formatScheduleStage(resolvedFollowUpRoute)}
               </span>
             </div>
             <div className="mt-1 text-[11px] leading-relaxed">{banner.message}</div>
+            {(resolvedFinalAnswerOnly || (resolvedMissingComponents?.length ?? 0) > 0 || resolvedAnalysisAvailable === false) && (
+              <div className="mt-2 flex flex-wrap gap-2 text-[10px] uppercase tracking-wide">
+                {resolvedFinalAnswerOnly ? (
+                  <span className="rounded-full border border-amber-300/60 bg-amber-600/10 px-2 py-0.5 text-amber-200">
+                    Final Answer Only
+                  </span>
+                ) : null}
+                {resolvedMissingComponents?.length ? (
+                  <span className="rounded-full border border-amber-300/60 bg-amber-600/10 px-2 py-0.5 text-amber-200">
+                    Missing: {resolvedMissingComponents.map((component) => formatScheduleStage(component)).join(', ')}
+                  </span>
+                ) : null}
+                {resolvedAnalysisAvailable === false ? (
+                  <span className="rounded-full border border-amber-300/60 bg-amber-600/10 px-2 py-0.5 text-amber-200">
+                    Analysis Pending
+                  </span>
+                ) : null}
+              </div>
+            )}
+          </div>
+        ) : null}
+        {!banner && resolvedFinalAnswerOnly ? (
+          <div className="rounded-xl border border-amber-400/40 bg-amber-500/10 p-3 text-amber-100 shadow-inner">
+            <div className="flex flex-wrap items-center gap-2 text-[10px] uppercase tracking-wide text-amber-300">
+              <span className="font-semibold">Guided Final Answer</span>
+              <span className="rounded-full border border-amber-300/60 px-2 py-0.5 text-[9px] font-semibold text-amber-200">
+                {formatScheduleStage(resolvedFollowUpRoute)}
+              </span>
+            </div>
+            {resolvedMissingComponents?.length ? (
+              <div className="mt-1 text-[11px] leading-relaxed">
+                Missing lanes: {resolvedMissingComponents.map((component) => formatScheduleStage(component)).join(', ')}
+              </div>
+            ) : null}
+            {resolvedAnalysisAvailable === false ? (
+              <div className="mt-1 text-[11px] leading-relaxed">Fresh analysis required for a full answer.</div>
+            ) : null}
           </div>
         ) : null}
         {analysis_overview ? (
@@ -600,6 +666,25 @@ export const ProcessPanel: React.FC<ProcessPanelProps> = ({
               </span>
               {specialist_card.state && <span>{formatScheduleStage(specialist_card.state)}</span>}
             </div>
+            {(specialist_card.lane || specialist_card.parallelGroup || specialist_card.reused) ? (
+              <div className="mt-1 flex flex-wrap items-center gap-2 text-[9px] uppercase tracking-wide text-sky-300">
+                {specialist_card.lane && (
+                  <span className="rounded-full border border-sky-400/40 bg-sky-500/20 px-2 py-0.5 text-sky-100">
+                    Lane {formatScheduleStage(specialist_card.lane)}
+                  </span>
+                )}
+                {!specialist_card.lane && specialist_card.parallelGroup && (
+                  <span className="rounded-full border border-sky-400/40 bg-sky-500/20 px-2 py-0.5 text-sky-100">
+                    Group {formatScheduleStage(specialist_card.parallelGroup)}
+                  </span>
+                )}
+                {specialist_card.reused ? (
+                  <span className="rounded-full border border-emerald-400/60 bg-emerald-500/20 px-2 py-0.5 text-emerald-100">
+                    Cached
+                  </span>
+                ) : null}
+              </div>
+            ) : null}
             {specialist_card.message && (
               <div className="mt-1 text-[11px] leading-relaxed">{specialist_card.message}</div>
             )}
@@ -682,6 +767,11 @@ export const ProcessPanel: React.FC<ProcessPanelProps> = ({
                 const isExpanded = expandedLedgerSteps[step.id];
                 const durationLabel = formatDuration(step.elapsed_ms);
                 const timestampLabel = formatTimestamp(step.timestamp);
+                const laneLabel = step.lane ?? step.parallelGroup;
+                const laneDisplay = laneLabel ? formatScheduleStage(laneLabel) : null;
+                const missingComponentsLabel = step.missingComponents?.length
+                  ? step.missingComponents.map((component) => formatScheduleStage(component)).join(', ')
+                  : null;
                 return (
                   <div
                     key={step.id}
@@ -703,9 +793,9 @@ export const ProcessPanel: React.FC<ProcessPanelProps> = ({
                               {typeof step.sequence === 'number' && (
                                 <span className="rounded-full bg-gray-800/50 px-2 py-0.5 text-[10px] text-gray-300">#{step.sequence}</span>
                               )}
-                              {step.parallelGroup && (
+                              {laneDisplay && (
                                 <span className="rounded-full bg-gray-800/50 px-2 py-0.5 text-[10px] uppercase tracking-wide text-gray-200">
-                                  Lane {step.parallelGroup}
+                                  {laneLabel === 'coordination' ? 'Coordinator Lane' : `Lane ${laneDisplay}`}
                                 </span>
                               )}
                               {step.scheduleStage && (
@@ -716,6 +806,16 @@ export const ProcessPanel: React.FC<ProcessPanelProps> = ({
                               {step.flowMode && (
                                 <span className="rounded-full bg-purple-800/50 px-2 py-0.5 text-[10px] uppercase tracking-wide text-purple-200">
                                   {formatScheduleStage(step.flowMode)}
+                                </span>
+                              )}
+                              {step.reused && (
+                                <span className="rounded-full border border-emerald-400/60 bg-emerald-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-emerald-200">
+                                  Cached
+                                </span>
+                              )}
+                              {step.finalAnswerOnly && (
+                                <span className="rounded-full border border-amber-400/60 bg-amber-500/15 px-2 py-0.5 text-[10px] uppercase tracking-wide text-amber-200">
+                                  Final Answer Only
                                 </span>
                               )}
                             </div>
@@ -731,9 +831,15 @@ export const ProcessPanel: React.FC<ProcessPanelProps> = ({
                           {timestampLabel && <span>{timestampLabel}</span>}
                           {durationLabel && <span>{durationLabel}</span>}
                           {typeof step.sequence === 'number' && <span>{`Seq ${step.sequence}`}</span>}
-                          {step.parallelGroup && <span className="uppercase text-gray-300">{`Lane ${step.parallelGroup}`}</span>}
+                          {laneDisplay && <span className="uppercase text-gray-300">{`Lane ${laneDisplay}`}</span>}
                           {step.scheduleStage && (
                             <span className="uppercase text-indigo-300">{formatScheduleStage(step.scheduleStage)}</span>
+                          )}
+                          {step.analysisAvailable === false && (
+                            <span className="uppercase text-amber-300">Analysis Pending</span>
+                          )}
+                          {missingComponentsLabel && (
+                            <span className="uppercase text-amber-200">{`Missing: ${missingComponentsLabel}`}</span>
                           )}
                           <span>Toggle for full insight</span>
                         </div>
@@ -883,6 +989,25 @@ export const ProcessPanel: React.FC<ProcessPanelProps> = ({
                     <div className="mt-1 text-[11px] leading-relaxed text-amber-100/90">
                       {followUpBanner.message}
                     </div>
+                    {(followUpBanner.finalAnswerOnly || (followUpBanner.missingComponents?.length ?? 0) > 0 || followUpBanner.analysisAvailable === false) && (
+                      <div className="mt-2 flex flex-wrap gap-2 text-[10px] uppercase tracking-wide">
+                        {followUpBanner.finalAnswerOnly ? (
+                          <span className="rounded-full border border-amber-300/60 bg-amber-600/10 px-2 py-0.5 text-amber-200">
+                            Final Answer Only
+                          </span>
+                        ) : null}
+                        {followUpBanner.missingComponents?.length ? (
+                          <span className="rounded-full border border-amber-300/60 bg-amber-600/10 px-2 py-0.5 text-amber-200">
+                            Missing: {followUpBanner.missingComponents.map((component) => formatScheduleStage(component)).join(', ')}
+                          </span>
+                        ) : null}
+                        {followUpBanner.analysisAvailable === false ? (
+                          <span className="rounded-full border border-amber-300/60 bg-amber-600/10 px-2 py-0.5 text-amber-200">
+                            Analysis Pending
+                          </span>
+                        ) : null}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

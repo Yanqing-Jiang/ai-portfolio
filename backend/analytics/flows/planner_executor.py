@@ -49,6 +49,7 @@ from analytics.artifacts import (
 )
 from analytics.routing import FollowUpRoute
 from analytics.validators import sanitize_for_json
+from analytics.prompt_versions import get_prompt_versions
 from .hooks import AnalyticsFlowHooks, NullFlowHooks
 from .tooling import run_tool_parallelism, get_default_tool_adapters
 from ..core.intent import intent_to_sql_criteria
@@ -1634,6 +1635,87 @@ class PlannerPipeline:
     def set_follow_up_route(self, route: FollowUpRoute) -> None:
         self.follow_up_route = route
 
+    @staticmethod
+    def _lane_for_tool_name(tool_name: str) -> Optional[str]:
+        normalized = tool_name.strip().lower()
+        if not normalized:
+            return None
+        if normalized == "web_retriever":
+            return "web"
+        if normalized == "stock_tracker" or normalized.startswith("market_question"):
+            return "market"
+        return None
+
+    def _record_tool_receipt_from_event(
+        self,
+        ctx: PlannerPhaseContext,
+        tool_name: str,
+        status: str,
+        data: Mapping[str, Any],
+    ) -> None:
+        receipts = getattr(ctx, "tool_receipts", None)
+        if receipts is None:
+            receipts = {}
+            ctx.tool_receipts = receipts
+        lane = data.get("lane")
+        if not lane:
+            lane = self._lane_for_tool_name(tool_name)
+        metadata = dict(data.get("metadata") or {})
+        if lane:
+            metadata.setdefault("lane", lane)
+        parallel_group = data.get("parallel_group")
+        if parallel_group:
+            metadata.setdefault("parallel_group", parallel_group)
+        payload = data.get("payload") or {}
+        if isinstance(payload, Mapping):
+            question_id = payload.get("question_id")
+            if question_id and "question_id" not in metadata:
+                metadata["question_id"] = question_id
+        normalized_status = status or "unknown"
+        if normalized_status in {"complete", "completed", "success"}:
+            normalized_status = "completed"
+        elif normalized_status == "cached":
+            normalized_status = "reused"
+        reused_flag = bool(data.get("reused"))
+        receipt = receipts.get(tool_name)
+        if receipt:
+            receipt.status = "reused" if reused_flag else normalized_status
+            receipt.reused = reused_flag
+            merged_metadata = dict(receipt.metadata or {})
+            merged_metadata.update(metadata)
+            receipt.metadata = merged_metadata
+            receipt.attempts = max(receipt.attempts, 0) + 1
+        else:
+            fingerprint = {
+                "query": getattr(ctx, "query", None),
+                "intent": getattr(getattr(ctx, "intent", None), "intent_key", None),
+                "metadata": metadata,
+                "tool": tool_name,
+            }
+            receipt = ToolInvocationReceipt(
+                tool=tool_name,
+                status="reused" if reused_flag else normalized_status,
+                attempts=1,
+                input_hash=_hash_payload(fingerprint),
+                metadata=metadata,
+                reused=reused_flag,
+            )
+        elapsed_ms = data.get("elapsed_ms")
+        if isinstance(elapsed_ms, (int, float)):
+            receipt.elapsed_ms = int(elapsed_ms)
+        error = data.get("error")
+        if error:
+            receipt.error = str(error)
+        output_payload = payload if isinstance(payload, Mapping) else None
+        if output_payload:
+            receipt.output_hash = _hash_payload(output_payload)
+        completed_at = data.get("completed_at") or data.get("ts")
+        if completed_at:
+            receipt.timestamp = str(completed_at)
+        else:
+            receipt.timestamp = datetime.utcnow().isoformat()
+        receipts[tool_name] = receipt
+
     def _mark_delta_event(self, event: Dict[str, Any]) -> Dict[str, Any]:
         data = event.setdefault("data", {})
         data["delta"] = True
@@ -1658,6 +1740,8 @@ class PlannerPipeline:
         ) and status in {"completed", "complete", "success"}:
             if isinstance(payload, dict):
                 _seed_stock_widget_from_payload(ctx, payload)
+        if tool_name in {"web_retriever", "stock_tracker"} or tool_name.startswith("market_question"):
+            self._record_tool_receipt_from_event(ctx, tool_name, status, data)
 
     def _start_tool_parallelism(
         self,
@@ -3555,6 +3639,7 @@ class PlannerExecutorFlow:
         self._pipeline = PlannerPipeline(flow_mode=flow_mode, parallelism_enabled=parallelism_enabled)
         self.flow_mode = flow_mode
         self.follow_up_route = FollowUpRoute.FULL_PIPELINE
+        self._prompt_versions = get_prompt_versions()
 
     def __getattr__(self, name: str):
         try:
@@ -3629,6 +3714,8 @@ class PlannerExecutorFlow:
         annotated = apply_mode_metadata(event, self.flow_mode)
         data = annotated.setdefault("data", {})
         data.setdefault("follow_up_route", self.follow_up_route.value)
+        if isinstance(data, dict):
+            data.setdefault("prompt_versions", dict(self._prompt_versions))
         return annotated
 
     async def events(

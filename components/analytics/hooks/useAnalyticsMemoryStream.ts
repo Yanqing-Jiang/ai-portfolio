@@ -137,6 +137,83 @@ export const useAnalyticsMemoryStream = (
     return undefined;
   };
 
+  const resolveLane = (...sources: any[]): string | undefined => {
+    for (const source of sources) {
+      if (!source) {
+        continue;
+      }
+      if (typeof source === 'string') {
+        const candidate = coerceString(source);
+        if (candidate) {
+          return candidate;
+        }
+        continue;
+      }
+      if (typeof source !== 'object') {
+        continue;
+      }
+      const direct = coerceString((source as any).lane);
+      if (direct) {
+        return direct;
+      }
+      const metadataLane = coerceString((source as any).metadata?.lane);
+      if (metadataLane) {
+        return metadataLane;
+      }
+      const detailsLane = coerceString((source as any).details?.lane);
+      if (detailsLane) {
+        return detailsLane;
+      }
+    }
+    return undefined;
+  };
+
+  const resolveReusedFlag = (...sources: any[]): boolean | undefined => {
+    for (const source of sources) {
+      if (source === undefined || source === null) {
+        continue;
+      }
+      if (typeof source === 'boolean') {
+        return source;
+      }
+      if (typeof source === 'string') {
+        const normalized = source.trim().toLowerCase();
+        if (!normalized) {
+          continue;
+        }
+        if (['reused', 'cached', 'cache_hit', 'from_cache', 'true', '1', 'yes'].includes(normalized)) {
+          return true;
+        }
+        if (['fresh', 'false', '0', 'no'].includes(normalized)) {
+          return false;
+        }
+      }
+      const coerced = coerceBoolean(source);
+      if (coerced !== undefined) {
+        return coerced;
+      }
+      if (typeof source === 'object') {
+        if (typeof (source as any).status === 'string') {
+          const normalizedStatus = coerceString((source as any).status)?.toLowerCase();
+          if (normalizedStatus === 'reused' || normalizedStatus === 'cached') {
+            return true;
+          }
+        }
+        const nested =
+          resolveReusedFlag((source as any).reused) ??
+          resolveReusedFlag((source as any).cache_hit) ??
+          resolveReusedFlag((source as any).cacheHit) ??
+          resolveReusedFlag((source as any).from_cache) ??
+          resolveReusedFlag((source as any).fromCache) ??
+          resolveReusedFlag((source as any).cached);
+        if (nested !== undefined) {
+          return nested;
+        }
+      }
+    }
+    return undefined;
+  };
+
   const coerceStringList = (value: unknown): string[] => {
     if (!Array.isArray(value)) {
       return [];
@@ -367,6 +444,18 @@ export const useAnalyticsMemoryStream = (
       ts: coerceString(raw.ts) ?? timestamp ?? new Date().toISOString(),
       meta: typeof raw.meta === 'object' && raw.meta !== null ? raw.meta : undefined,
     };
+    const lane = resolveLane(raw, raw.meta);
+    if (lane) {
+      card.lane = lane;
+    }
+    const parallelGroup = coerceString(raw.parallel_group ?? raw.parallelGroup ?? raw.meta?.parallel_group);
+    if (parallelGroup) {
+      card.parallelGroup = parallelGroup;
+    }
+    const reusedFlag = resolveReusedFlag(raw, raw.meta);
+    if (reusedFlag !== undefined) {
+      card.reused = reusedFlag;
+    }
 
     return card;
   };
@@ -686,11 +775,18 @@ export const useAnalyticsMemoryStream = (
 
   const upsertSpecialistCard = useCallback((card: SpecialistCard) => {
     setSpecialistCards((prev) => {
-      const existingIndex = prev.findIndex((item) => item.type === card.type);
+      const keyFor = (entry: SpecialistCard) =>
+        [entry.type ?? 'accessory', entry.lane ?? '', entry.parallelGroup ?? ''].join('::');
+      const targetKey = keyFor(card);
+      const existingIndex = prev.findIndex((item) => keyFor(item) === targetKey);
       let next: SpecialistCard[];
       if (existingIndex >= 0) {
         next = [...prev];
-        next[existingIndex] = { ...prev[existingIndex], ...card };
+        next[existingIndex] = {
+          ...prev[existingIndex],
+          ...card,
+          reused: card.reused ?? prev[existingIndex].reused,
+        };
       } else {
         next = [...prev, card];
       }
@@ -834,6 +930,14 @@ export const useAnalyticsMemoryStream = (
       parallelGroup: meta?.parallel_group ?? payload.parallel_group,
       toolGroup: meta?.tool_group ?? payload.tool_group,
     };
+    const lane = resolveLane(payload, payload.metadata, { lane: meta?.parallel_group });
+    if (lane) {
+      entry.lane = lane;
+    }
+    const reusedFlag = resolveReusedFlag(payload, payload.metadata);
+    if (reusedFlag !== undefined) {
+      entry.reused = reusedFlag;
+    }
     const latencyBudget = typeof payload.latency_budget_ms === 'number' ? payload.latency_budget_ms : undefined;
     const concurrencyLimit = typeof payload.concurrency_limit === 'number' ? payload.concurrency_limit : undefined;
     const outputArtifacts = Array.isArray(payload.output_artifacts)
@@ -861,6 +965,9 @@ export const useAnalyticsMemoryStream = (
     }
     if (entry.concurrencyLimit !== undefined) {
       metadataSegments.push(`concurrency ${entry.concurrencyLimit}`);
+    }
+    if (entry.reused) {
+      metadataSegments.push('cached');
     }
     if (entry.outputArtifacts && entry.outputArtifacts.length) {
       metadataSegments.push(`outputs ${entry.outputArtifacts.slice(0, 3).join(', ')}`);
@@ -904,6 +1011,20 @@ export const useAnalyticsMemoryStream = (
       sequence,
       parallelGroup: meta?.parallel_group ?? payload.parallel_group ?? config.lane,
     };
+    const lane = resolveLane(payload, payload.metadata, { lane: config.lane }, { lane: meta?.parallel_group });
+    if (lane) {
+      entry.lane = lane;
+    }
+    const reusedFlag = resolveReusedFlag(payload, payload.metadata);
+    if (reusedFlag !== undefined) {
+      entry.reused = reusedFlag;
+    }
+    if (entry.reused === undefined && typeof payload.status === 'string') {
+      const normalizedStatus = payload.status.trim().toLowerCase();
+      if (normalizedStatus === 'reuse' || normalizedStatus === 'cached') {
+        entry.reused = true;
+      }
+    }
     const concurrencyLimit = typeof payload.concurrency_limit === 'number' ? payload.concurrency_limit : undefined;
     if (latencyBudget !== undefined) {
       entry.latencyBudgetMs = latencyBudget;
@@ -1221,6 +1342,8 @@ export const useAnalyticsMemoryStream = (
           : typeof eventData.tool_group === 'string'
           ? eventData.tool_group
           : undefined;
+      const laneFromEvent = resolveLane(eventData, eventData?.metadata, eventData?.details, data);
+      const reusedFlag = resolveReusedFlag(eventData, eventData?.metadata, eventData?.details, data);
 
       const updateStep = (
         stepId: string,
@@ -1229,6 +1352,14 @@ export const useAnalyticsMemoryStream = (
         details?: any,
         elapsed?: number,
         ts?: string,
+        overrides?: {
+          lane?: string;
+          reused?: boolean;
+          finalAnswerOnly?: boolean;
+          missingComponents?: string[];
+          followUpRoute?: string;
+          analysisAvailable?: boolean;
+        },
       ) => {
         stepsHook.updateStepStatus(
           stepId,
@@ -1241,6 +1372,14 @@ export const useAnalyticsMemoryStream = (
           parallelGroup,
           scheduleStage,
           flowModeValue,
+          {
+            lane: overrides?.lane ?? laneFromEvent,
+            reused: overrides?.reused ?? reusedFlag,
+            finalAnswerOnly: overrides?.finalAnswerOnly,
+            missingComponents: overrides?.missingComponents,
+            followUpRoute: overrides?.followUpRoute,
+            analysisAvailable: overrides?.analysisAvailable,
+          },
         );
       };
 
@@ -1271,10 +1410,23 @@ export const useAnalyticsMemoryStream = (
           if (stepInfo.step === 'follow_up_route' || bannerPayload) {
             const route = coerceString(bannerPayload?.route) ?? 'full_pipeline';
             const copy = FOLLOW_UP_BANNER_COPY[route] ?? FOLLOW_UP_BANNER_COPY.full_pipeline;
+            const finalAnswerOnly = coerceBoolean(bannerPayload?.final_answer_only);
+            const missingComponents = Array.isArray(bannerPayload?.missing_components)
+              ? (bannerPayload.missing_components as unknown[])
+                  .map((component) => coerceString(component))
+                  .filter(Boolean) as string[]
+              : undefined;
+            const analysisAvailable = coerceBoolean(bannerPayload?.analysis_available);
+            const summaryCopy = coerceString(bannerPayload?.summary);
             const banner: FollowUpBanner = {
               title: coerceString(bannerPayload?.title) ?? copy.title,
               message: coerceString(bannerPayload?.message) ?? (statusMessage || copy.message),
               route,
+              flowMode: flowModeValue ?? flow,
+              finalAnswerOnly: finalAnswerOnly ?? undefined,
+              missingComponents,
+              analysisAvailable,
+              summary: summaryCopy,
             };
             setFollowUpBanner(banner);
             workflowDataRef.current.followUpBanner = banner;
@@ -1286,6 +1438,12 @@ export const useAnalyticsMemoryStream = (
               { banner },
               stepInfo.elapsed_ms,
               stepInfo.ts,
+              {
+                followUpRoute: route,
+                finalAnswerOnly: finalAnswerOnly ?? undefined,
+                missingComponents,
+                analysisAvailable,
+              },
             );
             streamHook.setCurrentStatus(banner.message);
             break;
@@ -2756,13 +2914,58 @@ export const useAnalyticsMemoryStream = (
           break;
 
         case 'final_answer':
-          stepsHook.updateStepStatus('finalization', 'completed', ['Provided final response']);
-          streamHook.setCurrentStatus(eventData?.message || 'Completed');
-          if (!isThinkingEvent && !isSpecialistOnlyMode()) {
-            addChatMessage({
-              type: 'assistant',
-              content: eventData?.message || 'Happy to help with financial analytics questions!',
-            });
+          {
+            const finalMessage = coerceString(eventData?.message) ?? 'Analysis completed.';
+            const finalAnswerOnly = coerceBoolean(eventData?.final_answer_only);
+            const missingComponents = Array.isArray(eventData?.missing_components)
+              ? (eventData.missing_components as unknown[]).map((item) => coerceString(item)).filter(Boolean) as string[]
+              : undefined;
+            const followUpRoute = coerceString(eventData?.follow_up_route) ?? 'full_pipeline';
+            const analysisAvailable = coerceBoolean(eventData?.analysis_available);
+            const flowModeOverride =
+              (typeof eventData?.flow_mode === 'string' ? (eventData.flow_mode as FlowMode) : undefined) ?? flowModeValue ?? flow;
+            const banner: FollowUpBanner = {
+              title: finalAnswerOnly ? 'Guided Final Answer' : 'Final Answer Ready',
+              message: finalMessage,
+              route: followUpRoute,
+              flowMode: flowModeOverride,
+              finalAnswerOnly: finalAnswerOnly ?? undefined,
+              missingComponents,
+              analysisAvailable,
+              summary: coerceString(eventData?.summary),
+            };
+            setFollowUpBanner(banner);
+            workflowDataRef.current.followUpBanner = banner;
+
+            updateStep(
+              'finalization',
+              'completed',
+              ['Provided final response'],
+              {
+                banner,
+                final_answer_only: finalAnswerOnly ?? undefined,
+                missing_components: missingComponents,
+                follow_up_route: followUpRoute,
+                analysis_available: analysisAvailable,
+                message: finalMessage,
+              },
+              stepInfo.elapsed_ms,
+              stepInfo.ts,
+              {
+                finalAnswerOnly: finalAnswerOnly ?? undefined,
+                missingComponents,
+                followUpRoute,
+                analysisAvailable,
+              },
+            );
+
+            streamHook.setCurrentStatus(finalMessage || 'Completed');
+            if (!isThinkingEvent && !isSpecialistOnlyMode()) {
+              addChatMessage({
+                type: 'assistant',
+                content: finalMessage,
+              });
+            }
           }
           break;
           
