@@ -6,7 +6,7 @@ export const PROJECT_DATA: ProjectYear[] = [
     subtitle: '(Agentic AI & Autonomous Trading)',
     projects: [
       {
-        id: 'next-gen-analytics-memory',
+        id: 'next-gen-analytics-agent',
         title: 'Next Gen Analytics (Agents)',
         description: `Three Agentic Workflows:\nDirect (fixed path): no flexibility on tools, run through all tools all at once\nSingle-Agent (multi-tool use): ability to pick tools, revise single/multiple analytic element\nMulti-Agent (supervisor + specialists): workload delegation & orchestration\nHuman-in-the-loop: Compact widget for clarification on peers/metrics/range\nExplainable thinking process panel: plan graph + per-step trace.\nSQL database financials: AMD, AVGO, INTC, MU, NVDA, QCOM, TXN.\nMemory optimization: RAG optimized, Cached queries, vectorized prompts, stateful nodes`,
         cardDescription: 'Demo the process difference between single and multi-agent workflows.\nExperience the 50% processing time reduction vs direct workflow.',

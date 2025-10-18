@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Dict, Any, List, Optional, Tuple
 from .types import IntentModel, QueryPlanModel, ClarifyRequestModel, ClarifyAnswerModel
 from .companies import resolve_alias_to_ticker, sanitize_ticker
+from .intent_impl.normalization import normalize_timeframe, normalize_metrics
 
 
 # In-memory session store with TTL
@@ -389,31 +390,41 @@ async def merge_answers(
                 fallback = companies[0] if companies else 'NVDA'
                 intent.slots_detected['company'] = fallback
                 assumptions.append(f"Invalid company selection, using fallback: {fallback}")
-        
-        elif slot == 'timeframe':
-            # Parse timeframe string or explicit fiscal year
-            if isinstance(value, str):
-                raw_value = value.strip()
-                tokens = [token for token in raw_value.replace(',', ' ').split() if token]
-                numeric_tokens: List[int] = []
-                for token in tokens:
-                    cleaned = ''.join(ch for ch in token if ch.isdigit())
-                    if cleaned.isdigit():
-                        numeric_tokens.append(int(cleaned))
-                current_year = datetime.utcnow().year
-                target_year = next((num for num in numeric_tokens if 1900 <= num <= current_year + 1), None)
 
-                if target_year:
-                    plan.timeframe.start_year = target_year
-                    plan.timeframe.end_year = target_year
-                    plan.timeframe.years_back = 1
-                    assumptions.append(f"Focusing on fiscal year {target_year}")
-                elif numeric_tokens:
-                    years = numeric_tokens[0]
-                    max_years = configs.get('database', {}).get('query_defaults', {}).get('max_years_back', 10)
-                    years = max(3, min(years, max_years))
-                    plan.timeframe.years_back = years
-                    assumptions.append(f"Using timeframe: {years} years")
+            intent.slots_detected['tickers'] = [intent.slots_detected['company']]
+
+        elif slot == 'timeframe':
+            normalized_tf = normalize_timeframe(value, '', configs, origin='clarification')
+            if normalized_tf:
+                intent.slots_detected['timeframe'] = normalized_tf
+                plan.timeframe.years_back = normalized_tf.get('years_back')
+                plan.timeframe.quarters_back = normalized_tf.get('quarters_back')
+                plan.timeframe.start_year = normalized_tf.get('start_year')
+                plan.timeframe.end_year = normalized_tf.get('end_year')
+                plan.timeframe.preset = normalized_tf.get('preset')
+                plan.timeframe.year_to_date = normalized_tf.get('year_to_date')
+                plan.timeframe.source = normalized_tf.get('source')
+
+                descriptor = (
+                    normalized_tf.get('preset')
+                    or (
+                        f"{normalized_tf['years_back']} years"
+                        if normalized_tf.get('years_back')
+                        else None
+                    )
+                    or (
+                        f"{normalized_tf['quarters_back']} quarters"
+                        if normalized_tf.get('quarters_back')
+                        else None
+                    )
+                    or (
+                        f"{normalized_tf['start_year']} to {normalized_tf['end_year']}"
+                        if normalized_tf.get('start_year') and normalized_tf.get('end_year')
+                        else None
+                    )
+                )
+                if descriptor:
+                    assumptions.append(f"Using timeframe: {descriptor}")
 
         elif slot == 'granularity':
             # Parse granularity
@@ -424,6 +435,8 @@ async def merge_answers(
             else:
                 plan.granularity = 'annual'
                 assumptions.append("Using annual granularity")
+
+            intent.slots_detected['granularity'] = plan.granularity
         
         elif slot == 'comparison':
             # Parse comparison type
@@ -444,14 +457,18 @@ async def merge_answers(
                 if 'market_share' in (intent.intent_key or ''):
                     intent.intent_key = 'market_share_all'
                     assumptions.append("Updated intent to market_share_all")
+            intent.slots_detected['comparison'] = plan.comparison
             assumptions.append(f"Using comparison: {plan.comparison}")
         
-        elif slot == 'metrics':
+        elif slot in ('metric', 'metrics'):
             # Parse metrics selection
-            if isinstance(value, list):
-                plan.metrics = [str(m).strip() for m in value]
-            else:
-                plan.metrics = [str(value).strip()]
+            normalized_metrics = normalize_metrics(value, configs)
+            if not normalized_metrics and value:
+                normalized_metrics = [str(value).strip()]
+            if normalized_metrics:
+                plan.metrics = normalized_metrics
+                intent.slots_detected['metrics'] = normalized_metrics
+                intent.slots_detected['metric'] = normalized_metrics[0]
             assumptions.append(f"Using metrics: {', '.join(plan.metrics)}")
     
     return intent, plan, assumptions

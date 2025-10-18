@@ -24,7 +24,6 @@ metrics:
     database_name: "Revenue"
     aliases: 
       - "revenue"
-      - "sales" 
       - "net sales"
       - "total revenue"
     category: "income_statement"
@@ -192,11 +191,42 @@ derived_metrics:
 synonyms:
   "opex": "SG&A"
   "capex": "CapEx"
+  "sales": "Revenue"
   "cash": "Cash & Equiv."
   "margins": ["gross_margin", "operating_margin", "net_margin"]
   "profitability": ["gross_margin", "operating_margin", "net_margin"]
   "growth": "revenue"
   "earnings": "net_income"
+
+slot_suggestions:
+  metric:
+    - "Revenue"
+    - "Net Income"
+    - "Capital Expenditures"
+    - "EPS Basic"
+    - "Income Before Tax"
+    - "Operating Income"
+    - "Stockholders' Equity"
+    - "R&D Expense"
+    - "Gross Profit"
+  timeframe_presets:
+    - value: "last_4_quarters"
+      label: "last 4 quarters"
+      years_back: 1
+      aliases: ["last four quarters"]
+    - value: "last_8_quarters"
+      label: "last 8 quarters"
+      years_back: 2
+      aliases: ["last eight quarters"]
+    - value: "last_5_years"
+      label: "last 5 years"
+      years_back: 5
+      aliases: ["last five years", "past 5 years"]
+    - value: "year_to_date"
+      label: "year to date"
+      years_back: 1
+      year_to_date: true
+      aliases: ["ytd", "year-to-date"]
 
 # Display formatting
 formatting:

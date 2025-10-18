@@ -1,4 +1,6 @@
 ## Ground rules
+- Sacrifice grammar for the sake of concision
+- List any unresolved questions at the end, if any
 - Understand first, change second. If you're not confident on the task, read more context
 - Before any edit: read the entire target function and its direct call sites.
 - Prefer surgical diffs that preserve behavior unless asked to refactor.

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { render, act, screen } from '@testing-library/react';
+import { render, act, screen, renderHook } from '@testing-library/react';
 import { useAnalyticsMemoryStream } from './useAnalyticsMemoryStream';
 
 // Mock the API service used by useAnalyticsStream to avoid network
@@ -18,7 +18,7 @@ vi.mock('./useAnalyticsStream', () => {
     useAnalyticsStream: () => ({
       isLoading: false,
       error: '',
-      currentStatus: 'Ready to analyze financial data...',
+      currentStatus: '',
       setCurrentStatus: vi.fn(),
       setError: vi.fn(),
       startStream: async (_endpoint: string, onEvent: (data: any) => void) => {
@@ -127,6 +127,111 @@ describe('useAnalyticsMemoryStream result deduping', () => {
 
     const resultCount = Number(screen.getByTestId('result-count').textContent);
     expect(resultCount).toBe(1);
+  });
+
+  it('merges repeated analysis_ready sources into a single Financial Analysis card', async () => {
+    (globalThis as any).__TEST_EVENTS__ = [
+      {
+        event: 'analysis_ready',
+        analysis: 'SQL snapshot incoming',
+        analysis_sources: {
+          sql_lane: { id: 'sql_lane', lane: 'sql', summary: 'Rows fetched: 50', row_count: 50 },
+        },
+      },
+      {
+        event: 'analysis_ready',
+        analysis: 'SQL snapshot updated',
+        analysis_sources: {
+          sql_lane: {
+            id: 'sql_lane',
+            lane: 'sql',
+            summary: 'Rows fetched: 60',
+            row_count: 60,
+            columns: ['ticker', 'avg_return'],
+          },
+        },
+      },
+      {
+        event: 'analysis_ready',
+        analysis: 'Web insights ready',
+        analysis_sources: {
+          web_lane: {
+            id: 'web_lane',
+            lane: 'web',
+            summary: 'Two corroborating snippets',
+            snippet_count: 2,
+          },
+        },
+      },
+      {
+        event: 'analysis_ready',
+        analysis: 'Market snapshot ready',
+        analysis_sources: {
+          stock_lane: {
+            id: 'stock_lane',
+            lane: 'stock',
+            summary: 'NVDA trending up',
+            symbols: ['NVDA'],
+            latest_close: 120.34,
+            change_percent: 1.23,
+          },
+        },
+      },
+      {
+        event: 'cohesive_result',
+        analysis: 'Final blended narrative',
+        sql: 'SELECT * FROM metrics',
+        analysis_sources: {
+          sql_lane: {
+            id: 'sql_lane',
+            lane: 'sql',
+            summary: 'Rows fetched: 60',
+            row_count: 60,
+            columns: ['ticker', 'avg_return'],
+          },
+          web_lane: {
+            id: 'web_lane',
+            lane: 'web',
+            summary: 'Two corroborating snippets',
+            snippet_count: 2,
+          },
+          stock_lane: {
+            id: 'stock_lane',
+            lane: 'stock',
+            summary: 'NVDA trending up',
+            symbols: ['NVDA'],
+            latest_close: 120.34,
+            change_percent: 1.23,
+          },
+        },
+      },
+      { event: 'workflow_complete' },
+    ];
+
+    const { result } = renderHook(() => useAnalyticsMemoryStream('single-agent'));
+
+    await act(async () => {
+      await result.current.handleQuery('merge sources check');
+    });
+
+    const resultMessages = result.current.chatHistory.filter((message) => message.type === 'result');
+    expect(resultMessages).toHaveLength(1);
+
+    const sources = resultMessages[0].analysisSources;
+    expect(sources).toBeTruthy();
+    if (!sources) {
+      return;
+    }
+
+    expect(Object.keys(sources)).toHaveLength(3);
+    expect(sources.sql_lane?.rowCount).toBe(60);
+    expect(sources.sql_lane?.columns).toEqual(['ticker', 'avg_return']);
+    expect(sources.web_lane?.snippetCount).toBe(2);
+    expect(sources.stock_lane?.symbols).toEqual(['NVDA']);
+    expect(sources.stock_lane?.latestClose).toBeCloseTo(120.34);
+    expect(sources.stock_lane?.changePercent).toBeCloseTo(1.23);
+
+    (globalThis as any).__TEST_EVENTS__ = undefined;
   });
 
   it('records a chart revision step when chart_patch arrives', async () => {

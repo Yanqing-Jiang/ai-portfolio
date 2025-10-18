@@ -36,7 +36,7 @@ const ProjectView: React.FC<ProjectViewProps> = ({ project }) => {
     );
   }
 
-  if (project.id === 'next-gen-analytics-memory') {
+  if (project.id === 'next-gen-analytics-agent') {
     return (
       <>
         <ProjectHelmet project={project} />

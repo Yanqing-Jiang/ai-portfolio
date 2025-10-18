@@ -2,8 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, Iterable, Optional, Sequence, Set
+import logging
 
 from .planner_executor import PlannerPipeline, PlannerPhaseContext
+
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "PlannerToolDefinition",
@@ -118,7 +122,25 @@ def _bootstrap_registry(registry: PlannerToolRegistry) -> None:
         intent = ctx.intent
         plan = ctx.plan or ctx.provisional_plan
         if not intent or not plan:
+            logger.warning(
+                "Skipping SQL pipeline due to missing intent or plan",
+                extra={
+                    "session_id": ctx.session_id,
+                    "has_intent": intent is not None,
+                    "has_plan": plan is not None,
+                    "flow_mode": getattr(ctx, "flow_mode", None),
+                },
+            )
             return
+        logger.info(
+            "Starting SQL pipeline",
+            extra={
+                "session_id": ctx.session_id,
+                "intent_key": getattr(intent, "key", None),
+                "selected_template": ctx.selected_template_id,
+                "flow_mode": getattr(ctx, "flow_mode", None),
+            },
+        )
         async for event in pipeline.run_sql_pipeline(
             ctx,
             intent=intent,
@@ -126,7 +148,22 @@ def _bootstrap_registry(registry: PlannerToolRegistry) -> None:
             candidate_templates=ctx.candidate_templates,
             selected_template_id=ctx.selected_template_id,
         ):
+            logger.debug(
+                "SQL pipeline emitted event",
+                extra={
+                    "session_id": ctx.session_id,
+                    "event": event.get("event"),
+                    "flow_mode": getattr(ctx, "flow_mode", None),
+                },
+            )
             yield event
+        logger.info(
+            "Completed SQL pipeline",
+            extra={
+                "session_id": ctx.session_id,
+                "flow_mode": getattr(ctx, "flow_mode", None),
+            },
+        )
 
     async def _run_chart(pipeline: PlannerPipeline, ctx: PlannerPhaseContext, _: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
         intent = ctx.intent

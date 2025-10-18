@@ -16,6 +16,7 @@ sys.modules["google.genai.types"] = genai_types_stub
 
 from analytics.flows.multi_agent import MultiAgentFlow
 from analytics.flows.orchestrator import AgentResult
+from analytics.routing import FollowUpRoute
 
 
 def test_multi_agent_plan_dependencies():
@@ -148,6 +149,13 @@ def test_multi_agent_cohesive_result_payload(monkeypatch):
     assert data["chart_spec"]["title"] == "Share"
     assert data["sql"] == "SELECT * FROM market_share"
     assert data["stock_widget"]["symbols"] == ["NASDAQ:AMD"]
+    sources = data.get("analysis_sources")
+    assert isinstance(sources, dict)
+    assert sources["sql"]["lane"] == "sql"
+    assert sources["sql"].get("reused") is False
+    assert sources["stock"]["lane"] == "stock"
+    assert "NASDAQ:AMD" in sources["stock"]["symbols"]
+    assert sources["web"]["lane"] == "web"
 
     stock_ready = next((evt for evt in emitted if evt.get("event") == "stock_ready"), None)
     if stock_ready:
@@ -164,10 +172,13 @@ def test_multi_agent_cohesive_result_payload(monkeypatch):
         assert web_ready["data"].get("reused", False) is False
 
     lane_summary = next((evt for evt in emitted if evt.get("event") == "agent_decision"), None)
-    if lane_summary:
-        lane_data = lane_summary.get("data", {})
-        assert lane_data.get("parallel_group") in {"single_agent_fanout", "multi_supervisor_fanout"}
-        assert lane_data.get("ts")
+    assert lane_summary is not None
+    lane_data = lane_summary.get("data", {})
+    assert lane_data.get("parallel_group") == "multi_supervisor_fanout"
+    assert lane_data.get("ts")
+    scope = lane_data.get("rerun_scope")
+    assert isinstance(scope, dict)
+    assert "rerun" in scope and "reuse" in scope
 
 
 def test_multi_agent_emits_final_answer_when_cannot_cohere(monkeypatch):
@@ -209,6 +220,22 @@ def test_multi_agent_emits_final_answer_when_cannot_cohere(monkeypatch):
     assert final_event["data"].get("flow_mode") == "multi_agent"
     missing = set(final_event["data"].get("missing_components", []))
     assert missing == {"sql", "stock", "web"}
+
+
+def test_multi_agent_chart_revision_final_answer_mentions_reuse():
+    flow = MultiAgentFlow()
+    flow.set_follow_up_route(FollowUpRoute.REUSE_SQL)
+    flow._prepare_context("Reuse snapshot")
+    flow._shared_context["sql"]["sql"] = "SELECT symbol, price FROM quotes"
+    flow._shared_context["market"]["snapshot"] = {"symbols": [["NASDAQ:NVDA", "NVDA"]]}
+    flow._shared_context["web"]["summary"] = "Cached macro commentary."
+    flow._shared_context["analysis"]["final"] = "Existing financial analysis stays intact."
+    payload = flow._build_final_answer_payload(flow._shared_context["analysis"]["final"])
+    assert payload is not None
+    assert payload["missing_components"] == []
+    message = payload["message"]
+    assert "Chart revision applied." in message
+    assert "reused" in message.lower()
 
 
 def test_chart_generated_normalizes_wrapped_spec():

@@ -4,8 +4,19 @@ import { apiService } from '../../../services/apiService';
 export const useAnalyticsStream = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
-  const [currentStatus, setCurrentStatus] = useState('Ready to analyze financial data...');
+  const [status, setStatus] = useState<{ text: string; timestamp: string | null }>({
+    text: '',
+    timestamp: null,
+  });
   const abortControllerRef = useRef<AbortController | null>(null);
+
+  const setCurrentStatus = (text: string, options?: { timestamp?: string | null }) => {
+    const nextTimestamp =
+      options && options.hasOwnProperty('timestamp')
+        ? options.timestamp ?? null
+        : new Date().toISOString();
+    setStatus({ text, timestamp: nextTimestamp });
+  };
 
   const startStream = async (
     endpoint: string,
@@ -49,13 +60,14 @@ export const useAnalyticsStream = () => {
 
   const resetState = () => {
     setError('');
-    setCurrentStatus('Ready to analyze financial data...');
+    setCurrentStatus('', { timestamp: new Date().toISOString() });
   };
 
   return {
     isLoading,
     error,
-    currentStatus,
+    currentStatus: status.text,
+    statusTimestamp: status.timestamp,
     setCurrentStatus,
     setError,
     startStream,

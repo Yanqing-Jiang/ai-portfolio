@@ -54,7 +54,7 @@ def test_market_lane_uses_stock_tracker_and_concurrency_limit(monkeypatch: pytes
     active = controller._start_fanout_lanes(dummy_ctx, ("market",))
     assert "market" in active
     assert captured["adapters"] == ("market_question_a", "market_question_b", "stock_tracker")
-    assert captured["concurrency"] == 2
+    assert captured["concurrency"] == 3
 
 
 def test_iter_fresh_accessory_events_emit_once() -> None:
@@ -139,6 +139,8 @@ def test_lane_summary_adds_rerun_scope_for_chart_revision() -> None:
     assert data["decision"] == "chart_revision"
     scope = data.get("rerun_scope")
     assert isinstance(scope, dict)
-    assert set(scope.get("rerun", [])) == {"chart", "analysis"}
-    assert set(scope.get("reuse", [])) >= {"sql", "market", "web"}
+    rerun_set = set(scope.get("rerun", []))
+    assert rerun_set == {"chart"}
+    reuse_set = set(scope.get("reuse", []))
+    assert reuse_set >= {"sql", "market", "web", "analysis"}
     assert scope.get("route") == FollowUpRoute.REUSE_SQL.value

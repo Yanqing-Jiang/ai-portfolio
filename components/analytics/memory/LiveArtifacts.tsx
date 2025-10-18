@@ -1,9 +1,10 @@
-﻿import React from 'react';
+import React from 'react';
 import { AnalysisCard, ChartCard, SqlCard, TradingViewSymbolOverview, WebSearchCard } from '../common';
 import { isValidChartSpec } from '../utils';
-import type { FlowMode, StockWidgetConfig, WebSearchResult, AnalysisOverview, SpecialistCard, LatencyGuardrail } from '../types';
+import type { FlowMode, StockWidgetConfig, WebSearchResult, AnalysisOverview, SpecialistCard, LatencyGuardrail, AnalysisSources } from '../types';
 
 interface LiveArtifactsProps {
+  analysisSources?: AnalysisSources | null;
   chartSpec: any;
   dataSample: any[] | null;
   sqlQuery: string;
@@ -29,6 +30,7 @@ export const LiveArtifacts: React.FC<LiveArtifactsProps> = ({
   dataSample,
   sqlQuery,
   analysis,
+  analysisSources = null,
   progressiveAnalysis,
   progressiveText,
   webSearch,
@@ -166,7 +168,7 @@ export const LiveArtifacts: React.FC<LiveArtifactsProps> = ({
                   </ul>
                   {lowConfidenceEvidence && (
                     <div className="mt-2 text-[11px] text-amber-300">
-                      Sources flagged for low confidence—consider re-running web research.
+                      Sources flagged for low confidence�consider re-running web research.
                     </div>
                   )}
                 </div>
@@ -178,7 +180,7 @@ export const LiveArtifacts: React.FC<LiveArtifactsProps> = ({
             </div>
           )}
           <div className="mt-2">
-            <AnalysisCard analysis={analysisForDisplay} />
+            <AnalysisCard analysis={analysisForDisplay} analysisSources={analysisSources} />
           </div>
         </div>
       )}
@@ -238,7 +240,7 @@ export const LiveArtifacts: React.FC<LiveArtifactsProps> = ({
                 </span>
               ) : null}
               <span className="text-[11px] text-emerald-200/70">
-                p50 ≤ {latencyGuardrail.thresholds.p50_ms} ms · p95 ≤ {latencyGuardrail.thresholds.p95_ms} ms
+                p50 = {latencyGuardrail.thresholds.p50_ms} ms � p95 = {latencyGuardrail.thresholds.p95_ms} ms
               </span>
             </div>
           ) : null}
@@ -289,3 +291,4 @@ export const LiveArtifacts: React.FC<LiveArtifactsProps> = ({
 };
 
 export default LiveArtifacts;
+

@@ -9,6 +9,7 @@ import {
   Position,
   ReactFlowInstance,
   Controls,
+  ControlButton,
   MiniMap,
   Background,
   BackgroundVariant,
@@ -400,11 +401,37 @@ const SingleAgentFanoutCanvasInner: React.FC<SingleAgentFanoutCanvasProps> = ({ 
     setEdges(edgeConfigs);
   }, [edgeConfigs, setEdges]);
 
+  const translateExtent = useMemo(() => {
+    if (!nodeConfigs.length) {
+      return [
+        [-400, -200],
+        [400, 600],
+      ] as [[number, number], [number, number]];
+    }
+    const xs = nodeConfigs.map((node) => node.position.x);
+    const ys = nodeConfigs.map((node) => node.position.y);
+    const minX = Math.min(...xs) - 260;
+    const maxX = Math.max(...xs) + 260;
+    const minY = Math.min(...ys) - 200;
+    const maxY = Math.max(...ys) + 260;
+    return [
+      [minX, minY],
+      [maxX, maxY],
+    ] as [[number, number], [number, number]];
+  }, [nodeConfigs]);
+
   const handleInit = useCallback((instance: ReactFlowInstance) => {
     instanceRef.current = instance;
     requestAnimationFrame(() => {
       instance.fitView({ padding: 0.18, includeHiddenNodes: true, duration: 320 });
     });
+  }, []);
+
+  const handleResetView = useCallback(() => {
+    if (!instanceRef.current) {
+      return;
+    }
+    instanceRef.current.fitView({ padding: 0.18, includeHiddenNodes: true, duration: 320 });
   }, []);
 
   return (
@@ -424,7 +451,46 @@ const SingleAgentFanoutCanvasInner: React.FC<SingleAgentFanoutCanvasProps> = ({ 
       panOnDrag
       proOptions={{ hideAttribution: true }}
       className="bg-transparent"
-    />
+      translateExtent={translateExtent}
+      fitViewOptions={{ padding: 0.18, includeHiddenNodes: true, duration: 320 }}
+      minZoom={0.35}
+      maxZoom={1.75}
+      colorMode="dark"
+    >
+      <Controls
+        className="bg-gray-800/80 text-white border border-gray-700"
+        showFitView
+        showZoom
+        position="top-right"
+      >
+        <ControlButton onClick={handleResetView} title="Reset view">
+          Reset
+        </ControlButton>
+      </Controls>
+      <MiniMap
+        className="bg-gray-900/90 border border-gray-700"
+        pannable
+        zoomable
+        maskColor="rgba(8, 11, 20, 0.75)"
+        nodeColor={(node) => {
+          const data = node.data as ProcessNodeData | undefined;
+          if (!data) {
+            return '#4b5563';
+          }
+          if (data.hasError) {
+            return '#ef4444';
+          }
+          if (data.isActive) {
+            return SINGLE_AGENT_THEME.edgeActive;
+          }
+          if (data.isCompleted) {
+            return SINGLE_AGENT_THEME.edgeCompleted;
+          }
+          return SINGLE_AGENT_THEME.edgeIdle;
+        }}
+      />
+      <Background variant={BackgroundVariant.Lines} gap={32} size={1} color="#1f2937" />
+    </ReactFlow>
   );
 };
 

@@ -40,7 +40,7 @@ class OpenAIClient:
         if env_model:
             return env_model
 
-        # Use GPT-5 mini for next-gen-analytics-memory as specified in CLAUDE.md
+        # Use GPT-5 mini for next-gen-analytics-agent as specified in CLAUDE.md
         return "gpt-5-mini-2025-08-07"
 
     def create_structured(

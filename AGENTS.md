@@ -1,8 +1,9 @@
 ## Agent Ground Rules & Tooling
-Understand the task before editing: read the full function and its direct call sites, and prefer surgical diffs over speculative refactors. Look into the files, generate a plan of changes first, then execute. Do not add fallback code unless requested; Prioritize PowerShell over Bash. Always do unit test before you mark completion. When generating plan, be more elaborative on concept, use actual examples.
-
-- if user is asking for a plan, write your plan to docs folder for easy read
-- Run targeted `pytest` modules after each change to catch missing mocks (Polygon keys, etc.) before the full suite.
+Understand the task before editing: read the full function and its direct call sites, and prefer surgical diffs over speculative refactors. 
+Look into the files, generate a plan of changes first, then execute.When generating plan, be more elaborative on concept, use actual examples.
+Do not add fallback code unless requested; 
+Prioritize PowerShell over Bash.  
+List any unresolved questions at the end, if any.
 - Favor JS/TS-aware scripts (e.g. `node -e`) when editing TSX to avoid PowerShell escaping loops.
 
 ## Project Structure & Module Organization
@@ -51,10 +52,3 @@ Write backend tests with pytest, naming files `test_<feature>.py` beside the cod
 
 ## Environment & Secrets
 Copy `.env` templates at the root and inside `backend/` before running servers. Never commit secrets or service-account files.
-
-## Analytics Memory Overview
-- Showcases the planner-executor baseline alongside single-agent fan-out and multi-agent orchestration; keep the sequential UX ready as a fallback while surfacing telemetry to ProcessPanel and WorkflowCanvas.
-- Session state lives in Redis with a short TTL and enriched SSE metadata (`seq`, `parallel_group`, `tool_group`); review rollout and concurrency tasks in `backend/analytics/TO_DO.md` before editing prompts.
-- Execution diagrams, flow wiring, and adapter responsibilities sit in `backend/analytics/ARCHITECTURE.md`; update that file and the TODO whenever analytics memory logic or prompt contracts change.
-- Treat prompts as the control surface: align `/api/analytics/memory/stream?flow=<flow>` prompts, flags such as `ANALYTICS_TOOL_PARALLELISM`, and telemetry expectations before merging.
-

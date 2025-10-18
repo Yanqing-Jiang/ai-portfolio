@@ -65,6 +65,16 @@ def compile_sql_from_plan(
         sql = sql_template
         if target_ticker:
             sql = sql.replace('{target_ticker}', target_ticker)
+        primary_metric = None
+        plan_metrics = []
+        if isinstance(plan, QueryPlanModel):
+            plan_metrics = plan.metrics
+        elif isinstance(plan_dict.get('metrics'), list):
+            plan_metrics = plan_dict.get('metrics')
+        if plan_metrics:
+            primary_metric = plan_metrics[0]
+        safe_metric = (primary_metric or 'Revenue').replace("'", "''")
+        sql = sql.replace('{primary_metric}', safe_metric)
         sql = sql.replace('{years_back}', str(years_back))
         start_year = plan_dict.get('timeframe', {}).get('start_year')
         end_year = plan_dict.get('timeframe', {}).get('end_year')
@@ -109,6 +119,8 @@ def _granularity_clauses(granularity: str) -> tuple[str, str, str, str, str]:
 
 def _generic_sql(plan: QueryPlanModel, ticker_clause: str, years_back: int, granularity: str) -> str:
     order_by_clause = "calendar_year, calendar_quarter_num" if granularity == 'quarterly' else "calendar_year"
+    metric_name = plan.metrics[0] if getattr(plan, "metrics", []) else "Revenue"
+    metric_name = metric_name.replace("'", "''")
     base = [
         "SELECT ticker, calendar_year",
     ]
@@ -116,7 +128,7 @@ def _generic_sql(plan: QueryPlanModel, ticker_clause: str, years_back: int, gran
         base.append(", calendar_quarter_num, calendar_quarter")
     base.append(", SUM(value) AS value")
     base.append(" FROM comp_financials")
-    base.append(" WHERE metric = 'Revenue'")
+    base.append(f" WHERE metric = '{metric_name}'")
     if granularity == 'quarterly':
         base.append(" AND calendar_quarter_num IS NOT NULL")
     base.append(" AND calendar_year >= EXTRACT(YEAR FROM CURRENT_DATE) - {}".format(years_back))

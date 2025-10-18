@@ -5,6 +5,7 @@ import contextlib
 from datetime import datetime
 import copy
 import time
+import logging
 from typing import Any, AsyncGenerator, Dict, Iterable, List, Optional, Set, Tuple, Mapping
 
 from analytics.artifacts.models import PipelineArtifacts
@@ -28,6 +29,9 @@ from .planner_executor import (
 from .pipeline_tools import get_planner_tool_registry
 from .schedulers import FlowMode, apply_mode_metadata, get_mode_config
 from .tooling import StockTrackerAdapter, WebRetrieverAdapter
+
+
+logger = logging.getLogger(__name__)
 
 
 def _build_tool_metadata(manifest: Any) -> Dict[str, Dict[str, Any]]:
@@ -469,7 +473,13 @@ class _SingleAgentToolHooks(AnalyticsFlowHooks):
             "web": "online research data",
         }
         note: Optional[str] = None
-        if missing:
+        reuse_scope = self._flow.follow_up_route == FollowUpRoute.REUSE_SQL
+        if reuse_scope:
+            # For chart-only revisions we intentionally reuse the existing SQL, stock, and web context,
+            # so suppress the generic "Pending lanes" warning and surface a reuse hint instead.
+            missing = []
+            note = "Chart revision applied. SQL tables, stock telemetry, and market research were reused."
+        elif missing:
             readable = ", ".join(human_labels[name] for name in missing)
             note = f"Pending lanes: {readable}. Ask me to rerun those tools when you're ready."
         parts: List[str] = []
@@ -624,7 +634,8 @@ class SingleAgentController:
         "web": "single_agent_web",
     }
     LANE_CONCURRENCY_LIMITS: Dict[str, int] = {
-        "market": 2,
+        # Allow both market research questions plus the stock tracker to execute without serialising.
+        "market": 3,
         "web": 1,
     }
     LANE_TOOL_MAP: Dict[str, Tuple[str, ...]] = {
@@ -974,16 +985,23 @@ class SingleAgentController:
                 yield self._planner._annotate(event)
 
     def _emit_lane_summary(self, lane_states: Dict[str, str]) -> Dict[str, Any]:
+        normalized_states = dict(lane_states)
+        if self.follow_up_route == FollowUpRoute.REUSE_SQL:
+            for lane in ("sql", "analysis", "market", "web"):
+                state = normalized_states.get(lane)
+                if state in {"fresh", "running", "pending", "queued", "missing"}:
+                    normalized_states[lane] = "reused"
+
         payload = {
-            "lane_summary": lane_states,
+            "lane_summary": normalized_states,
             "parallel_group": "single_agent_fanout",
             "ts": datetime.utcnow().isoformat(),
             "flow_mode": self.flow_mode.value,
         }
         rerun_lanes = [
-            lane for lane, status in lane_states.items() if status in {"fresh", "running", "pending", "queued"}
+            lane for lane, status in normalized_states.items() if status in {"fresh", "running", "pending", "queued"}
         ]
-        reuse_lanes = [lane for lane, status in lane_states.items() if status in {"reused", "cached"}]
+        reuse_lanes = [lane for lane, status in normalized_states.items() if status in {"reused", "cached"}]
         payload["rerun_scope"] = {
             "rerun": rerun_lanes,
             "reuse": reuse_lanes,
@@ -1125,7 +1143,7 @@ class SingleAgentController:
                     lane_states["market"] = "running"
                 if "web" in started_lanes:
                     lane_states["web"] = "running"
-                async for fanout_event in self._drain_fanout_events(ctx, fanout_tasks):
+                for fanout_event in self._drain_fanout_events(ctx, fanout_tasks):
                     yield fanout_event
             elif should_run_parallel and not reuse_sql and (market_reuse or web_reuse):
                 ctx.accessories_prefetched = True
@@ -1139,7 +1157,7 @@ class SingleAgentController:
                 stale_progress["data"]["reused"] = False
                 yield self._planner._annotate(stale_progress)
                 if fanout_tasks:
-                    async for fanout_event in self._drain_fanout_events(fanout_tasks):
+                    for fanout_event in self._drain_fanout_events(fanout_tasks):
                         yield fanout_event
 
             if not reuse_sql:
@@ -1147,7 +1165,7 @@ class SingleAgentController:
                 async for event in registry.invoke("sql_generation", self._planner, ctx, executed=executed):
                     yield self._planner._annotate(event)
                     if fanout_tasks:
-                        async for fanout_event in self._drain_fanout_events(ctx, fanout_tasks):
+                        for fanout_event in self._drain_fanout_events(ctx, fanout_tasks):
                             yield fanout_event
                 lane_states["sql"] = "fresh"
             else:
@@ -1177,7 +1195,7 @@ class SingleAgentController:
                     )
                     yield self._planner._annotate(cached_sql_event)
                     if fanout_tasks:
-                        async for fanout_event in self._drain_fanout_events(ctx, fanout_tasks):
+                        for fanout_event in self._drain_fanout_events(ctx, fanout_tasks):
                             yield fanout_event
 
             await self._planner._persist_session_state(
@@ -1201,7 +1219,7 @@ class SingleAgentController:
                     )
 
             if fanout_tasks:
-                async for fanout_event in self._drain_fanout_events(ctx, fanout_tasks):
+                for fanout_event in self._drain_fanout_events(ctx, fanout_tasks):
                     yield fanout_event
 
                 for lane in list(fanout_tasks.keys()):
@@ -1217,7 +1235,7 @@ class SingleAgentController:
                         raise
                     finally:
                         lane_entry = {lane: (task, queue)}
-                        async for fanout_event in self._drain_fanout_events(ctx, lane_entry):
+                        for fanout_event in self._drain_fanout_events(ctx, lane_entry):
                             yield fanout_event
                         fanout_tasks.pop(lane, None)
                 ctx.accessories_prefetched = bool(started_lanes)
@@ -1253,6 +1271,15 @@ class SingleAgentController:
                     yield self._planner._annotate(cached_web_event)
                 ctx.accessories_prefetched = True
             elif not started_lanes:
+                logger.debug(
+                    "Ensuring analysis dependencies for single-agent flow",
+                    extra={
+                        "session_id": ctx.session_id,
+                        "market_lane": lane_states.get("market"),
+                        "web_lane": lane_states.get("web"),
+                        "flow_mode": self.flow_mode.value,
+                    },
+                )
                 async for event in self._planner._ensure_analysis_dependencies(ctx):
                     data = event.setdefault("data", {})
                     lane_hint = None
@@ -1319,9 +1346,28 @@ class SingleAgentController:
                     yield accessory_event
 
             lane_summary_event = self._emit_lane_summary(lane_states)
-            yield lane_summary_event
+            if lane_summary_event:
+                yield lane_summary_event
+            else:
+                logger.debug(
+                    "Single-agent lane summary emitted no payload",
+                    extra={
+                        "session_id": ctx.session_id,
+                        "lane_states": dict(lane_states),
+                        "flow_mode": self.flow_mode.value,
+                    },
+                )
 
             if ctx.halted:
+                logger.warning(
+                    "Single-agent flow halted after lane summary",
+                    extra={
+                        "session_id": ctx.session_id,
+                        "halt_reason": getattr(ctx, "halt_reason", None),
+                        "lane_states": dict(lane_states),
+                        "flow_mode": self.flow_mode.value,
+                    },
+                )
                 return
 
             lane_states["chart"] = "running"
@@ -1369,6 +1415,7 @@ class SingleAgentController:
         source: Optional[str] = None,
         query: Optional[str] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
+        self.set_follow_up_route(FollowUpRoute.REUSE_SQL)
         hooks = _SingleAgentToolHooks(self, session_id=session_id)
         async for event in self._invoke_planner_tool(
             "chart_revision",

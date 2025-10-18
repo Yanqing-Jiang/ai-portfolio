@@ -19,21 +19,34 @@ import '@xyflow/react/dist/style.css';
 import { ProcessNode } from './ProcessNode';
 import { ProcessStep, FlowMode, FlowVisualTheme } from '../types';
 
-type WorkflowLayoutMode = 'sequential' | 'lanes';
-
-const LANE_ORDER = ['fanout', 'overview', 'planner', 'query', 'analyst', 'chart', 'web', 'market', 'coordination'] as const;
+const LANE_ORDER = ['overview', 'coordination', 'planner', 'sql', 'market', 'web', 'chart', 'analysis', 'fanout'] as const;
 
 const LANE_LABELS: Record<(typeof LANE_ORDER)[number], string> = {
-  fanout: 'Tool Fan-Out',
   overview: 'Overview',
-  planner: 'Planner Agent',
-  query: 'Query Agent',
-  analyst: 'Analyst Agent',
-  chart: 'Chart Agent',
+  coordination: 'Supervisor Hub',
+  planner: 'Planner Lane',
+  sql: 'SQL Lane',
+  market: 'Market Lane',
   web: 'Web Research',
-  market: 'Market Agent',
-  coordination: 'Coordination',
+  chart: 'Charting',
+  analysis: 'Analysis Writer',
+  fanout: 'Tool Fan-Out',
 };
+
+const LANE_BASE_POSITIONS: Record<(typeof LANE_ORDER)[number], { x: number; y: number }> = {
+  overview: { x: 0, y: -260 },
+  coordination: { x: 0, y: -120 },
+  planner: { x: -360, y: 30 },
+  sql: { x: -180, y: 30 },
+  market: { x: 0, y: 30 },
+  web: { x: 180, y: 30 },
+  chart: { x: 360, y: 30 },
+  analysis: { x: 360, y: 220 },
+  fanout: { x: -360, y: -200 },
+};
+
+const LANE_STACK_SPACING = 120;
+const COORDINATION_STACK_SPACING = 100;
 
 const isBrowser = typeof window !== 'undefined';
 
@@ -58,7 +71,6 @@ const buildReusedEdgeTooltip = (step: ProcessStep, lane?: string, parallelGroup?
 interface WorkflowCanvasProps {
   steps: ProcessStep[];
   flowMode: FlowMode;
-  layoutMode?: WorkflowLayoutMode;
   className?: string;
   isVisible?: boolean;
   currentStepLabel?: string;
@@ -150,34 +162,14 @@ const FLOW_LAYOUT: Record<FlowMode, { columns: number; horizontalGap: number; ve
   'multi-agent': { columns: 5, horizontalGap: 400, verticalGap: 280 },
 };
 
-type HubLaneKey = 'fanout' | 'planner' | 'query' | 'analyst' | 'chart' | 'web' | 'market' | 'overview';
-
-interface HubLaneGeometry {
-  angle: number;
-  baseRadius: number;
-  branchSpacing: number;
-  lateralSpacing?: number;
-}
-
-const HUB_LANE_CONFIG: Record<HubLaneKey, HubLaneGeometry> = {
-  fanout: { angle: -150, baseRadius: 380, branchSpacing: 180, lateralSpacing: 36 },
-  planner: { angle: -100, baseRadius: 430, branchSpacing: 190, lateralSpacing: 42 },
-  query: { angle: -40, baseRadius: 440, branchSpacing: 190, lateralSpacing: 42 },
-  analyst: { angle: 10, baseRadius: 450, branchSpacing: 190, lateralSpacing: 42 },
-  chart: { angle: 60, baseRadius: 440, branchSpacing: 190, lateralSpacing: 42 },
-  web: { angle: 105, baseRadius: 430, branchSpacing: 190, lateralSpacing: 42 },
-  market: { angle: 150, baseRadius: 420, branchSpacing: 190, lateralSpacing: 42 },
-  overview: { angle: 0, baseRadius: 520, branchSpacing: 210, lateralSpacing: 40 },
-};
-
-const STEP_LANE_OVERRIDES: Record<string, HubLaneKey | 'coordination'> = {
+const STEP_LANE_OVERRIDES: Record<string, (typeof LANE_ORDER)[number]> = {
   agent_coordination: 'coordination',
   planner_agent: 'planner',
   planner_phase: 'planner',
-  query_agent: 'query',
-  query_phase: 'query',
-  analyst_agent: 'analyst',
-  analyst_phase: 'analyst',
+  query_agent: 'sql',
+  query_phase: 'sql',
+  analyst_agent: 'analysis',
+  analyst_phase: 'analysis',
   chart_agent: 'chart',
   chart_phase: 'chart',
   web_research_agent: 'web',
@@ -185,44 +177,44 @@ const STEP_LANE_OVERRIDES: Record<string, HubLaneKey | 'coordination'> = {
   market_agent: 'market',
   market_phase: 'market',
   tool_fanout: 'fanout',
-  sql_compilation: 'planner',
-  sql_validation: 'planner',
-  sql_execution: 'query',
+  sql_compilation: 'sql',
+  sql_validation: 'sql',
+  sql_execution: 'sql',
   chart_generation: 'chart',
-  analysis_generation: 'analyst',
-  analysis_revision: 'analyst',
+  analysis_generation: 'analysis',
+  analysis_revision: 'analysis',
 };
 
-const inferHubLane = (step: ProcessStep): HubLaneKey | 'coordination' => {
+const inferHubLane = (step: ProcessStep): (typeof LANE_ORDER)[number] => {
   if (STEP_LANE_OVERRIDES[step.id]) {
     return STEP_LANE_OVERRIDES[step.id];
   }
   if (step.lane) {
     if (STEP_LANE_OVERRIDES[step.lane]) {
-      return STEP_LANE_OVERRIDES[step.lane] as HubLaneKey | 'coordination';
+      return STEP_LANE_OVERRIDES[step.lane];
     }
-    if (HUB_LANE_CONFIG[step.lane as HubLaneKey]) {
-      return step.lane as HubLaneKey;
-    }
-    if (step.lane === 'coordination') {
-      return 'coordination';
+    if (Object.prototype.hasOwnProperty.call(LANE_BASE_POSITIONS, step.lane)) {
+      return step.lane as (typeof LANE_ORDER)[number];
     }
   }
   if (step.parallelGroup && STEP_LANE_OVERRIDES[step.parallelGroup]) {
-    return STEP_LANE_OVERRIDES[step.parallelGroup] as HubLaneKey | 'coordination';
+    return STEP_LANE_OVERRIDES[step.parallelGroup];
   }
-  if (typeof step.parallelGroup === 'string' && HUB_LANE_CONFIG[step.parallelGroup as HubLaneKey]) {
-    return step.parallelGroup as HubLaneKey;
+  if (typeof step.parallelGroup === 'string' && Object.prototype.hasOwnProperty.call(LANE_BASE_POSITIONS, step.parallelGroup)) {
+    return step.parallelGroup as (typeof LANE_ORDER)[number];
   }
   const id = step.id || '';
+  if (id.includes('coordination') || id.includes('supervisor')) {
+    return 'coordination';
+  }
   if (id.includes('planner') || id.includes('clarification') || id.includes('plan')) {
     return 'planner';
   }
   if (id.includes('query') || id.includes('sql')) {
-    return 'query';
+    return 'sql';
   }
   if (id.includes('analysis') || id.includes('insight')) {
-    return 'analyst';
+    return 'analysis';
   }
   if (id.includes('chart')) {
     return 'chart';
@@ -332,7 +324,6 @@ const computeSerpentinePlacement = (
 const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
   steps,
   flowMode,
-  layoutMode = 'sequential',
   className,
   isVisible = true,
   currentStepLabel,
@@ -365,7 +356,7 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
       : steps;
 
     const total = prioritizedSteps.length || 1;
-    const useLaneLayout = flowMode === 'multi-agent' && layoutMode === 'lanes';
+    const useLaneLayout = flowMode === 'multi-agent';
     const laneCounts: Record<string, number> = {};
 
     return prioritizedSteps.map((step, index) => {
@@ -378,40 +369,21 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
 
       if (useLaneLayout) {
         const resolvedLane = inferHubLane(step);
-        if (resolvedLane === 'coordination') {
-          const currentCount = laneCounts['coordination'] ?? 0;
-          laneCounts['coordination'] = currentCount + 1;
-          placement = {
-            position: { x: 0, y: currentCount * (layout.verticalGap / 3) },
-            row: currentCount,
-            stepInRow: 0,
-            columnsInRow: 1,
-            isEvenRow: true,
-          };
-          laneKey = 'coordination';
-        } else {
-          const config = HUB_LANE_CONFIG[resolvedLane] ?? HUB_LANE_CONFIG.overview;
-          const currentCount = laneCounts[resolvedLane] ?? 0;
-          laneCounts[resolvedLane] = currentCount + 1;
-          const radius = config.baseRadius + currentCount * config.branchSpacing;
-          const angleRad = (config.angle * Math.PI) / 180;
-          const perpendicular = angleRad + Math.PI / 2;
-          const lateralSpacing = config.lateralSpacing ?? 0;
-          const lateralIndex = Math.floor((currentCount + 1) / 2);
-          const lateralDirection = currentCount % 2 === 0 ? 1 : -1;
-          const lateralOffset = lateralSpacing ? lateralIndex * lateralSpacing * lateralDirection : 0;
-          const x = Math.cos(angleRad) * radius + Math.cos(perpendicular) * lateralOffset;
-          const y = Math.sin(angleRad) * radius + Math.sin(perpendicular) * lateralOffset;
-
-          placement = {
-            position: { x, y },
-            row: currentCount,
-            stepInRow: 0,
-            columnsInRow: 1,
-            isEvenRow: true,
-          };
-          laneKey = resolvedLane as (typeof LANE_ORDER)[number] | undefined;
-        }
+        const base = LANE_BASE_POSITIONS[resolvedLane] ?? LANE_BASE_POSITIONS.overview;
+        const currentCount = laneCounts[resolvedLane] ?? 0;
+        laneCounts[resolvedLane] = currentCount + 1;
+        const stackSpacing = resolvedLane === 'coordination' ? COORDINATION_STACK_SPACING : LANE_STACK_SPACING;
+        placement = {
+          position: {
+            x: base.x,
+            y: base.y + currentCount * stackSpacing,
+          },
+          row: currentCount,
+          stepInRow: 1,
+          columnsInRow: 1,
+          isEvenRow: currentCount % 2 === 0,
+        };
+        laneKey = resolvedLane;
       } else {
         placement = computeSerpentinePlacement(
           index,
@@ -451,7 +423,7 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
         analysisAvailable: step.analysisAvailable,
       };
     });
-  }, [steps, layout.columns, layout.horizontalGap, layout.verticalGap, flowMode, layoutMode]);
+  }, [steps, layout.columns, layout.horizontalGap, layout.verticalGap, flowMode]);
 
 
   const translateExtent = useMemo(() => {
@@ -472,7 +444,7 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
     const extraWidth = layout.horizontalGap;
     const extraHeight = layout.verticalGap;
 
-    if (flowMode === 'multi-agent' && layoutMode === 'lanes') {
+    if (flowMode === 'multi-agent') {
       const hubPlacement = processedSteps.find((entry) => entry.step.id === 'agent_coordination');
       if (hubPlacement) {
         minX = Math.min(minX, hubPlacement.position.x - layout.horizontalGap * 2.5);
@@ -484,7 +456,7 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
       [Math.min(-basePadX, minX - basePadX), -basePadY],
       [maxX + basePadX + extraWidth, maxY + basePadY + extraHeight],
     ] as [[number, number], [number, number]];
-  }, [processedSteps, layout.horizontalGap, layout.verticalGap, flowMode, layoutMode]);
+  }, [processedSteps, layout.horizontalGap, layout.verticalGap, flowMode]);
 
 
 
@@ -568,7 +540,7 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
         },
       );
 
-      if (flowMode === 'multi-agent' && layoutMode === 'lanes') {
+      if (flowMode === 'multi-agent') {
         const hubPlacement = processedSteps.find((entry) => entry.step.id === 'agent_coordination');
         if (hubPlacement) {
           const hubPosition = previous.get(hubPlacement.step.id)?.position ?? hubPlacement.position;
@@ -672,7 +644,6 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
     currentTimestamp,
     progressPercent,
     flowMode,
-    layoutMode,
   ]);
 
   useEffect(() => {
@@ -684,7 +655,7 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
 
   useEffect(() => {
     hasInitialFit.current = false;
-  }, [flowMode, layoutMode]);
+  }, [flowMode]);
 
   useEffect(() => {
     if (!isVisible) {
@@ -775,7 +746,7 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
       });
     }
 
-    if (flowMode === 'multi-agent' && layoutMode === 'lanes') {
+    if (flowMode === 'multi-agent') {
       const hubPlacement = processedSteps.find((node) => node.step.id === 'agent_coordination');
       if (hubPlacement) {
         const added = new Set<string>();
@@ -924,7 +895,7 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
     }
 
     setEdges(sequentialEdges);
-  }, [processedSteps, setEdges, theme, flowMode, layoutMode]);
+  }, [processedSteps, setEdges, theme, flowMode]);
 
   useEffect(() => {
     if (!isVisible) {

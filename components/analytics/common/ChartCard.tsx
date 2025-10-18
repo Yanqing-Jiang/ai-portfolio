@@ -20,7 +20,56 @@ export const ChartCard: React.FC<ChartCardProps> = ({
   const resolvedSpec = useMemo(() => hydrateChartSpec(chartSpec), [chartSpec]);
   const spec = resolvedSpec;
 
-  console.log('[ChartCard] Rendered with chartSpec:', !!spec, 'useAltChart:', useAltChart);
+  const intentKey =
+    spec?.meta?.chartDesign?.intent ??
+    spec?.meta?.intent ??
+    spec?.meta?.intent_key ??
+    spec?.intent_key ??
+    spec?.intent;
+
+  const formatColumnLabel = (column: string) =>
+    column
+      .replace(/_/g, ' ')
+      .replace(/\b\w/g, (m: string) => m.toUpperCase());
+
+  const dropdownOptions = useMemo(() => {
+    if (!enableDropdown) {
+      return [] as Array<{ label: string; value: string }>;
+    }
+
+    if (intentKey === 'revenue_growth_vs_avg') {
+      return [
+        { label: 'YoY Growth', value: 'yoy_growth' },
+        { label: 'Company', value: 'company' },
+        { label: 'Industry Average', value: 'industry' },
+      ];
+    }
+
+    const included = Array.isArray(spec?.meta?.includedColumns) ? spec.meta.includedColumns : [];
+    return included.map((column: string) => ({
+      value: column,
+      label: formatColumnLabel(column),
+    }));
+  }, [enableDropdown, intentKey, spec]);
+
+  const defaultDropdownValue = useMemo(() => {
+    if (!dropdownOptions.length) {
+      return undefined;
+    }
+    if (intentKey === 'revenue_growth_vs_avg') {
+      return 'YoY Growth';
+    }
+    const defaults = Array.isArray(spec?.meta?.defaultColumns) ? spec.meta.defaultColumns : [];
+    if (defaults.length) {
+      const preferred = dropdownOptions.find(
+        (option) => option.value === defaults[0] || option.label === formatColumnLabel(defaults[0]),
+      );
+      if (preferred) {
+        return preferred.label;
+      }
+    }
+    return dropdownOptions[0]?.label;
+  }, [dropdownOptions, intentKey, spec]);
 
   const handleChartError = (error: any) => {
     console.log('[ChartCard] Chart error boundary triggered:', error);
@@ -244,13 +293,14 @@ export const ChartCard: React.FC<ChartCardProps> = ({
                   id={dropdownId}
                   className="bg-gray-100 border border-gray-300 rounded px-2 sm:px-3 py-1 sm:py-1.5 text-sm sm:text-base min-h-[32px] sm:min-h-[36px]"
                   onChange={(e) => handleMetricChange(e.target.value)}
-                  defaultValue={((spec.meta?.defaultColumns || []).map((c: string) => c.replace(/_/g, ' ').replace(/\b\w/g, (m: string) => m.toUpperCase())))[0]}
+                  defaultValue={defaultDropdownValue}
                 >
                   {/* Always show metrics */}
-                  {(spec.meta?.includedColumns || []).map((c: string) => {
-                    const label = c.replace(/_/g, ' ').replace(/\b\w/g, (m: string) => m.toUpperCase());
-                    return <option key={c} value={label}>{label}</option>;
-                  })}
+                  {dropdownOptions.map((option) => (
+                    <option key={option.value} value={option.label}>
+                      {option.label}
+                    </option>
+                  ))}
                 </select>
               </div>
             )}

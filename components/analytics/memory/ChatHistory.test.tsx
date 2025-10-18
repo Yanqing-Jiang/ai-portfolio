@@ -1,9 +1,9 @@
-﻿import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import React from 'react';
 
 vi.mock('../common', () => ({
-  AnalysisCard: ({ analysis }: { analysis: string }) => (
+  AnalysisCard: ({ analysis }: { analysis: string; analysisSources?: any; evidenceLinks?: any }) => (
     <div data-testid="analysis-card">{analysis}</div>
   ),
   SqlCard: ({ sqlQuery }: { sqlQuery: string }) => (
@@ -46,7 +46,14 @@ describe('ChatHistory attachments', () => {
       },
     ];
 
-    render(<ChatHistory messages={messages} isLoading={false} processSteps={[]} />);
+    render(
+      <ChatHistory
+        messages={messages}
+        isLoading={false}
+        status={{ text: 'Streaming analysis...', timestamp: new Date().toISOString() }}
+        processSteps={[]}
+      />,
+    );
 
     expect(await screen.findByTestId('chart-card')).toBeInTheDocument();
     expect(screen.getByTestId('sql-card')).toHaveTextContent('SELECT 1;');
@@ -54,3 +61,40 @@ describe('ChatHistory attachments', () => {
     expect(screen.getByTestId('web-card')).toHaveTextContent('Market summary');
   });
 });
+
+describe('ChatHistory specialist updates', () => {
+  it('suppresses attachments for non-result assistant messages', () => {
+    const messages = [
+      {
+        id: 'assist-1',
+        type: 'assistant' as const,
+        content: 'Stock context ready',
+        timestamp: new Date().toISOString(),
+        chartSpec: { series: [{ data: [4, 5, 6] }] },
+        sqlQuery: 'SELECT 2;',
+        stockWidgetConfig: { symbols: [['NASDAQ:AAPL', 'AAPL']] },
+        webSearch: {
+          query: 'AAPL',
+          summary: 'Cached market summary',
+          snippets: [{ title: 'Example', snippet: 'Snippet' }],
+          ready: true,
+        },
+      },
+    ];
+
+    render(
+      <ChatHistory
+        messages={messages}
+        isLoading={false}
+        status={{ text: 'Assistant idle', timestamp: new Date().toISOString() }}
+        processSteps={[]}
+      />,
+    );
+
+    expect(screen.queryByTestId('chart-card')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('sql-card')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('stock-widget')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('web-card')).not.toBeInTheDocument();
+  });
+});
+
