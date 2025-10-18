@@ -1,6 +1,19 @@
 ﻿export type FlowMode = 'planner-executor' | 'single-agent' | 'multi-agent';
 
-export interface FlowVisualTheme {\n  id: FlowMode;\n  accent: string;\n  nodeGradient: [string, string];\n  nodeBorder: string;\n  nodeGlow: string;\n  edgeIdle: string;\n  edgeActive: string;\n  edgeCompleted: string;\n  badgeClass: string;\n  pulseClass: string;\n}\n\n// Shared types for analytics components
+export interface FlowVisualTheme {
+  id: FlowMode;
+  accent: string;
+  nodeGradient: [string, string];
+  nodeBorder: string;
+  nodeGlow: string;
+  edgeIdle: string;
+  edgeActive: string;
+  edgeCompleted: string;
+  badgeClass: string;
+  pulseClass: string;
+}
+
+// Shared types for analytics components
 
 export interface ToolCallTelemetry {
   tool: string;
@@ -212,6 +225,7 @@ export interface SpecialistCard {
   ts?: string;
   meta?: Record<string, any>;
   lane?: string;
+  source?: string;
   parallelGroup?: string;
   reused?: boolean;
 }
@@ -339,6 +353,7 @@ export interface ClarifyRequest {
   proposed_confidence?: number;
   reason?: string;
   required: boolean;
+  allow_custom?: boolean;
 }
 
 export interface ClarifyAnswer {
@@ -375,7 +390,6 @@ export interface ProcessPanelProps {
   singleAgentFanout?: SingleAgentFanout | null;
   steps: ProcessStep[];
   flowMode: FlowMode;
-  layoutMode?: 'sequential' | 'lanes';
   showVisualization?: boolean;
   show: boolean;
   onClose: () => void;
@@ -399,6 +413,7 @@ export interface PromptBarProps {
 export interface AnalysisCardProps {
   analysis: string;
   analysisSources?: AnalysisSources | null;
+  evidenceLinks?: AnalysisEvidenceLink[] | null;
 }
 
 export interface SqlCardProps {
@@ -418,9 +433,25 @@ export interface ClarificationOptionsProps {
   disabled?: boolean;
 }
 
+export interface SlotStatusPayload {
+  status: 'filled' | 'missing' | 'defaulted' | 'assumed';
+  value?: any;
+  reason?: string;
+  suggestions?: string[];
+  allow_custom?: boolean;
+}
+
+export type SlotStatusMap = Record<string, SlotStatusPayload>;
+
+export interface ChatStatusPayload {
+  text: string;
+  timestamp?: string | null;
+}
+
 export interface ChatHistoryProps {
   messages: ChatMessage[];
   isLoading?: boolean;
+  status: ChatStatusPayload;
   onSubmitClarification?: (value: any, request: ClarifyRequest) => Promise<void>;
   processSteps?: ProcessStep[];
 }
@@ -434,6 +465,7 @@ export interface AnalyticsState {
   sqlQuery: string;
   dataSample: any[] | null;
   currentStatus: string;
+  statusTimestamp?: string | null;
   useAltChart: boolean;
   streamingText: string;
 }

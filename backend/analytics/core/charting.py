@@ -795,13 +795,9 @@ def build_chart_spec(
             },
             'seriesValueType': {s['name']: ('percent' if series_axes.get(s['name']) == 'right' else 'currency') for s in series},
             # Missing metadata for frontend compatibility
-            'includedColumns': slugs if intent_key != 'revenue_growth_vs_avg' else ['YoY Growth', 'Company', 'Industry Average'],
-            'displayNames': display_names if intent_key != 'revenue_growth_vs_avg' else {
-                'YoY Growth': 'YoY Growth', 
-                'Company': 'Company', 
-                'Industry Average': 'Industry Average'
-            },
-            'defaultColumns': primary_slugs if intent_key != 'revenue_growth_vs_avg' else ['YoY Growth'],
+            'includedColumns': slugs,
+            'displayNames': display_names,
+            'defaultColumns': primary_slugs,
             'rawData': data,
             'seriesPercentFormat': {
                 slug: 'pre_multiplied' for slug in slugs if 'percent' in slug or 'share' in slug or 'margin' in slug

@@ -63,6 +63,419 @@ const normalizeSeriesNumericValues = (option: any) => {
   return option;
 };
 
+const looksLikePercentMetric = (rawName: string | undefined) => {
+  if (!rawName) {
+    return false;
+  }
+  const name = rawName.toLowerCase();
+  return (
+    name.includes('percent') ||
+    name.includes('pct') ||
+    name.includes('%') ||
+    name.includes('margin') ||
+    name.includes('growth') ||
+    name.includes('ratio') ||
+    name.includes('share') ||
+    name.includes('yield')
+  );
+};
+
+const normalizePercentSeriesData = (option: any, spec: any) => {
+  if (!option || !Array.isArray(option.series) || !spec || typeof spec !== 'object') {
+    return option;
+  }
+
+  const seriesValueType: Record<string, string> = spec.meta?.seriesValueType || {};
+  const percentFormatMeta: Record<string, string> = spec.meta?.seriesPercentFormat || {};
+
+  const ensurePercentFormatMeta = (seriesName: string) => {
+    option.meta = option.meta || {};
+    option.meta.seriesPercentFormat = option.meta.seriesPercentFormat || {};
+    option.meta.seriesPercentFormat[seriesName] = 'pre_multiplied';
+  };
+
+  option.series = option.series.map((series: any) => {
+    const seriesName: string = series?.name ?? '';
+    if (!Array.isArray(series?.data)) {
+      return series;
+    }
+
+    const numericValues = series.data.filter((value: any) => typeof value === 'number' && Number.isFinite(value));
+    if (!numericValues.length) {
+      return series;
+    }
+
+    const declaredPercent = seriesValueType[seriesName] === 'percent';
+    const requestedDecimalFormat = percentFormatMeta[seriesName] === 'decimal';
+    const heuristicPercent = looksLikePercentMetric(seriesName);
+
+    if (!declaredPercent && !requestedDecimalFormat && !heuristicPercent) {
+      return series;
+    }
+
+    const hasMagnitude = numericValues.some((value: number) => Math.abs(value) > 0);
+    const allWithinDecimalRange = numericValues.every((value: number) => Math.abs(value) <= 1.05);
+
+    if (!hasMagnitude || !allWithinDecimalRange) {
+      return series;
+    }
+
+    const scaledData = series.data.map((value: any) => {
+      if (typeof value !== 'number' || !Number.isFinite(value)) {
+        return value;
+      }
+      return value * 100;
+    });
+
+    ensurePercentFormatMeta(seriesName);
+
+    return {
+      ...series,
+      data: scaledData,
+    };
+  });
+
+  return option;
+};
+
+const normalizeSeriesName = (rawName?: string) => {
+  if (!rawName || typeof rawName !== 'string') {
+    return '';
+  }
+  return rawName
+    .toLowerCase()
+    .replace(/\b(percent|percentage|pct|%|basis points|bps)\b/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+};
+
+const dedupePercentShadowSeries = (option: any) => {
+  if (!option || !Array.isArray(option.series)) {
+    return option;
+  }
+
+  const EPSILON = 1e-9;
+
+  type SeriesInfo = {
+    index: number;
+    name: string;
+    normalizedName: string;
+    values: Array<number | null>;
+    magnitude: number;
+  };
+
+  const seriesInfo: SeriesInfo[] = option.series.map((series: any, index: number) => {
+    const name = typeof series?.name === 'string' ? series.name : `Series ${index + 1}`;
+    const rawValues = Array.isArray(series?.data) ? series.data : [];
+    const values = rawValues.map((value: any) =>
+      typeof value === 'number' && Number.isFinite(value) ? value : null,
+    );
+    const numeric = values.filter((value): value is number => value !== null);
+    const magnitude =
+      numeric.length > 0 ? numeric.reduce((acc, value) => acc + Math.abs(value), 0) / numeric.length : 0;
+
+    return {
+      index,
+      name,
+      normalizedName: normalizeSeriesName(name),
+      values,
+      magnitude,
+    };
+  });
+
+  const toDrop = new Set<number>();
+  const preferSelectedNames = new Set<string>();
+
+  const scaledWithinTolerance = (pairs: Array<[number, number]>, scale: number) =>
+    pairs.every(([a, b]) => Math.abs(a - b * scale) <= Math.max(0.75, Math.abs(b * scale) * 0.06));
+
+  for (let i = 0; i < seriesInfo.length; i += 1) {
+    const left = seriesInfo[i];
+    if (!left.values.length || toDrop.has(left.index) || !left.normalizedName) continue;
+
+    for (let j = i + 1; j < seriesInfo.length; j += 1) {
+      const right = seriesInfo[j];
+      if (!right.values.length || toDrop.has(right.index) || !right.normalizedName) continue;
+      if (left.normalizedName !== right.normalizedName) continue;
+
+      const pairs: Array<[number, number]> = [];
+      const maxLength = Math.max(left.values.length, right.values.length);
+      for (let k = 0; k < maxLength; k += 1) {
+        const a = left.values[k] ?? null;
+        const b = right.values[k] ?? null;
+        if (a === null || b === null) continue;
+        pairs.push([a, b]);
+      }
+
+      if (pairs.length < 2) continue;
+
+      let ratioSum = 0;
+      let inverseSum = 0;
+      let ratioCount = 0;
+      let consistent = true;
+
+      for (const [a, b] of pairs) {
+        if (Math.abs(a) < EPSILON && Math.abs(b) < EPSILON) {
+          continue;
+        }
+        if (Math.abs(a) < EPSILON || Math.abs(b) < EPSILON) {
+          consistent = false;
+          break;
+        }
+        ratioSum += a / b;
+        inverseSum += b / a;
+        ratioCount += 1;
+      }
+
+      if (!consistent || ratioCount === 0) continue;
+
+      const avgRatio = ratioSum / ratioCount;
+      const avgInverse = inverseSum / ratioCount;
+      const ratioCloseToHundred = Math.abs(avgRatio - 100) <= 8;
+      const inverseCloseToHundred = Math.abs(avgInverse - 100) <= 8;
+
+      const nameHasPercentLeft = /percent|pct|%/i.test(left.name);
+      const nameHasPercentRight = /percent|pct|%/i.test(right.name);
+      const identicalWithinTolerance = scaledWithinTolerance(pairs, 1);
+
+      if (!ratioCloseToHundred && !inverseCloseToHundred) {
+        if (!identicalWithinTolerance) {
+          continue;
+        }
+        if (nameHasPercentLeft === nameHasPercentRight) {
+          continue;
+        }
+        const dropIndex = nameHasPercentLeft ? left.index : right.index;
+        const keepName = nameHasPercentLeft ? right.name : left.name;
+        toDrop.add(dropIndex);
+        if (keepName) {
+          preferSelectedNames.add(keepName);
+        }
+        continue;
+      }
+
+      const larger = left.magnitude >= right.magnitude ? left : right;
+      const smaller = larger === left ? right : left;
+
+      if (larger.magnitude <= 1.05 || smaller.magnitude > 1.5) {
+        continue;
+      }
+
+      const referenceScale = ratioCloseToHundred ? avgRatio : avgInverse;
+      const validationPairs = ratioCloseToHundred ? pairs : pairs.map(([a, b]) => [b, a] as [number, number]);
+
+      if (!scaledWithinTolerance(validationPairs, referenceScale)) {
+        continue;
+      }
+
+      if (nameHasPercentLeft !== nameHasPercentRight) {
+        const dropIndex = nameHasPercentLeft ? left.index : right.index;
+        const keepName = nameHasPercentLeft ? right.name : left.name;
+        toDrop.add(dropIndex);
+        if (keepName) {
+          preferSelectedNames.add(keepName);
+        }
+      } else {
+        toDrop.add(smaller.index);
+      }
+    }
+  }
+
+  if (!toDrop.size) {
+    return option;
+  }
+
+  option.series = option.series.filter((_: any, index: number) => !toDrop.has(index));
+
+  const keptNames = option.series
+    .map((series: any) => (typeof series?.name === 'string' ? series.name : null))
+    .filter((name: string | null): name is string => Boolean(name));
+  const keptNameSet = new Set(keptNames);
+
+  const filterLegendEntry = (entry: any) => {
+    if (!entry || typeof entry !== 'object') return entry;
+    const next = { ...entry };
+    if (Array.isArray(next.data)) {
+      next.data = next.data.filter((name: string) => keptNameSet.has(name));
+    }
+    if (next.selected && typeof next.selected === 'object') {
+      const nextSelected: Record<string, boolean> = {};
+      Object.entries(next.selected).forEach(([key, value]) => {
+        if (keptNameSet.has(key)) {
+          nextSelected[key] = Boolean(value);
+        }
+      });
+      next.selected = Object.fromEntries(
+        Object.entries(nextSelected).map(([key, value]) => [
+          key,
+          preferSelectedNames.has(key) ? true : Boolean(value),
+        ]),
+      );
+      preferSelectedNames.forEach((name) => {
+        if (!next.selected.hasOwnProperty(name)) {
+          next.selected[name] = true;
+        }
+      });
+    }
+    return next;
+  };
+
+  if (option.legend) {
+    if (Array.isArray(option.legend)) {
+      option.legend = option.legend.map(filterLegendEntry);
+    } else {
+      option.legend = filterLegendEntry(option.legend);
+    }
+  }
+
+  if (option.meta) {
+    const percentFormat = option.meta.seriesPercentFormat;
+    if (percentFormat && typeof percentFormat === 'object') {
+      const nextPercentFormat: Record<string, string> = {};
+      Object.entries(percentFormat).forEach(([key, value]) => {
+        if (keptNameSet.has(key)) {
+          nextPercentFormat[key] = value;
+        }
+      });
+      option.meta.seriesPercentFormat = nextPercentFormat;
+    }
+    const valueType = option.meta.seriesValueType;
+    if (valueType && typeof valueType === 'object') {
+      const nextValueType: Record<string, string> = {};
+      Object.entries(valueType).forEach(([key, value]) => {
+        if (keptNameSet.has(key)) {
+          nextValueType[key] = value;
+        }
+      });
+      option.meta.seriesValueType = nextValueType;
+    }
+  }
+
+  return option;
+};
+
+const parseYear = (value: any): number | null => {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return Math.trunc(value);
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    const match = trimmed.match(/(\d{4})/);
+    if (match) {
+      return Number(match[1]);
+    }
+    const numeric = Number(trimmed);
+    if (Number.isFinite(numeric)) {
+      return Math.trunc(numeric);
+    }
+  }
+  return null;
+};
+
+const parseQuarter = (value: any): number | null => {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return Math.trunc(value);
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim().toLowerCase();
+    if (!trimmed) return null;
+    const mapping: Record<string, number> = { q1: 1, q2: 2, q3: 3, q4: 4 };
+    if (mapping[trimmed] !== undefined) {
+      return mapping[trimmed];
+    }
+    const match = trimmed.match(/q?\s*([1-4])/);
+    if (match) {
+      return Number(match[1]);
+    }
+    const numeric = Number(trimmed);
+    if (Number.isFinite(numeric)) {
+      return Math.trunc(numeric);
+    }
+  }
+  return null;
+};
+
+const parseMonth = (value: any): number | null => {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    const month = Math.trunc(value);
+    return month >= 1 && month <= 12 ? month : null;
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    const numeric = Number(trimmed);
+    if (Number.isFinite(numeric)) {
+      const month = Math.trunc(numeric);
+      return month >= 1 && month <= 12 ? month : null;
+    }
+  }
+  return null;
+};
+
+const parseTimestamp = (value: any): number | null => {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return value.getTime();
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    const parsed = Date.parse(trimmed);
+    if (!Number.isNaN(parsed)) {
+      return parsed;
+    }
+  }
+  return null;
+};
+
+const compareNullableNumbers = (a: number | null, b: number | null) => {
+  if (a != null && b != null) {
+    if (a === b) return 0;
+    return a < b ? -1 : 1;
+  }
+  if (a != null) return -1;
+  if (b != null) return 1;
+  return 0;
+};
+
+const sortRawDataChronologically = (rawData: any[]): any[] => {
+  return rawData
+    .map((row, index) => {
+      const year = parseYear(row?.calendar_year ?? row?.fiscal_year ?? row?.year);
+      const quarter = parseQuarter(row?.calendar_quarter ?? row?.fiscal_quarter ?? row?.quarter);
+      const month = parseMonth(row?.calendar_month ?? row?.month);
+      const timestamp = parseTimestamp(
+        row?.period ?? row?.period_end_date ?? row?.period_start_date ?? row?.date ?? row?.timestamp ?? row?.as_of ?? row?.reported_at,
+      );
+      return {
+        row,
+        key: { year, quarter, month, timestamp, index },
+      };
+    })
+    .sort((a, b) => {
+      const { year: yearA, quarter: quarterA, month: monthA, timestamp: tsA, index: indexA } = a.key;
+      const { year: yearB, quarter: quarterB, month: monthB, timestamp: tsB, index: indexB } = b.key;
+
+      let cmp = compareNullableNumbers(yearA, yearB);
+      if (cmp !== 0) return cmp;
+
+      cmp = compareNullableNumbers(quarterA, quarterB);
+      if (cmp !== 0) return cmp;
+
+      cmp = compareNullableNumbers(monthA, monthB);
+      if (cmp !== 0) return cmp;
+
+      cmp = compareNullableNumbers(tsA, tsB);
+      if (cmp !== 0) return cmp;
+
+      return indexA - indexB;
+    })
+    .map((entry) => entry.row);
+};
+
 export const hydrateChartSpec = (spec: any) => {
   if (!spec || typeof spec !== 'object') return spec;
   const rawData = spec.meta?.rawData;
@@ -70,8 +483,10 @@ export const hydrateChartSpec = (spec: any) => {
   const includedColumns = spec.meta?.includedColumns || Object.keys(displayNames || {});
   const baseClone = JSON.parse(JSON.stringify(spec));
   if (!Array.isArray(rawData) || rawData.length === 0 || !Array.isArray(spec.series)) {
-    return normalizeSeriesNumericValues(baseClone);
+    return dedupePercentShadowSeries(normalizePercentSeriesData(normalizeSeriesNumericValues(baseClone), spec));
   }
+
+  const sortedRawData = sortRawDataChronologically(rawData);
 
   const toLabel = (row: Record<string, any>) => {
     const year = row?.calendar_year ?? row?.fiscal_year ?? row?.year;
@@ -101,7 +516,10 @@ export const hydrateChartSpec = (spec: any) => {
   };
 
   const hydrated = baseClone;
-  const labels = rawData.map(toLabel);
+  if (hydrated.meta && typeof hydrated.meta === 'object') {
+    hydrated.meta.rawData = sortedRawData;
+  }
+  const labels = sortedRawData.map(toLabel);
 
   if (Array.isArray(hydrated.xAxis)) {
     hydrated.xAxis = hydrated.xAxis.map((axis: any) => ({ ...(axis || {}), data: labels }));
@@ -127,7 +545,7 @@ export const hydrateChartSpec = (spec: any) => {
       return series;
     }
 
-    const values = rawData.map((row: any) => {
+    const values = sortedRawData.map((row: any) => {
       const value = row?.[field];
       if (typeof value === 'number' || value === null) {
         return value;
@@ -145,7 +563,7 @@ export const hydrateChartSpec = (spec: any) => {
     };
   });
 
-  return normalizeSeriesNumericValues(hydrated);
+  return dedupePercentShadowSeries(normalizePercentSeriesData(normalizeSeriesNumericValues(hydrated), spec));
 };
 export const isValidChartSpec = (spec: any) => {
   try {

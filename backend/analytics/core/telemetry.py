@@ -64,6 +64,29 @@ def catalog_trace(
     _emit(payload)
 
 
+def intent_resolution(
+    *,
+    intent_key: Optional[str],
+    confidence: Optional[float],
+    slot_statuses: Dict[str, Any],
+    slot_followups: Iterable[Any],
+    elapsed_ms: Optional[int] = None,
+    session_id: Optional[str] = None,
+    flow: Optional[str] = None,
+) -> None:
+    payload = _base_payload('intent_resolution', session_id=session_id, flow=flow)
+    payload.update(
+        {
+            'intent_key': intent_key,
+            'confidence': confidence,
+            'slot_statuses': slot_statuses,
+            'slot_followups': list(slot_followups),
+        }
+    )
+    if elapsed_ms is not None:
+        payload['elapsed_ms'] = elapsed_ms
+    _emit(payload)
+
 def tool_iteration(
     *,
     tool: str,

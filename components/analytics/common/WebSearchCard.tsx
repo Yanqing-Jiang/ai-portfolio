@@ -64,7 +64,7 @@ export const WebSearchCard: React.FC<WebSearchCardProps> = ({
   const enrichedTopics: WebSearchTopic[] = topics.length
     ? topics
     : [{
-        label: searchTopic ?? 'Primary question',
+        label: searchTopic ?? 'Research topic',
         query: searchTopic ?? query ?? '',
         snippets,
         reason: undefined,
@@ -103,9 +103,6 @@ export const WebSearchCard: React.FC<WebSearchCardProps> = ({
           <h4 className="text-sm font-semibold text-slate-100">{title}</h4>
           {searchTopics && searchTopics.length ? (
             <p className="text-xs text-slate-300 mt-0.5">Topics: {searchTopics.join('; ')}</p>
-          ) : null}
-          {query ? (
-            <p className="text-xs text-slate-500 mt-0.5">Question: {query}</p>
           ) : null}
           {fetchedAt ? (
             <p className="text-xs text-slate-500 mt-0.5">
@@ -162,10 +159,9 @@ export const WebSearchCard: React.FC<WebSearchCardProps> = ({
         <div className="px-4 pb-4 space-y-3">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <p className="text-sm font-semibold text-slate-100">{activeTopic.label || `Topic ${activeTopicIndex + 1}`}</p>
-              {activeTopic.query ? (
-                <p className="text-xs text-slate-400 mt-0.5">Focus: {activeTopic.query}</p>
-              ) : null}
+              <p className="text-sm font-semibold text-slate-100">
+                {(activeTopic.label || `Topic ${activeTopicIndex + 1}`).replace(/^Primary (question|topic):\s*/i, '')}
+              </p>
               {activeTopic.reason ? (
                 <p className="text-xs text-slate-500 italic mt-0.5">Why: {activeTopic.reason}</p>
               ) : null}

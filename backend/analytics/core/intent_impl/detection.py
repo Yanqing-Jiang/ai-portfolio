@@ -9,9 +9,10 @@ analytics_supervisor share a single implementation.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 from unified_responses_client import get_unified_client
 
@@ -21,13 +22,20 @@ from .models import (
     IntentModel,
     LLMIntentModel,
     OffTopicClassifierSchema,
+    IntentResolutionModel,
+    IntentSelectionModel,
+    SlotStatusModel,
+    FollowUpModel,
+    LLMIntentResolutionModel,
 )
 from .normalization import (
     get_default_tickers,
     normalize_granularity,
     normalize_timeframe,
+    normalize_metrics,
 )
 from ..companies import resolve_alias_to_ticker
+from ..slot_catalog import get_slot_catalog, IntentSlotDefinition, SlotOption
 
 logger = logging.getLogger(__name__)
 
@@ -100,14 +108,19 @@ def heuristic_intent(query: str, configs: Dict[str, Any]) -> IntentModel:
 
     intent_key: Optional[str] = None
     reasoning: List[str] = []
+    metric_defaults: List[str] = []
+    comparison_default: Optional[str] = None
 
     if "market share" in q:
         if "all" in q or any(word in q for word in ("every", "each")):
             intent_key = "market_share_all"
             reasoning.append("Detected market share intent for all companies")
+            comparison_default = "all"
         else:
             intent_key = "market_share_single"
             reasoning.append("Detected single-company market share intent")
+            comparison_default = "single"
+        metric_defaults = ["Revenue"]
     elif "profit" in q or "earnings" in q:
         intent_key = "margins_vs_peers"
         reasoning.append("Detected profit analysis intent")
@@ -132,19 +145,34 @@ def heuristic_intent(query: str, configs: Dict[str, Any]) -> IntentModel:
         elif "expense" in q or "spending" in q:
             intent_key = "rnd_expense_vs_peers"
             reasoning.append("Detected R&D expense vs peers intent")
+            metric_defaults = ["R&D Expense"]
         else:
             intent_key = "rnd_intensity_vs_peers"
             reasoning.append("Detected R&D intensity vs peers intent")
+            metric_defaults = ["R&D Expense", "Revenue"]
 
+    timeframe_hint = normalize_timeframe(None, query, configs, apply_defaults=False, origin="query")
     slots: Dict[str, Any] = {
         "tickers": companies,
         "granularity": normalize_granularity(query),
-        "timeframe": normalize_timeframe(None, query, configs),
     }
+    if timeframe_hint:
+        slots["timeframe"] = timeframe_hint
     if detected_company:
         slots["company"] = detected_company
     elif intent_key in REQUIRES_COMPANY_SLOTS:
         reasoning.append("Company not detected in query")
+
+    if comparison_default and "comparison" not in slots:
+        slots["comparison"] = comparison_default
+
+    if metric_defaults and not slots.get("metrics"):
+        slots["metrics"] = metric_defaults
+        slots["metric"] = metric_defaults[0]
+
+    slots = post_process_slots(slots, query, configs)
+    if not detected_company:
+        slots.pop("company", None)
 
     clarifications: List[ClarificationSuggestionModel] = []
     if intent_key in REQUIRES_COMPANY_SLOTS and not detected_company:
@@ -167,6 +195,45 @@ def heuristic_intent(query: str, configs: Dict[str, Any]) -> IntentModel:
         possible_intents=[],
         intent_reasoning="; ".join(reasoning) or "Heuristic detection could not determine a clear intent",
     )
+
+
+def _clone_slot_option(option: Optional[SlotOption]) -> SlotOption:
+    if not option:
+        return SlotOption()
+    return SlotOption(
+        suggestions=list(option.suggestions),
+        presets=list(option.presets),
+        allow_custom=option.allow_custom,
+        description=option.description,
+    )
+
+
+def _select_candidate_definitions(
+    catalog,
+    primary_intent: Optional[str],
+    *,
+    limit: int = 6,
+) -> List[IntentSlotDefinition]:
+    definitions: List[IntentSlotDefinition] = []
+
+    if primary_intent:
+        definition = catalog.get_intent_definition(primary_intent)
+        if definition:
+            definitions.append(definition)
+
+    for intent_key in catalog.list_intents():
+        if primary_intent and intent_key == primary_intent:
+            continue
+        definition = catalog.get_intent_definition(intent_key)
+        if not definition:
+            continue
+        if any(existing.intent_key == definition.intent_key for existing in definitions):
+            continue
+        definitions.append(definition)
+        if len(definitions) >= limit:
+            break
+
+    return definitions
 
 
 # ---------------------------------------------------------------------------
@@ -227,6 +294,7 @@ def _normalize_company_candidates(values: Any, query: str) -> List[str]:
     ranked.sort(key=lambda item: (item[0], item[1]))
     return [symbol for _, _, symbol in ranked]
 
+
 def post_process_slots(
     slots: Dict[str, Any],
     query: str,
@@ -264,9 +332,37 @@ def post_process_slots(
             logger.info("Post-processed company: %s", detected_company)
 
 
-    timeframe = normalize_timeframe(processed_slots.get("timeframe"), query, configs)
+    timeframe = normalize_timeframe(
+        processed_slots.get("timeframe"),
+        query,
+        configs,
+        apply_defaults=False,
+    )
     if timeframe:
         processed_slots["timeframe"] = timeframe
+    else:
+        processed_slots.pop("timeframe", None)
+
+    metric_candidates: List[str] = []
+    if "metric" in processed_slots:
+        metric_candidates.extend(normalize_metrics(processed_slots.get("metric"), configs))
+    if "metrics" in processed_slots:
+        metric_candidates.extend(normalize_metrics(processed_slots.get("metrics"), configs))
+
+    if metric_candidates:
+        deduped_metrics: List[str] = []
+        seen_metric = set()
+        for value in metric_candidates:
+            lowered = value.lower()
+            if lowered in seen_metric:
+                continue
+            deduped_metrics.append(value)
+            seen_metric.add(lowered)
+        processed_slots["metrics"] = deduped_metrics
+        processed_slots["metric"] = deduped_metrics[0]
+    else:
+        processed_slots.pop("metric", None)
+        processed_slots.pop("metrics", None)
 
     processed_slots["granularity"] = normalize_granularity(query, processed_slots.get("granularity"))
     return processed_slots
@@ -292,9 +388,387 @@ def cleanup_clarifications_after_company_detection(
     return filtered
 
 
+def _ensure_required_slots(
+    slots: Dict[str, SlotStatusModel],
+    definition: Optional[IntentSlotDefinition],
+) -> None:
+    if not definition:
+        return
+
+    for slot_name in definition.required_slots:
+        option = definition.slot_options.get(slot_name) if definition.slot_options else None
+        existing = slots.get(slot_name)
+        if existing is None:
+            opt = _clone_slot_option(option)
+            slots[slot_name] = SlotStatusModel(
+                status="missing",
+                value=None,
+                reason="Resolver omitted a required slot",
+                suggestions=list(opt.suggestions),
+                allow_custom=opt.allow_custom,
+            )
+            continue
+
+        if not existing.suggestions and option and option.suggestions:
+            slots[slot_name] = existing.model_copy(
+                update={
+                    "suggestions": list(option.suggestions),
+                    "allow_custom": existing.allow_custom if existing.allow_custom is not None else option.allow_custom,
+                }
+            )
+
+
+def _append_missing_followups(
+    slots: Dict[str, SlotStatusModel],
+    followups: List[FollowUpModel],
+    definition: Optional[IntentSlotDefinition],
+) -> None:
+    if not definition:
+        return
+
+    existing_slots = {followup.slot for followup in followups}
+    for slot_name, slot_state in slots.items():
+        if slot_state.status != "missing":
+            continue
+        if slot_name in existing_slots:
+            continue
+        option = definition.slot_options.get(slot_name) if definition.slot_options else None
+        opt = _clone_slot_option(option)
+        prompt = f"Select a value for {slot_name.replace('_', ' ')}"
+        followups.append(
+            FollowUpModel(
+                slot=slot_name,
+                prompt=prompt,
+                suggestions=list(opt.suggestions),
+                allow_custom=opt.allow_custom,
+                reason=slot_state.reason or "This slot is required to continue.",
+            )
+        )
+
+
+def _fallback_intent_resolution(
+    query: str,
+    configs: Dict[str, Any],
+    *,
+    mode: str,
+    heuristic: IntentModel,
+    catalog,
+    candidate_definitions: Sequence[IntentSlotDefinition],
+) -> IntentResolutionModel:
+    intent_key = heuristic.intent_key
+    if not intent_key and candidate_definitions:
+        intent_key = candidate_definitions[0].intent_key
+
+    definition = catalog.get_intent_definition(intent_key) if intent_key else None
+    if not definition and candidate_definitions:
+        definition = candidate_definitions[0]
+
+    selection = IntentSelectionModel(
+        key=intent_key,
+        confidence=heuristic.confidence,
+        mode=mode,
+    )
+
+    slots: Dict[str, SlotStatusModel] = {}
+    followups: List[FollowUpModel] = []
+    heuristic_slots = heuristic.slots_detected or {}
+
+    if definition:
+        option_map = definition.slot_options or {}
+        for slot_name in definition.required_slots:
+            option = option_map.get(slot_name)
+            opt = _clone_slot_option(option)
+            status = "missing"
+            value = None
+            reason = "LLM intent resolver unavailable"
+
+            if slot_name == "company":
+                detected = heuristic_slots.get("company") or detect_company_from_query(query, configs, resolve_alias_to_ticker)
+                if detected:
+                    status = "filled"
+                    value = detected
+                    reason = None
+
+            slots[slot_name] = SlotStatusModel(
+                status=status,
+                value=value,
+                reason=reason,
+                suggestions=list(opt.suggestions),
+                allow_custom=opt.allow_custom,
+            )
+
+            if status == "missing":
+                followups.append(
+                    FollowUpModel(
+                        slot=slot_name,
+                        prompt=f"Select a value for {slot_name.replace('_', ' ')}",
+                        suggestions=list(opt.suggestions),
+                        allow_custom=opt.allow_custom,
+                        reason="Heuristic fallback requires this slot.",
+                    )
+                )
+        # Surface advisory follow-ups for high-signal optional slots (metric/timeframe).
+        optional_hint_slots = {"metric", "timeframe"}
+        for slot_name in definition.optional_slots:
+            normalized = slot_name.split(".", 1)[0] if slot_name else slot_name
+            if normalized not in optional_hint_slots:
+                continue
+            if normalized in slots:
+                continue
+            option = option_map.get(normalized)
+            opt = _clone_slot_option(option)
+
+            heuristic_value = heuristic_slots.get(normalized)
+            if normalized == "metric" and not heuristic_value:
+                heuristic_value = heuristic_slots.get("metrics")
+
+            filled = False
+            if normalized == "metric":
+                metrics_list = normalize_metrics(heuristic_value, configs)
+                if metrics_list:
+                    slots[normalized] = SlotStatusModel(
+                        status="defaulted",
+                        value=metrics_list[0],
+                        reason="Using heuristic metric default.",
+                        suggestions=list(opt.suggestions),
+                        allow_custom=opt.allow_custom,
+                    )
+                    filled = True
+            elif normalized == "timeframe" and isinstance(heuristic_value, dict) and heuristic_value:
+                slots[normalized] = SlotStatusModel(
+                    status="defaulted",
+                    value=heuristic_value,
+                    reason="Using heuristic timeframe default.",
+                    suggestions=list(opt.suggestions),
+                    allow_custom=opt.allow_custom,
+                )
+                filled = True
+
+            if filled:
+                continue
+
+            slots[normalized] = SlotStatusModel(
+                status="missing",
+                value=None,
+                reason="Providing this detail will improve the analysis output.",
+                suggestions=list(opt.suggestions),
+                allow_custom=opt.allow_custom,
+            )
+            followups.append(
+                FollowUpModel(
+                    slot=normalized,
+                    prompt=f"Select a value for {normalized.replace('_', ' ')}",
+                    suggestions=list(opt.suggestions),
+                    allow_custom=opt.allow_custom,
+                    reason="Additional context requested to tailor the analysis.",
+                )
+            )
+
+    notes = "Intent resolver fell back to heuristic due to unavailable LLM client."
+    return IntentResolutionModel(
+        intent=selection,
+        slots=slots,
+        followups=followups,
+        notes=notes,
+    )
+
+
+def _llm_resolution_to_runtime(
+    llm_res: LLMIntentResolutionModel,
+    *,
+    catalog,
+    candidate_definitions: Sequence[IntentSlotDefinition],
+    fallback_confidence: float,
+    mode: str,
+) -> IntentResolutionModel:
+    intent_payload = llm_res.intent or IntentSelectionModel()
+    intent_key = intent_payload.key
+
+    if not intent_key and candidate_definitions:
+        intent_key = candidate_definitions[0].intent_key
+
+    selection = IntentSelectionModel(
+        key=intent_key,
+        confidence=intent_payload.confidence or fallback_confidence,
+        mode=intent_payload.mode or mode,
+    )
+
+    definition = catalog.get_intent_definition(selection.key) if selection.key else None
+    if not definition and candidate_definitions:
+        definition = next((item for item in candidate_definitions if item.intent_key == selection.key), None)
+
+    slots: Dict[str, SlotStatusModel] = {}
+    for slot_name, slot_payload in (llm_res.slots or {}).items():
+        slots[slot_name] = SlotStatusModel(
+            status=slot_payload.status,
+            value=slot_payload.value,
+            reason=slot_payload.reason,
+            suggestions=list(slot_payload.suggestions or []),
+            allow_custom=slot_payload.allow_custom,
+        )
+
+    _ensure_required_slots(slots, definition)
+
+    followups: List[FollowUpModel] = []
+    for followup in llm_res.followups or []:
+        option = definition.slot_options.get(followup.slot) if definition and definition.slot_options else None
+        suggestions = list(followup.suggestions or [])
+        if not suggestions and option and option.suggestions:
+            suggestions = list(option.suggestions)
+        allow_custom = followup.allow_custom
+        if allow_custom is None and option:
+            allow_custom = option.allow_custom
+        followups.append(
+            FollowUpModel(
+                slot=followup.slot,
+                prompt=followup.prompt,
+                suggestions=suggestions,
+                allow_custom=True if allow_custom is None else allow_custom,
+                reason=followup.reason,
+            )
+        )
+
+    _append_missing_followups(slots, followups, definition)
+
+    return IntentResolutionModel(
+        intent=selection,
+        slots=slots,
+        followups=followups,
+        notes=llm_res.notes,
+    )
+
+
+async def resolve_intent_slots_async(
+    query: str,
+    configs: Dict[str, Any],
+    *,
+    mode: str = "single_agent",
+    context_slots: Optional[Dict[str, Any]] = None,
+    session_id: Optional[str] = None,
+    model: str = "gpt-5-mini-2025-08-07",
+    reasoning_effort: str = "low",
+) -> IntentResolutionModel:
+    catalog = get_slot_catalog()
+    heuristic = heuristic_intent(query, configs)
+
+    candidate_definitions = _select_candidate_definitions(catalog, heuristic.intent_key)
+    if not candidate_definitions:
+        candidate_definitions = _select_candidate_definitions(catalog, None)
+
+    heuristic_context = heuristic.slots_detected or {}
+    context_defaults = dict(heuristic_context)
+    if context_slots:
+        context_defaults.update(context_slots)
+
+    payload = {
+        "query": query,
+        "mode": mode,
+        "context_slots": context_defaults,
+        "candidate_intents": [definition.to_dict() for definition in candidate_definitions],
+        "heuristic": {
+            "intent_key": heuristic.intent_key,
+            "confidence": heuristic.confidence,
+        },
+    }
+
+    system_content = (
+        "You are an analytics intent resolver. "
+        "Select the best matching intent from the provided candidates and specify slot statuses.\n"
+        "- Only use the intents listed in candidate_intents.\n"
+        "- For each slot, set status to filled, missing, defaulted, or assumed.\n"
+        "- When you default a value, explain why in reason and include it in followups if confirmation is helpful.\n"
+        "- Emit followups for slots that need user input; include suggestions when available.\n"
+        "- Do not invent companies or metrics that are not mentioned or suggested.\n"
+        "- Return compact JSON that matches the requested schema."
+    )
+
+    user_content = json.dumps(payload, indent=2, default=str)
+    messages = [
+        {"role": "system", "content": system_content},
+        {"role": "user", "content": user_content},
+    ]
+
+    try:
+        client = get_unified_client()
+    except ValueError:
+        logger.warning("OpenAI client unavailable for intent slot resolver; falling back to heuristic.")
+        return _fallback_intent_resolution(
+            query,
+            configs,
+            mode=mode,
+            heuristic=heuristic,
+            catalog=catalog,
+            candidate_definitions=candidate_definitions,
+        )
+
+    try:
+        llm_res, _ = await client.create_structured(
+            response_model=LLMIntentResolutionModel,
+            messages=messages,
+            model=model,
+            reasoning_effort=reasoning_effort,
+            session_id=session_id,
+        )
+    except Exception as exc:  # pragma: no cover - network errors fallback
+        logger.error("Unified slot resolver failed; using heuristic fallback: %s", exc)
+        return _fallback_intent_resolution(
+            query,
+            configs,
+            mode=mode,
+            heuristic=heuristic,
+            catalog=catalog,
+            candidate_definitions=candidate_definitions,
+        )
+
+    return _llm_resolution_to_runtime(
+        llm_res,
+        catalog=catalog,
+        candidate_definitions=candidate_definitions,
+        fallback_confidence=heuristic.confidence,
+        mode=mode,
+    )
+
+
+def resolve_intent_slots(
+    query: str,
+    configs: Dict[str, Any],
+    *,
+    mode: str = "single_agent",
+    context_slots: Optional[Dict[str, Any]] = None,
+    session_id: Optional[str] = None,
+    model: str = "gpt-5-mini-2025-08-07",
+    reasoning_effort: str = "low",
+) -> IntentResolutionModel:
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(
+            resolve_intent_slots_async(
+                query,
+                configs,
+                mode=mode,
+                context_slots=context_slots,
+                session_id=session_id,
+                model=model,
+                reasoning_effort=reasoning_effort,
+            )
+        )
+    else:
+        return loop.run_until_complete(
+            resolve_intent_slots_async(
+                query,
+                configs,
+                mode=mode,
+                context_slots=context_slots,
+                session_id=session_id,
+                model=model,
+                reasoning_effort=reasoning_effort,
+            )
+        )
+
+
 # ---------------------------------------------------------------------------
 # LLM-backed Classification / Intent Detection
-# ---------------------------------------------------------------------------
 
 def _llm_to_runtime_intent(llm_res: LLMIntentModel) -> IntentModel:
     slots_dict: Dict[str, Any] = {}

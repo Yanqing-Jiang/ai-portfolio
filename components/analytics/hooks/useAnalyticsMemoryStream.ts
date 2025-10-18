@@ -1,5 +1,30 @@
 ﻿import { useState, useRef, useCallback, useEffect } from 'react';
-import { ChatMessage, ClarifyRequest, ClarifyAnswer, ToolCallTelemetry, AgentTurnTelemetry, AgentReasoningTelemetry, ProcessStep, ToolFanoutManifest, ToolFanoutResult, StockWidgetConfig, WebSearchResult, AnalysisOverview, AnalysisEvidenceLink, AnalysisSources, FollowUpBanner, SpecialistCard, SingleAgentFanout, SingleAgentFanoutBranch, FanoutBranchStatus, FlowMode, LatencyGuardrail } from '../types';
+import {
+  ChatMessage,
+  ClarifyRequest,
+  ClarifyAnswer,
+  ToolCallTelemetry,
+  AgentTurnTelemetry,
+  AgentReasoningTelemetry,
+  ProcessStep,
+  ToolFanoutManifest,
+  ToolFanoutResult,
+  StockWidgetConfig,
+  WebSearchResult,
+  AnalysisOverview,
+  AnalysisEvidenceLink,
+  AnalysisSources,
+  AnalysisSourceInsight,
+  FollowUpBanner,
+  SpecialistCard,
+  SingleAgentFanout,
+  SingleAgentFanoutBranch,
+  FanoutBranchStatus,
+  FlowMode,
+  LatencyGuardrail,
+  SlotStatusMap,
+  SlotStatusPayload,
+} from '../types';
 import { apiService } from '../../../services/apiService';
 import { useAnalyticsStream } from './useAnalyticsStream';
 
@@ -65,34 +90,53 @@ export const useAnalyticsMemoryStream = (
   const [followUpBanner, setFollowUpBanner] = useState<FollowUpBanner | null>(null);
   const [latencyGuardrail, setLatencyGuardrail] = useState<LatencyGuardrail | null>(null);
   const [specialistCards, setSpecialistCards] = useState<SpecialistCard[]>([]);
+  const [slotStatuses, setSlotStatuses] = useState<SlotStatusMap>({});
+  const [slotFollowups, setSlotFollowups] = useState<ClarifyRequest[]>([]);
   const [snapshotReuse, setSnapshotReuse] = useState<SnapshotReuseInfo | null>(null);
   const resultSentRef = useRef<boolean>(false);
   const summarySentRef = useRef<boolean>(false);
   const lastSessionIdRef = useRef<string>('');
-  const emitResultOnce = useCallback(() => {
+  const resultMessageIdRef = useRef<string | null>(null);
+
+  const buildResultMessageFields = () => ({
+    flowMode: workflowDataRef.current.flowMode ?? flow,
+    analysis: workflowDataRef.current.analysis || workflowDataRef.current.streamingText,
+    chartSpec: workflowDataRef.current.chartSpec,
+    sqlQuery: workflowDataRef.current.sqlQuery,
+    dataSample: workflowDataRef.current.dataSample,
+    stockWidgetConfig: workflowDataRef.current.stockWidget,
+    toolFanoutManifest: workflowDataRef.current.toolFanoutManifest,
+    toolFanoutResults: workflowDataRef.current.toolFanoutResults,
+    webSearch: workflowDataRef.current.webSearch,
+    analysisOverview: workflowDataRef.current.analysisOverview,
+    analysisSources: workflowDataRef.current.analysisSources,
+    banner: workflowDataRef.current.followUpBanner,
+    specialistCards: workflowDataRef.current.specialistCards,
+    latencyGuardrail: workflowDataRef.current.latencyGuardrail,
+  });
+
+  const emitResultOnce = useCallback((options?: { content?: string }) => {
     if (resultSentRef.current) return;
     resultSentRef.current = true;
     const newMessage = {
       id: Date.now().toString(),
       timestamp: new Date().toISOString(),
       type: 'result' as const,
-      content: 'Analysis completed! Here are your results:',
-      flowMode: workflowDataRef.current.flowMode ?? flow,
-      analysis: workflowDataRef.current.analysis || workflowDataRef.current.streamingText,
-      chartSpec: workflowDataRef.current.chartSpec,
-      sqlQuery: workflowDataRef.current.sqlQuery,
-      dataSample: workflowDataRef.current.dataSample,
-      stockWidgetConfig: workflowDataRef.current.stockWidget,
-      toolFanoutManifest: workflowDataRef.current.toolFanoutManifest,
-      toolFanoutResults: workflowDataRef.current.toolFanoutResults,
-      webSearch: workflowDataRef.current.webSearch,
-      analysisOverview: workflowDataRef.current.analysisOverview,
-      analysisSources: workflowDataRef.current.analysisSources,
-      banner: workflowDataRef.current.followUpBanner,
-      specialistCards: workflowDataRef.current.specialistCards,
-      latencyGuardrail: workflowDataRef.current.latencyGuardrail,
+      content: options?.content ?? 'Streaming analysis — cards will update below as tools finish.',
+      ...buildResultMessageFields(),
     };
+    resultMessageIdRef.current = newMessage.id;
     setChatHistory((prev) => [...prev, newMessage]);
+  }, [setChatHistory, flow]);
+
+  const refreshResultMessage = useCallback((overrides?: Partial<ChatMessage>) => {
+    const messageId = resultMessageIdRef.current;
+    if (!messageId) return;
+    const baseFields = buildResultMessageFields();
+    const payload = { ...baseFields, ...overrides };
+    setChatHistory((prev) =>
+      prev.map((message) => (message.id === messageId ? { ...message, ...payload } : message)),
+    );
   }, [setChatHistory, flow]);
   
   // Progressive rendering: update state immediately instead of accumulating in refs
@@ -137,6 +181,50 @@ export const useAnalyticsMemoryStream = (
       if (['false', '0', 'no', 'n', 'off'].includes(normalized)) return false;
     }
     return undefined;
+  };
+
+  const normalizeSlotStatuses = (payload: any): SlotStatusMap => {
+    if (!payload || typeof payload !== 'object') {
+      return {};
+    }
+    const result: SlotStatusMap = {};
+    Object.entries(payload as Record<string, any>).forEach(([slot, raw]) => {
+      if (!raw || typeof raw !== 'object') {
+        return;
+      }
+      const status = typeof (raw as any).status === 'string' ? (raw as any).status : 'missing';
+      const suggestions = Array.isArray((raw as any).suggestions)
+        ? (raw as any).suggestions.filter((entry: unknown) => typeof entry === 'string')
+        : undefined;
+      result[slot] = {
+        status: status as SlotStatusPayload['status'],
+        value: (raw as any).value,
+        reason: typeof (raw as any).reason === 'string' ? (raw as any).reason : undefined,
+        suggestions,
+        allow_custom: typeof (raw as any).allow_custom === 'boolean' ? (raw as any).allow_custom : undefined,
+      };
+    });
+    return result;
+  };
+
+  const upsertSlotStatus = (slot: string, update: Partial<SlotStatusPayload>) => {
+    setSlotStatuses((prev) => {
+      const existing = prev[slot] ?? { status: 'missing' as SlotStatusPayload['status'] };
+      const owns = Object.prototype.hasOwnProperty;
+      const next: SlotStatusPayload = {
+        status: (update.status ?? existing.status ?? 'missing') as SlotStatusPayload['status'],
+        value: owns.call(update, 'value') ? update.value : existing.value,
+        reason: owns.call(update, 'reason') ? update.reason : existing.reason,
+        suggestions: owns.call(update, 'suggestions') ? update.suggestions : existing.suggestions,
+        allow_custom: owns.call(update, 'allow_custom') ? update.allow_custom : existing.allow_custom,
+      };
+      return { ...prev, [slot]: next };
+    });
+  };
+
+  const clearClarificationState = () => {
+    setSlotStatuses({});
+    setSlotFollowups([]);
   };
 
   const resolveLane = (...sources: any[]): string | undefined => {
@@ -352,6 +440,62 @@ export const useAnalyticsMemoryStream = (
     return Object.keys(entries).length ? entries : null;
   };
 
+  const makeAnalysisSourceFingerprint = (key: string, insight: AnalysisSourceInsight): string => {
+    const lane = (insight.lane ?? '').toString().toLowerCase();
+    const id = (insight.id ?? '').toString().toLowerCase();
+    const label = (insight.label ?? '').toString().toLowerCase();
+    const normalizedKey = key.toLowerCase();
+    const identifier = id || label || normalizedKey;
+    return [lane, identifier].filter(Boolean).join('::');
+  };
+
+  const mergeAnalysisInsights = (
+    existing: AnalysisSourceInsight | undefined,
+    incoming: AnalysisSourceInsight,
+    fallbackKey: string,
+  ): AnalysisSourceInsight => {
+    const pickArray = (next?: string[], prev?: string[]) =>
+      Array.isArray(next) && next.length ? next : prev;
+
+    return {
+      id: incoming.id ?? existing?.id ?? fallbackKey,
+      lane: incoming.lane ?? existing?.lane,
+      label: incoming.label ?? existing?.label,
+      summary: incoming.summary ?? existing?.summary,
+      reused: incoming.reused ?? existing?.reused,
+      rowCount: incoming.rowCount ?? existing?.rowCount,
+      columns: pickArray(incoming.columns, existing?.columns),
+      snippetCount: incoming.snippetCount ?? existing?.snippetCount,
+      symbols: pickArray(incoming.symbols, existing?.symbols),
+      latestClose: incoming.latestClose ?? existing?.latestClose,
+      changePercent: incoming.changePercent ?? existing?.changePercent,
+      topic: incoming.topic ?? existing?.topic,
+    };
+  };
+
+  const mergeAnalysisSources = (
+    baseline: AnalysisSources | null,
+    incoming: AnalysisSources,
+  ): AnalysisSources => {
+    const result: AnalysisSources = baseline ? { ...baseline } : {};
+    const fingerprintIndex = new Map<string, string>();
+
+    if (baseline) {
+      for (const [key, insight] of Object.entries(baseline)) {
+        fingerprintIndex.set(makeAnalysisSourceFingerprint(key, insight), key);
+      }
+    }
+
+    for (const [incomingKey, insight] of Object.entries(incoming)) {
+      const fingerprint = makeAnalysisSourceFingerprint(incomingKey, insight);
+      const targetKey = fingerprintIndex.get(fingerprint) ?? incomingKey;
+      fingerprintIndex.set(fingerprint, targetKey);
+      result[targetKey] = mergeAnalysisInsights(result[targetKey], insight, targetKey);
+    }
+
+    return result;
+  };
+
   const normalizeWebContext = (raw: any): WebSearchResult | null => {
     if (!raw) {
       return null;
@@ -502,6 +646,10 @@ export const useAnalyticsMemoryStream = (
     const lane = resolveLane(raw, raw.meta);
     if (lane) {
       card.lane = lane;
+    }
+    const source = coerceString(raw.source ?? raw.meta?.source ?? raw.details?.source ?? raw.tool);
+    if (source) {
+      card.source = source;
     }
     const parallelGroup = coerceString(raw.parallel_group ?? raw.parallelGroup ?? raw.meta?.parallel_group);
     if (parallelGroup) {
@@ -824,14 +972,24 @@ export const useAnalyticsMemoryStream = (
   analysisOverview: null,
   followUpBanner: null,
   specialistCards: [],
-  latencyGuardrail: null,
-  snapshotReuse: null,
-});
+    latencyGuardrail: null,
+    snapshotReuse: null,
+  });
+
+  const applyAnalysisSourcesUpdate = useCallback((incoming: AnalysisSources | null | undefined) => {
+    if (!incoming || !Object.keys(incoming).length) {
+      return;
+    }
+    const merged = mergeAnalysisSources(workflowDataRef.current.analysisSources, incoming);
+    workflowDataRef.current.analysisSources = merged;
+    setAnalysisSources(merged);
+    refreshResultMessage();
+  }, [refreshResultMessage]);
 
   const upsertSpecialistCard = useCallback((card: SpecialistCard) => {
     setSpecialistCards((prev) => {
       const keyFor = (entry: SpecialistCard) =>
-        [entry.type ?? 'accessory', entry.lane ?? '', entry.parallelGroup ?? ''].join('::');
+        [entry.type ?? 'accessory', entry.lane ?? '', entry.source ?? '', entry.parallelGroup ?? ''].join('::');
       const targetKey = keyFor(card);
       const existingIndex = prev.findIndex((item) => keyFor(item) === targetKey);
       let next: SpecialistCard[];
@@ -840,6 +998,7 @@ export const useAnalyticsMemoryStream = (
         next[existingIndex] = {
           ...prev[existingIndex],
           ...card,
+          source: card.source ?? prev[existingIndex].source,
           reused: card.reused ?? prev[existingIndex].reused,
         };
       } else {
@@ -848,7 +1007,8 @@ export const useAnalyticsMemoryStream = (
       workflowDataRef.current.specialistCards = next;
       return next;
     });
-  }, []);
+    refreshResultMessage();
+  }, [refreshResultMessage]);
 
   const streamHook = useAnalyticsStream();
   const stepsHook = useProcessSteps();
@@ -901,6 +1061,8 @@ export const useAnalyticsMemoryStream = (
         setWebSearch(pending.webSearch);
         workflowDataRef.current.webSearch = pending.webSearch;
       }
+
+      refreshResultMessage();
 
       // Clear pending updates
       pendingUpdatesRef.current = {};
@@ -1327,6 +1489,7 @@ export const useAnalyticsMemoryStream = (
     workflowDataRef.current.latencyGuardrail = null;
     workflowDataRef.current.snapshotReuse = null;
     setPendingClarification(null);
+    clearClarificationState();
     setCriteria(null);
     stepsHook.resetSteps();
 
@@ -1339,6 +1502,9 @@ export const useAnalyticsMemoryStream = (
     toolTelemetryRef.current = [];
     agentTurnsRef.current = [];
     agentReasoningRef.current = [];
+    resultSentRef.current = false;
+    summarySentRef.current = false;
+    resultMessageIdRef.current = null;
 
     const baseEndpoint = `/api/analytics/memory/stream`;
 
@@ -1485,6 +1651,7 @@ export const useAnalyticsMemoryStream = (
             };
             setFollowUpBanner(banner);
             workflowDataRef.current.followUpBanner = banner;
+            refreshResultMessage();
             const thinkingLogs = banner.message ? [banner.message] : statusMessage ? [statusMessage] : [];
             updateStep(
               'follow_up_route',
@@ -1549,35 +1716,64 @@ export const useAnalyticsMemoryStream = (
           };
           setFollowUpBanner(banner);
           workflowDataRef.current.followUpBanner = banner;
+          refreshResultMessage();
           const thinking = [`Route selected: ${route.replace(/[_-]/g, ' ')}`];
           updateStep('follow_up_route', 'in_progress', thinking, { banner }, stepInfo.elapsed_ms, stepInfo.ts);
           streamHook.setCurrentStatus(copy.message);
           break;
         }
           
-        case 'clarification_request':
-          console.log('?? [DEBUG] Received clarification_request:', eventData);
-          setPendingClarification(eventData as ClarifyRequest);
-          updateStep('clarification', 'in_progress', [eventData.question]);
-          streamHook.setCurrentStatus(`Clarification needed: ${eventData.question}`);
+        case 'clarification_request': {
+          const request = eventData as ClarifyRequest;
+          console.log('?? [DEBUG] Received clarification_request:', request);
+          setPendingClarification(request);
+          upsertSlotStatus(request.slot, {
+            status: 'missing',
+            reason: request.reason,
+            suggestions: request.options,
+            allow_custom: request.allow_custom,
+          });
+          setSlotFollowups((prev) => {
+            const filtered = prev.filter((item) => item.request_id !== request.request_id);
+            return [...filtered, request];
+          });
+          updateStep('clarification', 'in_progress', [request.question], { request });
+          streamHook.setCurrentStatus(`Clarification needed: ${request.question}`);
           const clarificationMessage = {
             type: 'clarification' as const,
-            content: eventData.question,
-            clarifications: [eventData as ClarifyRequest],
+            content: request.question,
+            clarifications: [request],
           };
           console.log('?? [DEBUG] Adding clarification message:', clarificationMessage);
           addChatMessage(clarificationMessage);
           break;
+        }
           
-        case 'clarification_ack':
+        case 'clarification_ack': {
           setPendingClarification(null);
+          setSlotFollowups((prev) => prev.filter((item) => item.request_id !== eventData.request_id));
+          if (eventData.slot) {
+            if (eventData.slot_status) {
+              const ackStatus = normalizeSlotStatuses({ [eventData.slot]: eventData.slot_status });
+              const statusPayload = ackStatus[eventData.slot];
+              if (statusPayload) {
+                upsertSlotStatus(eventData.slot, statusPayload);
+              }
+            } else {
+              upsertSlotStatus(eventData.slot, { status: 'filled', value: eventData.answer });
+            }
+          }
           addChatMessage({
             type: 'user',
             content: `${eventData.answer}`,
           });
-          stepsHook.updateStepStatus('clarification', 'in_progress', ['Processing your answer...']);
+          stepsHook.updateStepStatus('clarification', 'in_progress', ['Processing your answer...'], {
+            slot: eventData.slot,
+            answer: eventData.answer,
+          });
           streamHook.setCurrentStatus('Processing your clarification answer...');
           break;
+        }
           
         case 'plan_built':
           // Combined planning step for streamlined agent flow
@@ -1707,21 +1903,8 @@ export const useAnalyticsMemoryStream = (
           updateStep('sql_execution', 'completed', [
             eventData.row_count != null ? `Rows: ${eventData.row_count}` : sqlPreview[0],
           ], eventData, stepInfo.elapsed_ms, stepInfo.ts);
-          // Live specialist bubble (SQL)
-          if (isLiveSpecialistsEnabled() && !isThinkingEvent) {
-            const rows = typeof eventData.row_count === 'number' ? eventData.row_count : (eventData.sample_data?.length ?? undefined);
-            const header = rows != null ? `SQL Ready (rows: ${rows})` : 'SQL Ready';
-            addChatMessage({
-              type: 'assistant',
-              content: header,
-              sqlQuery: typeof eventData.sql === 'string' ? eventData.sql : undefined,
-              dataSample: Array.isArray(eventData.sample_data) ? eventData.sample_data.slice(0, 5) : undefined,
-              flowMode: flow,
-              scheduleStage: eventData.schedule_stage || scheduleStage || 'sql',
-              parallelGroup,
-              sequence,
-            });
-          }
+          emitResultOnce();
+          refreshResultMessage();
           break;
         }
           
@@ -1750,6 +1933,8 @@ export const useAnalyticsMemoryStream = (
             stepInfo.elapsed_ms,
             stepInfo.ts,
           );
+          emitResultOnce();
+          refreshResultMessage();
           break;
         }
 
@@ -1759,30 +1944,11 @@ export const useAnalyticsMemoryStream = (
             const widgetPayload = eventData.stock_widget as StockWidgetConfig;
             setStockWidget(widgetPayload);
             workflowDataRef.current.stockWidget = widgetPayload;
+            refreshResultMessage();
           }
           updateStep('tool_execution', 'completed', ['Stock widget ready'], eventData, stepInfo.elapsed_ms, stepInfo.ts);
-          if (isLiveSpecialistsEnabled() && eventData.stock_widget && !isThinkingEvent) {
-            const sw = eventData.stock_widget as StockWidgetConfig;
-            const symbolList = Array.isArray(sw.symbols)
-              ? sw.symbols
-                  .map((s: any) => (Array.isArray(s) ? s[1] : s))
-                  .filter((s: any) => typeof s === 'string' && s.trim().length > 0)
-                  .join(', ')
-              : '';
-            const parts: string[] = ['Stock Widget Ready'];
-            if (symbolList) parts.push(`Symbols: ${symbolList}`);
-            if (sw.chartType) parts.push(`Chart: ${sw.chartType}`);
-            const header = parts.join(' | ');
-            addChatMessage({
-              type: 'assistant',
-              content: header,
-              stockWidgetConfig: sw,
-              flowMode: flow,
-              scheduleStage: eventData.schedule_stage || scheduleStage || 'hedged_accessories',
-              parallelGroup,
-              sequence,
-            });
-          }
+          emitResultOnce();
+          refreshResultMessage();
           break;
         }
 
@@ -1791,25 +1957,11 @@ export const useAnalyticsMemoryStream = (
           if (webContext) {
             scheduleProgressiveUpdate({ webSearch: webContext });
             workflowDataRef.current.webSearch = webContext;
+            refreshResultMessage();
           }
           updateStep('web_research_agent', 'completed', ['Web context ready'], eventData, stepInfo.elapsed_ms, stepInfo.ts);
-          if (isLiveSpecialistsEnabled() && webContext && !isThinkingEvent) {
-            const primaryTopic = webContext.searchTopic || webContext.queryTerms || webContext.query || '';
-            const provider = webContext.provider || '';
-            const parts: string[] = ['Web Context Ready'];
-            if (primaryTopic) parts.push(`Topic: ${primaryTopic}`);
-            if (provider) parts.push(`Source: ${provider}`);
-            const header = parts.join(' | ');
-            addChatMessage({
-              type: 'assistant',
-              content: header,
-              webSearch: webContext,
-              flowMode: flow,
-              scheduleStage: eventData.schedule_stage || scheduleStage || 'hedged_accessories',
-              parallelGroup,
-              sequence,
-            });
-          }
+          emitResultOnce();
+          refreshResultMessage();
           break;
         }
 
@@ -1824,10 +1976,11 @@ export const useAnalyticsMemoryStream = (
                 : undefined)
           );
           if (readySources) {
-            setAnalysisSources(readySources);
-            workflowDataRef.current.analysisSources = readySources;
+            applyAnalysisSourcesUpdate(readySources);
           }
           updateStep('analysis_generation', 'completed', ['Analysis ready'], eventData, stepInfo.elapsed_ms, stepInfo.ts);
+          emitResultOnce();
+          refreshResultMessage();
           break;
         }
 
@@ -1961,10 +2114,12 @@ export const useAnalyticsMemoryStream = (
 
           try {
             let opLines: string[] = [];
+            let patchedChartSpec: any = null;
             if (hasOps) {
               setChartSpec((prev) => {
                 const next = applyChartOps(prev, eventData);
                 workflowDataRef.current.chartSpec = next;
+                patchedChartSpec = next;
                 return next;
               });
 
@@ -2057,12 +2212,7 @@ export const useAnalyticsMemoryStream = (
                 ['Revision: Chart updated', ...revisionLines.map((line) => `- ${line}`)].join('\n');
               appendResultSnapshot({
                 content: revisionSummary,
-                analysis: '',
-                sqlQuery: undefined,
-                stockWidgetConfig: null,
-                toolFanoutManifest: undefined,
-                toolFanoutResults: undefined,
-                webSearch: null,
+                chartSpec: patchedChartSpec ?? workflowDataRef.current.chartSpec,
               });
               markRevisionMode('chart');
             }
@@ -2165,6 +2315,7 @@ export const useAnalyticsMemoryStream = (
             if (webContext) {
               setWebSearch(webContext);
               workflowDataRef.current.webSearch = webContext;
+              refreshResultMessage();
 
               const thinking: string[] = [];
               const primaryTopic = webContext.searchTopic || webContext.queryTerms || webContext.query || '';
@@ -2305,6 +2456,7 @@ export const useAnalyticsMemoryStream = (
                 setStockWidget(widgetPayload ?? null);
               }
               workflowDataRef.current.stockWidget = widgetPayload ? widgetPayload : null;
+              refreshResultMessage();
             }
             if (bundle.criteria) {
               workflowDataRef.current.criteria = bundle.criteria;
@@ -2330,6 +2482,7 @@ export const useAnalyticsMemoryStream = (
               if (webContext) {
                 setWebSearch(webContext);
                 workflowDataRef.current.webSearch = webContext;
+                refreshResultMessage();
               }
             }
             if (bundle.analysis_overview && typeof bundle.analysis_overview === 'object') {
@@ -2337,6 +2490,7 @@ export const useAnalyticsMemoryStream = (
               if (overview) {
                 setAnalysisOverview(overview);
                 workflowDataRef.current.analysisOverview = overview;
+                refreshResultMessage();
               }
             }
             const cohesiveSources = parseAnalysisSources(
@@ -2345,13 +2499,13 @@ export const useAnalyticsMemoryStream = (
                 (bundle.analysis && typeof bundle.analysis === 'object' ? (bundle.analysis as any).analysis_sources ?? (bundle.analysis as any).sources : undefined)
             );
             if (cohesiveSources) {
-              setAnalysisSources(cohesiveSources);
-              workflowDataRef.current.analysisSources = cohesiveSources;
+              applyAnalysisSourcesUpdate(cohesiveSources);
             }
             if (bundle.latency_guardrail) {
               const guardrail = bundle.latency_guardrail as LatencyGuardrail;
               setLatencyGuardrail(guardrail);
               workflowDataRef.current.latencyGuardrail = guardrail;
+              refreshResultMessage();
             }
             if (bundle.banner) {
               const bannerData = bundle.banner as Record<string, any>;
@@ -2364,6 +2518,7 @@ export const useAnalyticsMemoryStream = (
               };
               setFollowUpBanner(banner);
               workflowDataRef.current.followUpBanner = banner;
+              refreshResultMessage();
             }
 
             updateStep(
@@ -2392,6 +2547,7 @@ export const useAnalyticsMemoryStream = (
             // Emit the result bubble exactly once; guard handles subsequent workflow_complete
             if (!isThinkingEvent) {
               emitResultOnce();
+              refreshResultMessage();
             }
           }
           break;
@@ -2415,6 +2571,7 @@ export const useAnalyticsMemoryStream = (
                   : null;
                 setStockWidget(widgetPayload);
                 workflowDataRef.current.stockWidget = widgetPayload;
+                refreshResultMessage();
               }
 
               if (eventData.web_context) {
@@ -2422,6 +2579,7 @@ export const useAnalyticsMemoryStream = (
                 if (webContext) {
                   setWebSearch(webContext);
                   workflowDataRef.current.webSearch = webContext;
+                  refreshResultMessage();
                 }
               }
 
@@ -2444,6 +2602,7 @@ export const useAnalyticsMemoryStream = (
               if (overview) {
                 setAnalysisOverview(overview);
                 workflowDataRef.current.analysisOverview = overview;
+                refreshResultMessage();
               }
               const sourcesCandidate =
                 (eventData.analysis_sources && typeof eventData.analysis_sources === 'object' && eventData.analysis_sources) ??
@@ -2453,8 +2612,7 @@ export const useAnalyticsMemoryStream = (
                   : undefined);
               const sources = parseAnalysisSources(sourcesCandidate);
               if (sources) {
-                setAnalysisSources(sources);
-                workflowDataRef.current.analysisSources = sources;
+                applyAnalysisSourcesUpdate(sources);
               }
               const guardrailCandidate =
                 (eventData.latency_guardrail as LatencyGuardrail | undefined) ??
@@ -2462,6 +2620,7 @@ export const useAnalyticsMemoryStream = (
               if (guardrailCandidate) {
                 setLatencyGuardrail(guardrailCandidate);
                 workflowDataRef.current.latencyGuardrail = guardrailCandidate;
+                refreshResultMessage();
               }
             }
 
@@ -2493,6 +2652,7 @@ export const useAnalyticsMemoryStream = (
             // Emit the result bubble exactly once to avoid duplicates from later workflow_complete
             if (!isThinkingEvent) {
               emitResultOnce();
+              refreshResultMessage();
             }
           }
           break;
@@ -2632,6 +2792,7 @@ export const useAnalyticsMemoryStream = (
               const widgetCandidate = (payloadForWidget as { stock_widget?: StockWidgetConfig | null }).stock_widget;
               setStockWidget(widgetCandidate ?? null);
               workflowDataRef.current.stockWidget = widgetCandidate ?? null;
+              refreshResultMessage();
             }
 
             if (eventData.tool === 'web_retriever') {
@@ -2646,6 +2807,7 @@ export const useAnalyticsMemoryStream = (
               if (webContext) {
                 setWebSearch(webContext);
                 workflowDataRef.current.webSearch = webContext;
+                refreshResultMessage();
 
                 const stepId = 'web_research_agent';
                 const thinking: string[] = [];
@@ -2801,15 +2963,21 @@ export const useAnalyticsMemoryStream = (
           streamHook.setCurrentStatus('Analyzing query intent...');
           break;
 
-        case 'intent_detection_complete':
+        case 'intent_detection_complete': {
+          const slotStatusPayload = normalizeSlotStatuses(eventData.slot_statuses);
+          setSlotStatuses(slotStatusPayload);
+          setSlotFollowups([]);
           stepsHook.updateStepStatus('intent_detection', 'completed', [
             `Intent: ${eventData.intent_key} (${Math.round((eventData.confidence || 0) * 100)}%)`
           ], {
             intent_key: eventData.intent_key,
             confidence: eventData.confidence,
-            slots_detected: eventData.slots_detected
+            slots_detected: eventData.slots_detected,
+            slot_statuses: slotStatusPayload,
+            slot_followups: Array.isArray(eventData.slot_followups) ? eventData.slot_followups : [],
           }, undefined, eventData.ts);
           break;
+        }
 
         case 'schema_validation_started':
           stepsHook.updateStepStatus('schema_validation', 'in_progress', ['Validating required fields...'], undefined, undefined, eventData.ts);
@@ -2842,6 +3010,10 @@ export const useAnalyticsMemoryStream = (
         case 'clarification_skipped':
           stepsHook.updateStepStatus('clarification', 'completed', [eventData.reason || 'Clarification not needed'], undefined, undefined, eventData.ts);
           setPendingClarification(null);
+          setSlotFollowups((prev) => prev.filter((item) => item.slot !== eventData.slot));
+          if (eventData.slot) {
+            upsertSlotStatus(eventData.slot, { status: 'filled' });
+          }
           break;
 
         case 'intent_finalized':
@@ -2905,10 +3077,9 @@ export const useAnalyticsMemoryStream = (
             const keyFindings = Array.isArray(eventData.key_findings)
               ? (eventData.key_findings as string[]).map((f: string) => ' ' + f).join('\\n')
               : 'No findings available';
-            addChatMessage({
-  type: 'assistant'
-  ,content: `**Final Summary:**\n\n**Key Findings:**\n${keyFindings}`
-});
+            refreshResultMessage({
+              content: `**Final Summary:**\n\n**Key Findings:**\n${keyFindings}`,
+            });
           }
           break;
 
@@ -2945,12 +3116,14 @@ export const useAnalyticsMemoryStream = (
             if (overview) {
               setAnalysisOverview(overview);
               workflowDataRef.current.analysisOverview = overview;
+              refreshResultMessage();
             }
           }
           const guardrailMeta = metadata.web_search_guardrail as LatencyGuardrail | undefined;
           if (guardrailMeta) {
             setLatencyGuardrail(guardrailMeta);
             workflowDataRef.current.latencyGuardrail = guardrailMeta;
+            refreshResultMessage();
           }
           break;
         }
@@ -2964,8 +3137,21 @@ export const useAnalyticsMemoryStream = (
                 : 'Direct workflow completed!';
           const isEarlyExit = Boolean(eventData?.early_exit);
           const completionMessage = eventData?.message || (typeof eventData.total_elapsed_ms === 'number' ? `Completed in ${eventData.total_elapsed_ms} ms` : null);
-          streamHook.setCurrentStatus(completionMessage || workflowStatusMessage);
-          if (!isThinkingEvent && !isEarlyExit) { emitResultOnce(); }
+          const finalStatusCopy =
+            completionMessage && completionMessage !== workflowStatusMessage
+              ? completionMessage
+              : workflowStatusMessage;
+
+          if (!isThinkingEvent) {
+            emitResultOnce();
+            refreshResultMessage({ content: isEarlyExit ? finalStatusCopy : '' });
+          }
+
+          if (isEarlyExit) {
+            streamHook.setCurrentStatus(finalStatusCopy);
+          } else {
+            streamHook.resetState();
+          }
 
           if (isEarlyExit) {
             // Clear any partial workflow artifacts for clarity
@@ -2999,6 +3185,8 @@ export const useAnalyticsMemoryStream = (
             setFollowUpBanner(null);
             setSpecialistCards([]);
             setLatencyGuardrail(null);
+            resultMessageIdRef.current = null;
+            resultSentRef.current = false;
           }
           break;
 
@@ -3025,6 +3213,7 @@ export const useAnalyticsMemoryStream = (
             };
             setFollowUpBanner(banner);
             workflowDataRef.current.followUpBanner = banner;
+            refreshResultMessage({ content: finalMessage });
 
             updateStep(
               'finalization',
@@ -3049,12 +3238,6 @@ export const useAnalyticsMemoryStream = (
             );
 
             streamHook.setCurrentStatus(finalMessage || 'Completed');
-            if (!isThinkingEvent && !isSpecialistOnlyMode()) {
-              addChatMessage({
-                type: 'assistant',
-                content: finalMessage,
-              });
-            }
           }
           break;
           
@@ -3100,6 +3283,7 @@ export const useAnalyticsMemoryStream = (
       lastSessionIdRef.current = '';
     }
     setPendingClarification(null);
+    clearClarificationState();
     setCriteria(null);
     setChatHistory([]);
     setChartSpec(null);
@@ -3132,6 +3316,7 @@ export const useAnalyticsMemoryStream = (
     agentLaneStateRef.current = {};
     resultSentRef.current = false;
     summarySentRef.current = false;
+    resultMessageIdRef.current = null;
     toolFanoutRef.current = { manifest: [], results: [], concurrencyLimit: 0 };
 
     // Reset workflow data ref
@@ -3186,6 +3371,9 @@ export const useAnalyticsMemoryStream = (
     specialistCards,
     singleAgentFanout,
     revisionMode,
+    slotStatuses,
+    slotFollowups,
+
     latencyGuardrail,
     snapshotReuse,
 
@@ -3197,6 +3385,7 @@ export const useAnalyticsMemoryStream = (
     isLoading: streamHook.isLoading,
     error: streamHook.error,
     currentStatus: streamHook.currentStatus,
+    statusTimestamp: streamHook.statusTimestamp,
 
     // Process steps
     processSteps: stepsHook.processSteps,

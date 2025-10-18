@@ -266,6 +266,15 @@ def _derive_tasks(
     attempts = sql_ctx.get("attempts") or []
     last_attempt = attempts[-1] if attempts else None
     reuse_sql = bool(sql_ctx.get("status") in {"reused", "success"} and (sql_ctx.get("row_count") or 0) > 0)
+    analysis_revision_text = None
+    if isinstance(analysis_ctx, Mapping):
+        analysis_revision_text = analysis_ctx.get("revision_text")
+    planner_revision = planner_ctx.get("analysis_revision")
+    if analysis_revision_text is None and isinstance(planner_revision, Mapping):
+        candidate = planner_revision.get("text") or planner_revision.get("analysis")
+        if isinstance(candidate, str) and candidate.strip():
+            analysis_revision_text = candidate
+    analysis_revision = bool(analysis_revision_text and isinstance(analysis_revision_text, str) and analysis_revision_text.strip())
     if reuse_sql:
         plan.add_step("query", "skip", reason="sql_cached")
     elif attempts:
@@ -1114,7 +1123,8 @@ class MultiAgentFlow:
         }
         self._timers: Dict[str, float] = {}
         self._agent_registry = _build_default_agent_registry()
-        self._orchestrator = AgentExecutionOrchestrator(self._agent_registry)
+        # Analyst orchestration traverses supervisor -> specialists -> reviewer which requires a deeper DAG budget.
+        self._orchestrator = AgentExecutionOrchestrator(self._agent_registry, max_depth=4)
         self._base_plan = _build_default_plan()
         self._market_client = PolygonMarketDataClient()
         self._market_fetcher = fetch_daily_snapshot
@@ -1349,6 +1359,227 @@ class MultiAgentFlow:
             "sample_data": sample_preview,
         }
 
+    def _analysis_sources_snapshot(
+        self,
+        *,
+        sql_ctx: Mapping[str, Any],
+        stock_widget: Optional[Mapping[str, Any]],
+        web_context: Optional[Mapping[str, Any]],
+        bundle_sources: Mapping[str, Any],
+    ) -> Dict[str, Any]:
+        def _compact(entry: Dict[str, Any]) -> Dict[str, Any]:
+            cleaned: Dict[str, Any] = {}
+            for key, value in entry.items():
+                if value is None:
+                    continue
+                if isinstance(value, (list, dict)) and not value:
+                    continue
+                if isinstance(value, str) and not value.strip():
+                    continue
+                cleaned[key] = value
+            return cleaned
+
+        def _lane_reused(*, lane: str, context: Mapping[str, Any], source_keys: Iterable[str]) -> bool:
+            status = str(context.get("status") or "").lower()
+            if status in {"reused", "cached"}:
+                return True
+            source_hint = str(context.get("source") or "").lower()
+            if source_hint == "cached":
+                return True
+            for key in source_keys:
+                tag = str(bundle_sources.get(key) or "").lower()
+                if tag in {"cached", "reused"}:
+                    return True
+            return bool(context.get("reused"))
+
+        sources: Dict[str, Dict[str, Any]] = {}
+
+        if sql_ctx.get("sql") or sql_ctx.get("row_count") is not None:
+            columns = list(sql_ctx.get("columns") or [])[:6]
+            entry = _compact(
+                {
+                    "lane": "sql",
+                    "label": "SQL data",
+                    "row_count": sql_ctx.get("row_count"),
+                    "columns": columns,
+                    "reused": _lane_reused(
+                        lane="sql",
+                        context=sql_ctx,
+                        source_keys=("sql_executor", "sql_execution", "sql_compilation"),
+                    ),
+                }
+            )
+            if entry:
+                sources["sql"] = entry
+
+        widget = stock_widget if isinstance(stock_widget, Mapping) else None
+        if widget:
+            raw_symbols = widget.get("symbols")
+            symbols: List[str] = []
+            if isinstance(raw_symbols, list):
+                for item in raw_symbols:
+                    candidate = None
+                    if isinstance(item, (list, tuple)) and item:
+                        candidate = item[0] if isinstance(item[0], str) else item[1] if len(item) > 1 else None
+                    elif isinstance(item, str):
+                        candidate = item
+                    if isinstance(candidate, str) and candidate.strip():
+                        symbols.append(candidate.strip().upper())
+            entry = _compact(
+                {
+                    "lane": "stock",
+                    "label": "Stock data",
+                    "symbols": symbols[:6],
+                    "reused": _lane_reused(
+                        lane="stock",
+                        context=self._shared_context.get("market", {}),
+                        source_keys=("stock_tracker",),
+                    ),
+                }
+            )
+            if entry:
+                sources["stock"] = entry
+
+        web_ctx = web_context if isinstance(web_context, Mapping) else None
+        if web_ctx:
+            snippets = []
+            raw_snippets = web_ctx.get("snippets")
+            if isinstance(raw_snippets, list):
+                for snippet in raw_snippets[:5]:
+                    if isinstance(snippet, Mapping):
+                        snippets.append(
+                            {
+                                "title": snippet.get("title"),
+                                "url": snippet.get("url"),
+                            }
+                        )
+            entry = _compact(
+                {
+                    "lane": "web",
+                    "label": "Online research",
+                    "summary": web_ctx.get("summary"),
+                    "snippets": snippets,
+                    "reused": _lane_reused(
+                        lane="web",
+                        context=web_ctx,
+                        source_keys=("web_retriever", "web_search"),
+                    ),
+                }
+            )
+            if entry:
+                sources["web"] = entry
+
+        return sources
+
+    def _lane_state_snapshot(self) -> Dict[str, str]:
+        bundle_sources = self._shared_context.get("_meta", {}).get("bundle_sources", {})
+
+        def classify(ctx: Mapping[str, Any], *, has_payload: bool, source_keys: Iterable[str]) -> str:
+            status = str(ctx.get("status") or "").lower()
+            if status in {"reused", "cached"}:
+                return "reused"
+            source_hint = str(ctx.get("source") or "").lower()
+            if source_hint == "cached":
+                return "reused"
+            for key in source_keys:
+                tag = str(bundle_sources.get(key) or "").lower()
+                if tag in {"cached", "reused"}:
+                    return "reused"
+            if has_payload:
+                return "fresh"
+            return "missing"
+
+        sql_ctx = self._shared_context.get("sql", {})
+        chart_ctx = self._shared_context.get("chart", {})
+        analysis_ctx = self._shared_context.get("analysis", {})
+        market_ctx = self._shared_context.get("market", {})
+        web_ctx = self._shared_context.get("web", {})
+
+        lane_states = {
+            "sql": classify(
+                sql_ctx,
+                has_payload=bool(sql_ctx.get("sql") or sql_ctx.get("row_count") is not None),
+                source_keys=("sql_executor", "sql_execution", "sql_compilation"),
+            ),
+            "chart": classify(
+                chart_ctx,
+                has_payload=bool(chart_ctx.get("spec")),
+                source_keys=("chart_builder",),
+            ),
+            "analysis": classify(
+                analysis_ctx,
+                has_payload=bool(analysis_ctx.get("final") or analysis_ctx.get("summary")),
+                source_keys=("analysis_generation", "analysis_agent", "insight_reviewer", "supervisor_summary"),
+            ),
+            "market": classify(
+                market_ctx,
+                has_payload=bool(self._shared_context.get("stock_widget")),
+                source_keys=("stock_tracker",),
+            ),
+            "web": classify(
+                web_ctx,
+                has_payload=bool(web_ctx.get("summary") or web_ctx.get("snippets")),
+                source_keys=("web_retriever", "web_search"),
+            ),
+        }
+        return lane_states
+
+    def _select_follow_up_route(self, lane_states: Mapping[str, str]) -> FollowUpRoute:
+        if (
+            lane_states.get("market") == "fresh"
+            and all(lane_states.get(lane) == "reused" for lane in ("sql", "chart", "analysis", "web") if lane in lane_states)
+        ):
+            return FollowUpRoute.STOCK_ONLY
+        if (
+            lane_states.get("sql") == "reused"
+            and any(lane_states.get(lane) == "fresh" for lane in ("chart", "analysis"))
+        ):
+            return FollowUpRoute.REUSE_SQL
+        if any(lane_states.get(lane) == "fresh" for lane in ("sql", "chart", "analysis", "web")):
+            return FollowUpRoute.FULL_PIPELINE
+        return self.follow_up_route
+
+    def _emit_lane_summary(self, lane_states: Mapping[str, str]) -> Optional[Dict[str, Any]]:
+        meta = self._shared_context.setdefault("_meta", {})
+        if meta.get("lane_summary_emitted"):
+            return None
+
+        normalized_states = dict(lane_states)
+        if self.follow_up_route == FollowUpRoute.REUSE_SQL:
+            for lane in ("sql", "analysis", "market", "web"):
+                state = normalized_states.get(lane)
+                if state in {"fresh", "missing", "pending", "running", "queued"}:
+                    normalized_states[lane] = "reused"
+
+        rerun_lanes = [lane for lane, status in normalized_states.items() if status in {"fresh", "missing", "pending"}]
+        reuse_lanes = [lane for lane, status in normalized_states.items() if status in {"reused", "cached"}]
+
+        route = self._select_follow_up_route(lane_states)
+        if route != self.follow_up_route:
+            self.follow_up_route = route
+
+        payload = {
+            "lane_summary": dict(normalized_states),
+            "parallel_group": "multi_supervisor_fanout",
+            "ts": datetime.utcnow().isoformat(),
+            "flow_mode": self.flow_mode.value,
+            "rerun_scope": {
+                "rerun": rerun_lanes,
+                "reuse": reuse_lanes,
+                "route": self.follow_up_route.value,
+            },
+        }
+
+        if "chart" in rerun_lanes and "sql" in reuse_lanes:
+            payload["decision"] = "chart_revision"
+        elif rerun_lanes:
+            payload["decision"] = "fresh_execution"
+        else:
+            payload["decision"] = "reuse_snapshot"
+
+        meta["lane_summary_emitted"] = True
+        return {"event": "agent_decision", "data": payload}
+
     def _chart_preview(self, chart_ctx: Dict[str, Any]) -> Dict[str, Any]:
         return {
             "chart_spec": chart_ctx.get("spec"),
@@ -1503,7 +1734,11 @@ class MultiAgentFlow:
             "web": "online research data",
         }
         note: Optional[str] = None
-        if missing:
+        reuse_scope = self.follow_up_route == FollowUpRoute.REUSE_SQL
+        if reuse_scope:
+            missing = []
+            note = "Chart revision applied. SQL datasets, stock telemetry, and web research were reused."
+        elif missing:
             readable = ", ".join(human_labels[name] for name in missing)
             note = f"Pending lanes: {readable}. Ask me to rerun those tools when you're ready."
         parts: List[str] = []
@@ -1632,6 +1867,7 @@ class MultiAgentFlow:
     ) -> AsyncGenerator[Dict[str, Any], None]:
         if session_id is None:
             raise ValueError("chart_revision requires an existing session_id")
+        self.set_follow_up_route(FollowUpRoute.REUSE_SQL)
         hooks = _MultiAgentHooks(self, query, session_id=session_id)
         ctx = await self._planner.initialize_context(query, session_id=session_id)
         registry = get_planner_tool_registry()
@@ -1787,6 +2023,12 @@ class MultiAgentFlow:
                 )
             slots = data.get("slots_detected") or {}
             planner_ctx["slots"] = {k: v for k, v in slots.items() if k in {"company", "metric", "ticker"}}
+            slot_status_payload = data.get("slot_statuses") or {}
+            if isinstance(slot_status_payload, Mapping):
+                planner_ctx["slot_statuses"] = slot_status_payload
+            slot_followups_payload = data.get("slot_followups") or []
+            if isinstance(slot_followups_payload, Sequence):
+                planner_ctx["slot_followups"] = list(slot_followups_payload)
             companies = slots.get("company")
             if isinstance(companies, str):
                 companies = [companies]
@@ -1871,7 +2113,21 @@ class MultiAgentFlow:
                 if len(fragments) < _MAX_FRAGMENT_COUNT:
                     fragments.append(fragment[:200])
         elif name == "analysis_complete":
-            final_text = data.get("analysis") or ""
+            raw_analysis = data.get("analysis")
+            final_text: str = ""
+            if isinstance(raw_analysis, str):
+                final_text = raw_analysis
+            elif isinstance(raw_analysis, Mapping):
+                # Gemini responses may embed the prose under nested keys; inspect common fields before fallback.
+                for candidate in ("analysis", "text", "content", "message", "markdown"):
+                    candidate_value = raw_analysis.get(candidate)
+                    if isinstance(candidate_value, str) and candidate_value.strip():
+                        final_text = candidate_value
+                        break
+                if not final_text:
+                    final_text = json.dumps(raw_analysis, ensure_ascii=False)
+            elif raw_analysis is not None:
+                final_text = str(raw_analysis)
             if final_text:
                 truncated = final_text[:_MAX_ANALYSIS_STORED]
                 analysis_ctx["final"] = truncated
@@ -2130,17 +2386,19 @@ class MultiAgentFlow:
             final_payload["bundle"] = sanitized_bundle
         elif bundle is not None:
             final_payload["bundle"] = sanitize_for_json(bundle)
-        analysis_sources: List[str] = []
-        if sql_ctx.get("sql") and sql_ctx.get("row_count") is not None:
-            analysis_sources.append("sql")
-        if web_context:
-            analysis_sources.append("web")
-        if stock_widget:
-            analysis_sources.append("stock")
+        meta = self._shared_context.setdefault("_meta", {})
+        if isinstance(bundle_sources, Mapping):
+            meta["bundle_sources"] = dict(bundle_sources)
+        analysis_sources = self._analysis_sources_snapshot(
+            sql_ctx=sql_ctx,
+            stock_widget=stock_widget if isinstance(stock_widget, Mapping) else None,
+            web_context=web_context if isinstance(web_context, Mapping) else None,
+            bundle_sources=bundle_sources if isinstance(bundle_sources, Mapping) else {},
+        )
         if bundle_sources:
             final_payload["sources"] = bundle_sources
         if analysis_sources:
-            final_payload["analysis_sources"] = sorted(set(analysis_sources))
+            final_payload["analysis_sources"] = analysis_sources
         sanitized_cohesive_payload = sanitize_for_json(final_payload)
         if isinstance(sanitized_cohesive_payload, Mapping):
             sanitized_cohesive_payload = dict(sanitized_cohesive_payload)
@@ -2214,6 +2472,13 @@ class MultiAgentFlow:
                     yield final_event
                 return
             yield self._annotate({"event": "cohesive_result", "data": validated_payload})
+            lane_event = self._emit_lane_summary(self._lane_state_snapshot())
+            if lane_event:
+                yield self._annotate(lane_event)
+        else:
+            lane_event = self._emit_lane_summary(self._lane_state_snapshot())
+            if lane_event:
+                yield self._annotate(lane_event)
 
         await self._persist_bundle(bundle)
 

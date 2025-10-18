@@ -13,9 +13,13 @@ class TimeframeModel(BaseModel):
 
     model_config = ConfigDict(extra='forbid')
 
-    years_back: Optional[int] = Field(default=4, ge=0, le=10)
+    years_back: Optional[int] = Field(default=None, ge=0, le=10)
+    quarters_back: Optional[int] = Field(default=None, ge=0, le=40)
     start_year: Optional[int] = None
     end_year: Optional[int] = None
+    preset: Optional[str] = None
+    year_to_date: Optional[bool] = None
+    source: Optional[Literal['query', 'clarification', 'default', 'fallback']] = None
 
 
 class SlotsModel(BaseModel):
@@ -24,7 +28,7 @@ class SlotsModel(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
     company: Optional[str] = None
-    timeframe: TimeframeModel = Field(default_factory=TimeframeModel)
+    timeframe: Optional[TimeframeModel] = None
     metrics: Optional[List[str]] = None
     granularity: Optional[str] = None
     tickers: Optional[List[str]] = None
@@ -84,6 +88,53 @@ class IntentModel(BaseModel):
     )
 
 
+class IntentSelectionModel(BaseModel):
+    """Compact intent selection payload for the unified resolver."""
+
+    model_config = ConfigDict(extra='forbid')
+
+    key: Optional[str] = Field(default=None, description="Selected intent key")
+    confidence: float = Field(0.0, ge=0.0, le=1.0, description="Confidence in the selection")
+    mode: Literal["single_agent", "fanout", "multi_agent"] = Field(
+        "single_agent", description="Workflow mode that requested the resolution"
+    )
+
+
+class SlotStatusModel(BaseModel):
+    """Status metadata for an individual slot."""
+
+    model_config = ConfigDict(extra='forbid')
+
+    status: Literal["filled", "missing", "defaulted", "assumed"] = Field(..., description="Slot status determined by the LLM")
+    value: Optional[Any] = Field(default=None, description="Resolved slot value (if any)")
+    reason: Optional[str] = Field(default=None, description="Why the slot is in this status")
+    suggestions: List[str] = Field(default_factory=list, description="Suggested values provided by the resolver")
+    allow_custom: Optional[bool] = Field(default=None, description="Whether custom values are acceptable")
+
+
+class FollowUpModel(BaseModel):
+    """Clarification prompt emitted by the resolver."""
+
+    model_config = ConfigDict(extra='forbid')
+
+    slot: str = Field(..., description="Slot identifier to clarify")
+    prompt: str = Field(..., description="Prompt copy to display to the user")
+    suggestions: List[str] = Field(default_factory=list, description="Suggested values to present")
+    allow_custom: bool = Field(True, description="Whether arbitrary values may be entered")
+    reason: Optional[str] = Field(default=None, description="Explanation for why the clarification is needed")
+
+
+class IntentResolutionModel(BaseModel):
+    """Unified runtime payload describing the resolved intent and slots."""
+
+    model_config = ConfigDict(extra='forbid')
+
+    intent: IntentSelectionModel = Field(default_factory=IntentSelectionModel)
+    slots: Dict[str, SlotStatusModel] = Field(default_factory=dict, description="Slot statuses keyed by slot name")
+    followups: List[FollowUpModel] = Field(default_factory=list, description="Pending clarifications for the frontend")
+    notes: Optional[str] = Field(default=None, description="Additional guidance from the resolver")
+
+
 class SqlCriteriaModel(BaseModel):
     """
     Final structured criteria needed to compile & run SQL deterministically.
@@ -129,6 +180,41 @@ class LLMIntentModel(BaseModel):
     intent_reasoning: str = Field(default="")
 
 
+class LLMSlotStatusModel(BaseModel):
+    """Strict slot status schema for the unified resolver Responses output."""
+
+    model_config = ConfigDict(extra='forbid')
+
+    status: Literal["filled", "missing", "defaulted", "assumed"]
+    value: Optional[Any] = None
+    reason: Optional[str] = None
+    suggestions: List[str] = Field(default_factory=list)
+    allow_custom: Optional[bool] = None
+
+
+class LLMFollowUpModel(BaseModel):
+    """Strict follow-up schema for the unified resolver Responses output."""
+
+    model_config = ConfigDict(extra='forbid')
+
+    slot: str
+    prompt: str
+    suggestions: List[str] = Field(default_factory=list)
+    allow_custom: bool = True
+    reason: Optional[str] = None
+
+
+class LLMIntentResolutionModel(BaseModel):
+    """Structured model returned by the unified slot resolver prompt."""
+
+    model_config = ConfigDict(extra='forbid')
+
+    intent: IntentSelectionModel = Field(default_factory=IntentSelectionModel)
+    slots: Dict[str, LLMSlotStatusModel] = Field(default_factory=dict)
+    followups: List[LLMFollowUpModel] = Field(default_factory=list)
+    notes: Optional[str] = None
+
+
 class ClarifyRequestModel(BaseModel):
     """Clarification request surfaced to the frontend."""
 
@@ -143,6 +229,7 @@ class ClarifyRequestModel(BaseModel):
     proposed: Optional[Any] = Field(None, description="LLM-proposed value")
     proposed_confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     session_id: Optional[str] = Field(default=None, description="Session identifier for routing")
+    allow_custom: bool = Field(True, description="Whether custom values are permitted for this clarification")
 
 
 class ClarifyAnswerModel(BaseModel):

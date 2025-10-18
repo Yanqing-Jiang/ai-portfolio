@@ -1,10 +1,11 @@
 ﻿from __future__ import annotations
 
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 from ..core.intent import IntentModel
 from ..core.state import QueryPlanModel, TimeframeModel
 from ..core.config import CONFIGS
+from ..core.intent_impl.models import SlotStatusModel
 
 _REQUIREMENTS_CACHE: Dict[str, List[str]] = {}
 
@@ -27,6 +28,7 @@ def requirements_satisfied(
     intent: IntentModel,
     plan: Optional[QueryPlanModel],
     required_slots: Optional[Iterable[str]] = None,
+    slot_statuses: Optional[Mapping[str, SlotStatusModel]] = None,
 ) -> Tuple[bool, List[str]]:
     """Check whether the required slots are satisfied for the given intent/plan."""
     required = list(required_slots) if required_slots is not None else get_required_slots(intent.intent_key)
@@ -38,17 +40,33 @@ def requirements_satisfied(
     missing: List[str] = []
 
     for slot_key in required:
-        if _is_slot_filled(slot_key, slots, plan):
+        if _is_slot_filled(slot_key, slots, plan, slot_statuses):
             continue
         missing.append(slot_key)
 
     return len(missing) == 0, missing
 
 
-def _is_slot_filled(slot_key: str, slots: Dict[str, Any], plan: QueryPlanModel) -> bool:
+def _is_slot_filled(
+    slot_key: str,
+    slots: Dict[str, Any],
+    plan: QueryPlanModel,
+    slot_statuses: Optional[Mapping[str, SlotStatusModel]],
+) -> bool:
     """Return True if the slot identified by ``slot_key`` is satisfied."""
+    status_model = _get_slot_status(slot_key, slot_statuses)
+    if status_model is not None:
+        if status_model.status == "missing":
+            return False
+        if status_model.status in {"filled", "defaulted", "assumed"}:
+            if status_model.value not in (None, "", [], {}):
+                return True
+            # Defaulted/assumed slots may omit a concrete value; treat them as satisfied unless explicitly missing.
+            if status_model.status in {"defaulted", "assumed"}:
+                return True
+            # Fall through for filled-but-empty values so legacy heuristics can double-check.
     if slot_key == "company":
-        return _has_company(slots)
+        return _has_company(slots, slot_statuses)
     if slot_key == "comparison":
         comparison = slots.get("comparison") or getattr(plan, "comparison", None)
         return isinstance(comparison, str) and comparison.strip() != ""
@@ -73,17 +91,56 @@ def _is_slot_filled(slot_key: str, slots: Dict[str, Any], plan: QueryPlanModel) 
     return value not in (None, "", [], {})
 
 
-def _has_company(slots: Dict[str, Any]) -> bool:
+def _has_company(slots: Dict[str, Any], slot_statuses: Optional[Mapping[str, SlotStatusModel]]) -> bool:
+    """Return True when we have a single, concrete company selection."""
+    status_model = _get_slot_status("company", slot_statuses)
+    if status_model is not None:
+        if status_model.status == "missing":
+            return False
+        if status_model.status in {"filled", "defaulted", "assumed"}:
+            if status_model.value not in (None, "", [], {}):
+                return True
+            if status_model.status in {"defaulted", "assumed"}:
+                return True
+    return _company_from_slots(slots) is not None
+
+
+def _company_from_slots(slots: Dict[str, Any]) -> Optional[str]:
     company = slots.get("company")
     if isinstance(company, str) and company.strip():
-        return True
-    tickers = slots.get("tickers")
-    if isinstance(tickers, list) and any(isinstance(ticker, str) and ticker.strip() for ticker in tickers):
-        return True
-    candidates = slots.get("company_candidates")
-    if isinstance(candidates, list) and any(isinstance(candidate, str) and candidate.strip() for candidate in candidates):
-        return True
-    return False
+        return company.strip()
+
+    def _clean(symbols: Any) -> List[str]:
+        if not isinstance(symbols, list):
+            return []
+        cleaned: List[str] = []
+        for symbol in symbols:
+            if isinstance(symbol, str):
+                normalized = symbol.strip().upper()
+                if normalized:
+                    cleaned.append(normalized)
+        return cleaned
+
+    tickers = _clean(slots.get("tickers"))
+    if len(tickers) == 1:
+        return tickers[0]
+
+    candidates = _clean(slots.get("company_candidates"))
+    if len(candidates) == 1:
+        return candidates[0]
+
+    return None
+
+
+def _get_slot_status(
+    slot_key: str, slot_statuses: Optional[Mapping[str, SlotStatusModel]]
+) -> Optional[SlotStatusModel]:
+    if not slot_statuses:
+        return None
+    status = slot_statuses.get(slot_key)
+    if status is None and slot_key.startswith("timeframe."):
+        status = slot_statuses.get("timeframe")
+    return status if isinstance(status, SlotStatusModel) else None
 
 
 def _get_timeframe_field(timeframe: Any, field: str) -> Optional[Any]:

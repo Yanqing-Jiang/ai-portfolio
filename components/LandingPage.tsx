@@ -377,7 +377,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ projectData, onSelectProject 
               </div>
               <div className="grid grid-cols-1 gap-8 sm:gap-12">
                 {projects.map((project, projectIndex) => {
-                  const useContainLayout = project.id === 'next-gen-analytics-memory' || project.id === 'next-gen-analytics-sql';
+                  const useContainLayout = project.id === 'next-gen-analytics-agent' || project.id === 'next-gen-analytics-sql';
                   const previewDescription = project.cardDescription ?? project.description;
                   const truncatedDescription =
                     previewDescription.length > 200 ? `${previewDescription.substring(0, 200)}...` : previewDescription;

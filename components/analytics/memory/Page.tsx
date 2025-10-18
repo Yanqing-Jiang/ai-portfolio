@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+﻿import React, { useState, useEffect, useMemo } from 'react';
 import { motion } from 'framer-motion';
 import {
   AnalysisCard,
@@ -79,12 +79,14 @@ const MemoryAnalyticsPage: React.FC = () => {
     progressiveText,
     singleAgentFanout,
     followUpBanner,
+    slotStatuses,
+    slotFollowups,
     snapshotReuse,
     
     // Stream state
     isLoading,
-    error,
     currentStatus,
+    statusTimestamp,
     
     // Process steps
     processSteps,
@@ -128,14 +130,14 @@ Multi-Agent (supervisor + specialists): workload delegation & orchestration
     if (!snapshotReuse) return null;
     if (snapshotReuse.criteriaChanged) {
       return {
-        text: 'Criteria changed — running fresh pipeline',
+        text: 'Criteria changed â€” running fresh pipeline',
         className: 'bg-amber-600/20 text-amber-100 border-amber-500/40',
       };
     }
     if (snapshotReuseChips.length === 0) {
       return null;
     }
-    const detail = snapshotReuseChips.join(' · ');
+    const detail = snapshotReuseChips.join(' Â· ');
     return {
       text: `Reusing cached ${detail}`,
       className: 'bg-emerald-600/15 text-emerald-200 border-emerald-500/30',
@@ -172,11 +174,11 @@ Multi-Agent (supervisor + specialists): workload delegation & orchestration
 
   const processSubtitle =
     revisionMode === 'chart'
-      ? 'Revision fast-path · chart adjustments without SQL rerun'
+      ? 'Revision fast-path Â· chart adjustments without SQL rerun'
       : revisionMode === 'analysis'
-        ? 'Revision fast-path · narrative refinements on cached data'
+        ? 'Revision fast-path Â· narrative refinements on cached data'
         : revisionMode === 'mixed'
-          ? 'Revision fast-path · chart & narrative tweaks on cached data'
+          ? 'Revision fast-path Â· chart & narrative tweaks on cached data'
           : 'Real-time agent reasoning & tool execution';
 
   return (
@@ -313,6 +315,7 @@ Multi-Agent (supervisor + specialists): workload delegation & orchestration
             <ChatHistory 
               messages={chatHistory} 
               isLoading={isLoading} 
+              status={{ text: currentStatus, timestamp: statusTimestamp }}
               onSubmitClarification={submitClarification}
               processSteps={processSteps}
             />
@@ -328,27 +331,6 @@ Multi-Agent (supervisor + specialists): workload delegation & orchestration
 
         {/* Bottom Chat/Input Bar (fixed position on mobile, sticky on desktop) */}
         <div className="fixed md:sticky bottom-0 left-0 right-0 md:left-auto md:right-auto bg-gray-800/95 backdrop-blur-sm border-t border-gray-700 z-30">
-          {/* Status + Error */}
-          {(isLoading || currentStatus !== 'Ready to analyze financial data with intelligent memory...' || error) && (
-            <div className="px-4 sm:px-6 md:px-8 py-2 sm:py-3 border-b border-gray-700">
-              <div className="w-full max-w-5xl mx-auto flex items-center gap-3 sm:gap-4 overflow-hidden">
-                {isLoading && (
-                  <div className="flex items-center gap-2 text-sm text-blue-400">
-                    <div className="w-2 h-2 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
-                    <div className="w-2 h-2 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
-                    <div className="w-2 h-2 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
-                  </div>
-                )}
-                <div className="text-sm text-gray-300 min-w-0 flex-1 truncate">{currentStatus}</div>
-              </div>
-              {error && (
-                <div className="mt-2 bg-red-900/30 border border-red-700/50 rounded-lg p-2">
-                  <div className="text-red-300 text-xs">{error}</div>
-                </div>
-              )}
-            </div>
-          )}
-
           {/* Input Section */}
           <div className="px-4 sm:px-6 md:px-8 py-3 sm:py-4">
             <div className="w-full max-w-5xl mx-auto">
@@ -440,6 +422,8 @@ Multi-Agent (supervisor + specialists): workload delegation & orchestration
         flowMode={selectedFlow}
         singleAgentFanout={singleAgentFanout}
         followUpBanner={followUpBanner}
+        slotStatuses={slotStatuses}
+        slotFollowups={slotFollowups}
         show={showProcessPanel}
         showVisualization={true}
         onClose={() => setShowProcessPanel(false)}

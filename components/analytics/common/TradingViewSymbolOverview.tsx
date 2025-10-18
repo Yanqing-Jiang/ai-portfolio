@@ -69,8 +69,12 @@ export const TradingViewSymbolOverview: React.FC<TradingViewSymbolOverviewProps>
   }, [config.symbols, config.locale, config.height, config.colorTheme, config.chartType, config.showVolume, config.showMA, config.autosize, height, theme]);
 
   return (
-    <div className="tradingview-widget-container rounded-xl border border-gray-700/70 bg-gray-900/50">
-      <div ref={containerRef} className="tradingview-widget-container__widget" style={{ minHeight: height ?? config.height ?? DEFAULT_HEIGHT }} />
+    <div className="tradingview-widget-container w-full rounded-xl border border-gray-700/70 bg-gray-900/50">
+      <div
+        ref={containerRef}
+        className="tradingview-widget-container__widget w-full"
+        style={{ minHeight: height ?? config.height ?? DEFAULT_HEIGHT }}
+      />
       <div className="tradingview-widget-copyright text-[10px] text-gray-500 px-3 py-2">
         <span>
           Quotes powered by{' '}

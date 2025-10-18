@@ -5,6 +5,7 @@ from typing import Any, Dict, Optional, List
 
 from ..core.context import get_configs
 from ..core.state import IntentModel, QueryPlanModel
+from ..core.intent_impl.normalization import normalize_metrics
 from ..semantic.catalog import get_semantic_catalog
 
 CONFIGS = get_configs()
@@ -71,6 +72,15 @@ def plan_sql_rule_based(intent: IntentModel, configs: Optional[Dict[str, Any]] =
     metrics: List[str] = [spec.source for spec in metric_specs if not spec.is_derived]
     if not metrics:
         metrics = intent_spec.metrics or ["Revenue"]
+
+    slot_metrics = slots.get("metrics") if isinstance(slots.get("metrics"), (list, tuple, set)) else None
+    if slot_metrics is None and slots.get("metric"):
+        slot_metrics = [slots.get("metric")]
+    if slot_metrics:
+        normalized_slots = normalize_metrics(slot_metrics, configs or CONFIGS.__dict__)
+        if normalized_slots:
+            metrics = normalized_slots
+
     metrics = list(dict.fromkeys(metrics))
 
     derived_specs = SEMANTIC_CATALOG.list_metric_specs(intent_spec.derived_metrics)

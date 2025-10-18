@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Tuple
 
 from pydantic import BaseModel, Field
 
@@ -11,6 +11,7 @@ from ..core.intent import IntentModel
 from ..core.state import QueryPlanModel
 from ..sql.template_requirements import get_required_slots, requirements_satisfied
 from ..core.config import CONFIGS
+from ..core.intent_impl.models import SlotStatusModel
 
 try:
     from unified_responses_client import get_unified_client  # type: ignore
@@ -67,9 +68,15 @@ def decide_schema_clarification(
     template_id: Optional[str] = None,
     model: str = "gpt-5-mini-2025-08-07",
     reasoning_effort: str = "low",
+    slot_statuses: Optional[Mapping[str, SlotStatusModel]] = None,
 ) -> ClarifierDecision:
     required_slots = get_required_slots(intent.intent_key)
-    satisfied, missing = requirements_satisfied(intent, plan, required_slots)
+    satisfied, missing = requirements_satisfied(
+        intent,
+        plan,
+        required_slots,
+        slot_statuses=slot_statuses,
+    )
     if satisfied:
         return ClarifierDecision(action="skip", missing_slots=[])
 

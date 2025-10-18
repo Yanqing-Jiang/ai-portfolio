@@ -15,7 +15,7 @@ query_patterns:
           SUM(value) AS total_market_revenue
         FROM comp_financials
         WHERE 
-          metric = 'Revenue'
+          metric = '{primary_metric}'
           AND ticker IN ('AMD','AVGO','INTC','MU','NVDA','QCOM','TXN')
           AND {period_filter_clause}
           AND calendar_year >= EXTRACT(YEAR FROM CURRENT_DATE) - {years_back}
@@ -29,7 +29,7 @@ query_patterns:
           SUM(value) AS company_revenue
         FROM comp_financials
         WHERE 
-          metric = 'Revenue'
+          metric = '{primary_metric}'
           AND ticker = '{target_ticker}'
           AND {period_filter_clause}
           AND calendar_year >= EXTRACT(YEAR FROM CURRENT_DATE) - {years_back}

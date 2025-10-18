@@ -1,18 +1,33 @@
-import React, { Suspense } from 'react';
+﻿import React, { Suspense } from 'react';
 import { ChatHistoryProps } from '../types';
 import { ClarificationOptions } from './ClarificationOptions';
-import { AnalysisCard, SqlCard, CollapsibleSection, TradingViewSymbolOverview, WebSearchCard } from '../common';
+import {
+  AnalysisCard,
+  SqlCard,
+  CollapsibleSection,
+  TradingViewSymbolOverview,
+  WebSearchCard,
+} from '../common';
 import { isValidChartSpec } from '../utils';
 
 const ChartCard = React.lazy(() => import('../common/ChartCard').then((m) => ({ default: m.ChartCard })));
 const MAX_WEB_SNIPPETS = 3;
+const USER_AVATAR_LABEL = '👤';
+const BOT_AVATAR_LABEL = '🤖';
 
 const buildWebInsightsSection = (webSearch: ChatHistoryProps['messages'][number]['webSearch']) => {
   if (!webSearch || !webSearch.snippets?.length) return null;
   const lines: string[] = [];
   const summary = webSearch.summary?.trim();
   if (summary) {
-    lines.push(`- ${summary}`);
+    const sanitized = summary
+      .split(/\n+/)
+      .map((line) => line.trim())
+      .filter((line) => line && !/^primary (question|topic)/i.test(line))
+      .join(' ');
+    if (sanitized) {
+      lines.push(`- ${sanitized}`);
+    }
   }
   webSearch.snippets.slice(0, MAX_WEB_SNIPPETS).forEach((snippet) => {
     const raw = (snippet.snippet ?? '').trim();
@@ -31,7 +46,9 @@ const buildWebInsightsSection = (webSearch: ChatHistoryProps['messages'][number]
 
 const buildStockInsightsSection = (results: ChatHistoryProps['messages'][number]['toolFanoutResults']) => {
   if (!results?.length) return null;
-  const stockResult = results.find((entry) => entry?.tool === 'stock_tracker' && entry.payload && (entry.payload as any).ready);
+  const stockResult = results.find(
+    (entry) => entry?.tool === 'stock_tracker' && entry.payload && (entry.payload as any).ready,
+  );
   if (!stockResult?.payload) return null;
   const payload = stockResult.payload as Record<string, any>;
   const symbol = (payload.symbol || payload.tickers?.[0] || '').toString().toUpperCase();
@@ -73,7 +90,21 @@ const buildStockInsightsSection = (results: ChatHistoryProps['messages'][number]
 
 const buildCombinedAnalysis = (message: ChatHistoryProps['messages'][number]) => {
   const sections: string[] = [];
-  const base = message.analysis?.trim();
+  const tldr = message.analysisOverview?.tldr?.trim();
+  let base = message.analysis?.trim();
+
+  if (base && tldr) {
+    const filtered = base
+      .split('\n')
+      .filter((line) => !line.trim().toLowerCase().startsWith('tl;dr'));
+    const cleaned = filtered.join('\n').trim();
+    base = cleaned.length ? cleaned : undefined;
+  }
+
+  if (tldr) {
+    sections.push(`**TL;DR**\n${tldr}`);
+  }
+
   if (base) {
     sections.push('**SQL-Derived Highlights**\n' + base);
   }
@@ -84,48 +115,96 @@ const buildCombinedAnalysis = (message: ChatHistoryProps['messages'][number]) =>
   return sections.join('\n\n');
 };
 
+const formatStatusTimestamp = (value?: string | null) => {
+  const source = value ? new Date(value) : new Date();
+  if (Number.isNaN(source.getTime())) {
+    return undefined;
+  }
+  return source.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+};
+
 export const ChatHistory: React.FC<ChatHistoryProps> = ({
   messages,
+  status,
   isLoading,
   onSubmitClarification,
-  processSteps = [],
+  processSteps: _processSteps = [],
 }) => {
-  if (messages.length === 0) return null;
+  const statusText = status?.text?.trim() ?? '';
+  const statusTimestamp = formatStatusTimestamp(status?.timestamp);
+  const showStatusBubble = Boolean(statusText);
+  const latestAssistantIndex = React.useMemo(() => {
+    let latest = -1;
+    messages.forEach((msg, idx) => {
+      if (msg?.type !== 'user') {
+        latest = idx;
+      }
+    });
+    return latest;
+  }, [messages]);
 
   return (
-    <div className="bg-gray-900 py-4 mb-6">
+    <div className="bg-gray-900 py-4 mb-6 relative">
       <div className="space-y-4">
-        {messages.map((message) => {
-          const combinedAnalysis = buildCombinedAnalysis(message);
-          const showTradingView = Array.isArray(message.stockWidgetConfig?.symbols) && message.stockWidgetConfig?.symbols?.length;
-          const firstSymbol = showTradingView ? message.stockWidgetConfig?.symbols?.[0] : null;
-          const primaryTicker = showTradingView
-            ? Array.isArray(firstSymbol)
-              ? (firstSymbol[1] ?? firstSymbol[0] ?? '').toUpperCase()
-              : String(firstSymbol ?? '').toUpperCase()
-            : null;
+        {messages.map((message, idx) => {
+          const isUser = message.type === 'user';
+          const isResult = message.type === 'result';
+          const combinedAnalysis = isResult ? buildCombinedAnalysis(message) : undefined;
+          const showTradingView =
+            Array.isArray(message.stockWidgetConfig?.symbols) && message.stockWidgetConfig?.symbols?.length;
           const attachmentsAvailable = Boolean(
             (message.chartSpec && isValidChartSpec(message.chartSpec)) ||
-            (showTradingView && message.stockWidgetConfig) ||
-            combinedAnalysis ||
-            message.webSearch ||
-            message.sqlQuery
-          );
-          const bubbleClass = message.type === 'user'
-            ? 'bg-gray-800 text-gray-100 rounded-2xl rounded-br-md px-4 py-3'
-            : message.type === 'result'
-              ? 'bg-gray-800/30 text-gray-100 rounded-2xl rounded-bl-md p-2'
-              : 'bg-gray-800/50 text-gray-100 rounded-2xl rounded-bl-md px-4 py-3';
+              (showTradingView && message.stockWidgetConfig) ||
+              combinedAnalysis ||
+              message.webSearch ||
+              message.sqlQuery,
+            );
+          const contentText =
+            typeof message.content === 'string' && message.content.trim().length > 0 ? message.content : '';
+
+          const bubbleClass = isUser
+            ? 'bg-blue-600/20 border border-blue-500/40 text-blue-50 rounded-2xl rounded-br-md px-4 py-3'
+            : isResult
+              ? 'bg-gray-800/30 text-gray-100 rounded-2xl rounded-bl-md p-3 w-full'
+              : 'bg-gray-800/60 text-gray-100 rounded-2xl rounded-bl-md px-4 py-3';
 
           return (
-            <div key={message.id} className={`flex ${message.type === 'user' ? 'justify-end' : 'justify-start'}`}>
-              <div className={`max-w-[80%] ${message.type === 'user' ? 'order-2' : 'order-1'}`}>
+            <div
+              key={message.id}
+              className={`flex gap-3 ${isUser ? 'justify-end' : 'justify-start'}`}
+            >
+              {!isUser ? (
+                <div className="w-9 h-9 rounded-full bg-gray-700/70 text-gray-100 flex items-center justify-center flex-shrink-0">
+                  <span className="text-lg leading-none">{BOT_AVATAR_LABEL}</span>
+                </div>
+              ) : null}
+
+              <div className={`max-w-[960px] flex flex-col ${isUser ? 'items-end' : 'items-start'}`}>
                 <div className={`transition-all hover:shadow-sm ${bubbleClass}`}>
-                  <div className={message.type === 'result' ? 'px-2 py-1' : ''}>
-                    <div className="text-sm leading-relaxed">{message.content}</div>
+                  {showStatusBubble && idx === latestAssistantIndex ? (
+                    <div className="mb-3 flex flex-wrap items-center gap-3 rounded-xl border border-blue-500/40 bg-blue-500/10 px-3 py-2 text-xs text-blue-100/80">
+                      <span className="text-sm text-blue-100">{statusText}</span>
+                      {isLoading && (
+                        <div className="flex space-x-1" aria-hidden="true">
+                          <div className="w-2 h-2 bg-blue-300 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
+                          <div className="w-2 h-2 bg-blue-300 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
+                          <div className="w-2 h-2 bg-blue-300 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
+                        </div>
+                      )}
+                      {statusTimestamp ? (
+                        <span className="ml-auto text-[11px] uppercase tracking-wide text-blue-200/70">
+                          {statusTimestamp}
+                        </span>
+                      ) : null}
+                    </div>
+                  ) : null}
+                  <div className={isResult ? 'space-y-3' : 'space-y-2'}>
+                    {contentText ? (
+                      <div className="text-sm leading-relaxed whitespace-pre-line">{message.content}</div>
+                    ) : null}
 
                     {message.answers && Object.keys(message.answers).length > 0 && (
-                      <div className="mt-2 space-y-1 text-xs text-gray-400">
+                      <div className="space-y-1 text-xs text-gray-400">
                         {Object.entries(message.answers).map(([key, value]) => (
                           <div key={key}>
                             <span className="font-semibold text-gray-300">{key}: </span>
@@ -136,106 +215,97 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
                     )}
 
                     {message.clarifications && message.clarifications.length > 0 && onSubmitClarification && (
-                      <div className="mt-3">
+                      <div>
                         <ClarificationOptions
                           clarification={message.clarifications[0]}
-                          onSubmit={async (response) => onSubmitClarification(response, message.clarifications![0])}
+                          onSubmit={async (response) =>
+                            onSubmitClarification(response, message.clarifications![0])
+                          }
                         />
                       </div>
                     )}
-                  </div>
 
-                  {attachmentsAvailable && (message.type === 'result' || message.type === 'assistant') && (
-                    <div className="mt-3 space-y-4">
-                      {message.chartSpec && isValidChartSpec(message.chartSpec) && (
-                        <Suspense fallback={<div className="rounded-xl border border-gray-700 bg-gray-800/40 p-6 text-sm text-gray-300">Loading chart...</div>}>
-                          <div className="rounded-xl overflow-hidden border border-gray-700">
-                            <ChartCard
-                              chartSpec={message.chartSpec}
-                              dataSample={message.dataSample}
-                              enableDropdown
-                              enableCsvDownload
+                    {attachmentsAvailable && message.type === 'result' && (
+                      <div className="space-y-4">
+                        {message.chartSpec && isValidChartSpec(message.chartSpec) && (
+                          <Suspense
+                            fallback={
+                              <div className="rounded-xl border border-gray-700 bg-gray-800/40 p-6 text-sm text-gray-300">
+                                Loading chart...
+                              </div>
+                            }
+                          >
+                            <div className="rounded-xl overflow-hidden border border-gray-700 bg-gray-900/40">
+                              <ChartCard
+                                chartSpec={message.chartSpec}
+                                dataSample={message.dataSample}
+                                enableDropdown
+                                enableCsvDownload
+                              />
+                            </div>
+                          </Suspense>
+                        )}
+
+                        {combinedAnalysis && (
+                          <div className="rounded-xl overflow-hidden border border-blue-500/30 bg-blue-500/10">
+                            <AnalysisCard
+                              analysis={combinedAnalysis}
+                              analysisSources={message.analysisSources}
+                              evidenceLinks={message.analysisOverview?.evidence}
                             />
                           </div>
-                        </Suspense>
-                      )}
+                        )}
 
-                      {showTradingView && message.stockWidgetConfig && (
-                        <TradingViewSymbolOverview config={message.stockWidgetConfig} />
-                      )}
+                        {showTradingView && message.stockWidgetConfig && (
+                          <div className="rounded-xl border border-gray-700 bg-gray-900/50 p-3 sm:p-4 overflow-hidden">
+                            <TradingViewSymbolOverview config={message.stockWidgetConfig} height={480} />
+                          </div>
+                        )}
 
-                      {combinedAnalysis && (
-                        <div className="rounded-xl overflow-hidden">
-                          <AnalysisCard analysis={combinedAnalysis} />
+                        {message.webSearch ? (
+                          <CollapsibleSection title="Market Research" defaultOpen={false} className="bg-gray-800/50">
+                            <WebSearchCard
+                              result={message.webSearch}
+                              title="Market Research"
+                              emptyMessage="No market research snippets available."
+                            />
+                          </CollapsibleSection>
+                        ) : null}
+
+                        {message.sqlQuery && (
+                          <CollapsibleSection
+                            title="Generated SQL Query"
+                            defaultOpen={false}
+                            className="bg-gray-800/50"
+                          >
+                            <SqlCard sqlQuery={message.sqlQuery} compact={true} />
+                          </CollapsibleSection>
+                        )}
+
+                        <div className="pt-3 border-t border-dashed border-gray-700 text-xs text-gray-400">
+                          Need another update? Ask to continue generating results or request the latest status.
                         </div>
-                      )}
-
-                      {message.webSearch ? (
-                        <CollapsibleSection
-                          title="Market Research"
-                          defaultOpen={false}
-                          className="bg-gray-800/50"
-                        >
-                          <WebSearchCard
-                            result={message.webSearch}
-                            title="Market Research"
-                            emptyMessage="No market research snippets available."
-                          />
-                        </CollapsibleSection>
-                      ) : null}
-
-                      {message.sqlQuery && (
-                        <CollapsibleSection
-                          title="Generated SQL Query"
-                          defaultOpen={false}
-                          className="bg-gray-800/50"
-                        >
-                          <SqlCard sqlQuery={message.sqlQuery} compact={true} />
-                        </CollapsibleSection>
-                      )}
-                    </div>
-                  )}
+                      </div>
+                    )}
+                  </div>
                 </div>
 
-                <div className={`flex items-center gap-2 mt-1 px-1 ${message.type === 'user' ? 'justify-end' : 'justify-start'}`}>
-                  <span className="text-xs text-gray-500">
-                    {new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                  </span>
+                <div className={`mt-1 text-xs text-gray-500 ${isUser ? 'text-right' : 'text-left'}`}>
+                  {new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                 </div>
               </div>
 
-              <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${message.type === 'user' ? 'bg-gray-700 text-gray-300 order-3 ml-2' : 'bg-gray-700/50 text-gray-400 order-0 mr-2'}`}>
-                {message.type === 'user' ? '👤' : '🤖'}
-              </div>
+              {isUser ? (
+                <div className="w-9 h-9 rounded-full bg-blue-600/70 text-white flex items-center justify-center flex-shrink-0">
+                  <span className="text-lg leading-none">{USER_AVATAR_LABEL}</span>
+                </div>
+              ) : null}
             </div>
           );
         })}
 
-        {isLoading && (
-          <div className="flex justify-start">
-            <div className="max-w-[80%] order-1">
-              <div className="bg-gray-800/50 text-gray-100 rounded-2xl rounded-bl-md px-4 py-3 transition-all">
-                <div className="flex items-center gap-2">
-                  <div className="flex space-x-1">
-                    <div className="w-2 h-2 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
-                    <div className="w-2 h-2 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
-                    <div className="w-2 h-2 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
-                  </div>
-                  <span className="text-sm text-gray-300">Analyzing...</span>
-                </div>
-              </div>
-              <div className="flex items-center gap-2 mt-1 px-1 justify-start">
-                <span className="text-xs text-gray-500">
-                  {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                </span>
-              </div>
-            </div>
-            <div className="w-8 h-8 rounded-full bg-gray-600 text-gray-300 flex items-center justify-center flex-shrink-0 order-0 mr-2">
-              🤖
-            </div>
-          </div>
-        )}
       </div>
     </div>
   );
 };
+

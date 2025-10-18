@@ -257,7 +257,7 @@ const SqlAnalyticsPage: React.FC = () => {
         {/* Bottom Chat/Input Bar (fixed position on mobile, sticky on desktop) */}
         <div className="fixed md:sticky bottom-0 left-0 right-0 md:left-auto md:right-auto bg-gray-800/95 backdrop-blur-sm border-t border-gray-700 z-30">
           {/* Status + Error */}
-          {(isLoading || currentStatus !== 'Ready to analyze financial data...' || error) && (
+          {(isLoading || Boolean(currentStatus) || error) && (
             <div className="px-4 sm:px-6 md:px-8 py-2 sm:py-3 border-b border-gray-700">
               <div className="w-full max-w-5xl mx-auto flex items-center gap-3 sm:gap-4 overflow-hidden">
                 {isLoading && (
