@@ -583,6 +583,30 @@ class StockTrackerAdapter(BaseToolAdapter):
         )
 
 
+class MarketQuestionAdapter(StockTrackerAdapter):
+    """Stock tracker wrapper that tags outputs for specific market questions."""
+
+    def __init__(self, alias: str, label: str) -> None:
+        super().__init__()
+        self.name = alias
+        self.display_name = label
+        self._question_id = alias
+
+    async def execute(self, context: ToolExecutionContext) -> ToolAdapterResult:  # type: ignore[override]
+        result = await super().execute(context)
+        if isinstance(result.metadata, dict):
+            meta = dict(result.metadata)
+        else:
+            meta = {}
+        meta.setdefault("question_id", self._question_id)
+        result.metadata = meta
+        if isinstance(result.payload, dict):
+            payload = dict(result.payload)
+            payload.setdefault("question_id", self._question_id)
+            result.payload = payload
+        return result
+
+
 class NarrativeSynthesizerAdapter(BaseToolAdapter):
     name = "narrative_synthesizer"
     display_name = "Narrative Synthesizer"

@@ -14,19 +14,19 @@ type FlowOption = FlowMode;
 
 const FLOW_META: Record<FlowOption, { chip: string; chipClass: string; helper: string; placeholder: string }> = {
   'planner-executor': {
-    chip: 'Direct Workflow',
+    chip: 'Direct fixed workflow with RAG-backed SQL guidance',
     chipClass: 'bg-emerald-600/20 text-emerald-300 border-emerald-500/30',
     helper: 'Direct fixed workflow with RAG-backed SQL guidance.',
     placeholder: 'Ask about financial data (direct workflow)',
   },
   'single-agent': {
-    chip: 'Single Agent + Tools',
+    chip: 'Claude-Code style single agent with multiple tool calling capability',
     chipClass: 'bg-blue-600/20 text-blue-300 border-blue-500/30',
     helper: 'Claude-Code style single LLM agent with multiple tool calling capability.',
     placeholder: 'Ask about financial data (single-agent tools flow)',
   },
   'multi-agent': {
-    chip: 'Multi-Agent Orchestration',
+    chip: 'Single Supervisor agent collaboration across multiple specialist agents',
     chipClass: 'bg-purple-600/20 text-purple-300 border-purple-500/30',
     helper: 'Supervisor agent collaboration across multiple specialists',
     placeholder: 'Ask about financial data (multi-agent orchestration)',
@@ -70,6 +70,8 @@ const MemoryAnalyticsPage: React.FC = () => {
     chatHistory,
     chartSpec,
     analysis,
+    analysisOverview,
+    analysisSources,
     sqlQuery,
     dataSample,
     streamingText,
@@ -82,6 +84,8 @@ const MemoryAnalyticsPage: React.FC = () => {
     slotStatuses,
     slotFollowups,
     snapshotReuse,
+    specialistCards,
+    latencyGuardrail,
     
     // Stream state
     isLoading,
@@ -103,13 +107,13 @@ const MemoryAnalyticsPage: React.FC = () => {
   // Project data for the analytics memory project
   const projectData = {
     title: 'Next Gen Analytics (Agents)',
-    description: `**Three Agentic Workflows**:
-Direct (fixed path): no flexibility on tools, run through all tools all at once
-Single-Agent (multi-tool use): ability to pick tools, revise single/multiple analytic element
-Multi-Agent (supervisor + specialists): workload delegation & orchestration
+    description: `**Future of Analytics: agent workflow demo**
+Direct Workflow: no flexibility on tools, run through all tools all at once
+Single Agent: ability to pick tools, revise single/multiple analytic element
+Multi-Agent: workload delegation & orchestration, fastest speed
 **Human-in-the-loop**: Compact widget for clarification on peers/metrics/range
-**Explainable thinking process panel**: plan graph + per-step trace.
-**SQL database financials**: AMD, AVGO, INTC, MU, NVDA, QCOM, TXN.
+**Explainable thinking process diagram**: thinking graph + per-step trace.
+**Available financials**: AMD, AVGO, INTC, MU, NVDA, QCOM, TXN.
 **Memory optimization**: RAG optimized, Cached queries, vectorized prompts, stateful nodes`,
     technologies: ['Single Agent Workflow', 'Multi-Agent Workflow', 'Human-in-the-Loop', 'RAG', 'Long-Term Memory'],
     imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/Agent%20demo.gif'
@@ -250,9 +254,9 @@ Multi-Agent (supervisor + specialists): workload delegation & orchestration
                                   space-y-1 sm:space-y-1.5 overflow-y-auto flex-1 md:flex-none">
                     {projectData.description.split('\n').map((line, idx) => {
                       const trimmed = line.trim();
-                      if (!trimmed) {
-                        return null;
-                      }
+                      if (!trimmed) return null;
+
+                      // Bold header/labels pattern (e.g., **Human-in-the-loop**: ...)
                       const boldMatch = trimmed.match(/^\*\*(.+?)\*\*(?::\s*)?(.*)$/);
                       if (boldMatch) {
                         const [, label, rest] = boldMatch;
@@ -265,7 +269,39 @@ Multi-Agent (supervisor + specialists): workload delegation & orchestration
                         );
                       }
 
-                      return <p key={idx} className="leading-relaxed">{trimmed}</p>;
+                      // Flow label highlight + chip effect for three lines
+                      const colonIdx = trimmed.indexOf(':');
+                      const label = colonIdx >= 0 ? trimmed.slice(0, colonIdx).trim() : undefined;
+                      const restText = colonIdx >= 0 ? trimmed.slice(colonIdx + 1).trim() : '';
+                      const FLOW_LABEL_TO_OPTION: Record<string, FlowOption> = {
+                        'Direct Workflow': 'planner-executor',
+                        'Single Agent': 'single-agent',
+                        'Multi-Agent': 'multi-agent',
+                      };
+                      const flowKey = label ? FLOW_LABEL_TO_OPTION[label] : undefined;
+                      if (flowKey) {
+                        const chipClass = FLOW_META[flowKey].chipClass;
+                        return (
+                          <p key={idx} className="leading-relaxed flex items-center gap-2">
+                            <span
+                              role="button"
+                              onClick={() => { if (!isLoading) setSelectedFlow(flowKey); }}
+                              title={`Switch flow to ${FLOW_META[flowKey].chip}`}
+                              className={`px-2 py-0.5 text-[10px] sm:text-xs rounded-full border transition-colors duration-200 ${isLoading ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer hover:opacity-90'} ${chipClass}`}
+                            >
+                              {label}
+                            </span>
+                            {restText && (
+                              <span className="text-gray-400">: {restText}</span>
+                            )}
+                          </p>
+                        );
+                      }
+
+                      // Fallback: plain line
+                      return (
+                        <p key={idx} className="leading-relaxed">{trimmed}</p>
+                      );
                     })}
                   </div>
                   
@@ -319,7 +355,6 @@ Multi-Agent (supervisor + specialists): workload delegation & orchestration
               onSubmitClarification={submitClarification}
               processSteps={processSteps}
             />
-
             {/* Current Analysis Streaming (temporary display) */}
             {streamingText && !analysis && (
               <div className="bg-gray-800/30 rounded-xl border border-gray-700">
@@ -358,8 +393,8 @@ Multi-Agent (supervisor + specialists): workload delegation & orchestration
                   className="px-3 py-2 text-xs sm:text-sm bg-gray-700/80 border border-emerald-500/30 rounded-lg focus:ring-2 focus:ring-emerald-500/40 focus:border-emerald-500/40 text-gray-100 transition-all duration-200"
                 >
                   <option value="planner-executor">Direct Workflow</option>
-                  <option value="single-agent">Single Agent + Tools</option>
-                  <option value="multi-agent">Multi-Agent Orchestration</option>
+                  <option value="single-agent">Single Agent</option>
+                  <option value="multi-agent">Multi-Agent</option>
                 </select>
                 <span
                   className={"px-2 py-1 text-xs rounded-full border transition-colors duration-200 " + FLOW_META[selectedFlow].chipClass}
@@ -367,9 +402,7 @@ Multi-Agent (supervisor + specialists): workload delegation & orchestration
                 >
                   {FLOW_META[selectedFlow].chip}
                 </span>
-                <span className="text-xs text-gray-400 hidden lg:block">
-                  {FLOW_META[selectedFlow].helper}
-                </span>
+                {/* Removed grey helper text to avoid duplicating the colored chip */}
                 {revisionMode !== 'none' && (
                   <span
                     className={`px-2 py-1 text-xs rounded-full border transition-colors duration-200 ${REVISION_META[revisionMode].className}`}

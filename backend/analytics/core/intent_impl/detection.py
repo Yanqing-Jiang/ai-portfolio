@@ -33,6 +33,7 @@ from .normalization import (
     normalize_granularity,
     normalize_timeframe,
     normalize_metrics,
+    timeframe_implies_quarterly,
 )
 from ..companies import resolve_alias_to_ticker
 from ..slot_catalog import get_slot_catalog, IntentSlotDefinition, SlotOption
@@ -364,7 +365,10 @@ def post_process_slots(
         processed_slots.pop("metric", None)
         processed_slots.pop("metrics", None)
 
-    processed_slots["granularity"] = normalize_granularity(query, processed_slots.get("granularity"))
+    granularity_value = normalize_granularity(query, processed_slots.get("granularity"))
+    if timeframe_implies_quarterly(timeframe):
+        granularity_value = "quarterly"
+    processed_slots["granularity"] = granularity_value
     return processed_slots
 
 

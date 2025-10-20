@@ -327,6 +327,8 @@ export interface ChatMessage {
   clarifications?: ClarifyRequest[];
   answers?: Record<string, any>;
   analysis?: string;
+  progressiveAnalysis?: string;
+  progressiveText?: string;
   chartSpec?: any;
   sqlQuery?: string;
   dataSample?: any[];

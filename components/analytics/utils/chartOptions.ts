@@ -570,12 +570,23 @@ export const isValidChartSpec = (spec: any) => {
     const option = resolveChartSpecOption(spec) ?? (looksLikeChartSpec(spec) ? spec : null);
     if (!option || typeof option !== 'object') return false;
     if (option.series && !Array.isArray(option.series)) return false;
-    const hasSeriesData = Array.isArray(option.series)
-      ? option.series.some((series: any) => Array.isArray(series?.data) && series.data.some((value: any) => value !== null && value !== undefined))
+
+    const hydrated = hydrateChartSpec(option);
+    const target = hydrated ?? option;
+
+    const hasSeriesData = Array.isArray(target.series)
+      ? target.series.some(
+          (series: any) =>
+            Array.isArray(series?.data) &&
+            series.data.some((value: any) => value !== null && value !== undefined),
+        )
       : false;
-    const hasDataset = Array.isArray((option as any).dataset) ? (option as any).dataset.length > 0 : false;
-    const hasDatasets = Array.isArray((option as any).datasets) ? (option as any).datasets.length > 0 : false;
-    return hasSeriesData || hasDataset || hasDatasets;
+
+    const hasDataset = Array.isArray((target as any).dataset) ? (target as any).dataset.length > 0 : false;
+    const hasDatasets = Array.isArray((target as any).datasets) ? (target as any).datasets.length > 0 : false;
+    const hasRawData = Array.isArray(option?.meta?.rawData) ? option.meta.rawData.length > 0 : false;
+
+    return hasSeriesData || hasDataset || hasDatasets || hasRawData;
   } catch {
     return false;
   }

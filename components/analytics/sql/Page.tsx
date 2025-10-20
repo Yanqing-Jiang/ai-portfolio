@@ -54,7 +54,7 @@ const SqlAnalyticsPage: React.FC = () => {
 
   // Project data for the SQL analytics project
   const projectData = {
-    title: 'Direct SQL Analytics',
+    title: 'Next Gen Analytics (SQL)',
     description: `**Streamlined workflow**: Query analysis -> SQL generation -> chart creation -> insight delivery.
 **Interactive financial analysis**: AMD, AVGO, INTC, MU, NVDA, QCOM, TXN with optimized performance.
 **Real-time streaming analytics**: Comprehensive charting and data export.

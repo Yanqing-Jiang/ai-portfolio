@@ -6,6 +6,7 @@ from .normalization import (
     normalize_timeframe,
     normalize_granularity,
     get_default_tickers,
+    timeframe_implies_quarterly,
 )
 
 class TimeframeModel(BaseModel):
@@ -288,6 +289,11 @@ def intent_to_sql_criteria(intent: IntentModel, configs: Dict[str, Any]) -> SqlC
     granularity = normalize_granularity('', slots.get('granularity'))
     if granularity not in ('annual', 'quarterly'):
         granularity = 'annual'
+    if timeframe_implies_quarterly(timeframe_model):
+        granularity = 'quarterly'
+        slots['granularity'] = 'quarterly'
+        if isinstance(intent.slots_detected, dict):
+            intent.slots_detected['granularity'] = 'quarterly'
 
     raw_tickers = slots.get('tickers')
     if isinstance(raw_tickers, (list, tuple, set)):
@@ -321,3 +327,4 @@ def intent_to_sql_criteria(intent: IntentModel, configs: Dict[str, Any]) -> SqlC
         metrics=metrics,
         statistic=statistic,
     )
+

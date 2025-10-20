@@ -1,171 +1,130 @@
-# Analytics Architecture (Agentic Refactor) — October 2025
+# Next-Gen Analytics Agent Architecture - October 20, 2025
 
-This document describes how we will evolve the existing analytics service to support autonomous single-agent and supervisor-led multi-agent workflows while reusing the current Python modules under `backend/analytics`. We focus on upgrading the orchestration logic, concurrency model, and telemetry contracts without introducing greenfield frameworks or speculative fallbacks.
+## 1. Project Overview
+- The **next-gen analytics agent** delivers LangGraph-style orchestration on top of FastAPI (`backend/main.py`) using the Python modules under `backend/analytics`.
+- The system supports three operating modes: deterministic planner-executor, single agent with explicit tool telemetry, and supervisor-led multi-agent. Each mode is exposed through SSE endpoints that feed the Vite UI.
+- Product positioning (see `public/ai-projects.json`) highlights a unified UI that switches between direct, single-agent, and supervisor workflows, reuses cached SQL/RAG/chart artifacts, and targets a 60% improvement in clarification latency.
+- This reference captures implementation details current to **October 20, 2025** and replaces the earlier agentic refactor notes.
 
-## 1. Context & Constraints
-- **Reuse before rebuild:** We extend `PlannerExecutorFlow`, `SingleAgentController`, `MultiAgentFlow`, and `AgentExecutionOrchestrator` rather than replacing them outright. Controllers wrap these modules to add policy-driven behavior.
-- **No fallbacks:** Every flow must complete with the agentic path; we will not maintain the legacy sequential pipeline as a runtime fallback.
-- **Legacy cleanup:** As controllers land, we delete obsolete wrappers (the former `SingleAgentToolsFlow`), redundant helper functions in `multi_agent.py` that only echoed planner state, and refactor the `flows/instrumentation.py` stubs so agent controllers own telemetry emission without duplicate decorators.
-- **Shared artifacts:** SQL text, chart specs, stock widgets, and web snippets remain in `SessionStateSnapshot` to support revisions and cross-flow continuity.
+## 2. Guiding Principles & Guardrails
+- **Reuse the planner core.** `flows/planner_executor.PlannerExecutorFlow` stays the source of truth for SQL planning, execution, charting, and analysis so every mode shares identical business logic.
+- **No legacy fallbacks.** Users only interact with agentic flows; sequential legacy pipelines were removed from runtime, though regression tests still compare against their outputs.
+- **Observability first.** Flows annotate events via `flows.schedulers.apply_mode_metadata`, emit structured telemetry through `core.telemetry`, and persist tool receipts for replay or debugging.
+- **Explicit caching.** Hashed `ToolInvocationReceipt` objects, `SessionStateSnapshot` helpers, and lane metadata make reuse versus fresh work auditable.
+- **Incremental rollout.** Flow selection, revision handling, and telemetry toggles live inside Python rather than ad-hoc environment flags to reduce operational drift.
 
-## 2. Existing Components We Keep
-| Component | Reuse Plan |
-|-----------|------------|
-| `planner_executor.PlannerExecutorFlow` | Becomes the “SQL chain” tool: intent → plan → generate → validate → execute → chart. Returns structured receipts for agent decisions. |
-| `pipeline_tools.PlannerToolRegistry` | Houses callable tools. We promote each entry to an idempotent `ToolInvocation` that records hashes and outputs. |
-| `multi_agent.AgentExecutionOrchestrator` | Continues to run DAGs, but accepts dynamic plans emitted by the supervisor agent. |
-| `core.session_state.SessionStateSnapshot` | Stores tool receipts, agent summaries, and artifacts for reuse. |
-| `tool_bundle.collect_tool_bundle` | Extended to tag specialist ownership, concurrency batches, and reasoning snippets. |
+## 3. Flow Entry Points & Selection
+- FastAPI exposes `/api/analytics/stream` and `/api/analytics/memory/stream` (see `backend/main.py`), both of which wrap helpers in `backend/analytics/flows/workflow.py`.
+- `run_flow()` selects a factory from `FLOW_FACTORIES`, instantiates the requested flow, and streams `EventEmitter` payloads; instrumentation can be toggled per request.
+- `analytics_memory_workflow()` adds follow-up routing, chart and analysis revision detection, and primes the flow with persisted session state before streaming results.
 
-## 3. Refactor Themes
-1. **Agent Controllers:** Replace passive wrappers with controllers that request tools, evaluate receipts, and emit telemetry.
-2. **Deterministic Concurrency:** Run SQL, market research (two prompts), and stock chart generation concurrently where dependencies allow, using `asyncio.TaskGroup`.
-3. **Single Analysis Card:** Synthesize SQL, web, and stock insights into one Financial Analysis message per session.
-4. **Agent Reasoning Telemetry:** Stream reasoning and decision traces into an “Agent Thinking” panel for both flows.
-5. **Autonomy with Guardrails:** Agents stop retrying a failing tool after two attempts, mark it as failed, continue the workflow, and surface the failure reason to the UI.
+| Flow name        | Class (module)                                        | `FlowMode`            | Default label      | Typical usage                                                |
+|------------------|-------------------------------------------------------|-----------------------|--------------------|--------------------------------------------------------------|
+| `planner-executor` | `PlannerExecutorFlow` (`flows/planner_executor.py`)   | `FlowMode.DIRECT`     | `planner-executor` | Deterministic, sequential pipeline for reproducible runs.    |
+| `single-agent`   | `SingleAgentController` (`flows/single_agent_tools.py`) | `FlowMode.SINGLE_AGENT` | `single-agent`     | Single-agent UX with tool telemetry and cohesive synthesis.  |
+| `multi-agent`    | `MultiAgentFlow` (`flows/multi_agent.py`)               | `FlowMode.MULTI_AGENT` | `multi-agent`      | Supervisor plus specialists orchestrated by the agent DAG.   |
 
-## 4. Single-Agent Controller
+The `FollowUpClassifier` (`routing/follow_up_classifier.py`) runs ahead of every session to decide whether to reuse SQL, run stock-only updates, or execute the full pipeline; flows receive the `FollowUpRoute` via `set_follow_up_route()`.
 
-### 4.1 Responsibilities
-- Wrap the legacy `SingleAgentToolsFlow` entrypoint with a new `SingleAgentController` that:
-  - Runs the financial qualifier (`classify_query_async`) first.
-  - Builds a decision loop prompt that understands the available tools and their receipts (inspired by Claude code agents’ explicit tool catalogs and success criteria).citeturn1search1
-  - Issues structured tool batches over SSE.
+## 4. Shared Pipeline Stages
+### 4.1 Intent Qualification & Clarification
+- Classification and gating use `core.intent.classify_query_async`, `detect_intent`, and `post_process_slots`, with intermediate state captured on `PlannerPhaseContext`.
+- Slot resolution combines rule-based slot status (`core.intent_impl.models.SlotStatusModel`), LLM intent resolution (`core.intent_impl.detection.resolve_intent_slots_async`), and clarifier prompts.
+- `agents/schema_clarifier.decide_schema_clarification` validates template requirements (`sql.template_requirements`) and decides whether to clarify, assume, or decline missing fields.
+- Clarification loops rely on `core.clarify` helpers (`compute_required_clarifications`, `validate_clarification_answer`, `wait_for_answer_blocking`) with telemetry emitted via `telemetry.intent_resolution`.
 
-### 4.2 Tool Catalogue
-- **SQL Chain (`sql.chain`)** → delegates to `PlannerExecutorFlow`.
-- **Market Research (`market.snapshot`, `market.followup`)** → two prompts generated dynamically from the user query (e.g., “What catalysts impact {ticker}?”, “What risk signals appear in the past quarter?”) so both can run concurrently per session.
-- **Stock Chart (`stock.chart`)** → uses existing chart builder but is registered as a tool returning ECharts specs.
-- **Web Research (`web.search`)** → reuses `perform_response_search` with caching receipts.
+### 4.2 Planning, Templates & SQL Generation
+- `sql.sql_planner.plan_sql_rule_based` builds a provisional plan using the semantic catalog (`semantic/catalog.py`) and normalized metrics.
+- Template lookup (`sql.templates.fetch_templates_for_intent`, `sql.sql_planner.choose_template`) surfaces YAML-backed plans stored in `core.config_store`.
+- `PlannerPhaseContext` tracks candidate templates, criteria, and intent signatures for downstream reuse and revision detection.
+- SQL code is compiled and validated through `sql.compiler.compile_sql_from_plan` and `sql.validator.validate_sql`; failures populate `PipelineArtifacts.sql_generation.attempts` and drive retry prompts.
 
-All tools populate `ToolInvocationReceipt` objects containing input hash, output digest, attempt count, latency, and `reused` flag.
+### 4.3 Execution, Charting & Narrative Synthesis
+- `sql.executor.execute_sql` runs queries against analytics sources, producing sample rows, tickers, and column metadata for artifacts.
+- Charting logic (`core.charting.plan_chart_rule_based`, `core.charting.build_chart_spec`, `core.charting_impl`) translates datasets into ECharts-friendly specs, including legend ordering and metric-specific defaults.
+- Narrative generation leverages `core.analysis.stream_insights_llm` and `summarize` to fuse SQL, chart, market, and web findings into analysis chunks.
+- Validators in `validators/cohesive_result.py` ensure the final cohesive payload contains required sections before emission.
 
-### 4.3 Concurrency Model
-- During each decision loop the controller:
-  1. Launches the SQL chain task group.
-  2. Launches `market.snapshot` and `market.followup` concurrently.
-  3. Launches `stock.chart` once SQL execution emits `sql_ready` (dependency barrier).
-  4. Allows `web.search` to start immediately; it will reuse cached snippets if the hash matches.
-- Progress events (`tool_batch_start`, `tool_result`) include `batch_id`, `concurrency_level`, and the tool names for ProcessPanel.
+### 4.4 Artifacts, Receipts & Snapshotting
+- Artifacts are tracked via `artifacts/models.py` (`PipelineArtifacts`, `SQLGenerationArtifact`, `SQLExecutionArtifact`, `ChartArtifact`, `AnalysisArtifact`, `MarketArtifact`, `WebContextArtifact`).
+- Tool receipts use `ToolInvocationReceipt` (hashes, attempt counts, reused flags) attached to `PlannerPhaseContext` and persisted through `SessionStateSnapshot.record_tool_receipt`.
+- Session state (`core/session_state.py`) records last SQL, chart, analysis, tool cache, and schedule history with Redis (or in-memory) storage and a TTL bounded between 1 and 15 minutes.
+- Revision snapshots (`core/revision_snapshot`) capture query signatures and artifact snapshots for targeted reruns.
 
-### 4.4 Analysis Synthesis
-- Introduce `analysis_builder.compose_financial_card(sql, web, stock)` that requires non-null contributions from all three artifacts before emitting the single Financial Analysis card. This card replaces the prior planner narrative events.
-- The controller emits `analysis_ready` once, with references to artifact IDs and a `source: "single_agent_controller"` tag.
+## 5. Flow Implementations
+### 5.1 Planner-Executor (Deterministic Mode)
+- `PlannerExecutorFlow.events()` wraps the planner pipeline, annotates events with `apply_mode_metadata`, and yields sequential progress: classification -> intent -> SQL -> chart -> analysis.
+- Streaming uses `TimedEventEmitter` for consistent timestamps and latency metrics; key artifact events include `sql_ready`, `chart_ready`, `stock_ready`, `web_ready`, and `analysis_ready`.
+- `run_planner_executor()` exposes a backwards-compatible helper for legacy callers and unit tests.
+- Receipts are updated after each stage, enabling downstream flows to reuse results; when reused, payloads include `{"reused": true, "snapshot_age_seconds": ...}`.
 
-### 4.5 Revision Flow
-- On follow-up queries the controller receives snapshot receipts:
-  - If the agent detects schema-changing deltas, it invalidates the SQL chain receipt and re-runs the full tool.
-  - If the request targets chart updates only, the controller reruns `stock.chart` and `sql.chain.chart_step` (a new partial entrypoint) while reusing SQL execution results.
-  - Market/web tools rerun only when their input hash changes or receipts are stale (>10 minutes).
+### 5.2 Single-Agent Controller
+- `SingleAgentController` composes the planner core with tool metadata from `pipeline_tools.get_planner_tool_registry()` and exposes a manifest consumed by the frontend.
+- Fan-out adapters (`MarketQuestionAdapter`, `StockTrackerAdapter`, `WebRetrieverAdapter`) run inside `ToolTaskGroup` with lane-aware concurrency: the market lane allows three parallel calls (two questions plus the stock tracker), while the web lane is serialized.
+- Tool lifecycle events (`tool_call` start and end) include latency budgets, output artifact hints, and follow-up routing info; telemetry mirrors these updates via `telemetry.tool_iteration`.
+- Analysis completion (`analysis_complete`) triggers `_build_single_agent_cohesive_payload`, which merges planner artifacts, web context, stock widgets, and tool manifests into a single `cohesive_result`.
+- Cached receipts respect `LANE_TOOL_MAP` and `LANE_CONCURRENCY_LIMITS`; cache TTL defaults to 600 seconds to keep market data fresh without thrashing APIs.
 
-### 4.6 Failure Handling
-- Each tool accrues `attempts`. After two failed attempts the agent logs `tool_failed` and continues with available data, mirroring resilience advice from multi-agent production systems.citeturn1search0turn1search3
-- Failed tools contribute warnings inside the Financial Analysis card and appear in the telemetry stream.
+### 5.3 Multi-Agent Supervisor Flow
+- `MultiAgentFlow` orchestrates planner reuse with specialist agents coordinated by `AgentExecutionOrchestrator` (`flows/orchestrator.py`).
+- Agent specifications are registered via `AgentSpec` entries with capability metadata, latency budgets, and evaluation hooks; tasks are declared in `AgentTaskPlan` and `AgentTaskStep`.
+- The supervisor issues DAGs where planner, SQL, chart, market, web, and analyst agents run concurrently as dependencies allow. `ROLE_LANES` and `ROLE_PARALLEL_GROUPS` map events back to canvas lanes for the UI.
+- Cached receipts refresh when stale based on `RECEIPT_TTL_SECONDS` (default 600 seconds); hedged web tooling (`HEDGED_WEB_TOOLS`) lets live and cached web retrieval race safely.
+- Final narratives pass through `CohesiveResultValidator` before emitting a single `cohesive_result`; errors surface as `cohesive_result_error` events with missing field diagnostics.
 
-### 4.7 Telemetry
-- New events: `agent_decision`, `agent_reasoning_fragment`, `tool_batch_start`, `tool_batch_complete`, `tool_failed`.
-- Reasoning fragments stream to the Agent Thinking panel with structured JSON containing `decision`, `rationale`, `evidence`, and `next_actions`.
+## 6. Tool Ecosystem & Data Providers
+- `get_planner_tool_registry()` enumerates planner-accessible tools, aligning metadata with the `TOOL_METADATA_*` maps used by single- and multi-agent flows.
+- `collect_tool_bundle()` aggregates stock widgets, web context, and tool results into reusable bundles stored on artifacts and emitted to the UI.
+- `flows/tooling.py` defines `ToolTaskGroup`, `ToolExecutionContext`, and adapters that call downstream services:
+  - Polygon market data via `services/polygon.PolygonMarketDataClient` and `fetch_daily_snapshot`.
+  - Web context via `services/response_search.perform_response_search`, with guardrails (`ResponseSearchError`, latency buckets, cache hints).
+  - Stock widgets through the internal tracker adapter, ensuring symbols and metadata are normalized.
+- Supervisor-facing tools (`tools/registry.SupervisorTools`) expose function-call schemas for template lookup, metric search, company lookup, and analytics context retrieval so LLM agents stay deterministic.
 
-## 5. Multi-Agent Supervisor Flow
+## 7. Session Memory, Revisions & Follow-Ups
+- `SessionStateRepository` lazily instantiates Redis clients (or logs an in-memory fallback) and enforces TTLs via `_read_ttl_from_env()`. Helper methods record queries, tool results, artifacts history, and schedule events.
+- Revision helpers (`flows/chart_revision.py`, `RevisionContext`) enrich revision requests with prior SQL, dataset previews, and analysis history. Chart and analysis revisions emit events via `PlannerExecutorFlow.emit_chart_patch` and `emit_analysis_revision`.
+- `analytics_memory_workflow()` detects revision intent with `chart_revision.is_chart_revision_query` and `analysis_revision` helpers before running the main flow.
+- `FollowUpClassifier` inspects the latest snapshot to choose `FollowUpRoute.STOCK_ONLY`, `REUSE_SQL`, or `FULL_PIPELINE`, optimizing reruns for follow-up questions.
 
-### 5.1 Supervisor Agent
-- Replace the fixed `_base_plan` with a supervisor LLM that emits a DAG of specialist tasks, following industry best practice of supervisors delegating explicit tools.citeturn1search2turn1search3
-- Supervisor responsibilities:
-  - Confirm `intent_liaison` has satisfied slot requirements.
-  - Generate market follow-up prompts dynamically per query.
-  - Schedule SQL, market, stock, and web specialists concurrently (sequence 1→4, with the three “1” specialists allowed to run in parallel).
-  - Monitor receipts and mark tools as failed after two retries.
-  - Decide which specialists to rerun during revisions, ensuring chart reruns go through the SQL chart path.
+## 8. Event Streaming & Telemetry
+- `core.events.EventEmitter` and `TimedEventEmitter` standardize progress, result, error, and status payloads; data is sanitized through `validators.sanitize_for_json`.
+- `flows.instrumentation.instrument_events` wraps flows to attach timing metrics, SQL attempts, and telemetry counters without modifying the underlying pipeline.
+- `core.telemetry` exposes structured log emitters (`intent_resolution`, `tool_iteration`, `tool_parallelism`, `analysis_chunk`, `agent_handoff`, `policy_decision`), all routed to the `analytics.telemetry` logger.
+- Example payload emitted after a reused SQL replay:
+  ```json
+  {
+    "event": "sql_ready",
+    "data": {
+      "schedule_stage": "sql",
+      "reused": true,
+      "row_count": 128,
+      "snapshot_age_seconds": 42.0,
+      "ts": "2025-10-20T05:12:31.418176"
+    }
+  }
+  ```
+- Concurrency metadata (`batch_id`, `concurrency_level`, lanes) is included where available so the frontend canvases can render parallel stages faithfully.
 
-### 5.2 Specialist Lifecycle
-1. **intent_liaison (LLM)** — clarifies slots; writes to shared context.
-2. **SQL chain** — uses `PlannerExecutorFlow` entrypoints (`intent`, `plan`, `generate`, `validate`, `execute`, `chart`) and returns SQL text, columns, row samples, and chart spec.
-3. **viz_designer (LLM)** — consumes SQL output and builds/patches charts; only fires after SQL chain finishes.
-4. **market_agent (deterministic + optional commentary)** — issues two concurrent prompts, stores TradingView widgets, and marks them with `question_id`.
-5. **web_research_agent (LLM)** — fetches snippets, deduplicates providers.
-6. **insight_reviewer (LLM)** — composes the final consolidated Financial Analysis message pulled from SQL/web/stock artifacts.
+## 9. API Surface & Frontend Contracts
+- The SSE endpoints stream JSON events that the Vite frontend renders inside components such as `components/analytics/common/ProcessPanel` and `components/analytics/WorkflowCanvas`. Lanes are derived from the same mappings (`LANE_TOOL_MAP`, `ROLE_LANES`) used in the flows.
+- Key events expected by the UI include `session_started`, `classification`, `intent_detection`, `clarification_request`, `sql_ready`, `chart_ready`, `stock_ready`, `web_ready`, `analysis_complete`, `cohesive_result`, `final_answer`, and `workflow_complete`.
+- `SessionStateSnapshot.schedule_history` mirrors `FlowSchedule` definitions from `flows/schedulers.py`, enabling ledger visualizations and follow-up heuristics.
+- Revision flows annotate events with `{"reason": "revision_request", "source": "analytics_memory_workflow"}` so the frontend can badge revision responses.
 
-Specialist outputs surface as individual cards before the supervisor summary:
-- Generated SQL card (SQL chain).
-- SQL Chart card (viz_designer).
-- Stock Chart card (market_agent with chart context).
-- Web Research card (web_research_agent).
+## 10. Testing, Quality & Operations
+- Python tests live under `backend/tests/analytics/`. Existing suites cover revision routing (`test_revision_routing.py`) and should be expanded to assert multi-agent DAG orderings, cohesive result validation, and cache reuse logic.
+- Run `pytest backend/tests/analytics` before shipping backend changes; tests rely on mocked services for Polygon and response search.
+- Frontend Vitest coverage (see `docs/analytics-canvas-overview.md`) should validate lane rendering, telemetry overlays, and cohesive card updates.
+- Logging relies on the `analytics.telemetry` logger; configure sinks via standard `logging` config or FastAPI startup hooks.
+- Environment variables: `REDIS_URL` (session state), `WEB_SEARCH_GUARDRAIL_P50_MS`, `WEB_SEARCH_GUARDRAIL_P95_MS`, and tool API keys handled in `.env`. The project expects `npm install` + `npm run dev` for the frontend and `py -m uvicorn main:app --reload --port 8000` for the backend.
 
-### 5.3 Deduplication & Receipts
-- Supervisor tracks `executed_tools` by `(tool_name, input_hash)`. If a duplicate is requested, it emits a `tool_reused` event instead of re-running.
-- `market_agent` and `web_research_agent` share the receipt store with the single-agent flow to avoid duplicate HTTP calls.
-
-### 5.4 Concurrency & Sequencing
-- DAG constraints ensure:
-  - `intent_liaison` runs first.
-  - `sql_chain` starts immediately afterward.
-  - `market_agent` (two tasks), `web_research_agent`, and `stock_chart` (viz + market) launch as soon as SQL emits `sql_ready`.
-  - `insight_reviewer` waits on SQL, market, web, and viz results before composing the cohesive result.
-- The orchestrator logs concurrency batches and latency metrics for each specialist.
-
-### 5.5 Reasoning Telemetry
-- Supervisor emits `agent_turn:start` / `agent_turn:complete` events with reasoning summaries.
-- Reasoning snippets are streamed via `agent_reasoning_fragment` and surfaced in the Agent Thinking panel, aligning with modern observability practices for multi-agent systems.citeturn1search0turn1search2
-
-### 5.6 Cohesive Result
-- Supervisor emits one sanitized `cohesive_result` containing:
-  - Final analysis (with SQL, web, stock citations).
-  - SQL artifact references (text, row count, sample rows).
-  - Stock widget configuration.
-  - Web snippet summary.
-- Financial Analysis card reuses this payload to stay in sync with single-agent mode.
-
-## 6. Legacy Code Removal
-- **Delete the legacy `SingleAgentToolsFlow`** once the controller is fully integrated; update imports in `analytics.flows.workflow` and tests.
-- **Remove redundant artifact queue helpers** in `multi_agent.py` that simply mirror planner state, replacing them with receipt lookups.
-- **Inline instrumentation logic** currently in `flows/instrumentation.py` into the new controllers, then remove the legacy decorators once parity tests pass.
-- **Prune unused docs** replaced by this architecture file (`docs/analytics-*-plan-2025-10-14.md`), keeping history in git but not shipping stale content.
-
-## 7. Testing & Observability
-- **Unit Tests**
-  - `test_single_agent_controller.py`: decision loop, concurrency fan-out, failure thresholds.
-  - `test_multi_agent_supervisor.py`: DAG parsing, dedupe, revision routing, reasoning events.
-  - `test_tool_receipts.py`: hashing, reuse, expiry logic.
-- **Integration Tests**
-  - Existing SQL planner tests updated to expect concurrent event ordering.
-  - Multi-agent goldens extended to verify specialist cards arrive before cohesive result.
-  - Revision routing tests assert targeted reruns and avoided duplicates.
-- **Frontend Tests**
-  - Update ProcessPanel and WorkflowCanvas tests to handle new telemetry.
-  - Ensure Financial Analysis card renders once with combined data.
-- **Monitoring**
-  - Expand `analytics.core.telemetry` to log agent decisions, failed tools, and reasoning fragments.
-
-## 8. Open Questions (Resolved)
-1. **Autonomy & Failure Policy:** Agents stop attempting a tool after two failures, mark it failed, continue processing, and surface the error in both telemetry and the final analysis card. No workflow aborts the session.
-2. **Market Prompts:** The supervisor/controller crafts two market prompts per query using templated question families (catalysts, risk signals) filled with context-specific details, and executes them concurrently to minimize latency.
-3. **Reasoning Visibility:** Reasoning fragments from both the single agent and supervisor stream to the Agent Thinking panel via `agent_reasoning_fragment` events. Each fragment logs tool dependencies and evidence references for post-hoc debugging.
-
-## 9. References
-- Meta AI, “How we built our multi-agent research system,” June 13, 2025.citeturn1search0
-- Anthropic Docs, “Agents and Tool Use — Best Practices,” October 2025.citeturn1search1
-- Inspect.ai, “Inspect multi-agents: analyst, planner, router,” July 2025.citeturn1search3
-- LangGraph, “Working with large tool catalogs in agent supervisors,” August 2025.citeturn1search2
+## 11. Roadmap & Focus Areas
+- **Supervisor parity:** Finalize multi-agent telemetry so planner, market, web, and chart lanes emit consistent `tool_call` metadata and cohesive payloads before expanding agent roles.
+- **Cache diagnostics:** Surface diagnostics for stale receipts (age, hash mismatches) to ease debugging of `RECEIPT_TTL_SECONDS` decisions.
+- **Test coverage:** Backfill pytest suites for multi-agent DAG evaluation and single-agent cohesive payloads, plus Vitest snapshots for revision flows.
+- **Operational hardening:** Instrument Polygon and response search latency guardrails with alerts, and monitor Redis fallback logs to catch misconfigurations early.
 
 ---
 
-## 10. Execution Plan & Progress
-*(Updated October 15, 2025)*
-
-### 10.1 Active Burst (No feature flags)
-1. **Tool Receipts & Planner Refactor** — carve receipts into `PlannerExecutorFlow`, expose granular entrypoints, and ensure SQL + chart pipeline can be orchestrated externally.
-2. **Single Agent Controller** — embed controller logic into `single_agent_tools.py`, retire `SingleAgentToolsFlow`, wire new telemetry, and preserve API compatibility for `analytics.flows.workflow`.
-3. **Multi-Agent Supervisor Upgrade** — replace static `_base_plan` with LLM-driven DAG emission, upgrade specialists, and ensure concurrency requirements (SQL + market prompts + web + stock chart).
-4. **Telemetry & Frontend Contracts** — update `tool_bundle`, event schemas (`agent_decision`, `agent_reasoning_fragment`), and confirm ProcessPanel/WorkflowCanvas fields align with existing `agent_turn`.
-5. **Revision & Snapshot Logic** — persist and reuse tool receipts, enable targeted reruns, and guarantee chart reruns flow through SQL chart path.
-6. **Cleanup & Tests** — delete deprecated docs/code, adjust test suites, and run targeted `pytest backend/tests/analytics` modules.
-
-### 10.2 Progress Log
-- **[Completed – Oct 15]** Tool receipts now persisted via `PlannerExecutorFlow`; SQL, chart, and analysis phases emit structured receipts and reused runs send `sql_ready`/`chart_ready` with reuse metadata.
-- **[Pending]** Single agent controller embedded + telemetry ports.
-- **[Pending]** Multi-agent supervisor DAG + specialist upgrades.
-- **[Pending]** Telemetry / frontend contract updates.
-- **[Pending]** Revision routing w/ agent decisions.
-- **[Pending]** Targeted tests + cleanup.
-
-*(Update this section as milestones complete.)*
+This architecture reference reflects the current state of the `next-gen-analytics-agent` project and should be updated alongside significant planner, tool, or telemetry changes.

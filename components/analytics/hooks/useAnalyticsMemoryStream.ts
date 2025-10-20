@@ -68,6 +68,148 @@ type SnapshotReuseInfo = {
   followUpRoute?: string | null;
 };
 
+const SLOT_LABEL_CACHE = new Map<string, string>();
+
+const formatSlotLabel = (slot: string): string => {
+  if (!slot) {
+    return 'Answer';
+  }
+  const cached = SLOT_LABEL_CACHE.get(slot);
+  if (cached) {
+    return cached;
+  }
+  const label = slot
+    .split(/[_\s]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+  const finalLabel = label || 'Answer';
+  SLOT_LABEL_CACHE.set(slot, finalLabel);
+  return finalLabel;
+};
+
+const formatTimeframeDisplay = (raw: any): string | undefined => {
+  if (raw == null) {
+    return undefined;
+  }
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    return trimmed || undefined;
+  }
+  if (Array.isArray(raw)) {
+    const parts = raw
+      .map((entry) => {
+        if (typeof entry === 'string') {
+          return entry.trim();
+        }
+        if (typeof entry === 'number') {
+          return String(entry);
+        }
+        return formatTimeframeDisplay(entry);
+      })
+      .filter((entry): entry is string => Boolean(entry && entry.length));
+    return parts.length ? parts.join(', ') : undefined;
+  }
+  if (typeof raw === 'object') {
+    const preset =
+      typeof raw.preset === 'string' ? raw.preset.replace(/_/g, ' ').trim() : undefined;
+    if (preset) {
+      return preset;
+    }
+    const label = typeof raw.label === 'string' ? raw.label.trim() : undefined;
+    if (label) {
+      return label;
+    }
+    const value = typeof raw.value === 'string' ? raw.value.trim() : undefined;
+    if (value) {
+      return value;
+    }
+    if (raw.year_to_date === true) {
+      return 'year to date';
+    }
+    const quartersBack = (raw as any).quarters_back;
+    if (typeof quartersBack === 'number' && Number.isFinite(quartersBack)) {
+      const q = Math.max(0, Math.round(quartersBack));
+      if (q > 0) {
+        return `last ${q} quarter${q === 1 ? '' : 's'}`;
+      }
+    }
+    const yearsBack = (raw as any).years_back;
+    if (typeof yearsBack === 'number' && Number.isFinite(yearsBack)) {
+      const y = Math.max(0, Math.round(yearsBack));
+      if (y > 0) {
+        return `last ${y} year${y === 1 ? '' : 's'}`;
+      }
+    }
+    if (
+      typeof (raw as any).start_year === 'number' &&
+      typeof (raw as any).end_year === 'number'
+    ) {
+      return `${(raw as any).start_year} - ${(raw as any).end_year}`;
+    }
+  }
+  return undefined;
+};
+
+const coerceClarificationValue = (value: any): string | undefined => {
+  if (value == null) {
+    return undefined;
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed || undefined;
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    const entries = value
+      .map((entry) => coerceClarificationValue(entry))
+      .filter((entry): entry is string => Boolean(entry && entry.length));
+    return entries.length ? entries.join(', ') : undefined;
+  }
+  if (typeof value === 'object') {
+    const timeframe = formatTimeframeDisplay(value);
+    if (timeframe) {
+      return timeframe;
+    }
+    const label = typeof (value as any).label === 'string' ? (value as any).label.trim() : undefined;
+    if (label) {
+      return label;
+    }
+    const rawValue = typeof (value as any).value === 'string' ? (value as any).value.trim() : undefined;
+    if (rawValue) {
+      return rawValue;
+    }
+    const title = typeof (value as any).title === 'string' ? (value as any).title.trim() : undefined;
+    if (title) {
+      return title;
+    }
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  }
+  return String(value);
+};
+
+const formatClarificationEcho = (slot: string, value: any): string | undefined => {
+  const label = formatSlotLabel(slot);
+  const baseValue =
+    slot === 'timeframe'
+      ? formatTimeframeDisplay(value) ?? coerceClarificationValue(value)
+      : coerceClarificationValue(value);
+  const trimmed = baseValue?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (trimmed.toLowerCase().startsWith(label.toLowerCase())) {
+    return trimmed;
+  }
+  return `${label}: ${trimmed}`;
+};
+
 export const useAnalyticsMemoryStream = (
   flow: 'planner-executor' | 'single-agent' | 'multi-agent' = 'planner-executor',
 ) => {
@@ -87,20 +229,26 @@ export const useAnalyticsMemoryStream = (
   const [singleAgentFanout, setSingleAgentFanout] = useState<SingleAgentFanout | null>(null);
   const [analysisOverview, setAnalysisOverview] = useState<AnalysisOverview | null>(null);
   const [analysisSources, setAnalysisSources] = useState<AnalysisSources | null>(null);
+  const [analysisBundle, setAnalysisBundle] = useState<Record<string, any> | null>(null);
   const [followUpBanner, setFollowUpBanner] = useState<FollowUpBanner | null>(null);
   const [latencyGuardrail, setLatencyGuardrail] = useState<LatencyGuardrail | null>(null);
   const [specialistCards, setSpecialistCards] = useState<SpecialistCard[]>([]);
   const [slotStatuses, setSlotStatuses] = useState<SlotStatusMap>({});
   const [slotFollowups, setSlotFollowups] = useState<ClarifyRequest[]>([]);
   const [snapshotReuse, setSnapshotReuse] = useState<SnapshotReuseInfo | null>(null);
+  const lastClarificationEchoRef = useRef<{ slot: string; content: string } | null>(null);
   const resultSentRef = useRef<boolean>(false);
   const summarySentRef = useRef<boolean>(false);
   const lastSessionIdRef = useRef<string>('');
   const resultMessageIdRef = useRef<string | null>(null);
+  const analysisReadyEmittedRef = useRef<boolean>(false);
+  const finalResultMergedRef = useRef<boolean>(false);
 
-  const buildResultMessageFields = () => ({
+const buildResultMessageFields = () => ({
     flowMode: workflowDataRef.current.flowMode ?? flow,
     analysis: workflowDataRef.current.analysis || workflowDataRef.current.streamingText,
+    progressiveAnalysis: workflowDataRef.current.progressiveAnalysis,
+    progressiveText: workflowDataRef.current.progressiveText,
     chartSpec: workflowDataRef.current.chartSpec,
     sqlQuery: workflowDataRef.current.sqlQuery,
     dataSample: workflowDataRef.current.dataSample,
@@ -110,6 +258,7 @@ export const useAnalyticsMemoryStream = (
     webSearch: workflowDataRef.current.webSearch,
     analysisOverview: workflowDataRef.current.analysisOverview,
     analysisSources: workflowDataRef.current.analysisSources,
+    analysisBundle: workflowDataRef.current.analysisBundle,
     banner: workflowDataRef.current.followUpBanner,
     specialistCards: workflowDataRef.current.specialistCards,
     latencyGuardrail: workflowDataRef.current.latencyGuardrail,
@@ -118,11 +267,12 @@ export const useAnalyticsMemoryStream = (
   const emitResultOnce = useCallback((options?: { content?: string }) => {
     if (resultSentRef.current) return;
     resultSentRef.current = true;
+    finalResultMergedRef.current = false;
     const newMessage = {
       id: Date.now().toString(),
       timestamp: new Date().toISOString(),
       type: 'result' as const,
-      content: options?.content ?? 'Streaming analysis — cards will update below as tools finish.',
+      content: options?.content ?? 'Streaming analysis - cards will update below as tools finish.',
       ...buildResultMessageFields(),
     };
     resultMessageIdRef.current = newMessage.id;
@@ -673,6 +823,7 @@ export const useAnalyticsMemoryStream = (
     dataSample?: any[];
     stockWidget?: StockWidgetConfig | null;
     webSearch?: WebSearchResult | null;
+    analysisBundle?: Record<string, any> | null;
   }>({});
 
   const toolTelemetryRef = useRef<ToolCallTelemetry[]>([]);
@@ -938,9 +1089,11 @@ export const useAnalyticsMemoryStream = (
   const agentLaneStateRef = useRef<Record<string, ProcessStep['status']>>({});
 
   // Workflow data ref for result accumulation
-  const workflowDataRef = useRef<{
+const workflowDataRef = useRef<{
     chartSpec: any;
     analysis: string;
+    progressiveAnalysis: string;
+    progressiveText: string;
     sqlQuery: string;
     dataSample: any[] | null;
     streamingText: string;
@@ -952,6 +1105,8 @@ export const useAnalyticsMemoryStream = (
     webSearch: WebSearchResult | null;
   flowMode: FlowMode;
   analysisOverview: AnalysisOverview | null;
+  analysisSources: AnalysisSources | null;
+  analysisBundle: Record<string, any> | null;
   followUpBanner: FollowUpBanner | null;
   specialistCards: SpecialistCard[];
   latencyGuardrail: LatencyGuardrail | null;
@@ -959,6 +1114,8 @@ export const useAnalyticsMemoryStream = (
 }>({
   chartSpec: null,
   analysis: '',
+  progressiveAnalysis: '',
+  progressiveText: '',
   sqlQuery: '',
   dataSample: null,
     streamingText: '',
@@ -970,6 +1127,8 @@ export const useAnalyticsMemoryStream = (
   webSearch: null,
   flowMode: flow,
   analysisOverview: null,
+  analysisSources: null,
+  analysisBundle: null,
   followUpBanner: null,
   specialistCards: [],
     latencyGuardrail: null,
@@ -1035,11 +1194,13 @@ export const useAnalyticsMemoryStream = (
         setAnalysis(pending.analysis);
         setProgressiveAnalysis(pending.analysis);
         workflowDataRef.current.analysis = pending.analysis;
+        workflowDataRef.current.progressiveAnalysis = pending.analysis ?? '';
       }
       if (pending.streamingText !== undefined) {
         setStreamingText(pending.streamingText);
         setProgressiveText(pending.streamingText);
         workflowDataRef.current.streamingText = pending.streamingText;
+        workflowDataRef.current.progressiveText = pending.streamingText ?? '';
       }
       if (pending.chartSpec !== undefined) {
         setChartSpec(pending.chartSpec);
@@ -1060,6 +1221,10 @@ export const useAnalyticsMemoryStream = (
       if (pending.webSearch !== undefined) {
         setWebSearch(pending.webSearch);
         workflowDataRef.current.webSearch = pending.webSearch;
+      }
+      if (pending.analysisBundle !== undefined) {
+        setAnalysisBundle(pending.analysisBundle ?? null);
+        workflowDataRef.current.analysisBundle = pending.analysisBundle ?? null;
       }
 
       refreshResultMessage();
@@ -1403,7 +1568,7 @@ export const useAnalyticsMemoryStream = (
     },
   ) => {
     const snapshot = workflowDataRef.current;
-    const message: Omit<ChatMessage, 'id' | 'timestamp'> = {
+    const payload: Omit<ChatMessage, 'id' | 'timestamp'> = {
       type: 'result',
       content: options.content,
     };
@@ -1414,9 +1579,9 @@ export const useAnalyticsMemoryStream = (
       fallback: any,
     ) => {
       if (override !== undefined) {
-        (message as any)[field] = override;
+        (payload as any)[field] = override;
       } else if (fallback !== undefined) {
-        (message as any)[field] = fallback;
+        (payload as any)[field] = fallback;
       }
     };
 
@@ -1432,19 +1597,53 @@ export const useAnalyticsMemoryStream = (
     applyField('banner', options.banner, snapshot.followUpBanner);
     applyField('specialistCards', options.specialistCards, snapshot.specialistCards);
 
-    addChatMessage(message);
+    setChatHistory((prev) => {
+      const nextMessage: ChatMessage = {
+        ...payload,
+        id: Date.now().toString(),
+        timestamp: new Date().toISOString(),
+      };
+      const last = prev[prev.length - 1];
+      const shouldMerge =
+        last?.type === 'result' &&
+        typeof last.content === 'string' &&
+        typeof nextMessage.content === 'string' &&
+        last.content.trim() === nextMessage.content.trim();
+
+      if (shouldMerge) {
+        const merged: ChatMessage = {
+          ...last,
+          ...nextMessage,
+          id: last.id,
+        };
+        return [...prev.slice(0, -1), merged];
+      }
+
+      return [...prev, nextMessage];
+    });
   };
 
   const submitClarification = async (value: any, request?: ClarifyRequest) => {
     const req = request || pendingClarification;
     if (!req) return;
+    const normalizedValue = typeof value === 'string' ? value.trim() : value;
+    const echo = formatClarificationEcho(req.slot, normalizedValue);
+    if (echo) {
+      addChatMessage({
+        type: 'user',
+        content: echo,
+      });
+      lastClarificationEchoRef.current = { slot: req.slot, content: echo };
+    } else {
+      lastClarificationEchoRef.current = null;
+    }
     try {
       const activeSessionId = req.session_id || sessionId || lastSessionIdRef.current;
       const answer: ClarifyAnswer = {
         session_id: activeSessionId,
         request_id: req.request_id,
         slot: req.slot,
-        value,
+        value: normalizedValue,
         ts: new Date().toISOString(),
       };
       await apiService.post('/api/analytics/memory/clarify', answer);
@@ -1474,6 +1673,9 @@ export const useAnalyticsMemoryStream = (
     setStreamingText('');
     setProgressiveText('');
     setProgressiveAnalysis('');
+    workflowDataRef.current.streamingText = '';
+    workflowDataRef.current.progressiveText = '';
+    workflowDataRef.current.progressiveAnalysis = '';
     setWebSearch(null);
     setStockWidget(null);
     setAnalysisOverview(null);
@@ -1505,6 +1707,8 @@ export const useAnalyticsMemoryStream = (
     resultSentRef.current = false;
     summarySentRef.current = false;
     resultMessageIdRef.current = null;
+    analysisReadyEmittedRef.current = false;
+    finalResultMergedRef.current = false;
 
     const baseEndpoint = `/api/analytics/memory/stream`;
 
@@ -1763,15 +1967,43 @@ export const useAnalyticsMemoryStream = (
               upsertSlotStatus(eventData.slot, { status: 'filled', value: eventData.answer });
             }
           }
-          addChatMessage({
-            type: 'user',
-            content: `${eventData.answer}`,
-          });
+          const ackSlot = typeof eventData.slot === 'string' ? eventData.slot : 'answer';
+          const pendingEcho = lastClarificationEchoRef.current;
+          const ackEcho = formatClarificationEcho(ackSlot, eventData.answer);
+          const isDuplicate =
+            Boolean(ackEcho) &&
+            Boolean(
+              pendingEcho &&
+                pendingEcho.slot === ackSlot &&
+                pendingEcho.content === ackEcho
+            );
+          if (!isDuplicate) {
+            if (ackEcho) {
+              addChatMessage({
+                type: 'user',
+                content: ackEcho,
+              });
+            } else {
+              const fallback = coerceClarificationValue(eventData.answer);
+              const trimmedFallback = fallback?.trim();
+              if (trimmedFallback) {
+                const label = formatSlotLabel(ackSlot);
+                const display = trimmedFallback.toLowerCase().startsWith(label.toLowerCase())
+                  ? trimmedFallback
+                  : `${label}: ${trimmedFallback}`;
+                addChatMessage({
+                  type: 'user',
+                  content: display,
+                });
+              }
+            }
+          }
+          lastClarificationEchoRef.current = null;
           stepsHook.updateStepStatus('clarification', 'in_progress', ['Processing your answer...'], {
             slot: eventData.slot,
             answer: eventData.answer,
           });
-          streamHook.setCurrentStatus('Processing your clarification answer...');
+          streamHook.setCurrentStatus('Processing your clarification answer');
           break;
         }
           
@@ -1813,6 +2045,23 @@ export const useAnalyticsMemoryStream = (
               },
               stepInfo.elapsed_ms,
               stepInfo.ts
+            );
+            stepsHook.updateStepStatus(
+              'sql_lane',
+              'in_progress',
+              ['SQL lane running'],
+              {
+                attempt,
+                template_used: eventData.template_used,
+                template_fallback: eventData.template_fallback,
+              },
+              stepInfo.elapsed_ms,
+              stepInfo.ts,
+              sequence,
+              parallelGroup,
+              scheduleStage,
+              flowModeValue,
+              { lane: 'sql' }
             );
             if (eventData.fallback_reason) {
               streamHook.setCurrentStatus(`Template fallback applied: ${eventData.fallback_reason.replace(/_/g, ' ')}`);
@@ -1874,6 +2123,23 @@ export const useAnalyticsMemoryStream = (
             columns_count: eventData.columns_count || (eventData.columns ? eventData.columns.length : 0)
           };
           stepsHook.updateStepStatus('sql_execution', 'completed', [], executionData, stepInfo.elapsed_ms);
+          stepsHook.updateStepStatus(
+            'sql_lane',
+            'in_progress',
+            [
+              eventData.row_count != null
+                ? `Rows retrieved: ${eventData.row_count}`
+                : 'SQL execution completed',
+            ],
+            executionData,
+            stepInfo.elapsed_ms,
+            stepInfo.ts,
+            sequence,
+            parallelGroup,
+            scheduleStage,
+            flowModeValue,
+            { lane: 'sql' }
+          );
           break;
           
         case 'data_retrieved':
@@ -1903,6 +2169,19 @@ export const useAnalyticsMemoryStream = (
           updateStep('sql_execution', 'completed', [
             eventData.row_count != null ? `Rows: ${eventData.row_count}` : sqlPreview[0],
           ], eventData, stepInfo.elapsed_ms, stepInfo.ts);
+          stepsHook.updateStepStatus(
+            'sql_lane',
+            'completed',
+            sqlPreview,
+            eventData,
+            stepInfo.elapsed_ms,
+            stepInfo.ts,
+            sequence,
+            parallelGroup,
+            scheduleStage,
+            flowModeValue,
+            { lane: 'sql', reused: Boolean(eventData.reused) }
+          );
           emitResultOnce();
           refreshResultMessage();
           break;
@@ -1946,6 +2225,19 @@ export const useAnalyticsMemoryStream = (
             workflowDataRef.current.stockWidget = widgetPayload;
             refreshResultMessage();
           }
+          stepsHook.updateStepStatus(
+            'market_lane',
+            'completed',
+            ['Market data ready'],
+            eventData,
+            stepInfo.elapsed_ms,
+            stepInfo.ts,
+            sequence,
+            parallelGroup,
+            scheduleStage,
+            flowModeValue,
+            { lane: eventData.lane ?? 'market', reused: Boolean(eventData.reused) }
+          );
           updateStep('tool_execution', 'completed', ['Stock widget ready'], eventData, stepInfo.elapsed_ms, stepInfo.ts);
           emitResultOnce();
           refreshResultMessage();
@@ -1959,6 +2251,19 @@ export const useAnalyticsMemoryStream = (
             workflowDataRef.current.webSearch = webContext;
             refreshResultMessage();
           }
+          stepsHook.updateStepStatus(
+            'web_lane',
+            'completed',
+            ['Web research ready'],
+            eventData,
+            stepInfo.elapsed_ms,
+            stepInfo.ts,
+            sequence,
+            parallelGroup,
+            scheduleStage,
+            flowModeValue,
+            { lane: eventData.lane ?? 'web', reused: Boolean(eventData.reused) }
+          );
           updateStep('web_research_agent', 'completed', ['Web context ready'], eventData, stepInfo.elapsed_ms, stepInfo.ts);
           emitResultOnce();
           refreshResultMessage();
@@ -1966,6 +2271,9 @@ export const useAnalyticsMemoryStream = (
         }
 
         case 'analysis_ready': {
+          const isFirstReady = !analysisReadyEmittedRef.current;
+          analysisReadyEmittedRef.current = true;
+          finalResultMergedRef.current = false;
           if (typeof eventData.analysis === 'string') {
             scheduleProgressiveUpdate({ analysis: eventData.analysis });
           }
@@ -1979,7 +2287,9 @@ export const useAnalyticsMemoryStream = (
             applyAnalysisSourcesUpdate(readySources);
           }
           updateStep('analysis_generation', 'completed', ['Analysis ready'], eventData, stepInfo.elapsed_ms, stepInfo.ts);
-          emitResultOnce();
+          if (isFirstReady) {
+            emitResultOnce();
+          }
           refreshResultMessage();
           break;
         }
@@ -2206,6 +2516,34 @@ export const useAnalyticsMemoryStream = (
               streamHook.setError(errorMessage);
             } else if (hasOps) {
               streamHook.setCurrentStatus('Chart revision applied');
+              // Drop previously rendered attachments so the revision bubble only shows the updated chart.
+              setAnalysis('');
+              workflowDataRef.current.analysis = '';
+              setAnalysisOverview(null);
+              workflowDataRef.current.analysisOverview = null;
+            setAnalysisSources(null);
+            workflowDataRef.current.analysisSources = null;
+            setProgressiveAnalysis('');
+            setProgressiveText('');
+            setStreamingText('');
+            workflowDataRef.current.progressiveAnalysis = '';
+            workflowDataRef.current.progressiveText = '';
+            workflowDataRef.current.streamingText = '';
+              setSqlQuery('');
+              workflowDataRef.current.sqlQuery = null;
+              setDataSample(null);
+              workflowDataRef.current.dataSample = null;
+              setStockWidget(null);
+              workflowDataRef.current.stockWidget = null;
+              setWebSearch(null);
+              workflowDataRef.current.webSearch = null;
+              workflowDataRef.current.toolFanoutManifest = [];
+              workflowDataRef.current.toolFanoutResults = [];
+              setSpecialistCards([]);
+              workflowDataRef.current.specialistCards = [];
+              workflowDataRef.current.latencyGuardrail = null;
+              setFollowUpBanner(null);
+              workflowDataRef.current.followUpBanner = null;
               emitResultOnce();
               const revisionLines = opLines.length ? opLines : ['Applied chart revision'];
               const revisionSummary =
@@ -2213,6 +2551,14 @@ export const useAnalyticsMemoryStream = (
               appendResultSnapshot({
                 content: revisionSummary,
                 chartSpec: patchedChartSpec ?? workflowDataRef.current.chartSpec,
+                analysis: null,
+                analysisOverview: null,
+                sqlQuery: null,
+                dataSample: null,
+                stockWidgetConfig: null,
+                toolFanoutManifest: [],
+                toolFanoutResults: [],
+                webSearch: null,
               });
               markRevisionMode('chart');
             }
@@ -2234,6 +2580,10 @@ export const useAnalyticsMemoryStream = (
             if (revisionApplied && updatedAnalysis) {
               setAnalysis(updatedAnalysis);
               workflowDataRef.current.analysis = updatedAnalysis;
+            }
+            if (revisionApplied) {
+              analysisReadyEmittedRef.current = false;
+              finalResultMergedRef.current = false;
             }
 
             const summaryLine =
@@ -2476,6 +2826,11 @@ export const useAnalyticsMemoryStream = (
               workflowDataRef.current.toolFanoutResults = [];
               toolFanoutRef.current.results = [];
             }
+            if ('analysis_bundle' in bundle) {
+              const normalizedBundle = (bundle as any).analysis_bundle ?? null;
+              scheduleProgressiveUpdate({ analysisBundle: normalizedBundle });
+              workflowDataRef.current.analysisBundle = normalizedBundle;
+            }
             refreshFanoutState();
             if (bundle.web_context) {
               const webContext = normalizeWebContext(bundle.web_context);
@@ -2520,6 +2875,7 @@ export const useAnalyticsMemoryStream = (
               workflowDataRef.current.followUpBanner = banner;
               refreshResultMessage();
             }
+            finalResultMergedRef.current = true;
 
             updateStep(
               'analysis_generation',
@@ -2549,6 +2905,7 @@ export const useAnalyticsMemoryStream = (
               emitResultOnce();
               refreshResultMessage();
             }
+            finalResultMergedRef.current = true;
           }
           break;
 
@@ -2626,14 +2983,6 @@ export const useAnalyticsMemoryStream = (
 
             setStreamingText('');
             setProgressiveText('');
-
-            stepsHook.updateStepStatus(
-              'short_financial_analysis',
-              'completed',
-              ['Short financial analysis complete'],
-              { analysis: finalAnalysis, analysis_length: eventData.analysis_length },
-              stepInfo.elapsed_ms
-            );
 
             stepsHook.updateStepStatus(
               'analysis_generation',
@@ -2768,6 +3117,38 @@ export const useAnalyticsMemoryStream = (
               tool_manifest: manifest,
               concurrency_limit: concurrencyLimit,
             }, stepInfo.elapsed_ms, stepInfo.ts, sequence, parallelGroup);
+
+            const normalizedTools = manifest.map((entry) => String(entry.name || entry.tool || '').toLowerCase());
+            if (normalizedTools.some((tool) => tool.includes('stock') || tool.startsWith('market_question'))) {
+              stepsHook.updateStepStatus(
+                'market_lane',
+                'in_progress',
+                ['Fetching market data...'],
+                { tool_manifest: manifest },
+                stepInfo.elapsed_ms,
+                stepInfo.ts,
+                sequence,
+                parallelGroup,
+                scheduleStage,
+                flowModeValue,
+                { lane: 'market' }
+              );
+            }
+            if (normalizedTools.some((tool) => tool.includes('web_retriever') || tool.includes('web-search'))) {
+              stepsHook.updateStepStatus(
+                'web_lane',
+                'in_progress',
+                ['Collecting online research...'],
+                { tool_manifest: manifest },
+                stepInfo.elapsed_ms,
+                stepInfo.ts,
+                sequence,
+                parallelGroup,
+                scheduleStage,
+                flowModeValue,
+                { lane: 'web' }
+              );
+            }
           }
           break;
 
@@ -2786,6 +3167,50 @@ export const useAnalyticsMemoryStream = (
             };
             toolFanoutRef.current.results = [...toolFanoutRef.current.results, resultSummary].slice(-10);
             workflowDataRef.current.toolFanoutResults = toolFanoutRef.current.results;
+
+            const toolNameLower = String(eventData.tool || '').toLowerCase();
+            if (toolNameLower.includes('stock') || toolNameLower.startsWith('market_question')) {
+              const laneStatus = eventData.status === 'error' ? 'error' : 'in_progress';
+              const thinkingLogs = [
+                eventData.status === 'error'
+                  ? `Market tool error: ${eventData.error || 'Unknown error'}`
+                  : `Market tool ${eventData.status ?? 'running'}`,
+              ];
+              stepsHook.updateStepStatus(
+                'market_lane',
+                laneStatus,
+                thinkingLogs,
+                { result: resultSummary },
+                eventData.elapsed_ms,
+                eventData.completed_at,
+                sequence,
+                parallelGroup,
+                scheduleStage,
+                flowModeValue,
+                { lane: 'market', reused: Boolean(eventData.reused) }
+              );
+            }
+            if (toolNameLower.includes('web_retriever') || toolNameLower.includes('web-search')) {
+              const laneStatus = eventData.status === 'error' ? 'error' : 'in_progress';
+              const thinkingLogs = [
+                eventData.status === 'error'
+                  ? `Web tool error: ${eventData.error || 'Unknown error'}`
+                  : `Web tool ${eventData.status ?? 'running'}`,
+              ];
+              stepsHook.updateStepStatus(
+                'web_lane',
+                laneStatus,
+                thinkingLogs,
+                { result: resultSummary },
+                eventData.elapsed_ms,
+                eventData.completed_at,
+                sequence,
+                parallelGroup,
+                scheduleStage,
+                flowModeValue,
+                { lane: 'web', reused: Boolean(eventData.reused) }
+              );
+            }
 
             const payloadForWidget = (eventData.payload ?? {}) as Record<string, unknown>;
             if (payloadForWidget && 'stock_widget' in payloadForWidget) {
@@ -2929,7 +3354,7 @@ export const useAnalyticsMemoryStream = (
         // ===== NEW ENHANCED EVENTS =====
         case 'classification_started':
           stepsHook.updateStepStatus('classification', 'in_progress', ['Starting query classification...'], { model: eventData.model }, undefined, eventData.ts);
-          streamHook.setCurrentStatus('Classifying query...');
+          streamHook.setCurrentStatus('Classifying query');
           break;
 
         case 'classification_reasoning':
@@ -2960,7 +3385,7 @@ export const useAnalyticsMemoryStream = (
 
         case 'intent_detection_started':
           stepsHook.updateStepStatus('intent_detection', 'in_progress', ['Detecting query intent...'], undefined, undefined, eventData.ts);
-          streamHook.setCurrentStatus('Analyzing query intent...');
+          streamHook.setCurrentStatus('Analyzing query intent');
           break;
 
         case 'intent_detection_complete': {
@@ -2981,7 +3406,7 @@ export const useAnalyticsMemoryStream = (
 
         case 'schema_validation_started':
           stepsHook.updateStepStatus('schema_validation', 'in_progress', ['Validating required fields...'], undefined, undefined, eventData.ts);
-          streamHook.setCurrentStatus('Validating schema...');
+          streamHook.setCurrentStatus('Validating schema');
           break;
 
         case 'schema_validation_complete':
@@ -3022,7 +3447,7 @@ export const useAnalyticsMemoryStream = (
 
         case 'tool_planning_started':
           stepsHook.updateStepStatus('tool_planning', 'in_progress', [eventData.message || 'Planning tool execution...'], { intent_key: eventData.intent_key }, undefined, eventData.ts);
-          streamHook.setCurrentStatus('Agent planning tools...');
+          streamHook.setCurrentStatus('Agent planning tools');
           break;
 
         case 'tool_selection_reasoning':
@@ -3148,16 +3573,19 @@ export const useAnalyticsMemoryStream = (
           }
 
           if (isEarlyExit) {
-            streamHook.setCurrentStatus(finalStatusCopy);
+            streamHook.setCurrentStatus(finalStatusCopy || 'Output ready');
           } else {
-            streamHook.resetState();
+            streamHook.setError('');
+            streamHook.setCurrentStatus('Output ready');
           }
 
           if (isEarlyExit) {
             // Clear any partial workflow artifacts for clarity
-            workflowDataRef.current = {
+workflowDataRef.current = {
               chartSpec: null,
               analysis: '',
+              progressiveAnalysis: '',
+              progressiveText: '',
               sqlQuery: '',
               dataSample: null,
               streamingText: '',
@@ -3170,6 +3598,7 @@ export const useAnalyticsMemoryStream = (
               flowMode: flow,
               analysisOverview: null,
               analysisSources: null,
+              analysisBundle: null,
               followUpBanner: null,
               specialistCards: [],
               latencyGuardrail: null,
@@ -3187,6 +3616,8 @@ export const useAnalyticsMemoryStream = (
             setLatencyGuardrail(null);
             resultMessageIdRef.current = null;
             resultSentRef.current = false;
+            analysisReadyEmittedRef.current = false;
+            finalResultMergedRef.current = false;
           }
           break;
 
@@ -3242,7 +3673,7 @@ export const useAnalyticsMemoryStream = (
           break;
           
         case 'done':
-          streamHook.setCurrentStatus('Analysis completed successfully!');
+          streamHook.setCurrentStatus('Output ready');
           break;
           
         case 'error':
@@ -3293,12 +3724,16 @@ export const useAnalyticsMemoryStream = (
     setStreamingText('');
     setProgressiveAnalysis('');
     setProgressiveText('');
+    workflowDataRef.current.streamingText = '';
+    workflowDataRef.current.progressiveAnalysis = '';
+    workflowDataRef.current.progressiveText = '';
     setWebSearch(null);
     setStockWidget(null);
     setSingleAgentFanout(null);
     setRevisionMode('none');
     setAnalysisOverview(null);
     setAnalysisSources(null);
+    setAnalysisBundle(null);
     setFollowUpBanner(null);
     setSpecialistCards([]);
     setLatencyGuardrail(null);
@@ -3317,6 +3752,8 @@ export const useAnalyticsMemoryStream = (
     resultSentRef.current = false;
     summarySentRef.current = false;
     resultMessageIdRef.current = null;
+    analysisReadyEmittedRef.current = false;
+    finalResultMergedRef.current = false;
     toolFanoutRef.current = { manifest: [], results: [], concurrencyLimit: 0 };
 
     // Reset workflow data ref
@@ -3335,6 +3772,7 @@ export const useAnalyticsMemoryStream = (
       flowMode: flow,
       analysisOverview: null,
       analysisSources: null,
+      analysisBundle: null,
       followUpBanner: null,
       specialistCards: [],
       latencyGuardrail: null,
@@ -3367,6 +3805,7 @@ export const useAnalyticsMemoryStream = (
     stockWidget,
     analysisOverview,
     analysisSources,
+    analysisBundle,
     followUpBanner,
     specialistCards,
     singleAgentFanout,

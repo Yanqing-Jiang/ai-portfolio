@@ -98,6 +98,8 @@ export const AnalysisCard: React.FC<AnalysisCardProps> = ({ analysis, analysisSo
       .filter(Boolean) as Array<{ key: string; title: string; url: string; snippet: string }>;
   }, [evidenceLinks]);
 
+  const displaySourceEntries = useMemo(() => sourceEntries.slice(0, 3), [sourceEntries]);
+
   if (!analysis && sourceEntries.length === 0 && evidenceList.length === 0) {
     return null;
   }
@@ -124,7 +126,7 @@ export const AnalysisCard: React.FC<AnalysisCardProps> = ({ analysis, analysisSo
             Data Inputs
           </div>
           <div className="grid gap-3 sm:grid-cols-2">
-            {sourceEntries.map(({ key, title, reused, lines }) => (
+            {displaySourceEntries.map(({ key, title, reused, lines }) => (
               <div
                 key={key}
                 className="rounded-lg border border-blue-500/40 bg-blue-500/10 p-3 shadow-inner shadow-blue-900/20"
@@ -145,6 +147,11 @@ export const AnalysisCard: React.FC<AnalysisCardProps> = ({ analysis, analysisSo
               </div>
             ))}
           </div>
+          {sourceEntries.length > 3 && (
+            <div className="mt-2 text-[11px] text-blue-200/70">
+              +{sourceEntries.length - 3} more sources persisted in the run log.
+            </div>
+          )}
         </div>
       )}
 

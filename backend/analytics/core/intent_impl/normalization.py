@@ -403,6 +403,73 @@ def get_default_tickers(configs: Dict[str, Any]) -> List[str]:
     )
 
 
+def timeframe_implies_quarterly(timeframe: Any) -> bool:
+    """
+    Determine whether a provided timeframe should force quarterly granularity.
+
+    Args:
+        timeframe: A TimeframeModel, dict, or other mapping-like object.
+
+    Returns:
+        True if quarterly granularity should be enforced, False otherwise.
+    """
+    if timeframe is None:
+        return False
+
+    tf_dict: Dict[str, Any]
+    if hasattr(timeframe, "model_dump"):
+        try:
+            tf_dict = timeframe.model_dump()
+        except Exception:  # pragma: no cover - defensive catch
+            tf_dict = dict(getattr(timeframe, "__dict__", {}))
+    elif isinstance(timeframe, dict):
+        tf_dict = timeframe
+    else:
+        return False
+
+    if not isinstance(tf_dict, dict):
+        return False
+
+    def _string_fields_contain(keyword: str) -> bool:
+        lowered = keyword.lower()
+        for key in ("preset", "label", "value", "display", "raw", "original", "granularity"):
+            value = tf_dict.get(key)
+            if isinstance(value, str) and lowered in value.lower():
+                return True
+        return False
+
+    if _string_fields_contain("quarter"):
+        return True
+
+    if tf_dict.get("year_to_date") is True:
+        return True
+
+    quarters_back = tf_dict.get("quarters_back")
+    if isinstance(quarters_back, (int, float)) and quarters_back > 0:
+        return True
+
+    granularity = tf_dict.get("granularity")
+    if isinstance(granularity, str) and "quarter" in granularity.lower():
+        return True
+
+    years_back = tf_dict.get("years_back")
+    source = str(tf_dict.get("source") or "").lower()
+    if isinstance(years_back, (int, float)):
+        years_int = int(years_back)
+        if years_int == 2:
+            if source in {"query", "clarification"} or not source:
+                return True
+            if (
+                _string_fields_contain("2 year")
+                or _string_fields_contain("two year")
+                or _string_fields_contain("2_year")
+                or _string_fields_contain("last_2_year")
+            ):
+                return True
+
+    return False
+
+
 def normalize_granularity(query: str, current_granularity: Optional[str] = None) -> str:
     """
     Normalize granularity from query or use provided value.
@@ -414,10 +481,15 @@ def normalize_granularity(query: str, current_granularity: Optional[str] = None)
     Returns:
         Normalized granularity ("annual" or "quarterly")
     """
+    query_lower = (query or "").lower()
+
     if current_granularity and current_granularity in ["annual", "quarterly"]:
+        if current_granularity == "annual":
+            if any(k in query_lower for k in ["quarter", "qoq", "q1", "q2", "q3", "q4"]):
+                return "quarterly"
         return current_granularity
 
-    if any(k in (query or "").lower() for k in ["quarter", "qoq", "q1", "q2", "q3", "q4"]):
+    if any(k in query_lower for k in ["quarter", "qoq", "q1", "q2", "q3", "q4"]):
         return "quarterly"
     else:
         return "annual"

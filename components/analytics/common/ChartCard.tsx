@@ -46,9 +46,12 @@ export const ChartCard: React.FC<ChartCardProps> = ({
     }
 
     const included = Array.isArray(spec?.meta?.includedColumns) ? spec.meta.includedColumns : [];
+    const displayNames = (spec?.meta?.displayNames ?? {}) as Record<string, string>;
     return included.map((column: string) => ({
       value: column,
-      label: formatColumnLabel(column),
+      label: typeof displayNames[column] === 'string' && displayNames[column].trim().length
+        ? displayNames[column]
+        : formatColumnLabel(column),
     }));
   }, [enableDropdown, intentKey, spec]);
 
@@ -60,9 +63,16 @@ export const ChartCard: React.FC<ChartCardProps> = ({
       return 'YoY Growth';
     }
     const defaults = Array.isArray(spec?.meta?.defaultColumns) ? spec.meta.defaultColumns : [];
+    const displayNames = (spec?.meta?.displayNames ?? {}) as Record<string, string>;
+    const resolveLabel = (column: string) => {
+      const candidate = displayNames[column];
+      return typeof candidate === 'string' && candidate.trim().length
+        ? candidate
+        : formatColumnLabel(column);
+    };
     if (defaults.length) {
       const preferred = dropdownOptions.find(
-        (option) => option.value === defaults[0] || option.label === formatColumnLabel(defaults[0]),
+        (option) => option.value === defaults[0] || option.label === resolveLabel(defaults[0]),
       );
       if (preferred) {
         return preferred.label;

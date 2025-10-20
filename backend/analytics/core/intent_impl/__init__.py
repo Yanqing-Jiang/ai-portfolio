@@ -33,6 +33,7 @@ from .normalization import (
     normalize_timeframe,
     get_default_tickers,
     normalize_granularity,
+    timeframe_implies_quarterly,
 )
 
 __all__ = [
@@ -59,4 +60,5 @@ __all__ = [
     'normalize_timeframe',
     'get_default_tickers',
     'normalize_granularity',
+    'timeframe_implies_quarterly',
 ]
