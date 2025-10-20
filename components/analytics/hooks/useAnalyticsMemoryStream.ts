@@ -259,6 +259,7 @@ export const useAnalyticsMemoryStream = (
   const resultMessageIdRef = useRef<string | null>(null);
   const analysisReadyEmittedRef = useRef<boolean>(false);
   const finalResultMergedRef = useRef<boolean>(false);
+  const hasExplicitResultContentRef = useRef<boolean>(false);
 
 const buildResultMessageFields = () => ({
     flowMode: workflowDataRef.current.flowMode ?? flow,
@@ -284,14 +285,20 @@ const buildResultMessageFields = () => ({
     if (resultSentRef.current) return;
     resultSentRef.current = true;
     finalResultMergedRef.current = false;
+    const hasCustomContent = typeof options?.content === 'string';
+    const content = hasCustomContent
+      ? (options?.content as string)
+      : 'Streaming analysis - cards will update below as tools finish.';
     const newMessage = {
       id: Date.now().toString(),
       timestamp: new Date().toISOString(),
       type: 'result' as const,
-      content: options?.content ?? 'Streaming analysis - cards will update below as tools finish.',
+      content,
       ...buildResultMessageFields(),
     };
     resultMessageIdRef.current = newMessage.id;
+    hasExplicitResultContentRef.current =
+      hasCustomContent && content.trim().length > 0;
     setChatHistory((prev) => [...prev, newMessage]);
   }, [setChatHistory, flow]);
 
@@ -300,6 +307,14 @@ const buildResultMessageFields = () => ({
     if (!messageId) return;
     const baseFields = buildResultMessageFields();
     const payload = { ...baseFields, ...overrides };
+    if (overrides && Object.prototype.hasOwnProperty.call(overrides, 'content')) {
+      const overrideContent = (overrides as { content?: unknown }).content;
+      if (typeof overrideContent === 'string') {
+        hasExplicitResultContentRef.current = overrideContent.trim().length > 0;
+      } else if (overrideContent == null) {
+        hasExplicitResultContentRef.current = false;
+      }
+    }
     setChatHistory((prev) =>
       prev.map((message) => (message.id === messageId ? { ...message, ...payload } : message)),
     );
@@ -3621,14 +3636,21 @@ const workflowDataRef = useRef<{
 
           if (!isThinkingEvent) {
             emitResultOnce();
-            refreshResultMessage({ content: isEarlyExit ? finalStatusCopy : '' });
+            if (isEarlyExit) {
+              if (!hasExplicitResultContentRef.current) {
+                refreshResultMessage({ content: finalStatusCopy || '' });
+              }
+            } else if (!hasExplicitResultContentRef.current) {
+              refreshResultMessage({ content: '' });
+            }
           }
 
           if (isEarlyExit) {
-            streamHook.setCurrentStatus(finalStatusCopy || 'Output ready');
+            const shouldShowStatus = !hasExplicitResultContentRef.current;
+            streamHook.setCurrentStatus(shouldShowStatus ? finalStatusCopy || 'Output ready' : '');
           } else {
             streamHook.setError('');
-            streamHook.setCurrentStatus('Output ready');
+            streamHook.setCurrentStatus(hasExplicitResultContentRef.current ? '' : 'Output ready');
           }
 
           if (isEarlyExit) {

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import React from 'react';
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, act, screen, renderHook } from '@testing-library/react';
 import { useAnalyticsMemoryStream } from './useAnalyticsMemoryStream';
 import { apiService } from '../../../services/apiService';
@@ -13,6 +13,11 @@ vi.mock('../../../services/apiService', () => ({
   },
 }));
 
+const setCurrentStatusMock = vi.fn();
+const setErrorMock = vi.fn();
+const stopStreamMock = vi.fn();
+const resetStateMock = vi.fn();
+
 // Mock useAnalyticsStream to synchronously emit provided test events
 vi.mock('./useAnalyticsStream', () => {
   return {
@@ -20,8 +25,9 @@ vi.mock('./useAnalyticsStream', () => {
       isLoading: false,
       error: '',
       currentStatus: '',
-      setCurrentStatus: vi.fn(),
-      setError: vi.fn(),
+      statusTimestamp: null,
+      setCurrentStatus: setCurrentStatusMock,
+      setError: setErrorMock,
       startStream: async (_endpoint: string, onEvent: (data: any) => void) => {
         const events = (globalThis as any).__TEST_EVENTS__ as any[] | undefined;
         if (Array.isArray(events)) {
@@ -30,10 +36,18 @@ vi.mock('./useAnalyticsStream', () => {
           }
         }
       },
-      stopStream: vi.fn(),
-      resetState: vi.fn(),
+      stopStream: stopStreamMock,
+      resetState: resetStateMock,
     }),
   };
+});
+
+beforeEach(() => {
+  setCurrentStatusMock.mockReset();
+  setErrorMock.mockReset();
+  stopStreamMock.mockReset();
+  resetStateMock.mockReset();
+  (globalThis as any).__TEST_EVENTS__ = undefined;
 });
 
 function HookHarness({ query, flow }: { query: string; flow: 'planner-executor' | 'single-agent' | 'multi-agent' }) {
@@ -53,6 +67,7 @@ function HookHarness({ query, flow }: { query: string; flow: 'planner-executor' 
       <div data-testid="result-count">{chatHistory.filter((m) => m.type === 'result').length}</div>
       <div data-testid="message-count">{chatHistory.length}</div>
       <div data-testid="revision-mode">{revisionMode}</div>
+      <div data-testid="first-result-content">{firstResult?.content ?? ''}</div>
       <ul data-testid="step-ids">
         {processSteps.map((step) => (
           <li key={step.id}>{`${step.id}:${step.status}`}</li>
@@ -313,6 +328,39 @@ describe('useAnalyticsMemoryStream result deduping', () => {
     const resultCount = Number(screen.getByTestId('result-count').textContent);
     expect(resultCount).toBe(2);
     expect(screen.getByTestId('revision-mode').textContent).toBe('chart');
+  });
+});
+
+describe('useAnalyticsMemoryStream guardrail finalization', () => {
+  it('keeps decline copy visible and clears Output ready status', async () => {
+    const declineCopy = 'I can\'t help with casual chat, but happy to dig into financial questions.';
+    (globalThis as any).__TEST_EVENTS__ = [
+      {
+        event: 'finalization',
+        banner: {
+          title: 'Final Answer Ready',
+          message: declineCopy,
+          route: 'full_pipeline',
+        },
+        details: {
+          banner: {
+            message: declineCopy,
+            route: 'full_pipeline',
+          },
+        },
+      },
+      { event: 'workflow_complete' },
+    ];
+
+    await act(async () => {
+      render(<HookHarness query="how are you" flow="single-agent" />);
+    });
+
+    const content = screen.getByTestId('first-result-content').textContent || '';
+    expect(content).toBe(declineCopy);
+    expect(setCurrentStatusMock).toHaveBeenCalled();
+    const lastCall = setCurrentStatusMock.mock.calls.at(-1);
+    expect(lastCall?.[0]).toBe('');
   });
 });
 
