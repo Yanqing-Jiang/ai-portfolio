@@ -2,12 +2,26 @@ from __future__ import annotations
 
 import logging
 import asyncio
+import contextlib
 import copy
 import os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Sequence, Set, Tuple, TYPE_CHECKING, AsyncGenerator
+from typing import (
+    Any,
+    Awaitable,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+    TYPE_CHECKING,
+    AsyncGenerator,
+)
+import inspect
 
 from analytics.core import telemetry
 from analytics.core.events import EventEmitter
@@ -89,11 +103,29 @@ class ToolTaskGroup:
         self._adapters: Sequence[BaseToolAdapter] = adapters
         self._semaphore = asyncio.Semaphore(max(1, concurrency_limit))
 
-    async def run(self, context: ToolExecutionContext) -> List[ToolAdapterResult]:
+    async def run(
+        self,
+        context: ToolExecutionContext,
+        *,
+        on_result: Optional[Callable[[ToolAdapterResult], Optional[Awaitable[None]]]] = None,
+    ) -> List[ToolAdapterResult]:
         results: Dict[int, ToolAdapterResult] = {}
 
         def _record(index: int, result: ToolAdapterResult) -> None:
             results.setdefault(index, result)
+
+        async def _dispatch_result(index: int, result: ToolAdapterResult) -> None:
+            if on_result is None:
+                return
+            try:
+                maybe = on_result(result)
+                if inspect.isawaitable(maybe):
+                    await maybe
+            except Exception:
+                logger.exception(
+                    "tool_parallelism.result_callback_failed",
+                    extra={"adapter_index": index, "adapter": getattr(result, "name", None)},
+                )
 
         async def _runner(index: int, adapter: BaseToolAdapter) -> None:
             adapter_meta = adapter.get_metadata()
@@ -115,6 +147,7 @@ class ToolTaskGroup:
                         elapsed_ms=int((cancelled_at - started).total_seconds() * 1000),
                         fatal=False,
                     )
+                    await _dispatch_result(index, cancel_result)
                     _record(index, cancel_result)
                     raise
                 except Exception as exc:  # pragma: no cover - defensive fan-out guard
@@ -143,6 +176,7 @@ class ToolTaskGroup:
                     result.completed_at = completed.isoformat()
                 if result.elapsed_ms is None:
                     result.elapsed_ms = int((completed - started).total_seconds() * 1000)
+                await _dispatch_result(index, result)
                 _record(index, result)
                 if result.status == "error" and result.fatal:
                     raise _FatalAdapterException(result)
@@ -163,19 +197,21 @@ class ToolTaskGroup:
 
         # Ensure adapters that never started (e.g., cancelled before acquiring semaphore) appear as cancelled
         if len(ordered) < len(self._adapters):
+            synthetic_results: List[ToolAdapterResult] = []
             for idx, adapter in enumerate(self._adapters):
                 if idx not in results:
-                    ordered.append(
-                        ToolAdapterResult(
-                            name=getattr(adapter, "name", f"adapter_{idx}"),
-                            status="cancelled",
-                            payload={},
-                            metadata=adapter.get_metadata(),
-                            error="cancelled before start",
-                            fatal=False,
-                        )
+                    synthetic = ToolAdapterResult(
+                        name=getattr(adapter, "name", f"adapter_{idx}"),
+                        status="cancelled",
+                        payload={},
+                        metadata=adapter.get_metadata(),
+                        error="cancelled before start",
+                        fatal=False,
                     )
-            ordered.sort(key=lambda res: self._adapters.index(next(a for a in self._adapters if getattr(a, "name", "") == res.name)))
+                    synthetic_results.append(synthetic)
+                    _record(idx, synthetic)
+                    await _dispatch_result(idx, synthetic)
+            ordered = [results[idx] for idx in sorted(results.keys())]
 
         if fatal_detected:
             # flag results so downstream callers can surface cancellation reason
@@ -741,16 +777,23 @@ async def run_tool_parallelism(
     }
 
     task_group = ToolTaskGroup(selected_adapters, concurrency_limit=concurrency_limit)
-    results = await task_group.run(execution_context)
+    result_queue: asyncio.Queue[Dict[str, Any]] = asyncio.Queue()
+    total_expected = len(selected_adapters)
+    fatal_detected = False
 
-    fatal_detected = any(result.status == "error" and result.fatal for result in results)
-
-    for result in results:
+    async def _handle_result(result: ToolAdapterResult) -> None:
+        nonlocal fatal_detected
+        payload_for_context = (
+            copy.deepcopy(result.payload) if result.payload is not None else {}
+        )
+        metadata_for_context = (
+            copy.deepcopy(result.metadata) if result.metadata is not None else {}
+        )
         serialized = {
             "tool": result.name,
             "status": result.status,
-            "payload": copy.deepcopy(result.payload),
-            "metadata": copy.deepcopy(result.metadata),
+            "payload": payload_for_context,
+            "metadata": metadata_for_context,
             "error": result.error,
             "elapsed_ms": result.elapsed_ms,
             "started_at": result.started_at,
@@ -766,24 +809,47 @@ async def run_tool_parallelism(
             flow=getattr(ctx, "flow_label", None),
             payload={**serialized, "concurrency_limit": concurrency_limit},
         )
-        yield {
-            "event": "tool_parallel_result",
-            "data": {
-                "tool": result.name,
-                "status": result.status,
-                "payload": result.payload,
-                "metadata": result.metadata,
-                "error": result.error,
-                "elapsed_ms": result.elapsed_ms,
-                "started_at": result.started_at,
-                "completed_at": result.completed_at,
-                "fatal": result.fatal,
-                "parallel_group": "tool_fanout",
-                "tool_group": "single_agent",
-                "concurrency_limit": concurrency_limit,
-                "ts": datetime.utcnow().isoformat(),
-            },
+        if result.status == "error" and result.fatal:
+            fatal_detected = True
+        event_payload = {
+            "tool": result.name,
+            "status": result.status,
+            "payload": copy.deepcopy(serialized["payload"]),
+            "metadata": copy.deepcopy(serialized["metadata"]),
+            "error": result.error,
+            "elapsed_ms": result.elapsed_ms,
+            "started_at": result.started_at,
+            "completed_at": result.completed_at,
+            "fatal": result.fatal,
+            "parallel_group": "tool_fanout",
+            "tool_group": "single_agent",
+            "concurrency_limit": concurrency_limit,
+            "ts": datetime.utcnow().isoformat(),
         }
+        await result_queue.put({"event": "tool_parallel_result", "data": event_payload})
+
+    task = asyncio.create_task(task_group.run(execution_context, on_result=_handle_result))
+    results: List[ToolAdapterResult] = []
+
+    try:
+        emitted = 0
+        while emitted < total_expected:
+            event = await result_queue.get()
+            emitted += 1
+            yield event
+
+        # Drain any remaining events that might have arrived while awaiting completion.
+        while not result_queue.empty():
+            yield result_queue.get_nowait()
+
+        results = await task
+    finally:
+        if not task.done():
+            task.cancel()
+            with contextlib.suppress(Exception):
+                await task
+    if not fatal_detected:
+        fatal_detected = any(result.status == "error" and result.fatal for result in results)
 
     completion_status = "cancelled" if fatal_detected else "complete"
     telemetry.tool_parallelism(

@@ -18,6 +18,7 @@ import pytest
 
 
 from analytics.flows import planner_executor
+from analytics.flows.tooling import BaseToolAdapter, ToolAdapterResult
 from analytics.sql import prompt_builder
 from analytics.sql.compiler import compile_sql_from_plan
 from analytics.sql.sql_planner import plan_sql_rule_based, choose_template
@@ -463,6 +464,65 @@ def test_concurrent_lanes_emit_before_sql(monkeypatch):
     assert "sql_ready" in lane_events
     assert lane_events.index("stock_ready") < lane_events.index("sql_ready")
     assert lane_events.index("web_ready") < lane_events.index("sql_ready")
+
+
+@pytest.mark.asyncio
+async def test_tool_parallelism_streams_results_immediately():
+    class FastAdapter(BaseToolAdapter):
+        name = "market_question_a"
+        display_name = "Market Question A"
+
+        async def execute(self, context):
+            await asyncio.sleep(0.05)
+            return ToolAdapterResult(
+                name=self.name,
+                status="completed",
+                payload={"question_id": "fast", "summary": "fast lane ready"},
+                metadata={"alias": self.name},
+                fatal=False,
+            )
+
+    class SlowAdapter(BaseToolAdapter):
+        name = "web_retriever"
+        display_name = "Web Retriever"
+
+        async def execute(self, context):
+            await asyncio.sleep(0.12)
+            return ToolAdapterResult(
+                name=self.name,
+                status="completed",
+                payload={"ready": True, "summary": "slow lane ready"},
+                metadata={"alias": self.name},
+                fatal=False,
+            )
+
+    ctx = planner_executor.PlannerPhaseContext(
+        query="stream accessories early",
+        session_id="stream-session",
+        workflow_start=time.time(),
+        timed_emitter=planner_executor.TimedEventEmitter(session_id="stream-session", flow="test"),
+        flow_mode=planner_executor.FlowMode.SINGLE_AGENT,
+        parallelism_enabled=True,
+    )
+    ctx.intent = SimpleNamespace(intent_key="market")
+    ctx.plan = SimpleNamespace(name="plan")
+
+    events: list[tuple[str, float]] = []
+    start = time.perf_counter()
+    async for event in planner_executor.run_tool_parallelism(
+        ctx,
+        adapters=(FastAdapter(), SlowAdapter()),
+        concurrency_override=2,
+    ):
+        if event.get("event") == "tool_parallel_result":
+            tool = event["data"]["tool"]
+            events.append((tool, time.perf_counter() - start))
+
+    assert [entry[0] for entry in events] == ["market_question_a", "web_retriever"]
+    # Ensure the fast adapter's result surfaced meaningfully earlier than the slow adapter.
+    assert events[1][1] - events[0][1] >= 0.04
+    assert len(ctx.tool_parallel_results) == 2
+    assert ctx.tool_parallel_results[0]["tool"] == "market_question_a"
 def test_planner_fanout_manifest_contains_accessory_lanes(monkeypatch):
     captured = {}
 
