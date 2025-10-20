@@ -57,8 +57,18 @@ def compile_sql_from_plan(
 
     granularity = plan.granularity if isinstance(plan, QueryPlanModel) else plan_dict.get('granularity', 'annual')
 
-    if template and template.get('sql_template'):
-        sql_template = template['sql_template']
+    template_choice: Optional[str] = None
+    if template:
+        if granularity == 'annual' and template.get('sql_template_annual'):
+            template_choice = template.get('sql_template_annual')
+        elif granularity == 'quarterly' and template.get('sql_template_quarterly'):
+            template_choice = template.get('sql_template_quarterly')
+        elif template.get('sql_template'):
+            template_choice = template.get('sql_template')
+        elif isinstance(template.get('sql_template_map'), dict):
+            template_choice = template['sql_template_map'].get(granularity) or template['sql_template_map'].get('default')
+    if template_choice:
+        sql_template = template_choice or ""
         requires_company = '{target_ticker}' in sql_template
         if requires_company and not target_ticker:
             raise ValueError(format_company_error(intent.slots_detected.get('company'), cfg))

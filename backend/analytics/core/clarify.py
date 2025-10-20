@@ -404,6 +404,7 @@ async def merge_answers(
                 plan.timeframe.preset = normalized_tf.get('preset')
                 plan.timeframe.year_to_date = normalized_tf.get('year_to_date')
                 plan.timeframe.source = normalized_tf.get('source')
+                plan.timeframe.granularity = normalized_tf.get('granularity')
 
                 if timeframe_implies_quarterly(normalized_tf):
                     plan.granularity = 'quarterly'

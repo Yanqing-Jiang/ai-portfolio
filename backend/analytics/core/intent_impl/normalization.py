@@ -103,6 +103,14 @@ def _apply_preset(record: Dict[str, Any], timeframe: Dict[str, Any]) -> None:
         timeframe["start_year"] = record["start_year"]
     if "end_year" in record and isinstance(record["end_year"], int):
         timeframe["end_year"] = record["end_year"]
+    if "granularity" not in timeframe:
+        label_hint = str(record.get("label") or record.get("value") or "").lower()
+        if record.get("year_to_date"):
+            timeframe["granularity"] = "quarterly"
+        elif "quarter" in label_hint:
+            timeframe["granularity"] = "quarterly"
+        elif "year" in label_hint and "quarter" not in label_hint:
+            timeframe["granularity"] = "annual"
 
 
 def normalize_timeframe(
@@ -295,6 +303,14 @@ def normalize_timeframe(
 
     tf.pop("value", None)
     tf.pop("label", None)
+
+    if "granularity" not in tf:
+        if tf.get("quarters_back"):
+            tf["granularity"] = "quarterly"
+        elif tf.get("year_to_date"):
+            tf["granularity"] = "quarterly"
+        elif tf.get("years_back") or tf.get("start_year") or tf.get("end_year"):
+            tf["granularity"] = "annual"
 
     if source:
         tf["source"] = source

@@ -67,7 +67,13 @@ def _render_constraints(plan: QueryPlanModel) -> str:
     grain_filter = defaults.get(f"{plan.granularity}_filter") or time_grain.filter
 
     grain_filter_line = f"  - Apply {plan.granularity} filter: {grain_filter}\n" if grain_filter else ""
-    quarterly_line = "  - When granularity is quarterly, include calendar_quarter_num and calendar_quarter in SELECT and GROUP BY"
+    quarterly_line = ""
+    if plan.granularity == "quarterly":
+        quarterly_line = "  - When granularity is quarterly, include calendar_quarter_num and calendar_quarter in SELECT and GROUP BY\n"
+    annual_line = ""
+    if plan.granularity == "annual":
+        annual_line = "  - When granularity is annual, aggregate by calendar_year only and avoid quarter-specific columns\n"
+    optional_lines = grain_filter_line + annual_line + quarterly_line
 
     return dedent(
         f"""
@@ -75,7 +81,7 @@ def _render_constraints(plan: QueryPlanModel) -> str:
         Required filters:
           - Must restrict calendar_year using >= CURRENT_YEAR - {default_years_back}
           - Must include calendar_year in SELECT list
-{grain_filter_line}        {quarterly_line}
+{optional_lines}        Limits:
         Limits:
           - Always include LIMIT <= {max_limit}
         Safety:

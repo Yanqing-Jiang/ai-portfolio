@@ -1373,7 +1373,7 @@ def _compose_stock_ready_payload(ctx: PlannerPhaseContext) -> Optional[Dict[str,
         return None
     payload: Dict[str, Any] = {
         'stock_widget': stock_widget,
-        'reused': True,
+        'reused': bool(getattr(ctx, "reused_stock", False)),
         'schedule_stage': 'hedged_accessories',
     }
     if ctx.snapshot_age_seconds is not None:
@@ -1455,7 +1455,7 @@ def _compose_web_ready_payload(ctx: PlannerPhaseContext) -> Optional[Dict[str, A
     payload = sanitize_for_json(web_payload) or {}
     if not isinstance(payload, dict):
         return None
-    payload["reused"] = True
+    payload["reused"] = bool(getattr(ctx, "reused_web", False))
     payload.setdefault("schedule_stage", "hedged_accessories")
     if ctx.snapshot_age_seconds is not None:
         payload["snapshot_age_seconds"] = ctx.snapshot_age_seconds
@@ -2097,11 +2097,71 @@ class PlannerPipeline:
         data.setdefault("parallel_group", "accessory_delta")
         return event
 
-    def _ingest_tool_event(self, ctx: PlannerPhaseContext, event: Dict[str, Any]) -> None:
+    def _derive_accessory_events(
+        self,
+        ctx: PlannerPhaseContext,
+        *,
+        tool_name: str,
+        status: str,
+        data: Mapping[str, Any],
+    ) -> List[Dict[str, Any]]:
+        derived: List[Dict[str, Any]] = []
+        if status not in {"completed", "complete", "success"}:
+            return derived
+        payload = data.get("payload") or {}
+        schedule_stage = str(data.get("schedule_stage") or "hedged_accessories")
+        parallel_group = str(data.get("parallel_group") or "tool_fanout")
+        completed_at = data.get("completed_at") or data.get("ts")
+
+        def _base_event(name: str, raw_payload: Optional[Mapping[str, Any]], *, lane: str) -> Optional[Dict[str, Any]]:
+            if not isinstance(raw_payload, Mapping):
+                return None
+            sanitized_payload = sanitize_for_json(dict(raw_payload)) or {}
+            if not isinstance(sanitized_payload, dict):
+                return None
+            sanitized_payload.setdefault("schedule_stage", schedule_stage)
+            sanitized_payload.setdefault("parallel_group", parallel_group)
+            sanitized_payload.setdefault("lane", lane)
+            sanitized_payload.setdefault("flow_mode", getattr(self, "flow_mode", FlowMode.DIRECT).value)
+            sanitized_payload.setdefault("ts", completed_at or datetime.utcnow().isoformat())
+            return {"event": name, "data": sanitized_payload}
+
+        if tool_name in {"stock_tracker"} or tool_name.startswith("market_question"):
+            if getattr(ctx, "stock_widget_seeded", False) or (isinstance(payload, Mapping) and payload.get("stock_widget")):
+                stock_payload = _compose_stock_ready_payload(ctx)
+                if not stock_payload and isinstance(payload, Mapping) and payload.get("stock_widget"):
+                    stock_payload = {
+                        "stock_widget": sanitize_for_json(payload.get("stock_widget")),
+                        "reused": bool(payload.get("from_cache") or data.get("reused")),
+                    }
+                if stock_payload:
+                    stock_payload.setdefault("reused", bool(getattr(ctx, "reused_stock", False)))
+                    event = _base_event("stock_ready", stock_payload, lane="market")
+                    if event and (not getattr(ctx, "stock_ready_emitted", False) or stock_payload.get("reused")):
+                        derived.append(self._mark_delta_event(event))
+                        ctx.stock_ready_emitted = True
+
+        if tool_name == "web_retriever":
+            if getattr(ctx, "web_search_seeded", False) or (isinstance(payload, Mapping) and payload.get("ready")):
+                web_payload = _compose_web_ready_payload(ctx)
+                if not web_payload and isinstance(payload, Mapping):
+                    web_payload = dict(payload)
+                    web_payload["reused"] = bool(payload.get("from_cache") or data.get("reused"))
+                if web_payload:
+                    web_payload.setdefault("reused", bool(getattr(ctx, "reused_web", False)))
+                    event = _base_event("web_ready", web_payload, lane="web")
+                    if event and (not getattr(ctx, "web_ready_emitted", False) or web_payload.get("reused")):
+                        derived.append(self._mark_delta_event(event))
+                        ctx.web_ready_emitted = True
+
+        return derived
+
+    def _ingest_tool_event(self, ctx: PlannerPhaseContext, event: Dict[str, Any]) -> List[Dict[str, Any]]:
+        derived: List[Dict[str, Any]] = []
         if not isinstance(event, dict):
-            return
+            return derived
         if event.get("event") != "tool_parallel_result":
-            return
+            return derived
         data = event.get("data") or {}
         tool_name = str(data.get("tool") or "").strip().lower()
         status = str(data.get("status") or "").strip().lower()
@@ -2117,6 +2177,36 @@ class PlannerPipeline:
                 _seed_stock_widget_from_payload(ctx, payload)
         if tool_name in {"web_retriever", "stock_tracker"} or tool_name.startswith("market_question"):
             self._record_tool_receipt_from_event(ctx, tool_name, status, data)
+        derived.extend(
+            self._derive_accessory_events(
+                ctx,
+                tool_name=tool_name,
+                status=status,
+                data=data,
+            )
+        )
+        normalized_result = sanitize_for_json(dict(data))
+        if isinstance(normalized_result, dict):
+            existing_results: List[Dict[str, Any]] = list(getattr(ctx, "tool_parallel_results", []) or [])
+            existing_results.append(normalized_result)
+            dedup: List[Dict[str, Any]] = []
+            seen: Set[Tuple[str, Optional[str]]] = set()
+            for entry in reversed(existing_results):
+                tool_id = str(entry.get("tool") or "").strip().lower()
+                payload_entry = entry.get("payload")
+                question_id: Optional[str] = None
+                if isinstance(payload_entry, Mapping):
+                    raw_qid = payload_entry.get("question_id") or payload_entry.get("id")
+                    if isinstance(raw_qid, (str, int)):
+                        question_id = str(raw_qid)
+                key = (tool_id, question_id)
+                if key in seen:
+                    continue
+                seen.add(key)
+                dedup.append(entry)
+            dedup.reverse()
+            ctx.tool_parallel_results = dedup[-10:]
+        return derived
 
     def _start_tool_parallelism(
         self,
@@ -2134,8 +2224,10 @@ class PlannerPipeline:
                     adapters=adapters,
                     concurrency_override=concurrency_override,
                 ):
-                    self._ingest_tool_event(ctx, event)
+                    derived_events = self._ingest_tool_event(ctx, event)
                     await queue.put(event)
+                    for derived_event in derived_events:
+                        await queue.put(derived_event)
             finally:
                 await queue.put(_TOOL_QUEUE_SENTINEL)
 
@@ -2300,8 +2392,10 @@ class PlannerPipeline:
                     adapters=tuple(adapters),
                     concurrency_override=len(adapters),
                 ):
-                    self._ingest_tool_event(ctx, event)
+                    derived_events = self._ingest_tool_event(ctx, event)
                     yield self._mark_delta_event(event)
+                    for derived_event in derived_events:
+                        yield derived_event
 
         if ctx.web_search is None and not getattr(ctx, "web_search_seeded", False):
             async for event in self._web_search_phase(ctx):
@@ -3012,8 +3106,10 @@ class PlannerPipeline:
             subset = [adapter_lookup[name] for name in required_tools if name in adapter_lookup]
             if subset:
                 async for event in run_tool_parallelism(ctx, adapters=subset, concurrency_override=len(subset)):
-                    self._ingest_tool_event(ctx, event)
-                    yield event
+                    derived_events = self._ingest_tool_event(ctx, event)
+                    yield self._mark_delta_event(event)
+                    for derived_event in derived_events:
+                        yield derived_event
 
         has_web_context = (
             ctx.web_search is not None
@@ -4362,6 +4458,10 @@ async def _plan_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[str
     ctx.reused_analysis = False
     ctx.web_search_seeded = False
     ctx.stock_widget_seeded = False
+    ctx.stock_ready_emitted = False
+    ctx.web_ready_emitted = False
+    ctx.tool_parallel_results = []
+    ctx.tool_parallel_manifest = []
     current_signature = build_intent_signature(intent, ctx.plan)
     ctx.intent_signature = current_signature
     prior_signature = ctx.prior_intent_signature

@@ -57,6 +57,22 @@ const FOLLOW_UP_BANNER_COPY: Record<string, { title: string; message: string }> 
   },
 };
 
+const SPECIALIST_LANE_PRIORITY: Record<string, number> = {
+  chart: 0,
+  analysis: 1,
+  market: 2,
+  web: 3,
+  sql: 4,
+};
+
+const SPECIALIST_TYPE_TO_LANE: Record<string, string> = {
+  chart_builder: 'chart',
+  sql_executor: 'sql',
+  stock_widget: 'market',
+  web_context: 'web',
+  analysis_summary: 'analysis',
+};
+
 type SnapshotReuseInfo = {
   reusedSql?: boolean;
   reusedChart?: boolean;
@@ -793,7 +809,13 @@ const buildResultMessageFields = () => ({
       ts: coerceString(raw.ts) ?? timestamp ?? new Date().toISOString(),
       meta: typeof raw.meta === 'object' && raw.meta !== null ? raw.meta : undefined,
     };
-    const lane = resolveLane(raw, raw.meta);
+    let lane = resolveLane(raw, raw.meta);
+    if (!lane && card.type) {
+      const fallbackLane = SPECIALIST_TYPE_TO_LANE[card.type] ?? SPECIALIST_TYPE_TO_LANE[card.type.toLowerCase()];
+      if (fallbackLane) {
+        lane = fallbackLane;
+      }
+    }
     if (lane) {
       card.lane = lane;
     }
@@ -1147,8 +1169,16 @@ const workflowDataRef = useRef<{
 
   const upsertSpecialistCard = useCallback((card: SpecialistCard) => {
     setSpecialistCards((prev) => {
-      const keyFor = (entry: SpecialistCard) =>
-        [entry.type ?? 'accessory', entry.lane ?? '', entry.source ?? '', entry.parallelGroup ?? ''].join('::');
+      const keyFor = (entry: SpecialistCard) => {
+        const meta = entry.meta ?? {};
+        const questionKey =
+          typeof meta.question_id === 'string'
+            ? meta.question_id
+            : typeof meta.questionId === 'string'
+              ? meta.questionId
+              : entry.topic ?? '';
+        return [entry.type ?? 'accessory', entry.lane ?? '', questionKey, entry.parallelGroup ?? ''].join('::');
+      };
       const targetKey = keyFor(card);
       const existingIndex = prev.findIndex((item) => keyFor(item) === targetKey);
       let next: SpecialistCard[];
@@ -1163,6 +1193,27 @@ const workflowDataRef = useRef<{
       } else {
         next = [...prev, card];
       }
+      const priorityForCard = (entry: SpecialistCard) => {
+        const typeKey = typeof entry.type === 'string' ? entry.type.toLowerCase() : '';
+        const laneKeyRaw = entry.lane ?? (typeKey ? SPECIALIST_TYPE_TO_LANE[typeKey] : undefined);
+        const laneKey = laneKeyRaw ? laneKeyRaw.toLowerCase() : '';
+        if (laneKey && Object.prototype.hasOwnProperty.call(SPECIALIST_LANE_PRIORITY, laneKey)) {
+          return SPECIALIST_LANE_PRIORITY[laneKey];
+        }
+        return 100;
+      };
+      next.sort((a, b) => {
+        const diff = priorityForCard(a) - priorityForCard(b);
+        if (diff !== 0) {
+          return diff;
+        }
+        const tsA = a.ts ? Date.parse(a.ts) : 0;
+        const tsB = b.ts ? Date.parse(b.ts) : 0;
+        if (Number.isFinite(tsA) && Number.isFinite(tsB) && tsA !== tsB) {
+          return tsA - tsB;
+        }
+        return (a.title || '').localeCompare(b.title || '');
+      });
       workflowDataRef.current.specialistCards = next;
       return next;
     });
@@ -3101,6 +3152,7 @@ const workflowDataRef = useRef<{
 
         case 'tool_parallel_start':
           {
+            emitResultOnce();
             const manifest = (eventData.tools ?? []) as ToolFanoutManifest[];
             const concurrencyLimit = eventData.concurrency_limit ?? eventData.tool_count ?? toolFanoutRef.current.concurrencyLimit;
             toolFanoutRef.current = {
@@ -3620,6 +3672,93 @@ workflowDataRef.current = {
             finalResultMergedRef.current = false;
           }
           break;
+
+        case 'finalization': {
+          const detailsPayload = (eventData.details && typeof eventData.details === 'object') ? eventData.details as Record<string, unknown> : {};
+          const bannerPayloadRaw =
+            (eventData.banner && typeof eventData.banner === 'object' ? eventData.banner : null) ??
+            (detailsPayload.banner && typeof detailsPayload.banner === 'object' ? detailsPayload.banner : null);
+          const bannerPayload = (bannerPayloadRaw ?? {}) as Record<string, unknown>;
+
+          const followUpRoute =
+            coerceString(bannerPayload['route']) ??
+            coerceString(detailsPayload['follow_up_route']) ??
+            coerceString(eventData.follow_up_route) ??
+            'full_pipeline';
+
+          const finalAnswerOnly = coerceBoolean(
+            bannerPayload['final_answer_only'] ?? detailsPayload['final_answer_only'] ?? eventData.final_answer_only,
+          );
+          const missingComponentsSource =
+            (Array.isArray(bannerPayload['missing_components']) && (bannerPayload['missing_components'] as unknown[])) ||
+            (Array.isArray(detailsPayload['missing_components']) && (detailsPayload['missing_components'] as unknown[])) ||
+            (Array.isArray(eventData.missing_components) && eventData.missing_components) ||
+            [];
+          const missingComponents = (missingComponentsSource as unknown[])
+            .map((value) => coerceString(value))
+            .filter(Boolean) as string[];
+
+          const analysisAvailable = coerceBoolean(
+            bannerPayload['analysis_available'] ?? detailsPayload['analysis_available'] ?? eventData.analysis_available,
+          );
+          const flowModeOverride =
+            (coerceString(
+              (bannerPayload['flowMode'] ?? bannerPayload['flow_mode'] ?? detailsPayload['flowMode'] ?? detailsPayload['flow_mode'] ?? eventData.flow_mode) as
+                unknown,
+            ) as FlowMode | undefined) ?? flowModeValue ?? flow;
+
+          const summaryCopy =
+            coerceString(bannerPayload['summary'] ?? detailsPayload['summary'] ?? eventData.summary) ?? undefined;
+          const finalMessage =
+            coerceString(eventData.message) ??
+            coerceString(detailsPayload['message']) ??
+            coerceString(bannerPayload['message']) ??
+            'Output ready';
+          const title =
+            coerceString(bannerPayload['title']) ??
+            coerceString(detailsPayload['title']) ??
+            (finalAnswerOnly ? 'Guided Final Answer' : 'Final Answer Ready');
+
+          const banner: FollowUpBanner = {
+            title,
+            message: finalMessage,
+            route: followUpRoute,
+            flowMode: flowModeOverride,
+            finalAnswerOnly: finalAnswerOnly ?? undefined,
+            missingComponents: missingComponents.length ? missingComponents : undefined,
+            analysisAvailable,
+            summary: summaryCopy,
+          };
+
+          setFollowUpBanner(banner);
+          workflowDataRef.current.followUpBanner = banner;
+
+          emitResultOnce({ content: finalMessage });
+          refreshResultMessage({ content: finalMessage });
+
+          const thinkingLines = finalMessage ? [finalMessage] : ['Workflow finalized'];
+          updateStep(
+            'finalization',
+            'completed',
+            thinkingLines,
+            {
+              banner,
+              message: finalMessage,
+              follow_up_route: followUpRoute,
+            },
+            stepInfo.elapsed_ms,
+            stepInfo.ts,
+            {
+              followUpRoute,
+              finalAnswerOnly: finalAnswerOnly ?? undefined,
+              missingComponents: missingComponents.length ? missingComponents : undefined,
+              analysisAvailable,
+            },
+          );
+
+          streamHook.setCurrentStatus(finalMessage || 'Output ready');
+          break;
+        }
 
         case 'final_answer':
           {
