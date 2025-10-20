@@ -130,22 +130,20 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
   onSubmitClarification,
   processSteps: _processSteps = [],
 }) => {
-  const statusText = status?.text?.trim() ?? '';
+  const rawStatusText = status?.text ?? '';
+  const normalizedStatusText = React.useMemo(() => {
+    if (!rawStatusText) {
+      return '';
+    }
+    const trimmed = rawStatusText.trim().replace(/\u2026/g, '');
+    const withoutTrailingDots = trimmed.replace(/\s*\.\.\.$/, '').replace(/\s*…$/, '');
+    return withoutTrailingDots.trim();
+  }, [rawStatusText]);
   const statusTimestamp = formatStatusTimestamp(status?.timestamp);
-  const showStatusBubble = Boolean(statusText);
-  const latestAssistantIndex = React.useMemo(() => {
-    let latest = -1;
-    messages.forEach((msg, idx) => {
-      if (msg?.type !== 'user') {
-        latest = idx;
-      }
-    });
-    return latest;
-  }, [messages]);
-
+  const showStatusBubble = Boolean(normalizedStatusText);
   const renderStatusBubble = React.useCallback(
     (compact?: boolean) => {
-      if (!showStatusBubble) {
+      if (!showStatusBubble || !normalizedStatusText) {
         return null;
       }
       const spacingClass = compact ? '' : 'mb-3 ';
@@ -153,7 +151,7 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
         <div
           className={`${spacingClass}flex flex-wrap items-center gap-3 rounded-xl border border-blue-500/40 bg-blue-500/10 px-3 py-2 text-xs text-blue-100/80`}
         >
-          <span className="text-sm text-blue-100">{statusText}</span>
+          <span className="text-sm text-blue-100">{normalizedStatusText}</span>
           {isLoading && (
             <div className="flex space-x-1" aria-hidden="true">
               <div className="w-2 h-2 bg-blue-300 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
@@ -169,14 +167,30 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
         </div>
       );
     },
-    [isLoading, showStatusBubble, statusText, statusTimestamp],
+    [isLoading, normalizedStatusText, showStatusBubble, statusTimestamp],
   );
 
-  const statusBubbleNode = React.useMemo(() => renderStatusBubble(), [renderStatusBubble]);
-  const compactStatusBubbleNode = React.useMemo(
-    () => renderStatusBubble(true),
-    [renderStatusBubble],
-  );
+  const statusInlineBubble = React.useMemo(() => renderStatusBubble(true), [renderStatusBubble]);
+  const statusStandaloneRow = React.useMemo(() => {
+    if (!showStatusBubble || !statusInlineBubble) {
+      return null;
+    }
+    const lastMessage = messages.length ? messages[messages.length - 1] : null;
+    const awaitingAssistantReply = !lastMessage || lastMessage.type === 'user';
+    if (!awaitingAssistantReply) {
+      return null;
+    }
+    return (
+      <div className="flex gap-3">
+        <div className="w-9 h-9 flex-shrink-0" aria-hidden="true" />
+        <div className="max-w-[960px] flex flex-col items-start">
+          <div className="transition-all hover:shadow-sm bg-gray-800/60 text-gray-100 rounded-2xl rounded-bl-md px-4 py-3">
+            {statusInlineBubble}
+          </div>
+        </div>
+      </div>
+    );
+  }, [messages, showStatusBubble, statusInlineBubble]);
 
   return (
     <div className="bg-gray-900 py-4 mb-6 relative">
@@ -217,8 +231,12 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
               ) : null}
 
               <div className={`max-w-[960px] flex flex-col ${isUser ? 'items-end' : 'items-start'}`}>
+                {!isUser && idx === messages.length - 1 && statusInlineBubble ? (
+                  <div className="transition-all hover:shadow-sm bg-gray-800/60 text-gray-100 rounded-2xl rounded-bl-md px-4 py-3 mb-3">
+                    {statusInlineBubble}
+                  </div>
+                ) : null}
                 <div className={`transition-all hover:shadow-sm ${bubbleClass}`}>
-                  {idx === latestAssistantIndex ? statusBubbleNode : null}
                   <div className={isResult ? 'space-y-3' : 'space-y-2'}>
                     {contentText ? (
                       <div className="text-sm leading-relaxed whitespace-pre-line">{message.content}</div>
@@ -325,16 +343,7 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
           );
         })}
 
-        {showStatusBubble && latestAssistantIndex === -1 ? (
-          <div className="flex gap-3 justify-start">
-            <div className="w-9 h-9 flex-shrink-0" aria-hidden="true" />
-            <div className="max-w-[960px] flex flex-col items-start">
-              <div className="transition-all hover:shadow-sm bg-gray-800/60 text-gray-100 rounded-2xl rounded-bl-md px-4 py-3">
-                {compactStatusBubbleNode}
-              </div>
-            </div>
-          </div>
-        ) : null}
+        {statusStandaloneRow}
 
       </div>
     </div>

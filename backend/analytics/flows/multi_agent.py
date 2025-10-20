@@ -2453,6 +2453,8 @@ class MultiAgentFlow:
                     web_ctx['source'] = 'cached'
                 else:
                     web_ctx.setdefault('source', web_ctx.get('source') or 'planner_fanout')
+            self._maybe_queue_stock_ready()
+            self._maybe_queue_web_ready()
         self._maybe_queue_sql_ready()
         self._maybe_queue_chart_ready()
         self._maybe_queue_stock_ready()

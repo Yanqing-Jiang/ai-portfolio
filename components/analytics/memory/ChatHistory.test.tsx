@@ -119,11 +119,34 @@ describe('ChatHistory status bubble alignment', () => {
     );
 
     const statusNode = screen.getByText('Classifying query');
-    const alignmentRow = statusNode.closest('.transition-all')?.parentElement?.parentElement;
-    expect(alignmentRow).not.toBeNull();
-    expect(alignmentRow?.className).toContain('justify-start');
-
-    const placeholder = alignmentRow?.querySelector('[aria-hidden="true"]');
+    const placeholder = document.querySelector('.w-9[aria-hidden="true"]') as HTMLElement | null;
     expect(placeholder).not.toBeNull();
+    const alignmentRow = placeholder?.parentElement;
+    expect(alignmentRow).not.toBeNull();
+    expect(alignmentRow?.className).toContain('flex');
+    expect(alignmentRow?.className).toContain('justify-start');
+    expect(alignmentRow?.textContent).toContain('Classifying query');
+  });
+
+  it('strips trailing ellipses from live status text', () => {
+    const messages = [
+      {
+        id: 'u-1',
+        type: 'user' as const,
+        content: 'Fetch NVDA metrics',
+        timestamp: new Date().toISOString(),
+      },
+    ];
+
+    render(
+      <ChatHistory
+        messages={messages}
+        isLoading={true}
+        status={{ text: 'Analyzing...', timestamp: new Date().toISOString() }}
+        processSteps={[]}
+      />,
+    );
+
+    expect(screen.getByText('Analyzing')).toBeInTheDocument();
   });
 });

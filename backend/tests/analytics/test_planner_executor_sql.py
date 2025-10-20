@@ -18,6 +18,7 @@ import pytest
 
 
 from analytics.flows import planner_executor
+from analytics.sql import prompt_builder
 from analytics.sql.compiler import compile_sql_from_plan
 from analytics.sql.sql_planner import plan_sql_rule_based, choose_template
 from analytics.core.state import QueryPlanModel, IntentModel
@@ -338,12 +339,136 @@ def _sanitize_events(events):
     return sanitized
 
 
+
+def test_ingest_tool_event_emits_stock_ready_lane(monkeypatch):
+    pipeline = planner_executor.PlannerPipeline(flow_mode=planner_executor.FlowMode.SINGLE_AGENT)
+    ctx = planner_executor.PlannerPhaseContext(
+        query="Concurrent lanes",
+        session_id="ctx-stock",
+        workflow_start=time.time(),
+        timed_emitter=planner_executor.TimedEventEmitter(session_id="ctx-stock", flow="test"),
+        flow_mode=planner_executor.FlowMode.SINGLE_AGENT,
+        parallelism_enabled=True,
+    )
+    payload = {
+        "stock_widget": {
+            "symbols": [["NASDAQ:NVDA", "NVDA"]],
+            "generated_at": "2025-10-20T00:00:00Z",
+        },
+    }
+    event = {
+        "event": "tool_parallel_result",
+        "data": {
+            "tool": "stock_tracker",
+            "status": "completed",
+            "payload": payload,
+            "completed_at": "2025-10-20T00:00:01Z",
+            "parallel_group": "tool_fanout",
+            "schedule_stage": "hedged_accessories",
+        },
+    }
+
+    derived_events = pipeline._ingest_tool_event(ctx, event)
+    stock_ready = next((evt for evt in derived_events if evt.get("event") == "stock_ready"), None)
+    assert stock_ready is not None, "Expected stock_ready event from accessory ingestion"
+    stock_data = stock_ready["data"]
+    assert stock_data.get("lane") == "market"
+    assert stock_data.get("reused") is False
+    assert ctx.stock_ready_emitted is True
+    assert ctx.tool_parallel_results and ctx.tool_parallel_results[0].get("tool") == "stock_tracker"
+
+    # Second ingestion with the same payload should not emit a duplicate ready event
+    duplicate_events = pipeline._ingest_tool_event(ctx, event)
+    assert all(evt.get("event") != "stock_ready" for evt in duplicate_events)
+
+
+def test_ingest_tool_event_emits_web_ready_lane():
+    pipeline = planner_executor.PlannerPipeline(flow_mode=planner_executor.FlowMode.SINGLE_AGENT)
+    ctx = planner_executor.PlannerPhaseContext(
+        query="Concurrent lanes",
+        session_id="ctx-web",
+        workflow_start=time.time(),
+        timed_emitter=planner_executor.TimedEventEmitter(session_id="ctx-web", flow="test"),
+        flow_mode=planner_executor.FlowMode.SINGLE_AGENT,
+        parallelism_enabled=True,
+    )
+    payload = {
+        "ready": True,
+        "summary": "Stubbed market commentary",
+        "snippets": [{"title": "NVDA report", "snippet": "Revenue up year over year."}],
+    }
+    event = {
+        "event": "tool_parallel_result",
+        "data": {
+            "tool": "web_retriever",
+            "status": "completed",
+            "payload": payload,
+            "completed_at": "2025-10-20T00:00:02Z",
+            "parallel_group": "tool_fanout",
+            "schedule_stage": "hedged_accessories",
+        },
+    }
+
+    derived_events = pipeline._ingest_tool_event(ctx, event)
+    web_ready = next((evt for evt in derived_events if evt.get("event") == "web_ready"), None)
+    assert web_ready is not None, "Expected web_ready event from accessory ingestion"
+    web_data = web_ready["data"]
+    assert web_data.get("lane") == "web"
+    assert web_data.get("reused") is False
+    assert ctx.web_ready_emitted is True
+    assert ctx.tool_parallel_results and ctx.tool_parallel_results[0].get("tool") == "web_retriever"
+
+
+def test_concurrent_lanes_emit_before_sql(monkeypatch):
+    flow = _setup_planner_flow(monkeypatch)
+    flow.flow_mode = planner_executor.FlowMode.SINGLE_AGENT
+    flow.parallelism_enabled = True
+
+    async def _parallelism(ctx, adapters=(), concurrency_override=None):
+        yield {
+            "event": "tool_parallel_result",
+            "data": {
+                "tool": "stock_tracker",
+                "status": "completed",
+                "payload": {
+                    "stock_widget": {"symbols": [["NASDAQ:NVDA", "NVDA"]]},
+                },
+                "completed_at": "2025-10-20T00:00:01Z",
+                "parallel_group": "tool_fanout",
+                "schedule_stage": "hedged_accessories",
+            },
+        }
+        yield {
+            "event": "tool_parallel_result",
+            "data": {
+                "tool": "web_retriever",
+                "status": "completed",
+                "payload": {
+                    "ready": True,
+                    "summary": "Stubbed commentary",
+                    "snippets": [],
+                },
+                "completed_at": "2025-10-20T00:00:02Z",
+                "parallel_group": "tool_fanout",
+                "schedule_stage": "hedged_accessories",
+            },
+        }
+
+    monkeypatch.setattr(planner_executor, 'run_tool_parallelism', _parallelism)
+
+    events = _collect_events(flow)
+    lane_events = [evt["event"] for evt in events if evt.get("event") in {"stock_ready", "web_ready", "sql_ready"}]
+    assert "stock_ready" in lane_events
+    assert "web_ready" in lane_events
+    assert "sql_ready" in lane_events
+    assert lane_events.index("stock_ready") < lane_events.index("sql_ready")
+    assert lane_events.index("web_ready") < lane_events.index("sql_ready")
 def test_planner_fanout_manifest_contains_accessory_lanes(monkeypatch):
     captured = {}
 
     def _capture_start(self, ctx, *, adapters=(), concurrency_override=None):
         captured["names"] = [adapter.name for adapter in (adapters or ())]
-        return None, None
+        return None, asyncio.Queue()
 
     monkeypatch.setattr(planner_executor.PlannerPipeline, "_start_tool_parallelism", _capture_start)
     flow = _setup_planner_flow(monkeypatch)
@@ -635,6 +760,13 @@ def test_market_share_sql_template_emits_annual_columns():
     assert 'calendar_quarter_num' not in sql
     assert 'calendar_year' in sql
     assert 'AND 1=1' not in sql
+
+
+def test_prompt_constraints_enforce_annual_without_quarterly_hints():
+    plan = QueryPlanModel(metrics=['revenue'], granularity='annual')
+    constraints = prompt_builder._render_constraints(plan)
+    assert 'aggregate by calendar_year only' in constraints
+    assert 'calendar_quarter' not in constraints
 
 
 def test_auto_fill_missing_slots_defaulted_from_suggestions():

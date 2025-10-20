@@ -256,7 +256,7 @@ query_patterns:
       - "compare to average"
       - "vs average"
       
-    sql_template: |
+    sql_template_quarterly: |
       WITH quarterly_revenue AS (
         SELECT 
           ticker,
@@ -344,6 +344,133 @@ query_patterns:
       - "vs industry average"
       - "compare to industry"
       - "vs peers growth"
+    sql_template: |
+      WITH quarterly_revenue AS (
+        SELECT 
+          ticker,
+          calendar_year,
+          calendar_quarter_num,
+          calendar_quarter,
+          SUM(value) AS quarterly_revenue,
+          calendar_year * 100 + calendar_quarter_num AS period_id
+        FROM comp_financials
+        WHERE 
+          metric = 'Revenue'
+          AND ticker IN ('AMD','AVGO','INTC','MU','NVDA','QCOM','TXN')
+          AND calendar_quarter_num IS NOT NULL
+          AND calendar_year >= EXTRACT(YEAR FROM CURRENT_DATE) - {years_back}
+          AND value IS NOT NULL
+        GROUP BY ticker, calendar_year, calendar_quarter_num, calendar_quarter
+      ),
+      growth_calculations AS (
+        SELECT 
+          ticker,
+          calendar_year,
+          calendar_quarter_num,
+          calendar_quarter,
+          quarterly_revenue,
+          LAG(quarterly_revenue, 4) OVER (
+            PARTITION BY ticker 
+            ORDER BY period_id
+          ) AS same_quarter_prev_year,
+          CASE 
+            WHEN LAG(quarterly_revenue, 4) OVER (
+              PARTITION BY ticker 
+              ORDER BY period_id
+            ) > 0 
+            THEN ((quarterly_revenue - LAG(quarterly_revenue, 4) OVER (
+              PARTITION BY ticker 
+              ORDER BY period_id
+            )) / LAG(quarterly_revenue, 4) OVER (
+              PARTITION BY ticker 
+              ORDER BY period_id
+            )) * 100.0
+            ELSE NULL 
+          END AS yoy_growth_percent
+        FROM quarterly_revenue
+      ),
+      industry_averages AS (
+        SELECT 
+          calendar_year,
+          calendar_quarter_num,
+          calendar_quarter,
+          AVG(CASE WHEN ticker != '{target_ticker}' THEN yoy_growth_percent END) AS industry_avg_yoy_growth_percent
+        FROM growth_calculations
+        WHERE yoy_growth_percent IS NOT NULL
+        GROUP BY calendar_year, calendar_quarter_num, calendar_quarter
+      )
+      SELECT 
+        gc.ticker,
+        gc.calendar_year,
+        gc.calendar_quarter_num,
+        gc.calendar_quarter,
+        gc.quarterly_revenue,
+        gc.yoy_growth_percent AS company_yoy_growth_percent,
+        ia.industry_avg_yoy_growth_percent
+      FROM growth_calculations gc
+      JOIN industry_averages ia ON 
+        gc.calendar_year = ia.calendar_year 
+        AND gc.calendar_quarter_num = ia.calendar_quarter_num
+        AND gc.calendar_quarter = ia.calendar_quarter
+      WHERE gc.ticker = '{target_ticker}' 
+        AND gc.yoy_growth_percent IS NOT NULL
+      ORDER BY gc.calendar_year, gc.calendar_quarter_num
+      LIMIT 500;
+    sql_template_annual: |
+      WITH annual_revenue AS (
+        SELECT 
+          ticker,
+          calendar_year,
+          SUM(value) AS annual_revenue
+        FROM comp_financials
+        WHERE 
+          metric = 'Revenue'
+          AND ticker IN ('AMD','AVGO','INTC','MU','NVDA','QCOM','TXN')
+          AND calendar_year >= EXTRACT(YEAR FROM CURRENT_DATE) - {years_back}
+          AND value IS NOT NULL
+        GROUP BY ticker, calendar_year
+      ),
+      growth_calculations AS (
+        SELECT 
+          ticker,
+          calendar_year,
+          annual_revenue,
+          LAG(annual_revenue) OVER (
+            PARTITION BY ticker 
+            ORDER BY calendar_year
+          ) AS prior_year_revenue
+        FROM annual_revenue
+      ),
+      company_growth AS (
+        SELECT
+          ticker,
+          calendar_year,
+          annual_revenue,
+          CASE 
+            WHEN prior_year_revenue IS NULL OR prior_year_revenue = 0 THEN NULL
+            ELSE ((annual_revenue - prior_year_revenue)::numeric / NULLIF(prior_year_revenue::numeric, 0)) * 100.0
+          END AS yoy_growth_percent
+        FROM growth_calculations
+      ),
+      industry_averages AS (
+        SELECT 
+          calendar_year,
+          AVG(yoy_growth_percent) FILTER (WHERE ticker <> '{target_ticker}') AS industry_avg_yoy_growth_percent
+        FROM company_growth
+        WHERE yoy_growth_percent IS NOT NULL
+        GROUP BY calendar_year
+      )
+      SELECT 
+        cg.ticker,
+        cg.calendar_year,
+        cg.annual_revenue,
+        cg.yoy_growth_percent AS company_yoy_growth_percent,
+        ia.industry_avg_yoy_growth_percent
+      FROM company_growth cg
+      LEFT JOIN industry_averages ia USING (calendar_year)
+      WHERE cg.ticker = '{target_ticker}'
+      ORDER BY cg.calendar_year
+      LIMIT 500;
     sql_template: |
       WITH quarterly_revenue AS (
         SELECT 

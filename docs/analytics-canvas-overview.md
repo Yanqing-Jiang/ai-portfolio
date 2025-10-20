@@ -146,16 +146,20 @@ The ledger file `docs/agent-process-ledger (54).json` demonstrates the intended 
 - Metric and timeframe clarifications flow through normalized payloads: `normalize_timeframe` tracks the `source`, slot statuses remain `missing` until the user responds, and the SQL planner/templates honour the curated metric list through the `{primary_metric}` placeholder.
 - Added `backend/tests/analytics/test_timeframe_normalization.py` to guard the new timeframe semantics.
 
-## Updated Integration Plan (2025-10-18)
+## Canvas Implementation Status (2025-10-20)
 
-The redesign is live; the remaining work focuses on regression coverage and snapshot parity.
+### Single-Agent Fan-Out Canvas
 
-1. **Front-end regression snapshots**  
-   Capture Vitest snapshots for single-agent and multi-agent canvases (with and without `schema_validation`) so future layout tweaks keep the lane grammar intact.  
-   _Files_: `components/analytics/__tests__/WorkflowCanvas.test.tsx`
-2. **Ledger-level SQL/chart verification**  
-   Extend the multi-agent pytest fixture to assert that `{primary_metric}` substitutions still populate `rawData` for revenue-growth and peer-comparison charts.  
-   _Files_: `backend/tests/analytics/test_multi_agent_flow.py`
-3. **Live artifacts polish**  
-   Add a Vitest story/render test that exercises the merged status bubble + streaming result rendering to prevent regressions in the chat transcript.  
-   _Files_: `components/analytics/memory/__tests__/ChatHistory.test.tsx`
+- **Complete:** Legacy hub-and-spoke rendering is still live (`fanout_start` → `Agent Hub` → branch nodes → `__end__`), so operators can monitor branch health in today’s build.  
+- **In progress:** The redesign work that introduces the intent-prep cluster, SQL lane extraction, and lane-aware aggregator has not landed in the codebase yet; the React flow still renders a single column with undifferentiated spokes.  
+- **Missing:** Need to split `buildNodes()`/`buildEdges()` into pre-fan-out and lane-aware segments, surface the intent steps ahead of the hub, and anchor SQL/market/chart/web branches to discrete columns as outlined above.
+
+### Multi-Agent Workflow Canvas
+
+- **Complete:** Lane scaffolding and the supervisor hub fan-out are implemented; `WorkflowCanvas` positions planner/SQL/market/web/chart lanes around `agent_coordination`, and the hub links to each specialist lane with paired return edges.  
+- **In progress:** The start-to-hub story currently uses a synthetic `User Question` node instead of the shared `__start__` glyph, and lane stacking still increments sequentially rather than keeping concurrent `parallelGroup` members on the same band.  
+- **Missing:** Need to normalize concurrency layout (shared y-levels for identical `parallelGroup` values), refine edge semantics for speculative routes, and ensure the closing merge back into `analysis_generation` reflects the lane merge grammar.
+
+## Outstanding Documentation Cleanup
+
+- Normalize the punctuation in this note (several pasted glyphs rendered as replacement characters) so the objectives and lane descriptions read cleanly in ASCII diffs.

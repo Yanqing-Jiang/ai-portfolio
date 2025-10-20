@@ -14,6 +14,7 @@ class TimeframeModel(BaseModel):
 
     model_config = ConfigDict(extra='forbid')
 
+    granularity: Optional[Literal['annual', 'quarterly']] = None
     years_back: Optional[int] = Field(default=None, ge=0, le=10)
     quarters_back: Optional[int] = Field(default=None, ge=0, le=40)
     start_year: Optional[int] = None
