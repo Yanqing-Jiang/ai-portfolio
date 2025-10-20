@@ -33,3 +33,35 @@ def test_post_process_slots_detects_company_when_missing():
     assert processed["company"] == "TSLA"
     assert processed["tickers"] == ["TSLA"]
     assert processed["company_candidates"] == ["TSLA"]
+
+
+def test_post_process_slots_timeframe_forces_quarterly():
+    slots = {
+        "timeframe": "last 4 quarters",
+        "granularity": "annual",
+    }
+    processed = post_process_slots(slots, "Compare revenue over the last 4 quarters", configs={})
+
+    assert processed["timeframe"]["quarters_back"] == 4
+    assert processed["granularity"] == "quarterly"
+
+
+def test_post_process_slots_last_five_years_promotes_quarterly():
+    slots = {
+        "timeframe": "last 5 years",
+        "granularity": "annual",
+    }
+    processed = post_process_slots(slots, "Show last 5 years quarterly performance", configs={})
+
+    assert processed["timeframe"]["years_back"] == 5
+    assert processed["granularity"] == "quarterly"
+
+
+def test_post_process_slots_last_five_years_defaults_to_annual_without_quarter_hint():
+    slots = {
+        "timeframe": "last 5 years",
+    }
+    processed = post_process_slots(slots, "Nvidia market share in the past 5 years?", configs={})
+
+    assert processed["timeframe"]["years_back"] == 5
+    assert processed["granularity"] == "annual"

@@ -140,7 +140,9 @@ The ledger file `docs/agent-process-ledger (54).json` demonstrates the intended 
 ## 2025-10-18 Implementation Notes
 
 - Multi-agent workflow nodes now resolve to dedicated lanes (`planner`, `sql`, `market`, `web`, `chart`, `analysis`) underneath a single supervisor hub. The start node feeds `agent_coordination`, which in turn fans tasks into the vertical specialist stacks so the canvas mirrors the Untitled.png reference.
-- The chat transcript keeps the streaming status badge anchored inside the most recent assistant bubble. Progressive updates and the final answer reuse the same `result` message instead of spawning an extra assistant reply.
+- The insight ledger now normalizes `analysis_sources` before rendering and surfaces a “Data Inputs” block per step, preventing expansion crashes like the 2025-10-18 direct workflow replay (`agent-process-ledger (62).json`) and exposing lane/row metadata inline.
+- Memory mode mounts the `LiveArtifacts` panel directly under the chat transcript so SQL tables, chart previews, stock snapshots, and web cards stream in as soon as readiness events arrive (and persist after completion).
+- Status updates pin to the latest user turn when awaiting clarifications, then migrate underneath the newest assistant/result bubble once tool cards start rendering; the loading indicator remains a single `result` message rather than spawning extra assistant replies.
 - Metric and timeframe clarifications flow through normalized payloads: `normalize_timeframe` tracks the `source`, slot statuses remain `missing` until the user responds, and the SQL planner/templates honour the curated metric list through the `{primary_metric}` placeholder.
 - Added `backend/tests/analytics/test_timeframe_normalization.py` to guard the new timeframe semantics.
 

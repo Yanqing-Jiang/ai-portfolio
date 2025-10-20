@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 from types import SimpleNamespace
 from typing import List
@@ -14,7 +15,7 @@ from analytics.artifacts.models import (
     WebContextArtifact,
 )
 from analytics.core.events import TimedEventEmitter
-from analytics.flows.planner_executor import PlannerPhaseContext
+from analytics.flows.planner_executor import PlannerPhaseContext, _TOOL_QUEUE_SENTINEL
 from analytics.flows.single_agent_tools import SingleAgentController, _build_single_agent_cohesive_payload
 from analytics.routing import FollowUpRoute
 
@@ -144,3 +145,21 @@ def test_lane_summary_adds_rerun_scope_for_chart_revision() -> None:
     reuse_set = set(scope.get("reuse", []))
     assert reuse_set >= {"sql", "market", "web", "analysis"}
     assert scope.get("route") == FollowUpRoute.REUSE_SQL.value
+
+
+def test_flush_tool_events_marks_deltas_and_preserves_sentinel() -> None:
+    controller = SingleAgentController()
+    queue: asyncio.Queue = asyncio.Queue()
+    payload = {
+        "event": "tool_parallel_result",
+        "data": {"tool": "stock_tracker", "payload": {"ready": True}},
+    }
+    queue.put_nowait(payload)
+    queue.put_nowait(_TOOL_QUEUE_SENTINEL)
+
+    flushed = controller._planner._pipeline._flush_tool_events(queue)
+    assert len(flushed) == 1
+    assert flushed[0]["data"]["delta"] is True
+    assert flushed[0]["data"]["tool"] == "stock_tracker"
+    assert queue.qsize() == 1
+    assert queue.get_nowait() is _TOOL_QUEUE_SENTINEL

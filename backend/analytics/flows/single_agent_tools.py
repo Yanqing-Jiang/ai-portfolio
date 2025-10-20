@@ -28,7 +28,7 @@ from .planner_executor import (
 )
 from .pipeline_tools import get_planner_tool_registry
 from .schedulers import FlowMode, apply_mode_metadata, get_mode_config
-from .tooling import StockTrackerAdapter, WebRetrieverAdapter
+from .tooling import MarketQuestionAdapter, StockTrackerAdapter, WebRetrieverAdapter
 
 
 logger = logging.getLogger(__name__)
@@ -204,30 +204,6 @@ def _build_single_agent_cohesive_payload(
     if not (has_sql and has_stock and has_web):
         return None
     return sanitized
-
-
-class MarketQuestionAdapter(StockTrackerAdapter):
-    """Stock tracker wrapper that tags outputs for specific market questions."""
-
-    def __init__(self, alias: str, label: str) -> None:
-        super().__init__()
-        self.name = alias
-        self.display_name = label
-        self._question_id = alias
-
-    async def execute(self, context):  # type: ignore[override]
-        result = await super().execute(context)
-        if isinstance(result.metadata, dict):
-            meta = dict(result.metadata)
-        else:
-            meta = {}
-        meta.setdefault("question_id", self._question_id)
-        result.metadata = meta
-        if isinstance(result.payload, dict):
-            payload = dict(result.payload)
-            payload.setdefault("question_id", self._question_id)
-            result.payload = payload
-        return result
 
 
 class _SingleAgentToolHooks(AnalyticsFlowHooks):
@@ -478,7 +454,7 @@ class _SingleAgentToolHooks(AnalyticsFlowHooks):
             # For chart-only revisions we intentionally reuse the existing SQL, stock, and web context,
             # so suppress the generic "Pending lanes" warning and surface a reuse hint instead.
             missing = []
-            note = "Chart revision applied. SQL tables, stock telemetry, and market research were reused."
+            note = "Chart revision applied. Reused cached datasets for consistency."
         elif missing:
             readable = ", ".join(human_labels[name] for name in missing)
             note = f"Pending lanes: {readable}. Ask me to rerun those tools when you're ready."

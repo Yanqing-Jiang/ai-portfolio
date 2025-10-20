@@ -5,6 +5,7 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 
 import asyncio
+import time
 
 from copy import deepcopy
 
@@ -20,6 +21,7 @@ from analytics.flows import planner_executor
 from analytics.sql.compiler import compile_sql_from_plan
 from analytics.sql.sql_planner import plan_sql_rule_based, choose_template
 from analytics.core.state import QueryPlanModel, IntentModel
+from analytics.core.intent_impl.models import SlotStatusModel
 from analytics.core.session_state import get_session_state_repository
 from analytics.routing import FollowUpRoute
 
@@ -336,6 +338,30 @@ def _sanitize_events(events):
     return sanitized
 
 
+def test_planner_fanout_manifest_contains_accessory_lanes(monkeypatch):
+    captured = {}
+
+    def _capture_start(self, ctx, *, adapters=(), concurrency_override=None):
+        captured["names"] = [adapter.name for adapter in (adapters or ())]
+        return None, None
+
+    monkeypatch.setattr(planner_executor.PlannerPipeline, "_start_tool_parallelism", _capture_start)
+    flow = _setup_planner_flow(monkeypatch)
+    flow.flow_mode = planner_executor.FlowMode.SINGLE_AGENT
+    flow.parallelism_enabled = True
+
+    async def _run():
+        async for event in flow.events("NVDA revenue trend - fanout manifest", session_id="fanout-session"):
+            if event.get("event") == "sql_ready":
+                break
+
+    asyncio.run(_run())
+    assert captured.get("names") == [
+        "market_question_a",
+        "market_question_b",
+        "stock_tracker",
+        "web_retriever",
+    ]
 
 
 GOLDEN_EVENTS = [
@@ -361,6 +387,8 @@ GOLDEN_EVENTS = [
     {"event": "sql_validated", "stage": "sql"},
 
     {"event": "progress", "stage": "sql"},
+    {"event": "execution_stats", "stage": "sql"},
+    {"event": "data_retrieved", "stage": "sql"},
     {"event": "sql_ready", "stage": "sql"},
 
     {"event": "progress", "stage": "chart"},
@@ -550,6 +578,53 @@ def test_follow_up_reuses_snapshot_metadata(monkeypatch):
         asyncio.run(repo.delete(session_id))
 
 
+def test_reused_analysis_event_contains_summary_and_reuse_flag():
+    timed_emitter = planner_executor.TimedEventEmitter(session_id="session-stock-only", flow="test")
+    ctx = planner_executor.PlannerPhaseContext(
+        query="Stock follow-up",
+        session_id="session-stock-only",
+        workflow_start=time.time(),
+        timed_emitter=timed_emitter,
+        flow_mode=planner_executor.FlowMode.MULTI_AGENT,
+        configs={},
+    )
+    ctx.artifacts.analysis = planner_executor.AnalysisArtifact(
+        query="Stock follow-up",
+        analysis_text="Reuse the prior analysis narrative.",
+        summary="Quick take reuse",
+        highlights=["Revenue steady", "Margins consistent"],
+        key_numbers=["Revenue: $10B", "YoY Growth: 8%"],
+        risk_watch=["FX volatility"],
+        next_steps=["Track NVDA hedges"],
+        stock_widget={"symbols": [["NASDAQ:NVDA", "NVDA"]]},
+        web_context={"summary": "Cached web context"},
+        evidence=[
+            {
+                "source_url": "https://example.com/nvda",
+                "title": "NVDA earnings recap",
+                "confidence": 0.85,
+            }
+        ],
+    )
+
+    event = planner_executor._build_reused_analysis_event(planner_executor.FlowMode.MULTI_AGENT, ctx)
+    assert event is not None
+    assert event["event"] == "analysis_complete"
+    data = event["data"]
+    assert data.get("reused") is True
+    assert data.get("flow_mode") == planner_executor.FlowMode.MULTI_AGENT.value
+    analysis_payload = data.get("analysis") or {}
+    assert analysis_payload.get("analysis") == "Reuse the prior analysis narrative."
+    assert analysis_payload.get("analysis_length") == 35
+    assert analysis_payload.get("tldr") == "Quick take reuse"
+    assert analysis_payload.get("bullets") == ["Revenue steady", "Margins consistent"]
+    assert analysis_payload.get("key_numbers") == ["Revenue: $10B", "YoY Growth: 8%"]
+    assert analysis_payload.get("risk_watch") == ["FX volatility"]
+    assert analysis_payload.get("next_steps") == ["Track NVDA hedges"]
+    evidence = analysis_payload.get("evidence")
+    assert evidence and evidence[0]["source_url"] == "https://example.com/nvda"
+
+
 def test_market_share_sql_template_emits_annual_columns():
     intent = IntentModel(intent_key='market_share_single', confidence=0.9, slots_detected={'company': 'NVDA'})
     plan_dict = plan_sql_rule_based(intent)
@@ -561,3 +636,27 @@ def test_market_share_sql_template_emits_annual_columns():
     assert 'calendar_year' in sql
     assert 'AND 1=1' not in sql
 
+
+def test_auto_fill_missing_slots_defaulted_from_suggestions():
+    emitter = planner_executor.TimedEventEmitter()
+    ctx = planner_executor.PlannerPhaseContext(
+        query="How's Nvidia margin growth compare to industry average?",
+        session_id="session-123",
+        workflow_start=time.time(),
+        timed_emitter=emitter,
+    )
+    ctx.slot_statuses = {
+        "timeframe": SlotStatusModel(status="missing", value=None, reason=None, suggestions=["last_5_years"], allow_custom=False),
+        "metric": SlotStatusModel(status="missing", value=None, reason=None, suggestions=["Revenue"], allow_custom=False),
+    }
+    assumptions: list[str] = []
+
+    remaining = planner_executor._auto_fill_missing_slots(ctx, assumptions)
+
+    assert remaining == []
+    assert ctx.slot_statuses["timeframe"].status in {"assumed", "defaulted"}
+    assert ctx.slot_statuses["timeframe"].value == "last_5_years"
+    assert ctx.slot_statuses["metric"].status in {"assumed", "defaulted"}
+    assert ctx.slot_statuses["metric"].value == "Revenue"
+    assert any(entry.startswith("Using timeframe: last_5_years") for entry in assumptions)
+    assert any(entry.startswith("Using metric") for entry in assumptions)

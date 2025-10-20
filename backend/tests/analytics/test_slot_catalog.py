@@ -17,8 +17,9 @@ def test_timeframe_presets_available_for_market_share():
     definition = catalog.get_intent_definition("market_share_single")
     assert definition is not None
     timeframe_options = definition.slot_options["timeframe"]
-    assert "last 4 quarters" in timeframe_options.presets
+    assert timeframe_options.presets[:4] == ["last 5 years", "last 2 years", "last 8 quarters", "year to date"]
     assert "last 5 years" in timeframe_options.suggestions
+    assert "last 2 years" in timeframe_options.suggestions
     assert timeframe_options.allow_custom is True
 
 

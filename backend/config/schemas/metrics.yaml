@@ -210,18 +210,19 @@ slot_suggestions:
     - "R&D Expense"
     - "Gross Profit"
   timeframe_presets:
-    - value: "last_4_quarters"
-      label: "last 4 quarters"
-      years_back: 1
-      aliases: ["last four quarters"]
-    - value: "last_8_quarters"
-      label: "last 8 quarters"
-      years_back: 2
-      aliases: ["last eight quarters"]
     - value: "last_5_years"
       label: "last 5 years"
       years_back: 5
       aliases: ["last five years", "past 5 years"]
+    - value: "last_2_years"
+      label: "last 2 years"
+      years_back: 2
+      aliases: ["last two years", "past 2 years"]
+    - value: "last_8_quarters"
+      label: "last 8 quarters"
+      years_back: 2
+      quarters_back: 8
+      aliases: ["last eight quarters"]
     - value: "year_to_date"
       label: "year to date"
       years_back: 1

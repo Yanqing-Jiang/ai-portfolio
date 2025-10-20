@@ -3,6 +3,7 @@ import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
 import { render, act, screen, renderHook } from '@testing-library/react';
 import { useAnalyticsMemoryStream } from './useAnalyticsMemoryStream';
+import { apiService } from '../../../services/apiService';
 
 // Mock the API service used by useAnalyticsStream to avoid network
 vi.mock('../../../services/apiService', () => ({
@@ -36,7 +37,7 @@ vi.mock('./useAnalyticsStream', () => {
 });
 
 function HookHarness({ query, flow }: { query: string; flow: 'planner-executor' | 'single-agent' | 'multi-agent' }) {
-  const { handleQuery, chatHistory, processSteps, revisionMode } = useAnalyticsMemoryStream(flow);
+  const { handleQuery, chatHistory, processSteps, revisionMode, analysisBundle } = useAnalyticsMemoryStream(flow);
   const firstResult = chatHistory.find((m) => m.type === 'result');
 
   React.useEffect(() => {
@@ -59,6 +60,7 @@ function HookHarness({ query, flow }: { query: string; flow: 'planner-executor' 
       </ul>
       <div data-testid="first-result-evidence">{firstResult?.analysisOverview ? JSON.stringify(firstResult.analysisOverview.evidence || []) : ''}</div>
       <div data-testid="latency-guardrail-status">{firstResult?.latencyGuardrail?.status ?? ''}</div>
+      <div data-testid="analysis-bundle">{analysisBundle ? JSON.stringify(analysisBundle) : ''}</div>
     </div>
   );
 }
@@ -78,6 +80,20 @@ describe('useAnalyticsMemoryStream result deduping', () => {
     expect(resultCount).toBe(1);
   });
 
+  it('dedupes repeated analysis_ready payloads', async () => {
+    (globalThis as any).__TEST_EVENTS__ = [
+      { event: 'analysis_ready', data: { analysis: 'Final NVDA summary.' } },
+      { event: 'analysis_ready', data: { analysis: 'Final NVDA summary.' } },
+      { event: 'workflow_complete', total_elapsed_ms: 640 },
+    ];
+
+    await act(async () => {
+      render(<HookHarness query="dedupe analysis" flow="planner-executor" />);
+    });
+
+    const resultCount = Number(screen.getByTestId('result-count').textContent);
+    expect(resultCount).toBe(1);
+  });
   it('parses evidence entries from analysis_overview payloads', async () => {
     (globalThis as any).__TEST_EVENTS__ = [
       {
@@ -117,16 +133,30 @@ describe('useAnalyticsMemoryStream result deduping', () => {
 
   it('emits a single result for cohesive_result followed by workflow_complete', async () => {
     (globalThis as any).__TEST_EVENTS__ = [
-      { event: 'cohesive_result', analysis: 'Cohesive final output', sql: 'SELECT 1', tool_results: [] },
+      {
+        event: 'cohesive_result',
+        analysis: 'Cohesive final output',
+        sql: 'SELECT 1',
+        tool_results: [],
+        analysis_bundle: {
+          sql: { row_count: 4, columns: ['metric', 'value'] },
+          stock: { symbols: ['NASDAQ:AMD'] },
+        },
+      },
       { event: 'workflow_complete' },
     ];
 
     await act(async () => {
       render(<HookHarness query="another" flow="single-agent" />);
     });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 75));
+    });
 
     const resultCount = Number(screen.getByTestId('result-count').textContent);
     expect(resultCount).toBe(1);
+    const bundleText = screen.getByTestId('analysis-bundle').textContent || '';
+    expect(bundleText).toContain('"row_count":4');
   });
 
   it('merges repeated analysis_ready sources into a single Financial Analysis card', async () => {
@@ -268,6 +298,85 @@ describe('useAnalyticsMemoryStream result deduping', () => {
     expect(resultCount).toBe(2);
 
     expect(screen.getByTestId('revision-mode').textContent).toBe('analysis');
+  });
+
+  it('replaces duplicate revision payloads instead of appending new messages', async () => {
+    (globalThis as any).__TEST_EVENTS__ = [
+      { event: 'chart_patch', data: { ops: [{ op: 'set_chart_type', value: 'line' }], status: 'applied' } },
+      { event: 'chart_patch', data: { ops: [{ op: 'set_chart_type', value: 'line' }], status: 'applied' } },
+    ];
+
+    await act(async () => {
+      render(<HookHarness query="revise chart twice" flow="single-agent" />);
+    });
+
+    const resultCount = Number(screen.getByTestId('result-count').textContent);
+    expect(resultCount).toBe(2);
+    expect(screen.getByTestId('revision-mode').textContent).toBe('chart');
+  });
+});
+
+describe('useAnalyticsMemoryStream clarifications', () => {
+  it('echoes timeframe clarification responses as chat messages', async () => {
+    const request = {
+      request_id: 'req-timeframe',
+      session_id: 'session-clarify',
+      slot: 'timeframe',
+      question: 'Select a value for timeframe',
+      type: 'single' as const,
+      options: ['last 5 years', 'last 2 years', 'last 8 quarters', 'year to date'],
+      default: null,
+      reason: 'Additional context requested to tailor the analysis.',
+      required: true,
+      mode: 'single_agent',
+    };
+
+    const { result } = renderHook(() => useAnalyticsMemoryStream('single-agent'));
+
+    await act(async () => {
+      await result.current.submitClarification('last 8 quarters ', request as any);
+    });
+
+    const userMessages = result.current.chatHistory.filter((msg) => msg.type === 'user');
+    expect(userMessages.at(-1)?.content).toBe('Timeframe: last 8 quarters');
+    expect(apiService.post).toHaveBeenCalledWith(
+      '/api/analytics/memory/clarify',
+      expect.objectContaining({
+        slot: 'timeframe',
+        value: 'last 8 quarters',
+      }),
+    );
+  });
+
+  it('echoes free-text timeframe clarifications when custom value is provided', async () => {
+    const request = {
+      request_id: 'req-timeframe-custom',
+      session_id: 'session-clarify',
+      slot: 'timeframe',
+      question: 'Select a value for timeframe',
+      type: 'single' as const,
+      options: ['last 5 years', 'last 2 years'],
+      default: null,
+      reason: 'Additional context requested to tailor the analysis.',
+      required: true,
+      mode: 'single_agent',
+    };
+
+    const { result } = renderHook(() => useAnalyticsMemoryStream('single-agent'));
+
+    await act(async () => {
+      await result.current.submitClarification('custom trailing 18 months', request as any);
+    });
+
+    const userMessages = result.current.chatHistory.filter((msg) => msg.type === 'user');
+    expect(userMessages.at(-1)?.content).toBe('Timeframe: custom trailing 18 months');
+    expect(apiService.post).toHaveBeenCalledWith(
+      '/api/analytics/memory/clarify',
+      expect.objectContaining({
+        slot: 'timeframe',
+        value: 'custom trailing 18 months',
+      }),
+    );
   });
 });
 

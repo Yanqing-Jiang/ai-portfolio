@@ -52,17 +52,17 @@ const FINAL_ANSWER_BANNER_KEY = 'aa.finalAnswerOnlyDismissed';
 
 const FLOW_META: Record<FlowMode, { title: string; accent: string; description: string }> = {
   'planner-executor': {
-    title: 'Direct Workflow',
+    title: 'Direct fixed workflow with RAG-backed SQL guidance',
     accent: 'text-emerald-300',
     description: 'Deterministic direct workflow with ordered tool execution.',
   },
   'single-agent': {
-    title: 'Single Agent + Tools',
+    title: 'Claude-Code style single agent with multiple tool calling capability',
     accent: 'text-blue-300',
     description: 'Autonomous agent orchestrating structured tool calls.',
   },
   'multi-agent': {
-    title: 'Multi-Agent Relay',
+    title: 'Single Supervisor agent collaboration across multiple specialist agents',
     accent: 'text-purple-300',
     description: 'Coordinator handing work across planner, analyst, and viz roles.',
   },
@@ -95,6 +95,8 @@ const TIMEFRAME_PRESETS: Record<string, string> = {
   "last 8 quarters": "last 8 quarters",
   last_5_years: "last 5 years",
   "last 5 years": "last 5 years",
+  last_2_years: "last 2 years",
+  "last 2 years": "last 2 years",
   year_to_date: "year to date",
   "year to date": "year to date",
   ytd: "year to date",
@@ -181,9 +183,98 @@ const formatSlotLabel = (slot: string): string => {
     .replace(/\\s+/g, ' ')
     .trim()
     .replace(/^[a-z]/, (match) => match.toUpperCase());
-};
-
-const STATUS_STYLES: Record<ProcessStep['status'], { border: string; text: string; indicator: string; pill: string }> = {
+};
+
+interface NormalizedAnalysisSource {
+  key: string;
+  label: string;
+  lane?: string;
+  reused?: boolean;
+  summary?: string;
+  rowCount?: number;
+  columns?: string[];
+  symbols?: string[];
+  snippetCount?: number;
+  latestClose?: number;
+  changePercent?: number;
+}
+
+const normalizeAnalysisSources = (sources?: AnalysisSources | null): NormalizedAnalysisSource[] => {
+  if (!sources || typeof sources !== 'object') {
+    return [];
+  }
+
+  const toTrimmedString = (value: unknown) => (typeof value === 'string' ? value.trim() : undefined);
+
+  return Object.entries(sources)
+    .map(([key, raw]) => {
+      if (!raw || typeof raw !== 'object') {
+        return null;
+      }
+
+      const entry = raw as Record<string, unknown>;
+
+      const label =
+        toTrimmedString(entry.label) ??
+        key
+          .replace(/[_-]/g, ' ')
+          .replace(/\b\w/g, (char) => char.toUpperCase());
+
+      const lane = toTrimmedString(entry.lane);
+      const summary = toTrimmedString(entry.summary);
+      const rowCount =
+        typeof entry.rowCount === 'number' && Number.isFinite(entry.rowCount)
+          ? entry.rowCount
+          : undefined;
+
+      const columns = Array.isArray(entry.columns)
+        ? (entry.columns as unknown[])
+            .map((column) => (typeof column === 'string' ? column.trim() : undefined))
+            .filter((column): column is string => Boolean(column))
+        : undefined;
+
+      const symbols = Array.isArray(entry.symbols)
+        ? (entry.symbols as unknown[])
+            .map((symbol) => (typeof symbol === 'string' ? symbol.trim() : undefined))
+            .filter((symbol): symbol is string => Boolean(symbol))
+        : undefined;
+
+      const snippetCount =
+        typeof entry.snippetCount === 'number' && Number.isFinite(entry.snippetCount)
+          ? entry.snippetCount
+          : undefined;
+
+      const latestClose =
+        typeof entry.latestClose === 'number' && Number.isFinite(entry.latestClose)
+          ? entry.latestClose
+          : undefined;
+
+      const changePercent =
+        typeof entry.changePercent === 'number' && Number.isFinite(entry.changePercent)
+          ? entry.changePercent
+          : undefined;
+
+      const reused =
+        typeof entry.reused === 'boolean' ? entry.reused : undefined;
+
+      return {
+        key,
+        label,
+        lane,
+        reused,
+        summary,
+        rowCount,
+        columns,
+        symbols,
+        snippetCount,
+        latestClose,
+        changePercent,
+      };
+    })
+    .filter((entry): entry is NormalizedAnalysisSource => Boolean(entry));
+};
+
+const STATUS_STYLES: Record<ProcessStep['status'], { border: string; text: string; indicator: string; pill: string }> = {
   pending: {
     border: 'border-gray-600',
     text: 'text-gray-300',
@@ -937,7 +1028,74 @@ export const ProcessPanel: React.FC<ProcessPanelProps> = ({
             )}
           </div>
         ) : null}
-        {latency ? (
+        {analysisSourceEntries.length ? (
+          <div className="rounded-xl border border-blue-400/40 bg-blue-500/10 p-3 text-blue-100/90">
+            <div className="text-[10px] uppercase tracking-wide text-blue-300">Data Inputs</div>
+            <div className="mt-2 space-y-2">
+              {analysisSourceEntries.map((source) => {
+                const formattedColumns =
+                  source.columns && source.columns.length
+                    ? `${source.columns.slice(0, 4).join(', ')}${source.columns.length > 4 ? ', …' : ''}`
+                    : null;
+                const formattedSymbols =
+                  source.symbols && source.symbols.length
+                    ? `${source.symbols.slice(0, 4).join(', ')}${source.symbols.length > 4 ? ', …' : ''}`
+                    : null;
+                const formattedChange =
+                  typeof source.changePercent === 'number'
+                    ? `${source.changePercent >= 0 ? '+' : ''}${source.changePercent.toFixed(2)}%`
+                    : null;
+                return (
+                  <div
+                    key={source.key}
+                    className="rounded-lg border border-blue-400/30 bg-blue-500/10 p-3 text-[11px] leading-relaxed text-blue-100/90"
+                  >
+                    <div className="flex flex-wrap items-center gap-2 text-[10px] uppercase tracking-wide text-blue-200">
+                      <span className="font-semibold">{source.label}</span>
+                      {source.lane ? (
+                        <span className="rounded-full border border-blue-300/50 px-2 py-0.5 text-blue-100">
+                          Lane {formatScheduleStage(source.lane)}
+                        </span>
+                      ) : null}
+                      {source.reused ? (
+                        <span className="rounded-full border border-blue-300/50 px-2 py-0.5 text-blue-100">
+                          Cached
+                        </span>
+                      ) : null}
+                    </div>
+                    {source.summary ? (
+                      <div className="mt-1 text-blue-100/85">{source.summary}</div>
+                    ) : null}
+                    {source.rowCount !== undefined ? (
+                      <div className="mt-1 text-[10px] text-blue-200/80">
+                        Rows analysed: {source.rowCount.toLocaleString()}
+                      </div>
+                    ) : null}
+                    {formattedColumns ? (
+                      <div className="mt-1 text-[10px] text-blue-200/80">Columns: {formattedColumns}</div>
+                    ) : null}
+                    {formattedSymbols ? (
+                      <div className="mt-1 text-[10px] text-blue-200/80">Symbols: {formattedSymbols}</div>
+                    ) : null}
+                    {source.latestClose !== undefined ? (
+                      <div className="mt-1 text-[10px] text-blue-200/80">
+                        Latest close: ${source.latestClose.toFixed(2)}
+                        {formattedChange ? ` (${formattedChange})` : ''}
+                      </div>
+                    ) : null}
+                    {source.snippetCount !== undefined ? (
+                      <div className="mt-1 text-[10px] text-blue-200/80">
+                        Snippets reviewed: {source.snippetCount}
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ) : null}
+
+        {latency ? (
           <div className="rounded-xl border border-amber-300/40 bg-amber-500/10 p-3 text-amber-100/90">
             <div className="text-[10px] uppercase tracking-wide text-amber-300">Web Search Latency</div>
             <div className="mt-1 text-[11px] leading-relaxed space-y-1">
@@ -1338,7 +1496,11 @@ export const ProcessPanel: React.FC<ProcessPanelProps> = ({
             </button>
           </div>
         </div>
-        <div className="relative flex-1 overflow-hidden">
+        <div
+          className={`relative flex-1 overflow-hidden ${
+            flowMode === 'multi-agent' ? 'min-h-[520px] sm:min-h-[560px]' : 'min-h-[420px] sm:min-h-[460px]'
+          }`}
+        >
           {isFanoutMode && singleAgentFanout ? (
             <SingleAgentFanoutCanvas fanout={singleAgentFanout} />
           ) : (

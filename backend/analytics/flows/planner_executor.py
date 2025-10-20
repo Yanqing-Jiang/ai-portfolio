@@ -51,7 +51,13 @@ from analytics.routing import FollowUpRoute
 from analytics.validators import sanitize_for_json
 from analytics.prompt_versions import get_prompt_versions
 from .hooks import AnalyticsFlowHooks, NullFlowHooks
-from .tooling import run_tool_parallelism, get_default_tool_adapters
+from .tooling import (
+    run_tool_parallelism,
+    get_default_tool_adapters,
+    MarketQuestionAdapter,
+    StockTrackerAdapter,
+    WebRetrieverAdapter,
+)
 from analytics.core.intent import (
     intent_to_sql_criteria,
     detect_intent,
@@ -130,6 +136,8 @@ _FLOW_MODE_TO_RESOLVER_MODE: Dict[FlowMode, str] = {
     FlowMode.SINGLE_AGENT: "fanout",
     FlowMode.MULTI_AGENT: "multi_agent",
 }
+
+_TOOL_QUEUE_SENTINEL: object = object()
 def _env_flag(name: str, *, default: bool = False) -> bool:
     # Legacy env flag helper retained for backwards compatibility in logs only.
     # Behavioural flags have been removed; flows use built-in defaults.
@@ -286,6 +294,17 @@ def _hash_payload(payload: Any) -> str:
     except TypeError:
         encoded = json.dumps(str(normalized), sort_keys=True).encode("utf-8")
     return hashlib.sha1(encoded).hexdigest()
+
+
+def _accessory_tool_adapters() -> Tuple[Any, ...]:
+    """Return tool adapters that supply market and web lanes."""
+    return (
+        MarketQuestionAdapter("market_question_a", "Market Research Question A"),
+        MarketQuestionAdapter("market_question_b", "Market Research Question B"),
+        StockTrackerAdapter(),
+        WebRetrieverAdapter(),
+    )
+
 
 @dataclass
 class PlannerPhaseContext:
@@ -1361,6 +1380,68 @@ def _compose_stock_ready_payload(ctx: PlannerPhaseContext) -> Optional[Dict[str,
         payload['snapshot_age_seconds'] = ctx.snapshot_age_seconds
     return payload
 
+
+def _compose_reused_analysis_payload(ctx: PlannerPhaseContext) -> Optional[Dict[str, Any]]:
+    artifact = ctx.artifacts.analysis
+    if artifact is None and ctx.snapshot_artifacts and ctx.snapshot_artifacts.analysis:
+        artifact = ctx.snapshot_artifacts.analysis
+    if artifact is None:
+        return None
+
+    artifact_dict = artifact.to_dict()
+    if not artifact_dict:
+        return None
+
+    payload: Dict[str, Any] = {}
+    analysis_text = artifact_dict.get("analysis_text")
+    if analysis_text:
+        payload["analysis"] = analysis_text
+        payload["analysis_length"] = artifact_dict.get("length") or len(analysis_text)
+    summary = artifact_dict.get("summary")
+    if summary:
+        payload["tldr"] = summary
+    highlights = artifact_dict.get("highlights")
+    if highlights:
+        payload["bullets"] = highlights
+    key_numbers = artifact_dict.get("key_numbers")
+    if key_numbers:
+        payload["key_numbers"] = key_numbers
+    risk_watch = artifact_dict.get("risk_watch")
+    if risk_watch:
+        payload["risk_watch"] = risk_watch
+    next_steps = artifact_dict.get("next_steps")
+    if next_steps:
+        payload["next_steps"] = next_steps
+    stock_widget = artifact_dict.get("stock_widget")
+    if stock_widget:
+        payload["stock_widget"] = stock_widget
+    web_context = artifact_dict.get("web_context")
+    if web_context:
+        payload["web_context"] = web_context
+    evidence = artifact_dict.get("evidence")
+    if evidence:
+        payload["evidence"] = evidence
+    tool_bundle = artifact_dict.get("tool_bundle")
+    if tool_bundle:
+        payload["tool_bundle"] = tool_bundle
+
+    sanitized = sanitize_for_json(payload)
+    return sanitized or None
+
+
+def _build_reused_analysis_event(flow_mode: FlowMode, ctx: PlannerPhaseContext) -> Optional[Dict[str, Any]]:
+    payload = _compose_reused_analysis_payload(ctx)
+    if not payload:
+        return None
+    event = EventEmitter.result("analysis_complete", payload, key="analysis")
+    event["event"] = "analysis_complete"
+    event["data"]["ts"] = datetime.utcnow().isoformat()
+    event["data"]["reused"] = True
+    event["data"]["flow_mode"] = flow_mode.value
+    event["data"]["lane"] = "analysis"
+    return event
+
+
 def _compose_web_ready_payload(ctx: PlannerPhaseContext) -> Optional[Dict[str, Any]]:
     web_payload: Optional[Dict[str, Any]] = None
     if ctx.artifacts.analysis and ctx.artifacts.analysis.web_context:
@@ -2047,28 +2128,159 @@ class PlannerPipeline:
         queue: asyncio.Queue = asyncio.Queue()
 
         async def runner() -> None:
-            async for event in run_tool_parallelism(
-                ctx,
-                adapters=adapters,
-                concurrency_override=concurrency_override,
-            ):
-                self._ingest_tool_event(ctx, event)
-                await queue.put(event)
+            try:
+                async for event in run_tool_parallelism(
+                    ctx,
+                    adapters=adapters,
+                    concurrency_override=concurrency_override,
+                ):
+                    self._ingest_tool_event(ctx, event)
+                    await queue.put(event)
+            finally:
+                await queue.put(_TOOL_QUEUE_SENTINEL)
 
         task = asyncio.create_task(runner())
         return task, queue
 
-    @staticmethod
-    def _flush_tool_events(queue: Optional[asyncio.Queue]) -> List[Dict[str, Any]]:
+    async def _stream_with_tool_state(
+        self,
+        stream: AsyncGenerator[Dict[str, Any], None],
+        tool_state: Optional[Dict[str, Any]],
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        if tool_state is None or not tool_state.get("active", False):
+            async for event in stream:
+                yield event
+            return
+
+        queue: asyncio.Queue = tool_state["queue"]
+        queue_task: Optional[asyncio.Task] = None
+        stream_iter = stream.__aiter__()
+        stream_task: Optional[asyncio.Task] = asyncio.create_task(stream_iter.__anext__())
+
+        try:
+            while True:
+                tasks: Set[asyncio.Task] = set()
+                if stream_task is not None:
+                    tasks.add(stream_task)
+                if tool_state.get("active", False):
+                    if queue_task is None:
+                        queue_task = asyncio.create_task(queue.get())
+                    tasks.add(queue_task)
+                elif queue_task is not None:
+                    queue_task.cancel()
+                    queue_task = None
+
+                if not tasks:
+                    break
+
+                done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+
+                if queue_task in done:
+                    try:
+                        tool_event = queue_task.result()
+                    except asyncio.CancelledError:
+                        tool_event = None
+                    queue_task = None
+                    if tool_event is _TOOL_QUEUE_SENTINEL:
+                        tool_state["active"] = False
+                    elif tool_event is not None:
+                        try:
+                            logger.debug(
+                                "planner_executor.tool_delta_emitted",
+                                extra={
+                                    "flow_mode": getattr(self, "flow_mode", FlowMode.DIRECT).value,
+                                    "event": tool_event.get("event"),
+                                    "tool": (tool_event.get("data") or {}).get("tool"),
+                                },
+                            )
+                        except Exception:
+                            pass
+                        yield self._mark_delta_event(tool_event)
+
+                if stream_task in done:
+                    try:
+                        event = stream_task.result()
+                    except StopAsyncIteration:
+                        stream_task = None
+                    else:
+                        try:
+                            logger.debug(
+                                "planner_executor.core_event_emitted",
+                                extra={
+                                    "flow_mode": getattr(self, "flow_mode", FlowMode.DIRECT).value,
+                                    "event": event.get("event"),
+                                    "step": event.get("data", {}).get("step") if isinstance(event.get("data"), dict) else None,
+                                },
+                            )
+                        except Exception:
+                            pass
+                        yield event
+                        stream_task = asyncio.create_task(stream_iter.__anext__())
+
+            if tool_state and tool_state.get("active", False):
+                while True:
+                    try:
+                        pending = queue.get_nowait()
+                    except QueueEmpty:
+                        break
+                    if pending is _TOOL_QUEUE_SENTINEL:
+                        tool_state["active"] = False
+                        break
+                    yield self._mark_delta_event(pending)
+        finally:
+            if queue_task:
+                queue_task.cancel()
+            if stream_task:
+                stream_task.cancel()
+
+    def _flush_tool_events(self, queue: asyncio.Queue) -> List[Dict[str, Any]]:
+        """Drain any immediately available tool events without blocking."""
         flushed: List[Dict[str, Any]] = []
-        if queue is None:
-            return flushed
+        sentinel_found = False
         while True:
             try:
-                flushed.append(queue.get_nowait())
+                event = queue.get_nowait()
             except QueueEmpty:
                 break
+            if event is _TOOL_QUEUE_SENTINEL:
+                sentinel_found = True
+                break
+            flushed.append(self._mark_delta_event(event))
+        if sentinel_found:
+            queue.put_nowait(_TOOL_QUEUE_SENTINEL)
         return flushed
+
+    def _collect_tool_deltas_now(self, tool_state: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        deltas: List[Dict[str, Any]] = []
+        if not tool_state or not tool_state.get("active", False):
+            return deltas
+        queue: asyncio.Queue = tool_state["queue"]
+        while True:
+            try:
+                event = queue.get_nowait()
+            except QueueEmpty:
+                break
+            if event is _TOOL_QUEUE_SENTINEL:
+                tool_state["active"] = False
+                break
+            deltas.append(self._mark_delta_event(event))
+        return deltas
+
+    async def _drain_tool_state_async(
+        self,
+        tool_state: Optional[Dict[str, Any]],
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        if not tool_state or not tool_state.get("active", False):
+            return
+        queue: asyncio.Queue = tool_state["queue"]
+        while tool_state.get("active", False):
+            event = await queue.get()
+            if event is _TOOL_QUEUE_SENTINEL:
+                tool_state["active"] = False
+                break
+            yield self._mark_delta_event(event)
+        for pending in self._collect_tool_deltas_now(tool_state):
+            yield pending
 
     async def _emit_post_analysis_accessories(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[str, Any], None]:
         mode_config = get_mode_config(ctx.flow_mode)
@@ -2508,6 +2720,59 @@ class PlannerPipeline:
                 status="success",
             )
             self._capture_artifacts(ctx)
+
+            execution_artifact = getattr(ctx.artifacts, "sql_execution", None)
+            row_count = getattr(execution_artifact, "row_count", None) if execution_artifact else None
+            columns: List[str] = []
+            sample_rows: List[Dict[str, Any]] = []
+            if execution_artifact:
+                columns = list(getattr(execution_artifact, "columns", []) or [])[:12]
+                preview = getattr(execution_artifact, "dataset_preview", None)
+                sample_rows = list(preview or getattr(execution_artifact, "sample_rows", []) or [])[:20]
+
+            execution_event = EventEmitter.result(
+                "execution_stats",
+                {
+                    "row_count": row_count,
+                    "columns": columns,
+                    "columns_count": len(columns),
+                },
+            )
+            execution_event["event"] = "execution_stats"
+            execution_event["data"].update(
+                {
+                    "ts": datetime.utcnow().isoformat(),
+                    "elapsed_ms": exec_elapsed,
+                    "schedule_stage": "sql",
+                    "parallel_group": "core_sequential",
+                    "flow_mode": self.flow_mode.value,
+                    "lane": "sql",
+                    "reused": False,
+                }
+            )
+            yield execution_event
+
+            data_event = EventEmitter.result(
+                "data_retrieved",
+                {
+                    "row_count": row_count,
+                    "sample_data": sample_rows,
+                },
+            )
+            data_event["event"] = "data_retrieved"
+            data_event["data"].update(
+                {
+                    "ts": datetime.utcnow().isoformat(),
+                    "elapsed_ms": exec_elapsed,
+                    "schedule_stage": "sql",
+                    "parallel_group": "core_sequential",
+                    "flow_mode": self.flow_mode.value,
+                    "lane": "sql",
+                    "reused": False,
+                }
+            )
+            yield data_event
+
         except Exception as exec_exc:
             exec_elapsed = int((time.time() - exec_start) * 1000)
             _set_sql_execution_artifact(
@@ -3147,10 +3412,7 @@ class PlannerPipeline:
         executed: Set[str] = set()
         mode_config = get_mode_config(self.flow_mode)
         tool_task: Optional[Task] = None
-        tool_queue: Optional[asyncio.Queue] = None
-
-        def pending_tool_events() -> List[Dict[str, Any]]:
-            return self._flush_tool_events(tool_queue)
+        tool_state: Optional[Dict[str, Any]] = None
 
         try:
             async for event in registry.invoke("classification", self, ctx, executed=executed):
@@ -3168,10 +3430,25 @@ class PlannerPipeline:
                 return
 
             should_run_parallel = ctx.parallelism_enabled and not (ctx.reuse_sql and ctx.reuse_snapshot_active)
+            fanout_adapters: Tuple[Any, ...] = ()
             if should_run_parallel:
-                tool_task, tool_queue = self._start_tool_parallelism(ctx)
-                for tool_event in pending_tool_events():
-                    yield tool_event
+                fanout_adapters = _accessory_tool_adapters()
+                if fanout_adapters:
+                    tool_task, tool_queue = self._start_tool_parallelism(
+                        ctx,
+                        adapters=fanout_adapters,
+                    )
+                    tool_state = {"queue": tool_queue, "active": True}
+                    for tool_event in self._collect_tool_deltas_now(tool_state):
+                        yield tool_event
+
+            if ctx.stock_only:
+                ctx.reuse_sql = True
+                ctx.reused_sql = True
+                ctx.reused_chart = True
+                ctx.reused_analysis = True
+                ctx.reused_web = True
+                ctx.parallelism_enabled = False
 
             reuse_sql = ctx.reuse_sql and ctx.revision_snapshot is not None
             if not reuse_sql and ctx.snapshot_stale and ctx.revision_snapshot:
@@ -3182,14 +3459,15 @@ class PlannerPipeline:
                 stale_progress["data"]["flow_mode"] = self.flow_mode.value
                 stale_progress["data"]["reused"] = False
                 yield stale_progress
-                for tool_event in pending_tool_events():
+                for tool_event in self._collect_tool_deltas_now(tool_state):
                     yield tool_event
 
             if not reuse_sql:
-                async for event in registry.invoke("sql_generation", self, ctx, executed=executed):
+                async for event in self._stream_with_tool_state(
+                    registry.invoke("sql_generation", self, ctx, executed=executed),
+                    tool_state,
+                ):
                     yield event
-                    for tool_event in pending_tool_events():
-                        yield tool_event
             else:
                 ctx.reused_sql = True
                 reuse_status = EventEmitter.progress("sql_generation", "Reusing cached SQL dataset")
@@ -3199,7 +3477,7 @@ class PlannerPipeline:
                 reuse_status["data"]["flow_mode"] = self.flow_mode.value
                 reuse_status["data"]["reused"] = True
                 yield reuse_status
-                for tool_event in pending_tool_events():
+                for tool_event in self._collect_tool_deltas_now(tool_state):
                     yield tool_event
                 receipt = ctx.tool_receipts.get("sql_chain")
                 if receipt:
@@ -3216,7 +3494,7 @@ class PlannerPipeline:
                         parallel_group="core_sequential",
                         lane="sql",
                     )
-                    for tool_event in pending_tool_events():
+                    for tool_event in self._collect_tool_deltas_now(tool_state):
                         yield tool_event
 
             await self._persist_session_state(
@@ -3236,19 +3514,12 @@ class PlannerPipeline:
                         "event": "sql_ready",
                         "data": sanitize_for_json(sql_payload),
                     }
-            for tool_event in pending_tool_events():
+            for tool_event in self._collect_tool_deltas_now(tool_state):
                 yield tool_event
-
-            if tool_task:
-                await tool_task
-                for tool_event in pending_tool_events():
-                    yield tool_event
-                tool_task = None
-                tool_queue = None
 
             if reuse_sql:
                 stock_payload = _compose_stock_ready_payload(ctx)
-                if stock_payload:
+                if stock_payload and not ctx.stock_only:
                     ctx.reused_stock = True
                     yield _cached_event(
                         "stock_ready",
@@ -3268,18 +3539,52 @@ class PlannerPipeline:
                         flow_mode=self.flow_mode,
                         parallel_group="tool_fanout",
                         lane="web",
-                    )
+                )
                 ctx.accessories_prefetched = True
             else:
-                async for event in self._ensure_analysis_dependencies(ctx):
+                async for event in self._stream_with_tool_state(
+                    self._ensure_analysis_dependencies(ctx),
+                    tool_state,
+                ):
                     yield event
-                    for tool_event in pending_tool_events():
-                        yield tool_event
+
+            if ctx.stock_only:
+                ctx.reused_stock = False
+                async for event in self._stream_with_tool_state(
+                    registry.invoke("stock_tracker", self, ctx, executed=executed),
+                    tool_state,
+                ):
+                    yield event
+                async for tool_event in self._drain_tool_state_async(tool_state):
+                    yield tool_event
+                await self._persist_session_state(ctx, record_artifacts=True)
+                analysis_event = _build_reused_analysis_event(self.flow_mode, ctx)
+                if analysis_event:
+                    yield analysis_event
+                banner_config = FOLLOW_UP_BANNERS.get(ctx.follow_up_route, FOLLOW_UP_BANNERS[FollowUpRoute.FULL_PIPELINE])
+                banner_event = EventEmitter.progress("follow_up_route", banner_config["message"])
+                banner_event["data"]["route"] = ctx.follow_up_route.value
+                banner_event["data"]["ts"] = datetime.utcnow().isoformat()
+                yield banner_event
+                planner_payload = _build_planner_result_payload(ctx)
+                result_event = EventEmitter.result("planner_result", planner_payload)
+                result_event["event"] = "planner_result"
+                result_event["data"]["ts"] = datetime.utcnow().isoformat()
+                yield result_event
+                total_elapsed = int((time.time() - ctx.workflow_start) * 1000)
+                workflow_complete = EventEmitter.result("workflow_complete", {"total_elapsed_ms": total_elapsed})
+                workflow_complete["event"] = "workflow_complete"
+                workflow_complete["data"]["ts"] = datetime.utcnow().isoformat()
+                yield workflow_complete
+                return
 
             if ctx.halted:
                 return
 
-            async for event in registry.invoke("chart_generation", self, ctx, executed=executed):
+            async for event in self._stream_with_tool_state(
+                registry.invoke("chart_generation", self, ctx, executed=executed),
+                tool_state,
+            ):
                 yield event
             await self._persist_session_state(
                 ctx,
@@ -3288,11 +3593,17 @@ class PlannerPipeline:
             )
 
             if mode_config.accessories_in_critical_path:
-                async for event in self._web_search_phase(ctx):
+                async for event in self._stream_with_tool_state(
+                    self._web_search_phase(ctx),
+                    tool_state,
+                ):
                     yield event
                 await self._persist_session_state(ctx, record_artifacts=True)
 
-            async for event in registry.invoke("analysis_generation", self, ctx, executed=executed):
+            async for event in self._stream_with_tool_state(
+                registry.invoke("analysis_generation", self, ctx, executed=executed),
+                tool_state,
+            ):
                 yield event
             await self._persist_session_state(
                 ctx,
@@ -3301,6 +3612,8 @@ class PlannerPipeline:
                 ),
                 record_artifacts=True,
             )
+            async for tool_event in self._drain_tool_state_async(tool_state):
+                yield tool_event
         finally:
             if tool_task:
                 tool_task.cancel()
@@ -3348,46 +3661,15 @@ async def _classification_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerato
     timed_emitter = ctx.timed_emitter
     timed_emitter.start_step("classification")
     classification_started_ts = datetime.utcnow().isoformat()
-    flow_mode = getattr(self, "flow_mode", None)
-    agentic_mode = flow_mode in {FlowMode.SINGLE_AGENT, FlowMode.MULTI_AGENT}
-    skip_classifier_flag = os.getenv("ANALYTICS_SINGLE_AGENT_SKIP_CLASSIFIER", "1").strip().lower()
-    skip_classifier = agentic_mode and skip_classifier_flag not in {"0", "false", "off"}
     model_name = "gpt-5-mini-2025-08-07"
     yield {
         "event": "classification_started",
         "data": {
-            "message": "Bypassing financial qualifier for agentic controller." if skip_classifier else "Starting query classification...",
+            "message": "Starting query classification...",
             "model": model_name,
             "ts": classification_started_ts,
         },
     }
-    if skip_classifier:
-        ctx.classification = None
-        ctx.is_financial_query = True
-        ctx.artifacts.classification = ClassificationArtifactModel(
-            query=ctx.query,
-            category="financial_analytics",
-            confidence=1.0,
-            is_financial=True,
-            model=model_name,
-            raw={"skipped": True},
-        )
-        self._capture_artifacts(ctx)
-        classification_elapsed = timed_emitter.end_step("classification")
-        classification_complete = {
-            "event": "classification_complete",
-            "data": {
-                "is_financial": ctx.is_financial_query,
-                "category": "financial_analytics",
-                "confidence": 1.0,
-                "skipped": True,
-                "ts": datetime.utcnow().isoformat(),
-            },
-        }
-        if classification_elapsed:
-            classification_complete["data"]["elapsed_ms"] = classification_elapsed
-        yield classification_complete
-        return
     classification: Optional[OffTopicClassifierSchema] = None
     try:
         classification = await classify_query_async(
@@ -3444,9 +3726,22 @@ async def _classification_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerato
         classification_complete["data"]["elapsed_ms"] = classification_elapsed
     yield classification_complete
     if not ctx.is_financial_query:
-        decline_message = classification.polite_decline_message or "I am here for financial analytics insights. Try asking about revenue trends or market share."
+        polite_default = (
+            "I'm focused on financial analytics questions. Please rephrase with a company, metric, or ticker so I can help."
+        )
+        decline_message = classification.polite_decline_message or polite_default
         if len(decline_message) > 200:
             decline_message = decline_message[:197] + "..."
+        decline_notice = {
+            "event": "classification_declined",
+            "data": {
+                "message": decline_message,
+                "category": classification.topic_category,
+                "confidence": classification.confidence,
+                "ts": datetime.utcnow().isoformat(),
+            },
+        }
+        yield decline_notice
         final_event = {
             "event": "final_answer",
             "data": {
@@ -3938,11 +4233,7 @@ async def _clarification_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator
     ctx.clarification_rounds = rounds
     ctx.clarifications = official_clarifications
 
-    remaining_missing = [
-        slot_name
-        for slot_name, status in (ctx.slot_statuses or {}).items()
-        if isinstance(status, SlotStatusModel) and status.status == "missing"
-    ]
+    remaining_missing = _auto_fill_missing_slots(ctx, assumptions)
     if remaining_missing:
         regenerated_requests: List[ClarifyRequestModel] = []
         for slot_name in remaining_missing:
@@ -4331,6 +4622,54 @@ async def run_planner_executor(query: str, session_id: Optional[str] = None) -> 
     workflow_instance = PlannerExecutorFlow()
     async for event in workflow_instance.events(query, session_id):
         yield event
+
+
+def _auto_fill_missing_slots(ctx: PlannerPhaseContext, assumptions: List[str]) -> List[str]:
+    assumption_lookup: Dict[str, str] = {}
+    for assumption in assumptions:
+        if not isinstance(assumption, str):
+            continue
+        parts = assumption.split(":", 1)
+        if len(parts) != 2:
+            continue
+        key, value = parts
+        assumption_lookup[key.strip().lower()] = value.strip()
+
+    remaining_missing: List[str] = []
+    for slot_name, status in (ctx.slot_statuses or {}).items():
+        if not isinstance(status, SlotStatusModel):
+            continue
+        if status.status != "missing":
+            continue
+        slot_label = slot_name.replace("_", " ")
+        assumption_key = f"using {slot_label}".lower()
+        assumed_value = assumption_lookup.get(assumption_key)
+        if assumed_value:
+            status.status = "assumed"
+            status.value = assumed_value
+            if not status.reason:
+                status.reason = "Auto-filled from existing assumptions."
+            ctx.slot_statuses[slot_name] = status
+            continue
+        default_value: Optional[str] = None
+        if slot_name == "timeframe":
+            if status.suggestions:
+                default_value = status.suggestions[0]
+            else:
+                default_value = "last_5_years"
+        elif slot_name == "metric":
+            if status.suggestions:
+                default_value = status.suggestions[0]
+        if default_value:
+            status.status = "defaulted"
+            status.value = default_value
+            if not status.reason:
+                status.reason = "Auto-filled due to missing clarification."
+            ctx.slot_statuses[slot_name] = status
+            assumptions.append(f"Using {slot_label}: {default_value}")
+            continue
+        remaining_missing.append(slot_name)
+    return remaining_missing
 
 
 

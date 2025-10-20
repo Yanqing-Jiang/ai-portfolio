@@ -102,6 +102,26 @@ describe('ChartCard', () => {
     });
   });
 
+  it('prefers displayNames metadata for dropdown labels', () => {
+    render(
+      <ChartCard
+        chartSpec={{
+          ...sampleSpec,
+          meta: {
+            includedColumns: ['market_share_percent'],
+            defaultColumns: ['market_share_percent'],
+            displayNames: { market_share_percent: 'Market Share' },
+          },
+        } as any}
+        enableDropdown
+      />,
+    );
+
+    const select = screen.getByLabelText('Series:') as HTMLSelectElement;
+    expect(select.value).toBe('Market Share');
+    expect(screen.getAllByRole('option')[0]).toHaveTextContent('Market Share');
+  });
+
   it('coerces string series values to numbers during hydration', () => {
     const hydrated = hydrateChartSpec({
       series: [

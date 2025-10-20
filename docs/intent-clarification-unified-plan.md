@@ -49,6 +49,15 @@ Deliver a unified, LLM-led intent resolution workflow that powers single-agent, 
 - **Frontend alignment** - Keep the "Financial Analysis ? TL;DR" copy inside the main chat bubble, pin the status/updates bar above charts, and persist structured values when a user confirms custom inputs so UI and backend stay in sync.
 - **Revenue growth visualization** - Trace the YAML-driven chart spec and frontend renderer so `revenue_growth_vs_avg` charts actually render the SQL rows (target: confirm the data array is non-empty in `ChartCard`, add fallback logging if not).
 
+## 2025-10-18 Implementation Notes
+- Multi-agent workflow nodes now resolve to dedicated lanes (``planner``, ``sql``, ``market``, ``web``, ``chart``, ``analysis``) underneath a single supervisor hub. The start node feeds ``agent_coordination``, which in turn fans tasks into the vertical specialist stacks so the canvas mirrors the Untitled.png reference.
+- The chat transcript keeps the streaming status badge anchored inside the most recent assistant bubble. Progressive updates and the final answer reuse the same ``result`` message instead of spawning an extra assistant reply.
+- Metric and timeframe clarifications flow through normalized payloads: ``normalize_timeframe`` tracks the ``source``, slot statuses remain ``missing`` until the user responds, and the SQL planner/templates honour the curated metric list through the ``{primary_metric}`` placeholder.
+- Added ``backend/tests/analytics/test_timeframe_normalization.py`` to guard the new timeframe semantics.
+- Chart revision fast-paths now skip re-running market or web lanes; the UI clears cached SQL/analysis artifacts so chart-only tweaks render in the existing bubble without duplicate cards.
+- Market share templates surface a single ``Market Share`` series with percent-only axes, and the dropdown honours ``displayNames`` metadata to avoid alias clutter. Regression coverage lives in ``backend/tests/analytics/test_chart_market_share.py`` and the updated ``ChartCard`` unit test.
+
+
 ## Remaining Work to Call This Initiative Complete
 1. **Finalize YAML Audit**
    - Run `PYTHONPATH=backend py scripts/report_slot_catalog_usage.py --days 7` (or similar) on recent ledgers.

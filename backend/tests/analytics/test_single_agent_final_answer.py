@@ -75,4 +75,4 @@ def test_single_agent_chart_revision_final_answer_mentions_reuse() -> None:
     assert payload["missing_components"] == []
     message = payload["message"]
     assert "Chart revision applied." in message
-    assert "reused" in message.lower()
+    assert "Reused cached datasets for consistency." in message

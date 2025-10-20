@@ -320,7 +320,12 @@ def _derive_tasks(
             reason="chart_revision",
             metadata={"tickers": tickers},
         )
-        plan.add_step("web_research", "run", reason="chart_revision")
+        plan.add_step(
+            "web_research",
+            "skip",
+            reason="chart_revision",
+            metadata={"source": web_ctx.get("source") if isinstance(web_ctx, Mapping) else None},
+        )
         return plan
 
     plan.add_step(
@@ -591,6 +596,12 @@ async def _chart_agent(context: AgentRunContext) -> AgentResult:
 
 
 async def _market_agent(context: AgentRunContext) -> AgentResult:
+    gate = context.shared.get('_runtime', {}).get('accessories_ready')
+    if isinstance(gate, asyncio.Event) and not gate.is_set():
+        try:
+            await asyncio.wait_for(gate.wait(), 1.5)
+        except asyncio.TimeoutError:
+            logger.debug("Market agent proceeding without accessories_ready signal after timeout.")
     planner_output = context.dependencies.get('planner_phase')
     tasks = planner_output.output.get('tasks', []) if planner_output else []
     status = _task_status(tasks, 'market')
@@ -708,6 +719,12 @@ async def _market_agent(context: AgentRunContext) -> AgentResult:
 
 
 async def _web_research_agent(context: AgentRunContext) -> AgentResult:
+    gate = context.shared.get('_runtime', {}).get('accessories_ready')
+    if isinstance(gate, asyncio.Event) and not gate.is_set():
+        try:
+            await asyncio.wait_for(gate.wait(), 1.5)
+        except asyncio.TimeoutError:
+            logger.debug("Web research agent proceeding without accessories_ready signal after timeout.")
     web_ctx = context.shared.setdefault('web', {})
     query = context.shared.get('query', context.query)
     session_id = context.session_id
@@ -963,9 +980,9 @@ def _build_default_plan() -> List[AgentTask]:
     return [
         AgentTask(name='planner_phase', agent='planner'),
         AgentTask(name='query_phase', agent='query', depends_on=('planner_phase',)),
+        AgentTask(name='market_phase', agent='market', depends_on=('planner_phase',)),
+        AgentTask(name='web_research_phase', agent='web_research', depends_on=('planner_phase',)),
         AgentTask(name='chart_phase', agent='chart', depends_on=('query_phase',)),
-        AgentTask(name='market_phase', agent='market', depends_on=('query_phase',)),
-        AgentTask(name='web_research_phase', agent='web_research', depends_on=('query_phase',)),
         AgentTask(
             name='analyst_phase',
             agent='analyst',
@@ -1299,6 +1316,27 @@ class MultiAgentFlow:
             }
         return None
 
+    def _get_accessories_gate(self) -> Optional[asyncio.Event]:
+        runtime_state = self._shared_context.get("_runtime", {})
+        event = runtime_state.get("accessories_ready")
+        return event if isinstance(event, asyncio.Event) else None
+
+    def _mark_accessories_ready(self) -> None:
+        gate = self._get_accessories_gate()
+        if gate and not gate.is_set():
+            gate.set()
+
+    async def _await_accessories_ready(self, timeout: float = 1.5) -> None:
+        gate = self._get_accessories_gate()
+        if not gate or gate.is_set():
+            return
+        try:
+            await asyncio.wait_for(gate.wait(), timeout)
+        except asyncio.TimeoutError:
+            logger.debug(
+                "Accessory gate wait timed out; continuing execution without ready signal.",
+            )
+
     def _queue_artifact_event(self, event_name: str, payload: Dict[str, Any]) -> None:
         sanitized_payload = sanitize_for_json(payload)
         if not isinstance(sanitized_payload, dict):
@@ -1339,6 +1377,18 @@ class MultiAgentFlow:
         event = {"event": event_name, "data": enriched_payload}
         self._pending_artifact_events.append(event)
         self._artifact_flush_pending = True
+        try:
+            logger.debug(
+                "multi_agent.artifact_enqueued",
+                extra={
+                    "event": event_name,
+                    "lane": lane,
+                    "parallel_group": enriched_payload.get("parallel_group"),
+                    "flow_mode": getattr(self, "flow_mode", FlowMode.MULTI_AGENT).value,
+                },
+            )
+        except Exception:
+            pass
 
     def _drain_artifact_events(self) -> List[Dict[str, Any]]:
         pending = self._pending_artifact_events
@@ -1470,6 +1520,117 @@ class MultiAgentFlow:
                 sources["web"] = entry
 
         return sources
+
+    def _analysis_bundle_snapshot(
+        self,
+        *,
+        analysis_ctx: Mapping[str, Any],
+        sql_ctx: Mapping[str, Any],
+        stock_widget: Optional[Mapping[str, Any]],
+        web_context: Optional[Mapping[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        bundle: Dict[str, Any] = {}
+
+        narrative = ""
+        if isinstance(analysis_ctx, Mapping):
+            narrative = str(analysis_ctx.get("final") or "").strip()
+        if narrative:
+            bundle["narrative"] = narrative
+
+        if isinstance(sql_ctx, Mapping) and (sql_ctx.get("sql") or sql_ctx.get("row_count") is not None):
+            sql_entry: Dict[str, Any] = {}
+            sql_text = sql_ctx.get("sql")
+            if isinstance(sql_text, str) and sql_text.strip():
+                sql_entry["query"] = sql_text.strip()
+            row_count = sql_ctx.get("row_count")
+            if isinstance(row_count, int):
+                sql_entry["row_count"] = row_count
+            columns = sql_ctx.get("columns")
+            if isinstance(columns, Sequence):
+                preview_cols = [str(col) for col in columns if isinstance(col, str)][:6]
+                if preview_cols:
+                    sql_entry["columns"] = preview_cols
+            sample_data = sql_ctx.get("sample_data")
+            if isinstance(sample_data, Sequence):
+                samples: List[Any] = []
+                for row in sample_data[:3]:
+                    if isinstance(row, Mapping):
+                        samples.append({str(k): v for k, v in row.items()})
+                    else:
+                        samples.append(row)
+                if samples:
+                    sql_entry["sample_rows"] = samples
+            if sql_entry:
+                bundle["sql"] = sql_entry
+
+        if isinstance(web_context, Mapping):
+            web_entry: Dict[str, Any] = {}
+            summary = web_context.get("summary")
+            if isinstance(summary, str) and summary.strip():
+                web_entry["summary"] = summary.strip()
+            topic = (
+                web_context.get("search_topic")
+                or web_context.get("searchTopic")
+                or web_context.get("query")
+            )
+            if isinstance(topic, str) and topic.strip():
+                web_entry["topic"] = topic.strip()
+            snippets = web_context.get("snippets")
+            if isinstance(snippets, Sequence):
+                normalized_snippets: List[Dict[str, Any]] = []
+                for snippet in snippets[:3]:
+                    if not isinstance(snippet, Mapping):
+                        continue
+                    normalized_snippets.append(
+                        {
+                            "title": snippet.get("title"),
+                            "snippet": snippet.get("snippet"),
+                            "url": snippet.get("url"),
+                            "display_url": snippet.get("display_url") or snippet.get("displayUrl"),
+                        }
+                    )
+                if normalized_snippets:
+                    web_entry["snippets"] = normalized_snippets
+            if web_entry:
+                bundle["web"] = web_entry
+
+        if isinstance(stock_widget, Mapping):
+            stock_entry: Dict[str, Any] = {}
+            raw_symbols = stock_widget.get("symbols")
+            symbols: List[str] = []
+            if isinstance(raw_symbols, Sequence):
+                for item in raw_symbols:
+                    candidate = None
+                    if isinstance(item, (list, tuple)) and item:
+                        candidate = item[0]
+                    elif isinstance(item, str):
+                        candidate = item
+                    if isinstance(candidate, str) and candidate.strip():
+                        symbols.append(candidate.strip().upper())
+            if symbols:
+                stock_entry["symbols"] = symbols[:3]
+            chart_type = stock_widget.get("chartType") or stock_widget.get("chart_type")
+            if isinstance(chart_type, str) and chart_type.strip():
+                stock_entry["chart_type"] = chart_type.strip()
+            generated_at = stock_widget.get("generated_at") or stock_widget.get("generatedAt")
+            if isinstance(generated_at, str) and generated_at.strip():
+                stock_entry["generated_at"] = generated_at.strip()
+            change_pct = stock_widget.get("change_percent")
+            if isinstance(change_pct, (int, float)):
+                stock_entry["change_percent"] = change_pct
+            latest_close = stock_widget.get("latest_close")
+            if isinstance(latest_close, (int, float)):
+                stock_entry["latest_close"] = latest_close
+            if stock_entry:
+                bundle["stock"] = stock_entry
+
+        if not bundle:
+            return None
+
+        sanitized = sanitize_for_json(bundle)
+        if isinstance(sanitized, dict) and sanitized:
+            return sanitized
+        return None
 
     def _lane_state_snapshot(self) -> Dict[str, str]:
         bundle_sources = self._shared_context.get("_meta", {}).get("bundle_sources", {})
@@ -1737,7 +1898,7 @@ class MultiAgentFlow:
         reuse_scope = self.follow_up_route == FollowUpRoute.REUSE_SQL
         if reuse_scope:
             missing = []
-            note = "Chart revision applied. SQL datasets, stock telemetry, and web research were reused."
+            note = "Chart revision applied. Reused cached datasets for consistency."
         elif missing:
             readable = ", ".join(human_labels[name] for name in missing)
             note = f"Pending lanes: {readable}. Ask me to rerun those tools when you're ready."
@@ -1931,6 +2092,8 @@ class MultiAgentFlow:
                 'prompt_versions': dict(self._prompt_versions),
             },
         }
+        runtime_state = self._shared_context.setdefault('_runtime', {})
+        runtime_state['accessories_ready'] = asyncio.Event()
         receipts_cache: Dict[str, Any] = {}
         if self._prefetched_snapshot and isinstance(self._prefetched_snapshot.tool_cache, dict):
             receipts_cache = copy.deepcopy(self._prefetched_snapshot.tool_cache.get("tool_receipts") or {})
@@ -2002,6 +2165,12 @@ class MultiAgentFlow:
     def _capture_event(self, event: Dict[str, Any]) -> None:
         name = event.get("event")
         data = event.get("data") or {}
+        if name == "criteria_ready":
+            self._mark_accessories_ready()
+        elif name == "clarification_skipped":
+            self._mark_accessories_ready()
+        elif name == "clarification_resolved":
+            self._mark_accessories_ready()
         if name == "session_started":
             session_identifier = data.get("session_id")
             if session_identifier:
@@ -2399,6 +2568,14 @@ class MultiAgentFlow:
             final_payload["sources"] = bundle_sources
         if analysis_sources:
             final_payload["analysis_sources"] = analysis_sources
+        analysis_bundle = self._analysis_bundle_snapshot(
+            analysis_ctx=analysis_ctx,
+            sql_ctx=sql_ctx,
+            stock_widget=stock_widget if isinstance(stock_widget, Mapping) else None,
+            web_context=web_context if isinstance(web_context, Mapping) else None,
+        )
+        if analysis_bundle:
+            final_payload["analysis_bundle"] = analysis_bundle
         sanitized_cohesive_payload = sanitize_for_json(final_payload)
         if isinstance(sanitized_cohesive_payload, Mapping):
             sanitized_cohesive_payload = dict(sanitized_cohesive_payload)

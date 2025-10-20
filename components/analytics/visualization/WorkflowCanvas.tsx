@@ -159,7 +159,7 @@ const FLOW_THEMES: Record<FlowMode, FlowVisualTheme> = {
 const FLOW_LAYOUT: Record<FlowMode, { columns: number; horizontalGap: number; verticalGap: number }> = {
   'planner-executor': { columns: 4, horizontalGap: 420, verticalGap: 280 },
   'single-agent': { columns: 5, horizontalGap: 400, verticalGap: 270 },
-  'multi-agent': { columns: 5, horizontalGap: 400, verticalGap: 280 },
+  'multi-agent': { columns: 5, horizontalGap: 520, verticalGap: 340 },
 };
 
 const STEP_LANE_OVERRIDES: Record<string, (typeof LANE_ORDER)[number]> = {
@@ -265,8 +265,10 @@ const STEP_PHASES: Record<string, (typeof PHASE_SEQUENCE)[number]> = {
   plan_chart: 'execution',
   chart_generation: 'execution',
   agent_coordination: 'execution',
+  sql_lane: 'execution',
+  market_lane: 'execution',
+  web_lane: 'execution',
   analysis_generation: 'synthesis',
-  short_financial_analysis: 'synthesis',
   finalization: 'synthesis',
 };
 
@@ -940,6 +942,15 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
   }, [steps]);
 
   const decor = FLOW_CANVAS_DECOR[flowMode];
+  const fitViewOptions = useMemo(
+    () => ({
+      padding: flowMode === 'multi-agent' ? 0.12 : 0.06,
+      maxZoom: 1.6,
+      minZoom: 0.35,
+      includeHiddenNodes: true,
+    }),
+    [flowMode],
+  );
 
   return (
     <div ref={containerRef} className={`relative flex h-full flex-col overflow-hidden ${decor.wrapperClass} ${className ?? ''}`}>
@@ -969,7 +980,7 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
           nodeTypes={nodeTypes}
           onInit={handleInit}
           fitView
-          fitViewOptions={{ padding: 0.04, maxZoom: 1.6, minZoom: 0.35, includeHiddenNodes: true }}
+          fitViewOptions={fitViewOptions}
           colorMode="dark"
           className="bg-transparent"
           proOptions={{ hideAttribution: true }}

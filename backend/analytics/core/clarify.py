@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 import uuid
 import asyncio
 import time
@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Dict, Any, List, Optional, Tuple
 from .types import IntentModel, QueryPlanModel, ClarifyRequestModel, ClarifyAnswerModel
 from .companies import resolve_alias_to_ticker, sanitize_ticker
-from .intent_impl.normalization import normalize_timeframe, normalize_metrics
+from .intent_impl.normalization import normalize_timeframe, normalize_metrics, timeframe_implies_quarterly
 
 
 # In-memory session store with TTL
@@ -404,6 +404,11 @@ async def merge_answers(
                 plan.timeframe.preset = normalized_tf.get('preset')
                 plan.timeframe.year_to_date = normalized_tf.get('year_to_date')
                 plan.timeframe.source = normalized_tf.get('source')
+
+                if timeframe_implies_quarterly(normalized_tf):
+                    plan.granularity = 'quarterly'
+                    intent.slots_detected['granularity'] = 'quarterly'
+                    assumptions.append('Using quarterly granularity based on requested timeframe')
 
                 descriptor = (
                     normalized_tf.get('preset')

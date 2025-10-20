@@ -1,6 +1,11 @@
 ﻿import React from 'react';
 import { render, screen } from '@testing-library/react';
+import { vi } from 'vitest';
 import { LiveArtifacts } from './LiveArtifacts';
+
+vi.mock('../common/ChartCard', () => ({
+  ChartCard: () => <div data-testid="chart-card">Mock Chart</div>,
+}));
 
 const baseProps = {
   chartSpec: null,
@@ -18,8 +23,8 @@ const baseProps = {
 
 describe('LiveArtifacts', () => {
   it('renders nothing when no live data', () => {
-    const { queryByText } = render(<LiveArtifacts {...baseProps} />);
-    expect(queryByText(/Live Specialist Outputs/i)).toBeNull();
+    const { container } = render(<LiveArtifacts {...baseProps} />);
+    expect(container.firstChild).toBeNull();
   });
 
   it('renders sql and analysis sections while streaming', () => {
@@ -28,12 +33,13 @@ describe('LiveArtifacts', () => {
         {...baseProps}
         sqlQuery="SELECT 1"
         progressiveAnalysis="Draft narrative"
+        chartSpec={{ series: [{ data: [1, 2, 3] }] }}
         isLoading={true}
       />,
     );
-    expect(screen.getByText(/Live Specialist Outputs/i)).toBeInTheDocument();
     expect(screen.getByText(/Analysis Draft/i)).toBeInTheDocument();
-    expect(screen.getByText(/SQL Snapshot/i)).toBeInTheDocument();
+    expect(screen.getByTestId('chart-card')).toBeInTheDocument();
+    expect(screen.getByText(/Generated SQL Query/i)).toBeInTheDocument();
   });
 
   it('shows final analysis overview when persisted', () => {
@@ -66,7 +72,7 @@ describe('LiveArtifacts', () => {
         isLoading={false}
       />,
     );
-    expect(screen.getByText(/Final Analysis/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/Financial Analysis/i).length).toBeGreaterThan(0);
     expect(screen.getByText(/Quick Take/i)).toBeInTheDocument();
     expect(screen.getByText(/Quarterly beat on revenue/i)).toBeInTheDocument();
     expect(screen.getByText(/Key Numbers/i)).toBeInTheDocument();
@@ -78,7 +84,7 @@ describe('LiveArtifacts', () => {
   });
 
   it('hides when analysis is finalized and not loading', () => {
-    const { queryByText } = render(
+    const { container } = render(
       <LiveArtifacts
         {...baseProps}
         chartSpec={{ series: [] }}
@@ -86,7 +92,7 @@ describe('LiveArtifacts', () => {
         isLoading={false}
       />,
     );
-    expect(queryByText(/Live Specialist Outputs/i)).toBeNull();
+    expect(container.firstChild).toBeNull();
   });
 
   it('renders supplemental specialist cards when provided', () => {

@@ -168,7 +168,7 @@ def _collect_timeframe_presets(configs: Configs) -> List[str]:
         return labels
 
     query_defaults = metrics_cfg.get("query_defaults", {}) if isinstance(metrics_cfg, dict) else {}
-    fallback_defaults = ["last 4 quarters", "last 8 quarters", "last 5 years", "year to date"]
+    fallback_defaults = ["last 5 years", "last 2 years", "last 8 quarters", "year to date"]
     seen = set()
     presets: List[str] = []
 

@@ -360,13 +360,17 @@ def plan_chart_rule_based(
             if 'value' in cols:
                 numeric_cols = ['value']
 
-        # Ensure market_share_percent is present for share intents
-        if intent_key and intent_key.startswith('market_share'):
-            has_percent = any(col == 'market_share_percent' or col.endswith('_market_share_percent') for col in cols)
-            has_ratio = any(col == 'market_share' or col.endswith('_market_share') for col in cols)
-            if not any(c == 'market_share_percent' for c in numeric_cols) and (has_percent or has_ratio):
-                # Prepend derived column slug; values will be computed in builder if needed
-                numeric_cols = ['market_share_percent'] + numeric_cols
+        is_market_share_intent = bool(intent_key and intent_key.startswith('market_share'))
+        if is_market_share_intent:
+            preferred_slug = None
+            if 'market_share_percent' in cols:
+                preferred_slug = 'market_share_percent'
+            elif 'market_share' in cols:
+                preferred_slug = 'market_share'
+            if preferred_slug:
+                numeric_cols = [preferred_slug]
+            elif numeric_cols:
+                numeric_cols = [numeric_cols[0]]
 
         for c in numeric_cols[:4]:  # cap to avoid clutter
             vtype = 'percent' if any(k in c.lower() for k in ['margin', 'share', 'ratio', 'growth', 'percent', 'pct']) else 'number'
@@ -385,6 +389,9 @@ def plan_chart_rule_based(
                     name = f'{company_ticker} - YoY Growth' if company_ticker else 'Company - YoY Growth'
                 else:
                     name = c.replace('_', ' ').title()
+            elif is_market_share_intent and c in {'market_share_percent', 'market_share'}:
+                name = 'Market Share'
+                vtype = 'percent'
             elif intent_key == 'margin_growth_vs_peers':
                 # Special naming for margin growth comparisons
                 if 'peer_avg' in c:

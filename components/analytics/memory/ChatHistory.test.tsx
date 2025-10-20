@@ -98,3 +98,32 @@ describe('ChatHistory specialist updates', () => {
   });
 });
 
+describe('ChatHistory status bubble alignment', () => {
+  it('anchors streaming status on assistant side when the latest message is from the user', () => {
+    const messages = [
+      {
+        id: 'u-1',
+        type: 'user' as const,
+        content: 'What is the market share trend?',
+        timestamp: new Date().toISOString(),
+      },
+    ];
+
+    render(
+      <ChatHistory
+        messages={messages}
+        isLoading={true}
+        status={{ text: 'Classifying query', timestamp: new Date().toISOString() }}
+        processSteps={[]}
+      />,
+    );
+
+    const statusNode = screen.getByText('Classifying query');
+    const alignmentRow = statusNode.closest('.transition-all')?.parentElement?.parentElement;
+    expect(alignmentRow).not.toBeNull();
+    expect(alignmentRow?.className).toContain('justify-start');
+
+    const placeholder = alignmentRow?.querySelector('[aria-hidden="true"]');
+    expect(placeholder).not.toBeNull();
+  });
+});

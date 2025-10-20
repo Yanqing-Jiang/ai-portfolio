@@ -625,12 +625,15 @@ def build_chart_spec(
     
     # Detect primary series using data columns (slugs)
     primary_slugs = detect_primary_series(intent_key, slugs)
-    
+
     # Add fallback when no primary series detected
     if not primary_slugs and slugs:
         # Fallback: first percent/margin series, or first series
         percent_slugs = [s for s in slugs if any(keyword in s for keyword in ['percent', 'margin', 'growth', 'share'])]
         primary_slugs = [percent_slugs[0]] if percent_slugs else [slugs[0]]
+    else:
+        # Ensure we do not duplicate slugs when planner already selected a primary series
+        primary_slugs = list(dict.fromkeys(primary_slugs))
     
     # Convert primary slugs to display names for legend
     primary_series = [display_names[slug] for slug in primary_slugs]

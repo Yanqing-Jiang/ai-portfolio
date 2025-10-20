@@ -14,7 +14,7 @@ setattr(google_stub, "genai", genai_stub)
 sys.modules["google.genai"] = genai_stub
 sys.modules["google.genai.types"] = genai_types_stub
 
-from analytics.flows.multi_agent import MultiAgentFlow
+from analytics.flows.multi_agent import MultiAgentFlow, _derive_tasks
 from analytics.flows.orchestrator import AgentResult
 from analytics.routing import FollowUpRoute
 
@@ -23,8 +23,8 @@ def test_multi_agent_plan_dependencies():
     flow = MultiAgentFlow()
     plan_map = {task.name: task for task in flow._base_plan}
     assert plan_map["chart_phase"].depends_on == ("query_phase",)
-    assert plan_map["market_phase"].depends_on == ("query_phase",)
-    assert plan_map["web_research_phase"].depends_on == ("query_phase",)
+    assert plan_map["market_phase"].depends_on == ("planner_phase",)
+    assert plan_map["web_research_phase"].depends_on == ("planner_phase",)
     assert set(plan_map["analyst_phase"].depends_on) == {
         "chart_phase",
         "market_phase",
@@ -80,6 +80,16 @@ class DummyPlannerFlow:
             "event": "workflow_complete",
             "data": {"total_elapsed_ms": 100},
         }
+
+
+def test_accessories_gate_marks_on_criteria_ready():
+    flow = MultiAgentFlow()
+    flow._prepare_context("NVDA outlook")
+    gate = flow._shared_context.get("_runtime", {}).get("accessories_ready")
+    assert isinstance(gate, asyncio.Event)
+    assert not gate.is_set()
+    flow._capture_event({"event": "criteria_ready", "data": {}})
+    assert gate.is_set()
 
 
 def test_multi_agent_flow_handles_web_context(monkeypatch):
@@ -149,6 +159,12 @@ def test_multi_agent_cohesive_result_payload(monkeypatch):
     assert data["chart_spec"]["title"] == "Share"
     assert data["sql"] == "SELECT * FROM market_share"
     assert data["stock_widget"]["symbols"] == ["NASDAQ:AMD"]
+    bundle = data.get("analysis_bundle")
+    assert isinstance(bundle, dict)
+    assert bundle.get("narrative") == "TLDR: AMD gains share."
+    assert bundle.get("sql", {}).get("row_count") == 8
+    assert bundle.get("web", {}).get("summary") == "Industry roundup"
+    assert "NASDAQ:AMD" in (bundle.get("stock", {}).get("symbols") or [])
     sources = data.get("analysis_sources")
     assert isinstance(sources, dict)
     assert sources["sql"]["lane"] == "sql"
@@ -222,6 +238,29 @@ def test_multi_agent_emits_final_answer_when_cannot_cohere(monkeypatch):
     assert missing == {"sql", "stock", "web"}
 
 
+def test_multi_agent_chart_revision_plan_skips_web_research():
+    planner_ctx = {"tickers": ["NVDA"]}
+    sql_ctx = {"status": "success", "row_count": 12}
+    analysis_ctx = {}
+    chart_ctx = {"spec_summary": {"chart_type": "line"}}
+    market_ctx = {}
+    plan = _derive_tasks(
+        planner_ctx,
+        sql_ctx,
+        analysis_ctx,
+        chart_ctx,
+        market_ctx,
+        "Please update the chart to a bar view",
+        web_ctx={"source": "cache"},
+    )
+    decisions = {step.name: step.status for step in plan}
+    assert decisions["query"] == "skip"
+    assert decisions["chart"] == "run"
+    assert decisions["analyst"] == "skip"
+    assert decisions["market"] == "skip"
+    assert decisions["web_research"] == "skip"
+
+
 def test_multi_agent_chart_revision_final_answer_mentions_reuse():
     flow = MultiAgentFlow()
     flow.set_follow_up_route(FollowUpRoute.REUSE_SQL)
@@ -235,7 +274,7 @@ def test_multi_agent_chart_revision_final_answer_mentions_reuse():
     assert payload["missing_components"] == []
     message = payload["message"]
     assert "Chart revision applied." in message
-    assert "reused" in message.lower()
+    assert "Reused cached datasets for consistency." in message
 
 
 def test_chart_generated_normalizes_wrapped_spec():

@@ -9,11 +9,11 @@ import {
   WebSearchCard,
 } from '../common';
 import { isValidChartSpec } from '../utils';
+import { RobotIcon } from '../../icons/RobotIcon';
+import { UserIcon } from '../../icons/UserIcon';
 
 const ChartCard = React.lazy(() => import('../common/ChartCard').then((m) => ({ default: m.ChartCard })));
 const MAX_WEB_SNIPPETS = 3;
-const USER_AVATAR_LABEL = '👤';
-const BOT_AVATAR_LABEL = '🤖';
 
 const buildWebInsightsSection = (webSearch: ChatHistoryProps['messages'][number]['webSearch']) => {
   if (!webSearch || !webSearch.snippets?.length) return null;
@@ -143,6 +143,41 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
     return latest;
   }, [messages]);
 
+  const renderStatusBubble = React.useCallback(
+    (compact?: boolean) => {
+      if (!showStatusBubble) {
+        return null;
+      }
+      const spacingClass = compact ? '' : 'mb-3 ';
+      return (
+        <div
+          className={`${spacingClass}flex flex-wrap items-center gap-3 rounded-xl border border-blue-500/40 bg-blue-500/10 px-3 py-2 text-xs text-blue-100/80`}
+        >
+          <span className="text-sm text-blue-100">{statusText}</span>
+          {isLoading && (
+            <div className="flex space-x-1" aria-hidden="true">
+              <div className="w-2 h-2 bg-blue-300 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
+              <div className="w-2 h-2 bg-blue-300 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
+              <div className="w-2 h-2 bg-blue-300 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
+            </div>
+          )}
+          {statusTimestamp ? (
+            <span className="ml-auto text-[11px] uppercase tracking-wide text-blue-200/70">
+              {statusTimestamp}
+            </span>
+          ) : null}
+        </div>
+      );
+    },
+    [isLoading, showStatusBubble, statusText, statusTimestamp],
+  );
+
+  const statusBubbleNode = React.useMemo(() => renderStatusBubble(), [renderStatusBubble]);
+  const compactStatusBubbleNode = React.useMemo(
+    () => renderStatusBubble(true),
+    [renderStatusBubble],
+  );
+
   return (
     <div className="bg-gray-900 py-4 mb-6 relative">
       <div className="space-y-4">
@@ -174,30 +209,16 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
               className={`flex gap-3 ${isUser ? 'justify-end' : 'justify-start'}`}
             >
               {!isUser ? (
-                <div className="w-9 h-9 rounded-full bg-gray-700/70 text-gray-100 flex items-center justify-center flex-shrink-0">
-                  <span className="text-lg leading-none">{BOT_AVATAR_LABEL}</span>
+                <div className="w-9 h-9 rounded-full bg-gray-700/70 flex items-center justify-center flex-shrink-0 overflow-hidden">
+                  <div className="w-full h-full bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center">
+                    <RobotIcon />
+                  </div>
                 </div>
               ) : null}
 
               <div className={`max-w-[960px] flex flex-col ${isUser ? 'items-end' : 'items-start'}`}>
                 <div className={`transition-all hover:shadow-sm ${bubbleClass}`}>
-                  {showStatusBubble && idx === latestAssistantIndex ? (
-                    <div className="mb-3 flex flex-wrap items-center gap-3 rounded-xl border border-blue-500/40 bg-blue-500/10 px-3 py-2 text-xs text-blue-100/80">
-                      <span className="text-sm text-blue-100">{statusText}</span>
-                      {isLoading && (
-                        <div className="flex space-x-1" aria-hidden="true">
-                          <div className="w-2 h-2 bg-blue-300 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
-                          <div className="w-2 h-2 bg-blue-300 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
-                          <div className="w-2 h-2 bg-blue-300 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
-                        </div>
-                      )}
-                      {statusTimestamp ? (
-                        <span className="ml-auto text-[11px] uppercase tracking-wide text-blue-200/70">
-                          {statusTimestamp}
-                        </span>
-                      ) : null}
-                    </div>
-                  ) : null}
+                  {idx === latestAssistantIndex ? statusBubbleNode : null}
                   <div className={isResult ? 'space-y-3' : 'space-y-2'}>
                     {contentText ? (
                       <div className="text-sm leading-relaxed whitespace-pre-line">{message.content}</div>
@@ -297,12 +318,23 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
 
               {isUser ? (
                 <div className="w-9 h-9 rounded-full bg-blue-600/70 text-white flex items-center justify-center flex-shrink-0">
-                  <span className="text-lg leading-none">{USER_AVATAR_LABEL}</span>
+                  <UserIcon />
                 </div>
               ) : null}
             </div>
           );
         })}
+
+        {showStatusBubble && latestAssistantIndex === -1 ? (
+          <div className="flex gap-3 justify-start">
+            <div className="w-9 h-9 flex-shrink-0" aria-hidden="true" />
+            <div className="max-w-[960px] flex flex-col items-start">
+              <div className="transition-all hover:shadow-sm bg-gray-800/60 text-gray-100 rounded-2xl rounded-bl-md px-4 py-3">
+                {compactStatusBubbleNode}
+              </div>
+            </div>
+          </div>
+        ) : null}
 
       </div>
     </div>
