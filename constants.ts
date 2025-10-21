@@ -400,8 +400,8 @@ This production-grade web application automates the invoice validation and match
           'What reports sit behind the action cards?',
           'Describe the business impact of consolidating 20+ sub-reports.'
         ],
-        coverUrl: 'http://jiangyanqing.com/wp-content/uploads/2021/10/15FA1F15-25C5-4AE6-A84A-EB5972FB0996.gif',
-        imageUrl: 'http://jiangyanqing.com/wp-content/uploads/2021/10/15FA1F15-25C5-4AE6-A84A-EB5972FB0996.gif',
+        coverUrl: 'https://yanqinghot.blob.core.windows.net/public-access/Inventory%20Dashboard/Global-Inventory-Dashboard.png',
+        imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/Inventory%20Dashboard/Global-Inventory-Dashboard.png',
         link: 'https://www.jiangyanqing.com/portfolio/global-inventory-dashboard/',
         contentHtml: `<div class="inventory-content">
           <p><em>*Real project, hence sensitive data is blurred.</em></p>
