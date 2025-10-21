@@ -16,21 +16,14 @@ from analytics.validators import sanitize_for_json
 from analytics.routing import FollowUpRoute
 from .hooks import AnalyticsFlowHooks
 from .planner_executor import (
-    _cached_event,
-    _compose_sql_ready_payload,
-    _compose_stock_ready_payload,
-    _compose_web_ready_payload,
     _build_analysis_source_summaries,
     ToolInvocationReceipt,
     _hash_payload,
     PlannerPhaseContext,
     PlannerExecutorFlow,
-    ToolParallelRuntime,
 )
 from .pipeline_tools import get_planner_tool_registry
 from .schedulers import FlowMode, apply_mode_metadata, get_mode_config
-from .tooling import MarketQuestionAdapter, StockTrackerAdapter, WebRetrieverAdapter
-
 
 logger = logging.getLogger(__name__)
 
@@ -216,11 +209,13 @@ class _SingleAgentToolHooks(AnalyticsFlowHooks):
         self._emitted_cohesive = False
         self._last_analysis_payload: Optional[Dict[str, Any]] = None
         self._final_answer_emitted = False
+        self._chart_revision_missing_session = False
 
     async def on_flow_start(self, ctx: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
         self._emitted_cohesive = False
         self._last_analysis_payload = None
         self._final_answer_emitted = False
+        self._chart_revision_missing_session = False
         if ctx.get("session_id") and not self._session_id:
             session = ctx.get("session_id")
             if isinstance(session, str) and session:
@@ -288,6 +283,13 @@ class _SingleAgentToolHooks(AnalyticsFlowHooks):
         if False:
             yield {}
         event_name = event.get("event")
+        if event_name == "error":
+            data = event.get("data") or {}
+            code = str(data.get("code") or "").upper()
+            if code == "CHART_REVISION_MISSING_SESSION":
+                self._chart_revision_missing_session = True
+                self._flow.set_follow_up_route(FollowUpRoute.FULL_PIPELINE)
+            return
         if event_name == "final_answer":
             self._final_answer_emitted = True
             return
@@ -450,8 +452,17 @@ class _SingleAgentToolHooks(AnalyticsFlowHooks):
             "web": "online research data",
         }
         note: Optional[str] = None
-        reuse_scope = self._flow.follow_up_route == FollowUpRoute.REUSE_SQL
-        if reuse_scope:
+        reuse_scope = (
+            self._flow.follow_up_route == FollowUpRoute.REUSE_SQL
+            and not self._chart_revision_missing_session
+        )
+        if self._chart_revision_missing_session:
+            missing = ["sql", "stock", "web"]
+            note = (
+                "I couldn't apply the chart update because the saved session expired. "
+                "Ask me to rerun the full analysis so I can rebuild fresh data and charts."
+            )
+        elif reuse_scope:
             # For chart-only revisions we intentionally reuse the existing SQL, stock, and web context,
             # so suppress the generic "Pending lanes" warning and surface a reuse hint instead.
             missing = []
@@ -604,17 +615,7 @@ class SingleAgentController:
         "analysis_writer": "analysis_generation",
     }
 
-    CONCURRENT_LANES: Tuple[str, ...] = ("market", "web")
     LANE_CACHE_TTL_SECONDS: int = 600
-    LANE_PARALLEL_GROUPS: Dict[str, str] = {
-        "market": "single_agent_market",
-        "web": "single_agent_web",
-    }
-    LANE_CONCURRENCY_LIMITS: Dict[str, int] = {
-        # Allow both market research questions plus the stock tracker to execute without serialising.
-        "market": 3,
-        "web": 1,
-    }
     LANE_TOOL_MAP: Dict[str, Tuple[str, ...]] = {
         "market": ("market_question_a", "market_question_b", "stock_tracker"),
         "web": ("web_retriever",),
@@ -646,10 +647,6 @@ class SingleAgentController:
         if not tool_name:
             return None
         return cls.LANE_TOOL_LOOKUP.get(str(tool_name).strip().lower())
-
-    @classmethod
-    def _lane_tool_names(cls, lane: str) -> Tuple[str, ...]:
-        return cls.LANE_TOOL_MAP.get(lane, tuple())
 
     @staticmethod
     def _receipt_age_seconds(receipt: Optional[ToolInvocationReceipt]) -> Optional[float]:
@@ -778,20 +775,6 @@ class SingleAgentController:
             receipt.output_hash = _hash_payload(payload)
         ctx.tool_receipts[tool_name] = receipt
 
-    def _mark_lane_reused(self, ctx: PlannerPhaseContext, lane: str) -> None:
-        if lane == "market":
-            ctx.reused_stock = True
-        elif lane == "web":
-            ctx.reused_web = True
-        for tool_name in self._lane_tool_names(lane):
-            receipt = ctx.tool_receipts.get(tool_name)
-            if not receipt:
-                continue
-            receipt.status = "reused"
-            receipt.reused = True
-            receipt.error = None
-            ctx.tool_receipts[tool_name] = receipt
-
     def _process_tool_parallel_event(
         self,
         ctx: PlannerPhaseContext,
@@ -827,140 +810,14 @@ class SingleAgentController:
         lane = lane_hint or self._lane_for_tool(tool_name)
         if lane:
             data.setdefault("lane", lane)
-            data.setdefault("parallel_group", self.LANE_PARALLEL_GROUPS.get(lane, "single_agent_fanout"))
+            parallel_group = "single_agent_fanout"
+            if lane == "market":
+                parallel_group = "single_agent_market"
+            elif lane == "web":
+                parallel_group = "single_agent_web"
+            data.setdefault("parallel_group", parallel_group)
             data.setdefault("reused", False)
         self._finalize_receipt(ctx, lane, tool_name, data)
-
-    def _lane_adapters(self, lane: str) -> Tuple[Any, ...]:
-        if lane == "market":
-            return (
-                MarketQuestionAdapter("market_question_a", "Market Research Question A"),
-                MarketQuestionAdapter("market_question_b", "Market Research Question B"),
-                StockTrackerAdapter(),
-            )
-        if lane == "web":
-            return (WebRetrieverAdapter(),)
-        return tuple()
-
-    def _should_reuse_market(self, ctx: PlannerPhaseContext) -> bool:
-        market_artifact = getattr(ctx.artifacts, "market", None)
-        has_snapshot = bool(market_artifact and getattr(market_artifact, "snapshot", None))
-        if not has_snapshot:
-            return False
-        receipts = [
-            ctx.tool_receipts.get(tool_name)
-            for tool_name in self._lane_tool_names("market")
-        ]
-        if any(self._receipt_is_fresh(receipt) for receipt in receipts):
-            return True
-        age = ctx.snapshot_age_seconds
-        if age is None:
-            return self.follow_up_route == FollowUpRoute.REUSE_SQL
-        return age <= self.LANE_CACHE_TTL_SECONDS
-
-    def _should_reuse_web(self, ctx: PlannerPhaseContext) -> bool:
-        web_artifact = getattr(ctx.artifacts, "web", None)
-        has_web = bool(web_artifact and getattr(web_artifact, "summary", None))
-        if not has_web:
-            analysis_art = getattr(ctx.artifacts, "analysis", None)
-            has_web = bool(analysis_art and getattr(analysis_art, "web_context", None))
-        if not has_web:
-            return False
-        receipt = ctx.tool_receipts.get("web_retriever")
-        if self._receipt_is_fresh(receipt):
-            return True
-        age = ctx.snapshot_age_seconds
-        if age is None:
-            return self.follow_up_route == FollowUpRoute.REUSE_SQL
-        return age <= self.LANE_CACHE_TTL_SECONDS
-
-    def _start_fanout_lanes(
-        self,
-        ctx: PlannerPhaseContext,
-        lanes: Iterable[str],
-    ) -> Dict[str, ToolParallelRuntime]:
-        active: Dict[str, ToolParallelRuntime] = {}
-        for lane in lanes:
-            adapters = self._lane_adapters(lane)
-            if not adapters:
-                continue
-            concurrency_limit = self.LANE_CONCURRENCY_LIMITS.get(lane)
-            if concurrency_limit is None:
-                concurrency_limit = len(adapters)
-            else:
-                concurrency_limit = max(1, min(concurrency_limit, len(adapters)))
-            runtime = self._planner._start_tool_parallelism(
-                ctx,
-                adapters=adapters,
-                concurrency_override=concurrency_limit,
-            )
-            active[lane] = runtime
-        return active
-
-    def _iter_fresh_accessory_events(
-        self,
-        ctx: PlannerPhaseContext,
-        lane_states: Mapping[str, str],
-    ) -> Iterable[Dict[str, Any]]:
-        if lane_states.get("market") == "fresh" and not getattr(ctx, "stock_widget_announced", False):
-            stock_payload = _compose_stock_ready_payload(ctx)
-            if stock_payload:
-                payload = dict(stock_payload)
-                payload["reused"] = False
-                payload.setdefault("schedule_stage", "hedged_accessories")
-                payload.setdefault("parallel_group", self.LANE_PARALLEL_GROUPS.get("market", "single_agent_market"))
-                payload.setdefault("lane", "market")
-                payload.setdefault("flow_mode", self.flow_mode.value)
-                payload.setdefault("ts", datetime.utcnow().isoformat())
-                sanitized = sanitize_for_json(payload)
-                if not isinstance(sanitized, dict):
-                    sanitized = {"payload": sanitized}
-                ctx.stock_widget_announced = True  # type: ignore[attr-defined]
-                yield self._planner._annotate(
-                    {
-                        "event": "stock_ready",
-                        "data": sanitized,
-                    }
-                )
-        if lane_states.get("web") == "fresh" and not getattr(ctx, "web_context_announced", False):
-            web_payload = _compose_web_ready_payload(ctx)
-            if web_payload:
-                payload = dict(web_payload)
-                payload["reused"] = False
-                payload.setdefault("schedule_stage", "hedged_accessories")
-                payload.setdefault("parallel_group", self.LANE_PARALLEL_GROUPS.get("web", "single_agent_web"))
-                payload.setdefault("lane", "web")
-                payload.setdefault("flow_mode", self.flow_mode.value)
-                payload.setdefault("ts", datetime.utcnow().isoformat())
-                sanitized = sanitize_for_json(payload)
-                if not isinstance(sanitized, dict):
-                    sanitized = {"payload": sanitized}
-                ctx.web_context_announced = True  # type: ignore[attr-defined]
-                yield self._planner._annotate(
-                    {
-                        "event": "web_ready",
-                        "data": sanitized,
-                    }
-                )
-
-    def _drain_fanout_events(
-        self,
-        ctx: PlannerPhaseContext,
-        fanout_tasks: Mapping[str, ToolParallelRuntime],
-    ) -> AsyncGenerator[Dict[str, Any], None]:
-        for lane, runtime in fanout_tasks.items():
-            queue = getattr(runtime, "queue", None)
-            if queue is None:
-                continue
-            lane_events = self._planner._flush_tool_events(queue, ctx)
-            for event in lane_events:
-                data = event.setdefault("data", {})
-                parallel_group = self.LANE_PARALLEL_GROUPS.get(lane, "single_agent_fanout")
-                data.setdefault("parallel_group", parallel_group)
-                data.setdefault("lane", lane)
-                data.setdefault("reused", False)
-                self._process_tool_parallel_event(ctx, event, lane_hint=lane)
-                yield self._planner._annotate(event)
 
     def _emit_lane_summary(self, lane_states: Dict[str, str]) -> Dict[str, Any]:
         normalized_states = dict(lane_states)
@@ -992,6 +849,101 @@ class SingleAgentController:
         else:
             payload["decision"] = "reuse_snapshot"
         return self._planner._annotate({"event": "agent_decision", "data": payload})
+
+    def _initial_lane_states(self) -> Dict[str, str]:
+        if self.follow_up_route == FollowUpRoute.REUSE_SQL:
+            return {
+                "sql": "reused",
+                "chart": "reused",
+                "analysis": "reused",
+                "market": "skipped",
+                "web": "skipped",
+            }
+        if self.follow_up_route == FollowUpRoute.STOCK_ONLY:
+            return {
+                "sql": "reused",
+                "chart": "reused",
+                "analysis": "reused",
+                "market": "pending",
+                "web": "reused",
+            }
+        return {
+            "sql": "pending",
+            "chart": "queued",
+            "analysis": "queued",
+            "market": "skipped",
+            "web": "skipped",
+        }
+
+    def _update_lane_state_from_event(
+        self,
+        lane_states: Dict[str, str],
+        event: Dict[str, Any],
+        *,
+        revision_targets: Set[str],
+    ) -> None:
+        name = event.get("event") or ""
+        data = event.get("data") or {}
+        lane = data.get("lane")
+        reused = bool(data.get("reused"))
+        schedule_stage = data.get("schedule_stage")
+
+        if name == "follow_up_route":
+            route_value = data.get("route") or data.get("follow_up_route")
+            if isinstance(route_value, str):
+                try:
+                    self.follow_up_route = FollowUpRoute(route_value)
+                except ValueError:
+                    pass
+        elif name == "revision_request":
+            lanes = data.get("lanes") or []
+            revision_targets.clear()
+            revision_targets.update(str(l).strip().lower() for l in lanes if l)
+            for tracked_lane in ("sql", "chart", "analysis"):
+                if tracked_lane not in revision_targets:
+                    lane_states[tracked_lane] = "reused"
+        elif name in {"sql_ready", "sql_revision_ready"}:
+            lane_states["sql"] = "reused" if reused else "fresh"
+        elif name in {"chart_ready", "chart_revision_ready"}:
+            lane_states["chart"] = "reused" if reused else "fresh"
+        elif name in {"analysis_ready", "analysis_revision_ready", "analysis_complete"}:
+            lane_states["analysis"] = "reused" if reused else "fresh"
+        elif name in {"stock_ready", "stock_revision_ready"}:
+            lane_states["market"] = "reused" if reused else "fresh"
+        elif name in {"web_ready", "web_revision_ready"}:
+            lane_states["web"] = "reused" if reused else "fresh"
+        elif lane in lane_states and name == "tool_parallel_result":
+            status = str(data.get("status") or "").lower()
+            if status in {"completed", "complete", "success"}:
+                lane_states[str(lane)] = "fresh"
+            elif status in {"cached", "reused"} or reused:
+                lane_states[str(lane)] = "reused"
+        elif lane in lane_states and schedule_stage in {"hedged_accessories"}:
+            lane_states[str(lane)] = "reused" if reused else "fresh"
+
+        if name == "workflow_complete":
+            for tracked_lane in ("sql", "chart", "analysis"):
+                lane_states.setdefault(tracked_lane, "reused" if tracked_lane not in revision_targets else "fresh")
+
+    def _should_emit_lane_summary_before(self, event: Dict[str, Any]) -> bool:
+        name = event.get("event") or ""
+        if name in {
+            "chart_progress",
+            "chart_generated",
+            "chart_ready",
+            "chart_revision_ready",
+            "analysis_progress",
+            "analysis_ready",
+            "analysis_revision_ready",
+            "analysis_complete",
+            "planner_result",
+            "workflow_complete",
+        }:
+            return True
+        schedule_stage = (event.get("data") or {}).get("schedule_stage")
+        if schedule_stage in {"chart", "analysis"}:
+            return True
+        return False
 
     def set_follow_up_route(self, route: FollowUpRoute) -> None:
         self.follow_up_route = route
@@ -1065,326 +1017,26 @@ class SingleAgentController:
         query: str,
         session_id: Optional[str],
     ) -> AsyncGenerator[Dict[str, Any], None]:
-        ctx = await self._planner.initialize_context(query, session_id=session_id)
-        session_identifier = ctx.session_id
-        yield self._planner._annotate(EventEmitter.session_started(session_identifier))
+        lane_states = self._initial_lane_states()
+        revision_targets: Set[str] = set()
+        summary_emitted = False
+        planner_stream = self._planner.events(query, session_id=session_id)
 
-        registry = get_planner_tool_registry()
-        executed: Set[str] = set()
-        mode_config = get_mode_config(self.flow_mode)
-        fanout_tasks: Dict[str, Tuple[asyncio.Task, Optional[asyncio.Queue]]] = {}
-        started_lanes: Set[str] = set()
-        lane_states: Dict[str, str] = {
-            "sql": "pending",
-            "chart": "queued",
-            "analysis": "queued",
-            "market": "skipped",
-            "web": "skipped",
-        }
+        async for event in planner_stream:
+            self._update_lane_state_from_event(lane_states, event, revision_targets=revision_targets)
+            if not summary_emitted and self._should_emit_lane_summary_before(event):
+                summary_event = self._emit_lane_summary(lane_states)
+                if summary_event:
+                    yield summary_event
+                summary_emitted = True
+            yield event
 
-        try:
-            async for event in registry.invoke("classification", self._planner, ctx, executed=executed):
-                yield self._planner._annotate(event)
-            await self._planner._persist_session_state(ctx, record_artifacts=True)
-            if not ctx.is_financial_query:
-                return
-
-            for tool_name in ("intent_detection", "clarification", "plan_generation"):
-                async for event in registry.invoke(tool_name, self._planner, ctx, executed=executed):
-                    yield self._planner._annotate(event)
-                await self._planner._persist_session_state(ctx, record_artifacts=True)
-
-            if ctx.intent is None or (ctx.plan or ctx.provisional_plan) is None:
-                return
-
-            reuse_sql = ctx.reuse_sql and ctx.revision_snapshot is not None
-            should_run_parallel = ctx.parallelism_enabled and not (ctx.reuse_sql and ctx.reuse_snapshot_active)
-            market_reuse = self._should_reuse_market(ctx)
-            web_reuse = self._should_reuse_web(ctx)
-            if market_reuse:
-                lane_states["market"] = "reused"
-                self._mark_lane_reused(ctx, "market")
-            if web_reuse:
-                lane_states["web"] = "reused"
-                self._mark_lane_reused(ctx, "web")
-
-            lanes_to_start: Tuple[str, ...] = tuple(
-                lane
-                for lane in self.CONCURRENT_LANES
-                if not (
-                    (lane == "market" and market_reuse)
-                    or (lane == "web" and web_reuse)
-                )
-            )
-
-            if should_run_parallel and not reuse_sql and lanes_to_start:
-                fanout_tasks = self._start_fanout_lanes(ctx, lanes_to_start)
-                started_lanes = set(fanout_tasks.keys())
-                if "market" in started_lanes:
-                    lane_states["market"] = "running"
-                if "web" in started_lanes:
-                    lane_states["web"] = "running"
-                for fanout_event in self._drain_fanout_events(ctx, fanout_tasks):
-                    yield fanout_event
-            elif should_run_parallel and not reuse_sql and (market_reuse or web_reuse):
-                ctx.accessories_prefetched = True
-
-            if not reuse_sql and ctx.snapshot_stale and ctx.revision_snapshot:
-                stale_progress = EventEmitter.progress("sql_generation", "Cached SQL snapshot expired - rerunning dataset")
-                stale_progress["data"]["ts"] = datetime.utcnow().isoformat()
-                stale_progress["data"]["schedule_stage"] = "sql"
-                stale_progress["data"]["parallel_group"] = "core_sequential"
-                stale_progress["data"]["flow_mode"] = self.flow_mode.value
-                stale_progress["data"]["reused"] = False
-                yield self._planner._annotate(stale_progress)
-                if fanout_tasks:
-                    for fanout_event in self._drain_fanout_events(fanout_tasks):
-                        yield fanout_event
-
-            if not reuse_sql:
-                lane_states["sql"] = "running"
-                async for event in registry.invoke("sql_generation", self._planner, ctx, executed=executed):
-                    yield self._planner._annotate(event)
-                    if fanout_tasks:
-                        for fanout_event in self._drain_fanout_events(ctx, fanout_tasks):
-                            yield fanout_event
-                lane_states["sql"] = "fresh"
-            else:
-                ctx.reused_sql = True
-                lane_states["sql"] = "reused"
-                reuse_status = EventEmitter.progress("sql_generation", "Reusing cached SQL dataset")
-                reuse_status["data"]["ts"] = datetime.utcnow().isoformat()
-                reuse_status["data"]["schedule_stage"] = "sql"
-                reuse_status["data"]["parallel_group"] = "core_sequential"
-                reuse_status["data"]["flow_mode"] = self.flow_mode.value
-                reuse_status["data"]["reused"] = True
-                yield self._planner._annotate(reuse_status)
-                receipt = ctx.tool_receipts.get("sql_chain")
-                if receipt:
-                    receipt.status = "reused"
-                    receipt.reused = True
-                    receipt.error = None
-                sql_payload = _compose_sql_ready_payload(ctx)
-                if sql_payload:
-                    cached_sql_event = _cached_event(
-                        "sql_ready",
-                        sql_payload,
-                        schedule_stage="sql",
-                        flow_mode=self.flow_mode,
-                        parallel_group="core_sequential",
-                        lane="sql",
-                    )
-                    yield self._planner._annotate(cached_sql_event)
-                    if fanout_tasks:
-                        for fanout_event in self._drain_fanout_events(ctx, fanout_tasks):
-                            yield fanout_event
-
-            await self._planner._persist_session_state(
-                ctx,
-                record_sql=(not reuse_sql) and bool(ctx.artifacts.sql_generation and ctx.artifacts.sql_generation.sql),
-                record_artifacts=True,
-            )
-            if not reuse_sql:
-                sql_payload = _compose_sql_ready_payload(ctx)
-                if sql_payload:
-                    sql_payload.setdefault("parallel_group", "core_sequential")
-                    sql_payload.setdefault("flow_mode", self.flow_mode.value)
-                    sql_payload.setdefault("ts", datetime.utcnow().isoformat())
-                    sql_payload.setdefault("lane", "sql")
-                    sql_payload["reused"] = False
-                    yield self._planner._annotate(
-                        {
-                            "event": "sql_ready",
-                            "data": sanitize_for_json(sql_payload),
-                        }
-                    )
-
-            if fanout_tasks:
-                for fanout_event in self._drain_fanout_events(ctx, fanout_tasks):
-                    yield fanout_event
-
-                for lane in list(fanout_tasks.keys()):
-                    runtime = fanout_tasks[lane]
-                    task = getattr(runtime, "runner", None)
-                    if not task:
-                        continue
-                    try:
-                        await task
-                        if lane_states.get(lane) == "running":
-                            lane_states[lane] = "fresh"
-                    except Exception:
-                        lane_states[lane] = "error"
-                        raise
-                    finally:
-                        lane_entry = {lane: runtime}
-                        for fanout_event in self._drain_fanout_events(ctx, lane_entry):
-                            yield fanout_event
-                        fanout_tasks.pop(lane, None)
-                        await runtime.close()
-                ctx.accessories_prefetched = bool(started_lanes)
-                for accessory_event in self._iter_fresh_accessory_events(ctx, lane_states):
-                    yield accessory_event
-
-            if reuse_sql:
-                stock_payload = _compose_stock_ready_payload(ctx)
-                if stock_payload:
-                    self._mark_lane_reused(ctx, "market")
-                    lane_states["market"] = "reused"
-                    cached_stock_event = _cached_event(
-                        "stock_ready",
-                        stock_payload,
-                        schedule_stage="hedged_accessories",
-                        flow_mode=self.flow_mode,
-                        parallel_group=self.LANE_PARALLEL_GROUPS.get("market", "tool_fanout"),
-                        lane="market",
-                    )
-                    yield self._planner._annotate(cached_stock_event)
-                web_payload = _compose_web_ready_payload(ctx)
-                if web_payload:
-                    self._mark_lane_reused(ctx, "web")
-                    lane_states["web"] = "reused"
-                    cached_web_event = _cached_event(
-                        "web_ready",
-                        web_payload,
-                        schedule_stage="hedged_accessories",
-                        flow_mode=self.flow_mode,
-                        parallel_group=self.LANE_PARALLEL_GROUPS.get("web", "tool_fanout"),
-                        lane="web",
-                    )
-                    yield self._planner._annotate(cached_web_event)
-                ctx.accessories_prefetched = True
-            elif not started_lanes:
-                logger.debug(
-                    "Ensuring analysis dependencies for single-agent flow",
-                    extra={
-                        "session_id": ctx.session_id,
-                        "market_lane": lane_states.get("market"),
-                        "web_lane": lane_states.get("web"),
-                        "flow_mode": self.flow_mode.value,
-                    },
-                )
-                async for event in self._planner._ensure_analysis_dependencies(ctx):
-                    data = event.setdefault("data", {})
-                    lane_hint = None
-                    tool_name = data.get("tool")
-                    if tool_name:
-                        lane_hint = self._lane_for_tool(tool_name)
-                    self._process_tool_parallel_event(ctx, event, lane_hint=lane_hint)
-                    lane = data.get("lane") or lane_hint
-                    if not lane:
-                        tools_meta = data.get("tools") or []
-                        for tool_meta in tools_meta:
-                            if not isinstance(tool_meta, Mapping):
-                                continue
-                            candidate = self._lane_for_tool(tool_meta.get("name") or tool_meta.get("tool"))
-                            if candidate:
-                                lane = candidate
-                                break
-                    if lane:
-                        data.setdefault("lane", lane)
-                        data.setdefault("parallel_group", self.LANE_PARALLEL_GROUPS.get(lane, "single_agent_fanout"))
-                        data.setdefault("reused", False)
-                    yield self._planner._annotate(event)
-                ctx.accessories_prefetched = True
-                if lane_states["market"] == "reused":
-                    stock_payload = _compose_stock_ready_payload(ctx)
-                    if stock_payload:
-                        self._mark_lane_reused(ctx, "market")
-                        yield self._planner._annotate(
-                            _cached_event(
-                                "stock_ready",
-                                stock_payload,
-                                schedule_stage="hedged_accessories",
-                                flow_mode=self.flow_mode,
-                                parallel_group=self.LANE_PARALLEL_GROUPS.get("market", "tool_fanout"),
-                                lane="market",
-                            )
-                        )
-                elif ctx.artifacts.market and lane_states["market"] == "skipped":
-                    lane_states["market"] = "fresh"
-                if lane_states["web"] == "reused":
-                    web_payload = _compose_web_ready_payload(ctx)
-                    if web_payload:
-                        self._mark_lane_reused(ctx, "web")
-                        yield self._planner._annotate(
-                            _cached_event(
-                                "web_ready",
-                                web_payload,
-                                schedule_stage="hedged_accessories",
-                                flow_mode=self.flow_mode,
-                                parallel_group=self.LANE_PARALLEL_GROUPS.get("web", "tool_fanout"),
-                                lane="web",
-                            )
-                        )
-                elif ctx.artifacts.web and lane_states["web"] == "skipped":
-                    lane_states["web"] = "fresh"
-                for accessory_event in self._iter_fresh_accessory_events(ctx, lane_states):
-                    yield accessory_event
-            else:
-                if ctx.artifacts.market and lane_states["market"] in {"running", "pending"}:
-                    lane_states["market"] = "fresh"
-                if ctx.artifacts.web and lane_states["web"] in {"running", "pending"}:
-                    lane_states["web"] = "fresh"
-                for accessory_event in self._iter_fresh_accessory_events(ctx, lane_states):
-                    yield accessory_event
-
-            lane_summary_event = self._emit_lane_summary(lane_states)
-            if lane_summary_event:
-                yield lane_summary_event
-            else:
-                logger.debug(
-                    "Single-agent lane summary emitted no payload",
-                    extra={
-                        "session_id": ctx.session_id,
-                        "lane_states": dict(lane_states),
-                        "flow_mode": self.flow_mode.value,
-                    },
-                )
-
-            if ctx.halted:
-                logger.warning(
-                    "Single-agent flow halted after lane summary",
-                    extra={
-                        "session_id": ctx.session_id,
-                        "halt_reason": getattr(ctx, "halt_reason", None),
-                        "lane_states": dict(lane_states),
-                        "flow_mode": self.flow_mode.value,
-                    },
-                )
-                return
-
-            lane_states["chart"] = "running"
-            async for event in registry.invoke("chart_generation", self._planner, ctx, executed=executed):
-                yield self._planner._annotate(event)
-            lane_states["chart"] = "reused" if getattr(ctx, "reused_chart", False) else "fresh"
-            await self._planner._persist_session_state(
-                ctx,
-                record_chart=bool(ctx.artifacts.chart and ctx.artifacts.chart.spec),
-                record_artifacts=True,
-            )
-
-            if mode_config.accessories_in_critical_path:
-                async for event in self._planner._web_search_phase(ctx):
-                    yield self._planner._annotate(event)
-                await self._planner._persist_session_state(ctx, record_artifacts=True)
-
-            lane_states["analysis"] = "running" if not getattr(ctx, "reused_analysis", False) else "reused"
-            async for event in registry.invoke("analysis_generation", self._planner, ctx, executed=executed):
-                yield self._planner._annotate(event)
-            if getattr(ctx, "reused_analysis", False):
-                lane_states["analysis"] = "reused"
-            else:
-                lane_states["analysis"] = "fresh"
-            await self._planner._persist_session_state(
-                ctx,
-                record_analysis=bool(
-                    ctx.artifacts.analysis and ctx.artifacts.analysis.analysis_text
-                ),
-                record_artifacts=True,
-            )
-        finally:
-            for runtime in fanout_tasks.values():
-                await runtime.close()
+        if not summary_emitted and any(
+            state not in {"pending", "queued", "skipped"} for state in lane_states.values()
+        ):
+            summary_event = self._emit_lane_summary(lane_states)
+            if summary_event:
+                yield summary_event
 
     async def chart_revision(
         self,

@@ -9,11 +9,23 @@ import time
 import html
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple, TYPE_CHECKING
 from urllib.parse import urlparse
 from types import SimpleNamespace
-from google import genai as google_genai
-from google.genai import types as genai_types
+
+try:  # pragma: no cover - optional dependency
+    from google import genai as google_genai  # type: ignore[import]
+    from google.genai import types as genai_types  # type: ignore[import]
+except ImportError:  # pragma: no cover - dependency is optional in tests
+    google_genai = None  # type: ignore[assignment]
+    genai_types = None  # type: ignore[assignment]
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from google import genai as _google_genai  # type: ignore[import]
+    from google.genai import types as _genai_types  # type: ignore[import]
+else:  # pragma: no cover - keep runtime lightweight
+    _google_genai = Any  # type: ignore[assignment]
+    _genai_types = Any  # type: ignore[assignment]
 
 from analytics.core.telemetry import gemini_call
 
@@ -124,6 +136,14 @@ def _resolve_search_api_key() -> Optional[str]:
 
 def has_search_api_key() -> bool:
     return _resolve_search_api_key() is not None
+
+
+def _ensure_google_genai(stage: str) -> None:
+    if google_genai is None or genai_types is None:
+        raise ResponseSearchError(
+            "google-genai SDK not available; install google-genai to enable response_search integration.",
+            stage=stage,
+        )
 
 
 def _ensure_model(preferred_model: Optional[str] = None) -> "GenerativeModel":
@@ -242,11 +262,12 @@ def _clean_html_text(value: Any) -> str:
 
 
 # --- Inline minimal google-genai wrapper (keeps test monkeypatching stable) ---
-_client: Optional[google_genai.Client] = None
+_client: Optional[Any] = None
 
 
-def _ensure_client() -> google_genai.Client:
+def _ensure_client() -> Any:
     global _client
+    _ensure_google_genai(stage="client_init")
     if _client is None:
         _client = google_genai.Client()
     return _client
@@ -254,6 +275,7 @@ def _ensure_client() -> google_genai.Client:
 
 def configure(*, api_key: str) -> None:
     global _client
+    _ensure_google_genai(stage="client_configure")
     _client = google_genai.Client(api_key=api_key)
 
 
@@ -263,20 +285,28 @@ class GenerativeModel:
         self._gen_cfg = dict(generation_config or {})
 
     def generate_content(self, *, contents: Any, tools: Optional[List[Dict[str, Any]]] = None, **_: Any) -> Dict[str, Any]:
+        _ensure_google_genai(stage="generate_content")
         client = _ensure_client()
         # Map tools to new SDK tool objects (google_search only for Gemini 2.x)
-        tool_objs: Optional[List[genai_types.Tool]] = None
-        if tools:
+        tool_objs: Optional[List[Any]] = None
+        if tools and genai_types is not None:
+            Tool = getattr(genai_types, "Tool", None)
+            GoogleSearch = getattr(genai_types, "GoogleSearch", None)
             for item in tools:
                 if not isinstance(item, dict):
                     continue
                 if "google_search" in item:
                     tool_objs = tool_objs or []
-                    tool_objs.append(genai_types.Tool(google_search=genai_types.GoogleSearch()))
+                    if Tool and GoogleSearch:
+                        tool_objs.append(Tool(google_search=GoogleSearch()))
         cfg_dict = dict(self._gen_cfg)
         if tool_objs is not None:
             cfg_dict["tools"] = tool_objs
-        config = genai_types.GenerateContentConfig(**cfg_dict) if cfg_dict else None
+        config = None
+        if cfg_dict and genai_types is not None:
+            GenerateContentConfig = getattr(genai_types, "GenerateContentConfig", None)
+            if callable(GenerateContentConfig):
+                config = GenerateContentConfig(**cfg_dict)
 
         # Coerce contents to list[str]
         content_list: List[str] = []

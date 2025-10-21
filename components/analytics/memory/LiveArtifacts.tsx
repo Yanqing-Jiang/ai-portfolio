@@ -84,14 +84,50 @@ export const LiveArtifacts: React.FC<LiveArtifactsProps> = ({
 
   const cards: React.ReactElement[] = [];
 
-  if (hasChart && allowArtifacts) {
+  if (hasStock && stockWidget && allowArtifacts) {
     cards.push(
-      <div
-        key="sql-chart"
-        className="rounded-xl border border-gray-700 bg-gray-900/40 p-3 sm:p-4 md:p-5"
-      >
-        <ChartCard chartSpec={chartSpec} dataSample={dataSample} enableDropdown enableCsvDownload />
+      <div key="stock" className="rounded-xl border border-gray-700 bg-gray-900/50 p-3 sm:p-4 overflow-hidden">
+        <TradingViewSymbolOverview config={stockWidget} height={480} />
       </div>,
+    );
+  }
+
+  if (hasWeb && webSearch && allowArtifacts) {
+    cards.push(
+      <CollapsibleSection
+        key="market"
+        title="Market Research"
+        defaultOpen={false}
+        className="bg-gray-800/50"
+      >
+        {webSearch.latencyStats ? (
+          <div className="mb-3 flex flex-wrap gap-3 text-xs text-emerald-200">
+            {typeof webSearch.latencyStats.p50_ms === 'number' && <span>p50: {webSearch.latencyStats.p50_ms} ms</span>}
+            {typeof webSearch.latencyStats.total_ms === 'number' && <span>Total: {webSearch.latencyStats.total_ms} ms</span>}
+            {typeof webSearch.latencyStats.max_ms === 'number' && <span>Max: {webSearch.latencyStats.max_ms} ms</span>}
+            {typeof webSearch.latencyStats.min_ms === 'number' && <span>Min: {webSearch.latencyStats.min_ms} ms</span>}
+            {typeof webSearch.latencyStats.samples === 'number' && <span>Samples: {webSearch.latencyStats.samples}</span>}
+          </div>
+        ) : null}
+        {latencyGuardrail ? (
+          <div
+            className={`mb-3 text-xs ${latencyGuardrail.status === 'violation' ? 'text-amber-300' : 'text-emerald-300'} flex flex-col gap-1`}
+          >
+            <span>
+              Guardrail: {latencyGuardrail.status === 'violation' ? 'Exceeded' : 'Within Thresholds'}
+            </span>
+            {latencyGuardrail.violations?.length ? (
+              <span className="text-[11px] text-amber-200/80">
+                Tripped: {latencyGuardrail.violations.join(', ')}
+              </span>
+            ) : null}
+            <span className="text-[11px] text-emerald-200/70">
+              p50 = {latencyGuardrail.thresholds.p50_ms} ms - p95 = {latencyGuardrail.thresholds.p95_ms} ms
+            </span>
+          </div>
+        ) : null}
+        <WebSearchCard result={webSearch} title="Market Research" emptyMessage="No snippets yet." />
+      </CollapsibleSection>,
     );
   }
 
@@ -194,50 +230,14 @@ export const LiveArtifacts: React.FC<LiveArtifactsProps> = ({
     );
   }
 
-  if (hasStock && stockWidget && allowArtifacts) {
+  if (hasChart && allowArtifacts) {
     cards.push(
-      <div key="stock" className="rounded-xl border border-gray-700 bg-gray-900/50 p-3 sm:p-4 overflow-hidden">
-        <TradingViewSymbolOverview config={stockWidget} height={480} />
-      </div>,
-    );
-  }
-
-  if (hasWeb && webSearch && allowArtifacts) {
-    cards.push(
-      <CollapsibleSection
-        key="market"
-        title="Market Research"
-        defaultOpen={false}
-        className="bg-gray-800/50"
+      <div
+        key="sql-chart"
+        className="rounded-xl border border-gray-700 bg-gray-900/40 p-3 sm:p-4 md:p-5"
       >
-        {webSearch.latencyStats ? (
-          <div className="mb-3 flex flex-wrap gap-3 text-xs text-emerald-200">
-            {typeof webSearch.latencyStats.p50_ms === 'number' && <span>p50: {webSearch.latencyStats.p50_ms} ms</span>}
-            {typeof webSearch.latencyStats.total_ms === 'number' && <span>Total: {webSearch.latencyStats.total_ms} ms</span>}
-            {typeof webSearch.latencyStats.max_ms === 'number' && <span>Max: {webSearch.latencyStats.max_ms} ms</span>}
-            {typeof webSearch.latencyStats.min_ms === 'number' && <span>Min: {webSearch.latencyStats.min_ms} ms</span>}
-            {typeof webSearch.latencyStats.samples === 'number' && <span>Samples: {webSearch.latencyStats.samples}</span>}
-          </div>
-        ) : null}
-        {latencyGuardrail ? (
-          <div
-            className={`mb-3 text-xs ${latencyGuardrail.status === 'violation' ? 'text-amber-300' : 'text-emerald-300'} flex flex-col gap-1`}
-          >
-            <span>
-              Guardrail: {latencyGuardrail.status === 'violation' ? 'Exceeded' : 'Within Thresholds'}
-            </span>
-            {latencyGuardrail.violations?.length ? (
-              <span className="text-[11px] text-amber-200/80">
-                Tripped: {latencyGuardrail.violations.join(', ')}
-              </span>
-            ) : null}
-            <span className="text-[11px] text-emerald-200/70">
-              p50 = {latencyGuardrail.thresholds.p50_ms} ms - p95 = {latencyGuardrail.thresholds.p95_ms} ms
-            </span>
-          </div>
-        ) : null}
-        <WebSearchCard result={webSearch} title="Market Research" emptyMessage="No snippets yet." />
-      </CollapsibleSection>,
+        <ChartCard chartSpec={chartSpec} dataSample={dataSample} enableDropdown enableCsvDownload />
+      </div>,
     );
   }
 
@@ -266,7 +266,12 @@ export const LiveArtifacts: React.FC<LiveArtifactsProps> = ({
             >
               <div className="flex items-center justify-between text-[10px] uppercase tracking-wide text-sky-200">
                 <span className="font-semibold">{card.title ?? card.type.replace(/[_-]/g, ' ')}</span>
-                {card.state ? <span>{card.state.replace(/[_-]/g, ' ')}</span> : null}
+                <div className="flex items-center gap-2">
+                  {card.revision ? (
+                    <span className="rounded border border-emerald-300/60 bg-emerald-400/10 px-2 py-[1px] text-[9px] font-semibold text-emerald-200">Revision</span>
+                  ) : null}
+                  {card.state ? <span>{card.state.replace(/[_-]/g, ' ')}</span> : null}
+                </div>
               </div>
               {card.message ? <div className="mt-1 text-[11px] leading-relaxed">{card.message}</div> : null}
               {card.topic ? (
@@ -290,7 +295,6 @@ export const LiveArtifacts: React.FC<LiveArtifactsProps> = ({
       </div>,
     );
   }
-
   if (!cards.length) {
     return null;
   }
@@ -299,3 +303,8 @@ export const LiveArtifacts: React.FC<LiveArtifactsProps> = ({
 };
 
 export default LiveArtifacts;
+
+
+
+
+
