@@ -467,6 +467,67 @@ def test_concurrent_lanes_emit_before_sql(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_stream_with_tool_state_emits_queue_events_during_sql():
+    pipeline = planner_executor.PlannerPipeline(flow_mode=planner_executor.FlowMode.SINGLE_AGENT)
+    ctx = planner_executor.PlannerPhaseContext(
+        query="Delayed accessory lane",
+        session_id="ctx-delayed",
+        workflow_start=time.time(),
+        timed_emitter=planner_executor.TimedEventEmitter(session_id="ctx-delayed", flow="test"),
+        flow_mode=planner_executor.FlowMode.SINGLE_AGENT,
+        parallelism_enabled=True,
+    )
+
+    queue: asyncio.Queue = asyncio.Queue()
+    runtime = planner_executor.ToolParallelRuntime(
+        runner=None,
+        dispatcher=None,
+        raw_queue=queue,
+        queue=queue,
+    )
+    tool_state = {"queue": queue, "active": True, "runtime": runtime}
+
+    async def sql_stream():
+        yield {
+            "event": "progress",
+            "data": {"stage": "sql", "step": "compiling"},
+        }
+        await asyncio.sleep(0.05)
+        yield {
+            "event": "sql_ready",
+            "data": {"stage": "sql"},
+        }
+
+    async def emit_accessory():
+        await asyncio.sleep(0.01)
+        await queue.put(
+            {
+                "event": "stock_ready",
+                "data": {
+                    "lane": "market",
+                    "payload": {"stock_widget": {"symbols": [["NASDAQ:NVDA", "NVDA"]]}},
+                },
+            }
+        )
+        await queue.put(planner_executor._TOOL_QUEUE_SENTINEL)
+
+    producer = asyncio.create_task(emit_accessory())
+
+    events = []
+    async for event in pipeline._stream_with_tool_state(sql_stream(), tool_state, ctx):
+        events.append(event)
+
+    await producer
+
+    event_names = [evt.get("event") for evt in events]
+    assert "stock_ready" in event_names
+    assert "sql_ready" in event_names
+    assert event_names.index("stock_ready") < event_names.index("sql_ready")
+    stock_event = next(evt for evt in events if evt.get("event") == "stock_ready")
+    assert stock_event["data"].get("delta") is True
+
+
+@pytest.mark.asyncio
 async def test_tool_parallelism_streams_results_immediately():
     class FastAdapter(BaseToolAdapter):
         name = "market_question_a"
@@ -523,12 +584,71 @@ async def test_tool_parallelism_streams_results_immediately():
     assert events[1][1] - events[0][1] >= 0.04
     assert len(ctx.tool_parallel_results) == 2
     assert ctx.tool_parallel_results[0]["tool"] == "market_question_a"
+
+
+def test_stock_revision_targets_emit_without_sql(monkeypatch):
+    flow = _setup_planner_flow(monkeypatch)
+    flow.flow_mode = planner_executor.FlowMode.SINGLE_AGENT
+    flow.parallelism_enabled = True
+    flow.set_revision_targets({"stock"})
+
+    async def _parallelism(ctx, adapters=(), concurrency_override=None):
+        yield {
+            "event": "tool_parallel_result",
+            "data": {
+                "tool": "stock_tracker",
+                "status": "completed",
+                "payload": {
+                    "stock_widget": {
+                        "symbols": [["NASDAQ:AAPL", "AAPL"]],
+                        "generated_at": "2025-10-21T18:00:00Z",
+                    },
+                },
+                "completed_at": "2025-10-21T18:00:02Z",
+                "parallel_group": "tool_fanout",
+                "schedule_stage": "hedged_accessories",
+            },
+        }
+
+    monkeypatch.setattr(planner_executor, "run_tool_parallelism", _parallelism)
+
+    events = _collect_events(flow)
+    event_names = [evt.get("event") for evt in events]
+
+    assert "revision_request" in event_names
+    assert "stock_revision_ready" in event_names
+    assert "sql_ready" not in event_names
+    assert "sql_revision_ready" not in event_names
+    stock_index = event_names.index("stock_revision_ready")
+    workflow_index = event_names.index("workflow_complete")
+    assert stock_index < workflow_index
+
+
+def test_sql_revision_ready_events_are_renamed(monkeypatch):
+    flow = _setup_planner_flow(monkeypatch)
+    flow.flow_mode = planner_executor.FlowMode.SINGLE_AGENT
+    flow.parallelism_enabled = True
+    flow.set_revision_targets({"sql", "chart"})
+
+    events = _collect_events(flow)
+    event_names = [evt.get("event") for evt in events]
+
+    assert "sql_revision_ready" in event_names
+    assert "chart_revision_ready" in event_names
+    assert "sql_ready" not in event_names
+    assert "chart_ready" not in event_names
 def test_planner_fanout_manifest_contains_accessory_lanes(monkeypatch):
     captured = {}
 
     def _capture_start(self, ctx, *, adapters=(), concurrency_override=None):
         captured["names"] = [adapter.name for adapter in (adapters or ())]
-        return None, asyncio.Queue()
+        queue = asyncio.Queue()
+        return planner_executor.ToolParallelRuntime(
+            runner=None,
+            dispatcher=None,
+            raw_queue=queue,
+            queue=queue,
+        )
 
     monkeypatch.setattr(planner_executor.PlannerPipeline, "_start_tool_parallelism", _capture_start)
     flow = _setup_planner_flow(monkeypatch)

@@ -1927,6 +1927,9 @@ class MultiAgentFlow:
         self.follow_up_route = route
         self._planner.set_follow_up_route(route)
 
+    def set_revision_targets(self, targets: Iterable[str]) -> None:
+        self._planner.set_revision_targets(targets)
+
     def _annotate(self, event: Dict[str, Any]) -> Dict[str, Any]:
         annotated = apply_mode_metadata(event, self.flow_mode)
         data = annotated.setdefault("data", {})
@@ -2904,6 +2907,7 @@ class MultiAgentFlow:
 
 
 __all__ = ["MultiAgentFlow"]
+
 
 
 

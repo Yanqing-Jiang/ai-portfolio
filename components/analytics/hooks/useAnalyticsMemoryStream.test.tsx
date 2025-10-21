@@ -51,8 +51,10 @@ beforeEach(() => {
 });
 
 function HookHarness({ query, flow }: { query: string; flow: 'planner-executor' | 'single-agent' | 'multi-agent' }) {
-  const { handleQuery, chatHistory, processSteps, revisionMode, analysisBundle } = useAnalyticsMemoryStream(flow);
+  const { handleQuery, chatHistory, processSteps, revisionMode, analysisBundle, specialistCards } = useAnalyticsMemoryStream(flow);
   const firstResult = chatHistory.find((m) => m.type === 'result');
+  const resultMessages = chatHistory.filter((m) => m.type === 'result');
+  const latestResult = resultMessages[resultMessages.length - 1];
 
   React.useEffect(() => {
     (async () => {
@@ -68,6 +70,8 @@ function HookHarness({ query, flow }: { query: string; flow: 'planner-executor' 
       <div data-testid="message-count">{chatHistory.length}</div>
       <div data-testid="revision-mode">{revisionMode}</div>
       <div data-testid="first-result-content">{firstResult?.content ?? ''}</div>
+      <div data-testid="first-result-has-chart">{firstResult?.chartSpec ? 'yes' : 'no'}</div>
+      <div data-testid="latest-result-has-chart">{latestResult?.chartSpec ? 'yes' : 'no'}</div>
       <ul data-testid="step-ids">
         {processSteps.map((step) => (
           <li key={step.id}>{`${step.id}:${step.status}`}</li>
@@ -76,7 +80,14 @@ function HookHarness({ query, flow }: { query: string; flow: 'planner-executor' 
       <div data-testid="first-result-evidence">{firstResult?.analysisOverview ? JSON.stringify(firstResult.analysisOverview.evidence || []) : ''}</div>
       <div data-testid="latency-guardrail-status">{firstResult?.latencyGuardrail?.status ?? ''}</div>
       <div data-testid="analysis-bundle">{analysisBundle ? JSON.stringify(analysisBundle) : ''}</div>
-    </div>
+      <div data-testid="specialist-card-count">{specialistCards.length}</div>
+      <div data-testid="specialist-card-order">
+        {specialistCards.map((card) => `${card.type ?? 'unknown'}:${card.revision ? 'rev' : 'base'}`).join('|')}
+      </div>
+      <div data-testid="specialist-card-revision-ids">
+        {specialistCards.map((card) => card.revisionId ?? '').join('|')}
+      </div>
+  </div>
   );
 }
 
@@ -281,6 +292,15 @@ describe('useAnalyticsMemoryStream result deduping', () => {
 
   it('records a chart revision step when chart_patch arrives', async () => {
     (globalThis as any).__TEST_EVENTS__ = [
+      {
+        event: 'chart_generated',
+        data: {
+          chart_spec: {
+            series: [{ type: 'line', data: [1, 2, 3] }],
+            meta: { chartDesign: { chart_type: 'line' } },
+          },
+        },
+      },
       { event: 'chart_patch', data: { ops: [{ op: 'set_chart_type', value: 'bar' }], status: 'applied' } },
     ];
 
@@ -293,6 +313,8 @@ describe('useAnalyticsMemoryStream result deduping', () => {
 
     const resultCount = Number(screen.getByTestId('result-count').textContent);
     expect(resultCount).toBe(2);
+    expect(screen.getByTestId('first-result-has-chart').textContent).toBe('no');
+    expect(screen.getByTestId('latest-result-has-chart').textContent).toBe('yes');
 
     expect(screen.getByTestId('revision-mode').textContent).toBe('chart');
   });
@@ -317,6 +339,15 @@ describe('useAnalyticsMemoryStream result deduping', () => {
 
   it('replaces duplicate revision payloads instead of appending new messages', async () => {
     (globalThis as any).__TEST_EVENTS__ = [
+      {
+        event: 'chart_generated',
+        data: {
+          chart_spec: {
+            series: [{ type: 'line', data: [3, 2, 1] }],
+            meta: { chartDesign: { chart_type: 'line' } },
+          },
+        },
+      },
       { event: 'chart_patch', data: { ops: [{ op: 'set_chart_type', value: 'line' }], status: 'applied' } },
       { event: 'chart_patch', data: { ops: [{ op: 'set_chart_type', value: 'line' }], status: 'applied' } },
     ];
@@ -349,6 +380,8 @@ describe('useAnalyticsMemoryStream guardrail finalization', () => {
           },
         },
       },
+      { event: 'follow_up_route', route: 'full_pipeline' },
+      { event: 'done' },
       { event: 'workflow_complete' },
     ];
 
@@ -359,8 +392,8 @@ describe('useAnalyticsMemoryStream guardrail finalization', () => {
     const content = screen.getByTestId('first-result-content').textContent || '';
     expect(content).toBe(declineCopy);
     expect(setCurrentStatusMock).toHaveBeenCalled();
-    const lastCall = setCurrentStatusMock.mock.calls.at(-1);
-    expect(lastCall?.[0]).toBe('');
+    const statusCalls = setCurrentStatusMock.mock.calls.map((call) => call[0]);
+    expect(statusCalls.at(-1)).toBe('');
   });
 });
 
@@ -472,6 +505,183 @@ describe('useAnalyticsMemoryStream specialist readiness', () => {
     expect(stepItems).toContain('chart_generation:completed');
     expect(stepItems).toContain('web_research_agent:completed');
     expect(stepItems).toContain('analysis_generation:completed');
+  });
+});
+
+describe('useAnalyticsMemoryStream card ordering', () => {
+  it('reorders specialist cards when accessories finish before sql and chart lanes', async () => {
+    (globalThis as any).__TEST_EVENTS__ = [
+      {
+        event: 'stock_ready',
+        data: {
+          ts: '2025-10-21T00:00:01.000Z',
+          lane: 'market',
+          specialist_card: {
+            type: 'stock_widget',
+            lane: 'market',
+            title: 'Stock Chart',
+            summary: 'Latest price action',
+            state: 'ready',
+            ready: true,
+            ts: '2025-10-21T00:00:01.000Z',
+          },
+        },
+      },
+      {
+        event: 'web_ready',
+        data: {
+          ts: '2025-10-21T00:00:02.000Z',
+          lane: 'web',
+          specialist_card: {
+            type: 'web_context',
+            lane: 'web',
+            title: 'Market Research',
+            summary: 'Peer commentary',
+            state: 'ready',
+            ready: true,
+            ts: '2025-10-21T00:00:02.000Z',
+          },
+        },
+      },
+      {
+        event: 'chart_ready',
+        data: {
+          ts: '2025-10-21T00:00:03.000Z',
+          lane: 'chart',
+          specialist_card: {
+            type: 'chart_builder',
+            lane: 'chart',
+            title: 'SQL Chart',
+            summary: 'Revenue vs. growth',
+            state: 'ready',
+            ready: true,
+            ts: '2025-10-21T00:00:03.000Z',
+          },
+        },
+      },
+      {
+        event: 'analysis_ready',
+        data: {
+          ts: '2025-10-21T00:00:04.000Z',
+          lane: 'analysis',
+          specialist_card: {
+            type: 'analysis_summary',
+            lane: 'analysis',
+            title: 'Financial Analysis',
+            summary: 'Highlights from the three data sources',
+            state: 'ready',
+            ready: true,
+            ts: '2025-10-21T00:00:04.000Z',
+          },
+        },
+      },
+      {
+        event: 'sql_ready',
+        data: {
+          ts: '2025-10-21T00:00:05.000Z',
+          lane: 'sql',
+          specialist_card: {
+            type: 'sql_executor',
+            lane: 'sql',
+            title: 'Generated SQL Query',
+            summary: 'Inspect or reuse the dataset',
+            state: 'ready',
+            ready: true,
+            ts: '2025-10-21T00:00:05.000Z',
+          },
+        },
+      },
+      { event: 'workflow_complete', total_elapsed_ms: 320 },
+    ];
+
+    await act(async () => {
+      render(<HookHarness query="priority ordering" flow="planner-executor" />);
+    });
+
+    const order = screen.getByTestId('specialist-card-order').textContent ?? '';
+    const tokens = order.split('|').filter(Boolean);
+    expect(tokens).toHaveLength(5);
+    expect(tokens[0]).toContain('chart_builder');
+    expect(tokens[1]).toContain('analysis_summary');
+    expect(tokens[2]).toContain('stock_widget');
+    expect(tokens[3]).toContain('web_context');
+    expect(tokens[4]).toContain('sql_executor');
+  });
+});
+
+describe('useAnalyticsMemoryStream revisions', () => {
+  it('streams stock revision cards ahead of sql revisions', async () => {
+    (globalThis as any).__TEST_EVENTS__ = [
+      { event: 'revision_request', data: { revision_id: 'rev-1', lanes: ['stock'] } },
+      {
+        event: 'stock_revision_ready',
+        data: {
+          revision_id: 'rev-1',
+          lane: 'market',
+          stock_widget: { symbols: ['NVDA'], ready: true },
+          specialist_card: {
+            type: 'stock_widget',
+            lane: 'market',
+            title: 'Stock Chart',
+            summary: 'Updated NVDA trend',
+          },
+        },
+      },
+      {
+        event: 'sql_revision_ready',
+        data: {
+          revision_id: 'rev-1',
+          lane: 'sql',
+          sql: 'SELECT 1',
+          specialist_card: {
+            type: 'sql_executor',
+            lane: 'sql',
+            title: 'SQL Ready',
+            summary: 'Rows: 10',
+          },
+        },
+      },
+      { event: 'workflow_complete', total_elapsed_ms: 120 },
+    ];
+
+    await act(async () => {
+      render(<HookHarness query="targeted stock revision" flow="planner-executor" />);
+    });
+
+    const count = screen.getByTestId('specialist-card-count').textContent ?? '0';
+    expect(count).toBe('2');
+    const order = screen.getByTestId('specialist-card-order').textContent ?? '';
+    expect(order.split('|')[0]).toContain('stock_widget');
+    const revisions = screen.getByTestId('specialist-card-revision-ids').textContent ?? '';
+    expect(revisions.split('|')[0]).toBe('rev-1');
+  });
+
+  it('dedupes identical stock revision payloads', async () => {
+    const stockEvent = {
+      revision_id: 'rev-2',
+      lane: 'market',
+      stock_widget: { symbols: ['AAPL'], ready: true },
+      specialist_card: {
+        type: 'stock_widget',
+        lane: 'market',
+        title: 'Stock Chart',
+        summary: 'Updated Apple snapshot',
+      },
+    };
+    (globalThis as any).__TEST_EVENTS__ = [
+      { event: 'revision_request', data: { revision_id: 'rev-2', lanes: ['stock'] } },
+      { event: 'stock_revision_ready', data: stockEvent },
+      { event: 'stock_revision_ready', data: stockEvent },
+      { event: 'workflow_complete', total_elapsed_ms: 90 },
+    ];
+
+    await act(async () => {
+      render(<HookHarness query="dedupe stock revision" flow="planner-executor" />);
+    });
+
+    expect(screen.getByTestId('specialist-card-count').textContent).toBe('1');
+    const order = screen.getByTestId('specialist-card-order').textContent ?? '';
+    expect(order).toContain('stock_widget:rev');
   });
 });
 

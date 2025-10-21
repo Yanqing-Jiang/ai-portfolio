@@ -15,7 +15,7 @@ from analytics.artifacts.models import (
     WebContextArtifact,
 )
 from analytics.core.events import TimedEventEmitter
-from analytics.flows.planner_executor import PlannerPhaseContext, _TOOL_QUEUE_SENTINEL
+from analytics.flows.planner_executor import PlannerPhaseContext, _TOOL_QUEUE_SENTINEL, ToolParallelRuntime
 from analytics.flows.single_agent_tools import SingleAgentController, _build_single_agent_cohesive_payload
 from analytics.routing import FollowUpRoute
 
@@ -35,7 +35,8 @@ def _build_context(controller: SingleAgentController) -> PlannerPhaseContext:
     return ctx
 
 
-def test_market_lane_uses_stock_tracker_and_concurrency_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.asyncio
+async def test_market_lane_uses_stock_tracker_and_concurrency_limit(monkeypatch: pytest.MonkeyPatch) -> None:
     controller = SingleAgentController()
     captured: dict = {}
 
@@ -47,15 +48,23 @@ def test_market_lane_uses_stock_tracker_and_concurrency_limit(monkeypatch: pytes
     ):
         captured["adapters"] = tuple(getattr(adapter, "name", repr(adapter)) for adapter in adapters or [])
         captured["concurrency"] = concurrency_override
-        return None, None
+        queue = asyncio.Queue()
+        return ToolParallelRuntime(
+            runner=None,
+            dispatcher=None,
+            raw_queue=queue,
+            queue=queue,
+        )
 
     monkeypatch.setattr(controller._planner, "_start_tool_parallelism", _fake_start)
     dummy_ctx = SimpleNamespace()
 
     active = controller._start_fanout_lanes(dummy_ctx, ("market",))
     assert "market" in active
+    assert isinstance(active["market"], ToolParallelRuntime)
     assert captured["adapters"] == ("market_question_a", "market_question_b", "stock_tracker")
     assert captured["concurrency"] == 3
+    await active["market"].close()
 
 
 def test_iter_fresh_accessory_events_emit_once() -> None:
@@ -150,6 +159,7 @@ def test_lane_summary_adds_rerun_scope_for_chart_revision() -> None:
 def test_flush_tool_events_marks_deltas_and_preserves_sentinel() -> None:
     controller = SingleAgentController()
     queue: asyncio.Queue = asyncio.Queue()
+    ctx = _build_context(controller)
     payload = {
         "event": "tool_parallel_result",
         "data": {"tool": "stock_tracker", "payload": {"ready": True}},
@@ -157,7 +167,7 @@ def test_flush_tool_events_marks_deltas_and_preserves_sentinel() -> None:
     queue.put_nowait(payload)
     queue.put_nowait(_TOOL_QUEUE_SENTINEL)
 
-    flushed = controller._planner._pipeline._flush_tool_events(queue)
+    flushed = controller._planner._pipeline._flush_tool_events(queue, ctx)
     assert len(flushed) == 1
     assert flushed[0]["data"]["delta"] is True
     assert flushed[0]["data"]["tool"] == "stock_tracker"

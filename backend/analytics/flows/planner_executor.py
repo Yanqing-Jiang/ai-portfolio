@@ -1,7 +1,7 @@
 ﻿from __future__ import annotations
 import json
 import hashlib
-from typing import AsyncGenerator, Dict, Any, Optional, List, Sequence, Tuple, Set, Mapping
+from typing import AsyncGenerator, Dict, Any, Optional, List, Sequence, Tuple, Set, Mapping, Iterable
 from dataclasses import dataclass, field
 import asyncio
 import contextlib
@@ -137,7 +137,34 @@ _FLOW_MODE_TO_RESOLVER_MODE: Dict[FlowMode, str] = {
     FlowMode.MULTI_AGENT: "multi_agent",
 }
 
+_REVISION_EVENT_ALIASES: Dict[str, str] = {
+    "stock_ready": "stock_revision_ready",
+    "web_ready": "web_revision_ready",
+    "sql_ready": "sql_revision_ready",
+    "chart_ready": "chart_revision_ready",
+    "analysis_ready": "analysis_revision_ready",
+}
+
 _TOOL_QUEUE_SENTINEL: object = object()
+
+
+@dataclass
+class ToolParallelRuntime:
+    runner: Optional[Task]
+    dispatcher: Optional[Task]
+    raw_queue: asyncio.Queue
+    queue: asyncio.Queue
+    active: bool = True
+
+    async def close(self) -> None:
+        """Cancel background tasks and mark the runtime inactive."""
+        self.active = False
+        for task in (self.dispatcher, self.runner):
+            if task and not task.done():
+                task.cancel()
+                with contextlib.suppress(Exception):
+                    await task
+
 def _env_flag(name: str, *, default: bool = False) -> bool:
     # Legacy env flag helper retained for backwards compatibility in logs only.
     # Behavioural flags have been removed; flows use built-in defaults.
@@ -352,6 +379,8 @@ class PlannerPhaseContext:
     snapshot_age_seconds: Optional[float] = None
     snapshot_stale: bool = False
     tool_receipts: Dict[str, ToolInvocationReceipt] = field(default_factory=dict)
+    revision_targets: Set[str] = field(default_factory=set)
+    revision_id: Optional[str] = None
     halted: bool = False
     halt_reason: Optional[str] = None
 
@@ -1916,6 +1945,7 @@ class PlannerPipeline:
         self.parallelism_enabled = mode_config.parallelism_enabled if parallelism_enabled is None else parallelism_enabled
         self.hooks: AnalyticsFlowHooks = NullFlowHooks()
         self._latest_artifacts: Optional[PipelineArtifacts] = None
+        self.revision_targets: Set[str] = set()
 
     async def _persist_session_state(
         self,
@@ -2010,6 +2040,14 @@ class PlannerPipeline:
     def set_follow_up_route(self, route: FollowUpRoute) -> None:
         self.follow_up_route = route
 
+    def set_revision_targets(self, targets: Iterable[str]) -> None:
+        normalized: Set[str] = set()
+        for target in targets or []:
+            if not target:
+                continue
+            normalized.add(str(target).strip().lower())
+        self.revision_targets = normalized
+
     @staticmethod
     def _lane_for_tool_name(tool_name: str) -> Optional[str]:
         normalized = tool_name.strip().lower()
@@ -2091,11 +2129,25 @@ class PlannerPipeline:
             receipt.timestamp = datetime.utcnow().isoformat()
         receipts[tool_name] = receipt
 
-    def _mark_delta_event(self, event: Dict[str, Any]) -> Dict[str, Any]:
+    def _annotate_revision(self, event: Dict[str, Any], ctx: Optional[PlannerPhaseContext]) -> Dict[str, Any]:
+        if not ctx or not ctx.revision_targets:
+            return event
+        alias = _REVISION_EVENT_ALIASES.get(event.get("event"))
+        if alias:
+            event["event"] = alias
+        data = event.setdefault("data", {})
+        data.setdefault("revision_id", ctx.revision_id)
+        data.setdefault("revision", True)
+        data.setdefault("revision_lanes", sorted(ctx.revision_targets))
+        if alias:
+            data.setdefault("revision_event", True)
+        return event
+
+    def _mark_delta_event(self, event: Dict[str, Any], ctx: Optional[PlannerPhaseContext] = None) -> Dict[str, Any]:
         data = event.setdefault("data", {})
         data["delta"] = True
         data.setdefault("parallel_group", "accessory_delta")
-        return event
+        return self._annotate_revision(event, ctx)
 
     def _derive_accessory_events(
         self,
@@ -2138,7 +2190,7 @@ class PlannerPipeline:
                     stock_payload.setdefault("reused", bool(getattr(ctx, "reused_stock", False)))
                     event = _base_event("stock_ready", stock_payload, lane="market")
                     if event and (not getattr(ctx, "stock_ready_emitted", False) or stock_payload.get("reused")):
-                        derived.append(self._mark_delta_event(event))
+                        derived.append(self._mark_delta_event(event, ctx))
                         ctx.stock_ready_emitted = True
 
         if tool_name == "web_retriever":
@@ -2151,7 +2203,7 @@ class PlannerPipeline:
                     web_payload.setdefault("reused", bool(getattr(ctx, "reused_web", False)))
                     event = _base_event("web_ready", web_payload, lane="web")
                     if event and (not getattr(ctx, "web_ready_emitted", False) or web_payload.get("reused")):
-                        derived.append(self._mark_delta_event(event))
+                        derived.append(self._mark_delta_event(event, ctx))
                         ctx.web_ready_emitted = True
 
         return derived
@@ -2214,8 +2266,9 @@ class PlannerPipeline:
         *,
         adapters: Optional[Sequence[Any]] = None,
         concurrency_override: Optional[int] = None,
-    ) -> Tuple[Task, asyncio.Queue]:
-        queue: asyncio.Queue = asyncio.Queue()
+    ) -> ToolParallelRuntime:
+        raw_queue: asyncio.Queue = asyncio.Queue()
+        dispatch_queue: asyncio.Queue = asyncio.Queue()
 
         async def runner() -> None:
             try:
@@ -2225,23 +2278,65 @@ class PlannerPipeline:
                     concurrency_override=concurrency_override,
                 ):
                     derived_events = self._ingest_tool_event(ctx, event)
-                    await queue.put(event)
+                    await raw_queue.put(event)
                     for derived_event in derived_events:
-                        await queue.put(derived_event)
+                        await raw_queue.put(derived_event)
             finally:
-                await queue.put(_TOOL_QUEUE_SENTINEL)
+                await raw_queue.put(_TOOL_QUEUE_SENTINEL)
 
-        task = asyncio.create_task(runner())
-        return task, queue
+        async def dispatcher() -> None:
+            sentinel_forwarded = False
+            try:
+                while True:
+                    item = await raw_queue.get()
+                    await dispatch_queue.put(item)
+                    if item is _TOOL_QUEUE_SENTINEL:
+                        sentinel_forwarded = True
+                        break
+            finally:
+                if not sentinel_forwarded:
+                    await dispatch_queue.put(_TOOL_QUEUE_SENTINEL)
+
+        runner_task = asyncio.create_task(runner())
+        dispatcher_task = asyncio.create_task(dispatcher())
+        return ToolParallelRuntime(
+            runner=runner_task,
+            dispatcher=dispatcher_task,
+            raw_queue=raw_queue,
+            queue=dispatch_queue,
+        )
+
+    def _fanout_adapters_for_context(self, ctx: PlannerPhaseContext) -> Tuple[Any, ...]:
+        targets = set(ctx.revision_targets or ())
+        if not targets:
+            return _accessory_tool_adapters()
+        adapters: List[Any] = []
+        if "market" in targets:
+            adapters.extend(
+                [
+                    MarketQuestionAdapter("market_question_a", "Market Research Question A"),
+                    MarketQuestionAdapter("market_question_b", "Market Research Question B"),
+                ]
+            )
+        if "stock" in targets or "market" in targets:
+            adapters.append(StockTrackerAdapter())
+        if "web" in targets or "market" in targets:
+            adapters.append(WebRetrieverAdapter())
+        if not adapters and "stock" in targets:
+            adapters.append(StockTrackerAdapter())
+        if not adapters and "web" in targets:
+            adapters.append(WebRetrieverAdapter())
+        return tuple(adapters)
 
     async def _stream_with_tool_state(
         self,
         stream: AsyncGenerator[Dict[str, Any], None],
         tool_state: Optional[Dict[str, Any]],
+        ctx: Optional[PlannerPhaseContext] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         if tool_state is None or not tool_state.get("active", False):
             async for event in stream:
-                yield event
+                yield self._annotate_revision(event, ctx)
             return
 
         queue: asyncio.Queue = tool_state["queue"]
@@ -2275,6 +2370,9 @@ class PlannerPipeline:
                     queue_task = None
                     if tool_event is _TOOL_QUEUE_SENTINEL:
                         tool_state["active"] = False
+                        runtime = tool_state.get("runtime")
+                        if isinstance(runtime, ToolParallelRuntime):
+                            runtime.active = False
                     elif tool_event is not None:
                         try:
                             logger.debug(
@@ -2287,7 +2385,7 @@ class PlannerPipeline:
                             )
                         except Exception:
                             pass
-                        yield self._mark_delta_event(tool_event)
+                        yield self._mark_delta_event(tool_event, ctx)
 
                 if stream_task in done:
                     try:
@@ -2306,7 +2404,7 @@ class PlannerPipeline:
                             )
                         except Exception:
                             pass
-                        yield event
+                        yield self._annotate_revision(event, ctx)
                         stream_task = asyncio.create_task(stream_iter.__anext__())
 
             if tool_state and tool_state.get("active", False):
@@ -2317,15 +2415,18 @@ class PlannerPipeline:
                         break
                     if pending is _TOOL_QUEUE_SENTINEL:
                         tool_state["active"] = False
+                        runtime = tool_state.get("runtime")
+                        if isinstance(runtime, ToolParallelRuntime):
+                            runtime.active = False
                         break
-                    yield self._mark_delta_event(pending)
+                    yield self._mark_delta_event(pending, ctx)
         finally:
             if queue_task:
                 queue_task.cancel()
             if stream_task:
                 stream_task.cancel()
 
-    def _flush_tool_events(self, queue: asyncio.Queue) -> List[Dict[str, Any]]:
+    def _flush_tool_events(self, queue: asyncio.Queue, ctx: Optional[PlannerPhaseContext] = None) -> List[Dict[str, Any]]:
         """Drain any immediately available tool events without blocking."""
         flushed: List[Dict[str, Any]] = []
         sentinel_found = False
@@ -2337,12 +2438,12 @@ class PlannerPipeline:
             if event is _TOOL_QUEUE_SENTINEL:
                 sentinel_found = True
                 break
-            flushed.append(self._mark_delta_event(event))
+            flushed.append(self._mark_delta_event(event, ctx))
         if sentinel_found:
             queue.put_nowait(_TOOL_QUEUE_SENTINEL)
         return flushed
 
-    def _collect_tool_deltas_now(self, tool_state: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _collect_tool_deltas_now(self, tool_state: Optional[Dict[str, Any]], ctx: Optional[PlannerPhaseContext] = None) -> List[Dict[str, Any]]:
         deltas: List[Dict[str, Any]] = []
         if not tool_state or not tool_state.get("active", False):
             return deltas
@@ -2354,13 +2455,17 @@ class PlannerPipeline:
                 break
             if event is _TOOL_QUEUE_SENTINEL:
                 tool_state["active"] = False
+                runtime = tool_state.get("runtime")
+                if isinstance(runtime, ToolParallelRuntime):
+                    runtime.active = False
                 break
-            deltas.append(self._mark_delta_event(event))
+            deltas.append(self._mark_delta_event(event, ctx))
         return deltas
 
     async def _drain_tool_state_async(
         self,
         tool_state: Optional[Dict[str, Any]],
+        ctx: Optional[PlannerPhaseContext] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         if not tool_state or not tool_state.get("active", False):
             return
@@ -2369,9 +2474,12 @@ class PlannerPipeline:
             event = await queue.get()
             if event is _TOOL_QUEUE_SENTINEL:
                 tool_state["active"] = False
+                runtime = tool_state.get("runtime")
+                if isinstance(runtime, ToolParallelRuntime):
+                    runtime.active = False
                 break
-            yield self._mark_delta_event(event)
-        for pending in self._collect_tool_deltas_now(tool_state):
+            yield self._mark_delta_event(event, ctx)
+        for pending in self._collect_tool_deltas_now(tool_state, ctx):
             yield pending
 
     async def _emit_post_analysis_accessories(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[str, Any], None]:
@@ -2949,7 +3057,7 @@ class PlannerPipeline:
             ctx.tool_receipts["chart_builder"] = receipt
             cached_payload = _compose_chart_ready_payload(ctx)
             if cached_payload:
-                yield _cached_event(
+                cached_chart = _cached_event(
                     "chart_ready",
                     cached_payload,
                     schedule_stage="chart",
@@ -2957,6 +3065,7 @@ class PlannerPipeline:
                     parallel_group="core_sequential",
                     lane="chart",
                 )
+                yield self._annotate_revision(cached_chart, ctx)
             return
         if receipt:
             receipt.status = "running"
@@ -3070,10 +3179,13 @@ class PlannerPipeline:
             ready_payload.setdefault("flow_mode", self.flow_mode.value)
             ready_payload.setdefault("ts", datetime.utcnow().isoformat())
             ready_payload.setdefault("lane", "chart")
-            yield {
-                "event": "chart_ready",
-                "data": sanitize_for_json(ready_payload),
-            }
+            yield self._annotate_revision(
+                {
+                    "event": "chart_ready",
+                    "data": sanitize_for_json(ready_payload),
+                },
+                ctx,
+            )
 
     async def _ensure_analysis_dependencies(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[str, Any], None]:
         if getattr(ctx, "accessories_prefetched", False):
@@ -3507,7 +3619,7 @@ class PlannerPipeline:
         registry = get_planner_tool_registry()
         executed: Set[str] = set()
         mode_config = get_mode_config(self.flow_mode)
-        tool_task: Optional[Task] = None
+        tool_runtime: Optional[ToolParallelRuntime] = None
         tool_state: Optional[Dict[str, Any]] = None
 
         try:
@@ -3525,18 +3637,51 @@ class PlannerPipeline:
             if ctx.intent is None or (ctx.plan or ctx.provisional_plan) is None:
                 return
 
-            should_run_parallel = ctx.parallelism_enabled and not (ctx.reuse_sql and ctx.reuse_snapshot_active)
-            fanout_adapters: Tuple[Any, ...] = ()
+            fanout_adapters: Tuple[Any, ...] = self._fanout_adapters_for_context(ctx)
+            should_run_parallel = (
+                ctx.parallelism_enabled
+                and bool(fanout_adapters)
+                and not (ctx.reuse_sql and ctx.reuse_snapshot_active)
+            )
             if should_run_parallel:
-                fanout_adapters = _accessory_tool_adapters()
-                if fanout_adapters:
-                    tool_task, tool_queue = self._start_tool_parallelism(
-                        ctx,
-                        adapters=fanout_adapters,
-                    )
-                    tool_state = {"queue": tool_queue, "active": True}
-                    for tool_event in self._collect_tool_deltas_now(tool_state):
-                        yield tool_event
+                tool_runtime = self._start_tool_parallelism(
+                    ctx,
+                    adapters=fanout_adapters,
+                )
+                tool_state = {"queue": tool_runtime.queue, "active": True, "runtime": tool_runtime}
+                for tool_event in self._collect_tool_deltas_now(tool_state, ctx):
+                    yield tool_event
+
+            revision_targets: Set[str] = set(ctx.revision_targets or ())
+            run_sql_lane = not revision_targets or "sql" in revision_targets
+            run_chart_lane = not revision_targets or bool({"sql", "chart"} & revision_targets)
+            run_analysis_lane = not revision_targets or bool({"sql", "analysis"} & revision_targets)
+
+            if revision_targets:
+                revision_event: Dict[str, Any] = {
+                    "event": "revision_request",
+                    "data": {
+                        "revision_id": ctx.revision_id,
+                        "lanes": sorted(revision_targets),
+                        "ts": datetime.utcnow().isoformat(),
+                        "flow_mode": self.flow_mode.value,
+                    },
+                }
+                follow_up_route = getattr(self, "follow_up_route", None)
+                if follow_up_route is not None:
+                    revision_event["data"]["follow_up_route"] = follow_up_route.value
+                revision_event = self._annotate_revision(revision_event, ctx)
+                yield revision_event
+
+                if not run_sql_lane:
+                    ctx.reuse_sql = True
+                    ctx.reused_sql = True
+                if not run_chart_lane:
+                    ctx.reused_chart = True
+                if not run_analysis_lane:
+                    ctx.reused_analysis = True
+                if revision_targets == {"stock"}:
+                    ctx.stock_only = True
 
             if ctx.stock_only:
                 ctx.reuse_sql = True
@@ -3546,7 +3691,7 @@ class PlannerPipeline:
                 ctx.reused_web = True
                 ctx.parallelism_enabled = False
 
-            reuse_sql = ctx.reuse_sql and ctx.revision_snapshot is not None
+            reuse_sql = (ctx.reuse_sql and ctx.revision_snapshot is not None) or not run_sql_lane
             if not reuse_sql and ctx.snapshot_stale and ctx.revision_snapshot:
                 stale_progress = EventEmitter.progress("sql_generation", "Cached SQL snapshot expired - rerunning dataset")
                 stale_progress["data"]["ts"] = datetime.utcnow().isoformat()
@@ -3555,13 +3700,14 @@ class PlannerPipeline:
                 stale_progress["data"]["flow_mode"] = self.flow_mode.value
                 stale_progress["data"]["reused"] = False
                 yield stale_progress
-                for tool_event in self._collect_tool_deltas_now(tool_state):
+                for tool_event in self._collect_tool_deltas_now(tool_state, ctx):
                     yield tool_event
 
             if not reuse_sql:
                 async for event in self._stream_with_tool_state(
                     registry.invoke("sql_generation", self, ctx, executed=executed),
                     tool_state,
+                    ctx,
                 ):
                     yield event
             else:
@@ -3573,7 +3719,7 @@ class PlannerPipeline:
                 reuse_status["data"]["flow_mode"] = self.flow_mode.value
                 reuse_status["data"]["reused"] = True
                 yield reuse_status
-                for tool_event in self._collect_tool_deltas_now(tool_state):
+                for tool_event in self._collect_tool_deltas_now(tool_state, ctx):
                     yield tool_event
                 receipt = ctx.tool_receipts.get("sql_chain")
                 if receipt:
@@ -3582,7 +3728,7 @@ class PlannerPipeline:
                     receipt.error = None
                 sql_payload = _compose_sql_ready_payload(ctx)
                 if sql_payload:
-                    yield _cached_event(
+                    cached_sql = _cached_event(
                         "sql_ready",
                         sql_payload,
                         schedule_stage="sql",
@@ -3590,7 +3736,8 @@ class PlannerPipeline:
                         parallel_group="core_sequential",
                         lane="sql",
                     )
-                    for tool_event in self._collect_tool_deltas_now(tool_state):
+                    yield self._annotate_revision(cached_sql, ctx)
+                    for tool_event in self._collect_tool_deltas_now(tool_state, ctx):
                         yield tool_event
 
             await self._persist_session_state(
@@ -3606,18 +3753,21 @@ class PlannerPipeline:
                     sql_payload.setdefault("ts", datetime.utcnow().isoformat())
                     sql_payload.setdefault("lane", "sql")
                     sql_payload["reused"] = False
-                    yield {
-                        "event": "sql_ready",
-                        "data": sanitize_for_json(sql_payload),
-                    }
-            for tool_event in self._collect_tool_deltas_now(tool_state):
+                    yield self._annotate_revision(
+                        {
+                            "event": "sql_ready",
+                            "data": sanitize_for_json(sql_payload),
+                        },
+                        ctx,
+                    )
+            for tool_event in self._collect_tool_deltas_now(tool_state, ctx):
                 yield tool_event
 
             if reuse_sql:
                 stock_payload = _compose_stock_ready_payload(ctx)
                 if stock_payload and not ctx.stock_only:
                     ctx.reused_stock = True
-                    yield _cached_event(
+                    cached_stock = _cached_event(
                         "stock_ready",
                         stock_payload,
                         schedule_stage="hedged_accessories",
@@ -3625,53 +3775,64 @@ class PlannerPipeline:
                         parallel_group="tool_fanout",
                         lane="market",
                     )
+                    yield self._annotate_revision(cached_stock, ctx)
                 web_payload = _compose_web_ready_payload(ctx)
                 if web_payload:
                     ctx.reused_web = True
-                    yield _cached_event(
+                    cached_web = _cached_event(
                         "web_ready",
                         web_payload,
                         schedule_stage="hedged_accessories",
                         flow_mode=self.flow_mode,
                         parallel_group="tool_fanout",
                         lane="web",
-                )
+                    )
+                    yield self._annotate_revision(cached_web, ctx)
                 ctx.accessories_prefetched = True
             else:
                 async for event in self._stream_with_tool_state(
                     self._ensure_analysis_dependencies(ctx),
                     tool_state,
+                    ctx,
                 ):
                     yield event
 
             if ctx.stock_only:
                 ctx.reused_stock = False
-                async for event in self._stream_with_tool_state(
-                    registry.invoke("stock_tracker", self, ctx, executed=executed),
-                    tool_state,
-                ):
-                    yield event
-                async for tool_event in self._drain_tool_state_async(tool_state):
-                    yield tool_event
+                if tool_state and tool_state.get("active", False):
+                    async for tool_event in self._drain_tool_state_async(tool_state, ctx):
+                        yield tool_event
+                else:
+                    ad_hoc_runtime = self._start_tool_parallelism(
+                        ctx,
+                        adapters=(StockTrackerAdapter(),),
+                        concurrency_override=1,
+                    )
+                    ad_hoc_state = {"queue": ad_hoc_runtime.queue, "active": True, "runtime": ad_hoc_runtime}
+                    try:
+                        async for tool_event in self._drain_tool_state_async(ad_hoc_state, ctx):
+                            yield tool_event
+                    finally:
+                        await ad_hoc_runtime.close()
                 await self._persist_session_state(ctx, record_artifacts=True)
                 analysis_event = _build_reused_analysis_event(self.flow_mode, ctx)
                 if analysis_event:
-                    yield analysis_event
+                    yield self._annotate_revision(analysis_event, ctx)
                 banner_config = FOLLOW_UP_BANNERS.get(ctx.follow_up_route, FOLLOW_UP_BANNERS[FollowUpRoute.FULL_PIPELINE])
                 banner_event = EventEmitter.progress("follow_up_route", banner_config["message"])
                 banner_event["data"]["route"] = ctx.follow_up_route.value
                 banner_event["data"]["ts"] = datetime.utcnow().isoformat()
-                yield banner_event
+                yield self._annotate_revision(banner_event, ctx)
                 planner_payload = _build_planner_result_payload(ctx)
                 result_event = EventEmitter.result("planner_result", planner_payload)
                 result_event["event"] = "planner_result"
                 result_event["data"]["ts"] = datetime.utcnow().isoformat()
-                yield result_event
+                yield self._annotate_revision(result_event, ctx)
                 total_elapsed = int((time.time() - ctx.workflow_start) * 1000)
                 workflow_complete = EventEmitter.result("workflow_complete", {"total_elapsed_ms": total_elapsed})
                 workflow_complete["event"] = "workflow_complete"
                 workflow_complete["data"]["ts"] = datetime.utcnow().isoformat()
-                yield workflow_complete
+                yield self._annotate_revision(workflow_complete, ctx)
                 return
 
             if ctx.halted:
@@ -3680,6 +3841,7 @@ class PlannerPipeline:
             async for event in self._stream_with_tool_state(
                 registry.invoke("chart_generation", self, ctx, executed=executed),
                 tool_state,
+                ctx,
             ):
                 yield event
             await self._persist_session_state(
@@ -3692,6 +3854,7 @@ class PlannerPipeline:
                 async for event in self._stream_with_tool_state(
                     self._web_search_phase(ctx),
                     tool_state,
+                    ctx,
                 ):
                     yield event
                 await self._persist_session_state(ctx, record_artifacts=True)
@@ -3699,6 +3862,7 @@ class PlannerPipeline:
             async for event in self._stream_with_tool_state(
                 registry.invoke("analysis_generation", self, ctx, executed=executed),
                 tool_state,
+                ctx,
             ):
                 yield event
             await self._persist_session_state(
@@ -3708,13 +3872,11 @@ class PlannerPipeline:
                 ),
                 record_artifacts=True,
             )
-            async for tool_event in self._drain_tool_state_async(tool_state):
+            async for tool_event in self._drain_tool_state_async(tool_state, ctx):
                 yield tool_event
         finally:
-            if tool_task:
-                tool_task.cancel()
-                with contextlib.suppress(Exception):
-                    await tool_task
+            if tool_runtime:
+                await tool_runtime.close()
 
 
 async def _initialize_context(self, query: str, session_id: Optional[str]) -> PlannerPhaseContext:
@@ -3750,6 +3912,11 @@ async def _initialize_context(self, query: str, session_id: Optional[str]) -> Pl
         cloned_artifacts = copy.deepcopy(self._latest_artifacts)
         ctx.artifacts = copy.deepcopy(cloned_artifacts)
         ctx.snapshot_artifacts = copy.deepcopy(cloned_artifacts)
+    revision_targets = getattr(self, "revision_targets", set()) or set()
+    ctx.revision_targets = set(revision_targets)
+    if ctx.revision_targets:
+        ctx.revision_id = str(uuid.uuid4())
+        ctx.parallelism_enabled = True
     return ctx
 
 
@@ -4628,6 +4795,9 @@ class PlannerExecutorFlow:
     def set_follow_up_route(self, route: FollowUpRoute) -> None:
         self.follow_up_route = route
         self._pipeline.set_follow_up_route(route)
+
+    def set_revision_targets(self, targets: Iterable[str]) -> None:
+        self._pipeline.set_revision_targets(targets)
 
     async def initialize_context(self, query: str, session_id: Optional[str] = None) -> PlannerPhaseContext:
         return await self._pipeline.initialize_context(query, session_id)

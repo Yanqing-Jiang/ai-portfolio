@@ -228,6 +228,10 @@ export interface SpecialistCard {
   source?: string;
   parallelGroup?: string;
   reused?: boolean;
+  revisionId?: string;
+  revision?: boolean;
+  revisionEvent?: boolean;
+  payloadHash?: string;
 }
 
 export interface StockWidgetConfig {

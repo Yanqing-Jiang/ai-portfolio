@@ -25,6 +25,7 @@ from .planner_executor import (
     _hash_payload,
     PlannerPhaseContext,
     PlannerExecutorFlow,
+    ToolParallelRuntime,
 )
 from .pipeline_tools import get_planner_tool_registry
 from .schedulers import FlowMode, apply_mode_metadata, get_mode_config
@@ -877,8 +878,8 @@ class SingleAgentController:
         self,
         ctx: PlannerPhaseContext,
         lanes: Iterable[str],
-    ) -> Dict[str, Tuple[asyncio.Task, Optional[asyncio.Queue]]]:
-        active: Dict[str, Tuple[asyncio.Task, Optional[asyncio.Queue]]] = {}
+    ) -> Dict[str, ToolParallelRuntime]:
+        active: Dict[str, ToolParallelRuntime] = {}
         for lane in lanes:
             adapters = self._lane_adapters(lane)
             if not adapters:
@@ -888,12 +889,12 @@ class SingleAgentController:
                 concurrency_limit = len(adapters)
             else:
                 concurrency_limit = max(1, min(concurrency_limit, len(adapters)))
-            task, queue = self._planner._start_tool_parallelism(
+            runtime = self._planner._start_tool_parallelism(
                 ctx,
                 adapters=adapters,
                 concurrency_override=concurrency_limit,
             )
-            active[lane] = (task, queue)
+            active[lane] = runtime
         return active
 
     def _iter_fresh_accessory_events(
@@ -945,12 +946,13 @@ class SingleAgentController:
     def _drain_fanout_events(
         self,
         ctx: PlannerPhaseContext,
-        fanout_tasks: Dict[str, Tuple[asyncio.Task, Optional[asyncio.Queue]]],
+        fanout_tasks: Mapping[str, ToolParallelRuntime],
     ) -> AsyncGenerator[Dict[str, Any], None]:
-        for lane, (_, queue) in fanout_tasks.items():
-            if not queue:
+        for lane, runtime in fanout_tasks.items():
+            queue = getattr(runtime, "queue", None)
+            if queue is None:
                 continue
-            lane_events = self._planner._flush_tool_events(queue)
+            lane_events = self._planner._flush_tool_events(queue, ctx)
             for event in lane_events:
                 data = event.setdefault("data", {})
                 parallel_group = self.LANE_PARALLEL_GROUPS.get(lane, "single_agent_fanout")
@@ -994,6 +996,9 @@ class SingleAgentController:
     def set_follow_up_route(self, route: FollowUpRoute) -> None:
         self.follow_up_route = route
         self._planner.set_follow_up_route(route)
+
+    def set_revision_targets(self, targets: Iterable[str]) -> None:
+        self._planner.set_revision_targets(targets)
 
     async def _forward_with_hooks(
         self,
@@ -1199,7 +1204,8 @@ class SingleAgentController:
                     yield fanout_event
 
                 for lane in list(fanout_tasks.keys()):
-                    task, queue = fanout_tasks[lane]
+                    runtime = fanout_tasks[lane]
+                    task = getattr(runtime, "runner", None)
                     if not task:
                         continue
                     try:
@@ -1210,10 +1216,11 @@ class SingleAgentController:
                         lane_states[lane] = "error"
                         raise
                     finally:
-                        lane_entry = {lane: (task, queue)}
+                        lane_entry = {lane: runtime}
                         for fanout_event in self._drain_fanout_events(ctx, lane_entry):
                             yield fanout_event
                         fanout_tasks.pop(lane, None)
+                        await runtime.close()
                 ctx.accessories_prefetched = bool(started_lanes)
                 for accessory_event in self._iter_fresh_accessory_events(ctx, lane_states):
                     yield accessory_event
@@ -1376,11 +1383,8 @@ class SingleAgentController:
                 record_artifacts=True,
             )
         finally:
-            for task, _ in fanout_tasks.values():
-                if task and not task.done():
-                    task.cancel()
-                    with contextlib.suppress(Exception):
-                        await task
+            for runtime in fanout_tasks.values():
+                await runtime.close()
 
     async def chart_revision(
         self,
@@ -1457,5 +1461,6 @@ class SingleAgentController:
 
     def latest_artifacts(self):
         return self._planner.latest_artifacts()
+
 
 

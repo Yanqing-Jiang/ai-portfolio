@@ -1,4 +1,4 @@
-﻿import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import {
   ChatMessage,
   ClarifyRequest,
@@ -71,6 +71,32 @@ const SPECIALIST_TYPE_TO_LANE: Record<string, string> = {
   stock_widget: 'market',
   web_context: 'web',
   analysis_summary: 'analysis',
+};
+
+const REVISION_EVENT_ALIASES: Record<string, string> = {
+  stock_revision_ready: 'stock_ready',
+  web_revision_ready: 'web_ready',
+  sql_revision_ready: 'sql_ready',
+  chart_revision_ready: 'chart_ready',
+  analysis_revision_ready: 'analysis_ready',
+};
+
+const computeCardPayloadHash = (entry: SpecialistCard): string | undefined => {
+  try {
+    const fingerprint = {
+      type: entry.type ?? '',
+      lane: entry.lane ?? '',
+      title: entry.title ?? '',
+      topic: entry.topic ?? '',
+      summary: entry.summary ?? '',
+      snippets: entry.snippets ?? [],
+      symbols: entry.symbols ?? [],
+      meta: entry.meta ?? null,
+    };
+    return JSON.stringify(fingerprint);
+  } catch {
+    return undefined;
+  }
 };
 
 type SnapshotReuseInfo = {
@@ -238,7 +264,7 @@ export const useAnalyticsMemoryStream = (
   const [analysis, setAnalysis] = useState('');
   const [sqlQuery, setSqlQuery] = useState('');
   const [dataSample, setDataSample] = useState<any[] | null>(null);
-  const [revisionMode, setRevisionMode] = useState<'none' | 'chart' | 'analysis' | 'mixed'>('none');
+  const [revisionMode, setRevisionMode] = useState<'none' | 'chart' | 'analysis' | 'market' | 'mixed'>('none');
   const [streamingText, setStreamingText] = useState('');
   const [webSearch, setWebSearch] = useState<WebSearchResult | null>(null);
   const [stockWidget, setStockWidget] = useState<StockWidgetConfig | null>(null);
@@ -252,6 +278,7 @@ export const useAnalyticsMemoryStream = (
   const [slotStatuses, setSlotStatuses] = useState<SlotStatusMap>({});
   const [slotFollowups, setSlotFollowups] = useState<ClarifyRequest[]>([]);
   const [snapshotReuse, setSnapshotReuse] = useState<SnapshotReuseInfo | null>(null);
+  const revisionContextRef = useRef<{ id?: string; lanes: string[] }>({ id: undefined, lanes: [] });
   const lastClarificationEchoRef = useRef<{ slot: string; content: string } | null>(null);
   const resultSentRef = useRef<boolean>(false);
   const summarySentRef = useRef<boolean>(false);
@@ -832,7 +859,7 @@ const buildResultMessageFields = () => ({
       }
     }
     if (lane) {
-      card.lane = lane;
+      card.lane = lane.toLowerCase();
     }
     const source = coerceString(raw.source ?? raw.meta?.source ?? raw.details?.source ?? raw.tool);
     if (source) {
@@ -846,6 +873,20 @@ const buildResultMessageFields = () => ({
     if (reusedFlag !== undefined) {
       card.reused = reusedFlag;
     }
+    const revisionId = coerceString(raw.revision_id ?? raw.revisionId ?? raw.meta?.revision_id);
+    if (revisionId) {
+      card.revisionId = revisionId;
+      card.revision = true;
+    }
+    const revisionFlag = coerceBoolean(raw.revision ?? raw.meta?.revision);
+    if (revisionFlag !== undefined) {
+      card.revision = revisionFlag;
+    }
+    const revisionEventFlag = coerceBoolean(raw.revision_event ?? raw.revisionEvent ?? raw.meta?.revision_event);
+    if (revisionEventFlag !== undefined) {
+      card.revisionEvent = revisionEventFlag;
+    }
+    card.payloadHash = computeCardPayloadHash(card);
 
     return card;
   };
@@ -1184,6 +1225,12 @@ const workflowDataRef = useRef<{
 
   const upsertSpecialistCard = useCallback((card: SpecialistCard) => {
     setSpecialistCards((prev) => {
+      const normalizedLane = card.lane ? card.lane.toLowerCase() : undefined;
+      const candidate: SpecialistCard = {
+        ...card,
+        lane: normalizedLane,
+      };
+      candidate.payloadHash = candidate.payloadHash ?? computeCardPayloadHash(candidate);
       const keyFor = (entry: SpecialistCard) => {
         const meta = entry.meta ?? {};
         const questionKey =
@@ -1194,19 +1241,29 @@ const workflowDataRef = useRef<{
               : entry.topic ?? '';
         return [entry.type ?? 'accessory', entry.lane ?? '', questionKey, entry.parallelGroup ?? ''].join('::');
       };
-      const targetKey = keyFor(card);
+      const targetKey = keyFor(candidate);
       const existingIndex = prev.findIndex((item) => keyFor(item) === targetKey);
       let next: SpecialistCard[];
       if (existingIndex >= 0) {
+        const current = prev[existingIndex];
+        const prevHash = current.payloadHash;
+        const nextHash = candidate.payloadHash;
+        if (prevHash && nextHash && prevHash === nextHash) {
+          const revisionChanged = candidate.revisionId && candidate.revisionId !== current.revisionId;
+          if (!revisionChanged) {
+            return prev;
+          }
+        }
         next = [...prev];
         next[existingIndex] = {
-          ...prev[existingIndex],
-          ...card,
-          source: card.source ?? prev[existingIndex].source,
-          reused: card.reused ?? prev[existingIndex].reused,
+          ...current,
+          ...candidate,
+          source: candidate.source ?? current.source,
+          reused: candidate.reused ?? current.reused,
+          payloadHash: candidate.payloadHash ?? current.payloadHash,
         };
       } else {
-        next = [...prev, card];
+        next = [...prev, candidate];
       }
       const priorityForCard = (entry: SpecialistCard) => {
         const typeKey = typeof entry.type === 'string' ? entry.type.toLowerCase() : '';
@@ -1246,6 +1303,10 @@ const workflowDataRef = useRef<{
   const scheduleProgressiveUpdate = (updates: Partial<typeof pendingUpdatesRef.current>) => {
     // Merge pending updates
     Object.assign(pendingUpdatesRef.current, updates);
+
+    if (updates.chartSpec !== undefined) {
+      workflowDataRef.current.chartSpec = updates.chartSpec;
+    }
 
     // Clear existing timeout
     if (updateTimeoutRef.current) {
@@ -1300,7 +1361,7 @@ const workflowDataRef = useRef<{
     }, 50); // 50ms debounce for smooth updates
   };
 
-  const markRevisionMode = useCallback((mode: 'chart' | 'analysis') => {
+  const markRevisionMode = useCallback((mode: 'chart' | 'analysis' | 'market') => {
     setRevisionMode((prev) => {
       if (prev === 'none') {
         return mode;
@@ -1664,12 +1725,43 @@ const workflowDataRef = useRef<{
     applyField('specialistCards', options.specialistCards, snapshot.specialistCards);
 
     setChatHistory((prev) => {
+      let base = prev;
+      let mutated = false;
+      if (options.chartSpec != null) {
+        base = prev.map((message, index) => {
+          if (index !== prev.length - 1 || message.type !== 'result') {
+            return message;
+          }
+          if (
+            !message.chartSpec &&
+            !message.dataSample &&
+            !message.stockWidgetConfig &&
+            (!message.toolFanoutManifest || message.toolFanoutManifest.length === 0) &&
+            (!message.toolFanoutResults || message.toolFanoutResults.length === 0) &&
+            !message.webSearch
+          ) {
+            return message;
+          }
+          mutated = true;
+          return {
+            ...message,
+            chartSpec: null,
+            dataSample: null,
+            stockWidgetConfig: null,
+            toolFanoutManifest: [],
+            toolFanoutResults: [],
+            webSearch: null,
+          };
+        });
+      }
+
+      const working = mutated ? base : prev;
       const nextMessage: ChatMessage = {
         ...payload,
         id: Date.now().toString(),
         timestamp: new Date().toISOString(),
       };
-      const last = prev[prev.length - 1];
+      const last = working[working.length - 1];
       const shouldMerge =
         last?.type === 'result' &&
         typeof last.content === 'string' &&
@@ -1682,10 +1774,11 @@ const workflowDataRef = useRef<{
           ...nextMessage,
           id: last.id,
         };
-        return [...prev.slice(0, -1), merged];
+        const withoutLast = working.slice(0, -1);
+        return [...withoutLast, merged];
       }
 
-      return [...prev, nextMessage];
+      return [...working, nextMessage];
     });
   };
 
@@ -1775,6 +1868,7 @@ const workflowDataRef = useRef<{
     resultMessageIdRef.current = null;
     analysisReadyEmittedRef.current = false;
     finalResultMergedRef.current = false;
+    hasExplicitResultContentRef.current = false;
 
     const baseEndpoint = `/api/analytics/memory/stream`;
 
@@ -1790,18 +1884,46 @@ const workflowDataRef = useRef<{
     const endpoint = `${baseEndpoint}?${params.toString()}`;
 
     await streamHook.startStream(endpoint, (data) => {
-      const eventType = data.event || data.type;
+      const rawEventType = data.event || data.type;
+      const eventType =
+        typeof rawEventType === 'string' ? REVISION_EVENT_ALIASES[rawEventType] ?? rawEventType : rawEventType;
       // Handle both old (heavy) and new (lightweight) event formats
       const eventData = data.data || data;
       const eventVisibility =
         typeof data.event_type === 'string' ? data.event_type : 'user';
       const isThinkingEvent = eventVisibility === 'thinking';
+      const revisionId = coerceString(data.revision_id ?? eventData.revision_id);
+      const revisionLanesRaw =
+        Array.isArray(data.revision_lanes)
+          ? data.revision_lanes
+          : Array.isArray(eventData.revision_lanes)
+            ? eventData.revision_lanes
+            : undefined;
+      const normalizedRevisionLanes = Array.isArray(revisionLanesRaw)
+        ? (revisionLanesRaw as unknown[])
+            .map((lane) => (typeof lane === 'string' ? lane.toLowerCase() : ''))
+            .filter((lane): lane is string => lane.length > 0)
+        : [];
+      if (revisionId || normalizedRevisionLanes.length) {
+        revisionContextRef.current = {
+          id: revisionId ?? revisionContextRef.current.id,
+          lanes: normalizedRevisionLanes.length ? normalizedRevisionLanes : revisionContextRef.current.lanes,
+        };
+      }
+      const revisionFlag = coerceBoolean(data.revision ?? eventData.revision);
+      const revisionEventFlag =
+        coerceBoolean(data.revision_event ?? eventData.revision_event) ||
+        (typeof rawEventType === 'string' && Object.prototype.hasOwnProperty.call(REVISION_EVENT_ALIASES, rawEventType));
+      const isRevisionEvent = Boolean(revisionFlag || revisionEventFlag || revisionId);
+      const effectiveRevisionId = revisionId ?? revisionContextRef.current.id;
+      const effectiveRevisionLanes = revisionContextRef.current.lanes ?? [];
 
       // For lightweight events, extract step and timing info from top level
       const stepInfo = {
         step: data.step || eventData.step,
         ts: data.ts || eventData.ts,
-        elapsed_ms: data.elapsed_ms || eventData.elapsed_ms
+        elapsed_ms: data.elapsed_ms || eventData.elapsed_ms,
+        event: typeof eventType === 'string' ? eventType : undefined,
       };
             const sequence: number | undefined =
         typeof data.seq === 'number'
@@ -1877,7 +1999,15 @@ const workflowDataRef = useRef<{
       if (eventData.specialist_card) {
         const normalizedCard = normalizeSpecialistCard(eventData.specialist_card, stepInfo.ts);
         if (normalizedCard) {
-          upsertSpecialistCard(normalizedCard);
+          const mergedCard: SpecialistCard = {
+            ...normalizedCard,
+            revisionId: normalizedCard.revisionId ?? effectiveRevisionId,
+            revision: normalizedCard.revision ?? (isRevisionEvent || Boolean(effectiveRevisionId)),
+            revisionEvent: normalizedCard.revisionEvent ?? isRevisionEvent,
+            lane: normalizedCard.lane ?? laneFromEvent ?? normalizedCard.lane,
+          };
+          mergedCard.payloadHash = mergedCard.payloadHash ?? computeCardPayloadHash(mergedCard);
+          upsertSpecialistCard(mergedCard);
         }
       }
       
@@ -1891,6 +2021,24 @@ const workflowDataRef = useRef<{
             }
           }
           break;
+        case 'revision_request': {
+          const normalizedLanes = effectiveRevisionLanes.length
+            ? effectiveRevisionLanes
+            : Array.isArray(eventData.lanes)
+              ? (eventData.lanes as unknown[])
+                  .map((lane) => (typeof lane === 'string' ? lane.toLowerCase() : ''))
+                  .filter((lane): lane is string => lane.length > 0)
+              : [];
+          revisionContextRef.current = {
+            id: effectiveRevisionId ?? revisionContextRef.current.id,
+            lanes: normalizedLanes,
+          };
+          setRevisionMode('none');
+          if (normalizedLanes.length) {
+            streamHook.setCurrentStatus(`Revision requested: ${normalizedLanes.join(', ')}`);
+          }
+          break;
+        }
           
 
         case 'status':
@@ -1989,7 +2137,7 @@ const workflowDataRef = useRef<{
           refreshResultMessage();
           const thinking = [`Route selected: ${route.replace(/[_-]/g, ' ')}`];
           updateStep('follow_up_route', 'in_progress', thinking, { banner }, stepInfo.elapsed_ms, stepInfo.ts);
-          streamHook.setCurrentStatus(copy.message);
+          streamHook.setCurrentStatus(hasExplicitResultContentRef.current ? '' : copy.message);
           break;
         }
           
@@ -2249,6 +2397,9 @@ const workflowDataRef = useRef<{
             { lane: 'sql', reused: Boolean(eventData.reused) }
           );
           emitResultOnce();
+          if (isRevisionEvent) {
+            markRevisionMode('chart');
+          }
           refreshResultMessage();
           break;
         }
@@ -2278,6 +2429,9 @@ const workflowDataRef = useRef<{
             stepInfo.elapsed_ms,
             stepInfo.ts,
           );
+          if (isRevisionEvent) {
+            markRevisionMode('chart');
+          }
           emitResultOnce();
           refreshResultMessage();
           break;
@@ -2306,6 +2460,9 @@ const workflowDataRef = useRef<{
           );
           updateStep('tool_execution', 'completed', ['Stock widget ready'], eventData, stepInfo.elapsed_ms, stepInfo.ts);
           emitResultOnce();
+          if (isRevisionEvent) {
+            markRevisionMode('market');
+          }
           refreshResultMessage();
           break;
         }
@@ -2332,6 +2489,9 @@ const workflowDataRef = useRef<{
           );
           updateStep('web_research_agent', 'completed', ['Web context ready'], eventData, stepInfo.elapsed_ms, stepInfo.ts);
           emitResultOnce();
+          if (isRevisionEvent) {
+            markRevisionMode('market');
+          }
           refreshResultMessage();
           break;
         }
@@ -2355,6 +2515,9 @@ const workflowDataRef = useRef<{
           updateStep('analysis_generation', 'completed', ['Analysis ready'], eventData, stepInfo.elapsed_ms, stepInfo.ts);
           if (isFirstReady) {
             emitResultOnce();
+          }
+          if (isRevisionEvent) {
+            markRevisionMode('analysis');
           }
           refreshResultMessage();
           break;
@@ -2493,7 +2656,25 @@ const workflowDataRef = useRef<{
             let patchedChartSpec: any = null;
             if (hasOps) {
               setChartSpec((prev) => {
-                const next = applyChartOps(prev, eventData);
+                const baseCandidate =
+                  (prev && typeof prev === 'object' ? prev : undefined) ??
+                  (pendingUpdatesRef.current.chartSpec &&
+                  typeof pendingUpdatesRef.current.chartSpec === 'object'
+                    ? pendingUpdatesRef.current.chartSpec
+                    : undefined) ??
+                  (workflowDataRef.current.chartSpec &&
+                  typeof workflowDataRef.current.chartSpec === 'object'
+                    ? workflowDataRef.current.chartSpec
+                    : undefined) ??
+                  (eventData?.chart_spec && typeof eventData.chart_spec === 'object'
+                    ? eventData.chart_spec
+                    : undefined);
+
+                if (!baseCandidate || typeof baseCandidate !== 'object') {
+                  return prev;
+                }
+
+                const next = applyChartOps(baseCandidate, eventData);
                 workflowDataRef.current.chartSpec = next;
                 patchedChartSpec = next;
                 return next;
@@ -3655,7 +3836,7 @@ const workflowDataRef = useRef<{
 
           if (isEarlyExit) {
             // Clear any partial workflow artifacts for clarity
-workflowDataRef.current = {
+            workflowDataRef.current = {
               chartSpec: null,
               analysis: '',
               progressiveAnalysis: '',
@@ -3692,6 +3873,7 @@ workflowDataRef.current = {
             resultSentRef.current = false;
             analysisReadyEmittedRef.current = false;
             finalResultMergedRef.current = false;
+            hasExplicitResultContentRef.current = false;
           }
           break;
 
@@ -3778,7 +3960,8 @@ workflowDataRef.current = {
             },
           );
 
-          streamHook.setCurrentStatus(finalMessage || 'Output ready');
+          const statusCopy = finalMessage || 'Output ready';
+          streamHook.setCurrentStatus(hasExplicitResultContentRef.current ? '' : statusCopy);
           break;
         }
 
@@ -3829,12 +4012,13 @@ workflowDataRef.current = {
               },
             );
 
-            streamHook.setCurrentStatus(finalMessage || 'Completed');
+            const responseStatus = finalMessage || 'Completed';
+            streamHook.setCurrentStatus(hasExplicitResultContentRef.current ? '' : responseStatus);
           }
           break;
           
         case 'done':
-          streamHook.setCurrentStatus('Output ready');
+          streamHook.setCurrentStatus(hasExplicitResultContentRef.current ? '' : 'Output ready');
           break;
           
         case 'error':

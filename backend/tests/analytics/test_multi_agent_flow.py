@@ -1,6 +1,8 @@
 import sys
 from pathlib import Path
 import asyncio
+import copy
+from datetime import datetime
 import types
 
 sys.path.append(str(Path(__file__).resolve().parents[2]))
@@ -14,8 +16,15 @@ setattr(google_stub, "genai", genai_stub)
 sys.modules["google.genai"] = genai_stub
 sys.modules["google.genai.types"] = genai_types_stub
 
-from analytics.flows.multi_agent import MultiAgentFlow, _derive_tasks
-from analytics.flows.orchestrator import AgentResult
+from analytics.flows.multi_agent import (
+    MultiAgentFlow,
+    _derive_tasks,
+    _planner_agent,
+    _query_agent,
+    _market_agent,
+    _web_research_agent,
+)
+from analytics.flows.orchestrator import AgentResult, AgentRunContext
 from analytics.routing import FollowUpRoute
 
 
@@ -351,3 +360,153 @@ def test_stock_ready_event_carries_source_metadata():
     stock_event = flow._pending_artifact_events[-1]
     assert stock_event["event"] == "stock_ready"
     assert stock_event["data"]["source"] == "planner_fanout"
+
+
+def test_multi_agent_supervisor_reuses_planner_fanout():
+    flow = MultiAgentFlow()
+    flow._prepare_context("NVDA outlook reuse")
+    runtime = flow._shared_context["_runtime"]
+    runtime["accessories_ready"].set()
+
+    now_iso = datetime.utcnow().isoformat()
+    planner_ctx = flow._shared_context["planner"]
+    planner_ctx.update({"confidence": 0.88, "tickers": ["NVDA"]})
+
+    sql_ctx = flow._shared_context["sql"]
+    sql_ctx.update(
+        {
+            "status": "success",
+            "row_count": 128,
+            "sql": "SELECT symbol, close FROM price_history",
+            "attempts": [
+                {"attempt": 1, "status": "success", "source": "planner_fanout"}
+            ],
+        }
+    )
+
+    analysis_ctx = flow._shared_context["analysis"]
+    analysis_ctx["final"] = "Revenue continues to grow with stable margins."
+    analysis_ctx["analysis_length"] = len(analysis_ctx["final"])
+
+    chart_ctx = flow._shared_context["chart"]
+    chart_ctx.update(
+        {
+            "spec_summary": {"chart_type": "line", "series_count": 1},
+            "spec_id": "chart-abc123",
+        }
+    )
+
+    market_ctx = flow._shared_context["market"]
+    market_ctx.update(
+        {
+            "snapshot": {
+                "symbol": "NVDA",
+                "latest_close": 468.12,
+                "change_percent": 1.8,
+            },
+            "tickers": ["NVDA"],
+            "source": "planner_fanout",
+        }
+    )
+
+    web_ctx = flow._shared_context["web"]
+    web_ctx.update(
+        {
+            "snippets": [{"title": "NVDA guidance", "url": "https://example.com"}],
+            "query": "nvda outlook reuse",
+            "source": "planner_fanout",
+        }
+    )
+
+    flow._shared_context["stock_widget"] = {
+        "symbols": ["NASDAQ:NVDA"],
+        "last_close": 468.12,
+    }
+
+    flow._shared_context["tool_results"] = [
+        {
+            "tool": "stock_tracker",
+            "status": "completed",
+            "payload": {"ready": True},
+            "metadata": {"name": "stock_tracker"},
+            "elapsed_ms": 1200,
+        },
+        {
+            "tool": "web_retriever",
+            "status": "completed",
+            "payload": {"ready": True, "snippets": web_ctx["snippets"]},
+            "metadata": {"name": "web_retriever"},
+            "elapsed_ms": 950,
+        },
+    ]
+
+    flow._shared_context["tool_receipts"] = {
+        "stock_tracker": {"status": "completed", "completed_at": now_iso},
+        "web_retriever": {"status": "completed", "completed_at": now_iso},
+        "market_question_a": {"status": "completed", "completed_at": now_iso},
+        "market_question_b": {"status": "completed", "completed_at": now_iso},
+    }
+    initial_tool_results = copy.deepcopy(flow._shared_context["tool_results"])
+
+    async def fail_fetch(symbol, client=None):
+        raise AssertionError("Planner fan-out cache should prevent market refetch")
+
+    flow._market_fetcher = fail_fetch
+    runtime["market_fetcher"] = fail_fetch
+    flow._market_client = types.SimpleNamespace(is_configured=True)
+    runtime["market_client"] = flow._market_client
+
+    async def orchestrate():
+        planner_context = AgentRunContext(
+            query="NVDA outlook reuse",
+            session_id="sess-multi-agent",
+            shared=flow._shared_context,
+            dependencies={},
+            inputs={},
+        )
+        planner_result = await _planner_agent(planner_context)
+        dependencies = {"planner_phase": planner_result}
+
+        query_context = AgentRunContext(
+            query="NVDA outlook reuse",
+            session_id="sess-multi-agent",
+            shared=flow._shared_context,
+            dependencies=dependencies,
+            inputs={},
+        )
+        market_context = AgentRunContext(
+            query="NVDA outlook reuse",
+            session_id="sess-multi-agent",
+            shared=flow._shared_context,
+            dependencies=dependencies,
+            inputs={},
+        )
+        web_context_run = AgentRunContext(
+            query="NVDA outlook reuse",
+            session_id="sess-multi-agent",
+            shared=flow._shared_context,
+            dependencies=dependencies,
+            inputs={},
+        )
+
+        query_result = await _query_agent(query_context)
+        market_result = await _market_agent(market_context)
+        web_result = await _web_research_agent(web_context_run)
+        return planner_result, query_result, market_result, web_result
+
+    planner_result, query_result, market_result, web_result = asyncio.run(orchestrate())
+
+    task_status = {task["name"]: task["status"] for task in planner_result.output["tasks"]}
+    assert task_status["query"] == "skip"
+    assert task_status["market"] == "reuse"
+    assert task_status["web_research"] == "skip"
+    assert task_status["chart"] == "reuse"
+    assert task_status["analyst"] == "reuse"
+
+    assert query_result.output["status"] == "skip"
+    assert market_result.output["status"] == "reuse"
+    assert market_result.output["refresh"] is False
+    assert web_result.output["status"] == "skip"
+    assert web_ctx["status"] == "skip"
+    assert market_ctx["status"] == "reuse"
+    assert flow._shared_context["tool_results"] == initial_tool_results

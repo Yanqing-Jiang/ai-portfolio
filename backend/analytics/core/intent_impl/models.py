@@ -188,7 +188,7 @@ class LLMSlotStatusModel(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
     status: Literal["filled", "missing", "defaulted", "assumed"]
-    value: Optional[Any] = None
+    value: Optional[Union[str, int, float, bool, List[str], Dict[str, Any]]] = None
     reason: Optional[str] = None
     suggestions: List[str] = Field(default_factory=list)
     allow_custom: Optional[bool] = None

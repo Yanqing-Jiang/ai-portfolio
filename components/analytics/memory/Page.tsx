@@ -33,7 +33,7 @@ const FLOW_META: Record<FlowOption, { chip: string; chipClass: string; helper: s
   },
 };
 
-const REVISION_META: Record<'chart' | 'analysis' | 'mixed', { label: string; helper: string; className: string }> = {
+const REVISION_META: Record<'chart' | 'analysis' | 'market' | 'mixed', { label: string; helper: string; className: string }> = {
   chart: {
     label: 'Chart Revision Fast-Path',
     helper: 'Replaying cached data; only chart specification is being adjusted.',
@@ -43,6 +43,11 @@ const REVISION_META: Record<'chart' | 'analysis' | 'mixed', { label: string; hel
     label: 'Analysis Revision Fast-Path',
     helper: 'Re-using latest data to update narrative only.',
     className: 'bg-pink-600/20 text-pink-200 border-pink-500/30',
+  },
+  market: {
+    label: 'Market Revision Fast-Path',
+    helper: 'Refreshing market research cards without triggering SQL or chart regeneration.',
+    className: 'bg-sky-600/20 text-sky-200 border-sky-500/30',
   },
   mixed: {
     label: 'Chart + Analysis Revision',
@@ -103,6 +108,20 @@ const MemoryAnalyticsPage: React.FC = () => {
     submitClarification,
     stopAnalysis,
   } = useAnalyticsMemoryStream(selectedFlow);
+
+  useEffect(() => {
+    if (hasStartedChat) {
+      return;
+    }
+    const historyHasMessages = (chatHistory?.length ?? 0) > 0;
+    const hasStreamingText = typeof streamingText === 'string' && streamingText.trim().length > 0;
+    const hasProgressiveText = typeof progressiveText === 'string' && progressiveText.trim().length > 0;
+    if (historyHasMessages || hasStreamingText || hasProgressiveText) {
+      setHasStartedChat(true);
+    }
+  }, [chatHistory, streamingText, progressiveText, hasStartedChat]);
+
+  const flowSelectionLocked = hasStartedChat;
 
   // Project data for the analytics memory project
   const projectData = {
@@ -181,7 +200,9 @@ Multi-Agent: workload delegation & orchestration, fastest speed
       ? 'Revision fast-path Â· chart adjustments without SQL rerun'
       : revisionMode === 'analysis'
         ? 'Revision fast-path Â· narrative refinements on cached data'
-        : revisionMode === 'mixed'
+        : revisionMode === 'market'
+          ? 'Revision fast-path A� market snapshots without SQL rerun'
+          : revisionMode === 'mixed'
           ? 'Revision fast-path Â· chart & narrative tweaks on cached data'
           : 'Real-time agent reasoning & tool execution';
 
@@ -285,9 +306,18 @@ Multi-Agent: workload delegation & orchestration, fastest speed
                           <p key={idx} className="leading-relaxed flex items-center gap-2">
                             <span
                               role="button"
-                              onClick={() => { if (!isLoading) setSelectedFlow(flowKey); }}
-                              title={`Switch flow to ${FLOW_META[flowKey].chip}`}
-                              className={`px-2 py-0.5 text-[10px] sm:text-xs rounded-full border transition-colors duration-200 ${isLoading ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer hover:opacity-90'} ${chipClass}`}
+                              onClick={() => { if (!isLoading && !flowSelectionLocked) setSelectedFlow(flowKey); }}
+                              title={
+                                flowSelectionLocked
+                                  ? 'Flow selection locked for this chat. Refresh to choose a different workflow.'
+                                  : `Switch flow to ${FLOW_META[flowKey].chip}`
+                              }
+                              aria-disabled={flowSelectionLocked || isLoading}
+                              className={`px-2 py-0.5 text-[10px] sm:text-xs rounded-full border transition-colors duration-200 ${
+                                isLoading || flowSelectionLocked
+                                  ? 'opacity-60 cursor-not-allowed'
+                                  : 'cursor-pointer hover:opacity-90'
+                              } ${chipClass}`}
                             >
                               {label}
                             </span>
@@ -389,8 +419,13 @@ Multi-Agent: workload delegation & orchestration, fastest speed
                 <select
                   value={selectedFlow}
                   onChange={(e) => setSelectedFlow(e.target.value as FlowOption)}
-                  disabled={isLoading}
-                  className="px-3 py-2 text-xs sm:text-sm bg-gray-700/80 border border-emerald-500/30 rounded-lg focus:ring-2 focus:ring-emerald-500/40 focus:border-emerald-500/40 text-gray-100 transition-all duration-200"
+                  disabled={isLoading || flowSelectionLocked}
+                  className="px-3 py-2 text-xs sm:text-sm bg-gray-700/80 border border-emerald-500/30 rounded-lg focus:ring-2 focus:ring-emerald-500/40 focus:border-emerald-500/40 text-gray-100 transition-all duration-200 disabled:cursor-not-allowed disabled:bg-gray-700/50 disabled:border-gray-600/40 disabled:text-gray-500 disabled:opacity-70"
+                  title={
+                    flowSelectionLocked
+                      ? 'Flow selection locked for this chat. Refresh to choose a different workflow.'
+                      : 'Select an analytics workflow before starting a chat.'
+                  }
                 >
                   <option value="planner-executor">Direct Workflow</option>
                   <option value="single-agent">Single Agent</option>
