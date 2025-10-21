@@ -25,7 +25,7 @@ def test_classification_artifact_roundtrip():
         category="financial_analytics",
         confidence=0.84,
         is_financial=True,
-        model="gpt-5-mini-2025-08-07",
+        model="gpt-5-nano-2025-08-07",
         raw={"category": "financial_analytics", "confidence": 0.84},
     )
 
@@ -36,7 +36,7 @@ def test_classification_artifact_roundtrip():
     assert restored.category == "financial_analytics"
     assert restored.confidence == 0.84
     assert restored.is_financial is True
-    assert restored.model == "gpt-5-mini-2025-08-07"
+    assert restored.model == "gpt-5-nano-2025-08-07"
     assert restored.raw == {"category": "financial_analytics", "confidence": 0.84}
 
 

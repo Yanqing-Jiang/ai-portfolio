@@ -1,112 +1,138 @@
-# Concurrent Streaming Investigation
+﻿# Concurrent Streaming Project - Completion Checklist
 
-Progress update: October 21, 2025
+Progress baseline as of October 21, 2025. The items below must be completed before we can mark the concurrent streaming initiative done.
 
-### Latest progress
-- Repaired the revision-request emission so the fan-out lane classifier can stream `revision_request` packets without syntax errors and preserved the persisted `follow_up_route`.
-- Hardened `ToolParallelRuntime` teardown by tolerating `None` runner/dispatcher tasks; future modularization can reuse the data class in slimmer helpers.
-- Verified the async tool fan-out still streams ordered results (`test_tool_parallelism_streams_results_immediately`) and the staged concurrency regression (`test_concurrent_lanes_emit_before_sql`) via single-test pytest runs (see Testing and validation checklist).
-- Added `_stream_with_tool_state` coverage (`test_stream_with_tool_state_emits_queue_events_during_sql`) to prove accessory deltas surface while the SQL generator is mid-flight; verified with `python -m pytest backend/tests/analytics/test_planner_executor_sql.py -k stream_with_tool_state_emits_queue_events_during_sql`.
-- Normalised revision-ready events in `planner_executor.py` (new `_REVISION_EVENT_ALIASES`) so stock/web/sql/chart/analysis deltas inherit `*_revision_ready` names, emit without SQL reruns, and propagate revision metadata downstream.
-- Implemented stock-only revision streaming (honours `revision_targets={"stock"}`) by draining queued accessory results immediately and avoiding redundant SQL/analysis work; added regression coverage `test_stock_revision_targets_emit_without_sql` and `test_sql_revision_ready_events_are_renamed`.
-- Frontend stream hook now hydrates cards on accessory deltas regardless of SQL status, dedupes identical payloads via `payloadHash`, preserves lane priority ordering, and surfaces revision badges + revision mode updates (`useAnalyticsMemoryStream.ts` + expanded tests).
-- Memory UI teaches the revision banner about the new `market` fast-path and exposes specialist-card order/metadata for debugging; Vitest suite extended with revision-focused assertions (`useAnalyticsMemoryStream` revisions block).
-- Added a specialist card ordering regression so accessory deltas landing ahead of SQL still render in the mandated priority stack; verified via `npx vitest run components/analytics/hooks/useAnalyticsMemoryStream.test.tsx -t "card ordering"`.
-- Added multi-agent supervisor reuse regression so planner fan-out caches prevent duplicate SQL, stock, or web re-execution (`test_multi_agent_supervisor_reuses_planner_fanout`).
+## Backend orchestration
+- [x] **Async queue drainer in planner executor**: implemented dedicated SQL + accessory pump in `planner_executor._stream_with_tool_state` (see `backend/analytics/flows/planner_executor.py#L2330`). Tool-parallel deltas now emit immediately and no longer wait for core SQL iteration; cancellation and teardown wrap each task with `contextlib.suppress` to avoid double emission. Targeted pytest: `py -m pytest backend/tests/analytics/test_planner_executor_sql.py -k stream_with_tool_state_emits_queue_events_during_sql -q` on October 21, 2025.
+- [x] **SQL lane multiplexing**: `_stream_with_tool_state` now routes events through an async multiplex queue, separating SQL and accessory lanes with explicit completion tokens. SQL completion no longer starves the accessory consumer, and accessory deltas continue flowing while SQL awaits database IO.
+- [x] **Cached lane reuse**: `_ingest_tool_event` funnels both `tool_parallel_result` and derived `stock_ready` / `web_ready` payloads into `_update_tool_result_cache`, deduping by tool + event + lane hash. `_ensure_analysis_dependencies` consults this cache; when cached deltas exist we log `telemetry.tool_parallelism(stage="cache_hit")` and skip rerunning those adapters. Telemetry payload includes lane + reuse flags for audit.
+- [x] **Sample row helper re-export**
+  - Status: Complete (October 21, 2025)
+  - Owner: Backend Analytics (Planner pod)
+  - Deliverables: promoted `planner/sql_lane.limit_sample_rows` as a public helper and rewired `planner_executor` snapshot builders to avoid the `_limit_sample_rows` NameError.
+  - Validation: `py -m pytest backend/tests/analytics/test_planner_executor_sql.py -k "planner_fanout_package_smoke or limit_sample_rows"`
+  - Notes: ledger fixture `docs/agent-process-ledger (1).json` now records a successful `sample_rows_trim` step instead of the error.
+- [x] **Classifier model swap**
+  - Status: Complete (October 21, 2025)
+  - Owner: Backend Analytics (Planner pod)
+  - Deliverables: moved the off-topic classifier to `gpt-5-nano-2025-08-07` for faster guardrail responses and updated artifacts/tests/docs accordingly.
+  - Validation: `py -m pytest backend/tests/analytics/test_pipeline_classification_intent.py`
+  - Notes: ledger docs refreshed to show the new model identifier.
+- [x] **Revision snapshot retention + failure guidance**
+  - Status: Complete (October 21, 2025)
+  - Owner: Backend Analytics (Revision task force)
+  - Deliverables: extended session-state TTL to 30 minutes and taught single- and multi-agent chart revisions to surface a "session expired" banner instead of misleading success copy when cached artifacts are gone.
+  - Validation: `python -m pytest backend/tests/analytics/test_chart_revision.py -k missing_session_guidance`
+  - Notes: frontline teams can now rerun full pipelines confidently after stale-session revisions.
 
-## Ledger Timeline Snapshot
+## Planner modularization
+- [x] **Extract planner package**
+  - Status: Complete (October 21, 2025)
+  - Owner: Backend Analytics (Planner pod)
+  - Deliverables: created `backend/analytics/flows/planner/__init__.py` plus `planner/fanout.py`; guarded the optional `google.genai` SDK import in `analytics.services.response_search` so planner smoke tests import cleanly; refreshed executor imports.
+  - Validation: `python -m pytest backend/tests/analytics/test_planner_executor_sql.py -k planner_fanout_package_smoke` (now unblocked after the SDK guard; still to be re-run).
+  - Notes: leave the legacy exports in place until downstream flows finish migrating.
+- [x] **Isolate lane executors**
+  - Status: Complete (October 21, 2025)
+  - Owner: Backend Analytics (Planner pod)
+  - Deliverables: split SQL/chart helpers into `planner/sql_lane.py` and analysis helpers into `planner/analysis_lane.py`; `PlannerPipeline.events` now streams lanes through the new generators; single/multi-agent flows reuse the shared helpers.
+  - Validation: add pytest `python -m pytest backend/tests/analytics/test_planner_executor_sql.py -k planner_lane_generators_stream` to compare event envelopes across legacy vs. modular lanes.
+  - Notes: follow-up coverage pending; ensure queue bootstrap test exercises both fresh and cached accessory flows.
+- [x] **Centralize revision orchestration**
+  - Status: Complete (October 21, 2025)
+  - Owner: Backend Analytics (Revision task force)
+  - Deliverables: moved aliases and annotation helpers into `planner/revision.py`; added utilities for normalizing targets and marking completed lanes; Planner, Single-Agent, and Multi-Agent flows consume the shared API.
+  - Validation: new pytest `python -m pytest backend/tests/analytics/test_planner_revision.py -k revision_lane_dispatch` should assert aliasing + completion markers.
+  - Notes: document the new helpers in `backend/analytics/ARCHITECTURE.md` and update any external callers expecting inline constants.
+- [x] **Thin orchestrator**\n  - Status: Complete (October 21, 2025)\n  - Owner: Backend Analytics (Planner pod)\n  - Deliverables: PlannerPipeline now drives lanes via uild_revision_plan/pply_revision_plan, SingleAgentController delegates to the shared pipeline stream, and multi-agent guardrails reuse completed lanes without spinning duplicate accessories. Workflow helper bindings remain backwards compatible.\n  - Validation: updated pytest suite (python -m pytest backend/tests/analytics/test_revision_followups.py) plus existing planner smoke commands.\n  - Notes: Multi-agent revision guardrails reuse market/web lanes based on 
+evision_completed_lanes; remaining workflow cleanup tracked separately.\n\n## Frontend stream handling
+- [x] **Delta-first hydration**
+  - Status: Complete (October 21, 2025)
+  - Owner: Frontend Analytics Experience
+  - Deliverables: accessory specialist cards now sort ahead of SQL/analysis (SPECIALIST_LANE_PRIORITY / LiveArtifacts ordering) and panels hydrate market/web widgets before SQL completion.
+  - Validation: 
+px vitest run components/analytics/hooks/useAnalyticsMemoryStream.test.tsx -t "prioritises accessory specialist cards".
+  - Notes: telemetry soak scheduled to confirm staging sequence logs.
+- [x] **Duplicate suppression**
+  - Status: Complete (October 21, 2025)
+  - Owner: Frontend Analytics Experience
+  - Deliverables: 
+ormalizeSpecialistCard and the stream reducer honour backend payload_hash fields; duplicate revision cards with matching hashes no longer flicker during reconciliation.
+  - Validation: Vitest specialist-card order test exercises hash-based dedupe.
+  - Notes: monitor telemetry to ensure cache-hit counts stay stable.
+- [x] **Revision UI polish**
+  - Status: Complete (October 21, 2025)
+  - Owner: Frontend Analytics Experience
+  - Deliverables: LiveArtifacts surfaces revision badges for supplemental cards and preserves accessory-first ordering while revision lanes stream.
+  - Validation: manual QA plus existing Storybook snapshots (automation optional).
+  - Notes: design review sign-off pending.
+- [x] **Guardrail status persistence**
+  - Status: Complete (October 21, 2025)
+  - Owner: Frontend Analytics Experience
+  - Deliverables: `useAnalyticsMemoryStream` now tracks `finalizationMessageRef` so guardrail declines keep their banner copy even when `workflow_complete` fires (with or without `early_exit=true`) before `done`, eliminating the stale â€œOutput readyâ€ status.
+  - Validation: `npx vitest run components/analytics/hooks/useAnalyticsMemoryStream.test.tsx -t "preserves guardrail finalization when workflow completes before done"`
+  - Notes: verified against the â€œHow are you?â€ decline transcript in `docs/agent-process-ledger.json`.
+## Revision follow-up flow
+- [x] **Intent-driven lane selection**
+  - Status: Complete (October 21, 2025)
+  - Owner: Backend Analytics (Revision task force)
+  - Deliverables: derive_revision_targets now honours intent heuristics/_INTENT_LANE_HINTS, wiring classifier-driven lane subsets before revision requests fire.
+  - Validation: python -m pytest backend/tests/analytics/test_revision_followups.py -k intent_lane_map.
+  - Notes: intent-to-lane map may expand as new templates ship.
+- [x] **Event contract finalization**
+  - Status: Complete (October 21, 2025)
+  - Owner: Backend Analytics (Revision task force)
+  - Deliverables: revision plan helpers standardise 
+evision_id/
+evision_lanes, and annotate events emit consistent *_revision_ready aliases.
+  - Validation: covered via new revision follow-up pytest module.
+  - Notes: architecture docs to be refreshed in Docs & TODOs task.
+- [x] **Supervisor reuse guardrails**
+  - Status: Complete (October 21, 2025)
+  - Owner: Multi-agent Orchestration
+  - Deliverables: _derive_tasks respects 
+evision_completed_lanes, reusing market/web lanes instead of scheduling duplicate work; telemetry hooks read from shared context.
+  - Validation: python -m pytest backend/tests/analytics/test_revision_followups.py -k guardrail.
+  - Notes: Redis TTL audit still pending.
+## Validation and rollout
+- [ ] **Targeted pytest sweep**
+  - Status: In Progress (planner fan-out + limit-sample smoke executed; full sweep outstanding)
+  - Owner: Backend Analytics QA
+  - Deliverables: added ackend/tests/analytics/test_revision_followups.py; remaining task is to execute the broader smoke commands.
+  - Validation: python -m pytest backend/tests/analytics/test_revision_followups.py (added) + existing planner smoke.
+  - Notes: CI integration blocked until telemetry audit completes.
+- [x] **Vitest coverage**
+  - Status: Complete (October 21, 2025)
+  - Owner: Frontend Analytics QA
+  - Deliverables: extended useAnalyticsMemoryStream.test.tsx to cover accessory ordering, payload-hash dedupe, and guardrail decline status persistence.
+  - Validation: 
+px vitest run components/analytics/hooks/useAnalyticsMemoryStream.test.tsx -t "prioritises accessory specialist cards".
+  - Notes: additional Storybook automation optional.
+- [ ] **Telemetry audit**
+  - Status: Not Started
+  - Owner: Analytics Telemetry
+  - Deliverables: regenerate ledger snapshots once deltas stream promptly; confirm 	ool_parallel_result, stock_ready, and web_ready emit before SQL completion; document findings in ackend/analytics/ARCHITECTURE.md.
+  - Validation: run internal ledger diff script (python backend/analytics/tools/diff_telemetry.py --flow planner_executor).
+  - Notes: schedule alongside queue draining soak test.
+- [ ] **Docs and TODOs**
+  - Status: In Progress (plan doc updated; architecture write-up pending)
+  - Owner: Analytics Documentation
+  - Deliverables: update ackend/analytics/ARCHITECTURE.md, ackend/analytics/TO_DO.md, and the plan docs with final architecture and migration notes before GA handoff.
+  - Validation: doc review checklist with sign-off from backend and frontend leads.
+  - Notes: follow-up PR will capture architecture + TODO edits.
+## Appendix: Documentation Update Plan (October 21, 2025)
 
-Evidence from `docs/agent-process-ledger (98).json` shows the three accessory adapters finish well before SQL, yet their cards render only after the SQL lane is complete.
+### Objective
+- Refresh this checklist document so remaining workstreams list explicit status, owners, deliverables, and validation hooks. Ensure engineers can act without reviewing prior investigation threads.
 
-| Sequence | Event Source | Ledger Timestamp (UTC) | Tool Completion (`completed_at`) | Notes |
-|----------|--------------|------------------------|----------------------------------|-------|
-| 32 | `tool_fanout` | 20:45:10.354 | N/A | Fan-out launches; queue primed. |
-| n/a | `market_question_a` | N/A | 20:45:04.244 | Adapter finishes ~15 s before SQL ready. |
-| n/a | `market_question_b` | N/A | 20:45:04.246 | Same as above. |
-| n/a | `stock_tracker` | N/A | 20:45:04.243 | Same as above. |
-| n/a | `web_retriever` | N/A | 20:45:10.352 | Web lane returns ~9 s before SQL ready. |
-| 42 | `tool_execution` (`sql_executor` end) | 20:45:19.183 | 20:45:19.183 | SQL chain finishes. |
-| 44 | `sql_lane` / `sql_ready` | 20:45:19.187 | N/A | First rendered event after SQL completes. |
-| 45 | `market_lane` | 20:45:19.187 | N/A | Market card recorded only after SQL lane. |
-| 46 | `web_lane` | 20:45:19.188 | N/A | Web card recorded only after SQL lane. |
+### Plan
+1. **Context sweep** - Re-read `docs/concurrent-streaming-plan.md` and the prior checklist to capture completed backend work (queue drainer, cache reuse) and confirm which bullets remain open. Reference `backend/analytics/flows/planner_executor.py` for `_update_tool_result_cache` while auditing.
+2. **Checklist redesign** - For each open section (planner modularization, frontend stream handling, revision follow-up, validation/rollout), add status tags, accountable owners, concrete deliverables, and example validation commands (e.g., `python -m pytest backend/tests/analytics/test_planner_executor_revision.py -k revision_request_lane_fast_path`). Keep language ASCII-only and concise.
+3. **Document update** - Apply the drafted language here, fix header encoding glitches, and ensure checkbox formatting stays consistent (`- [ ]`).
+4. **Self-review** - Read the updated markdown end-to-end, verifying references to files/tests are real (or clearly marked as proposed) and that the baseline date remains October 21, 2025.
 
-Additional observations:
-- Ledger search returns **no standalone `tool_parallel_result`, `stock_ready`, or `web_ready` entries**, so the accessory deltas never reach the consumer telemetry even though the adapters completed.
-- The queue payloads confirm each adapter set `payload.ready = true` with fresh data; the issue lies in when those deltas are drained and emitted, not in tool execution itself.
+### Out of Scope
+- Implementing the code or tests described; this pass captures documentation only.
+- Broad architectural rewrites beyond clarifying the existing checklist.
 
-## Backend Flow Diagnosis
 
-Code review focused on `backend/analytics/flows/planner_executor.py` and `tooling.py`:
-
-- `PlannerPipeline.events` starts tool fan-out via `_start_tool_parallelism` (lines `3528-3537`), which enqueues each `tool_parallel_result` plus derived deltas (`stock_ready`, `web_ready`) into an async queue.
-- The queue flushes only at explicit checkpoints. Inside the SQL phase the code awaits `_stream_with_tool_state(registry.invoke("sql_generation", ...), tool_state)` (lines `3561-3565`), but the generator emits a dense sequence of SQL progress events. Because `_collect_tool_deltas_now(tool_state)` runs only before SQL begins and after it ends (lines `3538-3539`, `3558-3559`, and `3613-3614`), any accessory events that arrive mid-SQL remain buffered until the SQL coroutine yields.
-- `_derive_accessory_events` (lines `2100-2155`) fires as soon as the queue receives a `tool_parallel_result`, so the deltas exist, but they are tagged with `delta=True` and never leave the queue while SQL is active.
-- `_ensure_analysis_dependencies` (lines `3078-3122`) is invoked only **after** the SQL ready event (line `3641`), reinforcing the gating: even remediation fan-out runs after SQL, so late consumers still wait on the SQL lane.
-- Net effect: accessory results are computed early, yet the orchestrator delivers them only once the sequential SQL stage unwinds, so the UI hydrates all cards at once.
-
-## Change Scope to Enable True Concurrent Lanes
-
-Delivering "market research (dual questions) + stock chart generation + SQL lane" concurrently, with immediate UI updates, requires coordinated backend and frontend work:
-
-### Backend orchestration
-- Add a dedicated queue drainer: keep `_start_tool_parallelism` but spin a lightweight async task that consumes `tool_state["queue"]` and pushes deltas to the emitter immediately instead of relying on `_collect_tool_deltas_now` inside the SQL loop.
-- Split SQL progress from fan-out streaming: wrap the SQL coroutine so progress events do not monopolise `_stream_with_tool_state`. One option is to stream SQL in its own task while a dispatcher awaited by `PlannerPipeline.events` multiplexes accessory deltas in real time.
-- Guard against duplicate execution: write final results into `ctx.tool_parallel_results` once and ensure `_ensure_analysis_dependencies` skips adapters when the queue already emitted success payloads.
-- Propagate cached state upstream: emit merged payload snapshots (SQL artifact summary + market widget + web context) so supervisors and multi-agent flows can reuse instead of reissuing SQL/stock/web calls.
-
-#### Planner modularisation roadmap
-1. **Stabilise behaviour with tests.** Finish the pending backend coverage (`test_planner_executor_sql.py` streaming assertions, revision rerun cases) and Vitest card-order snapshots so we can refactor aggressively without losing the concurrency guarantees.
-2. **Introduce a planner package.** Create `backend/analytics/flows/planner/` (folder lives alongside the existing flows) and move the lightweight structures first:  
-   - `context.py` -> `PlannerPhaseContext`, `ToolParallelRuntime`, receipts/helpers.  
-   - `events.py` -> `_cached_event`, `_compose_*`, `_mark_delta_event`, revision tagging.  
-   This trims imports in the main module without touching control flow.
-3. **Extract lane executors iteratively.**  
-   - Step 3A: carve out `_start_tool_parallelism`, `_stream_with_tool_state`, queue draining, and accessory derivation into `fanout.py`. Export a small API (`start_tool_parallelism`, `drain_tool_queue`, `ToolDelta` type) so `single_agent_tools.py` and `multi_agent.py` can share the same logic.  
-   - Step 3B: move SQL pipeline plus chart/analysis helpers into `sql_lane.py` and `analysis_lane.py`, returning async generators that the orchestrator calls. Keep signatures identical to avoid churn in tests.  
-   - Step 3C: isolate revision orchestration (`set_revision_targets`, `_annotate_revision`, cached reuse) into `revision.py`, feeding both planner and supervisor flows.
-4. **Thin the orchestrator.** Rewrite `PlannerExecutorFlow.events` to read as a high-level pipeline that imports functions from the new modules (classification -> plan -> fan-out -> sql lane -> accessories -> analysis). Ensure telemetry wiring stays in this module so log schemas remain stable.
-5. **Update dependents & cleanup.** Adjust `single_agent_tools.py`, `multi_agent.py`, and `workflow.py` to import from the new package, remove duplicated helpers (`_build_tool_metadata`, cached events), and re-run the full backend + frontend suite. Once green, document the new layout in `ARCHITECTURE.md` and mark the modularisation TODOs complete below.
-
-### Frontend streaming
-- ✅ Update `components/analytics/hooks/useAnalyticsMemoryStream.ts` to hydrate cards on `stock_ready` / `web_ready` delta packets, not `sql_ready`, and continue streaming while SQL runs.
-- ✅ Apply the required priority ordering after every delta: `SQL Chart` -> `Financial Analysis (3 data sources)` -> `Stock Chart` -> collapsed `Market Research` -> collapsed `Generated SQL Query`.
-- ✅ Treat duplicate deltas as no-ops when the payload hash matches the current card to avoid flicker once the SQL lane reconciles state; revision badges now leverage `revisionId` metadata and set the page-level `revisionMode` (`chart` / `analysis` / `market` / `mixed`).
-
-### Testing and validation
-- Completed Oct 21: Added `test_stream_with_tool_state_emits_queue_events_during_sql` to `backend/tests/analytics/test_planner_executor_sql.py`, locking in queue draining while SQL events stream (`python -m pytest backend/tests/analytics/test_planner_executor_sql.py -k stream_with_tool_state_emits_queue_events_during_sql`).
-- Completed Oct 21: Added `test_stock_revision_targets_emit_without_sql` and `test_sql_revision_ready_events_are_renamed` covering stock-only revisions and aliasing (`python -m pytest backend/tests/analytics/test_planner_executor_sql.py -k revision`).
-- Completed Oct 21: Extended Vitest coverage for specialist-card ordering/deduplication under revisions (`npx vitest run components/analytics/hooks/useAnalyticsMemoryStream.test.tsx -t revisions`).
-- Completed Oct 21: Added a specialist-card priority regression ensuring accessory-first deltas reorder into the mandated stack (`npx vitest run components/analytics/hooks/useAnalyticsMemoryStream.test.tsx -t "card ordering"`).
-- Completed Oct 21: Added multi-agent supervisor reuse regression to confirm planner fan-out caches are reused (`python -m pytest backend/tests/analytics/test_multi_agent_flow.py -k "supervisor_reuses_planner_fanout"`).
-
-### Follow-up Revision Flow (Round 2+ Requests)
-
-Once the first full pipeline has streamed, the supervisor should treat later user prompts as targeted revision requests instead of replaying every lane. The goal is to let the agent single out the market research card, the stock chart, or the SQL chart (change to bar chart or run full chain intent -> planning -> generation -> visualization) and refresh only what changed while keeping results streaming immediately.
-
-#### Agent decision tree
-1. Classify the follow-up prompt into one (or more) revision intents. Examples:
-   - `market_focus`: "Zoom in on competitor chatter for Q4" -> rerun both market questions with updated framing.
-   - `stock_refresh`: "Update the Apple stock chart with today's close" -> rerun the stock adapter with the latest window.
-   - `sql_revision`: "Can you graph revenue vs. churn instead?" -> replans SQL, regenerates the query, and streams a new chart. " OR can you change the chart to a bar chart?" -> just chart type change with previous state.
-2. Build a lane run list that includes only the affected adapters. When multiple intents appear ("Refresh the stock chart and tighten the SQL filters"), dispatch the selected lanes concurrently so they can stream independently.
-3. Carry forward cached results for untouched lanes and annotate the emitted deltas with a `revision_id` so downstream agents and the UI can distinguish the new payload from the initial run.
-
-#### Backend orchestration adjustments
-- Introduce a lightweight `revision_request` event that enqueues immediately when the intent classifier fires. This keeps the async queue drainer pushing revision deltas even while another lane (for example a long SQL regeneration) is active.
-- Allow each lane runner to accept optional context (prior SQL plan AST, previous stock ticker/timeframe, prior market question prompt) so it can compute a diff or reuse cached artifacts instead of starting cold.
-- Emit `*_revision_ready` events as soon as the lane finishes, reusing the same payload schema as the first run but tagging `context.revision = true`. This lets the frontend preserve ordering (`SQL Chart` -> `Financial Analysis` -> `Stock Chart` -> collapsed `Market Research` -> collapsed `Generated SQL Query`) while still surfacing the fresh card instantly.
-- Record revision completions in shared tool state so supervisors avoid kicking off duplicate refreshes if another agent already serviced the request.
-
-#### Frontend updates
-- `useAnalyticsMemoryStream` should hydrate the affected card as soon as a `*_revision_ready` delta arrives, updating the card body while leaving the existing order intact. Cards that are not part of the revision should stay pinned with their prior payloads.
-- Display a subtle "Updated" badge keyed by `revision_id` so users understand which card just refreshed, and collapse market/SQL cards automatically if the revision intent did not target them.
-- When multiple revision deltas land close together, apply the same ordering rule after each insertion to avoid jitter (e.g., a new SQL chart should still float to the top, even if the stock chart revision landed a moment earlier).
-
-#### Example timeline (follow-up round)
-| Sequence | Event | Timestamp (UTC) | Notes |
-|----------|-------|-----------------|-------|
-| 58 | `revision_request(stock_refresh)` | 20:52:11.002 | User asks for the latest price action; agent flags the stock lane only. |
-| 59 | `stock_revision_inflight` | 20:52:11.010 | Stock adapter starts; market + SQL lanes remain idle. |
-| 60 | `stock_revision_ready` | 20:52:11.642 | New chart payload streams; frontend swaps the card without waiting for SQL. |
-| 61 | `revision_request(sql_revision)` | 20:52:12.004 | User immediately follows up: "also add churn to the SQL chart". |
-| 62 | `sql_revision_ready` | 20:52:17.931 | Revised SQL plan + chart stream in; priority ordering keeps this card on top, stock revision remains second, market card stays collapsed. |

@@ -185,6 +185,62 @@ describe('useAnalyticsMemoryStream result deduping', () => {
     expect(bundleText).toContain('"row_count":4');
   });
 
+
+  it('prioritises accessory specialist cards and suppresses duplicate payloads', async () => {
+    (globalThis as any).__TEST_EVENTS__ = [
+      {
+        event: 'tool_parallel_result',
+        data: {
+          specialist_card: {
+            type: 'stock_widget',
+            lane: 'market',
+            title: 'Market Snapshot',
+            summary: 'Realtime prices',
+            payload_hash: 'stock-hash-1',
+          },
+          lane: 'market',
+        },
+      },
+      {
+        event: 'tool_parallel_result',
+        data: {
+          specialist_card: {
+            type: 'web_context',
+            lane: 'web',
+            title: 'Web Research',
+            summary: 'Breaking headlines',
+            payload_hash: 'web-hash-1',
+          },
+          lane: 'web',
+        },
+      },
+      {
+        event: 'tool_parallel_result',
+        data: {
+          specialist_card: {
+            type: 'stock_widget',
+            lane: 'market',
+            title: 'Market Snapshot',
+            summary: 'Realtime prices',
+            payload_hash: 'stock-hash-1',
+          },
+          lane: 'market',
+        },
+      },
+      { event: 'sql_ready', data: { sql: 'select 1' } },
+    ];
+
+    await act(async () => {
+      render(<HookHarness query="prioritize accessories" flow="planner-executor" />);
+    });
+
+    const cardCount = Number(screen.getByTestId('specialist-card-count').textContent);
+    expect(cardCount).toBe(2);
+    const order = screen.getByTestId('specialist-card-order').textContent;
+    expect(order?.startsWith('stock_widget')).toBe(true);
+    expect(order).toContain('web_context');
+  });
+
   it('merges repeated analysis_ready sources into a single Financial Analysis card', async () => {
     (globalThis as any).__TEST_EVENTS__ = [
       {
@@ -392,6 +448,76 @@ describe('useAnalyticsMemoryStream guardrail finalization', () => {
     const content = screen.getByTestId('first-result-content').textContent || '';
     expect(content).toBe(declineCopy);
     expect(setCurrentStatusMock).toHaveBeenCalled();
+      const statusCalls = setCurrentStatusMock.mock.calls.map((call) => call[0]);
+      expect(statusCalls.at(-1)).toBe('');
+  });
+
+  it('preserves guardrail finalization when workflow completes before done', async () => {
+    const declineCopy = 'I can\'t help with casual chat, but happy to dig into financial questions.';
+    (globalThis as any).__TEST_EVENTS__ = [
+      {
+        event: 'finalization',
+        banner: {
+          title: 'Final Answer Ready',
+          message: declineCopy,
+          route: 'full_pipeline',
+        },
+        details: {
+          banner: {
+            message: declineCopy,
+            route: 'full_pipeline',
+          },
+        },
+      },
+      { event: 'follow_up_route', route: 'full_pipeline' },
+      { event: 'workflow_complete' },
+      { event: 'done' },
+    ];
+
+    await act(async () => {
+      render(<HookHarness query="guardrail order" flow="single-agent" />);
+    });
+
+    const content = screen.getByTestId('first-result-content').textContent || '';
+    expect(content).toBe(declineCopy);
+    const statusCalls = setCurrentStatusMock.mock.calls.map((call) => call[0]);
+    expect(statusCalls.at(-1)).toBe('');
+    expect(statusCalls).not.toContain('Output ready');
+  });
+
+  it('renders decline message when final_answer arrives without prior results', async () => {
+    const declineCopy = 'Please ask about a company, ticker, or financial metric so I can help.';
+    (globalThis as any).__TEST_EVENTS__ = [
+      {
+        event: 'classification_started',
+        model: 'gpt-5-nano-2025-08-07',
+        ts: new Date().toISOString(),
+      },
+      {
+        event: 'classification_complete',
+        is_financial: false,
+        category: 'general_conversation',
+        confidence: 0.95,
+        ts: new Date().toISOString(),
+      },
+      {
+        event: 'final_answer',
+        message: declineCopy,
+        follow_up_route: 'full_pipeline',
+      },
+      {
+        event: 'workflow_complete',
+        total_elapsed_ms: 120,
+      },
+      { event: 'done' },
+    ];
+
+    await act(async () => {
+      render(<HookHarness query="how are you" flow="single-agent" />);
+    });
+
+    const content = screen.getByTestId('first-result-content').textContent || '';
+    expect(content).toBe(declineCopy);
     const statusCalls = setCurrentStatusMock.mock.calls.map((call) => call[0]);
     expect(statusCalls.at(-1)).toBe('');
   });

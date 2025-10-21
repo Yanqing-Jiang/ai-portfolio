@@ -18,6 +18,7 @@ import pytest
 
 
 from analytics.flows import planner_executor
+from analytics.flows.planner import fanout as planner_fanout
 from analytics.flows.tooling import BaseToolAdapter, ToolAdapterResult
 from analytics.sql import prompt_builder
 from analytics.sql.compiler import compile_sql_from_plan
@@ -464,6 +465,80 @@ def test_concurrent_lanes_emit_before_sql(monkeypatch):
     assert "sql_ready" in lane_events
     assert lane_events.index("stock_ready") < lane_events.index("sql_ready")
     assert lane_events.index("web_ready") < lane_events.index("sql_ready")
+
+
+@pytest.mark.asyncio
+async def test_planner_fanout_package_smoke(monkeypatch):
+    pipeline = planner_executor.PlannerPipeline(flow_mode=planner_executor.FlowMode.SINGLE_AGENT)
+    ctx = planner_executor.PlannerPhaseContext(
+        query="Adapter fan-out smoke",
+        session_id="ctx-fanout",
+        workflow_start=time.time(),
+        timed_emitter=planner_executor.TimedEventEmitter(session_id="ctx-fanout", flow="test"),
+        flow_mode=planner_executor.FlowMode.SINGLE_AGENT,
+        parallelism_enabled=True,
+    )
+
+    async def _fake_parallelism(ctx, adapters=(), concurrency_override=None):
+        yield {
+            "event": "tool_parallel_result",
+            "data": {
+                "tool": "stock_tracker",
+                "status": "completed",
+                "payload": {
+                    "stock_widget": {"symbols": [["NASDAQ:NVDA", "NVDA"]]},
+                    "from_cache": False,
+                },
+                "parallel_group": "tool_fanout",
+                "schedule_stage": "hedged_accessories",
+                "completed_at": "2025-10-21T12:00:00Z",
+            },
+        }
+
+    monkeypatch.setattr(planner_fanout, "run_tool_parallelism", _fake_parallelism)
+
+    runtime = planner_fanout.start_tool_parallelism(
+        ctx,
+        ingest_tool_event=pipeline._ingest_tool_event,
+        adapters=None,
+        concurrency_override=None,
+    )
+
+    observed = []
+    sentinel = None
+    while sentinel is None:
+        item = await asyncio.wait_for(runtime.queue.get(), timeout=0.1)
+        if item is planner_fanout.TOOL_QUEUE_SENTINEL:
+            sentinel = item
+            break
+        observed.append(item)
+
+    assert sentinel is planner_fanout.TOOL_QUEUE_SENTINEL
+    runner_exc = runtime.runner.exception() if runtime.runner else None
+    dispatcher_exc = runtime.dispatcher.exception() if runtime.dispatcher else None
+    assert runner_exc is None, f"runner failed with {runner_exc}"
+    assert dispatcher_exc is None, f"dispatcher failed with {dispatcher_exc}"
+    assert any(isinstance(event, dict) and event.get("event") == "tool_parallel_result" for event in observed)
+
+    derived_event = next(
+        (event for event in observed if isinstance(event, dict) and event.get("event") == "stock_ready"),
+        None,
+    )
+    assert derived_event is not None
+    assert derived_event["data"]["lane"] == "market"
+    assert derived_event["data"]["delta"] is True
+
+    await asyncio.wait_for(runtime.close(), timeout=0.1)
+
+
+def test_limit_sample_rows_caps_rows_to_fifty():
+    rows = [{"row": idx} for idx in range(65)]
+
+    limited = planner_executor.limit_sample_rows(rows)
+
+    assert len(limited) == 50
+    assert limited[0]["row"] == 0
+    assert limited[-1]["row"] == 49
 
 
 @pytest.mark.asyncio

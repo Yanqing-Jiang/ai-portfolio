@@ -52,7 +52,7 @@ def test_classification_phase_populates_artifact(monkeypatch: pytest.MonkeyPatch
         assert artifact is not None
         assert artifact.category == "financial_analytics"
         assert artifact.is_financial is True
-        assert artifact.model == "gpt-5-mini-2025-08-07"
+        assert artifact.model == "gpt-5-nano-2025-08-07"
         assert artifact.raw.get("topic_category") == "financial_analytics"
 
     asyncio.run(_run())
@@ -131,6 +131,34 @@ def test_intent_phase_populates_artifact(monkeypatch: pytest.MonkeyPatch) -> Non
     async def _run() -> None:
         pipeline = planner_executor.PlannerPipeline()
 
+        async def fake_classify(query: str, *, session_id: str, model: str, reasoning_effort: str):
+            return OffTopicClassifierSchema(
+                is_financial_query=True,
+                confidence=0.9,
+                topic_category="financial_analytics",
+                polite_decline_message=None,
+                suggested_rephrase=None,
+            )
+
+        monkeypatch.setattr(planner_executor, "classify_query_async", fake_classify)
+        class _SlotStatus:
+            def __init__(self, value: Any):
+                self.status = "filled"
+                self.value = value
+                self.reason = None
+                self.suggestions = []
+                self.allow_custom = True
+
+        class _SlotResolution:
+            def __init__(self):
+                self.slots = {"tickers": _SlotStatus("NVDA"), "granularity": _SlotStatus("annual")}
+                self.followups = []
+                self.notes = "stubbed slot resolver"
+
+        async def fake_resolve_slots(*args, **kwargs):
+            return _SlotResolution()
+
+        monkeypatch.setattr(planner_executor, "resolve_intent_slots_async", fake_resolve_slots)
         def fake_detect(query: str, configs, session_id=None, **kwargs):
             return IntentModel(
                 intent_key="margin_growth_vs_peers",
@@ -146,6 +174,8 @@ def test_intent_phase_populates_artifact(monkeypatch: pytest.MonkeyPatch) -> Non
         monkeypatch.setattr(planner_executor, "compute_required_clarifications", lambda *args, **kwargs: [])
 
         ctx = await pipeline.initialize_context("Compare NVDA margins vs peers", session_id="intent-session")
+        async for _ in pipeline.run_classification(ctx):
+            pass
 
         async for _ in pipeline.run_intent(ctx):
             pass
@@ -294,6 +324,15 @@ def test_sql_pipeline_artifacts(monkeypatch: pytest.MonkeyPatch) -> None:
         pipeline = planner_executor.PlannerPipeline()
         pipeline.unified_client = FakeUnifiedClient()
 
+        async def fake_classify(query: str, *, session_id: str, model: str, reasoning_effort: str):
+            return OffTopicClassifierSchema(
+                is_financial_query=True,
+                confidence=0.91,
+                topic_category="financial_analytics",
+                polite_decline_message=None,
+                suggested_rephrase=None,
+            )
+
         monkeypatch.setattr(planner_executor, "_validate_sql", lambda sql: (True, [], 4))
         monkeypatch.setattr(planner_executor, "execute_sql", fake_execute_sql)
         monkeypatch.setattr(
@@ -311,8 +350,11 @@ def test_sql_pipeline_artifacts(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(planner_executor, "perform_response_search", fake_perform_search)
         monkeypatch.setattr(planner_executor, "collect_tool_bundle", lambda *args, **kwargs: {"stock_widget": {"symbols": ["NVDA"]}})
         monkeypatch.setattr(planner_executor, "stream_insights_llm", fake_stream_insights_llm)
+        monkeypatch.setattr(planner_executor, "classify_query_async", fake_classify)
 
         ctx = await pipeline.initialize_context("SQL query", session_id="sql-session")
+        async for _ in pipeline.run_classification(ctx):
+            pass
         intent = IntentModel(
             intent_key="margin_growth_vs_peers",
             confidence=0.85,

@@ -58,10 +58,10 @@ const FOLLOW_UP_BANNER_COPY: Record<string, { title: string; message: string }> 
 };
 
 const SPECIALIST_LANE_PRIORITY: Record<string, number> = {
-  chart: 0,
-  analysis: 1,
-  market: 2,
-  web: 3,
+  market: 0,
+  web: 1,
+  analysis: 2,
+  chart: 3,
   sql: 4,
 };
 
@@ -287,6 +287,7 @@ export const useAnalyticsMemoryStream = (
   const analysisReadyEmittedRef = useRef<boolean>(false);
   const finalResultMergedRef = useRef<boolean>(false);
   const hasExplicitResultContentRef = useRef<boolean>(false);
+  const finalizationMessageRef = useRef<string | null>(null);
 
 const buildResultMessageFields = () => ({
     flowMode: workflowDataRef.current.flowMode ?? flow,
@@ -886,7 +887,8 @@ const buildResultMessageFields = () => ({
     if (revisionEventFlag !== undefined) {
       card.revisionEvent = revisionEventFlag;
     }
-    card.payloadHash = computeCardPayloadHash(card);
+    const providedPayloadHash = coerceString(raw.payload_hash ?? raw.payloadHash ?? raw.meta?.payload_hash);
+    card.payloadHash = providedPayloadHash ?? computeCardPayloadHash(card);
 
     return card;
   };
@@ -1869,6 +1871,7 @@ const workflowDataRef = useRef<{
     analysisReadyEmittedRef.current = false;
     finalResultMergedRef.current = false;
     hasExplicitResultContentRef.current = false;
+    finalizationMessageRef.current = null;
 
     const baseEndpoint = `/api/analytics/memory/stream`;
 
@@ -3814,27 +3817,34 @@ const workflowDataRef = useRef<{
             completionMessage && completionMessage !== workflowStatusMessage
               ? completionMessage
               : workflowStatusMessage;
+          const guardrailFinalizationActive = Boolean(finalizationMessageRef.current);
+          const treatAsEarlyExit = isEarlyExit || guardrailFinalizationActive;
 
           if (!isThinkingEvent) {
             emitResultOnce();
-            if (isEarlyExit) {
+            if (treatAsEarlyExit) {
               if (!hasExplicitResultContentRef.current) {
-                refreshResultMessage({ content: finalStatusCopy || '' });
+                const guardrailCopy = finalizationMessageRef.current ?? finalStatusCopy ?? '';
+                if (guardrailCopy) {
+                  refreshResultMessage({ content: guardrailCopy });
+                }
               }
             } else if (!hasExplicitResultContentRef.current) {
               refreshResultMessage({ content: '' });
             }
           }
 
-          if (isEarlyExit) {
+          if (treatAsEarlyExit) {
             const shouldShowStatus = !hasExplicitResultContentRef.current;
-            streamHook.setCurrentStatus(shouldShowStatus ? finalStatusCopy || 'Output ready' : '');
+            const statusText = finalizationMessageRef.current ?? finalStatusCopy ?? 'Output ready';
+            streamHook.setCurrentStatus(shouldShowStatus ? statusText : '');
           } else {
             streamHook.setError('');
             streamHook.setCurrentStatus(hasExplicitResultContentRef.current ? '' : 'Output ready');
+            finalizationMessageRef.current = null;
           }
 
-          if (isEarlyExit) {
+          if (treatAsEarlyExit) {
             // Clear any partial workflow artifacts for clarity
             workflowDataRef.current = {
               chartSpec: null,
@@ -3873,7 +3883,7 @@ const workflowDataRef = useRef<{
             resultSentRef.current = false;
             analysisReadyEmittedRef.current = false;
             finalResultMergedRef.current = false;
-            hasExplicitResultContentRef.current = false;
+            hasExplicitResultContentRef.current = Boolean(finalizationMessageRef.current);
           }
           break;
 
@@ -3918,6 +3928,15 @@ const workflowDataRef = useRef<{
             coerceString(detailsPayload['message']) ??
             coerceString(bannerPayload['message']) ??
             'Output ready';
+          if (typeof finalMessage === 'string') {
+            const normalizedFinalMessage = finalMessage.trim();
+            finalizationMessageRef.current =
+              normalizedFinalMessage && normalizedFinalMessage.toLowerCase() !== 'output ready'
+                ? finalMessage
+                : null;
+          } else {
+            finalizationMessageRef.current = null;
+          }
           const title =
             coerceString(bannerPayload['title']) ??
             coerceString(detailsPayload['title']) ??
@@ -3976,6 +3995,9 @@ const workflowDataRef = useRef<{
             const analysisAvailable = coerceBoolean(eventData?.analysis_available);
             const flowModeOverride =
               (typeof eventData?.flow_mode === 'string' ? (eventData.flow_mode as FlowMode) : undefined) ?? flowModeValue ?? flow;
+            emitResultOnce({ content: finalMessage });
+            finalizationMessageRef.current =
+              finalMessage.trim().toLowerCase() !== 'output ready' ? finalMessage : finalizationMessageRef.current;
             const banner: FollowUpBanner = {
               title: finalAnswerOnly ? 'Guided Final Answer' : 'Final Answer Ready',
               message: finalMessage,
@@ -4017,9 +4039,11 @@ const workflowDataRef = useRef<{
           }
           break;
           
-        case 'done':
-          streamHook.setCurrentStatus(hasExplicitResultContentRef.current ? '' : 'Output ready');
+        case 'done': {
+          const hasFinalizationCopy = Boolean(finalizationMessageRef.current);
+          streamHook.setCurrentStatus(hasExplicitResultContentRef.current || hasFinalizationCopy ? '' : 'Output ready');
           break;
+        }
           
         case 'error':
           {

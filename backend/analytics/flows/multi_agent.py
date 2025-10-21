@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import hashlib
 import json
@@ -114,6 +114,7 @@ class _MultiAgentHooks(AnalyticsFlowHooks):
         self._flow = flow
         self._query = query
         self._active_session: Optional[str] = session_id
+        self._flow._chart_revision_missing_session = False
 
     async def on_flow_start(self, ctx: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
         self._flow._prepare_context(self._query)
@@ -148,6 +149,13 @@ class _MultiAgentHooks(AnalyticsFlowHooks):
     async def after_event(self, ctx: Dict[str, Any], event: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
         if False:
             yield {}
+        if event.get("event") == "error":
+            data = event.get("data") or {}
+            code = str(data.get("code") or "").upper()
+            if code == "CHART_REVISION_MISSING_SESSION":
+                self._flow._chart_revision_missing_session = True
+                self._flow.set_follow_up_route(FollowUpRoute.FULL_PIPELINE)
+            return
         end_event = self._flow._maybe_agent_turn_end(event)
         if end_event:
             yield end_event
@@ -261,11 +269,23 @@ def _derive_tasks(
     query: str,
     *,
     web_ctx: Optional[Dict[str, Any]] = None,
+    revision_completed: Optional[Sequence[str]] = None,
 ) -> AgentTaskPlan:
     plan = AgentTaskPlan()
     attempts = sql_ctx.get("attempts") or []
     last_attempt = attempts[-1] if attempts else None
     reuse_sql = bool(sql_ctx.get("status") in {"reused", "success"} and (sql_ctx.get("row_count") or 0) > 0)
+    completed_lanes = {
+        str(lane).strip().lower()
+        for lane in (revision_completed or [])
+        if lane
+    }
+    if "market" in completed_lanes:
+        completed_lanes.add("stock")
+    if "stock" in completed_lanes:
+        completed_lanes.add("market")
+    if "web" in completed_lanes:
+        completed_lanes.add("web")
     analysis_revision_text = None
     if isinstance(analysis_ctx, Mapping):
         analysis_revision_text = analysis_ctx.get("revision_text")
@@ -312,38 +332,48 @@ def _derive_tasks(
     if chart_revision:
         if revision_patch:
             chart_ctx["revision_patch"] = revision_patch
-        plan.add_step("chart", "run", reason="chart_revision")
+        chart_status = "reuse" if "chart" in completed_lanes else "run"
+        chart_reason = "revision_completed" if chart_status == "reuse" else "chart_revision"
+        plan.add_step("chart", chart_status, reason=chart_reason)
         plan.add_step("analyst", "skip", reason="chart_revision")
+        market_status = "reuse" if "stock" in completed_lanes else "skip"
+        market_reason = "revision_completed" if market_status == "reuse" else "chart_revision"
         plan.add_step(
             "market",
-            "skip",
-            reason="chart_revision",
+            market_status,
+            reason=market_reason,
             metadata={"tickers": tickers},
         )
+        web_status = "reuse" if "web" in completed_lanes else "skip"
+        web_reason = "revision_completed" if web_status == "reuse" else "chart_revision"
         plan.add_step(
             "web_research",
-            "skip",
-            reason="chart_revision",
+            web_status,
+            reason=web_reason,
             metadata={"source": web_ctx.get("source") if isinstance(web_ctx, Mapping) else None},
         )
         return plan
 
-    plan.add_step(
-        "analyst",
-        "reuse" if (analysis_ready and reuse_sql) else ("run" if analysis_ready else "skip"),
-        reason="analysis_cached" if (analysis_ready and reuse_sql) else ("analysis_ready" if analysis_ready else "analysis_not_available"),
+    analyst_status = "reuse" if "analysis" in completed_lanes else (
+        "reuse" if (analysis_ready and reuse_sql) else ("run" if analysis_ready else "skip")
     )
-
-    plan.add_step(
-        "chart",
-        "reuse" if (chart_ready and reuse_sql) else ("run" if chart_ready else "skip"),
-        reason="chart_cached" if (chart_ready and reuse_sql) else ("chart_ready" if chart_ready else "chart_not_available"),
+    analyst_reason = "revision_completed" if "analysis" in completed_lanes else (
+        "analysis_cached" if (analysis_ready and reuse_sql) else ("analysis_ready" if analysis_ready else "analysis_not_available")
     )
+    plan.add_step("analyst", analyst_status, reason=analyst_reason)
 
-    stock_cached = bool(market_ctx.get("snapshot") or market_ctx.get("stock_widget"))
+    chart_status = "reuse" if "chart" in completed_lanes else (
+        "reuse" if (chart_ready and reuse_sql) else ("run" if chart_ready else "skip")
+    )
+    chart_reason = "revision_completed" if "chart" in completed_lanes else (
+        "chart_cached" if (chart_ready and reuse_sql) else ("chart_ready" if chart_ready else "chart_not_available")
+    )
+    plan.add_step("chart", chart_status, reason=chart_reason)
+
+    stock_cached = bool(market_ctx.get("snapshot") or market_ctx.get("stock_widget")) or ("stock" in completed_lanes)
     if stock_cached:
         market_status = "reuse"
-        market_reason = "market_cached"
+        market_reason = "revision_completed" if "stock" in completed_lanes else "market_cached"
     elif bool(tickers) and chart_ready:
         market_status = "run"
         market_reason = "tickers_detected"
@@ -358,12 +388,24 @@ def _derive_tasks(
     )
 
     web_context = web_ctx or {}
-    web_should_run = _needs_web_refresh(query, web_context)
-    plan.add_step(
-        "web_research",
-        "run" if web_should_run else "skip",
-        reason="recency_requested" if web_should_run else "cached_web_context",
-    )
+    web_should_run = _needs_web_refresh(query, web_context) and ("web" not in completed_lanes)
+    web_status = "reuse" if "web" in completed_lanes else ("run" if web_should_run else "skip")
+    web_reason = "revision_completed" if "web" in completed_lanes else ("recency_requested" if web_should_run else "cached_web_context")
+    plan.add_step("web_research", web_status, reason=web_reason)
+
+    if revision_completed:
+        guard_map = {
+            "analyst": {"analysis"},
+            "chart": {"chart"},
+            "market": {"market", "stock"},
+            "web_research": {"web"},
+        }
+        completed_set = {str(l).strip().lower() for l in revision_completed if l}
+        for step in plan.steps:
+            lanes = guard_map.get(step.name)
+            if lanes and completed_set.intersection(lanes) and step.status == "run":
+                step.status = "reuse"
+                step.reason = "revision_guardrail"
 
     return plan
 
@@ -489,6 +531,7 @@ async def _planner_agent(context: AgentRunContext) -> AgentResult:
         market_ctx,
         shared.get('query', context.query),
         web_ctx=shared.setdefault('web', {}),
+        revision_completed=shared.get('revision_completed_lanes'),
     )
     tasks = plan.to_dicts()
     bundle = _create_planner_bundle(
@@ -1152,6 +1195,7 @@ class MultiAgentFlow:
         self._hedged_completion: Dict[str, bool] = {}
         self._pending_artifact_events: List[Dict[str, Any]] = []
         self._artifact_flush_pending: bool = False
+        self._chart_revision_missing_session: bool = False
 
     def _hedged_tool_aliases(self) -> List[str]:
         manifest = self._shared_context.get("tool_manifest")
@@ -1895,8 +1939,17 @@ class MultiAgentFlow:
             "web": "online research data",
         }
         note: Optional[str] = None
-        reuse_scope = self.follow_up_route == FollowUpRoute.REUSE_SQL
-        if reuse_scope:
+        reuse_scope = (
+            self.follow_up_route == FollowUpRoute.REUSE_SQL
+            and not self._chart_revision_missing_session
+        )
+        if self._chart_revision_missing_session:
+            missing = ["sql", "stock", "web"]
+            note = (
+                "I couldn't apply the chart update because the saved session expired. "
+                "Ask me to rerun the full analysis so I can rebuild fresh data and charts."
+            )
+        elif reuse_scope:
             missing = []
             note = "Chart revision applied. Reused cached datasets for consistency."
         elif missing:
@@ -2031,6 +2084,7 @@ class MultiAgentFlow:
     ) -> AsyncGenerator[Dict[str, Any], None]:
         if session_id is None:
             raise ValueError("chart_revision requires an existing session_id")
+        self._chart_revision_missing_session = False
         self.set_follow_up_route(FollowUpRoute.REUSE_SQL)
         hooks = _MultiAgentHooks(self, query, session_id=session_id)
         ctx = await self._planner.initialize_context(query, session_id=session_id)
@@ -2086,6 +2140,7 @@ class MultiAgentFlow:
             'tool_results': [],
             'stock_widget': None,
             'agents': {},
+            'revision_completed_lanes': set(),
             '_runtime': {
                 'market_fetcher': self._market_fetcher,
                 'market_client': self._market_client,
@@ -2179,6 +2234,17 @@ class MultiAgentFlow:
             if session_identifier:
                 self._session_snapshot = SessionStateSnapshot(session_id=session_identifier)
             return
+
+        if isinstance(data, Mapping) and data.get("revision"):
+            lane_name = data.get("lane")
+            if lane_name:
+                completed = self._shared_context.setdefault("revision_completed_lanes", set())
+                if isinstance(completed, set):
+                    completed.add(str(lane_name))
+                else:
+                    updated = set(completed) if isinstance(completed, Iterable) else set()
+                    updated.add(str(lane_name))
+                    self._shared_context["revision_completed_lanes"] = updated
 
         planner_ctx = self._shared_context.setdefault("planner", {})
         sql_ctx = self._shared_context.setdefault("sql", {})
