@@ -1,8 +1,9 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import os
 from typing import Any, AsyncGenerator, Callable, Dict, Optional
 
+from analytics.core.events import EventEmitter
 from analytics.core.session_state import get_session_state_repository
 from analytics.routing import FollowUpClassifier, FollowUpRoute
 from .planner_executor import PlannerExecutorFlow
@@ -83,7 +84,28 @@ async def analytics_memory_workflow(
     selected = flow or os.getenv("ANALYTICS_FLOW_MODE") or DEFAULT_FLOW
     should_instrument = _env_flag("ANALYTICS_MEMORY_INSTRUMENT", default=True)
 
-    if session_id and is_chart_revision_query(query):
+    chart_revision_requested = bool(session_id and is_chart_revision_query(query))
+    analysis_revision_requested = bool(
+        session_id and not chart_revision_requested and is_analysis_revision_query(query)
+    )
+
+    status_step = "initializing"
+    status_message = "Preparing analysis"
+    if chart_revision_requested:
+        status_step = "chart_revision"
+        status_message = "Applying chart update"
+    elif analysis_revision_requested:
+        status_step = "analysis_revision"
+        status_message = "Refreshing analysis"
+
+    initial_status = EventEmitter.status(status_step, status_message)
+    initial_status["data"]["flow"] = selected
+    if session_id:
+        initial_status["data"]["session_id"] = session_id
+    initial_status["data"]["phase"] = "initial"
+    yield initial_status
+
+    if chart_revision_requested:
         patch = infer_chart_patch_from_query(query)
         if patch:
             factory = _get_flow_factory(selected)
@@ -121,7 +143,7 @@ async def analytics_memory_workflow(
                 yield event
             return
 
-    if session_id and is_analysis_revision_query(query):
+    if analysis_revision_requested:
         analysis_text = infer_analysis_revision_from_query(query)
         if analysis_text:
             factory = _get_flow_factory(selected)
@@ -167,6 +189,9 @@ async def analytics_memory_workflow(
     route = classifier.classify(query, snapshot)
     factory = _get_flow_factory(selected)
     flow_instance = factory()
+    revision_targets = classifier.detect_revision_targets(query)
+    if session_id and revision_targets and hasattr(flow_instance, "set_revision_targets"):
+        flow_instance.set_revision_targets(revision_targets)
     if hasattr(flow_instance, "prime_with_snapshot"):
         flow_instance.prime_with_snapshot(snapshot)
     if hasattr(flow_instance, "set_follow_up_route"):

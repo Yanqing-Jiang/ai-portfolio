@@ -196,8 +196,8 @@ class SessionStateRepository:
                     self._redis_url,
                     encoding="utf-8",
                     decode_responses=True,
-                    socket_timeout=5.0,
-                    socket_connect_timeout=5.0,
+                    socket_timeout=0.5,
+                    socket_connect_timeout=0.5,
                     health_check_interval=30,
                 )
             except Exception as exc:  # pragma: no cover - network failure
@@ -298,8 +298,8 @@ class SessionStateRepository:
                     self._redis_url,
                     encoding="utf-8",
                     decode_responses=True,
-                    socket_timeout=5.0,
-                    socket_connect_timeout=5.0,
+                    socket_timeout=0.5,
+                    socket_connect_timeout=0.5,
                     health_check_interval=30,
                 )
                 await client.ping()
