@@ -6,7 +6,7 @@ from types import SimpleNamespace
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 
 from analytics.flows import tooling
-from analytics.services.response_search import ResponseSearchError
+from analytics.services.response_search import ResponseSearchError, SearchTopicPlan
 from analytics.flows.tooling import WebRetrieverAdapter, ToolExecutionContext
 from analytics.core.session_state import SessionStateSnapshot
 
@@ -103,3 +103,66 @@ def test_web_retriever_reports_error_stage(monkeypatch):
     assert result.metadata.get("error_stage") == "topic_generation"
     assert result.payload.get("error_stage") == "topic_generation"
     assert result.metadata.get("error") == "search boom"
+
+
+def test_expand_generates_unique_names_for_duplicate_labels(monkeypatch):
+    adapter = WebRetrieverAdapter()
+    context = _build_context("sess-fanout", "Market outlook 2025")
+    plans = [
+        SearchTopicPlan(label="Market Outlook", query="market outlook 2025"),
+        SearchTopicPlan(label="Market Outlook", query="market outlook by region"),
+    ]
+
+    async def _fake_generate(*args, **kwargs):
+        return plans
+
+    monkeypatch.setattr(tooling, "has_search_api_key", lambda: True)
+    monkeypatch.setattr(tooling, "generate_search_topics", _fake_generate)
+
+    expanded = asyncio.run(adapter.expand(context))
+
+    assert len(expanded) == 2
+    first, second = expanded
+    assert first.name != second.name
+    assert second.name.startswith("web_retriever_market-outlook-")
+    assert first.display_name.endswith("(Topic 1 of 2)")
+    assert second.display_name.endswith("(Topic 2 of 2)")
+
+
+def test_topic_execute_includes_position_metadata(monkeypatch):
+    topic_plan = SearchTopicPlan(label="Regulation Watch", query="regulation watch 2025")
+    adapter = WebRetrieverAdapter(
+        topic_plan=topic_plan,
+        topic_index=1,
+        topic_total=3,
+        base_query="regulation watch 2025",
+        label_occurrence=2,
+        label_total=2,
+    )
+    context = _build_context("sess-topic", "regulation watch 2025")
+
+    repo = _DummyRepo()
+
+    class _TopicSearchResult(_DummySearchResult):
+        def to_payload(self):
+            payload = super().to_payload()
+            payload.setdefault("search_topics", [topic_plan.query])
+            return payload
+
+    async def _fake_search(*args, **kwargs):
+        return _TopicSearchResult()
+
+    monkeypatch.setattr(tooling, "has_search_api_key", lambda: True)
+    monkeypatch.setattr(tooling, "get_session_state_repository", lambda: repo)
+    monkeypatch.setattr(tooling, "perform_response_search", _fake_search)
+
+    result = asyncio.run(adapter.execute(context))
+
+    assert result.payload.get("topic_index") == 1
+    assert result.payload.get("topic_total") == 3
+    assert result.payload.get("topic_position") == 2
+    assert result.metadata.get("topic_position") == 2
+    assert repo.saved_snapshot is not None
+    topic_cache = repo.saved_snapshot.tool_cache.get("web_search_topics", {})
+    assert adapter._topic_key in topic_cache
+    assert topic_cache[adapter._topic_key].get("topic_position") == 2
