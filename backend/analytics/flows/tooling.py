@@ -4,8 +4,10 @@ import logging
 import asyncio
 import contextlib
 import copy
+import json
 import os
 import re
+from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import (
@@ -26,10 +28,129 @@ import inspect
 from analytics.core import telemetry
 from analytics.core.events import EventEmitter
 from analytics.core.session_state import SessionStateSnapshot, get_session_state_repository
-from analytics.services.response_search import ResponseSearchError, perform_response_search, has_search_api_key
+from analytics.services.response_search import (
+    ResponseSearchError,
+    SearchTopicPlan,
+    generate_search_topics,
+    has_search_api_key,
+    perform_response_search,
+)
 from analytics.services.polygon import PolygonMarketDataClient, PolygonError, fetch_daily_snapshot
 
 logger = logging.getLogger(__name__)
+
+_WEB_SNIPPET_LIMIT = 5
+
+
+def _normalize_topic_key(value: str) -> str:
+    if not value:
+        return ""
+    return re.sub(r"\s+", " ", value.strip().lower())
+
+
+def _merge_web_payloads(
+    payloads: Sequence[Dict[str, Any]],
+    *,
+    base_query: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Combine multiple per-topic web payloads into a single context blob."""
+    entries: List[Dict[str, Any]] = [dict(payload) for payload in payloads if isinstance(payload, dict)]
+    if not entries:
+        return {}
+
+    summaries: List[str] = []
+    annotations: List[Dict[str, Any]] = []
+    topics: List[Dict[str, Any]] = []
+    snippets: List[Dict[str, Any]] = []
+    search_topics: List[str] = []
+    ready_any = False
+    from_cache_all = True
+    model: Optional[str] = None
+    usage: Optional[Dict[str, Any]] = None
+    fetched_at: Optional[str] = None
+    search_id: Optional[str] = None
+    latency_total = 0
+    query_value = base_query
+
+    for entry in entries:
+        ready_any = ready_any or bool(entry.get("ready"))
+        if not entry.get("from_cache"):
+            from_cache_all = False
+        model = entry.get("model") or model
+        usage = entry.get("usage") or usage
+        fetched_at = entry.get("fetched_at") or fetched_at
+        if not search_id:
+            search_id = entry.get("search_id")
+        if not query_value:
+            query_value = entry.get("query") or entry.get("query_terms")
+
+        summary = entry.get("summary")
+        if isinstance(summary, str) and summary.strip():
+            summaries.append(summary.strip())
+
+        entry_topics = entry.get("topics")
+        if isinstance(entry_topics, list):
+            topics.extend(entry_topics)
+
+        entry_snippets = entry.get("snippets")
+        if isinstance(entry_snippets, list):
+            snippets.extend(entry_snippets)
+
+        entry_annotations = entry.get("annotations")
+        if isinstance(entry_annotations, list):
+            annotations.extend(entry_annotations)
+
+        entry_search_topics = entry.get("search_topics")
+        if isinstance(entry_search_topics, list):
+            for topic in entry_search_topics:
+                if isinstance(topic, str) and topic.strip() and topic not in search_topics:
+                    search_topics.append(topic)
+        else:
+            topic_value = entry.get("search_topic")
+            if isinstance(topic_value, str) and topic_value.strip() and topic_value not in search_topics:
+                search_topics.append(topic_value)
+
+        latency = entry.get("latency_ms")
+        if isinstance(latency, (int, float)):
+            latency_total += int(latency)
+
+    deduped_snippets: List[Dict[str, Any]] = []
+    seen_snippet_keys: Set[str] = set()
+    for snippet in snippets:
+        if not isinstance(snippet, dict):
+            continue
+        key = snippet.get("url") or snippet.get("display_url") or snippet.get("snippet") or json.dumps(snippet, sort_keys=True)
+        key_lower = key.lower() if isinstance(key, str) else str(key)
+        if key_lower in seen_snippet_keys:
+            continue
+        seen_snippet_keys.add(key_lower)
+        deduped_snippets.append(snippet)
+        if len(deduped_snippets) >= _WEB_SNIPPET_LIMIT:
+            break
+
+    combined_summary = None
+    if summaries:
+        combined_summary = "\n\n".join(dict.fromkeys(summaries))
+
+    merged = {
+        "query": query_value,
+        "query_terms": query_value,
+        "search_topic": search_topics[0] if search_topics else None,
+        "search_topics": search_topics,
+        "summary": combined_summary,
+        "snippets": deduped_snippets,
+        "annotations": annotations,
+        "topics": topics,
+        "usage": usage,
+        "fetched_at": fetched_at,
+        "latency_ms": latency_total or None,
+        "model": model,
+        "from_cache": from_cache_all,
+        "ready": ready_any,
+        "search_id": search_id,
+        "topic_count": len(entries),
+    }
+    return merged
 
 
 if TYPE_CHECKING:  # pragma: no cover - import guard for typing only
@@ -83,6 +204,15 @@ class BaseToolAdapter:
             "capabilities": list(self.capabilities),
             "outputs": list(self.outputs),
         }
+
+    async def expand(self, context: ToolExecutionContext) -> Sequence["BaseToolAdapter"]:
+        """Return concrete adapters to execute for the given context.
+
+        Most tools run once and therefore return ``self``. Adapters that need
+        to fan out into multiple specialized executions can override this method
+        to return additional adapter instances.
+        """
+        return (self,)
 
     async def execute(self, context: ToolExecutionContext) -> ToolAdapterResult:  # pragma: no cover - interface
         raise NotImplementedError
@@ -279,8 +409,8 @@ class ChartBuilderAdapter(BaseToolAdapter):
 
 
 class WebRetrieverAdapter(BaseToolAdapter):
-    name = "web_retriever"
-    display_name = "Web Search"
+    base_name = "web_retriever"
+    base_display_name = "Web Search"
     description = "Fetch fresh external context using Gemini (Google Search retrieval)."
     capabilities = ("web_context", "telemetry")
     outputs = ("query_terms", "ready", "summary", "snippets", "search_id", "annotations", "from_cache")
@@ -300,10 +430,129 @@ class WebRetrieverAdapter(BaseToolAdapter):
         "current",
     )
 
+    def __init__(
+        self,
+        *,
+        topic_plan: Optional[SearchTopicPlan] = None,
+        topic_index: Optional[int] = None,
+        topic_total: Optional[int] = None,
+        base_query: Optional[str] = None,
+        label_occurrence: Optional[int] = None,
+        label_total: Optional[int] = None,
+    ) -> None:
+        self._topic_plan = topic_plan
+        self._topic_index = topic_index
+        self._topic_total = topic_total
+        self._base_query = base_query
+        self._label_occurrence = label_occurrence
+        self._label_total = label_total
+        self._topic_key = _normalize_topic_key(topic_plan.query) if topic_plan else None
+        self._topic_position: Optional[int] = None
+        if isinstance(topic_index, int) and topic_index >= 0:
+            self._topic_position = topic_index + 1
+        elif isinstance(label_occurrence, int) and label_occurrence > 0:
+            self._topic_position = label_occurrence
+        if topic_plan is None:
+            self.name = self.base_name
+            self.display_name = self.base_display_name
+        else:
+            raw_suffix = topic_plan.label if isinstance(topic_plan.label, str) else ""
+            suffix = raw_suffix.strip() if raw_suffix else ""
+            label_from_plan = bool(suffix)
+            position_value = self._topic_position
+            if not suffix:
+                suffix = f"Topic {position_value}" if position_value is not None else "Topic"
+            slug_source = suffix if label_from_plan else ""
+            base_slug = re.sub(r"[^a-z0-9]+", "-", slug_source.lower()).strip("-") if slug_source else ""
+            if not base_slug:
+                base_slug = f"topic-{position_value}" if position_value is not None else "topic"
+            total_dupes = label_total if isinstance(label_total, int) and label_total > 0 else None
+            occurrence = label_occurrence if isinstance(label_occurrence, int) and label_occurrence > 0 else None
+            if total_dupes and total_dupes > 1:
+                occurrence_value = occurrence or position_value or 1
+                slug = f"{base_slug}-{occurrence_value}"
+            else:
+                slug = base_slug
+            self.name = f"{self.base_name}_{slug}"[:64]
+            if total_dupes and total_dupes > 1 and label_from_plan:
+                occurrence_value = occurrence or position_value or 1
+                suffix = f"{suffix} (Topic {occurrence_value} of {total_dupes})"
+            elif not label_from_plan and position_value is not None:
+                suffix = f"Topic {position_value}"
+            self.display_name = f"{self.base_display_name} - {suffix}"
+
+    @property
+    def is_topic_adapter(self) -> bool:
+        return self._topic_plan is not None
+
+    async def expand(self, context: ToolExecutionContext) -> Sequence["BaseToolAdapter"]:
+        if self.is_topic_adapter or not has_search_api_key():
+            return (self,)
+        base_query = self._resolve_query_terms(context)
+        if not base_query:
+            return (self,)
+
+        try:
+            planned_topics = await generate_search_topics(base_query, session_id=context.session_id, min_topics=2)
+        except Exception as exc:  # pragma: no cover - defensive planning guard
+            logger.debug("WebRetrieverAdapter topic planning failed: %s", exc)
+            return (self,)
+
+        filtered = [
+            plan for plan in planned_topics if isinstance(plan, SearchTopicPlan) and plan.query and plan.query.strip()
+        ]
+        if len(filtered) <= 1:
+            return (self,)
+
+        label_keys: List[str] = []
+        for idx, plan in enumerate(filtered):
+            label_value = plan.label if isinstance(plan.label, str) else ""
+            normalized_label = _normalize_topic_key(label_value) if label_value else ""
+            label_keys.append(normalized_label or f"__topic_{idx}")
+
+        label_totals: Counter[str] = Counter(label_keys)
+        label_seen: defaultdict[str, int] = defaultdict(int)
+
+        adapters: List[WebRetrieverAdapter] = []
+        total = len(filtered)
+        for idx, plan in enumerate(filtered):
+            label_key = label_keys[idx]
+            label_seen[label_key] += 1
+            occurrence = label_seen[label_key]
+            label_total = label_totals.get(label_key, 1)
+            adapters.append(
+                WebRetrieverAdapter(
+                    topic_plan=plan,
+                    topic_index=idx,
+                    topic_total=total,
+                    base_query=base_query,
+                    label_occurrence=occurrence,
+                    label_total=label_total,
+                )
+            )
+        return tuple(adapters)
+
     async def execute(self, context: ToolExecutionContext) -> ToolAdapterResult:
         query_terms = self._resolve_query_terms(context)
+        base_query = self._base_query or str(context.query or "").strip() or query_terms
         metadata = self.get_metadata()
         payload: Dict[str, Any] = {"query_terms": query_terms, "ready": False}
+        if self.is_topic_adapter:
+            payload["topic_index"] = self._topic_index
+            payload["topic_total"] = self._topic_total
+            payload["topic_label"] = self._topic_plan.label if self._topic_plan else None
+            if self._topic_position is not None:
+                payload["topic_position"] = self._topic_position
+            metadata.setdefault(
+                "summary",
+                f"Queued search topic: {self._topic_plan.label}" if self._topic_plan else "Topic search queued.",
+            )
+            metadata["topic_index"] = self._topic_index
+            metadata["topic_total"] = self._topic_total
+            metadata["topic_label"] = self._topic_plan.label if self._topic_plan else None
+            metadata["base_query"] = base_query
+            if self._topic_position is not None:
+                metadata["topic_position"] = self._topic_position
         metadata["preview_keys"] = list(payload.keys())
         metadata.setdefault("summary", "Search adapter seeded with query terms.")
 
@@ -334,6 +583,15 @@ class WebRetrieverAdapter(BaseToolAdapter):
             payload["query_terms"] = query_terms
             payload["ready"] = True
             payload.setdefault("from_cache", True)
+            if self.is_topic_adapter:
+                payload.setdefault("topic_index", self._topic_index)
+                payload.setdefault("topic_total", self._topic_total)
+                payload.setdefault("topic_label", self._topic_plan.label if self._topic_plan else None)
+                if self._topic_position is not None:
+                    payload.setdefault("topic_position", self._topic_position)
+                metadata["topic_cached"] = True
+                if self._topic_position is not None:
+                    metadata["topic_position"] = self._topic_position
             metadata["preview_keys"] = list(payload.keys())
             return ToolAdapterResult(name=self.name, status="completed", payload=payload, metadata=metadata)
 
@@ -345,9 +603,10 @@ class WebRetrieverAdapter(BaseToolAdapter):
 
         try:
             search_result = await perform_response_search(
-                query_terms,
+                base_query,
                 session_id=context.session_id,
                 context=self._build_context(context),
+                topic_plans=[self._topic_plan] if self._topic_plan else None,
             )
         except ResponseSearchError as exc:
             error_stage = getattr(exc, "stage", "unknown")
@@ -372,6 +631,14 @@ class WebRetrieverAdapter(BaseToolAdapter):
         result_payload["query_terms"] = query_terms
         result_payload["ready"] = True
         result_payload["from_cache"] = False
+        if self.is_topic_adapter:
+            result_payload.setdefault("search_topics", [self._topic_plan.query])
+            result_payload["topic_index"] = self._topic_index
+            result_payload["topic_total"] = self._topic_total
+            result_payload["topic_label"] = self._topic_plan.label if self._topic_plan else None
+            result_payload["base_query"] = base_query
+            if self._topic_position is not None:
+                result_payload["topic_position"] = self._topic_position
         payload.update(result_payload)
         metadata["summary"] = search_result.summary or "Web search results ready."
         metadata["preview_only"] = False
@@ -381,28 +648,66 @@ class WebRetrieverAdapter(BaseToolAdapter):
         metadata["provider"] = "Gemini"
         if getattr(search_result, "model", None):
             metadata["model"] = search_result.model
+        if self.is_topic_adapter:
+            metadata["topic_index"] = self._topic_index
+            metadata["topic_total"] = self._topic_total
+            metadata["topic_label"] = self._topic_plan.label if self._topic_plan else None
+            metadata["base_query"] = base_query
+            metadata["search_query"] = query_terms
+            if self._topic_position is not None:
+                metadata["topic_position"] = self._topic_position
         metadata["preview_keys"] = list(payload.keys())
 
         cache_payload = dict(result_payload)
-        cache_payload["query"] = query_terms
-        snapshot.record_tool_result("web_search", cache_payload)
-        await repository.save(snapshot)
+        cache_payload.setdefault("query", base_query)
+        cache_payload.setdefault("query_terms", query_terms)
+        cache_payload["ready"] = True
+
+        await self._record_cache(
+            repository,
+            snapshot,
+            cache_payload,
+            base_query=base_query,
+        )
 
         return ToolAdapterResult(name=self.name, status="completed", payload=payload, metadata=metadata)
 
     def _resolve_query_terms(self, context: ToolExecutionContext) -> str:
+        if self._topic_plan and isinstance(self._topic_plan.query, str):
+            return self._topic_plan.query.strip()
         slots = getattr(context.intent, "slots_detected", {}) or {}
         return str(slots.get("original_query") or context.query or "").strip()
 
     def _maybe_get_cached(self, snapshot: SessionStateSnapshot, query_terms: str) -> Optional[Dict[str, Any]]:
-        cache = (snapshot.tool_cache or {}).get("web_search") if snapshot else None
-        if not cache:
+        if snapshot is None:
+            return None
+
+        normalized = query_terms.strip().lower()
+        if self._topic_key:
+            topic_cache = (snapshot.tool_cache or {}).get("web_search_topics") or {}
+            cached_topic = topic_cache.get(self._topic_key)
+            if not isinstance(cached_topic, dict):
+                return None
+            cached_query = str(cached_topic.get("query_terms") or cached_topic.get("query") or "").strip().lower()
+            if cached_query and cached_query != normalized:
+                return None
+            cached = dict(cached_topic)
+            cached["from_cache"] = True
+            cached.setdefault("ready", True)
+            if self._topic_position is not None:
+                cached.setdefault("topic_position", self._topic_position)
+            return cached
+
+        cache = (snapshot.tool_cache or {}).get("web_search")
+        if not isinstance(cache, dict):
             return None
         cached_query = str(cache.get("query") or cache.get("query_terms") or "").strip().lower()
-        if cached_query and cached_query == query_terms.strip().lower():
+        if cached_query and cached_query == normalized:
             cached = dict(cache)
             cached["from_cache"] = True
             cached.setdefault("ready", True)
+            if self._topic_position is not None:
+                cached.setdefault("topic_position", self._topic_position)
             return cached
         return None
 
@@ -412,6 +717,13 @@ class WebRetrieverAdapter(BaseToolAdapter):
             return True
         if snapshot is None:
             return True
+        if self._topic_key:
+            topic_cache = (snapshot.tool_cache or {}).get("web_search_topics") or {}
+            cached = topic_cache.get(self._topic_key)
+            if not isinstance(cached, dict):
+                return True
+            cached_query = str(cached.get("query_terms") or cached.get("query") or "").strip().lower()
+            return cached_query != normalized
         cache = snapshot.tool_cache.get("web_search") if snapshot.tool_cache else None
         if not cache:
             return True
@@ -431,12 +743,37 @@ class WebRetrieverAdapter(BaseToolAdapter):
             parts.append(f"Intent: {intent}.")
         if metrics:
             parts.append("Focus metrics: " + ", ".join(metrics[:3]))
+        if self._topic_plan and self._topic_plan.label:
+            parts.append(f"Topic: {self._topic_plan.label}")
         configs = context.configs if isinstance(context.configs, dict) else {}
         assumptions = configs.get("assumptions")
         if isinstance(assumptions, list) and assumptions:
             parts.append("Assumptions: " + "; ".join(str(item) for item in assumptions[:2]))
         return " ".join(parts) if parts else None
 
+    async def _record_cache(
+        self,
+        repository: Any,
+        snapshot: SessionStateSnapshot,
+        payload: Dict[str, Any],
+        *,
+        base_query: str,
+    ) -> None:
+        payload = dict(payload)
+        payload.setdefault("ready", True)
+        payload.setdefault("query", base_query)
+        if self._topic_position is not None:
+            payload.setdefault("topic_position", self._topic_position)
+
+        if self._topic_key:
+            topic_cache = snapshot.tool_cache.setdefault("web_search_topics", {})
+            topic_cache[self._topic_key] = payload
+            merged = _merge_web_payloads(list(topic_cache.values()), base_query=base_query)
+            if merged:
+                snapshot.record_tool_result("web_search", merged)
+        else:
+            snapshot.record_tool_result("web_search", payload)
+        await repository.save(snapshot)
 
 class StockTrackerAdapter(BaseToolAdapter):
     name = "stock_tracker"
@@ -680,7 +1017,12 @@ def get_default_tool_adapters() -> Tuple[BaseToolAdapter, ...]:
 
 
 
-def _resolve_concurrency_limit(ctx: "PlannerPhaseContext", default: int = 5) -> int:
+def _resolve_concurrency_limit(
+    ctx: "PlannerPhaseContext",
+    default: int = 5,
+    *,
+    max_size: Optional[int] = None,
+) -> int:
     configs = getattr(ctx, "configs", {}) or {}
     limit: Optional[int] = None
 
@@ -708,9 +1050,11 @@ def _resolve_concurrency_limit(ctx: "PlannerPhaseContext", default: int = 5) -> 
         except ValueError:
             pass
 
-    if not limit or limit < 1:
-        return default
-    return min(limit, len(get_default_tool_adapters()))
+    if limit is None or limit < 1:
+        limit = default
+    if max_size is not None and max_size >= 1:
+        return min(limit, max_size)
+    return limit
 
 async def run_tool_parallelism(
     ctx: "PlannerPhaseContext",
@@ -740,10 +1084,31 @@ async def run_tool_parallelism(
         configs=getattr(ctx, "configs", {}),
     )
 
+    expanded_adapters: List[BaseToolAdapter] = []
+    for adapter in selected_adapters:
+        try:
+            expanded = await adapter.expand(execution_context)
+        except Exception:  # pragma: no cover - defensive expansion guard
+            logger.exception(
+                "tool_parallelism.expand_failed",
+                extra={"adapter": getattr(adapter, "name", None)},
+            )
+            expanded = (adapter,)
+        if not expanded:
+            continue
+        expanded_adapters.extend(expanded)
+    selected_adapters = tuple(expanded_adapters)
+    if not selected_adapters:
+        return
+
     tool_manifests = [adapter.get_metadata() for adapter in selected_adapters]
 
     default_concurrency = len(selected_adapters)
-    concurrency_limit = concurrency_override or _resolve_concurrency_limit(ctx, default=default_concurrency)
+    concurrency_limit = concurrency_override or _resolve_concurrency_limit(
+        ctx,
+        default=default_concurrency,
+        max_size=len(selected_adapters),
+    )
     if adapters is None:
         ctx.tool_parallel_manifest = tool_manifests
         ctx.tool_parallel_results = []
@@ -873,5 +1238,6 @@ async def run_tool_parallelism(
             "ts": datetime.utcnow().isoformat(),
         },
     }
+
 
 
