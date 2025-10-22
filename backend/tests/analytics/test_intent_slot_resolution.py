@@ -1,5 +1,11 @@
 from backend.analytics.core.config import CONFIGS
 from backend.analytics.core.intent_impl import detection
+from backend.analytics.core.intent_impl.models import (
+    IntentSelectionModel,
+    LLMIntentResolutionModel,
+    LLMSlotStatusModel,
+    TimeframeSlotValue,
+)
 from backend.analytics.core.slot_catalog import get_slot_catalog
 
 
@@ -87,3 +93,102 @@ def test_resolve_intent_slots_fallback_rnd_metric(monkeypatch):
     assert metric_status is not None
     assert metric_status.status == "defaulted"
     assert metric_status.value == "R&D Expense"
+
+
+def test_structured_resolver_honors_explicit_year_range(monkeypatch):
+    get_slot_catalog(refresh=True)
+
+    class _FakeClient:
+        async def create_structured(self, *, response_model, messages, reasoning_effort, session_id=None, model=None):
+            payload = LLMIntentResolutionModel(
+                intent=IntentSelectionModel(key="revenue_comparison", confidence=0.92, mode="multi_agent"),
+                slots={
+                    "company": LLMSlotStatusModel(
+                        status="filled",
+                        value="AMD",
+                        suggestions=["AMD", "NVDA"],
+                        allow_custom=True,
+                    ),
+                    "metric": LLMSlotStatusModel(
+                        status="filled",
+                        value="Revenue",
+                        suggestions=["Revenue"],
+                        allow_custom=True,
+                    ),
+                    "timeframe": LLMSlotStatusModel(
+                        status="filled",
+                        value=TimeframeSlotValue(
+                            granularity="annual",
+                            years_back=4,
+                            start_year=2021,
+                            end_year=2024,
+                            source="query",
+                        ),
+                        suggestions=["last 5 years"],
+                        allow_custom=True,
+                    ),
+                },
+                followups=[],
+            )
+            return payload, "fake-response-id"
+
+    monkeypatch.setattr(detection, "get_unified_client", lambda: _FakeClient())
+
+    result = detection.resolve_intent_slots(
+        "AMD vs NVIDIA revenue comparison 2021-2024",
+        _config_payload(),
+    )
+
+    assert result.intent.key == "revenue_comparison"
+    assert not result.followups
+    timeframe_status = result.slots.get("timeframe")
+    assert timeframe_status is not None
+    assert timeframe_status.status == "filled"
+    assert timeframe_status.value["start_year"] == 2021
+    assert timeframe_status.value["end_year"] == 2024
+    assert timeframe_status.value["granularity"] == "annual"
+    metric_status = result.slots.get("metric")
+    assert metric_status is not None
+    assert metric_status.status == "filled"
+    assert metric_status.value == "Revenue"
+
+
+def test_fallback_keeps_timeframe_when_years_present(monkeypatch):
+    get_slot_catalog(refresh=True)
+
+    def _raise():
+        raise ValueError("mock client unavailable")
+
+    monkeypatch.setattr(detection, "get_unified_client", _raise)
+
+    result = detection.resolve_intent_slots(
+        "AMD vs NVIDIA revenue comparison 2021-2024",
+        _config_payload(),
+    )
+
+    timeframe_status = result.slots.get("timeframe")
+    assert timeframe_status is not None
+    assert timeframe_status.status in {"defaulted", "assumed"}
+    assert timeframe_status.value["start_year"] == 2021
+    assert timeframe_status.value["end_year"] == 2024
+    assert all(f.slot != "timeframe" for f in result.followups)
+
+
+def test_fallback_defaults_comparison_for_multi_company_query(monkeypatch):
+    get_slot_catalog(refresh=True)
+
+    def _raise():
+        raise ValueError("mock client unavailable")
+
+    monkeypatch.setattr(detection, "get_unified_client", _raise)
+
+    result = detection.resolve_intent_slots(
+        "Compare AMD and NVDA revenue 2021-2024",
+        _config_payload(),
+    )
+
+    comparison_status = result.slots.get("comparison")
+    assert comparison_status is not None
+    assert comparison_status.status in {"filled", "defaulted"}
+    assert comparison_status.value == "all"
+    assert all(f.slot != "comparison" for f in result.followups)

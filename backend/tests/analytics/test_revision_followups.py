@@ -2,7 +2,9 @@ import pytest
 from typing import Optional
 from types import SimpleNamespace
 
+from analytics.core.session_state import SessionStateSnapshot
 from analytics.routing import FollowUpRoute
+from analytics.routing.follow_up_classifier import FollowUpClassifier
 
 from backend.analytics.flows import planner_executor
 from backend.analytics.flows.planner.revision import derive_revision_targets
@@ -58,3 +60,25 @@ def test_multi_agent_guardrail_reuses_completed_web_lane():
     reason_by_name = {step.name: step.reason for step in plan.steps}
     assert status_by_name.get('web_research') == 'reuse'
     assert reason_by_name.get('web_research') in {'revision_completed', 'revision_guardrail'}
+
+
+def test_revision_targets_skip_without_snapshot():
+    classifier = FollowUpClassifier()
+    assert classifier.detect_revision_targets("market share analysis", snapshot=None) == set()
+
+
+def test_revision_targets_filter_by_snapshot_lanes():
+    classifier = FollowUpClassifier()
+    snapshot = SessionStateSnapshot(session_id="test-session")
+    snapshot.last_sql = "SELECT 1"
+    snapshot.last_analysis = "Some summary"
+    analytics_cache = {
+        "artifacts": {
+            "market": {"snapshot": {"tickers": ["QCOM"]}},
+            "analysis": {"analysis_text": "Some summary"},
+            "sql_generation": {"sql": "SELECT 1"},
+        }
+    }
+    snapshot.tool_cache["analytics"] = analytics_cache
+    lanes = classifier.detect_revision_targets("market share analysis", snapshot)
+    assert lanes == {"analysis", "market"}

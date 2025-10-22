@@ -4,7 +4,7 @@ import re
 import traceback
 import yaml
 from pathlib import Path
-from typing import Dict, Any, List, Optional, AsyncGenerator, TypedDict
+from typing import Dict, Any, List, Optional, AsyncGenerator, TypedDict, Tuple
 
 import asyncpg
 import sys
@@ -72,9 +72,16 @@ class AnalyticsWorkflow:
         """Detect user intent (kind, ticker, names) from the query using queries.yaml patterns."""
         q_lower = (query or '').lower()
         print(f"[INTENT DEBUG START] Processing query: '{q_lower}'")
-        ticker, name = self._extract_company(query)
-        print(f"[INTENT DEBUG] Extracted company: ticker='{ticker}', name='{name}'")
+        companies_in_query = self._extract_companies(query)
+        if companies_in_query:
+            ticker, name = companies_in_query[0]
+        else:
+            _, default_company = self._get_company_mapping()
+            ticker, name = default_company
+        tickers_detected = [company[0] for company in companies_in_query]
+        print(f"[INTENT DEBUG] Extracted company: ticker='{ticker}', name='{name}', candidates={tickers_detected}")
         kind: Optional[str] = None
+        start_year, end_year = self._extract_year_bounds(query)
 
         # High-signal feature gating to avoid false matches on generic words like 'average'
         has_market_share = ('market share' in q_lower) or ('share of market' in q_lower) or ('market position' in q_lower)
@@ -84,6 +91,8 @@ class AnalyticsWorkflow:
         has_rnd = ('r&d' in q_lower) or ('r and d' in q_lower) or ('rnd' in q_lower) or ('research and development' in q_lower)
         has_expense = ('expense' in q_lower) or ('spending' in q_lower) or ('spend' in q_lower) or ('expenditure' in q_lower)
         has_compare = ('peer' in q_lower) or ('peers' in q_lower) or ('compare' in q_lower) or ('comparison' in q_lower) or ('vs' in q_lower)
+        has_vs_keyword = (' vs ' in q_lower) or ('versus' in q_lower) or ('vs.' in q_lower)
+        has_revenue = 'revenue' in q_lower
         has_average = ('average' in q_lower) or ('industry average' in q_lower) or ('mean' in q_lower)
         has_rank = any(word in q_lower for word in ('highest', 'top', 'leading', 'leader', 'largest', 'biggest', 'most', 'rank', 'dominant'))
 
@@ -99,6 +108,7 @@ class AnalyticsWorkflow:
             add_candidate('margins_vs_peers', has_margin and (has_compare or has_average), 7)
             # Treat single-company revenue growth even without explicit compare keywords
             add_candidate('revenue_growth_analysis', has_growth, 7)
+            add_candidate('revenue_comparison', has_revenue and (has_compare or has_vs_keyword or 'revenue comparison' in q_lower), 9)
             add_candidate('rnd_expense_vs_peers', has_rnd and has_expense and (has_compare or has_average), 6)
             add_candidate('rnd_intensity_vs_peers', has_rnd and (('intensity' in q_lower) or (has_compare or has_average)), 5)
             add_candidate('rnd_top_spender', has_rnd and has_expense and has_rank, 6)
@@ -152,6 +162,8 @@ class AnalyticsWorkflow:
                 kind = 'market_share_all'
             elif 'market share' in q_lower:
                 kind = 'market_share_single'
+            elif 'revenue comparison' in q_lower or (has_revenue and has_vs_keyword):
+                kind = 'revenue_comparison'
             # Margin growth vs peers/industry
             elif ('margin' in q_lower and 'growth' in q_lower and ('peer' in q_lower or 'peers' in q_lower or 'compare' in q_lower or 'average' in q_lower)):
                 kind = 'margin_growth_vs_peers'
@@ -171,6 +183,9 @@ class AnalyticsWorkflow:
             'kind': kind,
             'ticker': ticker,
             'name': name,
+            'tickers': tickers_detected,
+            'start_year': start_year,
+            'end_year': end_year,
         }
         print(f"[INTENT DEBUG FINAL] Result: {result}")
         return result
@@ -486,36 +501,58 @@ class AnalyticsWorkflow:
                 "ORDER BY y.calendar_year"
             )
 
-    def _extract_company(self, query: str) -> (str, str):
-        """Extract target company ticker and display name from the query text."""
-        q = (query or '').lower()
-        
-        # Build mapping from companies.yaml
+    def _get_company_mapping(self) -> Tuple[Dict[str, Tuple[str, str]], Tuple[str, str]]:
+        """Return lowercase alias -> (ticker, short_name) mapping and default company tuple."""
         companies_config = self.configs.get('companies', {})
         companies = companies_config.get('companies', {}).get('semiconductor', [])
-        
-        mapping = {}
-        default_company = ('NVDA', 'Nvidia')  # fallback
-        
+
+        mapping: Dict[str, Tuple[str, str]] = {}
+        default_company: Tuple[str, str] = ('NVDA', 'Nvidia')
+
         for company in companies:
             ticker = company.get('ticker', '')
-            short_name = company.get('short_name', '')
+            short_name = company.get('short_name', '') or ticker
             aliases = company.get('aliases', [])
-            
-            # Set default company if priority is 1
-            if company.get('priority') == 1:
+
+            if company.get('priority') == 1 and ticker:
                 default_company = (ticker, short_name)
-            
-            # Add ticker and aliases to mapping
-            mapping[ticker.lower()] = (ticker, short_name)
+
+            if ticker:
+                mapping[ticker.lower()] = (ticker, short_name)
             for alias in aliases:
-                mapping[alias.lower()] = (ticker, short_name)
-        
-        # Check for matches
-        for key, val in mapping.items():
-            if key in q:
-                return val
-                
+                if isinstance(alias, str) and alias.strip():
+                    mapping[alias.lower()] = (ticker, short_name)
+
+        return mapping, default_company
+
+    def _extract_companies(self, query: str) -> List[Tuple[str, str]]:
+        """Return ordered list of (ticker, short_name) appearing in the query."""
+        q = (query or '').lower()
+        mapping, _ = self._get_company_mapping()
+        matches: List[Tuple[int, Tuple[str, str]]] = []
+
+        for alias, value in mapping.items():
+            idx = q.find(alias)
+            if idx != -1:
+                matches.append((idx, value))
+
+        # Sort by position in query and deduplicate tickers preserving order
+        matches.sort(key=lambda item: item[0])
+        seen: set[str] = set()
+        ordered: List[Tuple[str, str]] = []
+        for _, company in matches:
+            ticker = company[0]
+            if ticker not in seen:
+                ordered.append(company)
+                seen.add(ticker)
+        return ordered
+
+    def _extract_company(self, query: str) -> Tuple[str, str]:
+        """Extract primary company ticker and display name from the query text."""
+        companies = self._extract_companies(query)
+        if companies:
+            return companies[0]
+        _, default_company = self._get_company_mapping()
         return default_company
         
     def _extract_time_period(self, query: str) -> int:
@@ -524,6 +561,12 @@ class AnalyticsWorkflow:
         
         # Look for patterns like "past 6 years", "last 3 years", "6 years", etc.
         import re
+
+        start_year, end_year = self._extract_year_bounds(query)
+        if start_year is not None and end_year is not None:
+            span = max(end_year - start_year, 0)
+            print(f"[TIME EXTRACTION] Found explicit year range {start_year}-{end_year}, using years_back = {span}")
+            return span or 0
         
         # Pattern to match numbers followed by year/years (with optional punctuation)
         year_patterns = [
@@ -548,6 +591,27 @@ class AnalyticsWorkflow:
         # Default to 5 years back (6 years total including current)
         print(f"[TIME EXTRACTION] No time period found in query '{query}', using default 4 years back (5 total)")
         return 4  # Default: current year + 4 years back = 5 years total
+
+    def _extract_year_bounds(self, query: str) -> Tuple[Optional[int], Optional[int]]:
+        """Extract explicit start/end year (4-digit) from the query if present."""
+        if not query:
+            return None, None
+        import re
+
+        tokens = re.findall(r"(20\d{2})", query)
+        ordered_years: List[int] = []
+        for token in tokens:
+            try:
+                year = int(token)
+                if year not in ordered_years:
+                    ordered_years.append(year)
+            except ValueError:
+                continue
+        if len(ordered_years) >= 2:
+            return ordered_years[0], ordered_years[1]
+        if len(ordered_years) == 1:
+            return ordered_years[0], ordered_years[0]
+        return None, None
         
     def _extract_granularity(self, query: str) -> str:
         """Extract data granularity (quarterly vs annual) from user query"""
@@ -630,11 +694,26 @@ class AnalyticsWorkflow:
             print(f"[TEMPLATE DEBUG] Template length: {len(template)} chars, preview: {template[:100]}...")
         return template
         
-    def _substitute_sql_template(self, template: str, target_ticker: str, years_back: Optional[int] = None, granularity: str = 'annual') -> str:
+    def _substitute_sql_template(
+        self,
+        template: str,
+        target_ticker: str,
+        years_back: Optional[int] = None,
+        granularity: str = 'annual',
+        *,
+        primary_metric: Optional[str] = None,
+        start_year: Optional[int] = None,
+        end_year: Optional[int] = None,
+        tickers: Optional[List[str]] = None,
+    ) -> str:
         """Substitute parameters in SQL template with conditional clauses based on granularity"""
-        tickers = self._get_default_tickers()
-        ticker_list = "'" + "','".join(tickers) + "'"
-        
+        default_tickers = [ticker.upper() for ticker in self._get_default_tickers()]
+        ticker_choices = [ticker.upper() for ticker in (tickers or []) if ticker and isinstance(ticker, str)]
+        ticker_subset = [ticker for ticker in ticker_choices if ticker in default_tickers]
+        if not ticker_subset:
+            ticker_subset = default_tickers
+        ticker_list = "'" + "','".join(ticker_subset) + "'"
+
         # Use provided years_back or fall back to config default
         if years_back is None:
             queries_config = self.configs.get('queries', {})
@@ -648,13 +727,26 @@ class AnalyticsWorkflow:
             join_clause = "cr.calendar_year = mr.calendar_year AND cr.calendar_quarter_num = mr.calendar_quarter_num"
             order_by_clause = "cr.calendar_year, cr.calendar_quarter_num"
             growth_window = "4"  # same quarter last year
+            period_filter_clause = "calendar_quarter_num IS NOT NULL"
         else:  # annual
             select_clause = "calendar_year"
             group_by_clause = "calendar_year"
             join_clause = "cr.calendar_year = mr.calendar_year"
             order_by_clause = "cr.calendar_year"
             growth_window = "1"  # prior year
-        
+            period_filter_clause = "1=1"
+
+        if start_year is not None and end_year is not None:
+            year_filter_clause = f"calendar_year BETWEEN {start_year} AND {end_year}"
+        elif start_year is not None:
+            year_filter_clause = f"calendar_year >= {start_year}"
+        elif end_year is not None:
+            year_filter_clause = f"calendar_year <= {end_year}"
+        elif years_back is not None:
+            year_filter_clause = f"calendar_year >= EXTRACT(YEAR FROM CURRENT_DATE) - {years_back}"
+        else:
+            year_filter_clause = "1=1"
+
         # Perform substitutions
         substituted = template.replace('{target_ticker}', target_ticker)
         substituted = substituted.replace('{ticker_list}', ticker_list)
@@ -664,11 +756,22 @@ class AnalyticsWorkflow:
         substituted = substituted.replace('{join_clause}', join_clause)
         substituted = substituted.replace('{order_by_clause}', order_by_clause)
         substituted = substituted.replace('{growth_window}', growth_window)
-        
+        substituted = substituted.replace('{period_filter_clause}', period_filter_clause)
+        substituted = substituted.replace('{year_filter_clause}', year_filter_clause)
+
+        metric_name = (primary_metric or 'Revenue').strip()
+        metric_name = metric_name.replace("'", "''")
+        substituted = substituted.replace('{primary_metric}', metric_name)
+
+        start_year_value = str(start_year) if start_year is not None else 'NULL'
+        end_year_value = str(end_year) if end_year is not None else 'NULL'
+        substituted = substituted.replace('{start_year}', start_year_value)
+        substituted = substituted.replace('{end_year}', end_year_value)
+
         print(f"[SQL TEMPLATE] Using {granularity} granularity with clauses:")
         print(f"[SQL TEMPLATE]   SELECT: {select_clause}")
         print(f"[SQL TEMPLATE]   GROUP BY: {group_by_clause}")
-        
+
         return substituted
         
     def _get_chart_colors(self, theme: str = 'light') -> List[str]:
@@ -845,11 +948,20 @@ class AnalyticsWorkflow:
             print(f"[SQL AGENT DEBUG] Query: '{state.get('query', '')}' -> Intent: {intent}")
             target_ticker, target_name = intent['ticker'], intent['name']
             ticker_lower = target_ticker.lower()
+            tickers_override = intent.get('tickers') or []
+            start_year = intent.get('start_year')
+            end_year = intent.get('end_year')
+            template_tickers_override = tickers_override if (intent.get('kind') == 'revenue_comparison' and tickers_override) else None
+            primary_metric_override = 'Revenue' if intent.get('kind') == 'revenue_comparison' else None
 
             # Extract time period and granularity from user query
             years_back = self._extract_time_period(state.get('query', ''))
             granularity = self._extract_granularity(state.get('query', ''))
-            print(f"[SQL AGENT] Using {years_back + 1} years of data (current + {years_back} back)")
+            if start_year is not None and end_year is not None:
+                years_back = max(end_year - start_year, 0)
+                print(f"[SQL AGENT] Using explicit year range {start_year}-{end_year} (span {years_back + 1} years)")
+            else:
+                print(f"[SQL AGENT] Using {years_back + 1} years of data (current + {years_back} back)")
             print(f"[SQL AGENT] Using {granularity} granularity")
             
             # Try to get SQL template from YAML first
@@ -859,7 +971,16 @@ class AnalyticsWorkflow:
                 template = self._get_sql_template(intent['kind'])
                 print(f"[SQL DEBUG] Template lookup for '{intent['kind']}': {'FOUND' if template else 'NOT FOUND'}")
                 if template:
-                    handcrafted_sql = self._substitute_sql_template(template, target_ticker, years_back, granularity)
+                    handcrafted_sql = self._substitute_sql_template(
+                        template,
+                        target_ticker,
+                        years_back,
+                        granularity,
+                        primary_metric=primary_metric_override,
+                        start_year=start_year,
+                        end_year=end_year,
+                        tickers=template_tickers_override,
+                    )
                     print(f"[SQL AGENT] Using YAML template for pattern: {intent['kind']}")
                     print(f"[SQL DEBUG] Generated SQL (first 500 chars): {handcrafted_sql[:500]}...")
                     print("[SQL AGENT] Using YAML template for known query pattern")
@@ -875,7 +996,16 @@ class AnalyticsWorkflow:
                     # Prefer YAML template; if missing, derive via margins + LAG
                     template = self._get_sql_template('margin_growth_vs_peers')
                     if template:
-                        handcrafted_sql = self._substitute_sql_template(template, target_ticker, years_back, granularity)
+                        handcrafted_sql = self._substitute_sql_template(
+                            template,
+                            target_ticker,
+                            years_back,
+                            granularity,
+                            primary_metric=primary_metric_override,
+                            start_year=start_year,
+                            end_year=end_year,
+                            tickers=template_tickers_override,
+                        )
                     else:
                         handcrafted_sql = None
                 elif intent['kind'] == 'growth_vs_peers' or intent['kind'] == 'revenue_growth_analysis':
@@ -885,7 +1015,16 @@ class AnalyticsWorkflow:
                 elif intent['kind'] == 'rnd_expense_vs_peers':
                     template = self._get_sql_template('rnd_expense_vs_peers')
                     if template:
-                        handcrafted_sql = self._substitute_sql_template(template, target_ticker, years_back, granularity)
+                        handcrafted_sql = self._substitute_sql_template(
+                            template,
+                            target_ticker,
+                            years_back,
+                            granularity,
+                            primary_metric=primary_metric_override,
+                            start_year=start_year,
+                            end_year=end_year,
+                            tickers=template_tickers_override,
+                        )
                     else:
                         handcrafted_sql = None
 

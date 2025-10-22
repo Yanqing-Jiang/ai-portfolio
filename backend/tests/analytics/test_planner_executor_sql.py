@@ -23,7 +23,7 @@ from analytics.flows.tooling import BaseToolAdapter, ToolAdapterResult
 from analytics.sql import prompt_builder
 from analytics.sql.compiler import compile_sql_from_plan
 from analytics.sql.sql_planner import plan_sql_rule_based, choose_template
-from analytics.core.state import QueryPlanModel, IntentModel
+from analytics.core.state import QueryPlanModel, IntentModel, TimeframeModel
 from analytics.core.intent_impl.models import SlotStatusModel
 from analytics.core.session_state import get_session_state_repository
 from analytics.routing import FollowUpRoute
@@ -418,7 +418,7 @@ def test_ingest_tool_event_emits_web_ready_lane():
     assert web_data.get("lane") == "web"
     assert web_data.get("reused") is False
     assert ctx.web_ready_emitted is True
-    assert ctx.tool_parallel_results and ctx.tool_parallel_results[0].get("tool") == "web_retriever"
+    assert ctx.tool_parallel_results and ctx.tool_parallel_results[0].get("tool", "").startswith("web_retriever")
 
 
 def test_concurrent_lanes_emit_before_sql(monkeypatch):
@@ -654,7 +654,9 @@ async def test_tool_parallelism_streams_results_immediately():
             tool = event["data"]["tool"]
             events.append((tool, time.perf_counter() - start))
 
-    assert [entry[0] for entry in events] == ["market_question_a", "web_retriever"]
+    tools = [entry[0] for entry in events]
+    assert tools[0] == "market_question_a"
+    assert tools[1].startswith("web_retriever")
     # Ensure the fast adapter's result surfaced meaningfully earlier than the slow adapter.
     assert events[1][1] - events[0][1] >= 0.04
     assert len(ctx.tool_parallel_results) == 2
@@ -1015,6 +1017,34 @@ def test_market_share_sql_template_emits_annual_columns():
     assert 'calendar_quarter_num' not in sql
     assert 'calendar_year' in sql
     assert 'AND 1=1' not in sql
+
+
+def test_revenue_comparison_template_uses_between_and_custom_tickers():
+    timeframe = TimeframeModel(start_year=2021, end_year=2024, granularity='annual')
+    intent = IntentModel(
+        intent_key='revenue_comparison',
+        confidence=0.92,
+        slots_detected={
+            'tickers': ['AMD', 'NVDA'],
+            'company_candidates': ['AMD', 'NVDA'],
+            'timeframe': {'start_year': 2021, 'end_year': 2024},
+            'granularity': 'annual',
+        },
+    )
+    plan = QueryPlanModel(
+        metrics=['Revenue'],
+        derived_metrics=[],
+        timeframe=timeframe,
+        granularity='annual',
+        group_by=['calendar_year'],
+        limit=500,
+    )
+    template = choose_template(intent, plan)
+    sql = compile_sql_from_plan(plan, intent, template=template)
+
+    assert "calendar_year BETWEEN 2021 AND 2024" in sql
+    assert "ticker IN ('AMD','NVDA')" in sql
+    assert "calendar_quarter_num" not in sql
 
 
 def test_prompt_constraints_enforce_annual_without_quarterly_hints():
