@@ -50,7 +50,6 @@ from analytics.artifacts import (
 )
 from analytics.routing import FollowUpRoute
 from analytics.validators import sanitize_for_json
-from analytics.prompt_versions import get_prompt_versions
 from .hooks import AnalyticsFlowHooks, NullFlowHooks
 from .tooling import (
     run_tool_parallelism,
@@ -4508,6 +4507,15 @@ async def _plan_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[str
 class PlannerExecutorFlow:
     """Backward-compatible wrapper around :class:`PlannerPipeline`."""
 
+    _PROMPT_VERSIONS: Dict[str, str] = {
+        "schema_clarifier": "2025-10-16",
+        "multi_agent.supervisor": "2025-10-16",
+    }
+
+    @classmethod
+    def get_prompt_versions(cls) -> Dict[str, str]:
+        return dict(cls._PROMPT_VERSIONS)
+
     def __init__(
         self,
         *,
@@ -4517,7 +4525,7 @@ class PlannerExecutorFlow:
         self._pipeline = PlannerPipeline(flow_mode=flow_mode, parallelism_enabled=parallelism_enabled)
         self.flow_mode = flow_mode
         self.follow_up_route = FollowUpRoute.FULL_PIPELINE
-        self._prompt_versions = get_prompt_versions()
+        self._prompt_versions = dict(self._PROMPT_VERSIONS)
 
     def __getattr__(self, name: str):
         try:

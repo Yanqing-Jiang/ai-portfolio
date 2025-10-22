@@ -20,8 +20,7 @@ from analytics.core.session_state import (  # noqa: E402
     close_session_state_repository,
     get_session_state_repository,
 )
-from analytics.flows.planner_executor import ToolInvocationReceipt  # noqa: E402
-from analytics.prompt_versions import get_prompt_versions  # noqa: E402
+from analytics.flows.planner_executor import PlannerExecutorFlow, ToolInvocationReceipt  # noqa: E402
 from analytics.routing import FollowUpRoute  # noqa: E402
 from analytics.flows.schedulers import FlowMode  # noqa: E402
 
@@ -61,7 +60,7 @@ def _build_tool_receipt(
 
 
 def _build_snapshot(session_id: str, *, reuse_age_seconds: float) -> SessionStateSnapshot:
-    prompt_versions = get_prompt_versions()
+    prompt_versions = PlannerExecutorFlow.get_prompt_versions()
     snapshot = SessionStateSnapshot(session_id=session_id)
     snapshot.record_query(DEFAULT_QUERY, intent_key="margin_outlook_vs_peers")
 
