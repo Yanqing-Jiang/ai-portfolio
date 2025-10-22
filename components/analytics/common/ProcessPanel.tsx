@@ -48,8 +48,8 @@ type ExportFormat = 'csv' | 'json';
 
 const STORAGE_KEY = 'processPanelState';
 const PANE_KEY = 'processPanelFocusedPane';
-const FINAL_ANSWER_BANNER_KEY = 'aa.finalAnswerOnlyDismissed';
-
+const FINAL_ANSWER_BANNER_KEY = 'aa.finalAnswerOnlyDismissed';
+
 const FLOW_META: Record<FlowMode, { title: string; accent: string; description: string }> = {
   'planner-executor': {
     title: 'Direct fixed workflow with RAG-backed SQL guidance',
@@ -559,10 +559,10 @@ export const ProcessPanel: React.FC<ProcessPanelProps> = ({
     }
   });
 
-  const bannerSignature = useMemo(() => {
-    if (!followUpBanner) {
-      return null;
-    }
+  const bannerSignature = useMemo(() => {
+    if (!followUpBanner) {
+      return null;
+    }
     const signatureParts = [
       followUpBanner.title ?? '',
       followUpBanner.message ?? '',
@@ -572,10 +572,10 @@ export const ProcessPanel: React.FC<ProcessPanelProps> = ({
     return signatureParts.join('|').toLowerCase();
   }, [followUpBanner]);
 
-  const shouldRenderFollowUpBanner = useMemo(() => {
-    if (!followUpBanner) {
-      return false;
-    }
+  const shouldRenderFollowUpBanner = useMemo(() => {
+    if (!followUpBanner) {
+      return false;
+    }
     if (!followUpBanner.finalAnswerOnly) {
       return true;
     }
@@ -585,9 +585,24 @@ export const ProcessPanel: React.FC<ProcessPanelProps> = ({
     if (dismissedFinalAnswerSignature === '__any__' || dismissedFinalAnswerSignature === '__legacy__') {
       return false;
     }
-    return dismissedFinalAnswerSignature !== bannerSignature;
-  }, [followUpBanner, bannerSignature, dismissedFinalAnswerSignature]);
-
+    return dismissedFinalAnswerSignature !== bannerSignature;
+  }, [followUpBanner, bannerSignature, dismissedFinalAnswerSignature]);
+
+  const bannerMessageRaw =
+    followUpBanner && typeof followUpBanner.message === 'string' ? followUpBanner.message.trim() : '';
+  const bannerSummaryRaw =
+    followUpBanner && typeof followUpBanner.summary === 'string' ? followUpBanner.summary.trim() : '';
+  const canShowFullMessageInHeader =
+    !!followUpBanner && !followUpBanner.finalAnswerOnly && bannerMessageRaw.length > 0;
+  const canShowTrimmedFinalAnswer =
+    !!followUpBanner &&
+    followUpBanner.finalAnswerOnly &&
+    bannerMessageRaw.length > 0 &&
+    bannerMessageRaw.length <= 280 &&
+    !/\r?\n\s*\r?\n/.test(bannerMessageRaw);
+  const headerBannerCopy =
+    bannerSummaryRaw || (canShowFullMessageInHeader || canShowTrimmedFinalAnswer ? bannerMessageRaw : '');
+
   useEffect(() => {
     if (!isBrowser) {
       return;
@@ -1551,35 +1566,37 @@ export const ProcessPanel: React.FC<ProcessPanelProps> = ({
                 <div className={`text-lg font-semibold ${flowMeta.accent}`}>{flowMeta.title}</div>
                 <div className="text-[11px] text-gray-500">{subtitle}</div>
                 <div className="text-[11px] text-gray-600">{flowMeta.description}</div>
-                {followUpBanner && shouldRenderFollowUpBanner && (
-                  <div className="mt-2 rounded-lg border border-amber-400/40 bg-amber-500/10 px-3 py-2 shadow-sm">
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="flex items-center gap-2 text-[10px] uppercase tracking-wide text-amber-300">
-                        <span className="font-semibold">{followUpBanner.title}</span>
-                        <span className="rounded-full border border-amber-400/50 px-2 py-0.5 text-[9px] font-semibold text-amber-200">
-                          {formatScheduleStage(followUpBanner.route)}
-                        </span>
-                      </div>
-                      {followUpBanner.finalAnswerOnly ? (
-                        <button
-                          type="button"
-                          onClick={handleDismissFollowUpBanner}
-                          className="rounded border border-amber-400/40 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-200 transition hover:border-amber-300 hover:text-amber-100"
-                          aria-label="Dismiss final answer guidance"
-                          data-testid="final-answer-banner-dismiss"
-                        >
-                          Dismiss
-                        </button>
-                      ) : null}
-                    </div>
-                    <div className="mt-1 text-[11px] leading-relaxed text-amber-100/90">
-                      {followUpBanner.message}
-                    </div>
-                    {(followUpBanner.finalAnswerOnly || (followUpBanner.missingComponents?.length ?? 0) > 0 || followUpBanner.analysisAvailable === false) && (
-                      <div className="mt-2 flex flex-wrap gap-2 text-[10px] uppercase tracking-wide">
-                        {followUpBanner.finalAnswerOnly ? (
-                          <span className="rounded-full border border-amber-300/60 bg-amber-600/10 px-2 py-0.5 text-amber-200">
-                            Final Answer Only
+                {followUpBanner && shouldRenderFollowUpBanner && (
+                  <div className="mt-2 rounded-lg border border-amber-400/40 bg-amber-500/10 px-3 py-2 shadow-sm">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-center gap-2 text-[10px] uppercase tracking-wide text-amber-300">
+                        <span className="font-semibold">{followUpBanner.title}</span>
+                        <span className="rounded-full border border-amber-400/50 px-2 py-0.5 text-[9px] font-semibold text-amber-200">
+                          {formatScheduleStage(followUpBanner.route)}
+                        </span>
+                      </div>
+                      {followUpBanner.finalAnswerOnly ? (
+                        <button
+                          type="button"
+                          onClick={handleDismissFollowUpBanner}
+                          className="rounded border border-amber-400/40 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-200 transition hover:border-amber-300 hover:text-amber-100"
+                          aria-label="Dismiss final answer guidance"
+                          data-testid="final-answer-banner-dismiss"
+                        >
+                          Dismiss
+                        </button>
+                      ) : null}
+                    </div>
+                    {headerBannerCopy ? (
+                      <div className="mt-1 text-[11px] leading-relaxed text-amber-100/90">
+                        {headerBannerCopy}
+                      </div>
+                    ) : null}
+                    {(followUpBanner.finalAnswerOnly || (followUpBanner.missingComponents?.length ?? 0) > 0 || followUpBanner.analysisAvailable === false) && (
+                      <div className="mt-2 flex flex-wrap gap-2 text-[10px] uppercase tracking-wide">
+                        {followUpBanner.finalAnswerOnly ? (
+                          <span className="rounded-full border border-amber-300/60 bg-amber-600/10 px-2 py-0.5 text-amber-200">
+                            Final Answer Only
                           </span>
                         ) : null}
                         {followUpBanner.missingComponents?.length ? (
