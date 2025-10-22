@@ -7,7 +7,6 @@ from analytics.flows.multi_agent import (
     SUPERVISOR_AGENT_SYSTEM_PROMPTS,
 )
 from analytics.flows.planner_executor import PlannerExecutorFlow
-from analytics.prompt_versions import get_prompt_versions
 
 
 def test_schema_clarifier_prompt_mentions_decline_and_cache():
@@ -25,7 +24,8 @@ def test_supervisor_prompts_include_rerun_directive_and_guidance():
 
 
 def test_prompt_versions_surface_in_event_annotations():
-    expected_versions = get_prompt_versions()
+    expected_versions = PlannerExecutorFlow.get_prompt_versions()
+    assert expected_versions == MultiAgentFlow.get_prompt_versions()
 
     multi_flow = MultiAgentFlow()
     annotated_multi = multi_flow._annotate({"event": "progress", "data": {}})
@@ -45,7 +45,7 @@ def test_rerun_directive_exemplar_matches_contract():
     )
     exemplar = json.loads(exemplar_path.read_text(encoding="utf-8"))
 
-    assert exemplar["prompt_versions"] == get_prompt_versions()
+    assert exemplar["prompt_versions"] == PlannerExecutorFlow.get_prompt_versions()
     supervisor_response = exemplar["supervisor_response"]
 
     rerun_directive = supervisor_response["rerun_directive"]
@@ -70,7 +70,7 @@ def test_decline_exemplar_matches_contract():
     )
     exemplar = json.loads(exemplar_path.read_text(encoding="utf-8"))
 
-    assert exemplar["prompt_versions"] == get_prompt_versions()
+    assert exemplar["prompt_versions"] == PlannerExecutorFlow.get_prompt_versions()
     supervisor_response = exemplar["supervisor_response"]
 
     assert supervisor_response["decision"] == "decline"

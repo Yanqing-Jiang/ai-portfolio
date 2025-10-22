@@ -19,7 +19,6 @@ from analytics.services.polygon import PolygonMarketDataClient, PolygonError, fe
 from analytics.services.response_search import ResponseSearchError, perform_response_search
 from analytics.routing import FollowUpRoute
 from analytics.validators import CohesiveResultValidationError, CohesiveResultValidator, sanitize_for_json
-from analytics.prompt_versions import get_prompt_versions
 from .planner_executor import (
     PlannerExecutorFlow,
     run_planner_executor,
@@ -1040,6 +1039,11 @@ def _build_default_plan() -> List[AgentTask]:
 class MultiAgentFlow:
     """Coordinates specialist agents while reusing the planner-executor core."""
 
+    _PROMPT_VERSIONS: Dict[str, str] = {
+        "schema_clarifier": "2025-10-16",
+        "multi_agent.supervisor": "2025-10-16",
+    }
+
     AGENT_START_STEPS = {
         "intent_detection": "intent_analyst",
         "clarification": "user_liaison",
@@ -1148,6 +1152,10 @@ class MultiAgentFlow:
     }
     RECEIPT_TTL_SECONDS: int = 600
 
+    @classmethod
+    def get_prompt_versions(cls) -> Dict[str, str]:
+        return dict(cls._PROMPT_VERSIONS)
+
     @staticmethod
     def _receipt_is_fresh(receipt: Optional[Mapping[str, Any]], ttl_seconds: int) -> bool:
         if not receipt:
@@ -1172,7 +1180,7 @@ class MultiAgentFlow:
         self.flow_mode = FlowMode.MULTI_AGENT
         self.flow_label = "multi-agent"
         self._cohesive_validator = CohesiveResultValidator()
-        self._prompt_versions = get_prompt_versions()
+        self._prompt_versions = dict(self._PROMPT_VERSIONS)
         registry = get_planner_tool_registry()
         self._planner_tool_manifest = registry.describe_tools()
         self._tool_metadata_by_registry = _build_tool_metadata(self._planner_tool_manifest)
