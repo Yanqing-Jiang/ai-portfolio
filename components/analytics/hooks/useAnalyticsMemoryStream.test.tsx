@@ -416,6 +416,48 @@ describe('useAnalyticsMemoryStream result deduping', () => {
     expect(resultCount).toBe(2);
     expect(screen.getByTestId('revision-mode').textContent).toBe('chart');
   });
+
+  it('applies chart revisions on top of pending line specs so only a single bar chart renders', async () => {
+    vi.useFakeTimers();
+    (globalThis as any).__TEST_EVENTS__ = [
+      {
+        event: 'chart_generated',
+        data: {
+          chart_spec: {
+            series: [{ type: 'line', data: [1, 2, 3] }],
+            meta: { chartDesign: { chart_type: 'line' } },
+          },
+        },
+      },
+      { event: 'chart_patch', data: { ops: [{ op: 'set_chart_type', value: 'bar' }], status: 'applied' } },
+    ];
+
+    const { result } = renderHook(() => useAnalyticsMemoryStream('planner-executor'));
+
+    await act(async () => {
+      await result.current.handleQuery('convert to bar');
+    });
+
+    await act(async () => {
+      vi.runAllTimers();
+      await Promise.resolve();
+    });
+    vi.useRealTimers();
+
+    const chartSpec = result.current.chartSpec;
+    expect(chartSpec?.meta?.chartDesign?.chart_type).toBe('bar');
+    const series = Array.isArray(chartSpec?.series) ? chartSpec?.series : [];
+    expect(series?.every((entry: any) => entry?.type === 'bar')).toBe(true);
+
+    const resultMessages = result.current.chatHistory.filter((message) => message.type === 'result');
+    const chartMessages = resultMessages.filter((message) => message.chartSpec);
+    const chartTypes = chartMessages.map(
+      (message) => message.chartSpec?.meta?.chartDesign?.chart_type ?? null,
+    );
+    expect(chartTypes).toEqual(['bar']);
+
+    (globalThis as any).__TEST_EVENTS__ = undefined;
+  });
 });
 
 describe('useAnalyticsMemoryStream guardrail finalization', () => {
