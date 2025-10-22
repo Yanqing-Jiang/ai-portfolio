@@ -222,7 +222,7 @@ def _maybe_update_session_state(
     elif name == "tool_parallel_result":
         tool = (data.get("tool") or "").strip()
         payload = data.get("payload") or {}
-        if tool == "web_retriever" and payload:
+        if tool.startswith("web_retriever") and payload:
             cache_payload = dict(payload)
             cache_payload.setdefault("query", cache_payload.get("query_terms"))
             snapshot.record_tool_result("web_search", cache_payload)
@@ -279,6 +279,8 @@ async def instrument_events(
             snapshot.record_artifacts(payload)
 
     await repository.save(snapshot)
+
+
 
 
 

@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import hashlib
 import json
@@ -2461,7 +2461,7 @@ class MultiAgentFlow:
                     or datetime.utcnow().isoformat(),
                 }
                 receipts_map[receipt_key] = receipt_payload
-            if tool_name == "web_retriever":
+            if tool_name.startswith("web_retriever"):
                 web_ctx = self._shared_context.setdefault('web', {})
                 payload = sanitized_result.get("payload") or {}
                 metadata = sanitized_result.get("metadata") or {}

@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 import json
 import hashlib
 from typing import AsyncGenerator, Dict, Any, Optional, List, Sequence, Tuple, Set, Mapping, Iterable
@@ -200,6 +200,7 @@ def _generate_chart_design(intent_key: Optional[str], plan: QueryPlanModel, data
     # Extract available columns from data
     cols = list(data[0].keys()) if data else []
     has_multiple_tickers = len(set(row.get('ticker') for row in data if row.get('ticker'))) > 1
+    comparison = getattr(plan, "comparison", None)
     design = {
         'intent': intent_key,
         'grouping': 'ticker' if has_multiple_tickers else 'metric',
@@ -209,6 +210,10 @@ def _generate_chart_design(intent_key: Optional[str], plan: QueryPlanModel, data
         'defaultLegendSelection': {},
         'color_by': 'ticker' if has_multiple_tickers else 'metric'
     }
+    if comparison:
+        design['comparison'] = comparison
+        if comparison == 'all' and has_multiple_tickers:
+            design['comparison_mode'] = 'multi_company'
     if getattr(plan, "statistic", None) == "ranking_latest":
         primary_metric = (plan.metrics or [None])[0]
         design.update({
@@ -2000,7 +2005,7 @@ class PlannerPipeline:
         normalized = tool_name.strip().lower()
         if not normalized:
             return None
-        if normalized == "web_retriever":
+        if normalized.startswith("web_retriever"):
             return "web"
         if normalized == "stock_tracker" or normalized.startswith("market_question"):
             return "market"
@@ -2129,7 +2134,7 @@ class PlannerPipeline:
         tool_name = str(data.get("tool") or "").strip().lower()
         status = str(data.get("status") or "").strip().lower()
         payload = data.get("payload") or {}
-        if tool_name == "web_retriever" and status in {"completed", "complete", "success"}:
+        if tool_name.startswith("web_retriever") and status in {"completed", "complete", "success"}:
             if isinstance(payload, dict) and payload.get("ready"):
                 _seed_web_search_from_payload(ctx, payload)
         elif (
@@ -3847,6 +3852,10 @@ async def _intent_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[s
     ctx.assumptions = slot_assumptions
 
     intent_elapsed = timed_emitter.end_step("intent_detection")
+    resolver_status = "structured"
+    if isinstance(slot_resolution.notes, str) and "fell back" in slot_resolution.notes.lower():
+        resolver_status = "fallback"
+
     log_intent_resolution(
         intent_key=intent.intent_key,
         confidence=intent.confidence,
@@ -3855,6 +3864,7 @@ async def _intent_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[s
         elapsed_ms=intent_elapsed or int((time.time() - intent_start) * 1000),
         session_id=ctx.session_id,
         flow=ctx.flow_mode.value if isinstance(ctx.flow_mode, FlowMode) else str(ctx.flow_mode),
+        resolver_status=resolver_status,
     )
 
     intent_complete = {
@@ -4667,6 +4677,19 @@ def _auto_fill_missing_slots(ctx: PlannerPhaseContext, assumptions: List[str]) -
         elif slot_name == "metric":
             if status.suggestions:
                 default_value = status.suggestions[0]
+        elif slot_name == "comparison":
+            intent_tickers: List[str] = []
+            if ctx.intent and isinstance(ctx.intent.slots_detected, dict):
+                intent_raw_tickers = ctx.intent.slots_detected.get("tickers")
+                if isinstance(intent_raw_tickers, (list, tuple, set)):
+                    for value in intent_raw_tickers:
+                        symbol = str(value).strip().upper()
+                        if symbol and symbol not in intent_tickers and symbol != "ALL":
+                            intent_tickers.append(symbol)
+            if intent_tickers and len(intent_tickers) >= 2:
+                default_value = "all"
+            elif status.suggestions:
+                default_value = status.suggestions[0]
         if default_value:
             status.status = "defaulted"
             status.value = default_value
@@ -4674,6 +4697,8 @@ def _auto_fill_missing_slots(ctx: PlannerPhaseContext, assumptions: List[str]) -
                 status.reason = "Auto-filled due to missing clarification."
             ctx.slot_statuses[slot_name] = status
             assumptions.append(f"Using {slot_label}: {default_value}")
+            if ctx.intent and isinstance(ctx.intent.slots_detected, dict):
+                ctx.intent.slots_detected[slot_name] = default_value
             continue
         remaining_missing.append(slot_name)
     return remaining_missing
@@ -4690,3 +4715,4 @@ def _auto_fill_missing_slots(ctx: PlannerPhaseContext, assumptions: List[str]) -
 
 
 from analytics.core.intent_impl.normalization import normalize_timeframe, normalize_metrics
+

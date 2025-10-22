@@ -94,6 +94,33 @@ query_patterns:
       ORDER BY {order_by_clause}, market_share_percent DESC
       LIMIT 500;
 
+  revenue_comparison:
+    name: "Revenue Comparison Across Companies"
+    description: "Compare revenue totals for the semiconductor peer set over time"
+    keywords:
+      - "revenue comparison"
+      - "compare revenue"
+      - "revenue vs"
+      - "revenue versus"
+      - "revenue between"
+      - "revenue among"
+      - "revenue compare"
+    sql_template: |
+      SELECT
+        ticker,
+        {select_clause},
+        SUM(value) AS revenue
+      FROM comp_financials
+      WHERE
+        metric = 'Revenue'
+        AND ticker IN ({ticker_list})
+        AND {period_filter_clause}
+        AND {year_filter_clause}
+        AND value IS NOT NULL
+      GROUP BY ticker, {group_by_clause}
+      ORDER BY ticker, {group_by_clause}
+      LIMIT 500;
+
   margins_vs_peers:
     name: "Profit Margins vs Industry Average"
     description: "Compare profit margins against industry average"

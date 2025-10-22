@@ -145,7 +145,7 @@ def derive_accessory_events(
                     derived.append(mark_delta_event(event, ctx))
                     ctx.stock_ready_emitted = True  # type: ignore[attr-defined]
 
-    if tool_name == "web_retriever":
+    if tool_name.startswith("web_retriever"):
         if getattr(ctx, "web_search_seeded", False) or (isinstance(payload, Mapping) and payload.get("ready")):
             web_payload = compose_web_ready_payload(ctx)
             if not web_payload and isinstance(payload, Mapping):

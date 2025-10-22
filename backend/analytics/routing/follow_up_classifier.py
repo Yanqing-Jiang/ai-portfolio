@@ -87,9 +87,31 @@ class FollowUpClassifier:
             return FollowUpRoute.REUSE_SQL
         return FollowUpRoute.FULL_PIPELINE
 
-    def detect_revision_targets(self, query: str) -> set[str]:
+    def _lanes_available(self, snapshot: Optional[SessionStateSnapshot]) -> set[str]:
+        if snapshot is None:
+            return set()
+        lanes: set[str] = set()
+        artifacts = ((snapshot.tool_cache or {}).get("analytics") or {}).get("artifacts") or {}
+
+        if snapshot.last_sql or artifacts.get("sql_generation") or self._stage_seen(snapshot, "sql"):
+            lanes.add("sql")
+        if snapshot.last_chart_spec or artifacts.get("chart") or self._stage_seen(snapshot, "chart"):
+            lanes.add("chart")
+        if snapshot.last_analysis or artifacts.get("analysis") or self._stage_seen(snapshot, "analysis"):
+            lanes.add("analysis")
+        if artifacts.get("market") or self._stage_seen(snapshot, "hedged_accessories"):
+            lanes.add("market")
+        if artifacts.get("web") or self._stage_seen(snapshot, "hedged_accessories"):
+            lanes.add("web")
+        return lanes
+
+    def detect_revision_targets(
+        self,
+        query: str,
+        snapshot: Optional[SessionStateSnapshot] = None,
+    ) -> set[str]:
         normalized_query = (query or "").strip().lower()
-        if not normalized_query:
+        if not normalized_query or snapshot is None:
             return set()
         lanes: set[str] = set()
         if _contains_any(normalized_query, self.stock_keywords):
@@ -102,4 +124,5 @@ class FollowUpClassifier:
             lanes.add("sql")
         if _contains_any(normalized_query, self.analysis_keywords):
             lanes.add("analysis")
-        return lanes
+        available = self._lanes_available(snapshot)
+        return {lane for lane in lanes if lane in available}

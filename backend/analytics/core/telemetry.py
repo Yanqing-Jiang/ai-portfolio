@@ -73,6 +73,7 @@ def intent_resolution(
     elapsed_ms: Optional[int] = None,
     session_id: Optional[str] = None,
     flow: Optional[str] = None,
+    resolver_status: Optional[str] = None,
 ) -> None:
     payload = _base_payload('intent_resolution', session_id=session_id, flow=flow)
     payload.update(
@@ -85,6 +86,8 @@ def intent_resolution(
     )
     if elapsed_ms is not None:
         payload['elapsed_ms'] = elapsed_ms
+    if resolver_status:
+        payload['resolver_status'] = resolver_status
     _emit(payload)
 
 def tool_iteration(

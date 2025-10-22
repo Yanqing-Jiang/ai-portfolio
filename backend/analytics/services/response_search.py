@@ -9,7 +9,7 @@ import time
 import html
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
-from typing import Any, Dict, Iterable, List, Optional, Tuple, TYPE_CHECKING
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, TYPE_CHECKING
 from urllib.parse import urlparse
 from types import SimpleNamespace
 
@@ -433,6 +433,22 @@ async def generate_search_topic(query: str, *, session_id: Optional[str] = None)
     return await _generate_search_topic(gemini_model, query, session_id=session_id)
 
 
+async def generate_search_topics(
+    query: str,
+    *,
+    session_id: Optional[str] = None,
+    min_topics: int = 2,
+) -> List[SearchTopicPlan]:
+    """Return structured topic prompts without issuing live web calls."""
+    gemini_model = _ensure_model()
+    return await _generate_search_topics(
+        gemini_model,
+        query,
+        session_id=session_id,
+        min_topics=min_topics,
+    )
+
+
 def _extract_support_text(support: Dict[str, Any], chunk_map: Dict[int, Dict[str, Any]]) -> Optional[str]:
     # Prefer new API: text lives on the support.segment
     segment = _as_dict(support.get('segment'))
@@ -852,6 +868,7 @@ async def perform_response_search(
     context_size: Optional[str] = None,
     model: Optional[str] = None,
     search_topic: Optional[str] = None,
+    topic_plans: Optional[Sequence[SearchTopicPlan]] = None,
 ) -> ResponseSearchResult:
     if not query or not query.strip():
         raise ValueError('Search query must be provided')
@@ -866,12 +883,33 @@ async def perform_response_search(
     logger.debug('Resolved Gemini search model: %s', getattr(gemini_model, 'model_name', _DEFAULT_MODEL))
 
     plans: List[SearchTopicPlan] = []
-    if search_topic and isinstance(search_topic, str) and search_topic.strip():
-        plans.append(SearchTopicPlan(label='Primary question', query=_sanitize_search_query(search_topic, search_topic)))
-    generated_plans = await _generate_search_topics(gemini_model, query, session_id=session_id, min_topics=2)
-    for candidate_plan in generated_plans:
-        if all(candidate_plan.query.lower() != existing.query.lower() for existing in plans):
-            plans.append(candidate_plan)
+    if topic_plans:
+        for plan in topic_plans:
+            if not isinstance(plan, SearchTopicPlan):
+                continue
+            sanitized_query = _sanitize_search_query(plan.query, plan.query)
+            if not sanitized_query:
+                continue
+            if all(sanitized_query.lower() != existing.query.lower() for existing in plans):
+                plans.append(
+                    SearchTopicPlan(
+                        label=plan.label or 'Research focus',
+                        query=sanitized_query,
+                        reason=plan.reason,
+                    )
+                )
+    else:
+        if search_topic and isinstance(search_topic, str) and search_topic.strip():
+            plans.append(
+                SearchTopicPlan(
+                    label='Primary question',
+                    query=_sanitize_search_query(search_topic, search_topic),
+                )
+            )
+        generated_plans = await _generate_search_topics(gemini_model, query, session_id=session_id, min_topics=2)
+        for candidate_plan in generated_plans:
+            if all(candidate_plan.query.lower() != existing.query.lower() for existing in plans):
+                plans.append(candidate_plan)
     if not plans:
         plans.append(SearchTopicPlan(label='Primary question', query=_sanitize_search_query(query, query)))
     plans = plans[: max(1, _MAX_TOPICS)]
