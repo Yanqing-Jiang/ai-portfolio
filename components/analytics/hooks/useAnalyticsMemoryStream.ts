@@ -58,10 +58,10 @@ const FOLLOW_UP_BANNER_COPY: Record<string, { title: string; message: string }> 
 };
 
 const SPECIALIST_LANE_PRIORITY: Record<string, number> = {
-  market: 0,
-  web: 1,
-  analysis: 2,
-  chart: 3,
+  chart: 0,
+  analysis: 1,
+  market: 2,
+  web: 3,
   sql: 4,
 };
 
@@ -309,6 +309,9 @@ const buildResultMessageFields = () => ({
     latencyGuardrail: workflowDataRef.current.latencyGuardrail,
   });
 
+  const generateMessageId = () =>
+    `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+
   const emitResultOnce = useCallback((options?: { content?: string }) => {
     if (resultSentRef.current) return;
     resultSentRef.current = true;
@@ -318,7 +321,7 @@ const buildResultMessageFields = () => ({
       ? (options?.content as string)
       : 'Streaming analysis - cards will update below as tools finish.';
     const newMessage = {
-      id: Date.now().toString(),
+      id: generateMessageId(),
       timestamp: new Date().toISOString(),
       type: 'result' as const,
       content,
@@ -1658,7 +1661,7 @@ const workflowDataRef = useRef<{
   const addChatMessage = (message: Omit<ChatMessage, 'id' | 'timestamp'>) => {
     const newMessage: ChatMessage = {
       ...message,
-      id: Date.now().toString(),
+      id: generateMessageId(),
       timestamp: new Date().toISOString(),
     };
     setChatHistory(prev => [...prev, newMessage]);
@@ -1760,7 +1763,7 @@ const workflowDataRef = useRef<{
       const working = mutated ? base : prev;
       const nextMessage: ChatMessage = {
         ...payload,
-        id: Date.now().toString(),
+        id: generateMessageId(),
         timestamp: new Date().toISOString(),
       };
       const last = working[working.length - 1];
@@ -1777,9 +1780,17 @@ const workflowDataRef = useRef<{
           id: last.id,
         };
         const withoutLast = working.slice(0, -1);
+        resultSentRef.current = true;
+        resultMessageIdRef.current = merged.id;
+        hasExplicitResultContentRef.current =
+          typeof merged.content === 'string' && merged.content.trim().length > 0;
         return [...withoutLast, merged];
       }
 
+      resultSentRef.current = true;
+      resultMessageIdRef.current = nextMessage.id;
+      hasExplicitResultContentRef.current =
+        typeof nextMessage.content === 'string' && nextMessage.content.trim().length > 0;
       return [...working, nextMessage];
     });
   };
@@ -2679,6 +2690,7 @@ const workflowDataRef = useRef<{
 
                 const next = applyChartOps(baseCandidate, eventData);
                 workflowDataRef.current.chartSpec = next;
+                pendingUpdatesRef.current.chartSpec = next;
                 patchedChartSpec = next;
                 return next;
               });
