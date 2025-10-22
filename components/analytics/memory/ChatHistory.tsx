@@ -94,9 +94,16 @@ const buildCombinedAnalysis = (message: ChatHistoryProps['messages'][number]) =>
   let base = message.analysis?.trim();
 
   if (base && tldr) {
+    const isTldrLine = (line: string) => {
+      const trimmed = line.trim();
+      if (!trimmed) return false;
+      const withoutLeadingMarkdown = trimmed.replace(/^[^a-zA-Z0-9]+/, '').trim();
+      const normalized = withoutLeadingMarkdown.toLowerCase();
+      return normalized.startsWith('tl;dr');
+    };
     const filtered = base
       .split('\n')
-      .filter((line) => !line.trim().toLowerCase().startsWith('tl;dr'));
+      .filter((line) => !isTldrLine(line));
     const cleaned = filtered.join('\n').trim();
     base = cleaned.length ? cleaned : undefined;
   }
