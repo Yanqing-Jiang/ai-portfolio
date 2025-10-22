@@ -105,7 +105,12 @@ def heuristic_intent(query: str, configs: Dict[str, Any]) -> IntentModel:
 
     q = (query or "").lower()
     companies = get_default_tickers(configs)
-    detected_company = detect_company_from_query(query, configs, resolve_alias_to_ticker)
+    detected_companies = detect_companies_from_query(query, configs, resolve_alias_to_ticker)
+    if not detected_companies:
+        fallback_company = detect_company_from_query(query, configs, resolve_alias_to_ticker)
+        if fallback_company:
+            detected_companies = [fallback_company]
+    primary_company = detected_companies[0] if detected_companies else None
 
     intent_key: Optional[str] = None
     reasoning: List[str] = []
@@ -154,29 +159,35 @@ def heuristic_intent(query: str, configs: Dict[str, Any]) -> IntentModel:
 
     timeframe_hint = normalize_timeframe(None, query, configs, apply_defaults=False, origin="query")
     slots: Dict[str, Any] = {
-        "tickers": companies,
+        "tickers": detected_companies or companies,
         "granularity": normalize_granularity(query),
     }
     if timeframe_hint:
         slots["timeframe"] = timeframe_hint
-    if detected_company:
-        slots["company"] = detected_company
+    if detected_companies:
+        slots["company_candidates"] = detected_companies
+    if primary_company:
+        slots["company"] = primary_company
     elif intent_key in REQUIRES_COMPANY_SLOTS:
         reasoning.append("Company not detected in query")
 
     if comparison_default and "comparison" not in slots:
         slots["comparison"] = comparison_default
 
+    if len(detected_companies) >= 2:
+        slots["comparison"] = slots.get("comparison") or "all"
+        slots["tickers"] = detected_companies
+
     if metric_defaults and not slots.get("metrics"):
         slots["metrics"] = metric_defaults
         slots["metric"] = metric_defaults[0]
 
     slots = post_process_slots(slots, query, configs)
-    if not detected_company:
+    if not primary_company:
         slots.pop("company", None)
 
     clarifications: List[ClarificationSuggestionModel] = []
-    if intent_key in REQUIRES_COMPANY_SLOTS and not detected_company:
+    if intent_key in REQUIRES_COMPANY_SLOTS and not primary_company:
         clarifications.append(_build_company_clarification(companies))
 
     if _is_ranking_query(query):
@@ -267,6 +278,60 @@ def detect_company_from_query(
     return None
 
 
+_COMPANY_CONNECTOR_TOKENS = {
+    "vs",
+    "vs.",
+    "versus",
+    "and",
+    "or",
+    "&",
+    "against",
+    "compare",
+    "comparing",
+}
+
+
+def detect_companies_from_query(
+    query: str,
+    configs: Dict[str, Any],
+    resolve_alias_func=resolve_alias_to_ticker,
+) -> List[str]:
+    """Return all distinct company tickers referenced in the query."""
+
+    if not query:
+        return []
+
+    tokens = re.findall(r"[A-Za-z0-9&\\.']+", query)
+    if not tokens:
+        return []
+
+    default_tickers = get_default_tickers(configs)
+    default_lookup = {ticker.lower(): ticker for ticker in default_tickers}
+
+    detected: List[str] = []
+    for token in tokens:
+        normalized = token.strip().lower().strip(".,:;")
+        if not normalized or normalized in _COMPANY_CONNECTOR_TOKENS:
+            continue
+
+        ticker: Optional[str] = None
+        if resolve_alias_func:
+            ticker = resolve_alias_func(token, configs)
+
+        if not ticker:
+            candidate = token.strip().upper()
+            lowered = candidate.lower()
+            if lowered in default_lookup:
+                ticker = default_lookup[lowered]
+            elif candidate in default_tickers:
+                ticker = candidate
+
+        if ticker and ticker not in detected:
+            detected.append(ticker)
+
+    return detected
+
+
 
 def _normalize_company_candidates(values: Any, query: str) -> List[str]:
     """Return upper-cased company symbols ordered by their appearance in the query."""
@@ -310,6 +375,11 @@ def post_process_slots(
     if not company_candidates and processed_slots.get("tickers"):
         company_candidates = _normalize_company_candidates(processed_slots.get("tickers"), query)
 
+    query_companies = detect_companies_from_query(query, configs, resolve_alias_func)
+    for symbol in query_companies:
+        if symbol not in company_candidates:
+            company_candidates.append(symbol)
+
     if company_candidates:
         processed_slots["company_candidates"] = company_candidates
         processed_slots["company"] = company_candidates[0]
@@ -331,6 +401,22 @@ def post_process_slots(
             processed_slots["tickers"] = [detected_company]
             processed_slots.setdefault("company_candidates", [detected_company])
             logger.info("Post-processed company: %s", detected_company)
+
+    raw_tickers = processed_slots.get("tickers")
+    if isinstance(raw_tickers, (list, tuple, set)):
+        normalized_tickers: List[str] = []
+        for value in raw_tickers:
+            symbol = str(value).strip().upper()
+            if symbol and symbol not in normalized_tickers:
+                normalized_tickers.append(symbol)
+        if normalized_tickers:
+            processed_slots["tickers"] = normalized_tickers
+            processed_slots.setdefault("company_candidates", normalized_tickers)
+            processed_slots.setdefault("company", normalized_tickers[0])
+            if len(normalized_tickers) >= 2 and processed_slots.get("comparison") in (None, "", "single"):
+                processed_slots["comparison"] = "all"
+        else:
+            processed_slots.pop("tickers", None)
 
 
     timeframe = normalize_timeframe(
@@ -511,8 +597,8 @@ def _fallback_intent_resolution(
                         reason="Heuristic fallback requires this slot.",
                     )
                 )
-        # Surface advisory follow-ups for high-signal optional slots (metric/timeframe).
-        optional_hint_slots = {"metric", "timeframe"}
+        # Surface advisory follow-ups for high-signal optional slots.
+        optional_hint_slots = {"metric", "timeframe", "comparison"}
         for slot_name in definition.optional_slots:
             normalized = slot_name.split(".", 1)[0] if slot_name else slot_name
             if normalized not in optional_hint_slots:
@@ -538,15 +624,45 @@ def _fallback_intent_resolution(
                         allow_custom=opt.allow_custom,
                     )
                     filled = True
-            elif normalized == "timeframe" and isinstance(heuristic_value, dict) and heuristic_value:
-                slots[normalized] = SlotStatusModel(
-                    status="defaulted",
-                    value=heuristic_value,
-                    reason="Using heuristic timeframe default.",
-                    suggestions=list(opt.suggestions),
-                    allow_custom=opt.allow_custom,
-                )
-                filled = True
+            elif normalized == "timeframe":
+                normalized_tf = {}
+                if heuristic_value:
+                    normalized_tf = normalize_timeframe(
+                        heuristic_value,
+                        query,
+                        configs,
+                        apply_defaults=False,
+                        origin="heuristic",
+                    )
+                if normalized_tf:
+                    slots[normalized] = SlotStatusModel(
+                        status="defaulted",
+                        value=normalized_tf,
+                        reason="Using heuristic timeframe default.",
+                        suggestions=list(opt.suggestions),
+                        allow_custom=opt.allow_custom,
+                    )
+                    filled = True
+            elif normalized == "comparison":
+                comparison_value = None
+                if isinstance(heuristic_value, str) and heuristic_value:
+                    comparison_value = heuristic_value
+                tickers_hint = heuristic_slots.get("tickers")
+                if (
+                    not comparison_value
+                    and isinstance(tickers_hint, (list, tuple, set))
+                    and len({str(v).strip().upper() for v in tickers_hint if str(v).strip() and str(v).strip().upper() != "ALL"}) >= 2
+                ):
+                    comparison_value = "all"
+                if comparison_value:
+                    slots[normalized] = SlotStatusModel(
+                        status="defaulted" if comparison_value != heuristic_value else "filled",
+                        value=comparison_value,
+                        reason="Using heuristic comparison default.",
+                        suggestions=list(opt.suggestions),
+                        allow_custom=opt.allow_custom,
+                    )
+                    filled = True
 
             if filled:
                 continue
@@ -601,11 +717,16 @@ def _llm_resolution_to_runtime(
     if not definition and candidate_definitions:
         definition = next((item for item in candidate_definitions if item.intent_key == selection.key), None)
 
+    def _unwrap_slot_value(raw: Any) -> Any:
+        if hasattr(raw, "model_dump"):
+            return raw.model_dump(exclude_none=True)
+        return raw
+
     slots: Dict[str, SlotStatusModel] = {}
     for slot_name, slot_payload in (llm_res.slots or {}).items():
         slots[slot_name] = SlotStatusModel(
             status=slot_payload.status,
-            value=slot_payload.value,
+            value=_unwrap_slot_value(slot_payload.value),
             reason=slot_payload.reason,
             suggestions=list(slot_payload.suggestions or []),
             allow_custom=slot_payload.allow_custom,
@@ -943,6 +1064,13 @@ async def detect_intent_fast_async(
         intent.clarifications_suggested = [
             ClarificationSuggestionModel(**c) if not isinstance(c, ClarificationSuggestionModel) else c
             for c in intent.clarifications_suggested
+        ]
+
+    if intent.slots_detected.get("comparison") and intent.clarifications_suggested:
+        intent.clarifications_suggested = [
+            suggestion
+            for suggestion in intent.clarifications_suggested
+            if getattr(suggestion, "slot", None) != "comparison"
         ]
 
     logger.info(

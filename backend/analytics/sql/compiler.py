@@ -45,15 +45,66 @@ def compile_sql_from_plan(
     intent_key = intent.intent_key
     logger.info("[SQL_COMPILER] Compiling SQL for intent %s", intent_key)
 
-    ticker_list = get_ticker_list(cfg)
-    ticker_clause = "'" + "','".join(ticker_list) + "'"
+    default_tickers = get_ticker_list(cfg)
+    slots = getattr(intent, "slots_detected", None) or intent_dict.get("slots_detected") or {}
+    requested_symbols: list[str] = []
+    slot_tickers = slots.get("tickers")
+    if isinstance(slot_tickers, (list, tuple)):
+        requested_symbols.extend(slot_tickers)
+    company_candidates = slots.get("company_candidates")
+    if isinstance(company_candidates, (list, tuple)):
+        requested_symbols.extend(company_candidates)
+    single_company = slots.get("company")
+    if isinstance(single_company, str):
+        requested_symbols.append(single_company)
+
+    sanitized_tickers: list[str] = []
+    for symbol in requested_symbols:
+        cleaned = sanitize_ticker(symbol, default_tickers)
+        if cleaned and cleaned not in sanitized_tickers:
+            sanitized_tickers.append(cleaned)
+    ticker_values = sanitized_tickers or default_tickers
+    ticker_clause = "'" + "','".join(ticker_values) + "'"
 
     target_ticker = _resolve_company(intent, cfg)
 
-    years_back = plan_dict.get('timeframe', {}).get('years_back')
-    if not years_back:
+    timeframe_dict = plan_dict.get('timeframe') or {}
+    if hasattr(timeframe_dict, 'model_dump'):
+        timeframe_dict = timeframe_dict.model_dump()
+    timeframe_dict = timeframe_dict or {}
+
+    def _coerce_int(value: Any) -> Optional[int]:
+        try:
+            if value is None:
+                return None
+            if isinstance(value, bool):
+                return None
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    timeframe_years_back = _coerce_int(timeframe_dict.get('years_back'))
+    years_back = timeframe_years_back if timeframe_years_back is not None else _coerce_int(plan_dict.get('years_back'))
+    if years_back is None:
         defaults = SEMANTIC_CATALOG.query_defaults()
         years_back = defaults.get('default_years_back', 5)
+    years_back = _coerce_int(years_back) or 5
+
+    start_year = _coerce_int(timeframe_dict.get('start_year'))
+    end_year = _coerce_int(timeframe_dict.get('end_year'))
+    if start_year is not None and end_year is not None and end_year < start_year:
+        start_year, end_year = end_year, start_year
+
+    if start_year is not None and end_year is not None:
+        year_filter_clause = f"calendar_year BETWEEN {start_year} AND {end_year}"
+    elif start_year is not None:
+        year_filter_clause = f"calendar_year >= {start_year}"
+    elif end_year is not None:
+        year_filter_clause = f"calendar_year <= {end_year}"
+    elif timeframe_years_back is not None:
+        year_filter_clause = f"calendar_year >= EXTRACT(YEAR FROM CURRENT_DATE) - {timeframe_years_back}"
+    else:
+        year_filter_clause = f"calendar_year >= EXTRACT(YEAR FROM CURRENT_DATE) - {years_back}"
 
     granularity = plan.granularity if isinstance(plan, QueryPlanModel) else plan_dict.get('granularity', 'annual')
 
@@ -86,8 +137,6 @@ def compile_sql_from_plan(
         safe_metric = (primary_metric or 'Revenue').replace("'", "''")
         sql = sql.replace('{primary_metric}', safe_metric)
         sql = sql.replace('{years_back}', str(years_back))
-        start_year = plan_dict.get('timeframe', {}).get('start_year')
-        end_year = plan_dict.get('timeframe', {}).get('end_year')
         sql = sql.replace('{start_year}', 'NULL' if start_year is None else str(start_year))
         sql = sql.replace('{end_year}', 'NULL' if end_year is None else str(end_year))
         select_clause, group_by_clause, join_clause, order_by_clause, period_filter_clause = _granularity_clauses(granularity)
@@ -96,6 +145,8 @@ def compile_sql_from_plan(
         sql = sql.replace('{join_clause}', join_clause)
         sql = sql.replace('{order_by_clause}', order_by_clause)
         sql = sql.replace('{period_filter_clause}', period_filter_clause)
+        sql = sql.replace('{year_filter_clause}', year_filter_clause)
+        sql = sql.replace('{ticker_list}', ticker_clause)
         sql = sql.replace("('AMD','AVGO','INTC','MU','NVDA','QCOM','TXN')", f"({ticker_clause})")
         # If granularity is annual, strip quarterly-only filters to avoid empty results
         if granularity != 'quarterly':

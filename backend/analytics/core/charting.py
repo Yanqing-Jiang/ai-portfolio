@@ -274,6 +274,21 @@ def _build_candlestick_spec(
     return spec, None
 
 
+def _attach_comparison_meta(spec: Optional[Dict[str, Any]], comparison: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Attach comparison metadata to the chart spec and design."""
+    if not spec or not isinstance(spec, dict) or not comparison:
+        return spec
+    meta = spec.setdefault('meta', {})
+    if isinstance(meta, dict):
+        meta['comparison'] = comparison
+        chart_design = meta.get('chartDesign')
+        if isinstance(chart_design, dict):
+            chart_design['comparison'] = comparison
+            if comparison == 'all':
+                chart_design.setdefault('comparison_mode', 'multi_company')
+    return spec
+
+
 def _format_scope_banner(metric_label: str, tickers: List[str]) -> str:
     metric_label = metric_label.strip() if metric_label else "metric"
     if len(tickers) <= 6:
@@ -434,7 +449,7 @@ def build_chart_spec(
     if chart_type == 'candlestick':
         spec_result, fallback_plan = _build_candlestick_spec(data, chart_plan, charts_cfg, intent_key, comparison)
         if spec_result is not None:
-            return spec_result
+            return _attach_comparison_meta(spec_result, comparison)
         if fallback_plan is not None:
             chart_plan = fallback_plan
             chart_type = chart_plan.get('chart_type')
@@ -448,7 +463,7 @@ def build_chart_spec(
             statistic,
         )
         if spec_result is not None:
-            return spec_result
+            return _attach_comparison_meta(spec_result, comparison)
         if fallback_plan is not None:
             chart_plan = fallback_plan
             chart_type = chart_plan.get('chart_type')
@@ -613,7 +628,7 @@ def build_chart_spec(
                 }
             }
         }
-        return spec_stack
+        return _attach_comparison_meta(spec_stack, comparison)
 
     # Build series with enhanced metadata (generic path)
     series_defs = chart_plan.get('series', [])
@@ -650,7 +665,10 @@ def build_chart_spec(
         
         # Determine if this is a primary series
         is_primary = name in primary_series
-        default_legend_selection[name] = is_primary
+        if comparison == 'all' or (comparison == 'multi' and 'ticker_filter' in s):
+            default_legend_selection[name] = True
+        else:
+            default_legend_selection[name] = is_primary
         
         # Build data values
         vals: List[Any] = []
@@ -807,6 +825,6 @@ def build_chart_spec(
             }
         }
     }
-    return spec
+    return _attach_comparison_meta(spec, comparison)
 
 

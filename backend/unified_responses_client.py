@@ -335,13 +335,31 @@ class UnifiedResponsesClient:
         session_id: Optional[str] = None,
         model: Optional[str] = None
     ) -> Tuple[T, Optional[str]]:
+        schema = response_model.model_json_schema()
+        model_name = self._get_model_name(model)
+        formatted_messages = self._format_messages(messages)
         params: Dict[str, Any] = {
-            "model": self._get_model_name(model),
-            "input": self._format_messages(messages),
-            "text_format": response_model,
+            "model": model_name,
+            "input": formatted_messages,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": getattr(response_model, "__name__", "StructuredResponse"),
+                    "schema": schema,
+                },
+            },
+            "response_model": response_model,
         }
         self._apply_reasoning(params, reasoning_effort)
         self._inject_context(params, session_id)
+
+        legacy_params: Dict[str, Any] = {
+            "model": model_name,
+            "input": formatted_messages,
+            "text_format": response_model,
+        }
+        self._apply_reasoning(legacy_params, reasoning_effort)
+        self._inject_context(legacy_params, session_id)
 
         call_start = time.time()
 
@@ -363,6 +381,31 @@ class UnifiedResponsesClient:
                 metadata={"response_id": response_id, "response_model": getattr(response_model, '__name__', str(response_model))},
             )
             return parsed_model, response_id
+        except TypeError as exc:
+            if "response_format" not in str(exc):
+                raise
+            logger.warning("responses.parse does not support response_format; retrying with legacy text_format")
+            try:
+                response = await self.client.responses.parse(**legacy_params)
+                response_id = getattr(response, "id", None)
+                self._set_previous_response_id(response_id, session_id)
+                parsed_model = self._extract_parsed_model(response)
+                if parsed_model is None:
+                    raise ValueError('Responses API did not return parsed content')
+                elapsed_ms = int((time.time() - call_start) * 1000)
+                responses_call(
+                    call_type="create_structured",
+                    model=legacy_params.get("model"),
+                    reasoning_effort=reasoning_effort,
+                    duration_ms=elapsed_ms,
+                    status="success",
+                    session_id=session_id,
+                    metadata={"response_id": response_id, "response_model": getattr(response_model, '__name__', str(response_model)), "compat_mode": "text_format"},
+                )
+                return parsed_model, response_id
+            except Exception as retry_exc:
+                exc = retry_exc
+            raise exc
         except Exception as exc:
             elapsed_ms = int((time.time() - call_start) * 1000)
             responses_call(

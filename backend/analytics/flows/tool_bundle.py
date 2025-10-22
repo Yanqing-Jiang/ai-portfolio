@@ -1,9 +1,111 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set, Tuple
 import copy
+import json
 from analytics.validators import sanitize_for_json
 
+_WEB_SNIPPET_LIMIT = 5
+
+
+def _merge_web_payloads(payloads: List[Dict[str, Any]], *, base_query: Optional[str] = None) -> Dict[str, Any]:
+    merged_entries: List[Dict[str, Any]] = [dict(payload) for payload in payloads if isinstance(payload, dict)]
+    if not merged_entries:
+        return {}
+
+    summaries: List[str] = []
+    annotations: List[Dict[str, Any]] = []
+    topics: List[Dict[str, Any]] = []
+    snippets: List[Dict[str, Any]] = []
+    search_topics: List[str] = []
+    ready_any = False
+    from_cache_all = True
+    model: Optional[str] = None
+    usage: Optional[Dict[str, Any]] = None
+    fetched_at: Optional[str] = None
+    search_id: Optional[str] = None
+    latency_total = 0
+    query_value = base_query
+
+    for entry in merged_entries:
+        ready_any = ready_any or bool(entry.get("ready"))
+        if not entry.get("from_cache"):
+            from_cache_all = False
+        model = entry.get("model") or model
+        usage = entry.get("usage") or usage
+        fetched_at = entry.get("fetched_at") or fetched_at
+        if not search_id:
+            search_id = entry.get("search_id")
+        if not query_value:
+            query_value = entry.get("query") or entry.get("query_terms")
+
+        summary = entry.get("summary")
+        if isinstance(summary, str) and summary.strip():
+            summaries.append(summary.strip())
+
+        entry_topics = entry.get("topics")
+        if isinstance(entry_topics, list):
+            topics.extend(entry_topics)
+
+        entry_snippets = entry.get("snippets")
+        if isinstance(entry_snippets, list):
+            snippets.extend(entry_snippets)
+
+        entry_annotations = entry.get("annotations")
+        if isinstance(entry_annotations, list):
+            annotations.extend(entry_annotations)
+
+        entry_search_topics = entry.get("search_topics")
+        if isinstance(entry_search_topics, list):
+            for topic in entry_search_topics:
+                if isinstance(topic, str) and topic.strip() and topic not in search_topics:
+                    search_topics.append(topic)
+        else:
+            topic_value = entry.get("search_topic")
+            if isinstance(topic_value, str) and topic_value.strip() and topic_value not in search_topics:
+                search_topics.append(topic_value)
+
+        latency = entry.get("latency_ms")
+        if isinstance(latency, (int, float)):
+            latency_total += int(latency)
+
+    deduped_snippets: List[Dict[str, Any]] = []
+    seen_snippet_keys: Set[str] = set()
+    for snippet in snippets:
+        if not isinstance(snippet, dict):
+            continue
+        key = snippet.get("url") or snippet.get("display_url") or snippet.get("snippet") or json.dumps(snippet, sort_keys=True)
+        key_lower = key.lower() if isinstance(key, str) else str(key)
+        if key_lower in seen_snippet_keys:
+            continue
+        seen_snippet_keys.add(key_lower)
+        deduped_snippets.append(snippet)
+        if len(deduped_snippets) >= _WEB_SNIPPET_LIMIT:
+            break
+
+    combined_summary = None
+    if summaries:
+        combined_summary = "\n\n".join(dict.fromkeys(summaries))
+
+    merged_context: Dict[str, Any] = {
+        "query": query_value,
+        "query_terms": query_value,
+        "search_topic": search_topics[0] if search_topics else None,
+        "search_topics": search_topics,
+        "summary": combined_summary,
+        "snippets": deduped_snippets,
+        "annotations": annotations,
+        "topics": topics,
+        "usage": usage,
+        "fetched_at": fetched_at,
+        "latency_ms": latency_total or None,
+        "model": model,
+        "from_cache": from_cache_all,
+        "ready": ready_any,
+        "search_id": search_id,
+        "topic_count": len(merged_entries),
+    }
+    return merged_context
 
 
 def _extract_stock_widget(results: Optional[List[Dict[str, Any]]]) -> Optional[Dict[str, Any]]:
@@ -159,4 +261,6 @@ def collect_tool_bundle(
     if sources:
         bundle["sources"] = copy.deepcopy(sources)
     return sanitize_for_json(bundle)
+
+
 

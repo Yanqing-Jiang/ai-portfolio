@@ -266,6 +266,19 @@ def normalize_timeframe(
                 tf["years_back"] = detected_value
                 mark_detected(source or "query")
 
+    if not tf.get("start_year") and not tf.get("end_year"):
+        range_text_match = re.search(r"(19|20)\d{2}\s*(?:-|to|through)\s*(19|20)\d{2}", text)
+        if range_text_match:
+            parts = re.findall(r"((?:19|20)\d{2})", text)
+            if len(parts) >= 2:
+                start_year = int(parts[0])
+                end_year = int(parts[1])
+                if start_year <= end_year:
+                    tf["start_year"] = start_year
+                    tf["end_year"] = end_year
+                    tf.setdefault("years_back", max(1, end_year - start_year + 1))
+                    mark_detected(source or "query")
+
     if years_m and not tf.get("years_back"):
         tf["years_back"] = int(years_m.group(2))
         mark_detected(source or "query")

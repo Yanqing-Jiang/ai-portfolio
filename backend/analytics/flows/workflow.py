@@ -189,7 +189,7 @@ async def analytics_memory_workflow(
     route = classifier.classify(query, snapshot)
     factory = _get_flow_factory(selected)
     flow_instance = factory()
-    revision_targets = classifier.detect_revision_targets(query)
+    revision_targets = classifier.detect_revision_targets(query, snapshot)
     if session_id and revision_targets and hasattr(flow_instance, "set_revision_targets"):
         flow_instance.set_revision_targets(revision_targets)
     if hasattr(flow_instance, "prime_with_snapshot"):

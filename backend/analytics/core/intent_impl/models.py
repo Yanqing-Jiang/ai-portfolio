@@ -21,7 +21,7 @@ class TimeframeModel(BaseModel):
     end_year: Optional[int] = None
     preset: Optional[str] = None
     year_to_date: Optional[bool] = None
-    source: Optional[Literal['query', 'clarification', 'default', 'fallback']] = None
+    source: Optional[Literal['query', 'clarification', 'default', 'fallback', 'heuristic']] = None
 
 
 class SlotsModel(BaseModel):
@@ -182,13 +182,37 @@ class LLMIntentModel(BaseModel):
     intent_reasoning: str = Field(default="")
 
 
+class TimeframeSlotValue(BaseModel):
+    """Structured timeframe payload returned by the slot resolver."""
+
+    type: Literal["timeframe"] = "timeframe"
+    granularity: Optional[Literal['annual', 'quarterly']] = None
+    years_back: Optional[int] = Field(default=None, ge=0, le=10)
+    quarters_back: Optional[int] = Field(default=None, ge=0, le=40)
+    start_year: Optional[int] = None
+    end_year: Optional[int] = None
+    preset: Optional[str] = None
+    year_to_date: Optional[bool] = None
+    source: Optional[Literal['query', 'clarification', 'default', 'fallback', 'heuristic']] = None
+
+
+SlotValueType = Union[
+    str,
+    int,
+    float,
+    bool,
+    List[str],
+    TimeframeSlotValue,
+]
+
+
 class LLMSlotStatusModel(BaseModel):
     """Strict slot status schema for the unified resolver Responses output."""
 
     model_config = ConfigDict(extra='forbid')
 
     status: Literal["filled", "missing", "defaulted", "assumed"]
-    value: Optional[Union[str, int, float, bool, List[str], Dict[str, Any]]] = None
+    value: Optional[SlotValueType] = None
     reason: Optional[str] = None
     suggestions: List[str] = Field(default_factory=list)
     allow_custom: Optional[bool] = None
@@ -304,6 +328,14 @@ def intent_to_sql_criteria(intent: IntentModel, configs: Dict[str, Any]) -> SqlC
     else:
         tickers = list(get_default_tickers(configs))
 
+    normalized_tickers: List[str] = []
+    for value in tickers:
+        symbol = str(value).strip().upper()
+        if symbol and symbol != "ALL" and symbol not in normalized_tickers:
+            normalized_tickers.append(symbol)
+    if normalized_tickers:
+        tickers = normalized_tickers
+
     raw_metrics = slots.get('metrics')
     if isinstance(raw_metrics, (list, tuple, set)):
         metrics = list(raw_metrics)
@@ -317,6 +349,11 @@ def intent_to_sql_criteria(intent: IntentModel, configs: Dict[str, Any]) -> SqlC
         statistic = statistic.strip() or None
     else:
         statistic = None
+
+    if len(tickers) >= 2 and comparison not in ("all", "vs_avg", "vs_peers"):
+        comparison = "all"
+        if isinstance(intent.slots_detected, dict):
+            intent.slots_detected["comparison"] = "all"
 
     return SqlCriteriaModel(
         intent_key=intent.intent_key or '',
