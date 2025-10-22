@@ -432,7 +432,10 @@ const LandingPage: React.FC<LandingPageProps> = ({ projectData, onSelectProject 
       {preAiProjects.length > 0 && (
         <section className="bg-gray-900 border-t border-white/5">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 sm:py-16">
-            <h2 className="text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-bold text-center text-sky-100 mb-8 sm:mb-12">
+            <h2
+              className="font-black text-left text-balance bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-purple-500 mb-8 sm:mb-12"
+              style={{ fontSize: 'clamp(44px, 4.5vw, 56px)', textShadow: '0 0 40px rgba(56, 189, 248, 0.3)' }}
+            >
               Pre-AI Projects
             </h2>
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-8 sm:gap-10">
