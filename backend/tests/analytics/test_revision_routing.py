@@ -91,3 +91,22 @@ async def test_analysis_revision_routed_fast_path():
 
     await repo.delete(session_id)
     await close_session_state_repository()
+
+
+@pytest.mark.asyncio
+async def test_revision_hint_ignored_without_snapshot():
+    session_id = "revision-no-snapshot"
+    query = "Can you revise the chart to a scatter plot?"
+    events = []
+
+    async for event in analytics_memory_workflow(query=query, session_id=session_id, flow="single-agent"):
+        events.append(event)
+
+    assert not any(evt.get("event") == "revision_request" for evt in events), "Fresh sessions should not raise revision lanes"
+    follow_up_events = [evt for evt in events if evt.get("event") == "follow_up_route"]
+    assert follow_up_events, "Expected follow_up_route event for fresh session"
+    assert follow_up_events[0].get("data", {}).get("route") == "full_pipeline"
+
+    repo = get_session_state_repository()
+    await repo.delete(session_id)
+    await close_session_state_repository()

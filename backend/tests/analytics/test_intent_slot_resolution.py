@@ -174,6 +174,12 @@ def test_structured_resolver_drops_metric_followup_when_value_present(monkeypatc
                         suggestions=["Revenue"],
                         allow_custom=True,
                     ),
+                    "metrics": LLMSlotStatusModel(
+                        status="missing",
+                        value=["Revenue", "Net Income"],
+                        suggestions=["Revenue", "Net Income"],
+                        allow_custom=True,
+                    ),
                     "timeframe": LLMSlotStatusModel(
                         status="missing",
                         value=None,
@@ -188,6 +194,13 @@ def test_structured_resolver_drops_metric_followup_when_value_present(monkeypatc
                         suggestions=["Revenue"],
                         allow_custom=True,
                         reason="Clarify the metric for comparison",
+                    ),
+                    LLMFollowUpModel(
+                        slot="metrics",
+                        prompt="Select metrics to compare",
+                        suggestions=["Revenue", "Net Income"],
+                        allow_custom=True,
+                        reason="Clarify metrics",
                     )
                 ],
             )
@@ -206,6 +219,7 @@ def test_structured_resolver_drops_metric_followup_when_value_present(monkeypatc
     assert metric_status.value == "Revenue"
     followup_slots = {followup.slot for followup in result.followups}
     assert "metric" not in followup_slots
+    assert "metrics" not in followup_slots
 
 
 def test_fallback_keeps_timeframe_when_years_present(monkeypatch):
@@ -247,3 +261,69 @@ def test_fallback_defaults_comparison_for_multi_company_query(monkeypatch):
     assert comparison_status.status in {"filled", "defaulted"}
     assert comparison_status.value == "all"
     assert all(f.slot != "comparison" for f in result.followups)
+
+
+def test_fallback_handles_missing_client_and_detects_revenue_comparison(monkeypatch):
+    get_slot_catalog(refresh=True)
+    monkeypatch.setattr(detection, "get_unified_client", lambda: None)
+
+    result = detection.resolve_intent_slots(
+        "AMD vs NVIDIA revenue comparison 2021-2024",
+        _config_payload(),
+    )
+
+    assert result.intent.key == "revenue_comparison"
+    metric_status = result.slots.get("metric")
+    assert metric_status is not None
+    assert metric_status.value == "Revenue"
+    comparison_status = result.slots.get("comparison")
+    assert comparison_status is not None
+    assert comparison_status.value == "all"
+
+
+def test_fallback_detects_operating_leverage_intent(monkeypatch):
+    get_slot_catalog(refresh=True)
+
+    def _raise():
+        raise ValueError("mock client unavailable")
+
+    monkeypatch.setattr(detection, "get_unified_client", _raise)
+
+    result = detection.resolve_intent_slots(
+        "What's AMD's operating leverage YoY vs the industry over the last five years?",
+        _config_payload(),
+    )
+
+    assert result.intent.key == "operating_leverage_yoy_vs_peers"
+    assert result.slots["comparison"].value in {"vs_avg", "all"}
+    assert result.slots["company"].status == "filled"
+
+
+def test_fallback_detects_eps_rank_intent(monkeypatch):
+    get_slot_catalog(refresh=True)
+    monkeypatch.setattr(detection, "get_unified_client", lambda: None)
+
+    result = detection.resolve_intent_slots(
+        "Who leads EPS YoY growth this quarter?",
+        _config_payload(),
+    )
+
+    assert result.intent.key == "eps_yoy_rank_latest"
+    assert result.slots.get("metric").value == "EPS Basic"
+    assert result.slots.get("comparison").value == "all"
+
+
+def test_fallback_detects_capex_intensity_rank(monkeypatch):
+    get_slot_catalog(refresh=True)
+    monkeypatch.setattr(detection, "get_unified_client", lambda: None)
+
+    result = detection.resolve_intent_slots(
+        "Rank CapEx intensity latest quarter. Who is most capital intensive?",
+        _config_payload(),
+    )
+
+    assert result.intent.key == "capex_intensity_latest_rank"
+    metric_status = result.slots.get("metric")
+    assert metric_status is not None
+    assert metric_status.value == "Capital Expenditures"
+    assert result.slots.get("comparison").value == "all"

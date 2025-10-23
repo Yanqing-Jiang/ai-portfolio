@@ -49,6 +49,7 @@ REQUIRES_COMPANY_SLOTS = {
     "market_share_single",
     "margins_vs_peers",
     "margin_growth_vs_peers",
+    "operating_leverage_yoy_vs_peers",
     "rnd_intensity_vs_peers",
     "rnd_expense_vs_peers",
 }
@@ -117,7 +118,23 @@ def heuristic_intent(query: str, configs: Dict[str, Any]) -> IntentModel:
     metric_defaults: List[str] = []
     comparison_default: Optional[str] = None
 
-    if "market share" in q:
+    if "operating leverage" in q:
+        intent_key = "operating_leverage_yoy_vs_peers"
+        reasoning.append("Detected operating leverage vs peers intent")
+        comparison_default = "vs_avg"
+        metric_defaults = ["Operating Income", "Revenue"]
+    elif ("eps" in q or "earnings per share" in q) and ("yoy" in q or "year over year" in q or "year-over-year" in q) and _is_ranking_query(query):
+        intent_key = "eps_yoy_rank_latest"
+        reasoning.append("Detected EPS YoY ranking intent")
+        comparison_default = "all"
+        metric_defaults = ["EPS Basic"]
+    elif ("capex intensity" in q) or (("capital" in q and "intensity" in q) or "capital intensive" in q):
+        if _is_ranking_query(query) or any(keyword in q for keyword in ("rank", "leader", "top")):
+            intent_key = "capex_intensity_latest_rank"
+            reasoning.append("Detected CapEx intensity ranking intent")
+            comparison_default = "all"
+            metric_defaults = ["Capital Expenditures"]
+    elif "market share" in q:
         if "all" in q or any(word in q for word in ("every", "each")):
             intent_key = "market_share_all"
             reasoning.append("Detected market share intent for all companies")
@@ -127,6 +144,25 @@ def heuristic_intent(query: str, configs: Dict[str, Any]) -> IntentModel:
             reasoning.append("Detected single-company market share intent")
             comparison_default = "single"
         metric_defaults = ["Revenue"]
+    elif (
+        "revenue" in q
+        and any(
+            token in q
+            for token in (
+                "compare",
+                "comparison",
+                " vs ",
+                "versus",
+                "between",
+                "among",
+            )
+        )
+    ):
+        intent_key = "revenue_comparison"
+        reasoning.append("Detected revenue comparison intent")
+        metric_defaults = ["Revenue"]
+        if len(detected_companies) >= 2 or " vs " in q or "versus" in q:
+            comparison_default = "all"
     elif "profit" in q or "earnings" in q:
         intent_key = "margins_vs_peers"
         reasoning.append("Detected profit analysis intent")
@@ -520,6 +556,8 @@ def _append_missing_followups(
     for slot_name, slot_state in slots.items():
         if slot_state.status != "missing":
             continue
+        if _slot_has_value(slot_state.value):
+            continue
         if slot_name in existing_slots:
             continue
         option = definition.slot_options.get(slot_name) if definition.slot_options else None
@@ -861,6 +899,17 @@ async def resolve_intent_slots_async(
             candidate_definitions=candidate_definitions,
         )
 
+    if client is None:
+        logger.warning("OpenAI client unavailable for intent slot resolver; falling back to heuristic.")
+        return _fallback_intent_resolution(
+            query,
+            configs,
+            mode=mode,
+            heuristic=heuristic,
+            catalog=catalog,
+            candidate_definitions=candidate_definitions,
+        )
+
     try:
         llm_res, _ = await client.create_structured(
             response_model=LLMIntentResolutionModel,
@@ -1044,6 +1093,10 @@ async def detect_intent_fast_async(
     try:
         client = get_unified_client()
     except ValueError:
+        logger.warning("OpenAI client unavailable - using heuristic intent detection")
+        return heuristic
+
+    if client is None:
         logger.warning("OpenAI client unavailable - using heuristic intent detection")
         return heuristic
 

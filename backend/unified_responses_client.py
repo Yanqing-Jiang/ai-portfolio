@@ -30,6 +30,7 @@ Usage:
 """
 
 from __future__ import annotations
+import copy
 import os
 import logging
 import time
@@ -42,6 +43,103 @@ from analytics.core.telemetry import responses_call
 logger = logging.getLogger(__name__)
 
 T = TypeVar('T', bound=BaseModel)
+
+
+def _should_require_property(prop_schema: Any) -> bool:
+    if not isinstance(prop_schema, dict):
+        return True
+    schema_type = prop_schema.get("type")
+    if schema_type == "object":
+        nested_props = prop_schema.get("properties")
+        if isinstance(nested_props, dict) and nested_props:
+            return True
+        # Dictionary-style objects (only additionalProperties) cannot be marked required.
+        return False
+    return True
+
+
+def _normalize_schema_for_responses(schema: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Ensure every object schema declares a required list containing all properties and
+    defaults additionalProperties to False, per Responses API contract.
+    """
+
+    def _visit(node: Dict[str, Any]) -> None:
+        if not isinstance(node, dict):
+            return
+
+        if "default" in node:
+            node.pop("default", None)
+
+        properties = node.get("properties")
+        if isinstance(properties, dict) and properties:
+            required_fields: List[str] = []
+            for prop_name, prop_schema in properties.items():
+                if isinstance(prop_schema, dict):
+                    prop_schema.pop("default", None)
+                if _should_require_property(prop_schema):
+                    required_fields.append(prop_name)
+                if isinstance(prop_schema, dict):
+                    _visit(prop_schema)
+            node["required"] = required_fields
+            node.setdefault("additionalProperties", False)
+
+        for key in ("$defs", "definitions"):
+            subdefs = node.get(key)
+            if isinstance(subdefs, dict):
+                for sub_schema in subdefs.values():
+                    if isinstance(sub_schema, dict):
+                        _visit(sub_schema)
+
+        items = node.get("items")
+        if isinstance(items, dict):
+            _visit(items)
+        elif isinstance(items, list):
+            for entry in items:
+                if isinstance(entry, dict):
+                    _visit(entry)
+
+        for key in ("anyOf", "allOf", "oneOf"):
+            variants = node.get(key)
+            if isinstance(variants, list):
+                for variant in variants:
+                    if isinstance(variant, dict):
+                        _visit(variant)
+
+        for key in ("if", "then", "else", "not"):
+            conditional = node.get(key)
+            if isinstance(conditional, dict):
+                _visit(conditional)
+
+        additional_props = node.get("additionalProperties")
+        if isinstance(additional_props, dict):
+            _visit(additional_props)
+
+    normalized = copy.deepcopy(schema)
+    _visit(normalized)
+    return normalized
+
+
+def _wrap_response_model(response_model: Type[T]) -> Type[T]:
+    """
+    Create a subclass that emits a Responses-compliant JSON schema.
+    Re-wrapping is avoided by marking the class with a sentinel attribute.
+    """
+    if getattr(response_model, "__responses_schema_normalized__", False):
+        return response_model
+
+    class ResponsesModel(response_model):  # type: ignore[misc, valid-type]
+        __responses_schema_normalized__ = True
+
+        @classmethod
+        def model_json_schema(cls, *args, **kwargs):
+            schema = super().model_json_schema(*args, **kwargs)
+            return _normalize_schema_for_responses(schema)
+
+    ResponsesModel.__name__ = f"Responses{response_model.__name__}"
+    ResponsesModel.__qualname__ = ResponsesModel.__name__
+    ResponsesModel.__module__ = response_model.__module__
+    return ResponsesModel  # type: ignore[return-value]
 
 # Supervisor reasoning effort configuration (consolidated from responses_client)
 _ALLOWED_REASONING = {"low", "medium", "high"}
@@ -335,31 +433,18 @@ class UnifiedResponsesClient:
         session_id: Optional[str] = None,
         model: Optional[str] = None
     ) -> Tuple[T, Optional[str]]:
-        schema = response_model.model_json_schema()
+        wrapped_model = _wrap_response_model(response_model)
+        # Force schema build so any validation issues surface before the request.
+        _ = wrapped_model.model_json_schema()
         model_name = self._get_model_name(model)
         formatted_messages = self._format_messages(messages)
         params: Dict[str, Any] = {
             "model": model_name,
             "input": formatted_messages,
-            "response_format": {
-                "type": "json_schema",
-                "json_schema": {
-                    "name": getattr(response_model, "__name__", "StructuredResponse"),
-                    "schema": schema,
-                },
-            },
-            "response_model": response_model,
+            "text_format": wrapped_model,
         }
         self._apply_reasoning(params, reasoning_effort)
         self._inject_context(params, session_id)
-
-        legacy_params: Dict[str, Any] = {
-            "model": model_name,
-            "input": formatted_messages,
-            "text_format": response_model,
-        }
-        self._apply_reasoning(legacy_params, reasoning_effort)
-        self._inject_context(legacy_params, session_id)
 
         call_start = time.time()
 
@@ -381,31 +466,6 @@ class UnifiedResponsesClient:
                 metadata={"response_id": response_id, "response_model": getattr(response_model, '__name__', str(response_model))},
             )
             return parsed_model, response_id
-        except TypeError as exc:
-            if "response_format" not in str(exc):
-                raise
-            logger.warning("responses.parse does not support response_format; retrying with legacy text_format")
-            try:
-                response = await self.client.responses.parse(**legacy_params)
-                response_id = getattr(response, "id", None)
-                self._set_previous_response_id(response_id, session_id)
-                parsed_model = self._extract_parsed_model(response)
-                if parsed_model is None:
-                    raise ValueError('Responses API did not return parsed content')
-                elapsed_ms = int((time.time() - call_start) * 1000)
-                responses_call(
-                    call_type="create_structured",
-                    model=legacy_params.get("model"),
-                    reasoning_effort=reasoning_effort,
-                    duration_ms=elapsed_ms,
-                    status="success",
-                    session_id=session_id,
-                    metadata={"response_id": response_id, "response_model": getattr(response_model, '__name__', str(response_model)), "compat_mode": "text_format"},
-                )
-                return parsed_model, response_id
-            except Exception as retry_exc:
-                exc = retry_exc
-            raise exc
         except Exception as exc:
             elapsed_ms = int((time.time() - call_start) * 1000)
             responses_call(

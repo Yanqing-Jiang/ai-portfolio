@@ -54,7 +54,10 @@ INTENT_TITLES = {
     'revenue_growth_analysis': 'Revenue Growth Analysis',
     'revenue_growth_vs_avg': 'Revenue Growth vs Industry Average',
     'rnd_intensity_vs_peers': 'R&D Intensity vs Industry',
-    'rnd_expense_vs_peers': 'R&D Expense vs Industry'
+    'rnd_expense_vs_peers': 'R&D Expense vs Industry',
+    'operating_leverage_yoy_vs_peers': 'Operating Leverage vs Peers',
+    'eps_yoy_rank_latest': 'EPS YoY Leaderboard',
+    'capex_intensity_latest_rank': 'CapEx Intensity Leaderboard',
 }
 
 
@@ -92,7 +95,10 @@ def detect_primary_series(intent_key: Optional[str], available_slugs: List[str])
         'revenue_growth_analysis': ['qoq_growth_percent', 'yoy_growth_percent'],
         'revenue_growth_vs_avg': ['company_yoy_growth_percent', 'yoy_growth_percent', 'industry_avg_yoy_growth_percent'],
         'rnd_intensity_vs_peers': ['company_rnd_intensity', 'rnd_intensity_percent'],
-        'rnd_expense_vs_peers': ['company_rnd_expense']
+        'rnd_expense_vs_peers': ['company_rnd_expense'],
+        'operating_leverage_yoy_vs_peers': ['operating_leverage', 'operating_income_yoy_growth', 'revenue_yoy_growth'],
+        'eps_yoy_rank_latest': ['eps_yoy_growth_pct', 'eps_basic'],
+        'capex_intensity_latest_rank': ['capex_intensity_ratio', 'capex'],
     }
 
     patterns = primary_patterns.get(intent_key, [])
