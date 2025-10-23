@@ -63,6 +63,76 @@ const normalizeSeriesNumericValues = (option: any) => {
   return option;
 };
 
+const parseNumericString = (input: string): number | null => {
+  const trimmed = input.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const sanitized = trimmed.replace(/,/g, '');
+  const parsed = Number(sanitized);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const extractNumericCandidate = (value: any, seen: Set<any> = new Set()): number | null => {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : null;
+  }
+  if (typeof value === 'string') {
+    return parseNumericString(value);
+  }
+  if (typeof value !== 'object') {
+    return null;
+  }
+  if (seen.has(value)) {
+    return null;
+  }
+  seen.add(value);
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const candidate = extractNumericCandidate(entry, seen);
+      if (candidate !== null) {
+        return candidate;
+      }
+    }
+    return null;
+  }
+  const numericKeys = ['value', 'raw', 'amount', 'numeric', 'number'];
+  for (const key of numericKeys) {
+    if (Object.prototype.hasOwnProperty.call(value, key)) {
+      const candidate = extractNumericCandidate((value as any)[key], seen);
+      if (candidate !== null) {
+        return candidate;
+      }
+    }
+  }
+  return null;
+};
+
+const flattenRowForDataset = (row: Record<string, any>) => {
+  const flattened: Record<string, any> = {};
+  Object.entries(row || {}).forEach(([key, value]) => {
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      const numeric = extractNumericCandidate(value);
+      if (numeric !== null) {
+        flattened[key] = numeric;
+      } else {
+        flattened[key] = value;
+      }
+      const formatted =
+        (value as any).formatted ?? (value as any).display ?? (value as any).text ?? (value as any).label;
+      if (formatted !== undefined && formatted !== null && formatted !== '') {
+        flattened[`${key}__display`] = String(formatted);
+      }
+    } else {
+      flattened[key] = value;
+    }
+  });
+  return flattened;
+};
+
 const looksLikePercentMetric = (rawName: string | undefined) => {
   if (!rawName) {
     return false;
@@ -487,6 +557,7 @@ export const hydrateChartSpec = (spec: any) => {
   }
 
   const sortedRawData = sortRawDataChronologically(rawData);
+  const flattenedRawData = sortedRawData.map((row: Record<string, any>) => flattenRowForDataset(row));
 
   const toLabel = (row: Record<string, any>) => {
     const year = row?.calendar_year ?? row?.fiscal_year ?? row?.year;
@@ -517,9 +588,9 @@ export const hydrateChartSpec = (spec: any) => {
 
   const hydrated = baseClone;
   if (hydrated.meta && typeof hydrated.meta === 'object') {
-    hydrated.meta.rawData = sortedRawData;
+    hydrated.meta.rawData = sortedRawData.map((row: any) => ({ ...row }));
   }
-  const labels = sortedRawData.map(toLabel);
+  const labels = Array.from(new Set(sortedRawData.map(toLabel)));
 
   if (Array.isArray(hydrated.xAxis)) {
     hydrated.xAxis = hydrated.xAxis.map((axis: any) => ({ ...(axis || {}), data: labels }));
@@ -527,41 +598,111 @@ export const hydrateChartSpec = (spec: any) => {
     hydrated.xAxis = { ...(hydrated.xAxis || {}), data: labels };
   }
 
-  const displayToField = new Map<string, string>();
-  Object.entries(displayNames || {}).forEach(([field, name]) => {
-    if (name) {
-      displayToField.set(String(name), field);
-    }
+  const categoryDimensionKey = '__label';
+  const groupingCandidates: Array<string | undefined> = [];
+  if (typeof spec.meta?.grouping === 'string' && spec.meta.grouping.trim().length) {
+    groupingCandidates.push(spec.meta.grouping.trim());
+  }
+  groupingCandidates.push('ticker', 'company');
+  const firstRow = flattenedRawData[0] ?? {};
+  const splitKey = groupingCandidates.find((candidate) => candidate && Object.prototype.hasOwnProperty.call(firstRow, candidate));
+
+  const valueIgnoreKeys = new Set<string>([
+    categoryDimensionKey,
+    splitKey ?? '',
+    'calendar_year',
+    'fiscal_year',
+    'calendar_quarter',
+    'fiscal_quarter',
+    'calendar_month',
+    'month',
+    'year',
+    'quarter',
+    'timestamp',
+    'date',
+    'period',
+    'period_end_date',
+    'metric',
+    'label',
+  ]);
+
+  const numericFieldCandidates = Object.keys(firstRow).filter((key) => {
+    if (!key || valueIgnoreKeys.has(key) || key.endsWith('__display')) return false;
+    const sample = flattenedRawData.find((row: any) => row?.[key] !== null && row?.[key] !== undefined);
+    if (!sample) return false;
+    const candidateValue = sample[key];
+    return typeof candidateValue === 'number' && Number.isFinite(candidateValue);
   });
+  const valueKey = numericFieldCandidates[0];
 
-  hydrated.series = hydrated.series.map((series: any) => {
-    const seriesName = String(series?.name ?? '');
-    const field = series.meta?.field || displayToField.get(seriesName) || includedColumns.find((column: string) => {
-      const normalized = column.replace(/_/g, ' ').toLowerCase();
-      return seriesName.toLowerCase().includes(normalized);
-    });
-
-    if (!field) {
-      return series;
-    }
-
-    const values = sortedRawData.map((row: any) => {
-      const value = row?.[field];
-      if (typeof value === 'number' || value === null) {
-        return value;
-      }
-      if (value === undefined) {
-        return null;
-      }
-      const parsed = Number(value);
-      return Number.isFinite(parsed) ? parsed : null;
-    });
-
-    return {
-      ...series,
-      data: values,
+  let datasetApplied = false;
+  if (splitKey && valueKey) {
+    const datasetSource = flattenedRawData.map((row: any, index: number) => ({
+      ...row,
+      [categoryDimensionKey]: toLabel(sortedRawData[index]),
+    }));
+    const datasetEntry = {
+      dimensions: Array.from(new Set([categoryDimensionKey, splitKey, valueKey])),
+      source: datasetSource,
     };
-  });
+    const existingDataset = Array.isArray(hydrated.dataset) ? [...hydrated.dataset] : [];
+    const datasetIndex = existingDataset.length;
+    existingDataset.push(datasetEntry);
+    hydrated.dataset = existingDataset;
+    hydrated.series = (hydrated.series || []).map((series: any) => {
+      const next = { ...series };
+      if (next.data !== undefined) {
+        delete next.data;
+      }
+      next.encode = {
+        x: categoryDimensionKey,
+        y: valueKey,
+        seriesName: splitKey,
+        itemName: categoryDimensionKey,
+      };
+      next.datasetIndex = datasetIndex;
+      return next;
+    });
+    datasetApplied = true;
+  }
+
+  if (!datasetApplied) {
+    const displayToField = new Map<string, string>();
+    Object.entries(displayNames || {}).forEach(([field, name]) => {
+      if (name) {
+        displayToField.set(String(name), field);
+      }
+    });
+
+    hydrated.series = hydrated.series.map((series: any) => {
+      const seriesName = String(series?.name ?? '');
+      const field = series.meta?.field || displayToField.get(seriesName) || includedColumns.find((column: string) => {
+        const normalized = column.replace(/_/g, ' ').toLowerCase();
+        return seriesName.toLowerCase().includes(normalized);
+      });
+
+      if (!field) {
+        return series;
+      }
+
+      const values = flattenedRawData.map((row: any) => {
+        const value = row?.[field];
+        if (typeof value === 'number' || value === null) {
+          return value;
+        }
+        if (value === undefined) {
+          return null;
+        }
+        const parsed = coerceNumeric(value);
+        return typeof parsed === 'number' && Number.isFinite(parsed) ? parsed : null;
+      });
+
+      return {
+        ...series,
+        data: values,
+      };
+    });
+  }
 
   return dedupePercentShadowSeries(normalizePercentSeriesData(normalizeSeriesNumericValues(hydrated), spec));
 };

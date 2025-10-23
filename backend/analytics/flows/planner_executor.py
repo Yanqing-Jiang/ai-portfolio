@@ -62,7 +62,6 @@ from analytics.core.intent import (
     intent_to_sql_criteria,
     detect_intent,
     detect_intent_llm,
-    detect_intent_with_clarifications,
     classify_query_async,
     OffTopicClassifierSchema,
     post_process_slots,
@@ -363,6 +362,7 @@ class PlannerPhaseContext:
     provisional_plan: Optional[QueryPlanModel] = None
     template: Optional[Any] = None
     clarifications: List[ClarifyRequestModel] = field(default_factory=list)
+    clarification_sources: Set[str] = field(default_factory=set)
     assumptions: List[str] = field(default_factory=list)
     intent_resolution: Optional[IntentResolutionModel] = None
     slot_statuses: Dict[str, SlotStatusModel] = field(default_factory=dict)
@@ -397,6 +397,7 @@ class PlannerPhaseContext:
     tool_receipts: Dict[str, ToolInvocationReceipt] = field(default_factory=dict)
     revision_targets: Set[str] = field(default_factory=set)
     revision_id: Optional[str] = None
+    revision_hint_active: bool = False
     halted: bool = False
     halt_reason: Optional[str] = None
 
@@ -1125,6 +1126,8 @@ def _build_planner_result_payload(ctx: PlannerPhaseContext) -> Dict[str, Any]:
     metadata: Dict[str, Any] = {}
     if ctx.classification is not None:
         metadata["classification"] = copy.deepcopy(ctx.classification.model_dump())
+    if ctx.clarification_sources:
+        metadata["clarification_sources"] = sorted(ctx.clarification_sources)
 
     web_payload: Optional[Dict[str, Any]] = None
     if ctx.artifacts.web:
@@ -1800,6 +1803,188 @@ def _followup_to_clarify_request(followup: FollowUpModel, session_id: str) -> Cl
     )
 
 
+def _compose_intent_from_resolution(
+    query: str,
+    configs: Mapping[str, Any],
+    resolution: IntentResolutionModel,
+    *,
+    assumptions: Sequence[str] = (),
+) -> IntentModel:
+    """Merge structured slot resolution output with heuristic signals into a runtime IntentModel."""
+    heuristic_model = detect_intent(query, configs)
+
+    slots_detected: Dict[str, Any] = {}
+    if isinstance(heuristic_model.slots_detected, dict):
+        slots_detected.update(heuristic_model.slots_detected)
+
+    selection = getattr(resolution, "intent", None)
+    intent_key = getattr(selection, "key", None) or heuristic_model.intent_key
+    confidence = getattr(selection, "confidence", None)
+    if confidence is None:
+        confidence = heuristic_model.confidence
+
+    for slot_name, status in (resolution.slots or {}).items():
+        if not isinstance(status, SlotStatusModel):
+            continue
+        if status.value is None:
+            continue
+        slots_detected[slot_name] = status.value
+
+    slots_detected["original_query"] = query
+    normalized_slots = post_process_slots(slots_detected, query, configs)
+
+    reasoning = resolution.notes or heuristic_model.intent_reasoning or ""
+
+    combined_assumptions = list(heuristic_model.assumptions or [])
+    for assumption in assumptions:
+        if assumption not in combined_assumptions:
+            combined_assumptions.append(assumption)
+
+    return IntentModel(
+        intent_key=intent_key,
+        confidence=confidence or 0.0,
+        slots_detected=normalized_slots,
+        assumptions=combined_assumptions,
+        clarifications_suggested=list(heuristic_model.clarifications_suggested or []),
+        possible_intents=list(heuristic_model.possible_intents or []),
+        intent_reasoning=reasoning,
+    )
+
+
+def _normalize_metric_slots(resolution: IntentResolutionModel) -> None:
+    if not isinstance(resolution, IntentResolutionModel):
+        return
+
+    def _normalize(slot_name: str) -> None:
+        slot_state = resolution.slots.get(slot_name)
+        if slot_state is None:
+            return
+        value = slot_state.value
+        has_value = False
+        if isinstance(value, (list, tuple, set)):
+            has_value = any(item is not None for item in value)
+        elif value not in (None, "", []):
+            has_value = True
+        if slot_state.status == "missing" and has_value:
+            resolution.slots[slot_name] = slot_state.model_copy(update={"status": "defaulted"})
+        updated = resolution.slots.get(slot_name)
+        if updated and updated.status != "missing":
+            resolution.followups = [
+                followup
+                for followup in list(resolution.followups or [])
+                if getattr(followup, "slot", None) != slot_name
+            ]
+
+    _normalize("metric")
+    _normalize("metrics")
+
+
+def _build_slot_assumptions(slots: Mapping[str, SlotStatusModel]) -> List[str]:
+    assumptions: List[str] = []
+    for slot_name, status in (slots or {}).items():
+        if not isinstance(status, SlotStatusModel):
+            continue
+        if status.status == "defaulted" and status.value is not None:
+            assumptions.append(f"{slot_name} defaulted to {status.value}")
+        elif status.status == "assumed":
+            assumptions.append(f"{slot_name} assumed ({status.status})")
+    return assumptions
+
+
+def _apply_plan_metric_defaults(
+    ctx: PlannerPhaseContext,
+    plan: Optional[QueryPlanModel],
+    *,
+    configs: Mapping[str, Any],
+) -> List[str]:
+    """
+    Ensure metric slots are populated when the query plan already specifies concrete metrics.
+
+    Returns the normalized metric list that was applied, or an empty list if no updates occurred.
+    """
+    if plan is None:
+        return []
+    plan_metrics = list(getattr(plan, "metrics", []) or [])
+    if not plan_metrics:
+        return []
+
+    normalized_metrics = normalize_metrics(plan_metrics, configs)
+    if not normalized_metrics:
+        return []
+
+    updated = False
+    metric_status = ctx.slot_statuses.get("metric")
+    metric_value_missing = True
+    if isinstance(metric_status, SlotStatusModel):
+        value = metric_status.value
+        if isinstance(value, str) and value.strip():
+            metric_value_missing = False
+        elif isinstance(value, (list, tuple, set)) and any(v for v in value):
+            metric_value_missing = False
+        elif value is not None and not isinstance(value, (list, tuple, set, str)):
+            metric_value_missing = False
+
+    if metric_value_missing:
+        suggestions = list(metric_status.suggestions or []) if isinstance(metric_status, SlotStatusModel) else []
+        if not suggestions:
+            suggestions = normalized_metrics
+        reason = None
+        allow_custom = True
+        if isinstance(metric_status, SlotStatusModel):
+            reason = metric_status.reason
+            if metric_status.allow_custom is not None:
+                allow_custom = metric_status.allow_custom
+        ctx.slot_statuses["metric"] = SlotStatusModel(
+            status="defaulted",
+            value=normalized_metrics[0],
+            reason=reason or "Metric auto-filled from plan defaults.",
+            suggestions=suggestions,
+            allow_custom=allow_custom,
+        )
+        ctx.intent_resolution.slots["metric"] = ctx.slot_statuses["metric"]
+        updated = True
+
+    metrics_status = ctx.slot_statuses.get("metrics")
+    metrics_value_missing = True
+    if isinstance(metrics_status, SlotStatusModel):
+        value = metrics_status.value
+        if isinstance(value, (list, tuple, set)) and any(value):
+            metrics_value_missing = False
+        elif isinstance(value, str) and value.strip():
+            metrics_value_missing = False
+        elif value not in (None, "", []):
+            metrics_value_missing = False
+
+    if metrics_value_missing:
+        suggestions = list(metrics_status.suggestions or []) if isinstance(metrics_status, SlotStatusModel) else []
+        if not suggestions:
+            suggestions = normalized_metrics
+        reason = None
+        allow_custom = True
+        if isinstance(metrics_status, SlotStatusModel):
+            reason = metrics_status.reason
+            if metrics_status.allow_custom is not None:
+                allow_custom = metrics_status.allow_custom
+        ctx.slot_statuses["metrics"] = SlotStatusModel(
+            status="defaulted",
+            value=normalized_metrics,
+            reason=reason or "Metrics auto-filled from plan defaults.",
+            suggestions=suggestions,
+            allow_custom=allow_custom,
+        )
+        ctx.intent_resolution.slots["metrics"] = ctx.slot_statuses["metrics"]
+        updated = True
+
+    if updated:
+        if ctx.intent_resolution.followups:
+            ctx.intent_resolution.followups = [
+                followup for followup in ctx.intent_resolution.followups if followup.slot not in {"metric", "metrics"}
+            ]
+        ctx.slot_followups = [followup for followup in ctx.slot_followups if followup.slot not in {"metric", "metrics"}]
+
+    return normalized_metrics if updated else []
+
+
 def _request_allows_custom(request: ClarifyRequestModel) -> bool:
     allow_custom = getattr(request, "allow_custom", None)
     if allow_custom is not None:
@@ -1902,6 +2087,7 @@ class PlannerPipeline:
         self.hooks: AnalyticsFlowHooks = NullFlowHooks()
         self._latest_artifacts: Optional[PipelineArtifacts] = None
         self.revision_targets: Set[str] = set()
+        self.revision_hint_active: bool = False
 
     async def _persist_session_state(
         self,
@@ -1997,7 +2183,14 @@ class PlannerPipeline:
         self.follow_up_route = route
 
     def set_revision_targets(self, targets: Iterable[str]) -> None:
-        self.revision_targets = normalize_revision_targets(targets)
+        normalized = normalize_revision_targets(targets)
+        if not normalized:
+            self.revision_targets = set()
+            self.revision_id = None
+            self.revision_hint_active = False
+            return
+        self.revision_targets = normalized
+        self.revision_hint_active = True
 
     @staticmethod
     def _lane_for_tool_name(tool_name: str) -> Optional[str]:
@@ -3653,8 +3846,14 @@ async def _initialize_context(self, query: str, session_id: Optional[str]) -> Pl
         cloned_artifacts = copy.deepcopy(self._latest_artifacts)
         ctx.artifacts = copy.deepcopy(cloned_artifacts)
         ctx.snapshot_artifacts = copy.deepcopy(cloned_artifacts)
-    revision_targets = getattr(self, "revision_targets", set()) or set()
-    ctx.revision_targets = set(revision_targets)
+    revision_targets = set(getattr(self, "revision_targets", set()) or set())
+    hint_active = bool(getattr(self, "revision_hint_active", False) and revision_targets)
+    if not ctx.revision_snapshot:
+        ctx.revision_targets = set()
+        ctx.revision_hint_active = False
+    else:
+        ctx.revision_targets = set(revision_targets)
+        ctx.revision_hint_active = hint_active
     if ctx.revision_targets:
         ctx.revision_id = str(uuid.uuid4())
         ctx.parallelism_enabled = True
@@ -3800,17 +3999,44 @@ async def _intent_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[s
         context_slots=prior_slot_values or None,
         session_id=ctx.session_id,
     )
+    _normalize_metric_slots(slot_resolution)
     ctx.intent_resolution = slot_resolution
     ctx.slot_statuses = slot_resolution.slots
-    ctx.slot_followups = slot_resolution.followups
+    ctx.slot_followups = list(slot_resolution.followups or [])
 
-    slot_assumptions = [
-        f"{slot} defaulted to {status.value}"
-        if status.status == "defaulted" and status.value is not None
-        else f"{slot} assumed ({status.status})"
-        for slot, status in slot_resolution.slots.items()
-        if status.status in {"defaulted", "assumed"}
-    ]
+    slot_assumptions = _build_slot_assumptions(ctx.slot_statuses)
+    intent = _compose_intent_from_resolution(
+        ctx.query,
+        CONFIGS.__dict__,
+        slot_resolution,
+        assumptions=slot_assumptions,
+    )
+    ctx.intent = intent
+    ctx.assumptions = list(intent.assumptions or [])
+
+    intent_elapsed = timed_emitter.end_step("intent_detection")
+    resolver_status = "structured"
+    if isinstance(slot_resolution.notes, str) and "fell back" in slot_resolution.notes.lower():
+        resolver_status = "fallback"
+
+    ctx.provisional_plan = build_query_plan(intent, CONFIGS.__dict__)
+    ctx.template = choose_template(intent, ctx.provisional_plan, CONFIGS.__dict__)
+
+    plan_metric_defaults = _apply_plan_metric_defaults(
+        ctx,
+        ctx.provisional_plan,
+        configs=CONFIGS.__dict__,
+    )
+    if plan_metric_defaults:
+        slot_assumptions = _build_slot_assumptions(ctx.slot_statuses)
+        intent = _compose_intent_from_resolution(
+            ctx.query,
+            CONFIGS.__dict__,
+            ctx.intent_resolution,
+            assumptions=slot_assumptions,
+        )
+        ctx.intent = intent
+        ctx.assumptions = list(intent.assumptions or [])
 
     slot_status_payload = {
         slot: {
@@ -3820,70 +4046,14 @@ async def _intent_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[s
             "suggestions": list(status.suggestions or []),
             "allow_custom": status.allow_custom,
         }
-        for slot, status in slot_resolution.slots.items()
+        for slot, status in ctx.slot_statuses.items()
     }
-    slot_followup_payload = [
-        {
-            "slot": followup.slot,
-            "prompt": followup.prompt,
-            "suggestions": list(followup.suggestions or []),
-            "allow_custom": followup.allow_custom,
-            "reason": followup.reason,
-        }
-        for followup in slot_resolution.followups
-    ]
 
-    intent: IntentModel = await asyncio.to_thread(
-        detect_intent_with_clarifications,
-        ctx.query,
-        CONFIGS.__dict__,
-        session_id=ctx.session_id,
-    )
-
-    for slot_name, status in slot_resolution.slots.items():
-        if status.value is None or status.status == "missing":
-            continue
-        intent.slots_detected[slot_name] = status.value
-
-    intent.slots_detected["original_query"] = ctx.query
-    intent.slots_detected = post_process_slots(intent.slots_detected, ctx.query, CONFIGS.__dict__)
-    ctx.intent = intent
-    ctx.assumptions = slot_assumptions
-
-    intent_elapsed = timed_emitter.end_step("intent_detection")
-    resolver_status = "structured"
-    if isinstance(slot_resolution.notes, str) and "fell back" in slot_resolution.notes.lower():
-        resolver_status = "fallback"
-
-    log_intent_resolution(
-        intent_key=intent.intent_key,
-        confidence=intent.confidence,
-        slot_statuses=slot_status_payload,
-        slot_followups=slot_followup_payload,
-        elapsed_ms=intent_elapsed or int((time.time() - intent_start) * 1000),
-        session_id=ctx.session_id,
-        flow=ctx.flow_mode.value if isinstance(ctx.flow_mode, FlowMode) else str(ctx.flow_mode),
-        resolver_status=resolver_status,
-    )
-
-    intent_complete = {
-        "event": "intent_detection_complete",
-        "data": {
-            "intent_key": intent.intent_key,
-            "confidence": intent.confidence,
-            "slots_detected": intent.slots_detected,
-            "slot_statuses": slot_status_payload,
-            "slot_followups": slot_followup_payload,
-            "resolver_notes": slot_resolution.notes,
-            "ts": datetime.utcnow().isoformat(),
-            "elapsed_ms": int((time.time() - intent_start) * 1000),
-        },
-    }
-    if intent_elapsed:
-        intent_complete["data"]["elapsed_ms"] = intent_elapsed
-    yield intent_complete
-    ctx.provisional_plan = build_query_plan(intent, CONFIGS.__dict__)
-    ctx.template = choose_template(intent, ctx.provisional_plan, CONFIGS.__dict__)
+    clarification_sources: Set[str] = set()
+    if ctx.slot_followups:
+        clarification_sources.add("structured_resolver")
+    if resolver_status == "fallback":
+        clarification_sources.add("heuristic_fallback")
 
     schema_decision: Optional[ClarifierDecision] = None
     if SCHEMA_CLARIFIER_ENABLED and ctx.template is not None:
@@ -3909,20 +4079,7 @@ async def _intent_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[s
         intent_raw["slot_resolution"] = slot_resolution.model_dump()
     except Exception:  # pragma: no cover - defensive
         intent_raw["slot_resolution"] = {}
-    slot_followup_required = bool(ctx.slot_followups)
     schema_requires_clarification = bool(schema_decision and getattr(schema_decision, "action", None) == "request")
-    clarifications_required_flag = slot_followup_required or schema_requires_clarification
-    ctx.artifacts.intent = IntentArtifactModel(
-        query=ctx.query,
-        intent_key=getattr(intent, "intent_key", None),
-        confidence=getattr(intent, "confidence", None),
-        slots=dict(getattr(intent, "slots_detected", {}) or {}),
-        clarifications_needed=clarifications_required_flag,
-        low_confidence=getattr(intent, "low_confidence", None),
-        raw=intent_raw,
-    )
-    self._capture_artifacts(ctx)
-
     if SCHEMA_CLARIFIER_ENABLED:
         clarifier_event = EventEmitter.progress(
             "schema_clarifier",
@@ -3947,15 +4104,20 @@ async def _intent_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[s
         official_clarifications = compute_required_clarifications(
             intent, ctx.provisional_plan, ctx.template, CONFIGS.__dict__
         )
+        if official_clarifications:
+            clarification_sources.add("structured_resolver")
         if schema_decision and schema_decision.action == "clarify":
             clarifier_request = _build_schema_clarifier_request(schema_decision, ctx.session_id)
             if clarifier_request:
                 official_clarifications = [clarifier_request] + [
                     request for request in official_clarifications if request.slot != clarifier_request.slot
                 ]
+                clarification_sources.add("schema_clarifier")
     slot_followup_requests: List[ClarifyRequestModel] = [
         _followup_to_clarify_request(followup, ctx.session_id) for followup in ctx.slot_followups
     ]
+    if slot_followup_requests:
+        clarification_sources.add("structured_resolver")
     if slot_followup_requests:
         existing_slots = {request.slot for request in slot_followup_requests}
         remaining_requests = [
@@ -3984,11 +4146,63 @@ async def _intent_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[s
             allow_custom=allow_custom_flag,
         )
     _refresh_followups(ctx, deduped_requests)
+    slot_followup_payload = [
+        {
+            "slot": followup.slot,
+            "prompt": followup.prompt,
+            "suggestions": list(followup.suggestions or []),
+            "allow_custom": followup.allow_custom,
+            "reason": followup.reason,
+        }
+        for followup in ctx.slot_followups
+    ]
     ctx.clarifications = deduped_requests
     ctx.assumptions = list(ctx.assumptions or [])
+    ctx.clarification_sources = clarification_sources
     ctx.clarification_rounds = 0
+    clarifications_required_flag = bool(deduped_requests) or schema_requires_clarification
+    ctx.artifacts.intent = IntentArtifactModel(
+        query=ctx.query,
+        intent_key=getattr(intent, "intent_key", None),
+        confidence=getattr(intent, "confidence", None),
+        slots=dict(getattr(intent, "slots_detected", {}) or {}),
+        clarifications_needed=clarifications_required_flag,
+        low_confidence=getattr(intent, "low_confidence", None),
+        raw=intent_raw,
+    )
+    self._capture_artifacts(ctx)
     clarifications_needed = bool(deduped_requests)
     confidence_sufficient = (intent.confidence or 0.0) >= 0.8
+
+    log_intent_resolution(
+        intent_key=intent.intent_key,
+        confidence=intent.confidence,
+        slot_statuses=slot_status_payload,
+        slot_followups=slot_followup_payload,
+        elapsed_ms=intent_elapsed or int((time.time() - intent_start) * 1000),
+        session_id=ctx.session_id,
+        flow=ctx.flow_mode.value if isinstance(ctx.flow_mode, FlowMode) else str(ctx.flow_mode),
+        resolver_status=resolver_status,
+        clarification_sources=sorted(clarification_sources),
+    )
+
+    intent_complete = {
+        "event": "intent_detection_complete",
+        "data": {
+            "intent_key": intent.intent_key,
+            "confidence": intent.confidence,
+            "slots_detected": intent.slots_detected,
+            "slot_statuses": slot_status_payload,
+            "slot_followups": slot_followup_payload,
+            "clarification_sources": sorted(clarification_sources),
+            "resolver_notes": slot_resolution.notes,
+            "ts": datetime.utcnow().isoformat(),
+            "elapsed_ms": int((time.time() - intent_start) * 1000),
+        },
+    }
+    if intent_elapsed:
+        intent_complete["data"]["elapsed_ms"] = intent_elapsed
+    yield intent_complete
 
     if clarifications_needed:
         intent_status_event = EventEmitter.intent_draft(
@@ -4011,6 +4225,7 @@ async def _intent_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[s
 
     intent_status_event["data"]["slot_statuses"] = slot_status_payload
     intent_status_event["data"]["slot_followups"] = slot_followup_payload
+    intent_status_event["data"]["clarification_sources"] = sorted(clarification_sources)
     intent_status_event["data"]["ts"] = datetime.utcnow().isoformat()
     if intent_elapsed:
         intent_status_event["data"]["elapsed_ms"] = intent_elapsed

@@ -86,8 +86,19 @@ def derive_revision_targets(
 ) -> Set[str]:
     from analytics.routing import FollowUpRoute  # local import to avoid circular at module import
 
-    if ctx.revision_targets:
-        return set(ctx.revision_targets)
+    explicit_targets = set(getattr(ctx, "revision_targets", set()) or set())
+    revision_snapshot = getattr(ctx, "revision_snapshot", None)
+    if explicit_targets:
+        if not revision_snapshot:
+            return set()
+        return explicit_targets
+
+    if not revision_snapshot:
+        return set()
+
+    hint_active = bool(getattr(ctx, "revision_hint_active", False))
+    if not hint_active:
+        return set()
 
     targets: Set[str] = set()
     intent_obj = getattr(ctx, "intent", None)
@@ -171,6 +182,7 @@ def build_revision_plan(
 
 def apply_revision_plan(ctx: "PlannerPhaseContext", plan: RevisionPlan) -> None:
     ctx.revision_targets = set(plan.targets)
+    ctx.revision_hint_active = bool(plan.targets)
     if plan.targets:
         ctx.revision_id = getattr(ctx, "revision_id", None) or str(uuid.uuid4())
     if plan.stock_only:
