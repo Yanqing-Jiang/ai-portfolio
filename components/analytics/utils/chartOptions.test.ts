@@ -98,12 +98,68 @@ describe('hydrateChartSpec', () => {
     const names = hydrated.series.map((entry: any) => entry.name);
     expect(names).toEqual(['Market Share', 'Company Revenue']);
 
-    const legend = Array.isArray(hydrated.legend) ? hydrated.legend[0] : hydrated.legend;
-    expect(legend.data).toEqual(['Market Share', 'Company Revenue']);
-    expect(legend.selected).toEqual({
-      'Market Share': true,
-      'Company Revenue': true,
-    });
+  const legend = Array.isArray(hydrated.legend) ? hydrated.legend[0] : hydrated.legend;
+  expect(legend.data).toEqual(['Market Share', 'Company Revenue']);
+  expect(legend.selected).toEqual({
+    'Market Share': true,
+    'Company Revenue': true,
+  });
+  });
+
+  it('hydrates multi-company raw data into shared dataset', () => {
+    const spec = {
+      series: [
+        { name: 'AMD', type: 'line', data: [] },
+        { name: 'NVDA', type: 'line', data: [] },
+      ],
+      xAxis: { type: 'category' },
+      meta: {
+        grouping: 'ticker',
+        rawData: [
+          { ticker: 'AMD', calendar_year: 2021, revenue: 38 },
+          { ticker: 'NVDA', calendar_year: 2021, revenue: 53 },
+          { ticker: 'AMD', calendar_year: 2022, revenue: 47 },
+          { ticker: 'NVDA', calendar_year: 2022, revenue: 71 },
+        ],
+      },
+    } as any;
+
+    const hydrated = hydrateChartSpec(spec);
+    expect(Array.isArray(hydrated.dataset)).toBe(true);
+    const dataset = hydrated.dataset[0];
+    expect(dataset.dimensions).toEqual(['__label', 'ticker', 'revenue']);
+    expect(dataset.source.length).toBe(4);
+    expect(hydrated.series.every((series: any) => series.encode?.seriesName === 'ticker')).toBe(true);
+    expect(hydrated.series.every((series: any) => series.data === undefined)).toBe(true);
+    const axisData = Array.isArray(hydrated.xAxis) ? hydrated.xAxis[0].data : hydrated.xAxis.data;
+    expect(axisData).toEqual(['2021', '2022']);
+  });
+
+  it('unwraps object-valued metrics when building dataset', () => {
+    const spec = {
+      series: [
+        { name: 'AMD', type: 'line', data: [] },
+        { name: 'NVDA', type: 'line', data: [] },
+      ],
+      xAxis: { type: 'category' },
+      meta: {
+        grouping: 'ticker',
+        rawData: [
+          { ticker: 'AMD', calendar_year: 2021, revenue: { raw: '38', formatted: '$38B' } },
+          { ticker: 'NVDA', calendar_year: 2021, revenue: { value: 53, formatted: '$53B' } },
+          { ticker: 'AMD', calendar_year: 2022, revenue: { raw: '47', formatted: '$47B' } },
+          { ticker: 'NVDA', calendar_year: 2022, revenue: { raw: '71', formatted: '$71B' } },
+        ],
+      },
+    } as any;
+
+    const hydrated = hydrateChartSpec(spec);
+    expect(Array.isArray(hydrated.dataset)).toBe(true);
+    const dataset = hydrated.dataset[0];
+    expect(dataset.dimensions).toEqual(['__label', 'ticker', 'revenue']);
+    expect(dataset.source[0].revenue).toBe(38);
+    expect(dataset.source[1].revenue).toBe(53);
+    expect(hydrated.series.every((series: any) => series.data === undefined)).toBe(true);
   });
 });
 

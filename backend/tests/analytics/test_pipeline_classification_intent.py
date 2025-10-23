@@ -167,7 +167,7 @@ def test_intent_phase_populates_artifact(monkeypatch: pytest.MonkeyPatch) -> Non
                 assumptions=[],
             )
 
-        monkeypatch.setattr(planner_executor, "detect_intent_with_clarifications", fake_detect)
+        monkeypatch.setattr(planner_executor, "detect_intent", fake_detect)
         monkeypatch.setattr(planner_executor, "build_query_plan", lambda intent, configs: QueryPlanModel(metrics=["metric"]))
         monkeypatch.setattr(planner_executor, "choose_template", lambda intent, plan, configs: None)
         monkeypatch.setattr(planner_executor, "SCHEMA_CLARIFIER_ENABLED", False)

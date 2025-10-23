@@ -36,6 +36,8 @@ def test_multi_company_revenue_chart_selects_all_series():
 
     default_selection = meta.get("defaultLegendSelection") or {}
     assert default_selection == {"AMD": True, "NVDA": True}
+    assert meta.get("primarySeries") == ["AMD", "NVDA"]
+    assert meta.get("highlightRules", {}).get("mutedSecondary", False) is False
 
     chart_design = meta.get("chartDesign", {})
     assert chart_design.get("comparison") == "all"

@@ -4,6 +4,7 @@ from backend.analytics.core.intent_impl.models import (
     IntentSelectionModel,
     LLMIntentResolutionModel,
     LLMSlotStatusModel,
+    LLMFollowUpModel,
     TimeframeSlotValue,
 )
 from backend.analytics.core.slot_catalog import get_slot_catalog
@@ -151,6 +152,60 @@ def test_structured_resolver_honors_explicit_year_range(monkeypatch):
     assert metric_status is not None
     assert metric_status.status == "filled"
     assert metric_status.value == "Revenue"
+
+
+def test_structured_resolver_drops_metric_followup_when_value_present(monkeypatch):
+    get_slot_catalog(refresh=True)
+
+    class _FakeClient:
+        async def create_structured(self, *, response_model, messages, reasoning_effort, session_id=None, model=None):
+            payload = LLMIntentResolutionModel(
+                intent=IntentSelectionModel(key="revenue_comparison", confidence=0.9, mode="multi_agent"),
+                slots={
+                    "company": LLMSlotStatusModel(
+                        status="filled",
+                        value="AMD",
+                        suggestions=["AMD", "NVDA"],
+                        allow_custom=True,
+                    ),
+                    "metric": LLMSlotStatusModel(
+                        status="missing",
+                        value="Revenue",
+                        suggestions=["Revenue"],
+                        allow_custom=True,
+                    ),
+                    "timeframe": LLMSlotStatusModel(
+                        status="missing",
+                        value=None,
+                        suggestions=["last 5 years"],
+                        allow_custom=True,
+                    ),
+                },
+                followups=[
+                    LLMFollowUpModel(
+                        slot="metric",
+                        prompt="Which metric should we compare?",
+                        suggestions=["Revenue"],
+                        allow_custom=True,
+                        reason="Clarify the metric for comparison",
+                    )
+                ],
+            )
+            return payload, "fake-response-id"
+
+    monkeypatch.setattr(detection, "get_unified_client", lambda: _FakeClient())
+
+    result = detection.resolve_intent_slots(
+        "AMD vs NVIDIA revenue comparison",
+        _config_payload(),
+    )
+
+    metric_status = result.slots.get("metric")
+    assert metric_status is not None
+    assert metric_status.status == "defaulted"
+    assert metric_status.value == "Revenue"
+    followup_slots = {followup.slot for followup in result.followups}
+    assert "metric" not in followup_slots
 
 
 def test_fallback_keeps_timeframe_when_years_present(monkeypatch):

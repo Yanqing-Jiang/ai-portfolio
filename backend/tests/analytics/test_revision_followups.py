@@ -11,25 +11,39 @@ from backend.analytics.flows.planner.revision import derive_revision_targets
 from backend.analytics.flows.multi_agent import _derive_tasks
 
 
-def _make_context(intent_key: Optional[str] = None, follow_up: FollowUpRoute = FollowUpRoute.FULL_PIPELINE):
+def _make_context(
+    intent_key: Optional[str] = None,
+    follow_up: FollowUpRoute = FollowUpRoute.FULL_PIPELINE,
+    *,
+    with_snapshot: bool = False,
+    hint_active: bool = False,
+):
     intent = SimpleNamespace(intent_key=intent_key) if intent_key else None
     return SimpleNamespace(
         revision_targets=set(),
         follow_up_route=follow_up,
         intent=intent,
+        revision_snapshot={"id": "snapshot"} if with_snapshot else None,
+        revision_hint_active=hint_active,
     )
 
 
 def test_intent_lane_map_recognizes_market_share():
-    ctx = _make_context('market_share_single')
+    ctx = _make_context('market_share_single', with_snapshot=True, hint_active=True)
     targets = derive_revision_targets(ctx, intent_lane_map=planner_executor._INTENT_LANE_HINTS)
     assert targets == {'sql', 'chart', 'analysis'}
 
 
 def test_intent_lane_map_adds_web_for_news():
-    ctx = _make_context('breaking_news_flash')
+    ctx = _make_context('breaking_news_flash', with_snapshot=True, hint_active=True)
     targets = derive_revision_targets(ctx, intent_lane_map=planner_executor._INTENT_LANE_HINTS)
     assert 'web' in targets
+
+
+def test_intent_lane_map_requires_hint():
+    ctx = _make_context('market_share_single', with_snapshot=True, hint_active=False)
+    targets = derive_revision_targets(ctx, intent_lane_map=planner_executor._INTENT_LANE_HINTS)
+    assert targets == set()
 
 
 def test_multi_agent_guardrail_reuses_completed_web_lane():

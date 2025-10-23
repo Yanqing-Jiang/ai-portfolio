@@ -38,6 +38,40 @@ async def test_chart_revision_routed_fast_path():
 
 
 @pytest.mark.asyncio
+async def test_fresh_query_with_snapshot_stays_full_pipeline():
+    session_id = "fresh-route"
+    repo = get_session_state_repository()
+    snapshot = SessionStateSnapshot(session_id=session_id)
+    snapshot.record_outputs(
+        chart_spec={
+            "series": [{"type": "line", "name": "Revenue"}],
+            "meta": {"chartDesign": {"chart_type": "line"}},
+        }
+    )
+    await repo.save(snapshot)
+
+    query = "Compare AMD and NVDA revenue from 2021 to 2024"
+    events = []
+    async for event in analytics_memory_workflow(query=query, session_id=session_id, flow="single-agent"):
+        events.append(event)
+
+    assert not any(evt.get("event") == "revision_request" for evt in events)
+    follow_up_events = [evt for evt in events if evt.get("event") == "follow_up_route"]
+    assert follow_up_events, "Expected follow_up_route event for fresh run"
+    assert follow_up_events[0].get("data", {}).get("route") == "full_pipeline"
+    banner_events = [
+        evt.get("data", {}).get("banner")
+        for evt in follow_up_events
+        if evt.get("data", {}).get("banner")
+    ]
+    if banner_events:
+        assert any(banner.get("title") == "Fresh Run Scheduled" for banner in banner_events)
+
+    await repo.delete(session_id)
+    await close_session_state_repository()
+
+
+@pytest.mark.asyncio
 async def test_analysis_revision_routed_fast_path():
     session_id = "analysis-revision-route"
     repo = get_session_state_repository()

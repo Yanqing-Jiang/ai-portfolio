@@ -652,6 +652,11 @@ def build_chart_spec(
     
     # Convert primary slugs to display names for legend
     primary_series = [display_names[slug] for slug in primary_slugs]
+
+    is_multi_ticker_comparison = comparison == 'all' and any('ticker_filter' in s for s in series_defs)
+    if is_multi_ticker_comparison:
+        primary_series = [s.get('name') or s.get('data_column') for s in series_defs]
+        primary_series = list(dict.fromkeys(primary_series))
     
     # Assign axes based on data type
     series_axes = assign_series_axes(series_defs)
@@ -812,7 +817,7 @@ def build_chart_spec(
             'annotations': annotations,
             'highlightRules': {
                 'emphasizePrimary': True,
-                'mutedSecondary': True
+                'mutedSecondary': not is_multi_ticker_comparison
             },
             'seriesValueType': {s['name']: ('percent' if series_axes.get(s['name']) == 'right' else 'currency') for s in series},
             # Missing metadata for frontend compatibility

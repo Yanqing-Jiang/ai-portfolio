@@ -12,7 +12,7 @@ import asyncio
 import json
 import logging
 import re
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from unified_responses_client import get_unified_client
 
@@ -536,6 +536,30 @@ def _append_missing_followups(
         )
 
 
+def _slot_has_value(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, Mapping):
+        return bool(value)
+    if isinstance(value, (list, tuple, set)):
+        return any(_slot_has_value(item) for item in value)
+    return True
+
+
+def _normalize_metric_slot_statuses(slots: Dict[str, SlotStatusModel]) -> None:
+    for slot_name in ("metric", "metrics"):
+        slot_state = slots.get(slot_name)
+        if slot_state is None:
+            continue
+        if slot_state.status != "missing":
+            continue
+        if not _slot_has_value(slot_state.value):
+            continue
+        slots[slot_name] = slot_state.model_copy(update={"status": "defaulted"})
+
+
 def _fallback_intent_resolution(
     query: str,
     configs: Dict[str, Any],
@@ -752,6 +776,17 @@ def _llm_resolution_to_runtime(
                 reason=followup.reason,
             )
         )
+
+    _normalize_metric_slot_statuses(slots)
+
+    if followups:
+        pruned_followups: List[FollowUpModel] = []
+        for followup in followups:
+            slot_state = slots.get(followup.slot)
+            if slot_state and slot_state.status != "missing":
+                continue
+            pruned_followups.append(followup)
+        followups = pruned_followups
 
     _append_missing_followups(slots, followups, definition)
 

@@ -51,7 +51,7 @@ async def test_intent_resolution_telemetry(monkeypatch):
         captured.append(kwargs)
 
     monkeypatch.setattr(planner_executor, "resolve_intent_slots_async", fake_resolver)
-    monkeypatch.setattr(planner_executor, "detect_intent_with_clarifications", fake_detect_intent)
+    monkeypatch.setattr(planner_executor, "detect_intent", fake_detect_intent)
     monkeypatch.setattr(planner_executor, "log_intent_resolution", record_intent_resolution)
     monkeypatch.setattr(planner_executor, "build_query_plan", lambda intent, configs: QueryPlanModel())
     monkeypatch.setattr(planner_executor, "choose_template", lambda intent, plan, configs: {"id": "template"})
@@ -77,3 +77,4 @@ async def test_intent_resolution_telemetry(monkeypatch):
     assert payload["slot_statuses"]["timeframe"]["status"] == "missing"
     assert payload["slot_followups"][0]["slot"] == "timeframe"
     assert payload["flow"] == FlowMode.DIRECT.value
+    assert payload["clarification_sources"] == ["structured_resolver"]
