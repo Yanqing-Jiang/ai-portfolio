@@ -571,6 +571,213 @@ query_patterns:
       ORDER BY gc.calendar_year, gc.calendar_quarter_num
       LIMIT 500;
 
+  operating_leverage_yoy_vs_peers:
+    name: "Operating Leverage vs Peers"
+    description: "Compare year-over-year operating leverage against the peer average"
+    keywords:
+      - "operating leverage"
+      - "leverage vs peers"
+      - "operating leverage yoy"
+      - "operating leverage industry"
+      - "operating leverage compare"
+    sql_template: |
+      WITH annual AS (
+        SELECT
+          ticker,
+          calendar_year,
+          SUM(CASE WHEN metric = 'Revenue' THEN value ELSE 0 END) AS revenue,
+          SUM(CASE WHEN metric = 'Operating Income' THEN value ELSE 0 END) AS operating_income
+        FROM comp_financials
+        WHERE
+          metric IN ('Revenue','Operating Income')
+          AND ticker IN ('AMD','AVGO','INTC','MU','NVDA','QCOM','TXN')
+          AND calendar_year >= EXTRACT(YEAR FROM CURRENT_DATE) - {years_back}
+        GROUP BY ticker, calendar_year
+      ),
+      growth AS (
+        SELECT
+          ticker,
+          calendar_year,
+          revenue,
+          operating_income,
+          LAG(revenue) OVER (PARTITION BY ticker ORDER BY calendar_year) AS revenue_prev,
+          LAG(operating_income) OVER (PARTITION BY ticker ORDER BY calendar_year) AS operating_income_prev
+        FROM annual
+      ),
+      leverage AS (
+        SELECT
+          ticker,
+          calendar_year,
+          revenue,
+          operating_income,
+          CASE
+            WHEN revenue_prev IS NULL OR revenue_prev = 0 THEN NULL
+            ELSE (revenue - revenue_prev) / NULLIF(ABS(revenue_prev), 0)
+          END AS revenue_yoy_growth,
+          CASE
+            WHEN operating_income_prev IS NULL OR operating_income_prev = 0 THEN NULL
+            ELSE (operating_income - operating_income_prev) / NULLIF(ABS(operating_income_prev), 0)
+          END AS operating_income_yoy_growth
+        FROM growth
+      ),
+      leverage_ratios AS (
+        SELECT
+          ticker,
+          calendar_year,
+          revenue,
+          operating_income,
+          revenue_yoy_growth,
+          operating_income_yoy_growth,
+          CASE
+            WHEN revenue_yoy_growth IS NULL OR revenue_yoy_growth = 0 THEN NULL
+            ELSE operating_income_yoy_growth / revenue_yoy_growth
+          END AS operating_leverage
+        FROM leverage
+      ),
+      peer_average AS (
+        SELECT
+          calendar_year,
+          AVG(operating_leverage) FILTER (WHERE ticker <> '{target_ticker}' AND operating_leverage IS NOT NULL) AS peer_avg_operating_leverage,
+          AVG(operating_income_yoy_growth) FILTER (WHERE ticker <> '{target_ticker}' AND operating_income_yoy_growth IS NOT NULL) AS peer_avg_operating_income_yoy,
+          AVG(revenue_yoy_growth) FILTER (WHERE ticker <> '{target_ticker}' AND revenue_yoy_growth IS NOT NULL) AS peer_avg_revenue_yoy
+        FROM leverage_ratios
+        GROUP BY calendar_year
+      )
+      SELECT
+        lr.calendar_year,
+        lr.ticker,
+        lr.revenue,
+        lr.operating_income,
+        lr.revenue_yoy_growth,
+        lr.operating_income_yoy_growth,
+        lr.operating_leverage,
+        pa.peer_avg_operating_leverage,
+        pa.peer_avg_operating_income_yoy,
+        pa.peer_avg_revenue_yoy
+      FROM leverage_ratios lr
+      LEFT JOIN peer_average pa ON pa.calendar_year = lr.calendar_year
+      WHERE lr.ticker = '{target_ticker}'
+      ORDER BY lr.calendar_year
+      LIMIT 500;
+
+  eps_yoy_rank_latest:
+    name: "EPS YoY Leaderboard (Latest Quarter)"
+    description: "Rank peer EPS Basic year-over-year growth for the most recent reported quarter"
+    keywords:
+      - "eps yoy"
+      - "eps growth rank"
+      - "who leads eps"
+      - "eps leaderboard"
+      - "rank eps yoy"
+    sql_template: |
+      WITH latest_period AS (
+        SELECT MAX(calendar_year * 10 + calendar_quarter_num) AS period_key
+        FROM comp_financials
+        WHERE
+          metric = 'EPS Basic'
+          AND ticker IN ('AMD','AVGO','INTC','MU','NVDA','QCOM','TXN')
+          AND calendar_quarter_num IS NOT NULL
+      ),
+      eps_quarters AS (
+        SELECT
+          ticker,
+          calendar_year,
+          calendar_quarter_num,
+          calendar_quarter,
+          AVG(value) AS eps_basic
+        FROM comp_financials
+        WHERE
+          metric = 'EPS Basic'
+          AND ticker IN ('AMD','AVGO','INTC','MU','NVDA','QCOM','TXN')
+          AND calendar_quarter_num IS NOT NULL
+          AND calendar_year >= EXTRACT(YEAR FROM CURRENT_DATE) - 5
+        GROUP BY ticker, calendar_year, calendar_quarter_num, calendar_quarter
+      ),
+      with_lag AS (
+        SELECT
+          eq.*,
+          LAG(eq.eps_basic, 4) OVER (
+            PARTITION BY ticker
+            ORDER BY calendar_year, calendar_quarter_num
+          ) AS eps_basic_prev_year
+        FROM eps_quarters eq
+      ),
+      latest AS (
+        SELECT wl.*
+        FROM with_lag wl
+        JOIN latest_period lp
+          ON (wl.calendar_year * 10 + wl.calendar_quarter_num) = lp.period_key
+      )
+      SELECT
+        ticker,
+        calendar_year,
+        calendar_quarter_num,
+        calendar_quarter,
+        eps_basic,
+        eps_basic_prev_year,
+        CASE
+          WHEN eps_basic_prev_year IS NULL OR eps_basic_prev_year = 0 THEN NULL
+          ELSE (eps_basic - eps_basic_prev_year) / NULLIF(ABS(eps_basic_prev_year), 0)
+        END AS eps_yoy_growth_pct
+      FROM latest
+      ORDER BY eps_yoy_growth_pct DESC NULLS LAST, ticker
+      LIMIT 50;
+
+  capex_intensity_latest_rank:
+    name: "CapEx Intensity Leaderboard (Latest Quarter)"
+    description: "Rank capital expenditure intensity (CapEx / Revenue) for the most recent quarter"
+    keywords:
+      - "capex intensity"
+      - "capital intensity"
+      - "capex rank"
+      - "capital intensive"
+      - "capex leaderboard"
+    sql_template: |
+      WITH latest_period AS (
+        SELECT MAX(calendar_year * 10 + calendar_quarter_num) AS period_key
+        FROM comp_financials
+        WHERE
+          metric IN ('Capital Expenditures','Revenue')
+          AND ticker IN ('AMD','AVGO','INTC','MU','NVDA','QCOM','TXN')
+          AND calendar_quarter_num IS NOT NULL
+      ),
+      quarterly AS (
+        SELECT
+          ticker,
+          calendar_year,
+          calendar_quarter_num,
+          calendar_quarter,
+          SUM(CASE WHEN metric = 'Capital Expenditures' THEN value ELSE 0 END) AS capex,
+          SUM(CASE WHEN metric = 'Revenue' THEN value ELSE 0 END) AS revenue
+        FROM comp_financials
+        WHERE
+          metric IN ('Capital Expenditures','Revenue')
+          AND ticker IN ('AMD','AVGO','INTC','MU','NVDA','QCOM','TXN')
+          AND calendar_quarter_num IS NOT NULL
+          AND calendar_year >= EXTRACT(YEAR FROM CURRENT_DATE) - 3
+        GROUP BY ticker, calendar_year, calendar_quarter_num, calendar_quarter
+      ),
+      latest AS (
+        SELECT q.*
+        FROM quarterly q
+        JOIN latest_period lp
+          ON (q.calendar_year * 10 + q.calendar_quarter_num) = lp.period_key
+      )
+      SELECT
+        ticker,
+        calendar_year,
+        calendar_quarter_num,
+        calendar_quarter,
+        capex,
+        revenue,
+        CASE
+          WHEN revenue = 0 THEN NULL
+          ELSE capex / revenue
+        END AS capex_intensity_ratio
+      FROM latest
+      ORDER BY capex_intensity_ratio DESC NULLS LAST, ticker
+      LIMIT 50;
+
   rnd_intensity_vs_peers:
     name: "R&D Intensity vs Industry Average"
     description: "Compare R&D spending intensity against industry average"

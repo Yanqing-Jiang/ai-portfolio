@@ -69,7 +69,20 @@ metrics:
     aggregation: "sum"
     description: "Final profit after all expenses and taxes"
     format: "millions_usd"
-    
+
+  eps_basic:
+    name: "EPS Basic"
+    database_name: "EPS Basic"
+    aliases:
+      - "eps"
+      - "earnings per share"
+      - "eps basic"
+    category: "income_statement"
+    unit: "per_share"
+    aggregation: "avg"
+    description: "Basic earnings per share"
+    format: "decimal"
+
   rnd_expense:
     name: "R&D Expense"
     database_name: "R&D Expense"
@@ -176,7 +189,16 @@ derived_metrics:
     format: "percentage"
     category: "ratios"
     importance: "high"
-    
+
+  capex_intensity:
+    name: "CapEx Intensity"
+    formula: "capital_expenditures / revenue"
+    dependencies: ["capital_expenditures", "revenue"]
+    unit: "percentage"
+    description: "Capital expenditures as a share of revenue"
+    format: "percentage"
+    category: "ratios"
+
   free_cash_flow:
     name: "Free Cash Flow"
     formula: "operating_cash_flow - capital_expenditures"
@@ -420,6 +442,20 @@ semantic:
       allowed_granularities: ["annual", "quarterly"]
       comparisons: ["single", "vs_avg", "leaderboard"]
       dimensions: ["company", "calendar_year", "calendar_quarter"]
+    capital_expenditures:
+      source: "Capital Expenditures"
+      category: "cash_flow"
+      default_granularity: "quarterly"
+      allowed_granularities: ["annual", "quarterly"]
+      comparisons: ["single", "leaderboard"]
+      dimensions: ["company", "calendar_year", "calendar_quarter"]
+    eps_basic:
+      source: "EPS Basic"
+      category: "income_statement"
+      default_granularity: "quarterly"
+      allowed_granularities: ["annual", "quarterly"]
+      comparisons: ["leaderboard"]
+      dimensions: ["company", "calendar_year", "calendar_quarter"]
   derived_metrics:
     gross_margin:
       source: "gross_margin"
@@ -441,6 +477,13 @@ semantic:
       default_granularity: "quarterly"
       allowed_granularities: ["annual", "quarterly"]
       comparisons: ["vs_avg"]
+      dimensions: ["company", "calendar_year", "calendar_quarter"]
+    capex_intensity:
+      source: "capex_intensity"
+      dependencies: ["capital_expenditures", "revenue"]
+      default_granularity: "quarterly"
+      allowed_granularities: ["annual", "quarterly"]
+      comparisons: ["leaderboard"]
       dimensions: ["company", "calendar_year", "calendar_quarter"]
     rnd_intensity:
       source: "rnd_intensity"
@@ -502,6 +545,18 @@ semantic:
       filters:
         metrics: ["Revenue", "Gross Profit", "Operating Income", "Net Income"]
         granularity_filter: "calendar_quarter_num IS NOT NULL"
+    operating_leverage_yoy_vs_peers:
+      label: "Operating Leverage vs Peers"
+      metrics: ["revenue", "operating_income"]
+      derived_metrics: []
+      comparison: "vs_avg"
+      default_granularity: "annual"
+      allowed_granularities: ["annual"]
+      default_years_back: 5
+      default_limit: 500
+      group_by: ["calendar_year"]
+      filters:
+        metrics: ["Revenue", "Operating Income"]
     revenue_growth_vs_avg:
       label: "Revenue Growth vs Average"
       metrics: ["revenue"]
@@ -553,4 +608,30 @@ semantic:
       group_by: ["calendar_year"]
       filters:
         metrics: ["R&D Expense", "Revenue"]
+        granularity_filter: "calendar_quarter_num IS NOT NULL"
+    eps_yoy_rank_latest:
+      label: "EPS YoY Leaderboard"
+      metrics: ["eps_basic"]
+      derived_metrics: []
+      comparison: "leaderboard"
+      default_granularity: "quarterly"
+      allowed_granularities: ["quarterly"]
+      default_years_back: 1
+      default_limit: 20
+      group_by: []
+      filters:
+        metrics: ["EPS Basic"]
+        granularity_filter: "calendar_quarter_num IS NOT NULL"
+    capex_intensity_latest_rank:
+      label: "CapEx Intensity Leaderboard"
+      metrics: ["capital_expenditures", "revenue"]
+      derived_metrics: ["capex_intensity"]
+      comparison: "leaderboard"
+      default_granularity: "quarterly"
+      allowed_granularities: ["quarterly"]
+      default_years_back: 1
+      default_limit: 20
+      group_by: []
+      filters:
+        metrics: ["Capital Expenditures", "Revenue"]
         granularity_filter: "calendar_quarter_num IS NOT NULL"

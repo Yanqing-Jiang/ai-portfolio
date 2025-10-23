@@ -1,16 +1,29 @@
 ﻿required_slots:
   market_share_single:
     - company
-  market_share_all: []
+    - timeframe
+  market_share_all: 
+    - timeframe
   margins_vs_peers:
     - company
+    - timeframe
   margin_growth_vs_peers:
     - company
+    - timeframe
   revenue_growth_vs_avg:
     - company
+    - timeframe
   rnd_intensity_vs_peers:
     - company
+    - timeframe
   rnd_expense_vs_peers:
     - company
+    - timeframe
   rnd_top_spender:
-    - timeframe.start_year
+    - timeframe
+  operating_leverage_yoy_vs_peers:
+    - company
+  eps_yoy_rank_latest:
+    - company
+  capex_intensity_latest_rank: 
+    - timeframe
