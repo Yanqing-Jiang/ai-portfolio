@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { StockWidgetConfig } from '../types';
 
 interface TradingViewSymbolOverviewProps {
@@ -15,9 +15,42 @@ export const TradingViewSymbolOverview: React.FC<TradingViewSymbolOverviewProps>
   theme,
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const normalizedSymbols = useMemo(() => {
+    return (config?.symbols ?? []).map((entry) => {
+      if (Array.isArray(entry)) {
+        const [label, value] = entry as [string | undefined, string | undefined];
+        const resolvedLabel = label || value || '';
+        const resolvedValue = value || label || '';
+        const tradingValue = resolvedValue && resolvedValue.includes(':') ? resolvedValue : `NASDAQ:${resolvedValue.toUpperCase()}`;
+        return {
+          label: resolvedLabel || tradingValue,
+          tradingPair: [resolvedLabel || tradingValue, tradingValue] as [string, string],
+        };
+      }
+      const rawSymbol = String(entry || '').trim();
+      const hasExchange = rawSymbol.includes(':');
+      const tradingValue = hasExchange ? rawSymbol.toUpperCase() : `NASDAQ:${rawSymbol.toUpperCase()}`;
+      return {
+        label: hasExchange ? rawSymbol.split(':')[1] || rawSymbol : rawSymbol.toUpperCase(),
+        tradingPair: [tradingValue, tradingValue] as [string, string],
+      };
+    });
+  }, [config?.symbols]);
+
+  const [activeIndex, setActiveIndex] = useState(0);
 
   useEffect(() => {
-    if (!containerRef.current || !config?.symbols?.length) {
+    setActiveIndex(0);
+  }, [normalizedSymbols.length]);
+
+  const hasMultipleSymbols = normalizedSymbols.length > 1;
+  const activeEntry = normalizedSymbols[activeIndex] ?? normalizedSymbols[0];
+  const tradingViewSymbols = hasMultipleSymbols
+    ? (activeEntry ? [activeEntry.tradingPair] : [])
+    : normalizedSymbols.map((item) => item.tradingPair);
+
+  useEffect(() => {
+    if (!containerRef.current || !tradingViewSymbols.length) {
       return;
     }
 
@@ -28,14 +61,6 @@ export const TradingViewSymbolOverview: React.FC<TradingViewSymbolOverviewProps>
     script.async = true;
     script.src = 'https://s3.tradingview.com/external-embedding/embed-widget-symbol-overview.js';
 
-    const symbols = config.symbols.map((symbol) => {
-      if (Array.isArray(symbol)) {
-        return symbol;
-      }
-      const upper = symbol.includes(':') ? symbol : `NASDAQ:${symbol.toUpperCase()}`;
-      return [upper, upper];
-    });
-
     // Optional theme overrides can be wired via the `theme` prop when design requests additional palettes.
     const configuredChartType = config.chartType?.toLowerCase();
     const normalizedChartType = configuredChartType
@@ -45,7 +70,7 @@ export const TradingViewSymbolOverview: React.FC<TradingViewSymbolOverviewProps>
       : 'candlesticks';
 
     const widgetConfig = {
-      symbols,
+      symbols: tradingViewSymbols,
       chartOnly: false,
       width: '100%',
       height: height ?? config.height ?? DEFAULT_HEIGHT,
@@ -66,10 +91,54 @@ export const TradingViewSymbolOverview: React.FC<TradingViewSymbolOverviewProps>
         containerRef.current.innerHTML = '';
       }
     };
-  }, [config.symbols, config.locale, config.height, config.colorTheme, config.chartType, config.showVolume, config.showMA, config.autosize, height, theme]);
+  }, [
+    tradingViewSymbols,
+    config.locale,
+    config.height,
+    config.colorTheme,
+    config.chartType,
+    config.showVolume,
+    config.showMA,
+    config.autosize,
+    height,
+    theme,
+  ]);
+
+  const handlePrev = useCallback(() => {
+    if (!hasMultipleSymbols) return;
+    setActiveIndex((prev) => (prev - 1 + normalizedSymbols.length) % normalizedSymbols.length);
+  }, [hasMultipleSymbols, normalizedSymbols.length]);
+
+  const handleNext = useCallback(() => {
+    if (!hasMultipleSymbols) return;
+    setActiveIndex((prev) => (prev + 1) % normalizedSymbols.length);
+  }, [hasMultipleSymbols, normalizedSymbols.length]);
+
+  const activeLabel = activeEntry?.label ?? '';
 
   return (
     <div className="tradingview-widget-container w-full rounded-xl border border-gray-700/70 bg-gray-900/50">
+      {hasMultipleSymbols ? (
+        <div className="flex items-center justify-between gap-3 border-b border-gray-700/70 bg-gray-900/70 px-3 py-2">
+          <button
+            type="button"
+            onClick={handlePrev}
+            className="rounded-md border border-gray-600/70 px-2 py-1 text-xs font-medium text-gray-200 transition hover:border-gray-400 hover:text-white"
+          >
+            ‹ Prev
+          </button>
+          <div className="text-sm font-semibold uppercase tracking-wide text-gray-100">
+            {activeLabel}
+          </div>
+          <button
+            type="button"
+            onClick={handleNext}
+            className="rounded-md border border-gray-600/70 px-2 py-1 text-xs font-medium text-gray-200 transition hover:border-gray-400 hover:text-white"
+          >
+            Next ›
+          </button>
+        </div>
+      ) : null}
       <div
         ref={containerRef}
         className="tradingview-widget-container__widget w-full"
