@@ -203,9 +203,13 @@ def heuristic_intent(query: str, configs: Dict[str, Any]) -> IntentModel:
             elif peers_cue_present:
                 comparison_default = "vs_peers"
     elif "growth" in q or "growing" in q:
-        if any(phrase in q for phrase in ("vs industry", "vs average", "industry average", "vs peers")):
+        growth_vs_avg_cues = ("vs industry", "vs average", "industry average")
+        if any(phrase in q for phrase in (*growth_vs_avg_cues, "vs peers")):
             intent_key = "revenue_growth_vs_avg"
             reasoning.append("Detected revenue growth vs average intent")
+            if comparison_default is None:
+                if any(cue in q for cue in growth_vs_avg_cues) or (average_cue_present and "peer" not in q):
+                    comparison_default = "vs_avg"
         else:
             intent_key = "revenue_growth_analysis"
             reasoning.append("Detected revenue growth intent")
