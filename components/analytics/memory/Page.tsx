@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { motion } from 'framer-motion';
 import {
   AnalysisCard,
@@ -7,7 +7,8 @@ import {
 import { ChatHistory } from './';
 import { useAnalyticsMemoryStream } from '../hooks';
 import type { FlowMode } from '../types';
-
+import { deriveRevisionContext, buildPromptCandidates } from './revisionPrompts';
+import type { PromptCandidate } from './revisionPrompts';
 
 
 type FlowOption = FlowMode;
@@ -63,6 +64,7 @@ const MemoryAnalyticsPage: React.FC = () => {
   const [hasStartedChat, setHasStartedChat] = useState(false);
   const [isHeaderCollapsed, setIsHeaderCollapsed] = useState(false);
   const [selectedFlow, setSelectedFlow] = useState<FlowOption>('planner-executor');
+  const [promptRotationKey, setPromptRotationKey] = useState(0);
 
   // Reset header to expanded state when component mounts (project navigation)
   useEffect(() => {
@@ -108,6 +110,58 @@ const MemoryAnalyticsPage: React.FC = () => {
     submitClarification,
     stopAnalysis,
   } = useAnalyticsMemoryStream(selectedFlow);
+  const revisionContext = useMemo(
+    () =>
+      deriveRevisionContext({
+        chatHistory,
+        chartSpec,
+        analysis,
+        analysisOverview,
+        analysisSources,
+        stockWidget,
+        webSearch,
+        sqlQuery,
+        dataSample,
+      }),
+    [
+      chatHistory,
+      chartSpec,
+      analysis,
+      analysisOverview,
+      analysisSources,
+      stockWidget,
+      webSearch,
+      sqlQuery,
+      dataSample,
+    ],
+  );
+
+  const revisionCandidates = useMemo<PromptCandidate[]>(
+    () => buildPromptCandidates(revisionContext, { rotationKey: promptRotationKey }),
+    [revisionContext, promptRotationKey],
+  );
+
+  const hasResultMessage = useMemo(
+    () => (chatHistory ?? []).some((message) => message?.type === 'result'),
+    [chatHistory],
+  );
+
+  const isShowingRevisionPrompts = hasResultMessage && revisionCandidates.length > 0;
+
+  useEffect(() => {
+    if (!hasResultMessage) {
+      setPromptRotationKey(0);
+    }
+  }, [hasResultMessage]);
+
+  const previousRevisionModeRef = useRef(revisionMode);
+  useEffect(() => {
+    const previous = previousRevisionModeRef.current;
+    if (previous !== 'none' && revisionMode === 'none' && !isLoading) {
+      setPromptRotationKey((value) => value + 1);
+    }
+    previousRevisionModeRef.current = revisionMode;
+  }, [revisionMode, isLoading]);
 
   useEffect(() => {
     if (hasStartedChat) {
@@ -188,12 +242,16 @@ Multi-Agent: workload delegation & orchestration, fastest speed
     }
   };
 
-  const suggestedQueries = [
-    'Nvidia market share in the past 5 years?',
+  const discoveryPrompts = [
+    'AMD vs NVIDIA revenue comparison in the past 5 years?',
     "How's Nvidia margin growth compare to industry average?",
     'How is NVDA R&D expense compare to industry average',
     'How fast is NVDA growing vs industry average?'
   ];
+
+  const displayedPrompts: Array<string | PromptCandidate> = isShowingRevisionPrompts
+    ? revisionCandidates
+    : discoveryPrompts;
 
   const processSubtitle =
     revisionMode === 'chart'
@@ -402,15 +460,22 @@ Multi-Agent: workload delegation & orchestration, fastest speed
               {/* Suggested queries (only show when not loading) */}
               {!isLoading && (
                 <div className="flex gap-2 sm:gap-2.5 overflow-x-auto scrollbar-thin scrollbar-thumb-gray-600 scrollbar-track-gray-800 py-1 sm:py-2 -mx-2 sm:-mx-1 px-2 sm:px-1 max-w-full">
-                  {suggestedQueries.map((suggestion, idx) => (
-                    <button
-                      key={idx}
-                      onClick={() => setQuery(suggestion)}
-                      className="px-2 sm:px-3 md:px-4 py-1 sm:py-1.5 md:py-2 text-[10px] sm:text-xs md:text-sm bg-gradient-to-r from-gray-700 to-gray-600 hover:from-gray-600 hover:to-gray-500 rounded-full text-gray-100 transition-colors border border-gray-600/60 whitespace-nowrap shadow-sm min-h-[28px] sm:min-h-[32px] md:min-h-[36px] flex items-center"
-                    >
-                      {suggestion}
-                    </button>
-                  ))}
+                  {displayedPrompts.map((prompt, idx) => {
+                    const copy = typeof prompt === 'string' ? prompt : prompt.copy;
+                    const key =
+                      typeof prompt === 'string'
+                        ? `discovery-${idx}`
+                        : `${prompt.intent}-${prompt.lane}-${idx}`;
+                    return (
+                      <button
+                        key={key}
+                        onClick={() => setQuery(copy)}
+                        className="px-2 sm:px-3 md:px-4 py-1 sm:py-1.5 md:py-2 text-[10px] sm:text-xs md:text-sm bg-gradient-to-r from-gray-700 to-gray-600 hover:from-gray-600 hover:to-gray-500 rounded-full text-gray-100 transition-colors border border-gray-600/60 whitespace-nowrap shadow-sm min-h-[28px] sm:min-h-[32px] md:min-h-[36px] flex items-center"
+                      >
+                        {copy}
+                      </button>
+                    );
+                  })}
                 </div>
               )}
               {/* Flow Selector */}
