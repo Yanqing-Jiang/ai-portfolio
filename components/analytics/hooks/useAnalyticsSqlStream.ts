@@ -3,6 +3,7 @@ import { useAnalyticsStream } from './useAnalyticsStream';
 import { applyChartOps } from '../utils';
 import { useProcessSteps } from './useProcessSteps';
 import { STEP_NAME_SQL, STEP_ORDER_SQL } from '../../../constants/analytics';
+import { apiService } from '../../../services/apiService';
 
 const STEP_ALIASES: Record<string, string> = {
   plan_and_select_template: 'schema',
@@ -76,6 +77,14 @@ export const useAnalyticsSqlStream = () => {
 
   const handleQuery = async (query: string) => {
     if (!query.trim() || streamHook.isLoading) return;
+
+    const usageResponse = await apiService.countUserInput({ scope: 'next-gen-analytics-sql' });
+    if (!usageResponse.success) {
+      const errorMessage = usageResponse.error || 'Rate limit exceeded. Please try again later.';
+      streamHook.setError(errorMessage);
+      streamHook.setCurrentStatus(`Error: ${errorMessage}`);
+      return;
+    }
 
     // Reset state
     setChartSpec(null);
@@ -308,6 +317,10 @@ export const useAnalyticsSqlStream = () => {
     stepsHook.stopInProgressSteps();
   };
 
+  const clearChartSpec = () => {
+    setChartSpec(null);
+  };
+
   const resetAll = () => {
     streamHook.resetState();
     stepsHook.resetSteps();
@@ -338,5 +351,6 @@ export const useAnalyticsSqlStream = () => {
     handleQuery,
     stopAnalysis,
     resetAll,
+    clearChartSpec,
   };
 };

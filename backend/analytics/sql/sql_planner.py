@@ -37,10 +37,13 @@ def _fallback_plan_defaults(slots: Dict[str, Any]) -> Dict[str, Any]:
     else:
         statistic = None
 
+    comparison_slot = slots.get("comparison")
+    comparison = comparison_slot.strip().lower() if isinstance(comparison_slot, str) and comparison_slot.strip() else None
+
     return {
         "metrics": ["Revenue"],
         "derived_metrics": [],
-        "comparison": None,
+        "comparison": comparison,
         "statistic": statistic,
         "granularity": granularity,
         "timeframe": timeframe,
@@ -114,12 +117,19 @@ def plan_sql_rule_based(intent: IntentModel, configs: Optional[Dict[str, Any]] =
 
     limit = intent_spec.default_limit or defaults.get("default_limit") or SEMANTIC_CATALOG.default_limit() or 500
 
+    comparison_value = intent_spec.comparison
+    comparison_slot = slots.get("comparison")
+    if isinstance(comparison_slot, str):
+        normalized_comparison = comparison_slot.strip().lower()
+        if normalized_comparison:
+            comparison_value = normalized_comparison
+
     plan_dict = {
         "metrics": metrics,
         "derived_metrics": derived,
         "timeframe": timeframe,
         "granularity": granularity,
-        "comparison": intent_spec.comparison,
+        "comparison": comparison_value,
         "statistic": statistic,
         "group_by": group_by,
         "filters": filters,

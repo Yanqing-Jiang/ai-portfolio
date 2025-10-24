@@ -24,6 +24,9 @@ class TimeframeModel(BaseModel):
     source: Optional[Literal['query', 'clarification', 'default', 'fallback', 'heuristic']] = None
 
 
+ComparisonLiteral = Literal['single', 'all', 'vs_avg', 'vs_peers', 'leaderboard']
+
+
 class SlotsModel(BaseModel):
     """Detected slots for analytics intents."""
 
@@ -34,7 +37,7 @@ class SlotsModel(BaseModel):
     metrics: Optional[List[str]] = None
     granularity: Optional[str] = None
     tickers: Optional[List[str]] = None
-    comparison: Optional[Literal['single', 'all']] = None
+    comparison: Optional[ComparisonLiteral] = None
     statistic: Optional[str] = None
 
 
@@ -146,7 +149,7 @@ class SqlCriteriaModel(BaseModel):
 
     intent_key: str
     company: Optional[str] = None
-    comparison: Optional[Literal['single', 'all']] = None
+    comparison: Optional[ComparisonLiteral] = None
     timeframe: TimeframeModel = Field(default_factory=TimeframeModel)
     granularity: Literal['annual', 'quarterly'] = 'annual'
     tickers: List[str] = Field(default_factory=list)
@@ -350,7 +353,8 @@ def intent_to_sql_criteria(intent: IntentModel, configs: Dict[str, Any]) -> SqlC
     else:
         statistic = None
 
-    if len(tickers) >= 2 and comparison not in ("all", "vs_avg", "vs_peers"):
+    multi_ticker_allowed = {'all', 'vs_avg', 'vs_peers', 'leaderboard'}
+    if len(tickers) >= 2 and comparison not in multi_ticker_allowed:
         comparison = "all"
         if isinstance(intent.slots_detected, dict):
             intent.slots_detected["comparison"] = "all"

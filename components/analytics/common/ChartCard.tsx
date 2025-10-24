@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState, useId } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState, useId } from 'react';
 import EChartsReact from 'echarts-for-react';
 import { ChartCardProps } from '../types';
 import { ChartErrorBoundary } from './ChartErrorBoundary';
@@ -20,6 +20,121 @@ export const ChartCard: React.FC<ChartCardProps> = ({
   const resolvedSpec = useMemo(() => hydrateChartSpec(chartSpec), [chartSpec]);
   const spec = resolvedSpec;
 
+  const parseCompositeKey = useCallback((column: string | undefined) => {
+    if (typeof column !== 'string' || !column.length) {
+      return { ticker: undefined as string | undefined, metric: undefined as string | undefined };
+    }
+    const parts = column.split('|');
+    if (parts.length >= 2) {
+      const [ticker, ...rest] = parts;
+      return {
+        ticker: ticker?.trim() || undefined,
+        metric: rest.join('|').trim() || undefined,
+      };
+    }
+    return { ticker: undefined, metric: column.trim() || undefined };
+  }, []);
+
+  const includedColumnsRaw = useMemo(() => {
+    const fromMeta = spec?.meta?.includedColumns;
+    if (Array.isArray(fromMeta)) {
+      return fromMeta.filter((value): value is string => typeof value === 'string' && value.length > 0);
+    }
+    return [] as string[];
+  }, [spec]);
+
+  const metricSeriesColumns = useMemo(() => {
+    const lookup = spec?.meta?.metricSeriesColumns;
+    if (lookup && typeof lookup === 'object') {
+      const normalized: Record<string, string[]> = {};
+      Object.entries(lookup).forEach(([metric, columns]) => {
+        if (Array.isArray(columns)) {
+          const sanitized = columns.filter((value): value is string => typeof value === 'string' && value.length > 0);
+          if (sanitized.length) {
+            normalized[metric] = sanitized;
+          }
+        }
+      });
+      if (Object.keys(normalized).length) {
+        return normalized;
+      }
+    }
+    const fallback: Record<string, string[]> = {};
+    includedColumnsRaw.forEach((column) => {
+      const { metric } = parseCompositeKey(column);
+      if (!metric) {
+        return;
+      }
+      if (!fallback[metric]) {
+        fallback[metric] = [];
+      }
+      if (!fallback[metric].includes(column)) {
+        fallback[metric].push(column);
+      }
+    });
+    return fallback;
+  }, [includedColumnsRaw, parseCompositeKey, spec]);
+
+  const metricLegendMap = useMemo(() => {
+    const lookup = spec?.meta?.metricLegendMap;
+    if (lookup && typeof lookup === 'object') {
+      const normalized: Record<string, string[]> = {};
+      Object.entries(lookup).forEach(([metric, legendNames]) => {
+        if (Array.isArray(legendNames)) {
+          const sanitized = legendNames.filter((value): value is string => typeof value === 'string' && value.length > 0);
+          if (sanitized.length) {
+            normalized[metric] = sanitized;
+          }
+        }
+      });
+      if (Object.keys(normalized).length) {
+        return normalized;
+      }
+    }
+    return {} as Record<string, string[]>;
+  }, [spec]);
+
+  const metricDisplayNames = useMemo(() => {
+    const lookup = spec?.meta?.metricDisplayNames;
+    if (lookup && typeof lookup === 'object') {
+      const normalized: Record<string, string> = {};
+      Object.entries(lookup).forEach(([metric, label]) => {
+        if (typeof label === 'string' && label.trim().length) {
+          normalized[metric] = label.trim();
+        }
+      });
+      if (Object.keys(normalized).length) {
+        return normalized;
+      }
+    }
+    return {} as Record<string, string>;
+  }, [spec]);
+
+  const metricKeys = useMemo(() => {
+    const metaMetrics = spec?.meta?.metricColumns;
+    if (Array.isArray(metaMetrics) && metaMetrics.length) {
+      return metaMetrics.filter(
+        (value: unknown): value is string => typeof value === 'string' && value.trim().length,
+      );
+    }
+    const dedup = new Set<string>();
+    if (Object.keys(metricSeriesColumns).length) {
+      Object.keys(metricSeriesColumns).forEach((metric) => {
+        if (metric && metric.trim().length) {
+          dedup.add(metric);
+        }
+      });
+    } else {
+      includedColumnsRaw.forEach((column) => {
+        const { metric } = parseCompositeKey(column);
+        if (metric) {
+          dedup.add(metric);
+        }
+      });
+    }
+    return Array.from(dedup);
+  }, [includedColumnsRaw, metricSeriesColumns, parseCompositeKey, spec]);
+
   const intentKey =
     spec?.meta?.chartDesign?.intent ??
     spec?.meta?.intent ??
@@ -36,7 +151,6 @@ export const ChartCard: React.FC<ChartCardProps> = ({
     if (!enableDropdown) {
       return [] as Array<{ label: string; value: string }>;
     }
-
     if (intentKey === 'revenue_growth_vs_avg') {
       return [
         { label: 'YoY Growth', value: 'yoy_growth' },
@@ -44,42 +158,97 @@ export const ChartCard: React.FC<ChartCardProps> = ({
         { label: 'Industry Average', value: 'industry' },
       ];
     }
-
-    const included = Array.isArray(spec?.meta?.includedColumns) ? spec.meta.includedColumns : [];
-    const displayNames = (spec?.meta?.displayNames ?? {}) as Record<string, string>;
-    return included.map((column: string) => ({
-      value: column,
-      label: typeof displayNames[column] === 'string' && displayNames[column].trim().length
-        ? displayNames[column]
-        : formatColumnLabel(column),
+    return metricKeys.map((metric) => ({
+      value: metric,
+      label: metricDisplayNames[metric] ?? formatColumnLabel(metric),
     }));
-  }, [enableDropdown, intentKey, spec]);
+  }, [enableDropdown, intentKey, metricDisplayNames, metricKeys]);
 
   const defaultDropdownValue = useMemo(() => {
     if (!dropdownOptions.length) {
       return undefined;
     }
     if (intentKey === 'revenue_growth_vs_avg') {
-      return 'YoY Growth';
+      return 'yoy_growth';
     }
     const defaults = Array.isArray(spec?.meta?.defaultColumns) ? spec.meta.defaultColumns : [];
-    const displayNames = (spec?.meta?.displayNames ?? {}) as Record<string, string>;
-    const resolveLabel = (column: string) => {
-      const candidate = displayNames[column];
-      return typeof candidate === 'string' && candidate.trim().length
-        ? candidate
-        : formatColumnLabel(column);
-    };
-    if (defaults.length) {
-      const preferred = dropdownOptions.find(
-        (option) => option.value === defaults[0] || option.label === resolveLabel(defaults[0]),
-      );
-      if (preferred) {
-        return preferred.label;
-      }
+    const preferredMetric = defaults.find((metric) =>
+      dropdownOptions.some((option) => option.value === metric),
+    );
+    if (preferredMetric) {
+      return preferredMetric;
     }
-    return dropdownOptions[0]?.label;
+    return dropdownOptions[0]?.value;
   }, [dropdownOptions, intentKey, spec]);
+
+  const [activeMetric, setActiveMetric] = useState<string | undefined>(defaultDropdownValue);
+  useEffect(() => {
+    setActiveMetric((prev) => {
+      if (!defaultDropdownValue) {
+        return prev;
+      }
+      if (prev === defaultDropdownValue) {
+        return prev;
+      }
+      return defaultDropdownValue;
+    });
+  }, [defaultDropdownValue]);
+
+  const [legendSelection, setLegendSelection] = useState<Record<string, boolean>>({});
+
+  const selectValue = useMemo(() => {
+    if (!dropdownOptions.length) {
+      return '';
+    }
+    const candidate = activeMetric ?? defaultDropdownValue ?? dropdownOptions[0]?.value ?? '';
+    if (dropdownOptions.some((option) => option.value === candidate)) {
+      return candidate;
+    }
+    return dropdownOptions[0]?.value ?? '';
+  }, [activeMetric, defaultDropdownValue, dropdownOptions]);
+
+  useEffect(() => {
+    const normalizeSelection = (source: unknown): Record<string, boolean> | undefined => {
+      if (!source || typeof source !== 'object') {
+        return undefined;
+      }
+      const result: Record<string, boolean> = {};
+      Object.entries(source as Record<string, unknown>).forEach(([key, value]) => {
+        if (typeof key === 'string') {
+          result[key] = Boolean(value);
+        }
+      });
+      return Object.keys(result).length ? result : undefined;
+    };
+
+    const fromMeta = normalizeSelection(spec?.meta?.defaultLegendSelection);
+    const fromLegend = (() => {
+      const legendOption = (spec?.legend as any) || {};
+      if (Array.isArray(legendOption)) {
+        for (const entry of legendOption) {
+          const normalized = normalizeSelection(entry?.selected);
+          if (normalized) {
+            return normalized;
+          }
+        }
+        return undefined;
+      }
+      return normalizeSelection(legendOption?.selected);
+    })();
+
+    const candidate = fromMeta ?? fromLegend;
+    if (!candidate) {
+      return;
+    }
+    setLegendSelection((prev) => {
+      const prevKeys = Object.keys(prev);
+      const candidateKeys = Object.keys(candidate);
+      if (prevKeys.length === candidateKeys.length && candidateKeys.every((key) => prev[key] === candidate[key])) {
+        return prev;
+      }
+      return candidate;
+    });
+  }, [spec]);
 
   const handleChartError = (error: any) => {
     console.log('[ChartCard] Chart error boundary triggered:', error);
@@ -94,70 +263,125 @@ export const ChartCard: React.FC<ChartCardProps> = ({
     }
   };
 
-  const handleMetricChange = (selectedMetric: string) => {
-    const instance = chartRef.current;
-    if (instance) {
-      const current = instance.getOption();
-      const legend = current.legend && current.legend[0];
-      if (legend && legend.data) {
-        const selectedMap: any = legend.selected || {};
-        const selectedLower = selectedMetric.trim().toLowerCase();
-        const fallbackSelection = Object.entries(selectedMap).find(([, value]: [string, unknown]) => Boolean(value))?.[0];
-        // Hide all series first
-        legend.data.forEach((name: string) => selectedMap[name] = false);
-        let matched = false;
-        // Show series based on selection
-        legend.data.forEach((name: string) => {
-          const nameLower = name.trim().toLowerCase();
+  const handleMetricChange = useCallback(
+    (metricKey: string) => {
+      if (!metricKey) {
+        return;
+      }
+      setActiveMetric(metricKey);
+      const instance = chartRef.current;
+      if (!instance || typeof instance.getOption !== 'function') {
+        return;
+      }
+      const option = instance.getOption() || {};
+      const legendOption = option?.legend;
+      const legendEntries = Array.isArray(legendOption)
+        ? legendOption
+        : legendOption
+        ? [legendOption]
+        : [];
+      if (!legendEntries.length) {
+        return;
+      }
+      const nextSelection: Record<string, boolean> = {};
+      legendEntries.forEach((entry: any) => {
+        if (Array.isArray(entry?.data)) {
+          entry.data.forEach((name: unknown) => {
+            if (typeof name === 'string') {
+              nextSelection[name] = false;
+            }
+          });
+        }
+      });
+      const enableSeries = (name: string) => {
+        if (Object.prototype.hasOwnProperty.call(nextSelection, name)) {
+          nextSelection[name] = true;
+          return true;
+        }
+        return false;
+      };
 
-          if (nameLower === selectedLower) {
-            selectedMap[name] = true;
-            matched = true;
-            return;
-          }
-          // Handle different series name patterns
-          if (name.endsWith(' - ' + selectedMetric)) {
-            // Standard pattern: "Company - Metric"
-            selectedMap[name] = true;
-            matched = true;
-          } else if (selectedLower === 'yoy growth' && nameLower.includes('yoy growth')) {
-            // Revenue growth pattern: show both company and industry average
-            selectedMap[name] = true;
-            matched = true;
-          } else if (selectedLower === 'company' && nameLower.includes(' - yoy growth') && !nameLower.includes('industry')) {
-            // Show only company data for revenue growth
-            selectedMap[name] = true;
-            matched = true;
-          } else if (selectedLower === 'industry average' && nameLower.includes('industry average')) {
-            // Show only industry average data
-            selectedMap[name] = true;
-            matched = true;
-          } else if (selectedLower.includes('margin change') && nameLower.includes('margin change')) {
-            // Margin growth pattern: show both company and industry average
-            selectedMap[name] = true;
-            matched = true;
-          } else if (selectedLower === 'company' && nameLower.includes(' - ') && nameLower.includes('margin change') && !nameLower.includes('industry')) {
-            // Show only company data for margin growth
-            selectedMap[name] = true;
-            matched = true;
-          } else if (selectedLower === 'industry average' && nameLower.includes('industry average') && nameLower.includes('margin change')) {
-            // Show only industry average data for margin growth
-            selectedMap[name] = true;
-            matched = true;
+      const explicitNames = new Set(
+        (metricLegendMap[metricKey] ?? []).filter(
+          (value) => typeof value === 'string' && value.trim().length > 0,
+        ),
+      );
+      let matched = false;
+      if (explicitNames.size) {
+        Object.keys(nextSelection).forEach((name) => {
+          if (explicitNames.has(name)) {
+            matched = enableSeries(name) || matched;
           }
         });
-
-        if (!matched) {
-          const fallback = legend.data.find((name: string) => name.trim().toLowerCase() === selectedLower) ?? fallbackSelection ?? legend.data[0];
-          if (fallback) {
-            selectedMap[fallback] = true;
-          }
-        }
-
-        instance.setOption({ legend: [{ selected: selectedMap }] });
       }
-    }
-  };
+
+      if (!matched) {
+        const compositeTargets = metricSeriesColumns[metricKey] ?? [];
+        if (compositeTargets.length) {
+          Object.keys(nextSelection).forEach((name) => {
+            const nameLower = name.trim().toLowerCase();
+            compositeTargets.forEach((target) => {
+              const parsed = parseCompositeKey(target);
+              if (parsed.ticker && nameLower.startsWith(parsed.ticker.toLowerCase())) {
+                matched = enableSeries(name) || matched;
+              } else if (parsed.metric) {
+                const normalizedMetric = parsed.metric.replace(/_/g, ' ').toLowerCase();
+                if (normalizedMetric && nameLower.includes(normalizedMetric)) {
+                  matched = enableSeries(name) || matched;
+                }
+              }
+            });
+          });
+        }
+      }
+
+      if (!matched) {
+        const label = metricDisplayNames[metricKey] ?? formatColumnLabel(metricKey);
+        const selectedLower = label.trim().toLowerCase();
+        Object.keys(nextSelection).forEach((name) => {
+          const nameLower = name.trim().toLowerCase();
+          if (nameLower === selectedLower || nameLower.endsWith(` - ${selectedLower}`)) {
+            matched = enableSeries(name) || matched;
+          } else if (
+            selectedLower.includes('growth') &&
+            (nameLower.includes('yoy growth') || nameLower.includes('growth'))
+          ) {
+            matched = enableSeries(name) || matched;
+          }
+        });
+      }
+
+      if (!matched) {
+        const fallback =
+          Object.entries(legendSelection).find(([, value]) => Boolean(value))?.[0] ??
+          Object.keys(nextSelection)[0];
+        if (fallback) {
+          nextSelection[fallback] = true;
+        }
+      }
+
+      setLegendSelection((prev) => {
+        const prevKeys = Object.keys(prev);
+        const nextKeys = Object.keys(nextSelection);
+        if (
+          prevKeys.length === nextKeys.length &&
+          nextKeys.every((key) => prev[key] === nextSelection[key])
+        ) {
+          return prev;
+        }
+        return nextSelection;
+      });
+    },
+    [
+      formatColumnLabel,
+      legendSelection,
+      metricDisplayNames,
+      metricLegendMap,
+      metricSeriesColumns,
+      parseCompositeKey,
+      setActiveMetric,
+    ],
+  );
 
   const scopeBanner = spec?.meta?.scopeBanner;
   const statistic = spec?.meta?.chartDesign?.statistic ?? spec?.statistic;
@@ -247,6 +471,47 @@ export const ChartCard: React.FC<ChartCardProps> = ({
     }
   }, [spec]);
 
+  useEffect(() => {
+    const instance = chartRef.current;
+    if (!instance) {
+      return;
+    }
+    if (!legendSelection || typeof legendSelection !== 'object') {
+      return;
+    }
+    try {
+      const current = instance.getOption ? instance.getOption() : {};
+      const legendOption = current?.legend;
+      const legendEntries = Array.isArray(legendOption)
+        ? legendOption
+        : legendOption
+        ? [legendOption]
+        : [];
+      const patched =
+        legendEntries.length > 0
+          ? legendEntries.map((entry: any) => ({
+              ...(entry || {}),
+              selected: {
+                ...(entry?.selected || {}),
+                ...legendSelection,
+              },
+            }))
+          : [
+              {
+                selected: { ...legendSelection },
+              },
+            ];
+      instance.setOption(
+        {
+          legend: patched,
+        },
+        { notMerge: false, replaceMerge: ['legend'] },
+      );
+    } catch (err) {
+      console.warn('[ChartCard] Failed to apply legend selection', err);
+    }
+  }, [legendSelection]);
+
   return (
     <div ref={containerRef} className="bg-gray-800 border border-gray-700 rounded-xl shadow-2xl p-4 sm:p-6 md:p-8">
       <div className="flex flex-col gap-3 mb-3 sm:mb-4">
@@ -303,11 +568,11 @@ export const ChartCard: React.FC<ChartCardProps> = ({
                   id={dropdownId}
                   className="bg-gray-100 border border-gray-300 rounded px-2 sm:px-3 py-1 sm:py-1.5 text-sm sm:text-base min-h-[32px] sm:min-h-[36px]"
                   onChange={(e) => handleMetricChange(e.target.value)}
-                  defaultValue={defaultDropdownValue}
+                  value={selectValue}
                 >
                   {/* Always show metrics */}
                   {dropdownOptions.map((option) => (
-                    <option key={option.value} value={option.label}>
+                    <option key={option.value} value={option.value}>
                       {option.label}
                     </option>
                   ))}
@@ -340,6 +605,20 @@ export const ChartCard: React.FC<ChartCardProps> = ({
             opts={{ renderer: 'canvas', devicePixelRatio: window.devicePixelRatio || 1 }} 
             onChartReady={(instance) => { 
               chartRef.current = instance;
+              if (instance && legendSelection && Object.keys(legendSelection).length) {
+                try {
+                  const patched = {
+                    legend: [
+                      {
+                        selected: { ...legendSelection },
+                      },
+                    ],
+                  };
+                  instance.setOption(patched, { notMerge: false, replaceMerge: ['legend'] });
+                } catch (err) {
+                  console.warn('[ChartCard] Unable to apply legend selection on ready', err);
+                }
+              }
               // Small delay to ensure proper initialization
               setTimeout(() => instance.resize(), 100);
             }}

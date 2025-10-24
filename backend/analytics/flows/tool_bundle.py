@@ -201,23 +201,62 @@ def _extract_stock_widget(results: Optional[List[Dict[str, Any]]]) -> Optional[D
 def _extract_web_context(results: Optional[List[Dict[str, Any]]]) -> Optional[Dict[str, Any]]:
     if not isinstance(results, list):
         return None
-    for entry in reversed(results):
-        if not isinstance(entry, dict) or entry.get("tool") != "web_retriever":
+
+    payloads: List[Dict[str, Any]] = []
+    base_query: Optional[str] = None
+    topic_total: int = 0
+
+    for entry in results:
+        if not isinstance(entry, dict):
+            continue
+        tool_name = str(entry.get("tool") or "").strip()
+        if not tool_name.startswith("web_retriever"):
             continue
         payload = entry.get("payload") or {}
-        if not isinstance(payload, dict) or not payload.get("ready"):
+        if not isinstance(payload, dict):
             continue
-        context = copy.deepcopy(payload)
+        if not payload.get("ready") and not payload.get("snippets"):
+            continue
+
+        payload_copy = copy.deepcopy(payload)
         metadata = entry.get("metadata")
         if isinstance(metadata, dict):
             summary = metadata.get("summary")
-            if summary and not context.get("summary"):
-                context["summary"] = summary
+            if summary and not payload_copy.get("summary"):
+                payload_copy["summary"] = summary
             cache_hit = metadata.get("cache_hit")
-            if cache_hit is not None and "from_cache" not in context:
-                context["from_cache"] = cache_hit
-        return context
-    return None
+            if cache_hit is not None and "from_cache" not in payload_copy:
+                payload_copy["from_cache"] = cache_hit
+            for key in ("topic_index", "topic_total", "topic_label", "topic_position"):
+                if key in metadata and key not in payload_copy:
+                    payload_copy[key] = metadata[key]
+        if base_query is None:
+            base_query = payload_copy.get("query") or payload_copy.get("query_terms")
+        try:
+            topic_total = max(topic_total, int(payload_copy.get("topic_total") or 0))
+        except (TypeError, ValueError):
+            pass
+        payloads.append(payload_copy)
+
+    if not payloads:
+        return None
+
+    merged_context = _merge_web_payloads(payloads, base_query=base_query)
+    if topic_total:
+        merged_context["topic_total"] = topic_total
+
+    topics = merged_context.get("topics")
+    if isinstance(topics, list):
+        merged_context["topics"] = sorted(
+            topics,
+            key=lambda topic: (
+                topic.get("topic_index")
+                if isinstance(topic.get("topic_index"), int)
+                else float("inf"),
+                topic.get("query") or "",
+            ),
+        )
+    return merged_context
 
 
 def collect_tool_bundle(

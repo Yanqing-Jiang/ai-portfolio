@@ -20,8 +20,9 @@ import { ProcessNode } from './ProcessNode';
 import { ProcessStep, FlowMode, FlowVisualTheme } from '../types';
 
 const LANE_ORDER = ['overview', 'coordination', 'planner', 'sql', 'market', 'web', 'chart', 'analysis', 'fanout'] as const;
+type LaneKey = (typeof LANE_ORDER)[number];
 
-const LANE_LABELS: Record<(typeof LANE_ORDER)[number], string> = {
+const LANE_LABELS: Record<LaneKey, string> = {
   overview: 'Overview',
   coordination: 'Supervisor Hub',
   planner: 'Planner Lane',
@@ -33,7 +34,7 @@ const LANE_LABELS: Record<(typeof LANE_ORDER)[number], string> = {
   fanout: 'Tool Fan-Out',
 };
 
-const LANE_BASE_POSITIONS: Record<(typeof LANE_ORDER)[number], { x: number; y: number }> = {
+const LANE_BASE_POSITIONS: Record<LaneKey, { x: number; y: number }> = {
   overview: { x: 0, y: -260 },
   coordination: { x: 0, y: -120 },
   planner: { x: -360, y: 30 },
@@ -45,8 +46,71 @@ const LANE_BASE_POSITIONS: Record<(typeof LANE_ORDER)[number], { x: number; y: n
   fanout: { x: -360, y: -200 },
 };
 
+const SINGLE_AGENT_LANE_BASE_POSITIONS: Record<LaneKey, { x: number; y: number }> = {
+  overview: { x: -520, y: -260 },
+  coordination: { x: 60, y: -80 },
+  planner: { x: -240, y: -180 },
+  sql: { x: -220, y: 40 },
+  market: { x: 20, y: 40 },
+  web: { x: 260, y: 40 },
+  chart: { x: 500, y: 40 },
+  analysis: { x: 300, y: 240 },
+  fanout: { x: -40, y: -200 },
+};
+
+const FLOW_START_POSITIONS: Partial<Record<FlowMode, { x: number; y: number }>> = {
+  'single-agent': { x: -620, y: -260 },
+  'multi-agent': { x: -540, y: -260 },
+};
+
+const START_NODE_ID = 'fanout_start';
+const START_NODE_LABEL = '__start__';
+const SINGLE_AGENT_PREPROCESS_SEQUENCE = [
+  'classification',
+  'intent_classifier',
+  'intent_detection',
+  'clarification_manager',
+  'clarification',
+  'schema_validation',
+] as const;
+const PREPROCESS_HORIZONTAL_SPACING = 180;
+const SINGLE_AGENT_PREPROCESS_BASE = { x: -340, y: -190 };
+const LANE_GROUP_HORIZONTAL_SPACING = 180;
+const LANE_GROUP_VERTICAL_SPACING = 110;
+
+const PLANNER_INTENT_STEPS = new Set<string>([
+  'initializing',
+  'classification',
+  'intent_classifier',
+  'intent_detection',
+  'schema_clarifier',
+  'clarification_manager',
+  'clarification',
+  'schema_validation',
+  'plan_and_select_template',
+]);
+
+const HORIZONTAL_GROUP_KEYS = new Set<string>(['planner:intent_prep']);
+const FANOUT_TARGET_LANES: LaneKey[] = ['sql', 'market', 'web', 'chart'];
+
+const HUB_STEP_IDS: Record<FlowMode, string> = {
+  'planner-executor': 'agent_coordination',
+  'single-agent': 'tool_fanout',
+  'multi-agent': 'agent_coordination',
+};
+
 const LANE_STACK_SPACING = 120;
 const COORDINATION_STACK_SPACING = 100;
+const SQL_SPINE_STEPS = new Set([
+  'sql_generator',
+  'sql_validator',
+  'sql_executor',
+  'sql_result_bridge',
+  'sql_compilation',
+  'sql_validation',
+  'sql_execution',
+]);
+const STRICT_VERTICAL_LANES = new Set<LaneKey>(['sql']);
 
 const isBrowser = typeof window !== 'undefined';
 
@@ -98,6 +162,10 @@ interface ProcessNodeData {
   parallelGroup?: string;
   sequence?: number;
   lane?: string;
+  resolvedLane?: LaneKey;
+  laneGroupId?: string;
+  bandIndex?: number;
+  memberIndex?: number;
   reused?: boolean;
   finalAnswerOnly?: boolean;
   missingComponents?: string[];
@@ -162,27 +230,48 @@ const FLOW_LAYOUT: Record<FlowMode, { columns: number; horizontalGap: number; ve
   'multi-agent': { columns: 5, horizontalGap: 520, verticalGap: 340 },
 };
 
-const STEP_LANE_OVERRIDES: Record<string, (typeof LANE_ORDER)[number]> = {
+const STEP_LANE_OVERRIDES: Record<string, LaneKey> = {
   agent_coordination: 'coordination',
   planner_agent: 'planner',
   planner_phase: 'planner',
+  initializing: 'planner',
+  classification: 'planner',
+  intent_classifier: 'planner',
+  intent_detection: 'planner',
+  schema_clarifier: 'planner',
+  clarification_manager: 'planner',
+  clarification: 'planner',
+  schema_validation: 'planner',
+  plan_and_select_template: 'planner',
   query_agent: 'sql',
   query_phase: 'sql',
-  analyst_agent: 'analysis',
-  analyst_phase: 'analysis',
-  chart_agent: 'chart',
-  chart_phase: 'chart',
-  web_research_agent: 'web',
-  web_research_phase: 'web',
-  market_agent: 'market',
-  market_phase: 'market',
-  tool_fanout: 'fanout',
+  sql_lane: 'sql',
+  sql_spine: 'sql',
+  sql_generator: 'sql',
+  sql_validator: 'sql',
+  sql_executor: 'sql',
+  sql_result_bridge: 'sql',
   sql_compilation: 'sql',
   sql_validation: 'sql',
   sql_execution: 'sql',
+  analyst_agent: 'analysis',
+  analyst_phase: 'analysis',
+  market_agent: 'market',
+  market_phase: 'market',
+  market_lane: 'market',
+  tool_execution: 'market',
+  web_research_agent: 'web',
+  web_research_phase: 'web',
+  web_lane: 'web',
+  chart_agent: 'chart',
+  chart_phase: 'chart',
   chart_generation: 'chart',
+  chart_designer: 'chart',
   analysis_generation: 'analysis',
   analysis_revision: 'analysis',
+  analysis_writer: 'analysis',
+  follow_up_route: 'analysis',
+  tool_fanout: 'fanout',
 };
 
 const inferHubLane = (step: ProcessStep): (typeof LANE_ORDER)[number] => {
@@ -251,23 +340,31 @@ const FLOW_CANVAS_DECOR: Record<FlowMode, { wrapperClass: string; overlayClass: 
 const STEP_PHASES: Record<string, (typeof PHASE_SEQUENCE)[number]> = {
   classification: 'analysis',
   classify: 'analysis',
+  intent_classifier: 'analysis',
   intent_detection: 'analysis',
+  clarification_manager: 'analysis',
   clarification: 'analysis',
   schema_validation: 'analysis',
   plan_and_select_template: 'planning',
   planning: 'planning',
   tool_planning: 'planning',
   provisional_plan: 'planning',
+  sql_generator: 'execution',
   sql_validation: 'execution',
+  sql_validator: 'execution',
+  sql_executor: 'execution',
   sql_compilation: 'execution',
   sql_execution: 'execution',
+  sql_result_bridge: 'execution',
   tool_execution: 'execution',
   plan_chart: 'execution',
+  chart_designer: 'execution',
   chart_generation: 'execution',
   agent_coordination: 'execution',
   sql_lane: 'execution',
   market_lane: 'execution',
   web_lane: 'execution',
+  analysis_writer: 'synthesis',
   analysis_generation: 'synthesis',
   finalization: 'synthesis',
 };
@@ -323,6 +420,71 @@ const computeSerpentinePlacement = (
   };
 };
 
+const getLaneBasePosition = (lane: LaneKey, mode: FlowMode): { x: number; y: number } => {
+  if (mode === 'single-agent') {
+    return SINGLE_AGENT_LANE_BASE_POSITIONS[lane] ?? SINGLE_AGENT_LANE_BASE_POSITIONS.overview;
+  }
+  return LANE_BASE_POSITIONS[lane] ?? LANE_BASE_POSITIONS.overview;
+};
+
+const computeLaneGroupId = (lane: LaneKey, step: ProcessStep): string => {
+  if (lane === 'planner' && PLANNER_INTENT_STEPS.has(step.id)) {
+    return 'intent_prep';
+  }
+  if (lane === 'analysis' && (step.id === 'analysis_generation' || step.id === 'follow_up_route')) {
+    return 'analysis_merge';
+  }
+  if (lane === 'sql' && SQL_SPINE_STEPS.has(step.id)) {
+    return 'sql_spine';
+  }
+  if (lane === 'fanout') {
+    return 'fanout_hub';
+  }
+  return step.parallelGroup ?? step.lane ?? step.id;
+};
+
+const extractLatestThinking = (step: ProcessStep): string | undefined => {
+  const trailing = step.thinking?.slice(-1)[0];
+  if (step.id === 'tool_fanout') {
+    const results = step.details?.tool_fanout_results;
+    if (Array.isArray(results) && results.length > 0) {
+      const winner = results.find((result) => result?.status === 'completed' && result?.tool);
+      if (winner?.tool) {
+        return `Winning branch: ${winner.tool}`;
+      }
+      const running = results.find((result) => result?.status === 'running' && result?.tool);
+      if (running?.tool) {
+        return `Running branch: ${running.tool}`;
+      }
+      if (!trailing) {
+        return `Branches fan-out: ${results.length}`;
+      }
+    }
+  }
+  return trailing;
+};
+
+const getStartPosition = (mode: FlowMode): { x: number; y: number } => {
+  const override = FLOW_START_POSITIONS[mode];
+  if (override) {
+    return override;
+  }
+  return { x: -480, y: -260 };
+};
+
+const isSpeculativeStep = (step?: ProcessStep): boolean => {
+  if (!step) {
+    return false;
+  }
+  if (step.status === 'pending' || step.status === 'queued') {
+    return true;
+  }
+  if (step.details?.hedged) {
+    return true;
+  }
+  return false;
+};
+
 const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
   steps,
   flowMode,
@@ -358,74 +520,144 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
       : steps;
 
     const total = prioritizedSteps.length || 1;
-    const useLaneLayout = flowMode === 'multi-agent';
-    const laneCounts: Record<string, number> = {};
+    const useLaneLayout = flowMode !== 'planner-executor';
 
-    return prioritizedSteps.map((step, index) => {
-      const phase = STEP_PHASES[step.id] || 'analysis';
-      const parallelGroup = step.parallelGroup;
-      const laneHint = step.lane ?? parallelGroup;
-
-      let placement: SerpentinePlacement;
-      let laneKey: (typeof LANE_ORDER)[number] | undefined;
-
-      if (useLaneLayout) {
-        const resolvedLane = inferHubLane(step);
-        const base = LANE_BASE_POSITIONS[resolvedLane] ?? LANE_BASE_POSITIONS.overview;
-        const currentCount = laneCounts[resolvedLane] ?? 0;
-        laneCounts[resolvedLane] = currentCount + 1;
-        const stackSpacing = resolvedLane === 'coordination' ? COORDINATION_STACK_SPACING : LANE_STACK_SPACING;
-        placement = {
-          position: {
-            x: base.x,
-            y: base.y + currentCount * stackSpacing,
-          },
-          row: currentCount,
-          stepInRow: 1,
-          columnsInRow: 1,
-          isEvenRow: currentCount % 2 === 0,
-        };
-        laneKey = resolvedLane;
-      } else {
-        placement = computeSerpentinePlacement(
+    if (!useLaneLayout) {
+      return prioritizedSteps.map((step, index) => {
+        const phase = STEP_PHASES[step.id] || 'analysis';
+        const placement = computeSerpentinePlacement(
           index,
           layout.columns,
           layout.horizontalGap,
           layout.verticalGap,
           total,
         );
+        const latestThinking = extractLatestThinking(step);
+        const isActive = step.status === 'in_progress';
+        const isCompleted = step.status === 'completed';
+        const hasError = step.status === 'error';
+        const laneGroupId = step.parallelGroup ?? step.lane ?? step.id;
+
+        return {
+          step,
+          phase,
+          position: placement.position,
+          row: placement.row,
+          stepInRow: placement.stepInRow,
+          columnsInRow: placement.columnsInRow,
+          isEvenRow: placement.isEvenRow,
+          isActive,
+          isCompleted,
+          hasError,
+          latestThinking,
+          index,
+          parallelGroup: step.parallelGroup ?? step.lane,
+          sequence: step.sequence,
+          lane: step.lane,
+          resolvedLane: undefined,
+          laneGroupId,
+          bandKey: undefined,
+          bandIndex: placement.row,
+          memberIndex: placement.stepInRow - 1,
+          reused: Boolean(step.reused),
+          finalAnswerOnly: Boolean(step.finalAnswerOnly),
+          missingComponents: step.missingComponents,
+          analysisAvailable: step.analysisAvailable,
+        };
+      });
+    }
+
+    const presentPreSequence = flowMode === 'single-agent'
+      ? SINGLE_AGENT_PREPROCESS_SEQUENCE.filter((id) => prioritizedSteps.some((entry) => entry.id === id))
+      : [];
+
+    const laneMeta = prioritizedSteps.map((step, index) => {
+      const phase = STEP_PHASES[step.id] || 'analysis';
+      const resolvedLane = inferHubLane(step);
+      const laneGroupId = computeLaneGroupId(resolvedLane, step);
+      const bandKey = `${resolvedLane}:${laneGroupId}`;
+      return { step, index, phase, resolvedLane, laneGroupId, bandKey };
+    });
+
+    const laneGroupSizes = new Map<string, number>();
+    laneMeta.forEach((meta) => {
+      laneGroupSizes.set(meta.bandKey, (laneGroupSizes.get(meta.bandKey) ?? 0) + 1);
+    });
+
+    const laneNextBandIndex = new Map<LaneKey, number>();
+    const bandIndexMap = new Map<string, number>();
+    const bandMemberIndexMap = new Map<string, number>();
+
+    return laneMeta.map((meta) => {
+      const { step, index, phase, resolvedLane, laneGroupId, bandKey } = meta;
+      const base = getLaneBasePosition(resolvedLane, flowMode);
+      const stackSpacing = resolvedLane === 'coordination' ? COORDINATION_STACK_SPACING : LANE_STACK_SPACING;
+
+      let bandIndex = bandIndexMap.get(bandKey);
+      if (bandIndex === undefined) {
+        const nextIndex = laneNextBandIndex.get(resolvedLane) ?? 0;
+        bandIndex = nextIndex;
+        bandIndexMap.set(bandKey, bandIndex);
+        laneNextBandIndex.set(resolvedLane, nextIndex + 1);
       }
 
-      const latestThinking = step.thinking?.slice(-1)[0];
+      const groupSize = laneGroupSizes.get(bandKey) ?? 1;
+      const memberIndex = bandMemberIndexMap.get(bandKey) ?? 0;
+      bandMemberIndexMap.set(bandKey, memberIndex + 1);
+
+      let positionX = base.x;
+      let positionY = base.y + bandIndex * stackSpacing;
+
+      if (flowMode === 'single-agent' && SINGLE_AGENT_PREPROCESS_SEQUENCE.includes(step.id)) {
+        const orderIndex = presentPreSequence.indexOf(step.id);
+        if (orderIndex >= 0) {
+          positionX = SINGLE_AGENT_PREPROCESS_BASE.x + orderIndex * PREPROCESS_HORIZONTAL_SPACING;
+          positionY = SINGLE_AGENT_PREPROCESS_BASE.y;
+        }
+      } else if (HORIZONTAL_GROUP_KEYS.has(bandKey)) {
+        const offset = (memberIndex - (groupSize - 1) / 2) * LANE_GROUP_HORIZONTAL_SPACING;
+        positionX = base.x + offset;
+      } else {
+        positionY += memberIndex * LANE_GROUP_VERTICAL_SPACING;
+        if (!STRICT_VERTICAL_LANES.has(resolvedLane) && memberIndex > 0) {
+          const indent = Math.min(memberIndex, 3) * 28;
+          positionX += indent;
+        }
+      }
+
+      const latestThinking = extractLatestThinking(step);
       const isActive = step.status === 'in_progress';
       const isCompleted = step.status === 'completed';
       const hasError = step.status === 'error';
 
-      const laneGroup = useLaneLayout ? (laneKey ?? inferHubLane(step)) : (laneHint ?? parallelGroup);
-
       return {
         step,
         phase,
-        position: placement.position,
-        row: placement.row,
-        stepInRow: placement.stepInRow,
-        columnsInRow: placement.columnsInRow,
-        isEvenRow: placement.isEvenRow,
+        position: { x: positionX, y: positionY },
+        row: bandIndex,
+        stepInRow: memberIndex + 1,
+        columnsInRow: groupSize,
+        isEvenRow: bandIndex % 2 === 0,
         isActive,
         isCompleted,
         hasError,
         latestThinking,
         index,
-        parallelGroup: laneGroup,
+        parallelGroup: step.parallelGroup ?? laneGroupId,
         sequence: step.sequence,
-        lane: laneHint ?? (typeof laneGroup === 'string' ? laneGroup : undefined),
+        lane: step.lane ?? resolvedLane,
+        resolvedLane,
+        laneGroupId,
+        bandKey,
+        bandIndex,
+        memberIndex,
         reused: Boolean(step.reused),
         finalAnswerOnly: Boolean(step.finalAnswerOnly),
         missingComponents: step.missingComponents,
         analysisAvailable: step.analysisAvailable,
       };
     });
-  }, [steps, layout.columns, layout.horizontalGap, layout.verticalGap, flowMode]);
+  }, [steps, flowMode, layout.columns, layout.horizontalGap, layout.verticalGap]);
 
 
   const translateExtent = useMemo(() => {
@@ -440,6 +672,9 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
     }
 
     const positions = processedSteps.map(({ position }) => position);
+    if (flowMode !== 'planner-executor') {
+      positions.push(getStartPosition(flowMode));
+    }
     const maxX = Math.max(...positions.map(({ x }) => x));
     let maxY = Math.max(...positions.map(({ y }) => y));
     let minX = Math.min(...positions.map(({ x }) => x));
@@ -486,7 +721,9 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
   }, []);
 
   useEffect(() => {
-    const totalSteps = processedSteps.length || 1;
+    const includeStart = flowMode !== 'planner-executor';
+    const totalSteps = (processedSteps.length || 0) + (includeStart ? 1 : 0);
+    const sequenceOffset = includeStart ? 1 : 0;
     setNodes((prevNodes) => {
       const previous = new Map(prevNodes.map((node) => [node.id, node]));
       const baseNodes = processedSteps.map(
@@ -502,6 +739,10 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
           parallelGroup,
           sequence,
           lane,
+          resolvedLane,
+          laneGroupId,
+          bandIndex,
+          memberIndex,
           reused,
           finalAnswerOnly,
           missingComponents,
@@ -523,7 +764,7 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
               isCompleted,
               hasError,
               statusLabel: toFriendlyStatus(step.status),
-              sequenceIndex: index,
+              sequenceIndex: index + sequenceOffset,
               totalSteps,
               latestThinking,
               currentStatus,
@@ -532,7 +773,11 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
               progressPercent,
               parallelGroup,
               sequence,
-              lane,
+              lane: lane ?? resolvedLane,
+              resolvedLane,
+              laneGroupId,
+              bandIndex,
+              memberIndex,
               reused,
               finalAnswerOnly,
               missingComponents,
@@ -542,100 +787,59 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
         },
       );
 
-      if (flowMode === 'multi-agent') {
-        const hubPlacement = processedSteps.find((entry) => entry.step.id === 'agent_coordination');
-        if (hubPlacement) {
-          const hubPosition = previous.get(hubPlacement.step.id)?.position ?? hubPlacement.position;
-          const supervisorStatus = hubPlacement.step.status;
-          const finalStatus: ProcessStep['status'] =
-            supervisorStatus === 'completed'
-              ? 'completed'
-              : supervisorStatus === 'error'
-                ? 'error'
-                : supervisorStatus === 'in_progress'
-                  ? 'in_progress'
-                  : 'pending';
+      const nodesWithStructure = [...baseNodes];
 
-          const userStep: ProcessStep = {
-            id: 'user_entry',
-            name: 'User Question',
-            status: 'completed',
-            thinking: [],
-            details: { description: 'User prompt captured' },
-          };
-
-          const finalStep: ProcessStep = {
-            id: 'final_response',
-            name: 'Final Response',
-            status: finalStatus,
-            thinking: [],
-            details: { description: 'Supervisor consolidates specialist outputs' },
-          };
-
-          const pseudoTotal = totalSteps + 1;
-          const pseudoNodes: Node<ProcessNodeData>[] = [
-            {
-              id: userStep.id,
-              type: 'processNode',
-              position: { x: hubPosition.x - 520, y: hubPosition.y - 160 },
-              dragHandle: '.process-node__drag-handle',
-              sourcePosition: Position.Right,
-              targetPosition: Position.Left,
-              data: {
-                step: userStep,
-                phase: 'analysis',
-                theme,
-                isActive: false,
-                isCompleted: true,
-                hasError: false,
-                statusLabel: toFriendlyStatus(userStep.status),
-                sequenceIndex: 0,
-                totalSteps: pseudoTotal,
-                latestThinking: 'User prompt received',
-                currentStatus,
-                currentDuration,
-                currentTimestamp,
-                progressPercent,
-                parallelGroup: 'overview',
-              },
-            },
-            {
-              id: finalStep.id,
-              type: 'processNode',
-              position: { x: hubPosition.x - 520, y: hubPosition.y + 160 },
-              dragHandle: '.process-node__drag-handle',
-              sourcePosition: Position.Right,
-              targetPosition: Position.Left,
-              data: {
-                step: finalStep,
-                phase: 'synthesis',
-                theme,
-                isActive: finalStatus === 'in_progress',
-                isCompleted: finalStatus === 'completed',
-                hasError: finalStatus === 'error',
-                statusLabel: toFriendlyStatus(finalStatus),
-                sequenceIndex: pseudoTotal - 1,
-                totalSteps: pseudoTotal,
-                latestThinking:
-                  finalStatus === 'completed'
-                    ? 'Final answer ready'
-                    : finalStatus === 'in_progress'
-                      ? 'Packaging narrative'
-                      : 'Awaiting supervisor output',
-                currentStatus,
-                currentDuration,
-                currentTimestamp,
-                progressPercent,
-                parallelGroup: 'overview',
-              },
-            },
-          ];
-
-          return [...pseudoNodes, ...baseNodes];
-        }
+      if (includeStart && !nodesWithStructure.some((node) => node.id === START_NODE_ID)) {
+        const startStep: ProcessStep = {
+          id: START_NODE_ID,
+          name: START_NODE_LABEL,
+          status: 'completed',
+          thinking: ['User prompt received'],
+          details: { description: 'Conversation start' },
+          lane: 'overview',
+          parallelGroup: 'overview',
+          sequence: -1,
+        };
+        const startPosition = previous.get(START_NODE_ID)?.position ?? getStartPosition(flowMode);
+        const startNode: Node<ProcessNodeData> = {
+          id: START_NODE_ID,
+          type: 'processNode',
+          position: startPosition,
+          dragHandle: '.process-node__drag-handle',
+          sourcePosition: Position.Right,
+          targetPosition: Position.Left,
+          data: {
+            step: startStep,
+            phase: 'analysis',
+            theme,
+            isActive: false,
+            isCompleted: true,
+            hasError: false,
+            statusLabel: toFriendlyStatus(startStep.status),
+            sequenceIndex: 0,
+            totalSteps,
+            latestThinking: startStep.thinking?.[0],
+            currentStatus,
+            currentDuration,
+            currentTimestamp,
+            progressPercent,
+            parallelGroup: 'overview',
+            sequence: startStep.sequence,
+            lane: 'overview',
+            resolvedLane: 'overview',
+            laneGroupId: 'overview:start',
+            bandIndex: 0,
+            memberIndex: 0,
+            reused: false,
+            finalAnswerOnly: false,
+            missingComponents: undefined,
+            analysisAvailable: true,
+          },
+        };
+        nodesWithStructure.unshift(startNode);
       }
 
-      return baseNodes;
+      return nodesWithStructure;
     });
   }, [
     processedSteps,
@@ -686,217 +890,317 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
   }, [isVisible, nodes.length, translateExtent]);
 
   useEffect(() => {
-    if (processedSteps.length < 2) {
+    if (!processedSteps.length) {
       setEdges([]);
       return;
     }
 
-    const sequentialEdges: Edge[] = [];
+    const includeStart = flowMode !== 'planner-executor';
+    const stepEntries = new Map(processedSteps.map((entry) => [entry.step.id, entry]));
 
-    for (let i = 0; i < processedSteps.length - 1; i += 1) {
-      const current = processedSteps[i];
-      const next = processedSteps[i + 1];
-      const hasTransitioned = current.step.status === 'completed' || current.step.status === 'error';
-      const isActiveChain = next.step.status === 'in_progress';
-      const shouldAnimate = hasTransitioned || isActiveChain;
-      const targetReused = Boolean(next.reused);
-      const tooltip = targetReused ? buildReusedEdgeTooltip(next.step, next.lane, next.parallelGroup) : undefined;
+    const edges: Edge[] = [];
+    const seenEdgeIds = new Set<string>();
 
-      const baseStroke = isActiveChain
-        ? theme.edgeActive
-        : hasTransitioned
-        ? theme.edgeCompleted
-        : theme.edgeIdle;
-      const baseStrokeWidth = isActiveChain ? 3 : hasTransitioned ? 2.2 : 1.4;
-
-      const edgeStyle: React.CSSProperties = {
-        stroke: baseStroke,
-        strokeWidth: baseStrokeWidth,
-        strokeDasharray: shouldAnimate && !targetReused ? '16 12' : undefined,
-        filter: shouldAnimate && !targetReused ? 'drop-shadow(0 0 8px rgba(148,163,184,0.35))' : undefined,
-      };
-
-      let markerColor = baseStroke;
-
-      if (targetReused) {
-        edgeStyle.stroke = theme.edgeCompleted;
-        edgeStyle.strokeDasharray = '6 3';
-        edgeStyle.strokeWidth = Math.max(baseStrokeWidth, 2.4);
-        edgeStyle.filter = 'drop-shadow(0 0 6px rgba(250,204,21,0.45))';
-        edgeStyle.opacity = 0.95;
-        edgeStyle.cursor = 'help';
-        markerColor = theme.edgeCompleted;
+    const pushEdge = (edge: Edge) => {
+      if (!edge.id || seenEdgeIds.has(edge.id)) {
+        return;
       }
+      seenEdgeIds.add(edge.id);
+      edges.push(edge);
+    };
 
-      sequentialEdges.push({
-        id: `${current.step.id}-${next.step.id}`,
-        source: current.step.id,
-        target: next.step.id,
-        sourceHandle: 'right',
-        targetHandle: 'left',
-        type: 'smoothstep',
-        animated: targetReused ? false : shouldAnimate,
-        style: edgeStyle,
-        className: targetReused ? 'edge-reused' : undefined,
-        data: tooltip ? { tooltip } : undefined,
-        markerEnd: {
-          type: 'arrowclosed',
-          color: markerColor,
-          width: 18,
-          height: 18,
-        },
-      });
+    const makeArrow = (color: string, size = 18) => ({
+      type: 'arrowclosed',
+      color,
+      width: size,
+      height: size,
+    });
+
+    if (processedSteps.length > 1) {
+      for (let i = 0; i < processedSteps.length - 1; i += 1) {
+        const current = processedSteps[i];
+        const next = processedSteps[i + 1];
+        const hasTransitioned = current.step.status === 'completed' || current.step.status === 'error';
+        const isActiveChain = next.step.status === 'in_progress';
+        const shouldAnimate = hasTransitioned || isActiveChain;
+        const targetReused = Boolean(next.reused);
+        const tooltip = targetReused ? buildReusedEdgeTooltip(next.step, next.lane ?? next.resolvedLane, next.parallelGroup) : undefined;
+
+        const baseStroke = isActiveChain
+          ? theme.edgeActive
+          : hasTransitioned
+            ? theme.edgeCompleted
+            : theme.edgeIdle;
+
+        const style: React.CSSProperties = {
+          stroke: targetReused ? theme.edgeCompleted : baseStroke,
+          strokeWidth: isActiveChain ? 3 : hasTransitioned ? 2.2 : 1.4,
+          strokeDasharray: targetReused ? '6 3' : shouldAnimate ? '16 12' : undefined,
+          filter: shouldAnimate && !targetReused ? 'drop-shadow(0 0 8px rgba(148,163,184,0.35))' : undefined,
+          opacity: targetReused ? 0.95 : 1,
+          cursor: targetReused ? 'help' : undefined,
+        };
+
+        pushEdge({
+          id: `${current.step.id}-${next.step.id}`,
+          source: current.step.id,
+          target: next.step.id,
+          sourceHandle: 'right',
+          targetHandle: 'left',
+          type: 'smoothstep',
+          animated: !targetReused && shouldAnimate,
+          style,
+          className: targetReused ? 'edge-reused' : undefined,
+          data: tooltip ? { tooltip } : undefined,
+          markerEnd: makeArrow(targetReused ? theme.edgeCompleted : baseStroke),
+        });
+      }
     }
 
-    if (flowMode === 'multi-agent') {
-      const hubPlacement = processedSteps.find((node) => node.step.id === 'agent_coordination');
-      if (hubPlacement) {
-        const added = new Set<string>();
-        processedSteps.forEach((node) => {
-          if (node.step.id === hubPlacement.step.id) {
-            return;
-          }
-          const lane = node.parallelGroup;
-          if (!lane || lane === 'coordination') {
-            return;
-          }
-          const edgeId = `hub-${hubPlacement.step.id}-${node.step.id}`;
-          if (added.has(edgeId)) {
-            return;
-          }
-          added.add(edgeId);
-          const laneActive = node.step.status === 'in_progress';
-          const laneCompleted = node.step.status === 'completed';
-          const laneReused = Boolean(node.reused);
-          const laneTooltip = laneReused ? buildReusedEdgeTooltip(node.step, node.lane, node.parallelGroup) : undefined;
-          const laneStyle: React.CSSProperties = {
-            stroke: laneActive ? theme.edgeActive : laneCompleted ? theme.edgeCompleted : theme.edgeIdle,
-            strokeWidth: laneActive ? 2.6 : laneCompleted ? 2 : 1.6,
-            strokeDasharray: laneCompleted ? '12 10' : undefined,
-            filter: laneActive ? 'drop-shadow(0 0 8px rgba(192,132,252,0.35))' : undefined,
-          };
-          let laneMarkerColor = laneActive ? theme.edgeActive : laneCompleted ? theme.edgeCompleted : theme.edgeIdle;
+    if (flowMode !== 'planner-executor') {
+      const hubId = HUB_STEP_IDS[flowMode];
+      const hubEntry = hubId ? stepEntries.get(hubId) : undefined;
+      const analysisEntry = stepEntries.get('analysis_generation');
+      const followUpEntry = stepEntries.get('follow_up_route');
+      const toolFanoutEntry = stepEntries.get('tool_fanout');
 
-          if (laneReused) {
-            laneStyle.stroke = theme.edgeCompleted;
-            laneStyle.strokeDasharray = '6 3';
-            laneStyle.strokeWidth = Math.max(laneStyle.strokeWidth ?? 0, 2.4);
-            laneStyle.filter = 'drop-shadow(0 0 6px rgba(250,204,21,0.45))';
-            laneStyle.opacity = 0.95;
-            laneStyle.cursor = 'help';
-            laneMarkerColor = theme.edgeCompleted;
-          }
+      const laneBuckets = new Map<LaneKey, Array<(typeof processedSteps)[number]>>();
+      processedSteps.forEach((entry) => {
+        if (!entry.resolvedLane) {
+          return;
+        }
+        const existing = laneBuckets.get(entry.resolvedLane);
+        if (existing) {
+          existing.push(entry);
+        } else {
+          laneBuckets.set(entry.resolvedLane, [entry]);
+        }
+      });
 
-          sequentialEdges.push({
-            id: edgeId,
-            source: hubPlacement.step.id,
-            target: node.step.id,
-            type: 'smoothstep',
-            sourceHandle: 'right',
-            targetHandle: 'left',
-            animated: laneReused ? false : laneActive,
-            style: laneStyle,
-            className: laneReused ? 'edge-reused' : undefined,
-            data: laneTooltip ? { tooltip: laneTooltip } : undefined,
-            markerEnd: {
-              type: 'arrowclosed',
-              color: laneMarkerColor,
-              width: 16,
-              height: 16,
-            },
+      const connectEdge = (
+        id: string,
+        source: string,
+        target: string,
+        style: React.CSSProperties,
+        tooltip?: string,
+        animated = false,
+        markerColor?: string,
+      ) => {
+        pushEdge({
+          id,
+          source,
+          target,
+          sourceHandle: 'right',
+          targetHandle: 'left',
+          type: 'smoothstep',
+          animated,
+          style,
+          data: tooltip ? { tooltip } : undefined,
+          markerEnd: makeArrow(markerColor ?? (typeof style.stroke === 'string' ? style.stroke : theme.edgeIdle), 16),
+        });
+      };
+
+      if (includeStart) {
+        const startSequence =
+          flowMode === 'single-agent'
+            ? SINGLE_AGENT_PREPROCESS_SEQUENCE.filter((id) => stepEntries.has(id))
+            : [];
+        let previousId = START_NODE_ID;
+        if (flowMode === 'single-agent' && startSequence.length > 0) {
+          startSequence.forEach((stepId) => {
+            const targetEntry = stepEntries.get(stepId);
+            if (!targetEntry) {
+              return;
+            }
+            connectEdge(
+              `${previousId}-${stepId}-prep`,
+              previousId,
+              stepId,
+              {
+                stroke: theme.edgeIdle,
+                strokeWidth: 2,
+              },
+              undefined,
+              false,
+              theme.edgeIdle,
+            );
+            previousId = stepId;
           });
+          if (hubEntry) {
+            connectEdge(
+              `${previousId}-${hubEntry.step.id}-hub`,
+              previousId,
+              hubEntry.step.id,
+              {
+                stroke: theme.edgeActive,
+                strokeWidth: 2.4,
+                filter: 'drop-shadow(0 0 6px rgba(96,165,250,0.35))',
+              },
+              undefined,
+              false,
+              theme.edgeActive,
+            );
+          }
+        } else if (hubEntry) {
+          connectEdge(
+            `${START_NODE_ID}-${hubEntry.step.id}`,
+            START_NODE_ID,
+            hubEntry.step.id,
+            {
+              stroke: theme.edgeActive,
+              strokeWidth: 2.4,
+              filter: 'drop-shadow(0 0 6px rgba(96,165,250,0.35))',
+            },
+            undefined,
+            false,
+            theme.edgeActive,
+          );
+        }
+      }
 
-          const returnEdgeId = `return-${node.step.id}-${hubPlacement.step.id}`;
-          sequentialEdges.push({
-            id: returnEdgeId,
-            source: node.step.id,
-            target: hubPlacement.step.id,
-            type: 'smoothstep',
-            animated: false,
-            sourceHandle: 'right',
-            targetHandle: 'left',
-            style: {
+      const targetLanes =
+        flowMode === 'single-agent'
+          ? FANOUT_TARGET_LANES
+          : LANE_ORDER.filter((lane) => !['overview', 'coordination', 'analysis', 'fanout'].includes(lane));
+
+      targetLanes.forEach((lane) => {
+        const laneEntries = laneBuckets.get(lane);
+        if (!laneEntries || laneEntries.length === 0) {
+          return;
+        }
+        const first = laneEntries[0];
+        if (hubEntry) {
+          const reused = Boolean(first.reused);
+          const speculative = isSpeculativeStep(first.step);
+          const stroke = reused ? theme.edgeCompleted : speculative ? theme.edgeIdle : theme.edgeActive;
+          const style: React.CSSProperties = {
+            stroke,
+            strokeWidth: speculative ? 1.8 : 2.4,
+            strokeDasharray: reused ? '6 3' : speculative ? '10 6' : undefined,
+            opacity: reused ? 0.95 : 1,
+            cursor: reused ? 'help' : undefined,
+            filter: !reused && !speculative ? 'drop-shadow(0 0 6px rgba(148,163,184,0.28))' : undefined,
+          };
+          const tooltip = reused ? buildReusedEdgeTooltip(first.step, first.lane ?? first.resolvedLane, first.parallelGroup) : undefined;
+          connectEdge(
+            `hub-${hubEntry.step.id}-${first.step.id}`,
+            hubEntry.step.id,
+            first.step.id,
+            style,
+            tooltip,
+            !reused && !speculative && first.step.status === 'in_progress',
+            stroke,
+          );
+        }
+
+        const last = laneEntries[laneEntries.length - 1];
+        if (analysisEntry) {
+          connectEdge(
+            `merge-${last.step.id}-${analysisEntry.step.id}`,
+            last.step.id,
+            analysisEntry.step.id,
+            {
+              stroke: theme.edgeActive,
+              strokeWidth: 2.2,
+              filter: 'drop-shadow(0 0 6px rgba(148,163,184,0.35))',
+            },
+            undefined,
+            false,
+            theme.edgeActive,
+          );
+        }
+
+        if (flowMode === 'multi-agent' && hubEntry && last.step.id !== hubEntry.step.id) {
+          connectEdge(
+            `return-${last.step.id}-${hubEntry.step.id}`,
+            last.step.id,
+            hubEntry.step.id,
+            {
               stroke: theme.edgeIdle,
               strokeWidth: 1.4,
               strokeDasharray: '6 6',
-              opacity: 0.65,
+              opacity: 0.6,
             },
-            markerEnd: {
-              type: 'arrowclosed',
-              color: theme.edgeIdle,
-              width: 12,
-              height: 12,
-            },
-          });
-        });
+            undefined,
+            false,
+            theme.edgeIdle,
+          );
+        }
+      });
 
-        sequentialEdges.push({
-          id: 'user-entry-to-hub',
-          source: 'user_entry',
-          target: hubPlacement.step.id,
-          type: 'smoothstep',
-          animated: false,
-          sourceHandle: 'right',
-          targetHandle: 'left',
-          style: {
-            stroke: '#f97316',
-            strokeWidth: 2.4,
-            filter: 'drop-shadow(0 0 6px rgba(249,115,22,0.35))',
-          },
-          markerEnd: {
-            type: 'arrowclosed',
-            color: '#f97316',
-            width: 18,
-            height: 18,
-          },
-        });
-
-        sequentialEdges.push({
-          id: 'hub-to-final-response',
-          source: hubPlacement.step.id,
-          target: 'final_response',
-          type: 'smoothstep',
-          animated: hubPlacement.step.status === 'in_progress',
-          sourceHandle: 'right',
-          targetHandle: 'left',
-          style: {
+      if (hubEntry && analysisEntry) {
+        connectEdge(
+          `spine-${hubEntry.step.id}-${analysisEntry.step.id}`,
+          hubEntry.step.id,
+          analysisEntry.step.id,
+          {
             stroke: theme.edgeActive,
             strokeWidth: 2.6,
-            filter: 'drop-shadow(0 0 6px rgba(192,132,252,0.35))',
+            filter: 'drop-shadow(0 0 6px rgba(148,163,184,0.35))',
           },
-          markerEnd: {
-            type: 'arrowclosed',
-            color: theme.edgeActive,
-            width: 18,
-            height: 18,
-          },
-        });
+          undefined,
+          hubEntry.step.status === 'in_progress',
+          theme.edgeActive,
+        );
+      }
 
-        sequentialEdges.push({
-          id: 'final-response-to-user',
-          source: 'final_response',
-          target: 'user_entry',
-          type: 'smoothstep',
-          animated: false,
-          sourceHandle: 'right',
-          targetHandle: 'left',
-          style: {
-            stroke: '#f97316',
+      if (analysisEntry && followUpEntry) {
+        connectEdge(
+          `${analysisEntry.step.id}-${followUpEntry.step.id}`,
+          analysisEntry.step.id,
+          followUpEntry.step.id,
+          {
+            stroke: theme.edgeActive,
+            strokeWidth: 2.4,
+            filter: 'drop-shadow(0 0 6px rgba(148,163,184,0.35))',
+          },
+          undefined,
+          followUpEntry.step.status === 'in_progress',
+          theme.edgeActive,
+        );
+      }
+
+      if (flowMode === 'single-agent') {
+        const sqlLane = laneBuckets.get('sql');
+        const chartEntry = stepEntries.get('chart_generation');
+        if (sqlLane && sqlLane.length && chartEntry) {
+          const sqlTerminal = sqlLane[sqlLane.length - 1];
+          connectEdge(
+            `dependency-${sqlTerminal.step.id}-${chartEntry.step.id}`,
+            sqlTerminal.step.id,
+            chartEntry.step.id,
+            {
+              stroke: theme.edgeIdle,
+              strokeWidth: 1.6,
+              strokeDasharray: '8 6',
+              opacity: 0.7,
+            },
+            'Chart generation waits on SQL results',
+            false,
+            theme.edgeIdle,
+          );
+        }
+      }
+
+      if (flowMode === 'multi-agent' && hubEntry && toolFanoutEntry && toolFanoutEntry.step.id !== hubEntry.step.id) {
+        connectEdge(
+          `${toolFanoutEntry.step.id}-${hubEntry.step.id}`,
+          toolFanoutEntry.step.id,
+          hubEntry.step.id,
+          {
+            stroke: theme.edgeIdle,
             strokeWidth: 1.8,
-            strokeDasharray: '6 6',
-            opacity: 0.85,
+            strokeDasharray: '8 6',
+            opacity: 0.7,
           },
-          markerEnd: {
-            type: 'arrowclosed',
-            color: '#f97316',
-            width: 16,
-            height: 16,
-          },
-        });
+          undefined,
+          false,
+          theme.edgeIdle,
+        );
       }
     }
 
-    setEdges(sequentialEdges);
+    setEdges(edges);
   }, [processedSteps, setEdges, theme, flowMode]);
 
   useEffect(() => {

@@ -3,10 +3,11 @@ import uuid
 import asyncio
 import time
 from datetime import datetime
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional, Tuple, Set
 from .types import IntentModel, QueryPlanModel, ClarifyRequestModel, ClarifyAnswerModel
 from .companies import resolve_alias_to_ticker, sanitize_ticker
 from .intent_impl.normalization import normalize_timeframe, normalize_metrics, timeframe_implies_quarterly
+from .slot_catalog import get_slot_catalog
 
 
 # In-memory session store with TTL
@@ -79,14 +80,33 @@ def detect_missing_slots(
 ) -> List[ClarifyRequestModel]:
     """Detect slots that need clarification based on intent, plan, and template requirements."""
     requests = []
+
+    catalog_definition = None
+    required_slots: Optional[Set[str]] = None
+    if intent and intent.intent_key:
+        catalog_definition = get_slot_catalog().get_intent_definition(intent.intent_key)
+        if catalog_definition:
+            required_slots = {slot.split(".", 1)[0] for slot in catalog_definition.required_slots}
+
+    def _requires(slot_name: str) -> bool:
+        if required_slots is None:
+            return True
+        normalized = slot_name.split(".", 1)[0]
+        return normalized in required_slots
     
     # 1. Company slot detection
-    company_request = _detect_company_slot(intent, template, configs)
+    if _requires('company'):
+        company_request = _detect_company_slot(intent, template, configs)
+    else:
+        company_request = None
     if company_request:
         requests.append(company_request)
     
     # 2. Timeframe slot detection  
-    timeframe_request = _detect_timeframe_slot(intent, plan, configs)
+    if _requires('timeframe'):
+        timeframe_request = _detect_timeframe_slot(intent, plan, configs)
+    else:
+        timeframe_request = None
     if timeframe_request:
         requests.append(timeframe_request)
     
@@ -96,12 +116,16 @@ def detect_missing_slots(
         requests.append(granularity_request)
     
     # 4. Comparison slot detection
-    comparison_request = _detect_comparison_slot(intent, plan, configs)
+    if _requires('comparison'):
+        comparison_request = _detect_comparison_slot(intent, plan, configs)
+    else:
+        comparison_request = None
     if comparison_request:
         requests.append(comparison_request)
     
     # 5. Metrics slot detection (for ambiguous intents)
-    metrics_request = _detect_metrics_slot(intent, plan, configs)
+    metrics_required = _requires('metric') or _requires('metrics')
+    metrics_request = _detect_metrics_slot(intent, plan, configs) if metrics_required else None
     if metrics_request:
         requests.append(metrics_request)
     
@@ -285,6 +309,22 @@ def _detect_comparison_slot(
     valid_options = multi_variant_intents[intent_key]
     
     if not current_comparison or current_comparison not in valid_options:
+        auto_choice: Optional[str] = None
+        slots = intent.slots_detected if isinstance(intent.slots_detected, dict) else {}
+        query_lower = str(slots.get('original_query') or '').lower()
+        if query_lower:
+            if ('average' in query_lower or 'avg' in query_lower) and 'vs_avg' in valid_options:
+                auto_choice = 'vs_avg'
+            elif ('peer' in query_lower or 'peers' in query_lower) and 'vs_peers' in valid_options:
+                auto_choice = 'vs_peers'
+            elif 'single' in query_lower and 'single' in valid_options:
+                auto_choice = 'single'
+        if auto_choice:
+            plan.comparison = auto_choice
+            if isinstance(intent.slots_detected, dict):
+                intent.slots_detected['comparison'] = auto_choice
+            return None
+
         display_options = []
         for option in valid_options:
             if option == 'vs_peers':

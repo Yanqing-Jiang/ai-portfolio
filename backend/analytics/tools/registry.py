@@ -405,8 +405,14 @@ class SupervisorTools:
 
 
     def validate_sql(self, sql: str, granularity: str, max_limit: Optional[int] = None):
-                semantic_defaults = SEMANTIC_CATALOG.query_defaults()\n        max_limit = max_limit or semantic_defaults.get('max_limit', 10000)
-        return validate_sql(sql, allowed_tables=["comp_financials"], max_limit=max_limit, granularity=granularity)
+        semantic_defaults = SEMANTIC_CATALOG.query_defaults()
+        effective_limit = max_limit or semantic_defaults.get("max_limit", 10000)
+        return validate_sql(
+            sql,
+            allowed_tables=["comp_financials"],
+            max_limit=effective_limit,
+            granularity=granularity,
+        )
 
     async def apply_execute_sql(self, sql: str) -> Dict[str, Any]:
         """Apply tool: Execute SQL query with safety checks

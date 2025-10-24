@@ -22,6 +22,21 @@ _QUARTER_REGEX = re.compile(r'(?i)q\s*([1-4])')
 _DIGIT_REGEX = re.compile(r'\d+')
 
 
+def _compose_series_column(ticker: Optional[str], metric: str) -> str:
+    ticker_clean = (ticker or "").strip()
+    if ticker_clean:
+        return f"{ticker_clean}|{metric}"
+    return metric
+
+
+def _derive_metric_label(display_name: str, metric: str) -> str:
+    if isinstance(display_name, str) and ' - ' in display_name:
+        tail = display_name.split(' - ', 1)[1].strip()
+        if tail:
+            return tail
+    return metric.replace('_', ' ').title()
+
+
 def _sort_axis_values(values: List[str], x_field: str) -> List[str]:
     """Return axis labels sorted ascending using date/quarter heuristics."""
     _ = x_field  # reserved for future heuristics
@@ -517,7 +532,7 @@ def build_chart_spec(
     secondary_colors = colors[1:] + ['#D4D4D4', '#B0B0B0', '#909090']
 
     # Special-case: All-companies market share — 100% stacked area with Top-N focus
-    if (intent_key == 'market_share_all') or (comparison == 'all'):
+    if intent_key == 'market_share_all':
         # Prepare per-year mapping of ticker -> share percent
         years = sorted({int(r.get('calendar_year')) for r in data if r.get('calendar_year') is not None})
         # Compute last year for ranking
@@ -634,29 +649,23 @@ def build_chart_spec(
     series_defs = chart_plan.get('series', [])
     series = []
     
-    # Extract data columns (slugs) and create display name mapping
-    slugs = [s['data_column'] for s in series_defs]
-    display_names = {s['data_column']: s.get('name', s['data_column']) for s in series_defs}
-    
-    # Detect primary series using data columns (slugs)
-    primary_slugs = detect_primary_series(intent_key, slugs)
+    metric_slugs = [s.get('data_column') for s in series_defs if s.get('data_column')]
+    metric_slugs = [slug for slug in metric_slugs if isinstance(slug, str)]
+    slugs = list(dict.fromkeys(metric_slugs))
 
-    # Add fallback when no primary series detected
+    primary_slugs = detect_primary_series(intent_key, slugs)
     if not primary_slugs and slugs:
-        # Fallback: first percent/margin series, or first series
         percent_slugs = [s for s in slugs if any(keyword in s for keyword in ['percent', 'margin', 'growth', 'share'])]
         primary_slugs = [percent_slugs[0]] if percent_slugs else [slugs[0]]
     else:
-        # Ensure we do not duplicate slugs when planner already selected a primary series
         primary_slugs = list(dict.fromkeys(primary_slugs))
-    
-    # Convert primary slugs to display names for legend
-    primary_series = [display_names[slug] for slug in primary_slugs]
 
-    is_multi_ticker_comparison = comparison == 'all' and any('ticker_filter' in s for s in series_defs)
-    if is_multi_ticker_comparison:
-        primary_series = [s.get('name') or s.get('data_column') for s in series_defs]
-        primary_series = list(dict.fromkeys(primary_series))
+    composite_columns: List[str] = []
+    display_names: Dict[str, str] = {}
+    metric_display_names: Dict[str, str] = {}
+    metric_series_columns: Dict[str, List[str]] = {}
+    metric_legend_map: Dict[str, List[str]] = {}
+    primary_series: List[str] = []
     
     # Assign axes based on data type
     series_axes = assign_series_axes(series_defs)
@@ -664,13 +673,26 @@ def build_chart_spec(
     # Default legend selection - primary series visible, others hidden
     default_legend_selection = {}
     
+    has_ticker_filters = any(s.get('ticker_filter') for s in series_defs)
+    multi_ticker_single_metric = has_ticker_filters and len(slugs) <= 1
+
     for i, s in enumerate(series_defs):
         name = s.get('name') or s.get('data_column')
         col = s.get('data_column')
-        
-        # Determine if this is a primary series
-        is_primary = name in primary_series
-        if comparison == 'all' or (comparison == 'multi' and 'ticker_filter' in s):
+        ticker_value = s.get('ticker_filter') or s.get('ticker')
+
+        if isinstance(col, str):
+            composite_key = _compose_series_column(ticker_value, col)
+            composite_columns.append(composite_key)
+            display_names[composite_key] = name
+            display_names.setdefault(col, _derive_metric_label(name, col))
+            metric_series_columns.setdefault(col, []).append(composite_key)
+            metric_legend_map.setdefault(col, []).append(name)
+            if col not in metric_display_names:
+                metric_display_names[col] = _derive_metric_label(name, col)
+
+        is_primary = name in primary_series or (isinstance(col, str) and col in primary_slugs)
+        if comparison == 'all' or (comparison == 'multi' and 'ticker_filter' in s) or multi_ticker_single_metric:
             default_legend_selection[name] = True
         else:
             default_legend_selection[name] = is_primary
@@ -738,6 +760,21 @@ def build_chart_spec(
                 'lineStyle': {'width': line_style['width'] + 1}
             }
         })
+
+    if primary_slugs and not primary_series:
+        for slug in primary_slugs:
+            for legend_name in metric_legend_map.get(slug, []):
+                if legend_name not in primary_series:
+                    primary_series.append(legend_name)
+    if not primary_series:
+        primary_series = [s.get('name') or s.get('data_column') for s in series_defs]
+    primary_series = list(dict.fromkeys(primary_series))
+
+    is_multi_ticker_comparison = (
+        comparison == 'all'
+        or any(len(names) > 1 for names in metric_series_columns.values())
+        or has_ticker_filters
+    )
 
     # Create Y-axis configuration based on data types
     has_left_axis = any(series_axes.get(s['name']) == 'left' for s in series)
@@ -821,7 +858,11 @@ def build_chart_spec(
             },
             'seriesValueType': {s['name']: ('percent' if series_axes.get(s['name']) == 'right' else 'currency') for s in series},
             # Missing metadata for frontend compatibility
-            'includedColumns': slugs,
+            'includedColumns': list(dict.fromkeys(composite_columns)),
+            'metricColumns': slugs,
+            'metricSeriesColumns': {key: list(dict.fromkeys(values)) for key, values in metric_series_columns.items()},
+            'metricLegendMap': {key: list(dict.fromkeys(values)) for key, values in metric_legend_map.items()},
+            'metricDisplayNames': metric_display_names,
             'displayNames': display_names,
             'defaultColumns': primary_slugs,
             'rawData': data,

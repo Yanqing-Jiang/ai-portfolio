@@ -63,6 +63,27 @@ def compile_sql_from_plan(
         cleaned = sanitize_ticker(symbol, default_tickers)
         if cleaned and cleaned not in sanitized_tickers:
             sanitized_tickers.append(cleaned)
+
+    comparison_mode: Optional[str]
+    if isinstance(plan, QueryPlanModel):
+        comparison_mode = getattr(plan, "comparison", None)
+    else:
+        comparison_mode = plan_dict.get("comparison")
+    normalized_comparison = (
+        comparison_mode.strip().lower()
+        if isinstance(comparison_mode, str) and comparison_mode.strip()
+        else None
+    )
+
+    if sanitized_tickers and normalized_comparison and normalized_comparison not in {"single"}:
+        # Ensure peer-aware templates still fetch benchmark rows even when the
+        # user references a single company in the question.
+        expanded: list[str] = list(sanitized_tickers)
+        for fallback_ticker in default_tickers:
+            if fallback_ticker not in expanded:
+                expanded.append(fallback_ticker)
+        sanitized_tickers = expanded
+
     ticker_values = sanitized_tickers or default_tickers
     ticker_clause = "'" + "','".join(ticker_values) + "'"
 

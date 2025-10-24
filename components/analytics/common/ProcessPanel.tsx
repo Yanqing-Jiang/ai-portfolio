@@ -1453,7 +1453,13 @@ export const ProcessPanel: React.FC<ProcessPanelProps> = ({
     </div>
   );
   const renderCanvas = () => {
-    const isFanoutMode = flowMode === 'single-agent' && !!singleAgentFanout?.hasFanout && (singleAgentFanout?.branches.length ?? 0) > 0;
+    const isFanoutMode = flowMode === 'single-agent' && !!singleAgentFanout?.hasFanout && (singleAgentFanout?.branches.length ?? 0) > 0;
+
+    const hubHasStarted = steps.some(
+      (step) => step.id === 'tool_fanout' && step.status !== 'pending' && step.status !== 'queued',
+    );
+
+    const showFanoutCounters = isFanoutMode && hubHasStarted;
     const activeCount = singleAgentFanout?.runningCount ?? 0;
     const completedCount = singleAgentFanout?.completedCount ?? 0;
     const failedCount = singleAgentFanout?.failedCount ?? 0;
@@ -1481,7 +1487,7 @@ export const ProcessPanel: React.FC<ProcessPanelProps> = ({
                 <span className="text-[10px] text-gray-500">{formatTimestamp(contextStep.timestamp)}</span>
               )}
             </div>
-            {isFanoutMode && (
+            {showFanoutCounters && (
               <div className="mt-1 flex flex-wrap items-center gap-2 text-[10px] text-gray-400">
                 <span className="rounded-full border border-gray-700 px-2 py-0.5 text-[10px] uppercase tracking-wide text-gray-200">
                   Limit {singleAgentFanout?.concurrencyLimit ?? singleAgentFanout?.branches.length ?? 0}

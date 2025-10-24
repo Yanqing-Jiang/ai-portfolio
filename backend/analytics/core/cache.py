@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import logging
@@ -41,9 +42,40 @@ class CacheService:
             "companies": 1800,
             "context": 600,
         }
+        self._handshake_attempted = False
+        self._handshake_succeeded = False
+
+    async def _warm_handshake(self) -> None:
+        """Attempt a quick connection check with aggressive timeouts to avoid long first-call stalls."""
+        if self._handshake_attempted or not REDIS_AVAILABLE:
+            return
+        self._handshake_attempted = True
+        client: Optional["redis.Redis"] = None
+        try:
+            client = redis.from_url(  # type: ignore[call-arg]
+                self.redis_url,
+                encoding="utf-8",
+                decode_responses=True,
+                socket_timeout=1.0,
+                socket_connect_timeout=1.0,
+                health_check_interval=30,
+            )
+            await client.ping()
+        except Exception as exc:  # pragma: no cover - network failure
+            logger.debug("Redis warm handshake failed: %s", exc)
+            self._record_failure()
+            self.circuit_breaker_failures = self.circuit_breaker_threshold
+        else:
+            self._handshake_succeeded = True
+        finally:
+            if client:
+                with contextlib.suppress(Exception):
+                    await client.close()
 
     async def _get_redis_client(self) -> Optional["redis.Redis"]:
         """Return Redis client if available and circuit breaker allows."""
+
+        await self._warm_handshake()
 
         if not REDIS_AVAILABLE:
             return None

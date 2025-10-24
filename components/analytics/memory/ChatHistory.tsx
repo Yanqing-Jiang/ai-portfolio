@@ -91,7 +91,14 @@ const buildStockInsightsSection = (results: ChatHistoryProps['messages'][number]
 const buildCombinedAnalysis = (message: ChatHistoryProps['messages'][number]) => {
   const sections: string[] = [];
   const tldr = message.analysisOverview?.tldr?.trim();
-  let base = message.analysis?.trim();
+  const primaryAnalysis =
+    message.analysis?.trim() ??
+    message.progressiveAnalysis?.trim() ??
+    message.progressiveText?.trim() ??
+    '';
+  const hasFinalAnalysis = Boolean(message.analysis?.trim());
+
+  let base = primaryAnalysis;
 
   if (base && tldr) {
     const isTldrLine = (line: string) => {
@@ -113,7 +120,8 @@ const buildCombinedAnalysis = (message: ChatHistoryProps['messages'][number]) =>
   }
 
   if (base) {
-    sections.push('**SQL-Derived Highlights**\n' + base);
+    const heading = hasFinalAnalysis ? '**SQL-Derived Highlights**' : '**Analysis Draft (Streaming)**';
+    sections.push(`${heading}\n${base}`);
   }
   const stockSection = buildStockInsightsSection(message.toolFanoutResults);
   if (stockSection) sections.push(stockSection);
