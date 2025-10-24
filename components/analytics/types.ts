@@ -296,6 +296,7 @@ export interface ProcessStepDetails {
   parallel_group?: string;
   reused?: boolean;
   final_answer_only?: boolean;
+  hedged?: boolean;
   missing_components?: string[];
   follow_up_route?: string;
   analysis_available?: boolean;
@@ -305,7 +306,7 @@ export interface ProcessStepDetails {
 export interface ProcessStep {
   id: string;
   name: string;
-  status: 'pending' | 'in_progress' | 'completed' | 'error' | 'stopped';
+  status: 'pending' | 'queued' | 'in_progress' | 'completed' | 'error' | 'stopped';
   thinking: string[];
   details?: ProcessStepDetails;
   elapsed_ms?: number;

@@ -6,17 +6,53 @@ import { useAnalyticsMemoryStream } from './useAnalyticsMemoryStream';
 import { apiService } from '../../../services/apiService';
 
 // Mock the API service used by useAnalyticsStream to avoid network
+const { countUserInputMock } = vi.hoisted(() => ({
+  countUserInputMock: vi.fn(async () => ({
+    success: true,
+    data: {
+      success: true,
+      scope: 'next-gen-analytics-agent',
+      identifier: 'ip:127.0.0.1|next-gen-analytics-agent',
+      base_identifier: 'ip:127.0.0.1',
+      current_usage: 1,
+      limit: 5,
+      remaining: 4,
+      user_type: 'guest',
+    },
+  })),
+}));
+
 vi.mock('../../../services/apiService', () => ({
   apiService: {
     post: vi.fn(async () => ({})),
     streamWithAuth: vi.fn(),
+    countUserInput: countUserInputMock,
+    getUsageStats: vi.fn(async () => ({
+      success: true,
+      data: {
+        scope: 'global',
+        identifier: 'ip:127.0.0.1',
+        base_identifier: 'ip:127.0.0.1',
+        current_usage: 0,
+        limit: 5,
+        remaining: 5,
+        user_type: 'guest',
+      },
+    })),
   },
 }));
 
-const setCurrentStatusMock = vi.fn();
-const setErrorMock = vi.fn();
-const stopStreamMock = vi.fn();
-const resetStateMock = vi.fn();
+const {
+  setCurrentStatusMock,
+  setErrorMock,
+  stopStreamMock,
+  resetStateMock,
+} = vi.hoisted(() => ({
+  setCurrentStatusMock: vi.fn(),
+  setErrorMock: vi.fn(),
+  stopStreamMock: vi.fn(),
+  resetStateMock: vi.fn(),
+}));
 
 // Mock useAnalyticsStream to synchronously emit provided test events
 vi.mock('./useAnalyticsStream', () => {
@@ -43,11 +79,35 @@ vi.mock('./useAnalyticsStream', () => {
 });
 
 beforeEach(() => {
-  setCurrentStatusMock.mockReset();
-  setErrorMock.mockReset();
-  stopStreamMock.mockReset();
-  resetStateMock.mockReset();
+  setCurrentStatusMock.mockClear();
+  setErrorMock.mockClear();
+  stopStreamMock.mockClear();
+  resetStateMock.mockClear();
+  countUserInputMock.mockClear();
   (globalThis as any).__TEST_EVENTS__ = undefined;
+});
+
+describe('useAnalyticsMemoryStream rate limiting', () => {
+  it('records an error and aborts when countUserInput fails', async () => {
+    countUserInputMock.mockResolvedValueOnce({
+      success: false,
+      needsAuth: true,
+      error: 'Sign-in required after free quota.',
+    });
+
+    const { result } = renderHook(() => useAnalyticsMemoryStream('planner-executor'));
+
+    await act(async () => {
+      await result.current.handleQuery('Test query');
+    });
+
+    expect(countUserInputMock).toHaveBeenCalledWith({ scope: 'next-gen-analytics-agent' });
+    expect(setErrorMock).toHaveBeenCalledWith('Sign-in required after free quota.');
+    expect(setCurrentStatusMock).toHaveBeenCalledWith('Error: Sign-in required after free quota.');
+    const lastMessage = result.current.chatHistory.at(-1);
+    expect(lastMessage?.type).toBe('assistant');
+    expect(lastMessage?.content).toBe('Sign-in required after free quota.');
+  });
 });
 
 function HookHarness({ query, flow }: { query: string; flow: 'planner-executor' | 'single-agent' | 'multi-agent' }) {
@@ -368,8 +428,8 @@ describe('useAnalyticsMemoryStream result deduping', () => {
     expect(stepIds).toContain('chart_revision:completed');
 
     const resultCount = Number(screen.getByTestId('result-count').textContent);
-    expect(resultCount).toBe(2);
-    expect(screen.getByTestId('first-result-has-chart').textContent).toBe('no');
+    expect(resultCount).toBe(1);
+    expect(screen.getByTestId('first-result-has-chart').textContent).toBe('yes');
     expect(screen.getByTestId('latest-result-has-chart').textContent).toBe('yes');
 
     expect(screen.getByTestId('revision-mode').textContent).toBe('chart');
@@ -413,7 +473,9 @@ describe('useAnalyticsMemoryStream result deduping', () => {
     });
 
     const resultCount = Number(screen.getByTestId('result-count').textContent);
-    expect(resultCount).toBe(2);
+    expect(resultCount).toBe(1);
+    expect(screen.getByTestId('first-result-has-chart').textContent).toBe('yes');
+    expect(screen.getByTestId('latest-result-has-chart').textContent).toBe('yes');
     expect(screen.getByTestId('revision-mode').textContent).toBe('chart');
   });
 
@@ -450,7 +512,9 @@ describe('useAnalyticsMemoryStream result deduping', () => {
     expect(series?.every((entry: any) => entry?.type === 'bar')).toBe(true);
 
     const resultMessages = result.current.chatHistory.filter((message) => message.type === 'result');
+    expect(resultMessages).toHaveLength(1);
     const chartMessages = resultMessages.filter((message) => message.chartSpec);
+    expect(chartMessages).toHaveLength(1);
     const chartTypes = chartMessages.map(
       (message) => message.chartSpec?.meta?.chartDesign?.chart_type ?? null,
     );

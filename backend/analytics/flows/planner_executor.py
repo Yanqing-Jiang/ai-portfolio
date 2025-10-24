@@ -79,6 +79,7 @@ from .tool_bundle import collect_tool_bundle
 from .chart_revision import emit_chart_patch as _chart_revision_emit, emit_analysis_revision as _analysis_revision_emit
 from analytics.core.telemetry import analysis_chunk as log_analysis_chunk, intent_resolution as log_intent_resolution
 from .schedulers import FlowMode, get_mode_config, apply_mode_metadata
+from analytics.tools.registry import SupervisorTools
 from .planner import (
     TOOL_QUEUE_SENTINEL,
     ToolParallelRuntime,
@@ -131,6 +132,7 @@ from analytics.core.clarify import (
 from unified_responses_client import get_unified_client
 CONFIGS = get_configs()
 CONFIG_STORE = get_config_store()
+SUPERVISOR_TOOLS = SupervisorTools()
 logger = logging.getLogger(__name__)
 
 _TOOL_TO_ANALYSIS_LANE: Dict[str, str] = {
@@ -1813,16 +1815,15 @@ def _compose_intent_from_resolution(
     """Merge structured slot resolution output with heuristic signals into a runtime IntentModel."""
     heuristic_model = detect_intent(query, configs)
 
-    slots_detected: Dict[str, Any] = {}
-    if isinstance(heuristic_model.slots_detected, dict):
-        slots_detected.update(heuristic_model.slots_detected)
-
     selection = getattr(resolution, "intent", None)
-    intent_key = getattr(selection, "key", None) or heuristic_model.intent_key
+    intent_key = getattr(selection, "key", None)
+    if not intent_key:
+        intent_key = heuristic_model.intent_key
     confidence = getattr(selection, "confidence", None)
     if confidence is None:
         confidence = heuristic_model.confidence
 
+    slots_detected: Dict[str, Any] = {}
     for slot_name, status in (resolution.slots or {}).items():
         if not isinstance(status, SlotStatusModel):
             continue
@@ -2719,11 +2720,6 @@ class PlannerPipeline:
         start_time = time.time()
         ctx.tool_receipts["sql_chain"] = receipt
 
-        sql_progress = EventEmitter.progress("sql_compilation", "Generating SQL with Responses API...")
-        sql_progress["data"]["ts"] = datetime.utcnow().isoformat()
-        yield sql_progress
-        timed_emitter.start_step("sql_generation")
-        MAX_SQL_ATTEMPTS = 3
         sql = ""
         llm_used = False
         attempt_logs: List[Dict[str, Any]] = []
@@ -2732,144 +2728,217 @@ class PlannerPipeline:
         last_error_detail: Optional[str] = None
         previous_sql: Optional[str] = None
 
-        messages = await build_sql_messages(
-            original_query=query,
-            intent=intent,
-            plan=plan,
-            config_store=self.config_store,
-            templates=candidate_templates,
-        )
+        progress_message = "Generating SQL with Responses API..."
+        deterministic_result: Optional[Dict[str, Any]] = None
+        deterministic_elapsed_ms: Optional[int] = None
+        try:
+            deterministic_start = time.time()
+            deterministic_result = SUPERVISOR_TOOLS.plan_and_select_template(intent)
+            deterministic_elapsed_ms = int((time.time() - deterministic_start) * 1000)
+        except Exception as exc:
+            logger.debug(
+                "[PlannerExecutor] Deterministic SQL generation failed, falling back to LLM: %s",
+                exc,
+                exc_info=True,
+            )
+            deterministic_result = None
 
-        for attempt in range(1, MAX_SQL_ATTEMPTS + 1):
-            attempt_start = time.time()
-            attempt_record: Dict[str, Any] = {"attempt": attempt, "status": "started"}
-            candidate_sql = ""
-            receipt.attempts += 1
-            try:
-                if not self.unified_client:
-                    self.unified_client = get_unified_client()
-                if not self.unified_client:
-                    raise RuntimeError("Unified Responses client is not configured")
-                llm_response, _ = await self.unified_client.simple_completion(
-                    messages=messages,
-                    reasoning_effort="medium",
+        if deterministic_result and isinstance(deterministic_result.get("sql"), str):
+            candidate_sql = (deterministic_result.get("sql") or "").strip()
+            if candidate_sql:
+                sql = candidate_sql
+                progress_message = "Using deterministic template SQL"
+                template_from_result = deterministic_result.get("template")
+                if template_from_result:
+                    selected_template_id = template_from_result.get("id") or selected_template_id
+                    ctx.template = template_from_result
+                attempt_logs.append(
+                    {
+                        "attempt": 1,
+                        "status": "deterministic",
+                        "elapsed_ms": deterministic_elapsed_ms or 0,
+                        "llm_used": False,
+                    }
                 )
-                candidate_sql = (extract_sql_from_response(llm_response) or "").strip()
-                candidate_sql = _normalize_calendar_filters(candidate_sql)
-            except Exception as exc:
-                last_error_code = "SQL_GENERATION_ERROR"
-                last_error_detail = str(exc)
-                attempt_record.update(
-                    status="error",
-                    error_code=last_error_code,
-                    error_detail=last_error_detail,
-                    elapsed_ms=int((time.time() - attempt_start) * 1000),
-                )
-                attempt_logs.append(attempt_record)
-                error_event = EventEmitter.error(
-                    "sql_compilation",
-                    "SQL generation failed",
-                    details={"attempt": attempt, "error": last_error_detail},
-                    code=last_error_code,
-                )
-                error_event["data"]["ts"] = datetime.utcnow().isoformat()
-                yield error_event
-            else:
-                if not candidate_sql:
-                    last_error_code = "SQL_EMPTY"
-                    last_error_detail = "Responses API returned no SQL content."
+                receipt.attempts = 1
+                validated_attempt = 1
+
+        sql_progress = EventEmitter.progress("sql_compilation", progress_message)
+        sql_progress["data"]["ts"] = datetime.utcnow().isoformat()
+        yield sql_progress
+        timed_emitter.start_step("sql_generation")
+
+        if sql and attempt_logs and attempt_logs[-1].get("status") == "deterministic":
+            compiled_event = EventEmitter.result(
+                "sql_compiled",
+                {
+                    "sql_length": len(sql),
+                    "template_fallback": False,
+                    "template_used": selected_template_id,
+                    "attempt": attempt_logs[-1].get("attempt", 1),
+                    "fallback_reason": None,
+                    "llm_used": False,
+                },
+            )
+            compiled_event["event"] = "sql_compiled"
+            compiled_event["data"].update(
+                {
+                    "ts": datetime.utcnow().isoformat(),
+                    "elapsed_ms": attempt_logs[-1].get("elapsed_ms"),
+                }
+            )
+            yield compiled_event
+            generated_event = EventEmitter.sql_generated(sql)
+            generated_event["data"].update(
+                {
+                    "ts": datetime.utcnow().isoformat(),
+                    "elapsed_ms": attempt_logs[-1].get("elapsed_ms"),
+                    "llm_used": False,
+                    "attempt": attempt_logs[-1].get("attempt", 1),
+                }
+            )
+            yield generated_event
+        if not sql:
+            MAX_SQL_ATTEMPTS = 3
+
+            messages = await build_sql_messages(
+                original_query=query,
+                intent=intent,
+                plan=plan,
+                config_store=self.config_store,
+                templates=candidate_templates,
+            )
+
+            for attempt in range(1, MAX_SQL_ATTEMPTS + 1):
+                attempt_start = time.time()
+                attempt_record: Dict[str, Any] = {"attempt": attempt, "status": "started"}
+                candidate_sql = ""
+                receipt.attempts += 1
+                try:
+                    if not self.unified_client:
+                        self.unified_client = get_unified_client()
+                    if not self.unified_client:
+                        raise RuntimeError("Unified Responses client is not configured")
+                    llm_response, _ = await self.unified_client.simple_completion(
+                        messages=messages,
+                        reasoning_effort="low",
+                    )
+                    candidate_sql = (extract_sql_from_response(llm_response) or "").strip()
+                    candidate_sql = _normalize_calendar_filters(candidate_sql)
+                except Exception as exc:
+                    last_error_code = "SQL_GENERATION_ERROR"
+                    last_error_detail = str(exc)
                     attempt_record.update(
-                        status="empty",
+                        status="error",
                         error_code=last_error_code,
                         error_detail=last_error_detail,
                         elapsed_ms=int((time.time() - attempt_start) * 1000),
                     )
                     attempt_logs.append(attempt_record)
-                    empty_notice = EventEmitter.progress(
+                    error_event = EventEmitter.error(
                         "sql_compilation",
-                        "SQL attempt returned no content; retrying with additional guidance.",
-                    )
-                    empty_notice["data"].update(
-                        {"ts": datetime.utcnow().isoformat(), "attempt": attempt}
-                    )
-                    yield empty_notice
-                else:
-                    ok, issues, validate_elapsed = _validate_sql(candidate_sql)
-                    attempt_record.update(
-                        status="valid" if ok else "invalid",
-                        elapsed_ms=int((time.time() - attempt_start) * 1000),
-                        validation_elapsed_ms=validate_elapsed,
-                        issues=issues,
-                    )
-                    if not ok:
-                        last_error_code = "SQL_VALIDATION_FAILED"
-                        last_error_detail = "; ".join(issues) if issues else "Validation failed"
-                    attempt_logs.append(attempt_record)
-                    if ok:
-                        sql = candidate_sql
-                        llm_used = True
-                        validated_attempt = attempt
-                        compiled_event = EventEmitter.result(
-                            "sql_compiled",
-                            {
-                                "sql_length": len(sql),
-                                "template_fallback": False,
-                                "template_used": selected_template_id,
-                                "attempt": attempt,
-                                "fallback_reason": None,
-                                "llm_used": True,
-                            },
-                        )
-                        compiled_event["event"] = "sql_compiled"
-                        compiled_event["data"].update(
-                            {
-                                "ts": datetime.utcnow().isoformat(),
-                                "elapsed_ms": attempt_record.get("elapsed_ms"),
-                            }
-                        )
-                        yield compiled_event
-                        generated_event = EventEmitter.sql_generated(sql)
-                        generated_event["data"].update(
-                            {
-                                "ts": datetime.utcnow().isoformat(),
-                                "elapsed_ms": attempt_record.get("elapsed_ms"),
-                                "llm_used": True,
-                                "attempt": attempt,
-                            }
-                        )
-                        yield generated_event
-                        break
-                    validation_event = EventEmitter.error(
-                        "sql_validation",
-                        "Generated SQL failed validation",
-                        details={"attempt": attempt, "issues": issues},
+                        "SQL generation failed",
+                        details={"attempt": attempt, "error": last_error_detail},
                         code=last_error_code,
                     )
-                    validation_event["data"]["ts"] = datetime.utcnow().isoformat()
-                    yield validation_event
-                    previous_sql = candidate_sql
-            if sql:
-                break
-            if attempt < MAX_SQL_ATTEMPTS:
-                retry_notice = EventEmitter.progress(
-                    "sql_compilation",
-                    f"Retrying SQL generation (attempt {attempt + 1}/{MAX_SQL_ATTEMPTS})",
-                )
-                retry_notice["data"].update(
-                    {"ts": datetime.utcnow().isoformat(), "last_error": last_error_code}
-                )
-                yield retry_notice
-                messages = await build_sql_retry_messages(
-                    original_query=query,
-                    intent=intent,
-                    plan=plan,
-                    error_code=last_error_code or "unknown_error",
-                    error_detail=last_error_detail or "",
-                    previous_sql=previous_sql,
-                    attempts=attempt_logs,
-                    config_store=self.config_store,
-                    templates=candidate_templates,
-                )
+                    error_event["data"]["ts"] = datetime.utcnow().isoformat()
+                    yield error_event
+                else:
+                    if not candidate_sql:
+                        last_error_code = "SQL_EMPTY"
+                        last_error_detail = "Responses API returned no SQL content."
+                        attempt_record.update(
+                            status="empty",
+                            error_code=last_error_code,
+                            error_detail=last_error_detail,
+                            elapsed_ms=int((time.time() - attempt_start) * 1000),
+                        )
+                        attempt_logs.append(attempt_record)
+                        empty_notice = EventEmitter.progress(
+                            "sql_compilation",
+                            "SQL attempt returned no content; retrying with additional guidance.",
+                        )
+                        empty_notice["data"].update(
+                            {"ts": datetime.utcnow().isoformat(), "attempt": attempt}
+                        )
+                        yield empty_notice
+                    else:
+                        ok, issues, validate_elapsed = _validate_sql(candidate_sql)
+                        attempt_record.update(
+                            status="valid" if ok else "invalid",
+                            elapsed_ms=int((time.time() - attempt_start) * 1000),
+                            validation_elapsed_ms=validate_elapsed,
+                            issues=issues,
+                        )
+                        if not ok:
+                            last_error_code = "SQL_VALIDATION_FAILED"
+                            last_error_detail = "; ".join(issues) if issues else "Validation failed"
+                        attempt_logs.append(attempt_record)
+                        if ok:
+                            sql = candidate_sql
+                            validated_attempt = attempt
+                            llm_used = True
+                            compiled_event = EventEmitter.result(
+                                "sql_compiled",
+                                {
+                                    "sql_length": len(sql),
+                                    "template_fallback": False,
+                                    "template_used": selected_template_id,
+                                    "attempt": attempt,
+                                    "fallback_reason": None,
+                                    "llm_used": True,
+                                },
+                            )
+                            compiled_event["event"] = "sql_compiled"
+                            compiled_event["data"].update(
+                                {
+                                    "ts": datetime.utcnow().isoformat(),
+                                    "elapsed_ms": attempt_record.get("elapsed_ms"),
+                                }
+                            )
+                            yield compiled_event
+                            generated_event = EventEmitter.sql_generated(sql)
+                            generated_event["data"].update(
+                                {
+                                    "ts": datetime.utcnow().isoformat(),
+                                    "elapsed_ms": attempt_record.get("elapsed_ms"),
+                                    "llm_used": True,
+                                    "attempt": attempt,
+                                }
+                            )
+                            yield generated_event
+                            break
+                        validation_event = EventEmitter.error(
+                            "sql_validation",
+                            "Generated SQL failed validation",
+                            details={"attempt": attempt, "issues": issues},
+                            code=last_error_code,
+                        )
+                        validation_event["data"]["ts"] = datetime.utcnow().isoformat()
+                        yield validation_event
+                        previous_sql = candidate_sql
+                if sql:
+                    break
+                if attempt < MAX_SQL_ATTEMPTS:
+                    retry_notice = EventEmitter.progress(
+                        "sql_compilation",
+                        f"Retrying SQL generation (attempt {attempt + 1}/{MAX_SQL_ATTEMPTS})",
+                    )
+                    retry_notice["data"].update(
+                        {"ts": datetime.utcnow().isoformat(), "last_error": last_error_code}
+                    )
+                    yield retry_notice
+                    messages = await build_sql_retry_messages(
+                        original_query=query,
+                        intent=intent,
+                        plan=plan,
+                        error_code=last_error_code or "unknown_error",
+                        error_detail=last_error_detail or "",
+                        previous_sql=previous_sql,
+                        attempts=attempt_logs,
+                        config_store=self.config_store,
+                        templates=candidate_templates,
+                    )
 
         generation_status = "generated" if sql else "failed"
         _set_sql_generation_artifact(
@@ -4096,6 +4165,12 @@ async def _intent_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[s
         if schema_decision and schema_decision.slot:
             clarifier_event["data"]["slot"] = schema_decision.slot
         yield clarifier_event
+        completion_action = schema_decision.action if schema_decision else "disabled"
+        if completion_action in {"skip", "fallback", "disabled"}:
+            yield EventEmitter.complete(
+                "schema_clarifier",
+                f"Schema clarifier {completion_action}",
+            )
 
     clarifier_request: Optional[ClarifyRequestModel] = None
     if schema_decision and schema_decision.action == "skip":

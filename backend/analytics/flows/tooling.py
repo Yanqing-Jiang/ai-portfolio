@@ -810,9 +810,16 @@ class StockTrackerAdapter(BaseToolAdapter):
                     ordered.append(symbol)
             return ordered
 
-        tickers: List[str] = _normalize_candidates(slots.get("company"))
-        if not tickers:
-            tickers = _normalize_candidates(slots.get("tickers"))
+        company_candidates = _normalize_candidates(slots.get("company"))
+        ticker_candidates = _normalize_candidates(slots.get("tickers"))
+
+        tickers: List[str] = []
+        if company_candidates or ticker_candidates:
+            seen_candidates: Set[str] = set()
+            for symbol in company_candidates + ticker_candidates:
+                if symbol and symbol not in seen_candidates:
+                    tickers.append(symbol)
+                    seen_candidates.add(symbol)
 
         if not tickers and query:
             inferred: List[str] = []

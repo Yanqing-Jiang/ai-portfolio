@@ -42,6 +42,7 @@ const SqlAnalyticsPage: React.FC = () => {
     handleQuery,
     stopAnalysis,
     resetAll,
+    clearChartSpec,
   } = useAnalyticsSqlStream();
 
   // Debug logging
@@ -66,6 +67,7 @@ const SqlAnalyticsPage: React.FC = () => {
   const handleAnalyticsQuery = async () => {
     if (!query.trim() || isLoading) return;
     const queryToSubmit = query.trim();
+    setUseAltChart(false);
     setQuery(''); // Clear input after starting analysis
     
     // Auto-collapse header on first query
@@ -229,7 +231,10 @@ const SqlAnalyticsPage: React.FC = () => {
               <ChartCard
                 chartSpec={chartSpec}
                 dataSample={dataSample}
-                onError={() => setUseAltChart(true)}
+                onError={() => {
+                  clearChartSpec();
+                  setUseAltChart(true);
+                }}
                 enableDropdown={true}
                 enableCsvDownload={true}
               />

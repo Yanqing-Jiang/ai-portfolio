@@ -15,6 +15,9 @@ export interface UsageStats {
   remaining: number
   user_type: 'guest' | 'member'
   identifier: string
+  base_identifier?: string
+  scope: string
+  message?: string
 }
 
 class ApiService {
@@ -97,12 +100,14 @@ class ApiService {
     })
   }
 
-  async getUsageStats(): Promise<ApiResponse<UsageStats>> {
-    return this.get<UsageStats>('/api/rate-limit/usage')
+  async getUsageStats(scope?: string): Promise<ApiResponse<UsageStats>> {
+    const query = scope ? `?scope=${encodeURIComponent(scope)}` : ''
+    return this.get<UsageStats>(`/api/rate-limit/usage${query}`)
   }
 
-  async countUserInput(): Promise<ApiResponse<UsageStats>> {
-    return this.post<UsageStats>('/api/user-input')
+  async countUserInput(options?: { scope?: string }): Promise<ApiResponse<UsageStats>> {
+    const payload = options?.scope ? { scope: options.scope } : undefined
+    return this.post<UsageStats>('/api/user-input', payload)
   }
 
   // Enhanced streaming method that handles auth errors

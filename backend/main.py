@@ -42,7 +42,16 @@ from research_agent import run_research_agent, run_research_agent_stream
 from resume_agent import run_resume_agent, run_resume_agent_stream
 from tts import get_voice_bytes
 from gemini_service import gemini_service
-from rate_limiter import init_rate_limiter, smart_rate_limit, get_user_usage, who_am_i
+from rate_limiter import (
+    init_rate_limiter,
+    smart_rate_limit,
+    get_user_usage,
+    who_am_i,
+    resolve_scope,
+    build_scoped_identifier,
+    analytics_agent_rate_limit,
+    analytics_sql_rate_limit,
+)
 from analytics_agent import create_analytics_workflow
 from analytics.flows.workflow import analytics_memory_workflow
 from analytics.core.clarify import put_answer
@@ -738,10 +747,24 @@ async def delete_gemini_chat(session_id: str):
 # -------------------- Rate Limiting Endpoints --------------------
 
 @app.post("/api/user-input")
-async def count_user_input(request: Request, _=Depends(smart_rate_limit)):
-    """Count a user input against their rate limit without doing any processing"""
+async def count_user_input(request: Request):
+    """Count a user input against a scoped rate limit without executing a workflow."""
     try:
+        body = {}
+        try:
+            body = await request.json()
+            if not isinstance(body, dict):
+                body = {}
+        except Exception:
+            body = {}
+        
+        scope = resolve_scope(body.get("scope"))
+        
+        # Enforce the scoped rate limit before returning usage stats
+        await smart_rate_limit(request, scope=scope)
+        
         identifier = await who_am_i(request)
+        scoped_identifier = build_scoped_identifier(identifier, scope)
         is_authenticated = not identifier.startswith("ip:")
         user_type = "member" if is_authenticated else "guest"
         
@@ -749,14 +772,20 @@ async def count_user_input(request: Request, _=Depends(smart_rate_limit)):
         import asyncio
         await asyncio.sleep(0.1)
         
-        # Now get the updated usage count
-        current_usage, limit = await get_user_usage(identifier)
+        # Now get the updated usage count for the scoped identifier
+        current_usage, limit = await get_user_usage(identifier, scope)
         
-        print(f"User input counted - Identifier: {identifier}, Usage: {current_usage}/{limit}, Type: {user_type}")
+        print(
+            f"User input counted - Identifier: {identifier}, Scope: {scope.value}, "
+            f"Scoped ID: {scoped_identifier}, Usage: {current_usage}/{limit}, Type: {user_type}"
+        )
         
         return JSONResponse(
             content={
                 "success": True,
+                "scope": scope.value,
+                "identifier": scoped_identifier,
+                "base_identifier": identifier,
                 "current_usage": current_usage,
                 "limit": limit,
                 "remaining": max(0, limit - current_usage),
@@ -765,6 +794,8 @@ async def count_user_input(request: Request, _=Depends(smart_rate_limit)):
             },
             headers={"Access-Control-Allow-Origin": "*"}
         )
+    except HTTPException as http_error:
+        raise http_error
     except Exception as e:
         print(f"Error in count_user_input: {e}")
         return JSONResponse(
@@ -779,16 +810,21 @@ async def get_usage_stats(request: Request):
     try:
         # Get user identifier
         identifier = await who_am_i(request)
+        scope = resolve_scope(request.query_params.get("scope"))
         
         # Get usage stats
-        current_usage, limit = await get_user_usage(identifier)
+        current_usage, limit = await get_user_usage(identifier, scope)
+        scoped_identifier = build_scoped_identifier(identifier, scope)
         
         # Determine user type
         is_authenticated = not identifier.startswith("ip:")
         user_type = "member" if is_authenticated else "guest"
         
         # Debug logging
-        print(f"Usage stats - Identifier: {identifier}, Usage: {current_usage}/{limit}, Type: {user_type}")
+        print(
+            f"Usage stats - Identifier: {identifier}, Scope: {scope.value}, "
+            f"Scoped ID: {scoped_identifier}, Usage: {current_usage}/{limit}, Type: {user_type}"
+        )
         
         return JSONResponse(
             content={
@@ -796,7 +832,9 @@ async def get_usage_stats(request: Request):
                 "limit": limit,
                 "remaining": max(0, limit - current_usage),
                 "user_type": user_type,
-                "identifier": identifier
+                "identifier": scoped_identifier,
+                "base_identifier": identifier,
+                "scope": scope.value,
             },
             headers={"Access-Control-Allow-Origin": "*"}
         )
@@ -811,7 +849,7 @@ async def get_usage_stats(request: Request):
 # -------------------- Analytics Endpoints --------------------
 
 @app.get("/api/analytics/stream")
-async def analytics_stream_endpoint(query: str, request: Request, _: None = Depends(smart_rate_limit)):
+async def analytics_stream_endpoint(query: str, request: Request, _: None = Depends(analytics_sql_rate_limit)):
     """Stream analytics results with LangGraph workflow visualization"""
     
     async def generate_analytics_stream():
@@ -897,7 +935,7 @@ async def analytics_memory_stream_endpoint(
     request: Request,
     session_id: Optional[str] = None,
     flow: Optional[str] = Query(default=None, description="Flow name (planner-executor | single-agent | multi-agent | single-agent-legacy | multi-agent-legacy)"),
-    _: None = Depends(smart_rate_limit),
+    _: None = Depends(analytics_agent_rate_limit),
 ):
     """Stream analytics memory results with conversational clarifications"""
     legacy_mode = request.query_params.get('mode')
@@ -950,7 +988,7 @@ async def analytics_memory_stream_endpoint(
 
 
 @app.post("/api/analytics/memory/clarify")
-async def analytics_memory_clarify_endpoint(answer: ClarifyAnswerModel, _: None = Depends(smart_rate_limit)):
+async def analytics_memory_clarify_endpoint(answer: ClarifyAnswerModel, _: None = Depends(analytics_agent_rate_limit)):
     """Handle clarification responses for analytics flows."""
     try:
         logger.info(f"[ANALYTICS_MEMORY] Clarification answer received for session {answer.session_id}")

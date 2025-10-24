@@ -12,6 +12,21 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from unified_responses_client import get_unified_client
 
 
+def _compose_series_column_key(ticker: Optional[str], metric: str) -> str:
+    ticker_clean = (ticker or "").strip()
+    if ticker_clean:
+        return f"{ticker_clean}|{metric}"
+    return metric
+
+
+def _metric_label_from_series(series_name: str, metric: str) -> str:
+    if isinstance(series_name, str) and ' - ' in series_name:
+        tail = series_name.split(' - ', 1)[1].strip()
+        if tail:
+            return tail
+    return metric.replace('_', ' ').title()
+
+
 class WorkflowState(TypedDict):
     query: str
     sql: Optional[str]
@@ -1514,7 +1529,10 @@ Important:
                 else:
                     display = name
                 legend_selected[name] = (display in default_titles) if default_titles else True
-        
+        if len(tickers) > 1 and len(data_columns) <= 1:
+            for series_name in series_data.keys():
+                legend_selected[series_name] = True
+
         # For multi-company, multi-metric queries, show first metric for all companies by default
         if len(tickers) > 1 and len(data_columns) > 1:
             # Reset legend selection to show only series for the first metric
@@ -1531,6 +1549,27 @@ Important:
         # Get layout configuration from charts.yaml
         layout = self._get_chart_layout('default')
         
+        composite_columns: List[str] = []
+        metric_series_columns_map: Dict[str, List[str]] = {}
+        metric_legend_map: Dict[str, List[str]] = {}
+        metric_display_names_map: Dict[str, str] = {}
+        display_name_map: Dict[str, str] = {}
+
+        for series_name, metric_slug in series_to_source_column.items():
+            if not isinstance(metric_slug, str):
+                continue
+            ticker_part = None
+            if isinstance(series_name, str) and ' - ' in series_name:
+                ticker_part = series_name.split(' - ', 1)[0].strip()
+            composite_key = _compose_series_column_key(ticker_part, metric_slug)
+            composite_columns.append(composite_key)
+            display_name_map[composite_key] = series_name
+            display_name_map.setdefault(metric_slug, series_name)
+            metric_series_columns_map.setdefault(metric_slug, []).append(composite_key)
+            metric_legend_map.setdefault(metric_slug, []).append(series_name)
+            if metric_slug not in metric_display_names_map:
+                metric_display_names_map[metric_slug] = _metric_label_from_series(series_name, metric_slug)
+
         chart_spec = {
             'title': {
                 **layout.get('title', {}),
@@ -1569,7 +1608,12 @@ Important:
                 'seriesPercentFormat': series_percent_format,
                 'rawData': data,
                 'defaultColumns': default_columns,
-                'includedColumns': data_columns,
+                'includedColumns': list(dict.fromkeys(composite_columns)) or data_columns,
+                'metricColumns': data_columns,
+                'metricSeriesColumns': {key: list(dict.fromkeys(values)) for key, values in metric_series_columns_map.items()},
+                'metricLegendMap': {key: list(dict.fromkeys(values)) for key, values in metric_legend_map.items()},
+                'metricDisplayNames': metric_display_names_map,
+                'displayNames': display_name_map,
                 'chartValueType': chart_value_type,
                 'groupingType': 'metric',
                 'metricsList': data_columns  # Always use metric grouping

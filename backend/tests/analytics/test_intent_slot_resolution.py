@@ -1,6 +1,8 @@
 from backend.analytics.core.config import CONFIGS
+from backend.analytics.core.clarify import detect_missing_slots
 from backend.analytics.core.intent_impl import detection
 from backend.analytics.core.intent_impl.models import (
+    IntentModel,
     IntentSelectionModel,
     LLMIntentResolutionModel,
     LLMSlotStatusModel,
@@ -8,6 +10,7 @@ from backend.analytics.core.intent_impl.models import (
     TimeframeSlotValue,
 )
 from backend.analytics.core.slot_catalog import get_slot_catalog
+from backend.analytics.core.state import QueryPlanModel
 
 
 def _config_payload():
@@ -17,6 +20,65 @@ def _config_payload():
         "companies": CONFIGS.companies,
         "metrics": CONFIGS.metrics,
     }
+
+
+def test_heuristic_short_circuit_skips_llm(monkeypatch):
+    get_slot_catalog(refresh=True)
+
+    invoked = {"called": False}
+
+    def _raise():
+        invoked["called"] = True
+        raise AssertionError("LLM resolver should not be invoked during heuristic short-circuit")
+
+    monkeypatch.setattr(detection, "get_unified_client", _raise)
+
+    result = detection.resolve_intent_slots(
+        "NVDA market share in the past 5 years",
+        _config_payload(),
+    )
+
+    assert invoked["called"] is False
+    assert result.intent.key == "market_share_single"
+    company_status = result.slots.get("company")
+    assert company_status is not None
+    assert company_status.status == "filled"
+    assert company_status.value == "NVDA"
+    timeframe_status = result.slots.get("timeframe")
+    assert timeframe_status is not None
+    assert timeframe_status.status == "filled"
+    timeframe_value = timeframe_status.value
+    assert isinstance(timeframe_value, dict)
+    assert timeframe_value.get("years_back") in {5, 6} or timeframe_value.get("preset") == "last_5_years"
+    assert not result.followups
+    assert result.notes == "Heuristic resolver satisfied required slots; LLM skipped."
+
+
+def test_detect_missing_slots_respects_catalog_requirements():
+    get_slot_catalog(refresh=True)
+
+    intent = IntentModel(
+        intent_key="market_share_single",
+        confidence=0.93,
+        slots_detected={
+            "company": "NVDA",
+            "timeframe": {"preset": "last_5_years", "years_back": 5},
+        },
+    )
+    plan = QueryPlanModel()
+    plan.timeframe.preset = "last_5_years"
+    plan.timeframe.years_back = 5
+
+    clarifications = detect_missing_slots(
+        intent,
+        plan,
+        template=None,
+        configs=_config_payload(),
+    )
+
+    requested_slots = {request.slot for request in clarifications}
+    assert "company" not in requested_slots
+    assert "timeframe" not in requested_slots
 
 
 def test_resolve_intent_slots_fallback_prompts_for_company(monkeypatch):

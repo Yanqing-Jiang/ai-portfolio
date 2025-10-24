@@ -111,6 +111,133 @@ const extractNumericCandidate = (value: any, seen: Set<any> = new Set()): number
   return null;
 };
 
+const extractDisplayCandidate = (value: any, seen: Set<any> = new Set()): any => {
+  if (!value || typeof value !== 'object') {
+    return undefined;
+  }
+  if (seen.has(value)) {
+    return undefined;
+  }
+  seen.add(value);
+
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const candidate = extractDisplayCandidate(entry, seen);
+      if (candidate !== undefined && candidate !== null && candidate !== '') {
+        return candidate;
+      }
+    }
+    return undefined;
+  }
+
+  const candidateKeys = [
+    'formatted',
+    'display',
+    'text',
+    'label',
+    'name',
+    'title',
+    'value',
+    'raw',
+    'string',
+  ];
+
+  for (const key of candidateKeys) {
+    if (Object.prototype.hasOwnProperty.call(value, key)) {
+      const candidate = (value as any)[key];
+      if (candidate !== undefined && candidate !== null && candidate !== '') {
+        return candidate;
+      }
+    }
+  }
+
+  const primitiveKeys = Object.keys(value);
+  if (primitiveKeys.length === 1) {
+    const candidate = (value as any)[primitiveKeys[0]];
+    if (candidate !== undefined && candidate !== null && candidate !== '') {
+      return candidate;
+    }
+  }
+
+  return undefined;
+};
+
+const toDisplayString = (value: any): string => {
+  if (value === null || value === undefined) {
+    return '';
+  }
+  if (typeof value === 'object') {
+    const numeric = extractNumericCandidate(value);
+    if (numeric !== null) {
+      return String(numeric);
+    }
+    const candidate = extractDisplayCandidate(value);
+    if (candidate !== undefined && candidate !== null && candidate !== '') {
+      return toDisplayString(candidate);
+    }
+    if (value instanceof Date) {
+      return value.toISOString();
+    }
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  }
+  if (typeof value === 'boolean') {
+    return value ? 'true' : 'false';
+  }
+  return String(value);
+};
+
+const applyAlphaToColor = (color: any, alpha: number): string => {
+  const safeAlpha = Number.isFinite(alpha) ? Math.min(Math.max(alpha, 0), 1) : 1;
+  if (typeof color !== 'string' || !color.trim()) {
+    return `rgba(34, 197, 94, ${safeAlpha})`;
+  }
+  const trimmed = color.trim();
+  const hexMatch = /^#([0-9a-f]{6})$/i.exec(trimmed);
+  if (hexMatch) {
+    const hex = parseInt(hexMatch[1], 16);
+    const r = (hex >> 16) & 255;
+    const g = (hex >> 8) & 255;
+    const b = hex & 255;
+    return `rgba(${r}, ${g}, ${b}, ${safeAlpha})`;
+  }
+  if (trimmed.startsWith('rgb(')) {
+    return trimmed.replace(/^rgb\(([^)]+)\)$/i, (_m, components) => `rgba(${components}, ${safeAlpha})`);
+  }
+  if (trimmed.startsWith('rgba(')) {
+    return trimmed.replace(/rgba\(([^,]+),([^,]+),([^,]+),[^)]+\)/i, (_m, r, g, b) => `rgba(${r}, ${g}, ${b}, ${safeAlpha})`);
+  }
+  return trimmed;
+};
+
+const resolveTemporalComponent = (value: any): string | number | null => {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (typeof value === 'object') {
+    const numeric = extractNumericCandidate(value);
+    if (numeric !== null) {
+      return numeric;
+    }
+    const candidate = extractDisplayCandidate(value);
+    if (candidate !== undefined && candidate !== null && candidate !== '') {
+      return resolveTemporalComponent(candidate);
+    }
+    if (value instanceof Date) {
+      return value.toISOString();
+    }
+    return toDisplayString(value);
+  }
+  return value;
+};
+
 const flattenRowForDataset = (row: Record<string, any>) => {
   const flattened: Record<string, any> = {};
   Object.entries(row || {}).forEach(([key, value]) => {
@@ -119,12 +246,25 @@ const flattenRowForDataset = (row: Record<string, any>) => {
       if (numeric !== null) {
         flattened[key] = numeric;
       } else {
-        flattened[key] = value;
+        const displayValue = extractDisplayCandidate(value);
+        if (displayValue !== undefined && displayValue !== null && displayValue !== '') {
+          if (typeof displayValue === 'object') {
+            flattened[key] = toDisplayString(displayValue);
+          } else {
+            flattened[key] = displayValue;
+          }
+        } else {
+          flattened[key] = toDisplayString(value);
+        }
       }
       const formatted =
-        (value as any).formatted ?? (value as any).display ?? (value as any).text ?? (value as any).label;
+        (value as any).formatted ??
+        (value as any).display ??
+        (value as any).text ??
+        (value as any).label ??
+        extractDisplayCandidate(value);
       if (formatted !== undefined && formatted !== null && formatted !== '') {
-        flattened[`${key}__display`] = String(formatted);
+        flattened[`${key}__display`] = toDisplayString(formatted);
       }
     } else {
       flattened[key] = value;
@@ -560,15 +700,21 @@ export const hydrateChartSpec = (spec: any) => {
   const flattenedRawData = sortedRawData.map((row: Record<string, any>) => flattenRowForDataset(row));
 
   const toLabel = (row: Record<string, any>) => {
-    const year = row?.calendar_year ?? row?.fiscal_year ?? row?.year;
-    const quarter = row?.calendar_quarter ?? row?.fiscal_quarter ?? row?.quarter;
+    const yearRaw = row?.calendar_year ?? row?.fiscal_year ?? row?.year;
+    const quarterRaw = row?.calendar_quarter ?? row?.fiscal_quarter ?? row?.quarter;
+    const monthRaw = row?.calendar_month ?? row?.month;
+    const periodRaw = row?.period ?? row?.period_end_date ?? row?.date ?? row?.timestamp;
+
+    const year = resolveTemporalComponent(yearRaw);
+    const quarter = resolveTemporalComponent(quarterRaw);
+
     if (quarter && year) {
       return `${quarter} ${year}`;
     }
     if (year !== undefined && year !== null) {
       return `${year}`;
     }
-    const month = row?.calendar_month ?? row?.month;
+    const month = resolveTemporalComponent(monthRaw);
     if (year !== undefined && month) {
       try {
         const date = new Date(Date.UTC(Number(year), Number(month) - 1, 1));
@@ -579,7 +725,7 @@ export const hydrateChartSpec = (spec: any) => {
         /* ignore */
       }
     }
-    const period = row?.period ?? row?.period_end_date ?? row?.date ?? row?.timestamp;
+    const period = resolveTemporalComponent(periodRaw);
     if (period) {
       return String(period);
     }
@@ -590,7 +736,9 @@ export const hydrateChartSpec = (spec: any) => {
   if (hydrated.meta && typeof hydrated.meta === 'object') {
     hydrated.meta.rawData = sortedRawData.map((row: any) => ({ ...row }));
   }
-  const labels = Array.from(new Set(sortedRawData.map(toLabel)));
+  const labels = Array.from(new Set(sortedRawData.map(toLabel))).map((label) =>
+    label === null || label === undefined || label === '' ? 'Value' : String(label),
+  );
 
   if (Array.isArray(hydrated.xAxis)) {
     hydrated.xAxis = hydrated.xAxis.map((axis: any) => ({ ...(axis || {}), data: labels }));
@@ -634,6 +782,154 @@ export const hydrateChartSpec = (spec: any) => {
     return typeof candidateValue === 'number' && Number.isFinite(candidateValue);
   });
   const valueKey = numericFieldCandidates[0];
+  const resolveCandidateField = (candidate?: string | null): string | undefined => {
+    if (!candidate || typeof candidate !== 'string') {
+      return undefined;
+    }
+    const direct = numericFieldCandidates.find((column) => column === candidate);
+    if (direct) {
+      return direct;
+    }
+    const lowerCandidate = candidate.toLowerCase();
+    const caseInsensitive = numericFieldCandidates.find((column) => column.toLowerCase() === lowerCandidate);
+    if (caseInsensitive) {
+      return caseInsensitive;
+    }
+    if (candidate.includes('|')) {
+      const parts = candidate
+        .split('|')
+        .map((part) => part.trim())
+        .filter((part) => part.length > 0);
+      for (let idx = parts.length - 1; idx >= 0; idx -= 1) {
+        const part = parts[idx];
+        const match = numericFieldCandidates.find(
+          (column) => column === part || column.toLowerCase() === part.toLowerCase(),
+        );
+        if (match) {
+          return match;
+        }
+      }
+      const combinedLower = parts.join('_').toLowerCase();
+      const combinedMatch = numericFieldCandidates.find(
+        (column) => column.toLowerCase() === combinedLower,
+      );
+      if (combinedMatch) {
+        return combinedMatch;
+      }
+      const suffix = parts[parts.length - 1];
+      if (suffix) {
+        const suffixLower = suffix.toLowerCase();
+        const suffixMatch = numericFieldCandidates.find(
+          (column) => column.toLowerCase().endsWith(`_${suffixLower}`),
+        );
+        if (suffixMatch) {
+          return suffixMatch;
+        }
+      }
+    }
+    return undefined;
+  };
+  const displayToField = new Map<string, string>();
+  Object.entries(displayNames || {}).forEach(([field, name]) => {
+    if (name) {
+      displayToField.set(String(name), field);
+    }
+  });
+  const fallbackMetricFieldCandidate =
+    (Array.isArray(spec.meta?.defaultColumns) && spec.meta.defaultColumns[0]) ||
+    (Array.isArray(spec.meta?.includedColumns) && spec.meta.includedColumns[0]) ||
+    valueKey;
+  const fallbackMetricField =
+    resolveCandidateField(fallbackMetricFieldCandidate) ??
+    (typeof valueKey === 'string' ? valueKey : undefined);
+
+  const resolveSeriesField = (series: any): string | undefined => {
+    const seriesName = String(series?.name ?? '');
+    if (series?.meta?.field) {
+      const resolved = resolveCandidateField(series.meta.field);
+      if (resolved) return resolved;
+    }
+    if (series?.meta?.metric_field) {
+      const resolved = resolveCandidateField(series.meta.metric_field);
+      if (resolved) return resolved;
+    }
+    if (series?.meta?.metric) {
+      const resolved = resolveCandidateField(series.meta.metric);
+      if (resolved) return resolved;
+    }
+    if (displayToField.has(seriesName)) {
+      const resolved = resolveCandidateField(displayToField.get(seriesName));
+      if (resolved) return resolved;
+    }
+    const normalized = seriesName.toLowerCase();
+    const candidate = numericFieldCandidates.find((column) => {
+      const formatted = column.replace(/_/g, ' ').toLowerCase();
+      return normalized.includes(formatted);
+    });
+    if (candidate) return candidate;
+    if (Array.isArray(spec.meta?.metricsList)) {
+      const fromMetrics = (spec.meta.metricsList as string[]).find((metric) =>
+        normalized.includes(metric.replace(/_/g, ' ').toLowerCase()),
+      );
+      const resolvedFromMetrics = resolveCandidateField(fromMetrics);
+      if (resolvedFromMetrics) {
+        return resolvedFromMetrics;
+      }
+    }
+    const fromIncluded = includedColumns.find((column: string) => {
+      const formatted = column.replace(/_/g, ' ').toLowerCase();
+      return normalized.includes(formatted);
+    });
+    const resolvedIncluded = resolveCandidateField(fromIncluded);
+    if (resolvedIncluded) {
+      return resolvedIncluded;
+    }
+    return fallbackMetricField;
+  };
+
+  const normalizeGroupValue = (value: any) => {
+    if (value === null || value === undefined) return '__default__';
+    return String(value).trim().toLowerCase();
+  };
+
+  const deriveSeriesGroup = (series: any): string | undefined => {
+    if (!splitKey) return '__default__';
+    if (series?.meta?.groupValue !== undefined) return String(series.meta.groupValue);
+    if (series?.meta?.group !== undefined) return String(series.meta.group);
+    if (series?.meta?.ticker !== undefined) return String(series.meta.ticker);
+    const seriesName = String(series?.name ?? '');
+    if (seriesName.includes(' - ')) {
+      return seriesName.split(' - ', 1)[0];
+    }
+    return seriesName;
+  };
+
+  const groupedRows = new Map<string, Map<string, any>>();
+  sortedRawData.forEach((row: any, index: number) => {
+    const groupKey = splitKey ? normalizeGroupValue(row?.[splitKey]) : '__default__';
+    const labelKey = String(toLabel(sortedRawData[index]));
+    if (!groupedRows.has(groupKey)) {
+      groupedRows.set(groupKey, new Map());
+    }
+    groupedRows.get(groupKey)!.set(labelKey, row);
+  });
+  const groupedRowEntries = Array.from(groupedRows.entries());
+  const resolveGroupedRows = (key: string) => {
+    const direct = groupedRows.get(key);
+    if (direct && direct.size) {
+      return direct;
+    }
+    if (groupedRowEntries.length === 1) {
+      return groupedRowEntries[0][1];
+    }
+    if (key === '__default__') {
+      const [, fallbackRows] = groupedRowEntries.find(([candidateKey]) => candidateKey !== '__default__') ?? [];
+      if (fallbackRows && fallbackRows.size) {
+        return fallbackRows;
+      }
+    }
+    return direct ?? new Map<string, any>();
+  };
 
   let datasetApplied = false;
   if (splitKey && valueKey) {
@@ -641,58 +937,82 @@ export const hydrateChartSpec = (spec: any) => {
       ...row,
       [categoryDimensionKey]: toLabel(sortedRawData[index]),
     }));
+    const metricFields = new Set<string>(numericFieldCandidates.length ? numericFieldCandidates : []);
+    if (!metricFields.size && Array.isArray(includedColumns)) {
+      includedColumns.forEach((col: string) => metricFields.add(col));
+    }
+    const seriesFieldMap = new Map<number, string>();
+    const seriesGroupMap = new Map<number, string | undefined>();
+    (hydrated.series || []).forEach((series: any, idx: number) => {
+      const resolvedField = resolveSeriesField(series) ?? fallbackMetricField ?? valueKey;
+      if (resolvedField) {
+        metricFields.add(resolvedField);
+      }
+      seriesFieldMap.set(idx, resolvedField ?? '');
+      seriesGroupMap.set(idx, deriveSeriesGroup(series));
+    });
     const datasetEntry = {
-      dimensions: Array.from(new Set([categoryDimensionKey, splitKey, valueKey])),
+      dimensions: Array.from(new Set([
+        categoryDimensionKey,
+        splitKey,
+        ...metricFields,
+      ])),
       source: datasetSource,
     };
     const existingDataset = Array.isArray(hydrated.dataset) ? [...hydrated.dataset] : [];
     const datasetIndex = existingDataset.length;
     existingDataset.push(datasetEntry);
     hydrated.dataset = existingDataset;
-    hydrated.series = (hydrated.series || []).map((series: any) => {
+    hydrated.series = (hydrated.series || []).map((series: any, idx: number) => {
       const next = { ...series };
       if (next.data !== undefined) {
         delete next.data;
       }
-      next.encode = {
-        x: categoryDimensionKey,
-        y: valueKey,
-        seriesName: splitKey,
-        itemName: categoryDimensionKey,
-      };
+      const fieldForSeries = seriesFieldMap.get(idx) || fallbackMetricField || valueKey;
+      const groupValueRaw = seriesGroupMap.get(idx);
+      const groupKey = splitKey ? normalizeGroupValue(groupValueRaw) : '__default__';
+      const groupRows = resolveGroupedRows(groupKey);
+      const dataValues = labels.map((label) => {
+        const row = groupRows.get(label);
+        if (!row) return null;
+        if (!fieldForSeries) return null;
+        const value = row?.[fieldForSeries];
+        if (typeof value === 'number') return value;
+        const parsed = coerceNumeric(value);
+        return typeof parsed === 'number' && Number.isFinite(parsed) ? parsed : null;
+      });
+      if (fieldForSeries) {
+        next.encode = {
+          x: categoryDimensionKey,
+          y: fieldForSeries,
+          seriesName: splitKey,
+          itemName: categoryDimensionKey,
+        };
+        next.seriesLayoutBy = 'column';
+      }
       next.datasetIndex = datasetIndex;
+      next.data = dataValues;
       return next;
     });
     datasetApplied = true;
   }
 
   if (!datasetApplied) {
-    const displayToField = new Map<string, string>();
-    Object.entries(displayNames || {}).forEach(([field, name]) => {
-      if (name) {
-        displayToField.set(String(name), field);
-      }
-    });
-
     hydrated.series = hydrated.series.map((series: any) => {
-      const seriesName = String(series?.name ?? '');
-      const field = series.meta?.field || displayToField.get(seriesName) || includedColumns.find((column: string) => {
-        const normalized = column.replace(/_/g, ' ').toLowerCase();
-        return seriesName.toLowerCase().includes(normalized);
-      });
+      const field = resolveSeriesField(series) ?? fallbackMetricField ?? valueKey;
+      const groupValueRaw = deriveSeriesGroup(series);
+      const groupKey = splitKey ? normalizeGroupValue(groupValueRaw) : '__default__';
+      const groupRows = resolveGroupedRows(groupKey);
 
       if (!field) {
         return series;
       }
 
-      const values = flattenedRawData.map((row: any) => {
+      const values = labels.map((label) => {
+        const row = groupRows.get(label);
+        if (!row) return null;
         const value = row?.[field];
-        if (typeof value === 'number' || value === null) {
-          return value;
-        }
-        if (value === undefined) {
-          return null;
-        }
+        if (typeof value === 'number') return value;
         const parsed = coerceNumeric(value);
         return typeof parsed === 'number' && Number.isFinite(parsed) ? parsed : null;
       });
@@ -771,31 +1091,157 @@ export const withLightTheme = (spec: any) => {
   const usesPercent = metaChartValueType === 'percent' || (percentSeries.size > 0) || includedPercent;
 
   const chartIsPercent = metaChartValueType === 'percent';
+  // Normalise formatter payloads (axis/tooltip objects, datasets, etc.) into a primitive.
+  const unwrapFormatterInput = (input: any): any => {
+    if (input === null || input === undefined) return input;
+    if (typeof input === 'number' || typeof input === 'string') return input;
+
+    const visited = new Set<any>();
+    const walk = (value: any): any => {
+      if (value === null || value === undefined) return value;
+      if (typeof value === 'number' || typeof value === 'string') return value;
+      if (visited.has(value)) return undefined;
+
+      if (Array.isArray(value)) {
+        for (const item of value) {
+          const result = walk(item);
+          if (result !== undefined) {
+            return result;
+          }
+        }
+        return undefined;
+      }
+
+      if (typeof value === 'object') {
+        visited.add(value);
+        const candidateKeys = [
+          'value',
+          'raw',
+          'rawValue',
+          'axisValue',
+          'axisValueLabel',
+          'name',
+          'label',
+          'text',
+          'payload',
+          'data',
+          'y',
+        ];
+
+        for (const key of candidateKeys) {
+          if (Object.prototype.hasOwnProperty.call(value, key)) {
+            const result = walk((value as any)[key]);
+            if (result !== undefined) {
+              return result;
+            }
+          }
+        }
+      }
+
+      return undefined;
+    };
+
+    const resolved = walk(input);
+    if (resolved !== undefined) {
+      return resolved;
+    }
+    if (typeof (input as any)?.valueOf === 'function') {
+      const primitive = (input as any).valueOf();
+      if (primitive !== input) {
+        return primitive;
+      }
+    }
+    return input;
+  };
+
   const formatPercent = (v: any, seriesName?: string) => {
-    const num = typeof v === 'number' ? v : Number(v);
+    const normalized = unwrapFormatterInput(v);
+    const num = typeof normalized === 'number' ? normalized : Number(normalized);
     if (Number.isFinite(num)) {
-      // Check if backend provided specific format info for this series
       const percentFormat = spec.meta?.seriesPercentFormat?.[seriesName || ''];
       
       if (percentFormat === 'pre_multiplied' || chartIsPercent) {
-        // Value is already in 0-100 range (e.g., 53.4 for 53.4%)
         return `${num.toFixed(1)}%`;
       } else if (percentFormat === 'decimal') {
-        // Value is in 0-1 range (e.g., 0.534 for 53.4%)
         return `${(num * 100).toFixed(1)}%`;
       } else {
-        // Fallback: If value is already in percentage format (> 1), display as-is
-        // If value is in decimal format (0-1), multiply by 100
         const percentValue = num > 1 ? num : num * 100;
         return `${percentValue.toFixed(1)}%`;
       }
     }
-    return v;
+    if (normalized === null || normalized === undefined) {
+      return '';
+    }
+    if (typeof normalized === 'object') {
+      return toDisplayString(normalized);
+    }
+    return String(normalized);
   };
   const formatCurrency0 = (v: any) => {
-    const num = typeof v === 'number' ? v : Number(v);
+    const normalized = unwrapFormatterInput(v);
+    const num = typeof normalized === 'number' ? normalized : Number(normalized);
     if (Number.isFinite(num)) return `$${Math.round(num).toLocaleString()}`;
-    return v;
+    if (normalized === null || normalized === undefined) {
+      return '';
+    }
+    if (typeof normalized === 'object') {
+      return toDisplayString(normalized);
+    }
+    return String(normalized);
+  };
+
+  const resolveValueFromParams = (params: any, axis: 'x' | 'y' = 'y') => {
+    if (!params) return undefined;
+    const encode = params.encode || {};
+    const targetDims: any[] = axis === 'y' ? encode.y || encode.value || [] : encode.x || encode.axis || [];
+    const dimensionNames: any[] = params.dimensionNames || [];
+    const rawValue = params.value ?? params.data?.value ?? params.data;
+
+    const tryFromObject = (valueObj: any) => {
+      if (!valueObj || typeof valueObj !== 'object') return undefined;
+      if (targetDims.length) {
+        for (const dim of targetDims) {
+          const name = typeof dim === 'number' ? dimensionNames[dim] : dim;
+          if (name && Object.prototype.hasOwnProperty.call(valueObj, name)) {
+            return valueObj[name];
+          }
+          if (Object.prototype.hasOwnProperty.call(valueObj, dim)) {
+            return valueObj[dim];
+          }
+        }
+      }
+      const fallbackKeys = ['value', 'raw', 'numeric', 'amount'];
+      for (const key of fallbackKeys) {
+        if (Object.prototype.hasOwnProperty.call(valueObj, key)) {
+          return valueObj[key];
+        }
+      }
+      if (axis === 'x' && Object.prototype.hasOwnProperty.call(valueObj, '__label')) {
+        return valueObj.__label;
+      }
+      return undefined;
+    };
+
+    if (Array.isArray(rawValue) && targetDims.length) {
+      const dimIndex = typeof targetDims[0] === 'number' ? targetDims[0] : dimensionNames.indexOf(targetDims[0]);
+      if (dimIndex >= 0 && rawValue[dimIndex] !== undefined) {
+        return rawValue[dimIndex];
+      }
+    }
+
+    if (typeof rawValue === 'object') {
+      const objCandidate = tryFromObject(rawValue);
+      if (objCandidate !== undefined) {
+        return objCandidate;
+      }
+    }
+
+    const nested = params.data && typeof params.data === 'object' ? tryFromObject(params.data) : undefined;
+    if (nested !== undefined) {
+      return nested;
+    }
+
+    return rawValue;
   };
 
   const axisFormatter = (value: any) => {
@@ -843,37 +1289,112 @@ export const withLightTheme = (spec: any) => {
   // Tooltip value formatting by series type
   option.tooltip.formatter = (params: any) => {
     const list = Array.isArray(params) ? params : [params];
-    const name = list[0]?.axisValueLabel ?? list[0]?.name ?? '';
-    const lines = [name];
+    const first = list[0] || {};
+    const axisValue = resolveValueFromParams(first, 'x') ?? first.axisValueLabel ?? first.name ?? '';
+    const lines = [axisValue];
     for (const p of list) {
       const isSingleSeries = Array.isArray(option.series) && option.series.length === 1;
       const isPercent = percentSeries.has(p.seriesName) || (includedPercent && isSingleSeries);
-      const val = p.value;
-      const formatted = isPercent ? formatPercent(val, p.seriesName) : formatCurrency0(val);
+      const rawVal = resolveValueFromParams(p, 'y');
+      const formatted = isPercent ? formatPercent(rawVal, p.seriesName) : formatCurrency0(rawVal);
       lines.push(`${p.marker || ''} ${p.seriesName}: ${formatted}`);
     }
     return lines.join('<br/>');
   };
   // Enable data labels with smart positioning
+  const totalSeriesCount = Array.isArray(option.series) ? option.series.length : 0;
+  const datapointCount =
+    totalSeriesCount > 0
+      ? Math.max(
+          ...option.series.map((series: any) => (Array.isArray(series?.data) ? series.data.length : 0)),
+        )
+      : 0;
+  const shouldShowPointLabels = totalSeriesCount > 0 && datapointCount > 0;
+
+  const legendNameFormatter = (name: string) => {
+    if (typeof name !== 'string') return name;
+    const displayName = spec.meta?.displayNames?.[name];
+    if (displayName) return displayName;
+    if (name.includes(' - ')) {
+      const [prefix, suffix] = name.split(' - ', 2);
+      if (suffix?.toLowerCase().startsWith('peer')) {
+        return suffix.replace(/^peer\s+/i, 'Peer ').trim();
+      }
+      if (suffix?.toLowerCase().includes(prefix.toLowerCase())) {
+        return suffix.trim();
+      }
+      return `${prefix.trim()} ${suffix.trim()}`;
+    }
+    return name;
+  };
+
+  if (Array.isArray(option.legend)) {
+    option.legend = option.legend.map((legend: any) => ({
+      ...(legend || {}),
+      formatter: legendNameFormatter,
+      tooltip: { show: true },
+    }));
+  } else if (option.legend) {
+    option.legend = {
+      ...(option.legend || {}),
+      formatter: legendNameFormatter,
+      tooltip: { show: true },
+    };
+  }
+
+  const palette = Array.isArray(option.color) ? option.color : [];
+
   if (Array.isArray(option.series)) {
-    option.series = option.series.map((s: any) => ({
-      ...s,
-      label: {
-        show: true,
-        position: 'top',
-        color: '#444',
-        formatter: (params: any) => {
-          const isSingleSeries = Array.isArray(option.series) && option.series.length === 1;
-          const isPercent = percentSeries.has(params.seriesName) || (includedPercent && isSingleSeries);
-          return isPercent ? formatPercent(params.value, params.seriesName) : formatCurrency0(params.value);
+    option.series = option.series.map((s: any, seriesIndex: number) => {
+      const paletteColor =
+        palette.length > 0 ? palette[seriesIndex % palette.length] : undefined;
+      const seriesColor =
+        (s?.itemStyle?.color as string) ||
+        paletteColor ||
+        '#1D4ED8';
+      return {
+        ...s,
+        label: {
+          show: shouldShowPointLabels,
+          position: 'top',
+          color: seriesColor,
+          fontSize: 12,
+          fontWeight: 600,
+          borderRadius: 6,
+          padding: [4, 6],
+          backgroundColor: applyAlphaToColor(seriesColor, 0.12),
+          borderColor: applyAlphaToColor(seriesColor, 0.32),
+          borderWidth: 1,
+          shadowBlur: 6,
+          shadowColor: applyAlphaToColor(seriesColor, 0.25),
+          formatter: (params: any) => {
+            const isSingleSeries = Array.isArray(option.series) && option.series.length === 1;
+            const isPercent = percentSeries.has(params.seriesName) || (includedPercent && isSingleSeries);
+            const value = resolveValueFromParams(params, 'y');
+            return isPercent ? formatPercent(value, params.seriesName) : formatCurrency0(value);
+          },
         },
-      },
+      labelLayout: shouldShowPointLabels
+        ? (layoutParams: any) => {
+            const labelRect = layoutParams.labelRect || layoutParams.rect || { x: layoutParams.x, y: layoutParams.y };
+            const clusterOffset = seriesIndex - (totalSeriesCount - 1) / 2;
+            const horizontalShift = clusterOffset * 26;
+            const verticalShift = -18 - Math.abs(clusterOffset) * 6;
+            return {
+              x: (labelRect.x ?? layoutParams.x) + horizontalShift,
+              y: (labelRect.y ?? layoutParams.y) + verticalShift,
+              align: 'center',
+              verticalAlign: 'bottom',
+            };
+          }
+        : undefined,
       smooth: true,
       lineStyle: { ...(s.lineStyle || {}), width: 2 },
       symbol: 'circle',
       symbolSize: 6,
       areaStyle: s.type === 'line' ? { opacity: 0.06 } : undefined,
-    }));
+      };
+    });
   }
 
   // Fallback: if legend.selected disables all series, auto-enable sensible defaults

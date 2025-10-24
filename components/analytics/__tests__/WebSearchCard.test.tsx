@@ -28,13 +28,69 @@ describe('WebSearchCard', () => {
     render(<WebSearchCard result={result} />);
 
     expect(screen.getByText('Market Research')).toBeInTheDocument();
-    expect(screen.getByText(/Question: latest Nvidia earnings/)).toBeInTheDocument();
+    expect(screen.getByText('Research topic')).toBeInTheDocument();
     expect(screen.getByText('Nvidia Q2 2025 results')).toBeInTheDocument();
     expect(screen.getByText('Nvidia posted $24B in revenue, up 89% year over year.')).toBeInTheDocument();
     expect(screen.getByText('1 result')).toBeInTheDocument();
     expect(screen.getByText('Topic 1 of 1')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Previous topic' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Next topic' })).toBeDisabled();
+    expect(screen.getByRole('link', { name: 'Open source 1' })).toHaveAttribute('href', 'https://example.com/nvidia-q2');
     expect(screen.queryByText('Nvidia beat expectations with record data center revenue.')).toBeNull();
+  });
+
+  it('handles multiple topics and enables navigation', () => {
+    const result: WebSearchResult = {
+      query: 'AMD vs NVIDIA revenue comparison 2021-2024',
+      searchTopics: ['AMD vs NVIDIA revenue comparison 2021-2024', 'AMD semiconductor industry outlook 2025'],
+      snippets: [],
+      topics: [
+        {
+          label: 'Primary question',
+          query: 'AMD vs NVIDIA revenue comparison 2021-2024',
+          snippets: [
+            {
+              title: 'alphastreet.com',
+              url: 'https://vertex.example/amd-q4',
+              snippet: 'AMD reported revenue of $7.66 billion.',
+              display_url: 'vertex.example',
+              published_at: '2025-01-28',
+            },
+          ],
+        },
+        {
+          label: 'Industry context',
+          query: 'AMD semiconductor industry outlook 2025',
+          snippets: [
+            {
+              title: 'ainvest.com',
+              url: 'https://vertex.example/industry',
+              snippet: 'Semiconductor industry projected to reach $700B in 2025.',
+              display_url: 'vertex.example',
+              published_at: '2025-07-12',
+            },
+          ],
+        },
+      ],
+      annotations: [],
+      searchId: 'search_multi',
+      fromCache: false,
+      fetchedAt: '2025-10-23T20:14:10.605709Z',
+      latencyMs: 2103,
+      ready: true,
+    };
+
+    render(<WebSearchCard result={result} />);
+
+    expect(screen.getByText('Topics: AMD vs NVIDIA revenue comparison 2021-2024; AMD semiconductor industry outlook 2025')).toBeInTheDocument();
+    expect(screen.getByText('Topic 1 of 2')).toBeInTheDocument();
+    expect(screen.getByText('Primary question')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open source 1' })).toHaveAttribute('href', 'https://vertex.example/amd-q4');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next topic' }));
+
+    expect(screen.getByText('Topic 2 of 2')).toBeInTheDocument();
+    expect(screen.getByText('Industry context')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open source 1' })).toHaveAttribute('href', 'https://vertex.example/industry');
   });
 });

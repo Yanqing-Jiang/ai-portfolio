@@ -11,6 +11,7 @@ import {
   ToolFanoutResult,
   StockWidgetConfig,
   WebSearchResult,
+  WebSearchTopic,
   AnalysisOverview,
   AnalysisEvidenceLink,
   AnalysisSources,
@@ -68,9 +69,14 @@ const SPECIALIST_LANE_PRIORITY: Record<string, number> = {
 const SPECIALIST_TYPE_TO_LANE: Record<string, string> = {
   chart_builder: 'chart',
   sql_executor: 'sql',
+  sql_generator: 'sql',
+  sql_validator: 'sql',
+  sql_result_bridge: 'sql',
   stock_widget: 'market',
   web_context: 'web',
   analysis_summary: 'analysis',
+  analysis_writer: 'analysis',
+  chart_designer: 'chart',
 };
 
 const REVISION_EVENT_ALIASES: Record<string, string> = {
@@ -802,6 +808,210 @@ const buildResultMessageFields = () => ({
       provider: coerceString(raw.provider) ?? (raw.model ? 'Gemini' : undefined),
       model: coerceString(raw.model) ?? coerceString(raw.model_name) ?? coerceString(raw.modelName),
       latencyStats,
+      topicTotal:
+        typeof raw.topic_total === 'number'
+          ? raw.topic_total
+          : typeof raw.topicTotal === 'number'
+            ? raw.topicTotal
+            : undefined,
+    };
+  };
+
+  type WebSnippet = WebSearchTopic['snippets'][number];
+
+  const mergeSnippetArrays = (existing: WebSnippet[] = [], incoming: WebSnippet[] = []) => {
+    const seen = new Set<string>();
+    const result: WebSnippet[] = [];
+    const pushUnique = (snippet?: WebSnippet | null) => {
+      if (!snippet) {
+        return;
+      }
+      const key = `${snippet.url ?? ''}|${snippet.snippet ?? ''}|${snippet.title ?? ''}`;
+      if (seen.has(key)) {
+        return;
+      }
+      seen.add(key);
+      result.push({
+        title: snippet.title,
+        url: snippet.url,
+        snippet: snippet.snippet,
+        display_url: snippet.display_url,
+        published_at: snippet.published_at,
+      });
+    };
+
+    [...existing, ...incoming].forEach(pushUnique);
+    return result;
+  };
+
+  const mergeWebContexts = (current: WebSearchResult | null, incoming: WebSearchResult): WebSearchResult => {
+    const coerceTopicTotal = (...values: Array<unknown>): number | undefined => {
+      for (const value of values) {
+        if (typeof value === 'number' && Number.isFinite(value)) {
+          return value;
+        }
+        if (typeof value === 'string') {
+          const parsed = Number(value);
+          if (Number.isFinite(parsed)) {
+            return parsed;
+          }
+        }
+      }
+      return undefined;
+    };
+
+    if (!current) {
+      return {
+        ...incoming,
+        snippets: mergeSnippetArrays([], incoming.snippets),
+        topics: (incoming.topics ?? []).map((topic) => ({
+          ...topic,
+          snippets: mergeSnippetArrays([], topic.snippets),
+        })),
+        searchTopics: incoming.searchTopics ? [...incoming.searchTopics] : undefined,
+        annotations: Array.isArray(incoming.annotations) ? [...incoming.annotations] : [],
+        topicTotal: coerceTopicTotal(incoming.topicTotal, (incoming as any).topic_total) ?? incoming.topics?.length,
+      };
+    }
+
+    const mergedSearchTopicsSet = new Set<string>();
+    const pushSearchTopic = (value?: string) => {
+      if (value) {
+        mergedSearchTopicsSet.add(value);
+      }
+    };
+    (current.searchTopics ?? []).forEach(pushSearchTopic);
+    (incoming.searchTopics ?? []).forEach(pushSearchTopic);
+    pushSearchTopic(incoming.searchTopic);
+    const searchTopics = mergedSearchTopicsSet.size ? Array.from(mergedSearchTopicsSet) : undefined;
+
+    const topicEntries: Array<{ key: string; topic: WebSearchTopic }> = [];
+    const topicKey = (topic: WebSearchTopic, fallbackIndex: number, prefix: string) => {
+      const base = topic.query?.toLowerCase() || topic.label?.toLowerCase();
+      return base ? `${prefix}-${base}` : `${prefix}-index-${fallbackIndex}`;
+    };
+
+    (current.topics ?? []).forEach((topic, index) => {
+      topicEntries.push({
+        key: topicKey(topic, index, 'current'),
+        topic: {
+          ...topic,
+          snippets: mergeSnippetArrays([], topic.snippets),
+        },
+      });
+    });
+
+    (incoming.topics ?? []).forEach((topic, index) => {
+      topicEntries.push({
+        key: topicKey(topic, index, 'incoming'),
+        topic: {
+          ...topic,
+          snippets: mergeSnippetArrays([], topic.snippets),
+        },
+      });
+    });
+
+    const mergedTopicMap = new Map<string, WebSearchTopic>();
+    topicEntries.forEach(({ key, topic }) => {
+      const existingTopic = mergedTopicMap.get(key);
+      if (!existingTopic) {
+        mergedTopicMap.set(key, topic);
+        return;
+      }
+      mergedTopicMap.set(key, {
+        label: topic.label ?? existingTopic.label,
+        query: topic.query || existingTopic.query,
+        reason: existingTopic.reason ?? topic.reason,
+        summary: topic.summary ?? existingTopic.summary,
+        search_id: topic.search_id ?? existingTopic.search_id,
+        latency_ms: typeof topic.latency_ms === 'number' ? topic.latency_ms : existingTopic.latency_ms,
+        snippets: mergeSnippetArrays(existingTopic.snippets, topic.snippets),
+      });
+    });
+
+    const mergedTopics = Array.from(mergedTopicMap.values());
+    mergedTopics.sort((a, b) => {
+      const idxA =
+        typeof a?.topic_index === 'number'
+          ? a.topic_index
+          : typeof a?.topicIndex === 'number'
+            ? a.topicIndex
+            : Number.MAX_SAFE_INTEGER;
+      const idxB =
+        typeof b?.topic_index === 'number'
+          ? b.topic_index
+          : typeof b?.topicIndex === 'number'
+            ? b.topicIndex
+            : Number.MAX_SAFE_INTEGER;
+      if (idxA !== idxB) {
+        return idxA - idxB;
+      }
+      return (a?.query || '').localeCompare(b?.query || '');
+    });
+
+    const mergeAnnotations = () => {
+      if (!Array.isArray(current.annotations) && !Array.isArray(incoming.annotations)) {
+        return current.annotations;
+      }
+      const currentList = Array.isArray(current.annotations) ? current.annotations : [];
+      const incomingList = Array.isArray(incoming.annotations) ? incoming.annotations : [];
+      const seen = new Set<string>();
+      const combined: any[] = [];
+      [...currentList, ...incomingList].forEach((annotation: any) => {
+        if (!annotation || typeof annotation !== 'object') {
+          return;
+        }
+        const key = JSON.stringify([
+          annotation.url ?? annotation.source ?? '',
+          annotation.snippet ?? annotation.text ?? annotation.segment?.text ?? '',
+        ]);
+        if (seen.has(key)) {
+          return;
+        }
+        seen.add(key);
+        combined.push(annotation);
+      });
+      return combined;
+    };
+
+    const selectDate = (a?: string, b?: string) => {
+      if (!a) return b;
+      if (!b) return a;
+      const aTime = Date.parse(a);
+      const bTime = Date.parse(b);
+      if (Number.isFinite(aTime) && Number.isFinite(bTime)) {
+        return bTime > aTime ? b : a;
+      }
+      return b ?? a;
+    };
+
+    return {
+      ...current,
+      query: incoming.query ?? current.query,
+      queryTerms: incoming.queryTerms ?? current.queryTerms,
+      searchTopic: incoming.searchTopic ?? current.searchTopic,
+      searchTopics,
+      summary: incoming.summary ?? current.summary,
+      snippets: mergeSnippetArrays(current.snippets, incoming.snippets),
+      annotations: mergeAnnotations(),
+      topics: mergedTopics,
+      searchId: incoming.searchId ?? current.searchId,
+      fromCache: incoming.fromCache ?? current.fromCache,
+      fetchedAt: selectDate(current.fetchedAt, incoming.fetchedAt),
+      latencyMs: incoming.latencyMs ?? current.latencyMs,
+      ready: current.ready || incoming.ready,
+      error: incoming.error ?? current.error,
+      reason: incoming.reason ?? current.reason,
+      provider: incoming.provider ?? current.provider,
+      model: incoming.model ?? current.model,
+      latencyStats: incoming.latencyStats ?? current.latencyStats,
+      topicTotal:
+        coerceTopicTotal(
+          current.topicTotal,
+          (current as any).topic_total,
+          incoming.topicTotal,
+          (incoming as any).topic_total,
+        ) ?? mergedTopics.length,
     };
   };
 
@@ -1834,6 +2044,18 @@ const workflowDataRef = useRef<{
       // Wait a brief moment for the stream to be properly closed
       await new Promise(resolve => setTimeout(resolve, 100));
     }
+
+    const usageResponse = await apiService.countUserInput({ scope: 'next-gen-analytics-agent' });
+    if (!usageResponse.success) {
+      const errorMessage = usageResponse.error || 'Rate limit exceeded. Please try again later.';
+      streamHook.setError(errorMessage);
+      streamHook.setCurrentStatus(`Error: ${errorMessage}`);
+      addChatMessage({
+        type: 'assistant',
+        content: errorMessage,
+      });
+      return;
+    }
     
     // Add user query to chat history
     addChatMessage({
@@ -2122,6 +2344,14 @@ const workflowDataRef = useRef<{
                 }
               : undefined;
             updateStep((stepInfo.step === 'web_search' ? 'web_research_agent' : stepInfo.step), 'in_progress', thinkingLogs, detailPayload, stepInfo.elapsed_ms, stepInfo.ts);
+          }
+          break;
+
+        case 'complete':
+          if (stepInfo.step) {
+            const summaryText = coerceString(eventData.summary) ?? coerceString(data.summary);
+            const thinkingLogs = summaryText ? [summaryText] : [];
+            stepsHook.updateStepStatus(stepInfo.step, 'completed', thinkingLogs, eventData, stepInfo.elapsed_ms, stepInfo.ts);
           }
           break;
           
@@ -2777,20 +3007,24 @@ const workflowDataRef = useRef<{
               const errorMessage = eventData?.error || 'Chart revision skipped';
               streamHook.setError(errorMessage);
             } else if (hasOps) {
+              if (patchedChartSpec && typeof patchedChartSpec === 'object') {
+                workflowDataRef.current.chartSpec = patchedChartSpec;
+              }
+
               streamHook.setCurrentStatus('Chart revision applied');
-              // Drop previously rendered attachments so the revision bubble only shows the updated chart.
+              // Drop previously rendered attachments before reusing the existing result bubble for the revision.
               setAnalysis('');
               workflowDataRef.current.analysis = '';
               setAnalysisOverview(null);
               workflowDataRef.current.analysisOverview = null;
-            setAnalysisSources(null);
-            workflowDataRef.current.analysisSources = null;
-            setProgressiveAnalysis('');
-            setProgressiveText('');
-            setStreamingText('');
-            workflowDataRef.current.progressiveAnalysis = '';
-            workflowDataRef.current.progressiveText = '';
-            workflowDataRef.current.streamingText = '';
+              setAnalysisSources(null);
+              workflowDataRef.current.analysisSources = null;
+              setProgressiveAnalysis('');
+              setProgressiveText('');
+              setStreamingText('');
+              workflowDataRef.current.progressiveAnalysis = '';
+              workflowDataRef.current.progressiveText = '';
+              workflowDataRef.current.streamingText = '';
               setSqlQuery('');
               workflowDataRef.current.sqlQuery = null;
               setDataSample(null);
@@ -2810,10 +3044,11 @@ const workflowDataRef = useRef<{
               const revisionLines = opLines.length ? opLines : ['Applied chart revision'];
               const revisionSummary =
                 ['Revision: Chart updated', ...revisionLines.map((line) => `- ${line}`)].join('\n');
-              appendResultSnapshot({
+
+              refreshResultMessage({
                 content: revisionSummary,
                 chartSpec: patchedChartSpec ?? workflowDataRef.current.chartSpec,
-                analysis: null,
+                analysis: '',
                 analysisOverview: null,
                 sqlQuery: null,
                 dataSample: null,
@@ -2821,6 +3056,7 @@ const workflowDataRef = useRef<{
                 toolFanoutManifest: [],
                 toolFanoutResults: [],
                 webSearch: null,
+                specialistCards: [],
               });
               markRevisionMode('chart');
             }
@@ -3473,6 +3709,28 @@ const workflowDataRef = useRef<{
                 flowModeValue,
                 { lane: 'web', reused: Boolean(eventData.reused) }
               );
+
+              if (toolNameLower.startsWith('web_retriever_')) {
+                const rawPayload = eventData.payload || {};
+                const partialContext = normalizeWebContext({
+                  ...rawPayload,
+                  summary: rawPayload.summary ?? eventData.metadata?.summary,
+                  from_cache: rawPayload.from_cache ?? eventData.metadata?.cache_hit,
+                  provider: rawPayload.provider ?? eventData.metadata?.provider,
+                  model: rawPayload.model ?? eventData.metadata?.model,
+                });
+                if (partialContext) {
+                  let merged: WebSearchResult | null = null;
+                  setWebSearch((prev) => {
+                    merged = mergeWebContexts(prev, partialContext);
+                    workflowDataRef.current.webSearch = merged;
+                    return merged;
+                  });
+                  if (merged) {
+                    refreshResultMessage();
+                  }
+                }
+              }
             }
 
             const payloadForWidget = (eventData.payload ?? {}) as Record<string, unknown>;
@@ -3493,29 +3751,36 @@ const workflowDataRef = useRef<{
                 model: fromPayload.model ?? eventData.metadata?.model,
               });
               if (webContext) {
-                setWebSearch(webContext);
-                workflowDataRef.current.webSearch = webContext;
-                refreshResultMessage();
+                let merged: WebSearchResult | null = null;
+                setWebSearch((prev) => {
+                  merged = mergeWebContexts(prev, webContext);
+                  workflowDataRef.current.webSearch = merged;
+                  return merged;
+                });
+                const contextForThinking = merged ?? webContext;
+                if (merged) {
+                  refreshResultMessage();
+                }
 
                 const stepId = 'web_research_agent';
                 const thinking: string[] = [];
-                const primaryTopic = webContext.searchTopic || webContext.queryTerms || webContext.query || '';
-                const topicLabels = Array.isArray(webContext.searchTopics) && webContext.searchTopics.length
-                  ? webContext.searchTopics
-                  : (Array.isArray(webContext.topics) ? webContext.topics.map((t: any) => t?.label || t?.query).filter(Boolean) : []);
+                const primaryTopic = contextForThinking.searchTopic || contextForThinking.queryTerms || contextForThinking.query || '';
+                const topicLabels = Array.isArray(contextForThinking.searchTopics) && contextForThinking.searchTopics.length
+                  ? contextForThinking.searchTopics
+                  : (Array.isArray(contextForThinking.topics) ? contextForThinking.topics.map((t: any) => t?.label || t?.query).filter(Boolean) : []);
                 if (primaryTopic) thinking.push(`Primary topic: ${primaryTopic}`);
                 if (topicLabels && topicLabels.length) {
                   thinking.push(`Topics: ${topicLabels.slice(0, 3).join('; ')}`);
                 }
-                const count = Array.isArray(webContext.snippets)
-                  ? webContext.snippets.length
-                  : (Array.isArray(webContext.topics)
-                      ? webContext.topics.reduce((acc: number, topic: any) => acc + (Array.isArray(topic?.snippets) ? topic.snippets.length : 0), 0)
+                const count = Array.isArray(contextForThinking.snippets)
+                  ? contextForThinking.snippets.length
+                  : (Array.isArray(contextForThinking.topics)
+                      ? contextForThinking.topics.reduce((acc: number, topic: any) => acc + (Array.isArray(topic?.snippets) ? topic.snippets.length : 0), 0)
                       : 0);
                 thinking.push(`Snippets: ${count}`);
-                if (typeof webContext.latencyMs === 'number') thinking.push(`Latency: ${webContext.latencyMs}ms`);
-                if (webContext.model) thinking.push(`Model: ${webContext.model}`);
-                stepsHook.updateStepStatus(stepId, 'completed', thinking, webContext, eventData.elapsed_ms ?? stepInfo.elapsed_ms, stepInfo.ts);
+                if (typeof contextForThinking.latencyMs === 'number') thinking.push(`Latency: ${contextForThinking.latencyMs}ms`);
+                if (contextForThinking.model) thinking.push(`Model: ${contextForThinking.model}`);
+                stepsHook.updateStepStatus(stepId, 'completed', thinking, contextForThinking, eventData.elapsed_ms ?? stepInfo.elapsed_ms, stepInfo.ts);
               }
             }
 

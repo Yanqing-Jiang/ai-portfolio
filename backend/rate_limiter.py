@@ -1,4 +1,5 @@
 import redis.asyncio as redis
+from enum import Enum
 from fastapi import Request, HTTPException, status, Depends
 from fastapi_limiter import FastAPILimiter
 from fastapi_limiter.depends import RateLimiter
@@ -50,6 +51,45 @@ if not SUPABASE_JWT_SECRET or SUPABASE_JWT_SECRET == "your-jwt-secret-here":
 GUEST_LIMIT = 5
 MEMBER_LIMIT = 20
 LIMIT_WINDOW = 86400  # 24 hours in seconds
+
+class RateLimitScope(str, Enum):
+    GLOBAL = "global"
+    ANALYTICS_AGENT = "next-gen-analytics-agent"
+    ANALYTICS_SQL = "next-gen-analytics-sql"
+
+# (guest_limit, member_limit)
+SCOPE_LIMITS: Dict[RateLimitScope, Tuple[int, int]] = {
+    RateLimitScope.GLOBAL: (GUEST_LIMIT, MEMBER_LIMIT),
+    RateLimitScope.ANALYTICS_AGENT: (GUEST_LIMIT, MEMBER_LIMIT),
+    RateLimitScope.ANALYTICS_SQL: (GUEST_LIMIT, MEMBER_LIMIT),
+}
+
+SCOPE_ALIAS_MAP: Dict[str, RateLimitScope] = {
+    "global": RateLimitScope.GLOBAL,
+    RateLimitScope.GLOBAL.value: RateLimitScope.GLOBAL,
+    "analytics_agent": RateLimitScope.ANALYTICS_AGENT,
+    "next-gen-analytics-agent": RateLimitScope.ANALYTICS_AGENT,
+    "analytics_sql": RateLimitScope.ANALYTICS_SQL,
+    "next-gen-analytics-sql": RateLimitScope.ANALYTICS_SQL,
+}
+
+def build_scoped_identifier(identifier: str, scope: RateLimitScope) -> str:
+    """Append scope information to the identifier so quotas track per-workflow usage."""
+    if scope == RateLimitScope.GLOBAL:
+        return identifier
+    return f"{identifier}|{scope.value}"
+
+def resolve_limits(scope: RateLimitScope, is_authenticated: bool) -> int:
+    """Return the effective limit for the scope and auth state."""
+    guest_limit, member_limit = SCOPE_LIMITS.get(scope, (GUEST_LIMIT, MEMBER_LIMIT))
+    return member_limit if is_authenticated else guest_limit
+
+def resolve_scope(value: Optional[str]) -> RateLimitScope:
+    """Resolve a string value into a RateLimitScope enum."""
+    if not value:
+        return RateLimitScope.GLOBAL
+    normalized = value.strip().lower()
+    return SCOPE_ALIAS_MAP.get(normalized, RateLimitScope.GLOBAL)
 
 def parse_user_id(token: str) -> Optional[str]:
     """Extract user ID from Supabase JWT token"""
@@ -118,24 +158,32 @@ async def rate_limit_callback(request: Request, response, pexpire: int):
         headers={"Retry-After": str(ceil(pexpire/1000))}
     )
 
-async def manual_increment_counter(identifier: str, is_authenticated: bool) -> None:
+async def manual_increment_counter(
+    identifier: str,
+    is_authenticated: bool,
+    scope: RateLimitScope = RateLimitScope.GLOBAL,
+) -> None:
     """Manually increment the Redis counter for the user"""
+    scoped_identifier = build_scoped_identifier(identifier, scope)
+    limit = resolve_limits(scope, is_authenticated)
+
     if redis_pool is None:
         # Use in-memory fallback for development
-        print(f"Using in-memory increment for identifier: {identifier}")
-        current_count = in_memory_usage.get(identifier, 0)
-        in_memory_usage[identifier] = current_count + 1
-        print(f"In-memory count incremented: {identifier} -> {in_memory_usage[identifier]}")
+        print(f"Using in-memory increment for identifier: {scoped_identifier}")
+        current_count = in_memory_usage.get(scoped_identifier, 0)
+        in_memory_usage[scoped_identifier] = current_count + 1
+        print(f"In-memory count incremented: {scoped_identifier} -> {in_memory_usage[scoped_identifier]}")
         return
     
     try:
         # Find the existing Redis key for this identifier
         all_keys = await redis_pool.keys("*")
         target_key = None
+        possible_limits = set(SCOPE_LIMITS.get(scope, (GUEST_LIMIT, MEMBER_LIMIT)))
         
         # Look for existing keys
         for key in all_keys:
-            if identifier in key and (':5:' in key or ':20:' in key):
+            if scoped_identifier in key and any(f":{limit}:" in key for limit in possible_limits):
                 target_key = key
                 break
         
@@ -145,29 +193,31 @@ async def manual_increment_counter(identifier: str, is_authenticated: bool) -> N
             print(f"REDIS INCREMENT - Key: {target_key}, New count: {new_count}")
         else:
             # Create new key with appropriate limit
-            limit = GUEST_LIMIT if not is_authenticated else MEMBER_LIMIT
-            new_key = f"fastapi-limiter:{identifier}:{limit}:0"
+            new_key = f"fastapi-limiter:{scoped_identifier}:{limit}:0"
             await redis_pool.setex(new_key, LIMIT_WINDOW, 1)
             print(f"REDIS CREATE - New key: {new_key}, Count: 1")
             
     except Exception as e:
-        print(f"ERROR: Failed to manually increment counter for {identifier}: {e}")
+        print(f"ERROR: Failed to manually increment counter for {scoped_identifier}: {e}")
         # Fall back to in-memory tracking
-        current_count = in_memory_usage.get(identifier, 0)
-        in_memory_usage[identifier] = current_count + 1
-        print(f"Fallback increment: {identifier} -> {in_memory_usage[identifier]}")
+        current_count = in_memory_usage.get(scoped_identifier, 0)
+        in_memory_usage[scoped_identifier] = current_count + 1
+        print(f"Fallback increment: {scoped_identifier} -> {in_memory_usage[scoped_identifier]}")
 
-async def get_user_usage(identifier: str) -> Tuple[int, int]:
-    """Get current usage count for a user identifier"""
-    # Determine limit based on identifier type
+async def get_user_usage(
+    identifier: str,
+    scope: RateLimitScope = RateLimitScope.GLOBAL,
+) -> Tuple[int, int]:
+    """Get current usage count for a user identifier within a scope."""
+    scoped_identifier = build_scoped_identifier(identifier, scope)
     is_guest = identifier.startswith("ip:")
-    limit = GUEST_LIMIT if is_guest else MEMBER_LIMIT
+    limit = resolve_limits(scope, not is_guest)
     
     if redis_pool is None:
         # Use in-memory fallback for development
-        print(f"Using in-memory fallback for identifier: {identifier}")
-        current_count = in_memory_usage.get(identifier, 0)
-        print(f"FALLBACK RESULT - Identifier: {identifier}, Count: {current_count}, Limit: {limit}, Is Guest: {is_guest}")
+        print(f"Using in-memory fallback for identifier: {scoped_identifier}")
+        current_count = in_memory_usage.get(scoped_identifier, 0)
+        print(f"FALLBACK RESULT - Identifier: {scoped_identifier}, Count: {current_count}, Limit: {limit}, Is Guest: {is_guest}")
         return current_count, limit
     
     try:
@@ -178,38 +228,24 @@ async def get_user_usage(identifier: str) -> Tuple[int, int]:
         # Try multiple possible Redis key formats used by fastapi-limiter
         # The actual pattern is fastapi-limiter:{identifier}:{limit}:{window_slot}
         possible_keys = [
-            f"fastapi-limiter:{identifier}:{LIMIT_WINDOW}",
-            f"fastapi-limiter:{identifier}:86400", 
-            f"{identifier}:{LIMIT_WINDOW}",
-            f"{identifier}:86400",
-            f"fastapi-limiter:{identifier}",
-            f"{identifier}"
+            f"fastapi-limiter:{scoped_identifier}:{LIMIT_WINDOW}",
+            f"fastapi-limiter:{scoped_identifier}:86400", 
+            f"{scoped_identifier}:{LIMIT_WINDOW}",
+            f"{scoped_identifier}:86400",
+            f"fastapi-limiter:{scoped_identifier}",
+            f"{scoped_identifier}"
         ]
         
         # Add keys with limit patterns (fastapi-limiter uses limit:window format)
-        # Since we're using unified limiter with MEMBER_LIMIT (20), all keys will have :20:
-        possible_keys.extend([
-            f"fastapi-limiter:{identifier}:{MEMBER_LIMIT}:0",
-            f"fastapi-limiter:{identifier}:{MEMBER_LIMIT}:1", 
-            f"fastapi-limiter:{identifier}:{MEMBER_LIMIT}:2",
-            f"fastapi-limiter:{identifier}:{MEMBER_LIMIT}:3",
-            f"fastapi-limiter:{identifier}:{MEMBER_LIMIT}:4",
-            f"fastapi-limiter:{identifier}:{MEMBER_LIMIT}:5",
-        ])
-        
-        # Also check legacy keys with the old limits for backward compatibility
-        possible_keys.extend([
-            f"fastapi-limiter:{identifier}:{limit}:0",
-            f"fastapi-limiter:{identifier}:{limit}:1", 
-            f"fastapi-limiter:{identifier}:{limit}:2",
-            f"fastapi-limiter:{identifier}:{limit}:3",
-            f"fastapi-limiter:{identifier}:{limit}:4",
-            f"fastapi-limiter:{identifier}:{limit}:5",
-        ])
+        guest_limit, member_limit = SCOPE_LIMITS.get(scope, (GUEST_LIMIT, MEMBER_LIMIT))
+        unique_limits = sorted({guest_limit, member_limit})
+        for scope_limit in unique_limits:
+            for window_slot in range(6):
+                possible_keys.append(f"fastapi-limiter:{scoped_identifier}:{scope_limit}:{window_slot}")
         
         # Also check for any keys that contain the identifier (wildcard search)
         for key in all_keys:
-            if identifier in key:
+            if scoped_identifier in key:
                 possible_keys.append(key)
         
         current_count = 0
@@ -223,14 +259,14 @@ async def get_user_usage(identifier: str) -> Tuple[int, int]:
                 key_found = key
                 break
         
-        print(f"REDIS RESULT - Identifier: {identifier}, Key: {key_found}, Count: {current_count}, Limit: {limit}, Is Guest: {is_guest}")
+        print(f"REDIS RESULT - Identifier: {scoped_identifier}, Key: {key_found}, Count: {current_count}, Limit: {limit}, Is Guest: {is_guest}")
         
         return current_count, limit
     except Exception as e:
-        print(f"ERROR: Failed to get usage count for {identifier}: {e}")
+        print(f"ERROR: Failed to get usage count for {scoped_identifier}: {e}")
         # Fall back to in-memory tracking
-        current_count = in_memory_usage.get(identifier, 0)
-        print(f"FALLBACK RESULT - Identifier: {identifier}, Count: {current_count}, Limit: {limit}, Is Guest: {is_guest}")
+        current_count = in_memory_usage.get(scoped_identifier, 0)
+        print(f"FALLBACK RESULT - Identifier: {scoped_identifier}, Count: {current_count}, Limit: {limit}, Is Guest: {is_guest}")
         return current_count, limit
 
 async def init_rate_limiter():
@@ -263,8 +299,11 @@ except Exception as e:
     print("INFO: Rate limiting will use fallback mechanisms")
     unified_rate_limiter = None
 
-async def smart_rate_limit(request: Request):
-    """Smart rate limiter based on authentication status"""
+async def smart_rate_limit(
+    request: Request,
+    scope: RateLimitScope = RateLimitScope.GLOBAL,
+):
+    """Smart rate limiter based on authentication status and workflow scope"""
     # Check if rate limiting is disabled for local development
     disable_rate_limit = os.getenv("DISABLE_RATE_LIMIT", "false").lower()
     if disable_rate_limit == "true":
@@ -284,19 +323,23 @@ async def smart_rate_limit(request: Request):
     # Get user identifier and check authentication
     identifier = await who_am_i(request)
     is_authenticated = not identifier.startswith("ip:")
+    scoped_identifier = build_scoped_identifier(identifier, scope)
+    limit = resolve_limits(scope, is_authenticated)
     
-    print(f"RATE LIMIT CHECK - Identifier: {identifier}, Is Authenticated: {is_authenticated}")
+    print(
+        f"RATE LIMIT CHECK - Identifier: {identifier}, Scope: {scope.value}, "
+        f"Scoped ID: {scoped_identifier}, Limit: {limit}, Is Authenticated: {is_authenticated}"
+    )
     
     # If Redis is not available, use simple in-memory rate limiting
     if redis_pool is None:
-        print(f"Using in-memory rate limiting for {identifier}")
+        print(f"Using in-memory rate limiting for {scoped_identifier}")
         
         # Simple in-memory rate limiting (resets on server restart)
-        limit = MEMBER_LIMIT if is_authenticated else GUEST_LIMIT
-        current_count = in_memory_usage.get(identifier, 0)
+        current_count = in_memory_usage.get(scoped_identifier, 0)
         
         if current_count >= limit:
-            print(f"In-memory rate limit exceeded for {identifier}: {current_count}/{limit}")
+            print(f"In-memory rate limit exceeded for {scoped_identifier}: {current_count}/{limit}")
             if is_authenticated:
                 raise HTTPException(
                     status_code=429,
@@ -311,8 +354,8 @@ async def smart_rate_limit(request: Request):
                 )
         
         # Increment usage count
-        in_memory_usage[identifier] = current_count + 1
-        print(f"In-memory usage updated for {identifier}: {in_memory_usage[identifier]}/{limit}")
+        in_memory_usage[scoped_identifier] = current_count + 1
+        print(f"In-memory usage updated for {scoped_identifier}: {in_memory_usage[scoped_identifier]}/{limit}")
         return
     
     # Redis-based rate limiting
@@ -322,68 +365,51 @@ async def smart_rate_limit(request: Request):
     
     try:
         # Get current usage and manually increment
-        current_usage, user_limit = await get_user_usage(identifier)
-        limit = MEMBER_LIMIT if is_authenticated else GUEST_LIMIT
+        current_usage, _ = await get_user_usage(identifier, scope)
         
-        print(f"MANUAL CHECK - {identifier}: {current_usage}/{limit}")
+        print(f"MANUAL CHECK - {scoped_identifier}: {current_usage}/{limit}")
         
         # Check rate limits
-        if not is_authenticated and current_usage >= GUEST_LIMIT:
-            print(f"MANUAL RATE LIMIT - Guest {identifier} exceeded {GUEST_LIMIT}/day limit")
-            raise HTTPException(
-                status_code=401,
-                detail="Sign-in required after free quota",
-                headers={"Retry-After": "3600"}
-            )
-        elif is_authenticated and current_usage >= MEMBER_LIMIT:
-            print(f"MANUAL RATE LIMIT - Member {identifier} exceeded {MEMBER_LIMIT}/day limit")
-            raise HTTPException(
-                status_code=429,
-                detail="Rate limit exceeded. Please try again later.",
-                headers={"Retry-After": "3600"}
-            )
-        
-        # Manually increment the counter in Redis
-        await manual_increment_counter(identifier, is_authenticated)
-        
-        print(f"Rate limit check passed and counter incremented for {identifier}")
-        
-        # Debug: Check Redis count immediately after incrementing
-        try:
-            updated_usage, updated_limit = await get_user_usage(identifier)
-            print(f"DEBUG - After manual increment: {identifier}, Count: {updated_usage}/{updated_limit}")
-        except Exception as debug_error:
-            print(f"DEBUG - Error checking updated usage: {debug_error}")
-        
-    except HTTPException as e:
-        print(f"Rate limit exceeded for {identifier}: {e.status_code} {e.detail}")
-        if e.status_code == 429:
+        if current_usage >= limit:
             if is_authenticated:
-                # Standard rate limit for members
+                print(f"MANUAL RATE LIMIT - Member {scoped_identifier} exceeded {limit}/day limit")
                 raise HTTPException(
                     status_code=429,
                     detail="Rate limit exceeded. Please try again later.",
                     headers={"Retry-After": "3600"}
                 )
             else:
-                # Require auth for guests
+                print(f"MANUAL RATE LIMIT - Guest {scoped_identifier} exceeded {limit}/day limit")
                 raise HTTPException(
                     status_code=401,
                     detail="Sign-in required after free quota",
                     headers={"Retry-After": "3600"}
                 )
-        else:
-            raise e
-    except Exception as e:
-        print(f"ERROR: Rate limiting error for {identifier}: {e}")
-        # Fall back to in-memory rate limiting on Redis errors
-        print(f"Falling back to in-memory rate limiting for {identifier}")
         
-        limit = MEMBER_LIMIT if is_authenticated else GUEST_LIMIT
-        current_count = in_memory_usage.get(identifier, 0)
+        # Manually increment the counter in Redis
+        await manual_increment_counter(identifier, is_authenticated, scope)
+        
+        print(f"Rate limit check passed and counter incremented for {scoped_identifier}")
+        
+        # Debug: Check Redis count immediately after incrementing
+        try:
+            updated_usage, updated_limit = await get_user_usage(identifier, scope)
+            print(f"DEBUG - After manual increment: {scoped_identifier}, Count: {updated_usage}/{updated_limit}")
+        except Exception as debug_error:
+            print(f"DEBUG - Error checking updated usage: {debug_error}")
+        
+    except HTTPException as e:
+        print(f"Rate limit exceeded for {scoped_identifier}: {e.status_code} {e.detail}")
+        raise e
+    except Exception as e:
+        print(f"ERROR: Rate limiting error for {scoped_identifier}: {e}")
+        # Fall back to in-memory rate limiting on Redis errors
+        print(f"Falling back to in-memory rate limiting for {scoped_identifier}")
+        
+        current_count = in_memory_usage.get(scoped_identifier, 0)
         
         if current_count >= limit:
-            print(f"In-memory fallback rate limit exceeded for {identifier}: {current_count}/{limit}")
+            print(f"In-memory fallback rate limit exceeded for {scoped_identifier}: {current_count}/{limit}")
             if is_authenticated:
                 raise HTTPException(
                     status_code=429,
@@ -398,6 +424,16 @@ async def smart_rate_limit(request: Request):
                 )
         
         # Increment usage count
-        in_memory_usage[identifier] = current_count + 1
-        print(f"Fallback usage updated for {identifier}: {in_memory_usage[identifier]}/{limit}")
+        in_memory_usage[scoped_identifier] = current_count + 1
+        print(f"Fallback usage updated for {scoped_identifier}: {in_memory_usage[scoped_identifier]}/{limit}")
         return
+
+
+async def analytics_agent_rate_limit(request: Request):
+    """Rate limiter dedicated to the analytics memory workflows."""
+    await smart_rate_limit(request, scope=RateLimitScope.ANALYTICS_AGENT)
+
+
+async def analytics_sql_rate_limit(request: Request):
+    """Rate limiter dedicated to the analytics SQL workflows."""
+    await smart_rate_limit(request, scope=RateLimitScope.ANALYTICS_SQL)

@@ -172,10 +172,24 @@ export const WebSearchCard: React.FC<WebSearchCardProps> = ({
             <ol className="mt-2 max-h-64 overflow-y-auto space-y-3 border-l border-slate-800/70 pl-4 pr-2">
               {topicSnippets.map((item, snippetIdx) => {
                 const title = item.title || displayHost(item.url) || `Result ${snippetNumber(snippetIdx)}`;
+                const indexLabel = `[${snippetNumber(snippetIdx)}]`;
+                const indexClass = "text-xs text-slate-500 font-mono mt-0.5 inline-flex items-center";
                 return (
                   <li key={item.url ?? `snippet-${activeTopicIndex}-${snippetIdx}`} className="text-sm text-slate-200">
                     <div className="flex items-start gap-2">
-                      <span className="text-xs text-slate-500 font-mono mt-0.5">[{snippetNumber(snippetIdx)}]</span>
+                      {item.url ? (
+                        <a
+                          href={item.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className={`${indexClass} hover:text-emerald-300 transition`}
+                          aria-label={`Open source ${snippetNumber(snippetIdx)}`}
+                        >
+                          {indexLabel}
+                        </a>
+                      ) : (
+                        <span className={indexClass}>{indexLabel}</span>
+                      )}
                       <div>
                         {item.url ? (
                           <a

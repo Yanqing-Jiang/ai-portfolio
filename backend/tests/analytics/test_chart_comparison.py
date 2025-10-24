@@ -39,6 +39,15 @@ def test_multi_company_revenue_chart_selects_all_series():
     assert meta.get("primarySeries") == ["AMD", "NVDA"]
     assert meta.get("highlightRules", {}).get("mutedSecondary", False) is False
 
-    chart_design = meta.get("chartDesign", {})
-    assert chart_design.get("comparison") == "all"
-    assert chart_design.get("comparison_mode") == "multi_company"
+    included_columns = meta.get("includedColumns")
+    assert set(included_columns) == {"AMD|revenue", "NVDA|revenue"}
+    assert meta.get("metricColumns") == ["revenue"]
+    assert meta.get("metricSeriesColumns", {}).get("revenue") == ["AMD|revenue", "NVDA|revenue"]
+    assert meta.get("metricLegendMap", {}).get("revenue") == ["AMD", "NVDA"]
+    assert meta.get("metricDisplayNames", {}).get("revenue") == "Revenue"
+    assert meta.get("displayNames", {}).get("revenue") == "Revenue"
+
+    chart_design = meta.get("chartDesign") or {}
+    if chart_design:
+        assert chart_design.get("comparison") == "all"
+        assert chart_design.get("comparison_mode") == "multi_company"

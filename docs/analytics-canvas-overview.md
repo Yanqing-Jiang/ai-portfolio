@@ -1,146 +1,111 @@
 # Analytics Agent Thinking Canvases
 
-This note documents the redesigned canvases that power the analytics thinking panel. It describes how the single-agent fan-out and multi-agent workflow views should evolve, how ledger fields (`sequence`, `parallelGroup`, `lane`) drive the layout, and the concrete steps required to ship the change.
+This note captures the analytics thinking panel visualization as of October 24, 2025. It explains how the single-agent and multi-agent canvases are currently rendered, the ledger metadata that drives placement, and the next steps for tightening the layouts.
 
-## Redesign Objectives
+## What Changed
 
-- Explicitly gate the single-agent flow with intent discovery (`classification`, `intent_detection`, `clarification`) before tools fan out, matching how the ledger records those steps on 2025-10-18.
-- Give SQL compilation/validation/execution its own lane that runs in parallel with the market research and charting spokes instead of being absorbed into the market lane.
-- Rebuild the multi-agent canvas so it mirrors the supplied supervisor -> specialist fan-out pattern: a single start node, a supervisor hub, and vertical specialist lanes that own their downstream tools.
-- Make concurrency obvious by letting shared `parallelGroup` values stack vertically inside a lane while still surfacing the supervisor's orchestration edges.
+- **Shared start spine** – every run now begins with the canonical `fanout_start` (`__start__`) glyph, feeding either the single-agent hub or the multi-agent supervisor row.
+- **Lane-aware stacking** – node placement keys off `(lane, parallelGroup)`, so work that belongs in the same logical lane stays aligned even when multiple tools run concurrently.
+- **Intent gating cluster** – the planner ribbon (`classification → intent_detection → clarification → schema_validation`) remains a straight bridge between `_start_` and the hub.
+- **Horizontal swim lanes** – the single-agent canvas now renders planner, SQL, market, web, chart, and analysis as horizontal bands. The hub sits above them and drops vertical connectors into each lane.
+- **Inline SQL timeline** – SQL tools continue to run sequentially, but their nodes advance left-to-right inside the SQL lane, giving a horizontal timeline once the hub fans downward.
+- **Fan-out telemetry surfaced** – `tool_fanout` still exposes winning branches, hedged work keeps dashed purple edges, and cached steps retain the golden dashed treatment across both canvases.
 
-## Single-Agent Canvas Redesign
+## Single-Agent Canvas
 
 ### Pre-Fan-Out Preparation
 
-- Render a dedicated pre-processing cluster between `__start__` and the `Agent Hub`. The cluster must render the intent steps in ledger order: `classification` -> `intent_detection` -> `clarification` -> `schema_validation` (when present). Each node should use the existing `ProcessNode` chrome, but the connector is a single straight path rather than a full fan-out spoke.
-- These nodes continue to source their metrics from `singleAgentFanout.telemetry`, but they should suppress branch counters so the header's concurrency module only starts counting once the hub is reached.
+- `_start_` connects to the pre-processing ribbon (`classification`, `intent_detection`, `clarification_manager`, `schema_validation`, `plan_and_select_template`) before reaching `tool_fanout`.
+- The ribbon keeps a single straight edge into the hub so operators can verify that intent gating completed without scanning the swim lanes.
+- Header fan-out counters remain hidden until `tool_fanout` transitions out of `pending` or `queued`, matching the behaviour in `ProcessPanel`.
 
-### Fan-Out and Lanes
+### Swim-Lane Fan-Out
 
-- After the preparation cluster, resume the hub-and-spoke fan-out. Each spoke should align to a named lane so that concurrent work is visually separated:
-  - **SQL Lane** - `sql_compilation` -> `sql_validation` -> `sql_execution`; keep them chained so users can see the hand-off but render them in a vertical column to emphasize they are running alongside, not within, the market lane.
-  - **Market Lane** - `tool_execution` (market data pull) and `market_agent`, sharing `parallelGroup: specialist_fanout`.
-  - **Chart Lane** - `chart_generation`, downstream from SQL results but still positioned as its own spoke so users can tell when charting lags behind SQL.
-  - **Web Lane** - `web_research_agent` or any other auxiliary tool assigned that lane by `inferHubLane`.
-- The aggregator on the far side still collapses into `analysis_generation` -> `follow_up_route`, but it should draw from each lane so the closing edge demonstrates the merge.
+- **Vertical connectors** – `tool_fanout` sits on a hub row above the lanes. When a specialist activates, the hub emits a vertical edge into that lane and the lane renders the steps from left-to-right or top-to-bottom depending on its rules.
+- **SQL lane** – once the hub lands in the SQL band, the lane stages (`sql_generator`, `sql_validator`, `sql_executor`, `sql_result_bridge`, plus legacy `sql_compilation`/`sql_validation`/`sql_execution`) line up left-to-right. Any retries stack slightly below the main sequence but stay inside the band.
+- **Market lane** – `market_question_a`, `market_question_b`, `stock_tracker`, and other price fetches occupy their own band. Multiple tools are stacked vertically inside the lane so the swim lane still reads left-to-right.
+- **Web lane** – cached and live Gemini searches occupy the web band. Parallel searches stack vertically beneath the hub connector.
+- **Chart lane** – `chart_designer` and chart revisions appear on a horizontal track aligned with the chart band. Inputs from SQL rise vertically into this band.
+- **Analysis lane** – `analysis_writer`, `analysis_generation`, and `follow_up_route` collect outputs from every upstream lane through vertical merge edges.
 
-### Flow Sketch
+### SQL Lane Sequencing Plan
 
-```
-User Request
-    |
-Pre-Processing Cluster
-    |- classification
-    |- intent_detection
-    '- clarification
-    |
-Agent Hub (fan-out)
-    |- SQL Lane:
-    |      sql_compilation -> sql_validation -> sql_execution
-    |- Market Lane:
-    |      tool_execution -> market_agent
-    |- Chart Lane:
-    |      chart_generation
-    '- Web Lane:
-           web_research_agent
-            |
-Downstream Merge
-    analysis_generation -> follow_up_route
-```
+- **Horizontal timeline** – the canonical order stays `sql_generator → sql_validator → sql_executor → sql_result_bridge`. All four nodes share `lane: "sql"` and `parallelGroup: "sql_spine"` so they render as a single horizontal strip.
+- **Intent bridge** – planner ribbon nodes still emit a vertical edge into `sql_generator` once validation resolves, highlighting the dependency without collapsing lane separation.
+- **Chart dependency** – `chart_designer` subscribes to `sql_executor`; the edge climbs vertically from the SQL band into the chart band before moving horizontally.
+- **Analysis merge** – `sql_result_bridge` produces the artifact edge into `analysis_writer`, while market and web bands contribute their own vertical edges to the analysis band.
+- **Example ledger entries** – configure step metadata to enforce ordering:
 
-This sketch mirrors `docs/agent-process-ledger (54).json` at 2025-10-18 02:07 UTC, where the SQL and market tasks shared `parallelGroup: specialist_fanout` yet progressed independently.
-
-## Multi-Agent Canvas Redesign
-
-### Start + Hub Pattern
-
-- Reintroduce the single start node (`__start__`) so every multi-agent run visually begins the same way as the single-agent canvas. Connect it to a supervisor hub node (current `agent_coordination`) that mirrors the "Supervisor" box from the reference image.
-- Use solid edges for active routes and dashed edges for speculative routes (cached, queued, or retries) to echo the solid/dashed arrows shown in the diagram.
-
-### Specialist Lanes
-
-- Dedicate a vertical lane per specialist: planner, market, web, SQL, chart, and any additional roles. Each lane opens with the agent node (`planner_agent`, `market_agent`, etc.) and continues straight down with any tools the specialist invoked.
-- When a tool step includes `lane`, place it directly under its agent; when the ledger only logs `parallelGroup`, infer the lane by prefix (for example, `sql_` -> SQL lane). Tools should indent slightly so operators can read the lane as a stack owned by that specialist.
-- Allow simultaneous steps with identical `parallelGroup` values to occupy the same horizontal band inside the lane, making concurrent execution obvious without overlapping edges.
-
-### Flow Sketch
-
-```
-User
-  |
-Supervisor Hub (agent_coordination)
-  |
-  +-- Planner Lane
-  |     planner_agent
-  |     plan_and_select_template
-  |
-  +-- Market Lane
-  |     market_agent
-  |     tool_execution
-  |
-  +-- Web Lane
-  |     web_research_agent
-  |
-  +-- SQL Lane
-  |     sql_compilation
-  |     sql_validation
-  |     sql_execution
-  |
-  \-- Chart Lane
-        chart_generation
-
-Final Response (analysis_generation -> follow_up_route)
+```json
+[
+  {
+    "id": "sql_generator",
+    "display_name": "SQL Generator",
+    "lane": "sql",
+    "parallelGroup": "sql_spine",
+    "sequence": 1
+  },
+  {
+    "id": "sql_validator",
+    "display_name": "SQL Validator",
+    "lane": "sql",
+    "parallelGroup": "sql_spine",
+    "sequence": 2,
+    "depends_on": ["sql_generator"]
+  },
+  {
+    "id": "sql_executor",
+    "display_name": "SQL Executor",
+    "lane": "sql",
+    "parallelGroup": "sql_spine",
+    "sequence": 3,
+    "depends_on": ["sql_validator"]
+  },
+  {
+    "id": "sql_result_bridge",
+    "display_name": "SQL Result Bridge",
+    "lane": "sql",
+    "parallelGroup": "sql_spine",
+    "sequence": 4,
+    "depends_on": ["sql_executor"],
+    "feeds": ["analysis_writer", "chart_designer"]
+  }
+]
 ```
 
-The supervisor routes requests down to each lane and receives results back up the central column, matching the Supervisor -> Agent structure from the provided PNG while using the telemetry-friendly lane metadata.
+### Final Diagram Pattern
 
-### Multi-Agent Step Reference (2025-10-20 run)
+- Planner lane: `classification → intent_detection → clarification_manager → schema_validation → plan_and_select_template` remains a single horizontal ribbon feeding the hub.
+- Hub row: `tool_fanout` sits above the specialist lanes; each activated lane receives a vertical connector and pushes work across its band.
+- SQL lane: `SQL Generator → SQL Validator → SQL Executor → SQL Result Bridge` reads left-to-right. Retries stack below the band but stay aligned.
+- Market lane: market tools occupy the next band; optional tickers or hedged calls appear as additional cards stacked beneath the main track.
+- Web lane: primary and industry research cards sit side-by-side; cached runs stack under the live call.
+- Chart lane: `Chart Designer` and revisions stay aligned horizontally, with vertical inbound edges from SQL.
+- Analysis lane: `Analysis Writer`, `analysis_generation`, and `follow_up_route` form the final band, ingesting vertical edges from every other lane.
+- Telemetry cues: cached steps keep the golden dashed edge and the swim-lane layout makes skipped lanes obvious because they lack a hub connector.
 
-The screenshot in `docs/multi-agent canvas.png` captures the ledger exported on 2025-10-20 20:56 UTC (`docs/agent-process-ledger (99).json`). The table below explains what happens behind each canvas node, pointing to the backend modules that produce the events.
+## Multi-Agent Canvas
 
-| # | Step id (canvas label) | What happens behind the node |
-| --- | --- | --- |
-| 1 | `initializing` ("initializing") | `analytics_memory_workflow` emits a `status` payload with `step="initializing"` to tag the run with the selected flow, session id, and phase metadata before any flow-specific work starts (`backend/analytics/flows/workflow.py`). |
-| 2 | `classification` ("classification") | `PlannerExecutorFlow._classification_phase` calls `classify_query_async` to label the query, record model/confidence, and persist the classification artifact before downstream specialists engage (`backend/analytics/flows/planner_executor.py`). |
-| 3 | `schema_clarifier` ("schema_clarifier") | The same phase threads through `decide_schema_clarification`, deciding whether extra slots are required and logging the requested fields or missing data for later clarification (`backend/analytics/flows/planner_executor.py`). |
-| 4 | `clarification` ("Requirements Clarification") | `_clarification_phase` polls `wait_for_answer_blocking`, issues `clarification_request` events, and merges the user's answers back into the slot ledger until requirements are satisfied or time out (`backend/analytics/flows/planner_executor.py`). |
-| 5 | `schema_validation` ("Schema & Criteria Validation") | Once slots stabilize, `intent_to_sql_criteria` normalizes company, timeframe, granularity, tickers, and metrics into a deterministic `SqlCriteriaModel`, which emits the `criteria_ready` event the canvas shows for this node (`backend/analytics/core/intent_impl/models.py`). |
-| 6 | `intent_detection` ("Intent Detection") | `_intent_phase` resolves the intent key, builds the provisional query plan, updates slot status metadata, and decides whether clarifications or schema checks are still needed (`backend/analytics/flows/planner_executor.py`). |
-| 7 | `market_lane` ("Market Data") | Hedged accessory receipts (`market_question_*`, `stock_tracker`) flow through `_derive_accessory_events`, which synthesizes `stock_ready` data, stock widgets, and snapshot provenance for the market lane (`backend/analytics/flows/planner_executor.py`). |
-| 8 | `tool_execution` ("Agent Tool Execution") | The stock tracker portion of that fan-out produces a `tool_parallel_result` with the rendered widget, so the canvas pins a dedicated node showing the accessory execution state (`backend/analytics/flows/planner_executor.py`). |
-| 9 | `web_lane` ("Web Research") | `_derive_accessory_events` and `_web_research_agent` combine cached or freshly fetched Gemini results (summary, snippets, search ids) and mark the lane as ready once the web retriever finishes (`backend/analytics/flows/planner_executor.py`, `backend/analytics/flows/multi_agent.py`). |
-| 10 | `sql_compilation` ("SQL Compilation") | The SQL stage iterates up to three Responses API attempts, logging generation progress, validation verdicts, template ids, and selected catalog entries before emitting `sql_compiled` / `sql_generated` (`backend/analytics/flows/planner_executor.py`). |
-| 11 | `sql_validation` ("SQL Validation") | Each candidate query runs through `_validate_sql`, which enforces guardrails (disallowing risky constructs, ensuring LIMIT clauses) and records issue lists and elapsed timings for this node (`backend/analytics/flows/planner_executor.py`). |
-| 12 | `sql_lane` ("SQL Lane") | Instrumentation folds compile, validation, and execution artifacts into a single lane record that carries the accepted SQL text, attempt counters, sample rows, and column summaries (`backend/analytics/flows/planner_executor.py`). |
-| 13 | `sql_execution` ("Data Retrieval") | After `execute_sql` returns, `_set_sql_execution_artifact` snapshots the dataset, emits `execution_stats` and `data_retrieved`, and stamps the lane with row counts and preview data (`backend/analytics/flows/planner_executor.py`). |
-| 14 | `chart_generation` ("Chart Generation") | The chart specialist looks at planner tasks and SQL artifacts, then `_chart_agent` reports the chart spec id, chart type, and series count once the visualization pipeline locks (`backend/analytics/flows/multi_agent.py`). |
-| 15 | `planner_agent` ("Planner Agent Lane") | `_planner_agent` rebuilds the multi-agent task DAG, packages a planner bundle (tasks, manifest, tool results), and posts planner hand-off telemetry before downstream specialists run (`backend/analytics/flows/multi_agent.py`). |
-| 16 | `market_agent` ("Market Insights") | `_market_agent` decides whether to reuse cached market snapshots, trigger fresh Polygon fetches, or skip retries based on planner confidence, then surfaces tickers, insights, and policy decisions in its output (`backend/analytics/flows/multi_agent.py`). |
-| 17 | `web_research_agent` ("Web Insights") | `_web_research_agent` optionally reuses session cache, otherwise invokes the web retriever, collecting attempts, summaries, and snippet payloads while respecting hedge gating for accessories (`backend/analytics/flows/multi_agent.py`). |
-| 18 | `agent_coordination` ("Agent Coordination") | `AgentExecutionOrchestrator.run` fans tasks to registered specialists; `MultiAgentFlow` converts `agent_turn` and `agent_reasoning` callbacks into supervisor status updates that the canvas groups under this hub (`backend/analytics/flows/multi_agent.py`, `backend/analytics/flows/orchestrator.py`). |
-| 19 | `tool_fanout` ("Tool Fan-Out Telemetry") | The planner's accessory strategy launches hedged tools (two market prompts, stock tracker, web retriever) with a concurrency cap, logging start/completion, hedging metadata, and tool receipts for the fan-out node (`backend/analytics/flows/planner_executor.py`). |
-| 20 | `analysis_generation` ("Final Analysis") | The analysis stage streams text from `stream_insights_llm`, accumulates TLDR bullets, key numbers, risk watch items, and bundles accessory evidence before emitting `analysis_complete` and the final analysis artifact (`backend/analytics/flows/planner_executor.py`). |
-| 21 | `follow_up_route` ("Follow-Up Guidance") | `analytics_memory_workflow` classifies the follow-up route up front, and the analysis phase refreshes it with the banner config that tells the UI whether to reuse, retry, or run the full pipeline (`backend/analytics/flows/workflow.py`, `backend/analytics/flows/planner_executor.py`). |
-| 22 | `plan_and_select_template` ("Query Planning & Template Selection") | After clarifications, the planner builds the structured query plan, emits `plan_built`, logs the chosen template (or fallback), and records candidate catalog entries for reuse (`backend/analytics/flows/planner_executor.py`). |
+### Start + Supervisor Spine
 
+- `_start_ → agent_coordination → analysis_generation → follow_up_route` forms the primary supervisor spine.
+- The supervisor row sits at the top of the canvas. Light dashed returns indicate coordination messages without overwhelming the lane layout.
 
+### Specialist Lane Columns
 
-## Multi-Agent Canvas Update Plan (2025-10-20 Run)
+- **Column swim lanes** – planner, SQL, market, web, chart, and analysis each own a full-height vertical column beneath the supervisor row. Steps progress top-to-bottom in their column.
+- **Header badges** – every column header shows the specialist name, active status, and latest artifact so the canvas reads like a mission-control board.
+- **Parallel runs** – when a lane spins up multiple tools, the nodes stagger horizontally within the column while staying anchored to the same top-down order.
+- **Coordinator edges** – vertical connectors drop from `agent_coordination` into the active columns and rise back into `analysis_generation`, differentiating the multi-agent canvas from the single-agent swim lanes.
+- **Cache & hedge indicators** – cached steps keep the golden dashed edge; hedged branches remain purple, hugging the column to avoid cross-lane clutter.
 
-1. **Adopt the shared start + hub spine**
-   - In `components/analytics/visualization/WorkflowCanvas.tsx`, replace the synthetic `user_entry` / `final_response` nodes that are injected inside the `setNodes` effect with the same `ProcessStep` shape the single-agent canvas uses for `fanout_start` (label `__start__`). Feed that start node directly into `agent_coordination` so multi-agent runs begin with the same glyph.
-   - Adjust the edge builder to route `fanout_start -> agent_coordination -> analysis_generation -> follow_up_route`, matching the supervisor spine in the grouped-steps doc and removing the extra loop back to the pseudo "User Question" node.
-2. **Cluster planner and intent preparation steps**
-   - While mapping `processedSteps`, bucket planner-intent steps (`initializing`, `classification`, `schema_clarifier`, `clarification`, `schema_validation`, `plan_and_select_template`) into a dedicated planner band that sits immediately beneath `planner_agent`. Swap the simple `laneCounts[resolvedLane]++` increment for a keyed structure such as `laneBands['planner:intent_prep']` so these steps line up on a shared Y origin instead of stair-stepping.
-   - When replaying the 2025-10-20 ledger, `classification`, `intent_detection`, and `plan_and_select_template` should appear on the same horizontal band to reflect their shared `parallelGroup`.
-3. **Normalize specialist lane concurrency**
-   - Refine the lane stacking logic by indexing counts with both lane and `parallelGroup` (for example, `const bandKey = `${resolvedLane}:${step.parallelGroup ?? step.id}``). Cache the Y-offset per `bandKey` so hedged steps like `market_lane`, `tool_execution`, and `web_lane` align horizontally whenever they share `parallelGroup: specialist_fanout`.
-   - Ensure the SQL chain (`sql_compilation`, `sql_validation`, `sql_lane`, `sql_execution`) reuses a single band when `parallelGroup === 'sql_pipeline'`, and draw a subtle dependency edge from the SQL lane's terminal node into `chart_generation` to mirror the grouped diagram.
-4. **Surface fan-out telemetry and speculative edges**
-   - Anchor `tool_fanout` in the dedicated `fanout` lane by giving it an explicit base position and connecting it to both the hub and each specialist lane. Reuse `buildReusedEdgeTooltip` for cache hits, and introduce an `isSpeculativeStep(step)` guard that returns `true` when `step.status === 'queued'` or `step.details?.hedged === true`; render those hub edges with a dashed stroke so speculative routes match the grouped-steps guidance.
-   - Label the winning branch via the existing telemetry fields on `tool_fanout`, so operators can see which hedged branch delivered the final data without opening the ledger.
-5. **Re-center the analysis return lane**
-   - Treat `analysis_generation` and `follow_up_route` as first-class nodes inside the `analysis` lane instead of the pseudo `final_response`. After each specialist lane feeds back into `agent_coordination`, emit a solid edge from the hub into `analysis_generation`, then link into `follow_up_route` to show the final synthesis path that the grouped steps call out.
-6. **Regression fixtures**
-   - Capture the grouped-steps ledger (`docs/agent-process-ledger (99).json`) in a Storybook story or Jest snapshot so the refactored layout can be regression-tested. Add a second fixture that omits `schema_validation` to confirm the planner band degrades gracefully.
+### Telemetry & Edge Semantics
+
+- Solid edges indicate active work; dashed edges mark queued or hedged turns.
+- Winning fan-out branches bubble up as node subtitles so it is clear which specialist delivered the decisive artifact.
+- Hub-to-lane edges animate only during active work, reducing noise once a lane finishes.
+
+## Remaining Follow-Up
+
+1. Snapshot the grouped-steps ledger (`docs/agent-process-ledger (99).json`) inside Storybook/Jest so swim-lane placement stays regression proof.
+2. Add a second fixture without `schema_validation` to confirm the planner ribbon collapses cleanly when the ledger omits that step.

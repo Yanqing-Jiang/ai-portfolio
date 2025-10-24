@@ -35,7 +35,7 @@ from .normalization import (
     normalize_metrics,
     timeframe_implies_quarterly,
 )
-from ..companies import resolve_alias_to_ticker
+from ..companies import resolve_alias_to_ticker, sanitize_ticker
 from ..slot_catalog import get_slot_catalog, IntentSlotDefinition, SlotOption
 
 logger = logging.getLogger(__name__)
@@ -73,6 +73,20 @@ RANKING_KEYWORDS = {
     "dominant",
     "biggest",
 }
+
+AVERAGE_CUES = (
+    "industry average",
+    "industry-average",
+    "average",
+    "avg",
+)
+
+PEER_CUES = (
+    "peer",
+    "peers",
+    "peer group",
+    "peer-group",
+)
 
 
 def _is_ranking_query(query: str) -> bool:
@@ -112,6 +126,9 @@ def heuristic_intent(query: str, configs: Dict[str, Any]) -> IntentModel:
         if fallback_company:
             detected_companies = [fallback_company]
     primary_company = detected_companies[0] if detected_companies else None
+
+    average_cue_present = any(cue in q for cue in AVERAGE_CUES)
+    peers_cue_present = any(cue in q for cue in PEER_CUES)
 
     intent_key: Optional[str] = None
     reasoning: List[str] = []
@@ -166,13 +183,25 @@ def heuristic_intent(query: str, configs: Dict[str, Any]) -> IntentModel:
     elif "profit" in q or "earnings" in q:
         intent_key = "margins_vs_peers"
         reasoning.append("Detected profit analysis intent")
+        if average_cue_present:
+            comparison_default = "vs_avg"
+        elif peers_cue_present:
+            comparison_default = "vs_peers"
     elif "margin" in q:
         if "growth" in q and any(token in q for token in ("vs", "average", "compare")):
             intent_key = "margin_growth_vs_peers"
             reasoning.append("Detected margin growth vs peers intent")
+            if average_cue_present:
+                comparison_default = "vs_avg"
+            elif peers_cue_present:
+                comparison_default = "vs_peers"
         else:
             intent_key = "margins_vs_peers"
             reasoning.append("Detected margin comparison intent")
+            if average_cue_present:
+                comparison_default = "vs_avg"
+            elif peers_cue_present:
+                comparison_default = "vs_peers"
     elif "growth" in q or "growing" in q:
         if any(phrase in q for phrase in ("vs industry", "vs average", "industry average", "vs peers")):
             intent_key = "revenue_growth_vs_avg"
@@ -606,6 +635,9 @@ def _fallback_intent_resolution(
     heuristic: IntentModel,
     catalog,
     candidate_definitions: Sequence[IntentSlotDefinition],
+    context_slots: Optional[Dict[str, Any]] = None,
+    fallback_reason: Optional[str] = None,
+    emit_optional_followups: bool = True,
 ) -> IntentResolutionModel:
     intent_key = heuristic.intent_key
     if not intent_key and candidate_definitions:
@@ -624,115 +656,169 @@ def _fallback_intent_resolution(
     slots: Dict[str, SlotStatusModel] = {}
     followups: List[FollowUpModel] = []
     heuristic_slots = heuristic.slots_detected or {}
+    merged_slots: Dict[str, Any] = {}
+    merged_slots.update(heuristic_slots)
+    if context_slots:
+        merged_slots.update({k: v for k, v in context_slots.items() if v is not None})
+
+    option_map = definition.slot_options if definition and definition.slot_options else {}
+
+    company_value = merged_slots.get("company")
+    resolved_company = None
+    if isinstance(company_value, str) and company_value.strip():
+        resolved_company = resolve_alias_to_ticker(company_value, configs) or sanitize_ticker(
+            company_value,
+            (configs.get("companies", {})
+             .get("selection_rules", {})
+             .get("default_companies", {})
+             .get("tickers", [])),
+        )
+    if not resolved_company:
+        resolved_company = detect_company_from_query(query, configs, resolve_alias_to_ticker)
+
+    timeframe_raw = merged_slots.get("timeframe")
+
+    def _normalize_timeframe_value(raw: Any) -> Optional[Dict[str, Any]]:
+        if raw is None:
+            return None
+        if hasattr(raw, "model_dump"):
+            raw = raw.model_dump(exclude_none=True)  # type: ignore[attr-defined]
+        if isinstance(raw, dict):
+            return raw if raw else None
+        return normalize_timeframe(
+            raw,
+            query,
+            configs,
+            apply_defaults=False,
+            origin="context" if context_slots else "heuristic",
+        )
+
+    normalized_timeframe = _normalize_timeframe_value(timeframe_raw)
+
+    metrics_source = merged_slots.get("metrics")
+    if not metrics_source:
+        metrics_source = merged_slots.get("metric")
+    normalized_metrics = normalize_metrics(metrics_source, configs)
+    if not normalized_metrics and isinstance(metrics_source, str):
+        stripped = metrics_source.strip()
+        normalized_metrics = [stripped] if stripped else []
+    primary_metric = normalized_metrics[0] if normalized_metrics else None
+
+    comparison_value = merged_slots.get("comparison")
+    if isinstance(comparison_value, str):
+        comparison_value = comparison_value.strip()
+    else:
+        comparison_value = None
+    tickers_hint = merged_slots.get("tickers")
+    if (
+        not comparison_value
+        and isinstance(tickers_hint, (list, tuple, set))
+        and len(
+            {
+                str(value).strip().upper()
+                for value in tickers_hint
+                if str(value).strip() and str(value).strip().upper() != "ALL"
+            }
+        )
+        >= 2
+    ):
+        comparison_value = "all"
+
+    resolved_lookup: Dict[str, Any] = dict(merged_slots)
+    resolved_lookup["company"] = resolved_company
+    if normalized_timeframe:
+        resolved_lookup["timeframe"] = normalized_timeframe
+    if primary_metric:
+        resolved_lookup["metric"] = primary_metric
+    if normalized_metrics:
+        resolved_lookup["metrics"] = normalized_metrics
+    if comparison_value:
+        resolved_lookup["comparison"] = comparison_value
 
     if definition:
-        option_map = definition.slot_options or {}
         for slot_name in definition.required_slots:
-            option = option_map.get(slot_name)
-            opt = _clone_slot_option(option)
-            status = "missing"
-            value = None
-            reason = "LLM intent resolver unavailable"
-
-            if slot_name == "company":
-                detected = heuristic_slots.get("company") or detect_company_from_query(query, configs, resolve_alias_to_ticker)
-                if detected:
-                    status = "filled"
-                    value = detected
-                    reason = None
-
-            slots[slot_name] = SlotStatusModel(
-                status=status,
-                value=value,
-                reason=reason,
-                suggestions=list(opt.suggestions),
-                allow_custom=opt.allow_custom,
-            )
-
-            if status == "missing":
-                followups.append(
-                    FollowUpModel(
-                        slot=slot_name,
-                        prompt=f"Select a value for {slot_name.replace('_', ' ')}",
-                        suggestions=list(opt.suggestions),
-                        allow_custom=opt.allow_custom,
-                        reason="Heuristic fallback requires this slot.",
-                    )
-                )
-        # Surface advisory follow-ups for high-signal optional slots.
-        optional_hint_slots = {"metric", "timeframe", "comparison"}
-        for slot_name in definition.optional_slots:
             normalized = slot_name.split(".", 1)[0] if slot_name else slot_name
-            if normalized not in optional_hint_slots:
-                continue
-            if normalized in slots:
-                continue
             option = option_map.get(normalized)
             opt = _clone_slot_option(option)
+            value = resolved_lookup.get(normalized)
 
-            heuristic_value = heuristic_slots.get(normalized)
-            if normalized == "metric" and not heuristic_value:
-                heuristic_value = heuristic_slots.get("metrics")
+            if isinstance(value, str) and not value.strip():
+                value = None
+            if isinstance(value, (list, tuple, set)) and not any(item is not None for item in value):
+                value = None
+            if isinstance(value, dict) and not value:
+                value = None
 
-            filled = False
-            if normalized == "metric":
-                metrics_list = normalize_metrics(heuristic_value, configs)
-                if metrics_list:
-                    slots[normalized] = SlotStatusModel(
-                        status="defaulted",
-                        value=metrics_list[0],
-                        reason="Using heuristic metric default.",
-                        suggestions=list(opt.suggestions),
-                        allow_custom=opt.allow_custom,
-                    )
-                    filled = True
-            elif normalized == "timeframe":
-                normalized_tf = {}
-                if heuristic_value:
-                    normalized_tf = normalize_timeframe(
-                        heuristic_value,
-                        query,
-                        configs,
-                        apply_defaults=False,
-                        origin="heuristic",
-                    )
-                if normalized_tf:
-                    slots[normalized] = SlotStatusModel(
-                        status="defaulted",
-                        value=normalized_tf,
-                        reason="Using heuristic timeframe default.",
-                        suggestions=list(opt.suggestions),
-                        allow_custom=opt.allow_custom,
-                    )
-                    filled = True
-            elif normalized == "comparison":
-                comparison_value = None
-                if isinstance(heuristic_value, str) and heuristic_value:
-                    comparison_value = heuristic_value
-                tickers_hint = heuristic_slots.get("tickers")
-                if (
-                    not comparison_value
-                    and isinstance(tickers_hint, (list, tuple, set))
-                    and len({str(v).strip().upper() for v in tickers_hint if str(v).strip() and str(v).strip().upper() != "ALL"}) >= 2
-                ):
-                    comparison_value = "all"
-                if comparison_value:
-                    slots[normalized] = SlotStatusModel(
-                        status="defaulted" if comparison_value != heuristic_value else "filled",
-                        value=comparison_value,
-                        reason="Using heuristic comparison default.",
-                        suggestions=list(opt.suggestions),
-                        allow_custom=opt.allow_custom,
-                    )
-                    filled = True
-
-            if filled:
+            if value is not None:
+                slots[normalized] = SlotStatusModel(
+                    status="filled",
+                    value=value,
+                    reason=None,
+                    suggestions=list(opt.suggestions),
+                    allow_custom=opt.allow_custom,
+                )
                 continue
 
             slots[normalized] = SlotStatusModel(
                 status="missing",
                 value=None,
-                reason="Providing this detail will improve the analysis output.",
+                reason="Required slot missing",
+                suggestions=list(opt.suggestions),
+                allow_custom=opt.allow_custom,
+            )
+            followups.append(
+                FollowUpModel(
+                    slot=normalized,
+                    prompt=f"Select a value for {normalized.replace('_', ' ')}",
+                    suggestions=list(opt.suggestions),
+                    allow_custom=opt.allow_custom,
+                    reason="Heuristic fallback requires this slot.",
+                )
+            )
+
+        optional_hint_slots = {"metric", "metrics", "timeframe", "comparison"}
+        for slot_name in definition.optional_slots:
+            normalized = slot_name.split(".", 1)[0] if slot_name else slot_name
+            if not normalized or normalized in slots or normalized not in optional_hint_slots:
+                continue
+
+            option = option_map.get(normalized)
+            opt = _clone_slot_option(option)
+            value = resolved_lookup.get(normalized)
+
+            if isinstance(value, str) and not value.strip():
+                value = None
+            if isinstance(value, (list, tuple, set)) and not any(item is not None for item in value):
+                value = None
+            if isinstance(value, dict) and not value:
+                value = None
+
+            if value is not None:
+                reason = None
+                status = "defaulted"
+                if normalized == "timeframe":
+                    status = "defaulted"
+                    reason = "Using heuristic timeframe default."
+                elif normalized in {"metric", "metrics"}:
+                    reason = "Using heuristic metric default."
+                elif normalized == "comparison":
+                    reason = "Using heuristic comparison default."
+                slots[normalized] = SlotStatusModel(
+                    status="filled" if normalized in definition.required_slots else status,
+                    value=value,
+                    reason=reason,
+                    suggestions=list(opt.suggestions),
+                    allow_custom=opt.allow_custom,
+                )
+                continue
+
+            if not emit_optional_followups:
+                continue
+
+            slots[normalized] = SlotStatusModel(
+                status="missing",
+                value=None,
+                reason="Additional context requested to tailor the analysis.",
                 suggestions=list(opt.suggestions),
                 allow_custom=opt.allow_custom,
             )
@@ -745,8 +831,7 @@ def _fallback_intent_resolution(
                     reason="Additional context requested to tailor the analysis.",
                 )
             )
-
-    notes = "Intent resolver fell back to heuristic due to unavailable LLM client."
+    notes = fallback_reason or "Intent resolver fell back to heuristic due to unavailable LLM client."
     return IntentResolutionModel(
         intent=selection,
         slots=slots,
@@ -858,6 +943,50 @@ async def resolve_intent_slots_async(
     if context_slots:
         context_defaults.update(context_slots)
 
+    definition = catalog.get_intent_definition(heuristic.intent_key) if heuristic.intent_key else None
+
+    merged_slot_view: Dict[str, Any] = dict(heuristic_context)
+    if context_slots:
+        merged_slot_view.update({k: v for k, v in context_slots.items() if v is not None})
+
+    def _slot_has_value(slot_name: str) -> bool:
+        normalized = slot_name.split(".", 1)[0] if slot_name else slot_name
+        if not normalized:
+            return False
+        value = merged_slot_view.get(normalized)
+        if value is None:
+            return False
+        if isinstance(value, str):
+            return bool(value.strip())
+        if isinstance(value, (list, tuple, set)):
+            return any(item not in (None, "", []) for item in value)
+        if isinstance(value, dict):
+            return bool(value)
+        return True
+
+    if (
+        definition
+        and heuristic.intent_key
+        and heuristic.confidence >= HEURISTIC_CONFIDENCE_THRESHOLD
+        and all(_slot_has_value(slot) for slot in definition.required_slots)
+    ):
+        logger.info(
+            "Heuristic short-circuit satisfied slots for query '%s' (intent=%s)",
+            query,
+            heuristic.intent_key,
+        )
+        return _fallback_intent_resolution(
+            query,
+            configs,
+            mode=mode,
+            heuristic=heuristic,
+            catalog=catalog,
+            candidate_definitions=candidate_definitions,
+            context_slots=context_slots,
+            fallback_reason="Heuristic resolver satisfied required slots; LLM skipped.",
+            emit_optional_followups=False,
+        )
+
     payload = {
         "query": query,
         "mode": mode,
@@ -897,6 +1026,7 @@ async def resolve_intent_slots_async(
             heuristic=heuristic,
             catalog=catalog,
             candidate_definitions=candidate_definitions,
+            context_slots=context_slots,
         )
 
     if client is None:
@@ -908,6 +1038,7 @@ async def resolve_intent_slots_async(
             heuristic=heuristic,
             catalog=catalog,
             candidate_definitions=candidate_definitions,
+            context_slots=context_slots,
         )
 
     try:
@@ -927,6 +1058,7 @@ async def resolve_intent_slots_async(
             heuristic=heuristic,
             catalog=catalog,
             candidate_definitions=candidate_definitions,
+            context_slots=context_slots,
         )
 
     return _llm_resolution_to_runtime(

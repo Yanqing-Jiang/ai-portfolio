@@ -166,3 +166,58 @@ def test_collect_tool_bundle_sources_reused_and_fanout() -> None:
     assert bundle["sources"]["stock_tracker"] == "fanout"
     assert bundle["web_context"]["summary"] == "Cached context"
     assert bundle["stock_widget"]["symbols"] == ["NASDAQ:NVDA"]
+
+def test_extract_web_context_merges_multiple_topics() -> None:
+    results = [
+        {
+            "tool": "web_retriever_primary-question",
+            "status": "completed",
+            "payload": {
+                "ready": True,
+                "summary": "Primary",
+                "topics": [
+                    {
+                        "query": "nvidia market share",
+                        "topic_index": 0,
+                        "snippets": [],
+                    }
+                ],
+                "topic_total": 2,
+            },
+            "metadata": {
+                "topic_index": 0,
+                "topic_total": 2,
+                "summary": "Primary",
+            },
+        },
+        {
+            "tool": "web_retriever_industry-context",
+            "status": "completed",
+            "payload": {
+                "ready": True,
+                "summary": "Industry",
+                "topics": [
+                    {
+                        "query": "amd market share",
+                        "topic_index": 1,
+                        "snippets": [],
+                    }
+                ],
+                "topic_total": 2,
+            },
+            "metadata": {
+                "topic_index": 1,
+                "topic_total": 2,
+                "summary": "Industry",
+            },
+        },
+    ]
+
+    bundle = collect_tool_bundle(results=results)
+    web_context = bundle.get("web_context")
+    assert web_context is not None
+    assert web_context.get("topic_total") == 2
+    topics = web_context.get("topics") or []
+    assert len(topics) == 2
+    assert topics[0]["query"] == "nvidia market share"
+    assert topics[1]["query"] == "amd market share"

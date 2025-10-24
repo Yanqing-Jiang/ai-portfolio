@@ -61,7 +61,7 @@ def test_post_process_slots_last_five_years_defaults_to_annual_without_quarter_h
     slots = {
         "timeframe": "last 5 years",
     }
-    processed = post_process_slots(slots, "Nvidia market share in the past 5 years?", configs={})
+    processed = post_process_slots(slots, "AMD vs NVIDIA revenue comparison in the past 5 years?", configs={})
 
     assert processed["timeframe"]["years_back"] == 5
     assert processed["granularity"] == "annual"
