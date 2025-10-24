@@ -35,14 +35,14 @@ const LANE_LABELS: Record<LaneKey, string> = {
 };
 
 const LANE_BASE_POSITIONS: Record<LaneKey, { x: number; y: number }> = {
-  overview: { x: 0, y: -260 },
+  overview: { x: -540, y: -260 },
   coordination: { x: 0, y: -120 },
-  planner: { x: -360, y: 30 },
-  sql: { x: -180, y: 30 },
-  market: { x: 0, y: 30 },
-  web: { x: 180, y: 30 },
-  chart: { x: 360, y: 30 },
-  analysis: { x: 360, y: 220 },
+  planner: { x: -360, y: 40 },
+  sql: { x: -180, y: 40 },
+  market: { x: 0, y: 40 },
+  web: { x: 180, y: 40 },
+  chart: { x: 360, y: 40 },
+  analysis: { x: 540, y: 40 },
   fanout: { x: -360, y: -200 },
 };
 
@@ -90,7 +90,7 @@ const PLANNER_INTENT_STEPS = new Set<string>([
   'plan_and_select_template',
 ]);
 
-const HORIZONTAL_GROUP_KEYS = new Set<string>(['planner:intent_prep']);
+const HORIZONTAL_GROUP_KEYS = new Set<string>(['planner:intent_prep', 'coordination:supervisor_spine']);
 const FANOUT_TARGET_LANES: LaneKey[] = ['sql', 'market', 'web', 'chart'];
 
 const HUB_STEP_IDS: Record<FlowMode, string> = {
@@ -274,7 +274,10 @@ const STEP_LANE_OVERRIDES: Record<string, LaneKey> = {
   tool_fanout: 'fanout',
 };
 
-const inferHubLane = (step: ProcessStep): (typeof LANE_ORDER)[number] => {
+const inferHubLane = (step: ProcessStep, mode: FlowMode): LaneKey => {
+  if (mode === 'multi-agent' && (step.id === 'analysis_generation' || step.id === 'follow_up_route')) {
+    return 'coordination';
+  }
   if (STEP_LANE_OVERRIDES[step.id]) {
     return STEP_LANE_OVERRIDES[step.id];
   }
@@ -431,6 +434,12 @@ const computeLaneGroupId = (lane: LaneKey, step: ProcessStep): string => {
   if (lane === 'planner' && PLANNER_INTENT_STEPS.has(step.id)) {
     return 'intent_prep';
   }
+  if (
+    lane === 'coordination' &&
+    (step.id === 'agent_coordination' || step.id === 'analysis_generation' || step.id === 'follow_up_route')
+  ) {
+    return 'supervisor_spine';
+  }
   if (lane === 'analysis' && (step.id === 'analysis_generation' || step.id === 'follow_up_route')) {
     return 'analysis_merge';
   }
@@ -573,7 +582,7 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
 
     const laneMeta = prioritizedSteps.map((step, index) => {
       const phase = STEP_PHASES[step.id] || 'analysis';
-      const resolvedLane = inferHubLane(step);
+      const resolvedLane = inferHubLane(step, flowMode);
       const laneGroupId = computeLaneGroupId(resolvedLane, step);
       const bandKey = `${resolvedLane}:${laneGroupId}`;
       return { step, index, phase, resolvedLane, laneGroupId, bandKey };
