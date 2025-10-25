@@ -48,6 +48,7 @@ describe('WebSearchCard', () => {
         {
           label: 'Primary question',
           query: 'AMD vs NVIDIA revenue comparison 2021-2024',
+          topic_index: 0,
           snippets: [
             {
               title: 'alphastreet.com',
@@ -61,6 +62,7 @@ describe('WebSearchCard', () => {
         {
           label: 'Industry context',
           query: 'AMD semiconductor industry outlook 2025',
+          topic_index: 1,
           snippets: [
             {
               title: 'ainvest.com',
@@ -92,5 +94,37 @@ describe('WebSearchCard', () => {
     expect(screen.getByText('Topic 2 of 2')).toBeInTheDocument();
     expect(screen.getByText('Industry context')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open source 1' })).toHaveAttribute('href', 'https://vertex.example/industry');
+  });
+
+  it('chunks fallback snippets into paginated topics of two results', () => {
+    const result: WebSearchResult = {
+      query: 'Semiconductor industry outlook',
+      summary: 'Context on the semiconductor market.',
+      snippets: [
+        { title: 'infosys.com', url: 'https://example.com/1', snippet: 'Growth projected to 11%', display_url: 'example.com', published_at: '2025-08-01' },
+        { title: 'deloitte.com', url: 'https://example.com/2', snippet: 'AI demand remains high', display_url: 'example.com', published_at: '2025-08-02' },
+        { title: 'ing.com', url: 'https://example.com/3', snippet: 'Capex accelerating into 2026', display_url: 'example.com', published_at: '2025-08-03' },
+      ],
+      annotations: [],
+      searchId: 'chunked',
+      fromCache: false,
+      fetchedAt: '2025-10-24T15:00:00Z',
+      latencyMs: 420,
+      ready: true,
+    };
+
+    render(<WebSearchCard result={result} />);
+
+    expect(screen.getByText('Topic 1 of 2')).toBeInTheDocument();
+    expect(screen.getByText('Research topic')).toBeInTheDocument();
+    expect(screen.getByText('[1]')).toBeInTheDocument();
+    expect(screen.getByText('[2]')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next topic' }));
+
+    expect(screen.getByText('Topic 2 of 2')).toBeInTheDocument();
+    expect(screen.getByText('Research topic (2)')).toBeInTheDocument();
+    expect(screen.getByText('[1]')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open source 1' })).toHaveAttribute('href', 'https://example.com/3');
   });
 });

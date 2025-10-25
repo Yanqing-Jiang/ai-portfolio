@@ -48,4 +48,35 @@ describe('WebSearchCard topics', () => {
     expect(screen.getByText('Company focus')).toBeInTheDocument();
     expect(screen.getByText(/Snippet body/)).toBeInTheDocument();
   });
+
+  it('keeps navigation disabled until additional topics arrive even if topicTotal advertises more', () => {
+    render(
+      <WebSearchCard
+        result={{
+          query: 'AMD vs NVIDIA revenue comparison',
+          topicTotal: 2,
+          topics: [
+            {
+              label: 'Primary question',
+              query: 'AMD vs NVIDIA revenue comparison',
+              snippets: [
+                {
+                  title: 'Example',
+                  url: 'https://example.com',
+                  snippet: 'Snippet body',
+                  display_url: 'example.com',
+                  published_at: '2025-10-01',
+                },
+              ],
+            },
+          ],
+        }}
+      />
+    );
+
+    expect(screen.getByText('Topic 1 of 2')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Previous topic' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Next topic' })).toBeDisabled();
+    expect(screen.getByText('Primary question')).toBeInTheDocument();
+  });
 });
