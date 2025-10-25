@@ -400,7 +400,11 @@ ANALYSIS_REVISION_KEYWORDS = (
     "rewrite",
     "revise",
     "update",
+    "insight",
+    "insights",
 )
+
+ANALYSIS_REVISION_ANCHORS = ("analysis", "summary", "insight", "insights")
 
 ANALYSIS_TEXT_MARKERS = (
     "analysis:",
@@ -417,7 +421,7 @@ def is_analysis_revision_query(query: Optional[str]) -> bool:
     if not query:
         return False
     normalized = query.strip().lower()
-    if "analysis" not in normalized and "summary" not in normalized:
+    if not any(anchor in normalized for anchor in ANALYSIS_REVISION_ANCHORS):
         return False
     return any(marker in normalized for marker in ANALYSIS_REVISION_KEYWORDS)
 
