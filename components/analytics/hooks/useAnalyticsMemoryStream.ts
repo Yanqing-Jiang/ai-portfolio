@@ -41,7 +41,12 @@ const AGENT_ROLE_CONFIG: Record<string, { stepId: string; lane: string; label: s
 const DEFAULT_AGENT_ROLE = { stepId: 'agent_coordination', lane: 'coordination', label: 'Agent Coordination' };
 
 import { useProcessSteps } from './useProcessSteps';
-import { resolveChartSpecOption, applyChartOps } from '../utils';
+import {
+  resolveChartSpecOption,
+  applyChartOps,
+  sanitizeStructuredText,
+  sanitizeStructuredList,
+} from '../utils';
 
 const FOLLOW_UP_BANNER_COPY: Record<string, { title: string; message: string }> = {
   full_pipeline: {
@@ -533,11 +538,15 @@ const buildResultMessageFields = () => ({
     if (!source || typeof source !== 'object') {
       return null;
     }
-    const tldrValue = coerceString(source.tldr ?? source.summary);
-    const highlightsValue = coerceStringList(source.highlights ?? source.bullets);
-    const keyNumbersValue = coerceStringList(source.key_numbers ?? source.keyNumbers);
-    const riskWatchValue = coerceStringList(source.risk_watch ?? source.riskWatch ?? source.watchlist);
-    const nextStepsValue = coerceStringList(source.next_steps ?? source.nextSteps ?? source.actions);
+    const tldrValue = sanitizeStructuredText(coerceString(source.tldr ?? source.summary));
+    const highlightsValue = sanitizeStructuredList(coerceStringList(source.highlights ?? source.bullets));
+    const keyNumbersValue = sanitizeStructuredList(coerceStringList(source.key_numbers ?? source.keyNumbers));
+    const riskWatchValue = sanitizeStructuredList(
+      coerceStringList(source.risk_watch ?? source.riskWatch ?? source.watchlist),
+    );
+    const nextStepsValue = sanitizeStructuredList(
+      coerceStringList(source.next_steps ?? source.nextSteps ?? source.actions),
+    );
     const evidenceSource = Array.isArray(source.evidence)
       ? source.evidence
       : Array.isArray(source.sources)
@@ -563,11 +572,11 @@ const buildResultMessageFields = () => ({
         if (displayUrl) {
           entry.displayUrl = displayUrl;
         }
-        const snippet = coerceString(item.snippet ?? item.excerpt);
+        const snippet = sanitizeStructuredText(coerceString(item.snippet ?? item.excerpt));
         if (snippet) {
           entry.snippet = snippet.length > 260 ? `${snippet.slice(0, 257).trimEnd()}...` : snippet;
         }
-        const claim = coerceString(item.claim);
+        const claim = sanitizeStructuredText(coerceString(item.claim));
         if (claim) {
           entry.claim = claim;
         }
@@ -584,26 +593,31 @@ const buildResultMessageFields = () => ({
       })
       .filter((entry): entry is AnalysisEvidenceLink => Boolean(entry));
 
+    const hasHighlights = Array.isArray(highlightsValue) && highlightsValue.length > 0;
+    const hasKeyNumbers = Array.isArray(keyNumbersValue) && keyNumbersValue.length > 0;
+    const hasRiskWatch = Array.isArray(riskWatchValue) && riskWatchValue.length > 0;
+    const hasNextSteps = Array.isArray(nextStepsValue) && nextStepsValue.length > 0;
+
     if (
       !tldrValue &&
-      !highlightsValue.length &&
-      !keyNumbersValue.length &&
-      !riskWatchValue.length &&
-      !nextStepsValue.length &&
+      !hasHighlights &&
+      !hasKeyNumbers &&
+      !hasRiskWatch &&
+      !hasNextSteps &&
       !evidenceEntries.length
     ) {
       return null;
     }
 
-  return {
-    tldr: tldrValue || undefined,
-    highlights: highlightsValue.length ? highlightsValue.slice(0, 3) : undefined,
-    keyNumbers: keyNumbersValue.length ? keyNumbersValue.slice(0, 3) : undefined,
-    riskWatch: riskWatchValue.length ? riskWatchValue.slice(0, 3) : undefined,
-    nextSteps: nextStepsValue.length ? nextStepsValue.slice(0, 3) : undefined,
-    evidence: evidenceEntries.length ? evidenceEntries.slice(0, 5) : undefined,
+    return {
+      tldr: tldrValue || undefined,
+      highlights: hasHighlights ? highlightsValue?.slice(0, 3) : undefined,
+      keyNumbers: hasKeyNumbers ? keyNumbersValue?.slice(0, 3) : undefined,
+      riskWatch: hasRiskWatch ? riskWatchValue?.slice(0, 3) : undefined,
+      nextSteps: hasNextSteps ? nextStepsValue?.slice(0, 3) : undefined,
+      evidence: evidenceEntries.length ? evidenceEntries.slice(0, 5) : undefined,
+    };
   };
-};
 
   const parseAnalysisSources = (source: any): AnalysisSources | null => {
     if (!source || typeof source !== 'object') {
@@ -718,15 +732,14 @@ const buildResultMessageFields = () => ({
     if (!raw) {
       return null;
     }
-    const snippets = Array.isArray(raw.snippets)
-      ? raw.snippets.map((item: any) => ({
-          title: coerceString(item?.title),
-          url: coerceString(item?.url),
-          snippet: coerceString(item?.snippet),
-          display_url: coerceString(item?.display_url) ?? coerceString(item?.displayUrl),
-          published_at: coerceString(item?.published_at) ?? coerceString(item?.publishedAt),
-        }))
-      : [];
+    const cloneSnippet = (item: any) => ({
+      title: coerceString(item?.title),
+      url: coerceString(item?.url),
+      snippet: coerceString(item?.snippet),
+      display_url: coerceString(item?.display_url) ?? coerceString(item?.displayUrl),
+      published_at: coerceString(item?.published_at) ?? coerceString(item?.publishedAt),
+    });
+    const snippets = Array.isArray(raw.snippets) ? raw.snippets.map(cloneSnippet) : [];
     const error = coerceString(raw.error);
     const reason = coerceString(raw.reason) ?? coerceString(raw.error_stage);
     let summary = coerceString(raw.summary);
@@ -751,22 +764,79 @@ const buildResultMessageFields = () => ({
       display_url: coerceString(item?.display_url) ?? coerceString(item?.displayUrl),
       published_at: coerceString(item?.published_at) ?? coerceString(item?.publishedAt),
     });
+    const topicIndex = coerceNumber((raw as any).topic_index ?? (raw as any).topicIndex);
+    const topicPosition = coerceNumber((raw as any).topic_position ?? (raw as any).topicPosition);
+    const topicLabel = coerceString((raw as any).topic_label ?? (raw as any).topicLabel);
+    const topicReason = coerceString((raw as any).topic_reason ?? (raw as any).topicReason ?? reason);
+    const latencyValue = typeof raw.latency_ms === 'number'
+      ? raw.latency_ms
+      : (typeof raw.latencyMs === 'number' ? raw.latencyMs : null);
     const topics = Array.isArray(raw.topics)
       ? raw.topics
           .map((topic: any, index: number) => ({
-            label: coerceString(topic?.label) ?? `Topic ${index + 1}`,
-            query: coerceString(topic?.query) ?? '',
+            label: coerceString(topic?.label) ?? coerceString(topic?.topic_label) ?? `Topic ${index + 1}`,
+            topic_label: coerceString(topic?.topic_label) ?? coerceString(topic?.label),
+            topicLabel: coerceString(topic?.topic_label) ?? coerceString(topic?.label),
+            query: coerceString(topic?.query) ?? coerceString(topic?.base_query) ?? query ?? '',
             reason: coerceString(topic?.reason),
             summary: coerceString(topic?.summary),
             search_id: coerceString(topic?.search_id) ?? coerceString(topic?.searchId),
-            latency_ms: typeof topic?.latency_ms === 'number' ? topic.latency_ms : (typeof topic?.latencyMs === 'number' ? topic.latencyMs : null),
+            latency_ms: typeof topic?.latency_ms === 'number'
+              ? topic.latency_ms
+              : (typeof topic?.latencyMs === 'number' ? topic.latencyMs : null),
             snippets: Array.isArray(topic?.snippets) ? topic.snippets.map(normalizeSnippet) : [],
+            topic_index: coerceNumber(topic?.topic_index ?? topic?.topicIndex),
+            topicIndex: coerceNumber(topic?.topic_index ?? topic?.topicIndex),
+            topic_position: coerceNumber(topic?.topic_position ?? topic?.topicPosition),
+            topicPosition: coerceNumber(topic?.topic_position ?? topic?.topicPosition),
           }))
           .filter((topic: any) => topic.query)
       : [];
     if (searchTopics && searchTopics.length && !searchTopicValue) {
       searchTopicValue = searchTopics[0];
     }
+    if ((topicLabel || topicIndex != null) && !topics.some((topic) => {
+      const currentIndex = typeof topic.topic_index === 'number' ? topic.topic_index : (typeof topic.topicIndex === 'number' ? topic.topicIndex : undefined);
+      if (currentIndex != null && topicIndex != null) {
+        return currentIndex === topicIndex;
+      }
+      if (topicLabel && topic.label) {
+        return topic.label.trim().toLowerCase() === topicLabel.trim().toLowerCase();
+      }
+      return false;
+    })) {
+      topics.push({
+        label: topicLabel ?? searchTopicValue ?? query ?? `Topic ${(topicIndex ?? topics.length) + 1}`,
+        topic_label: topicLabel ?? undefined,
+        topicLabel: topicLabel ?? undefined,
+        query: coerceString((raw as any).base_query) ?? query ?? '',
+        reason: topicReason,
+        summary,
+        search_id: coerceString(raw.search_id) ?? coerceString(raw.searchId),
+        latency_ms: latencyValue,
+        snippets: snippets.map((item) => ({ ...item })),
+        topic_index: topicIndex ?? null,
+        topicIndex: topicIndex ?? null,
+        topic_position: topicPosition ?? null,
+        topicPosition: topicPosition ?? null,
+      });
+    }
+    const mergedSearchTopics = (() => {
+      const source = new Set<string>();
+      (searchTopics ?? []).forEach((entry) => { if (entry) source.add(entry); });
+      if (topicLabel) {
+        source.add(topicLabel);
+      }
+      topics.forEach((topic) => {
+        if (topic.label) {
+          source.add(topic.label);
+        }
+      });
+      if (source.size === 0) {
+        return searchTopics;
+      }
+      return Array.from(source);
+    })();
     const rawLatencyStats =
       (raw.latency_stats && typeof raw.latency_stats === 'object' ? raw.latency_stats : null) ??
       (raw.latencyStats && typeof raw.latencyStats === 'object' ? raw.latencyStats : null);
@@ -801,13 +871,17 @@ const buildResultMessageFields = () => ({
       annotations: Array.isArray(raw.annotations) ? raw.annotations : [],
       topics,
       searchId: coerceString(raw.search_id) ?? coerceString(raw.searchId),
+      topicLabel: topicLabel ?? undefined,
       fromCache: raw.from_cache ?? raw.fromCache ?? raw.cache_hit ?? false,
       fetchedAt: coerceString(raw.fetched_at) ?? coerceString(raw.fetchedAt),
-      latencyMs: typeof raw.latency_ms === 'number' ? raw.latency_ms : (typeof raw.latencyMs === 'number' ? raw.latencyMs : null),
+      latencyMs: latencyValue,
+      topicIndex: topicIndex ?? null,
+      topicPosition: topicPosition ?? null,
       ready: raw.ready ?? (error !== 'search_api_missing' && reason !== 'search_api_missing'),
       provider: coerceString(raw.provider) ?? (raw.model ? 'Gemini' : undefined),
       model: coerceString(raw.model) ?? coerceString(raw.model_name) ?? coerceString(raw.modelName),
       latencyStats,
+      searchTopics: mergedSearchTopics,
       topicTotal:
         typeof raw.topic_total === 'number'
           ? raw.topic_total
@@ -881,21 +955,57 @@ const buildResultMessageFields = () => ({
       }
     };
     (current.searchTopics ?? []).forEach(pushSearchTopic);
+    pushSearchTopic(current.topicLabel);
     (incoming.searchTopics ?? []).forEach(pushSearchTopic);
     pushSearchTopic(incoming.searchTopic);
+    pushSearchTopic(incoming.topicLabel);
     const searchTopics = mergedSearchTopicsSet.size ? Array.from(mergedSearchTopicsSet) : undefined;
 
+    const resolveTopicIndex = (topic: WebSearchTopic): number | undefined => {
+      const direct = (topic as any)?.topic_index ?? (topic as any)?.topicIndex;
+      if (typeof direct === 'number' && Number.isFinite(direct)) {
+        return direct;
+      }
+      return undefined;
+    };
+    const resolveTopicPosition = (topic: WebSearchTopic): number | undefined => {
+      const direct = (topic as any)?.topic_position ?? (topic as any)?.topicPosition;
+      if (typeof direct === 'number' && Number.isFinite(direct)) {
+        return direct;
+      }
+      return undefined;
+    };
     const topicEntries: Array<{ key: string; topic: WebSearchTopic }> = [];
-    const topicKey = (topic: WebSearchTopic, fallbackIndex: number, prefix: string) => {
-      const base = topic.query?.toLowerCase() || topic.label?.toLowerCase();
-      return base ? `${prefix}-${base}` : `${prefix}-index-${fallbackIndex}`;
+    const topicKey = (topic: WebSearchTopic, fallbackIndex: number) => {
+      const idx = resolveTopicIndex(topic);
+      if (idx !== undefined) {
+        return `idx-${idx}`;
+      }
+      const position = resolveTopicPosition(topic);
+      if (position !== undefined) {
+        return `pos-${position}`;
+      }
+      const label = topic.label ?? (topic as any)?.topicLabel;
+      if (label) {
+        return `label-${label.trim().toLowerCase()}`;
+      }
+      if (topic.query) {
+        return `query-${topic.query.trim().toLowerCase()}`;
+      }
+      return `ord-${fallbackIndex}`;
     };
 
     (current.topics ?? []).forEach((topic, index) => {
       topicEntries.push({
-        key: topicKey(topic, index, 'current'),
+        key: topicKey(topic, index),
         topic: {
           ...topic,
+          topic_index: resolveTopicIndex(topic) ?? null,
+          topicIndex: resolveTopicIndex(topic) ?? null,
+          topic_position: resolveTopicPosition(topic) ?? null,
+          topicPosition: resolveTopicPosition(topic) ?? null,
+          topic_label: (topic as any)?.topic_label ?? (topic as any)?.topicLabel ?? topic.label,
+          topicLabel: (topic as any)?.topicLabel ?? (topic as any)?.topic_label ?? topic.label,
           snippets: mergeSnippetArrays([], topic.snippets),
         },
       });
@@ -903,9 +1013,15 @@ const buildResultMessageFields = () => ({
 
     (incoming.topics ?? []).forEach((topic, index) => {
       topicEntries.push({
-        key: topicKey(topic, index, 'incoming'),
+        key: topicKey(topic, index),
         topic: {
           ...topic,
+          topic_index: resolveTopicIndex(topic) ?? null,
+          topicIndex: resolveTopicIndex(topic) ?? null,
+          topic_position: resolveTopicPosition(topic) ?? null,
+          topicPosition: resolveTopicPosition(topic) ?? null,
+          topic_label: (topic as any)?.topic_label ?? (topic as any)?.topicLabel ?? topic.label,
+          topicLabel: (topic as any)?.topicLabel ?? (topic as any)?.topic_label ?? topic.label,
           snippets: mergeSnippetArrays([], topic.snippets),
         },
       });
@@ -919,34 +1035,37 @@ const buildResultMessageFields = () => ({
         return;
       }
       mergedTopicMap.set(key, {
-        label: topic.label ?? existingTopic.label,
-        query: topic.query || existingTopic.query,
+        label: topic.label ?? (topic as any)?.topicLabel ?? existingTopic.label,
+        query: topic.query || existingTopic.query || '',
         reason: existingTopic.reason ?? topic.reason,
         summary: topic.summary ?? existingTopic.summary,
         search_id: topic.search_id ?? existingTopic.search_id,
         latency_ms: typeof topic.latency_ms === 'number' ? topic.latency_ms : existingTopic.latency_ms,
         snippets: mergeSnippetArrays(existingTopic.snippets, topic.snippets),
+        topic_index: resolveTopicIndex(topic) ?? resolveTopicIndex(existingTopic) ?? null,
+        topicIndex: resolveTopicIndex(topic) ?? resolveTopicIndex(existingTopic) ?? null,
+        topic_position: resolveTopicPosition(topic) ?? resolveTopicPosition(existingTopic) ?? null,
+        topicPosition: resolveTopicPosition(topic) ?? resolveTopicPosition(existingTopic) ?? null,
+        topic_label: (topic as any)?.topic_label ?? (existingTopic as any)?.topic_label,
+        topicLabel: (topic as any)?.topicLabel ?? (existingTopic as any)?.topicLabel,
       });
     });
 
     const mergedTopics = Array.from(mergedTopicMap.values());
     mergedTopics.sort((a, b) => {
-      const idxA =
-        typeof a?.topic_index === 'number'
-          ? a.topic_index
-          : typeof a?.topicIndex === 'number'
-            ? a.topicIndex
-            : Number.MAX_SAFE_INTEGER;
-      const idxB =
-        typeof b?.topic_index === 'number'
-          ? b.topic_index
-          : typeof b?.topicIndex === 'number'
-            ? b.topicIndex
-            : Number.MAX_SAFE_INTEGER;
+      const idxA = resolveTopicIndex(a) ?? Number.MAX_SAFE_INTEGER;
+      const idxB = resolveTopicIndex(b) ?? Number.MAX_SAFE_INTEGER;
       if (idxA !== idxB) {
         return idxA - idxB;
       }
-      return (a?.query || '').localeCompare(b?.query || '');
+      const posA = resolveTopicPosition(a) ?? Number.MAX_SAFE_INTEGER;
+      const posB = resolveTopicPosition(b) ?? Number.MAX_SAFE_INTEGER;
+      if (posA !== posB) {
+        return posA - posB;
+      }
+      const labelA = ((a.label ?? (a as any)?.topicLabel ?? a.query) || '').toLowerCase();
+      const labelB = ((b.label ?? (b as any)?.topicLabel ?? b.query) || '').toLowerCase();
+      return labelA.localeCompare(labelB);
     });
 
     const mergeAnnotations = () => {
@@ -1005,6 +1124,10 @@ const buildResultMessageFields = () => ({
       provider: incoming.provider ?? current.provider,
       model: incoming.model ?? current.model,
       latencyStats: incoming.latencyStats ?? current.latencyStats,
+      topicLabel: incoming.topicLabel ?? current.topicLabel,
+      topicIndex: (typeof incoming.topicIndex === 'number' ? incoming.topicIndex : current.topicIndex) ?? null,
+      topicPosition:
+        (typeof incoming.topicPosition === 'number' ? incoming.topicPosition : current.topicPosition) ?? null,
       topicTotal:
         coerceTopicTotal(
           current.topicTotal,
@@ -1516,11 +1639,16 @@ const workflowDataRef = useRef<{
 
   // Progressive update function with debouncing
   const scheduleProgressiveUpdate = (updates: Partial<typeof pendingUpdatesRef.current>) => {
+    const normalizedUpdates: Partial<typeof pendingUpdatesRef.current> = { ...updates };
+    if (typeof normalizedUpdates.analysis === 'string') {
+      const sanitized = sanitizeStructuredText(normalizedUpdates.analysis);
+      normalizedUpdates.analysis = sanitized ?? normalizedUpdates.analysis;
+    }
     // Merge pending updates
-    Object.assign(pendingUpdatesRef.current, updates);
+    Object.assign(pendingUpdatesRef.current, normalizedUpdates);
 
-    if (updates.chartSpec !== undefined) {
-      workflowDataRef.current.chartSpec = updates.chartSpec;
+    if (normalizedUpdates.chartSpec !== undefined) {
+      workflowDataRef.current.chartSpec = normalizedUpdates.chartSpec;
     }
 
     // Clear existing timeout
@@ -2983,14 +3111,29 @@ const workflowDataRef = useRef<{
                   ? 'completed'
                   : 'in_progress';
 
+            const resolvedChartSpec =
+              patchedChartSpec && typeof patchedChartSpec === 'object'
+                ? patchedChartSpec
+                : eventData?.chart_spec && typeof eventData.chart_spec === 'object'
+                  ? eventData.chart_spec
+                  : workflowDataRef.current.chartSpec && typeof workflowDataRef.current.chartSpec === 'object'
+                    ? workflowDataRef.current.chartSpec
+                    : undefined;
+
+            const stepDetails: Record<string, any> = {
+              patch: eventData,
+              status: normalizedStatus || (hasOps ? 'applied' : undefined),
+            };
+
+            if (stepStatus !== 'error' && resolvedChartSpec) {
+              stepDetails.chart_spec = resolvedChartSpec;
+            }
+
             stepsHook.updateStepStatus(
               'chart_revision',
               stepStatus,
               statusLines.length ? statusLines : ['Chart revision received'],
-              {
-                patch: eventData,
-                status: normalizedStatus || (hasOps ? 'applied' : undefined),
-              },
+              stepDetails,
               stepInfo.elapsed_ms,
               stepInfo.ts,
               sequence,
@@ -3073,7 +3216,9 @@ const workflowDataRef = useRef<{
 
           try {
             const updatedAnalysis =
-              typeof eventData?.analysis === 'string' ? eventData.analysis : '';
+              typeof eventData?.analysis === 'string'
+                ? sanitizeStructuredText(eventData.analysis) ?? eventData.analysis
+                : '';
 
             if (revisionApplied && updatedAnalysis) {
               setAnalysis(updatedAnalysis);
@@ -3267,6 +3412,9 @@ const workflowDataRef = useRef<{
                 ? data.partial_analysis
                 : '';
             if (chunk) {
+              if (!resultSentRef.current) {
+                emitResultOnce();
+              }
               // Progressive streaming: update immediately for each chunk
               setStreamingText(prev => {
                 const newText = prev + chunk;
@@ -3283,8 +3431,10 @@ const workflowDataRef = useRef<{
             delete (bundle as any).step;
 
             if (typeof bundle.analysis === 'string') {
-              scheduleProgressiveUpdate({ analysis: bundle.analysis });
-              workflowDataRef.current.analysis = bundle.analysis;
+              const normalizedAnalysis =
+                sanitizeStructuredText(bundle.analysis) ?? bundle.analysis;
+              scheduleProgressiveUpdate({ analysis: normalizedAnalysis });
+              workflowDataRef.current.analysis = normalizedAnalysis;
             }
             if (bundle.chart_spec) {
               scheduleProgressiveUpdate({ chartSpec: bundle.chart_spec });

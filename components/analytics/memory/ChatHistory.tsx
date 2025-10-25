@@ -88,9 +88,47 @@ const buildStockInsightsSection = (results: ChatHistoryProps['messages'][number]
   return ['**Market Snapshot Highlights**', ...lines].join('\n');
 };
 
+const stripLeadMarkdownHeading = (text: string, patterns: RegExp[]) => {
+  if (!text?.trim()) {
+    return text;
+  }
+  const lines = text.split('\n');
+  for (let idx = 0; idx < lines.length; idx += 1) {
+    const original = lines[idx];
+    const trimmed = original.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const match = patterns.find((regex) => regex.test(trimmed));
+    if (!match) {
+      break;
+    }
+    const headingMatch = trimmed.match(match);
+    if (!headingMatch) {
+      break;
+    }
+    const headingLength = headingMatch[0].length;
+    const prefixLength = original.length - trimmed.length;
+    const remainder = original.slice(prefixLength + headingLength).trimStart();
+    if (remainder.length) {
+      lines[idx] = remainder;
+    } else {
+      lines.splice(idx, 1);
+    }
+    break;
+  }
+  return lines.join('\n').replace(/^\s+/, '').trim();
+};
+
+const cleanTldrCopy = (value?: string | null) => {
+  if (!value) return '';
+  const stripped = value.replace(/^\s*(?:[#>*-]\s*)*(?:\*\*|__)?\s*TL;?\s*DR\b[:\-\s]*/i, '').trim();
+  return stripped.length ? stripped : value.trim();
+};
+
 const buildCombinedAnalysis = (message: ChatHistoryProps['messages'][number]) => {
   const sections: string[] = [];
-  const tldr = message.analysisOverview?.tldr?.trim();
+  const tldr = cleanTldrCopy(message.analysisOverview?.tldr);
   const primaryAnalysis =
     message.analysis?.trim() ??
     message.progressiveAnalysis?.trim() ??
@@ -116,12 +154,18 @@ const buildCombinedAnalysis = (message: ChatHistoryProps['messages'][number]) =>
   }
 
   if (tldr) {
-    sections.push(`**TL;DR**\n${tldr}`);
+    sections.push(`**Quick Take**\n${tldr}`);
   }
 
   if (base) {
-    const heading = hasFinalAnalysis ? '**SQL-Derived Highlights**' : '**Analysis Draft (Streaming)**';
-    sections.push(`${heading}\n${base}`);
+    const headingLabel = hasFinalAnalysis ? 'SQL-Derived Highlights' : 'Analysis Draft (Streaming)';
+    const cleanedBase = stripLeadMarkdownHeading(base, [
+      /^(\*\*|__)?\s*sql[-\s]*derived highlights?\b[:\-\s]*/i,
+      /^(\*\*|__)?\s*analysis draft(?:\s*\(streaming\))?\b[:\-\s]*/i,
+    ]);
+    if (cleanedBase) {
+      sections.push(`**${headingLabel}**\n${cleanedBase}`);
+    }
   }
   const stockSection = buildStockInsightsSection(message.toolFanoutResults);
   if (stockSection) sections.push(stockSection);

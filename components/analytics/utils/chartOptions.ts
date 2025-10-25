@@ -1091,6 +1091,74 @@ export const withLightTheme = (spec: any) => {
   const usesPercent = metaChartValueType === 'percent' || (percentSeries.size > 0) || includedPercent;
 
   const chartIsPercent = metaChartValueType === 'percent';
+  const numericSamples = (() => {
+    const samples: number[] = [];
+    const collectFromEntry = (entry: any) => {
+      const candidate = extractNumericCandidate(entry);
+      if (typeof candidate === 'number' && Number.isFinite(candidate)) {
+        samples.push(candidate);
+      }
+    };
+    if (Array.isArray(option.series)) {
+      option.series.forEach((series: any) => {
+        if (!Array.isArray(series?.data)) {
+          return;
+        }
+        series.data.forEach(collectFromEntry);
+      });
+    }
+    return samples;
+  })();
+  const determineValueScale = (values: number[]) => {
+    if (!values.length) {
+      return { divisor: 1, suffix: '', label: '' };
+    }
+    const maxAbs = values.reduce((max, value) => {
+      const magnitude = Math.abs(value);
+      return magnitude > max ? magnitude : max;
+    }, 0);
+    if (!Number.isFinite(maxAbs) || maxAbs === 0) {
+      return { divisor: 1, suffix: '', label: '' };
+    }
+    const thresholds = [
+      { value: 1e12, divisor: 1e12, suffix: 'T', label: 'Trillions' },
+      { value: 1e9, divisor: 1e9, suffix: 'B', label: 'Billions' },
+      { value: 1e6, divisor: 1e6, suffix: 'M', label: 'Millions' },
+      { value: 1e3, divisor: 1e3, suffix: 'K', label: 'Thousands' },
+    ];
+    const match = thresholds.find((entry) => maxAbs >= entry.value);
+    if (match) {
+      return { divisor: match.divisor, suffix: match.suffix, label: match.label };
+    }
+    return { divisor: 1, suffix: '', label: '' };
+  };
+  const resolveCurrencySymbol = () => {
+    const explicit = spec.meta?.valueCurrencySymbol;
+    if (typeof explicit === 'string' && explicit.trim().length) {
+      return explicit.trim();
+    }
+    const currency = typeof spec.meta?.valueCurrency === 'string' ? spec.meta.valueCurrency.trim().toUpperCase() : undefined;
+    switch (currency) {
+      case 'USD':
+        return '$';
+      case 'EUR':
+        return '€';
+      case 'GBP':
+        return '£';
+      case 'JPY':
+      case 'CNY':
+      case 'RMB':
+        return '¥';
+      case 'AUD':
+        return 'A$';
+      case 'CAD':
+        return 'C$';
+      default:
+        return currency && currency.length === 1 ? currency : '$';
+    }
+  };
+  const valueScale = !usesPercent ? determineValueScale(numericSamples) : { divisor: 1, suffix: '', label: '' };
+  const currencySymbol = usesPercent ? '' : resolveCurrencySymbol();
   // Normalise formatter payloads (axis/tooltip objects, datasets, etc.) into a primitive.
   const unwrapFormatterInput = (input: any): any => {
     if (input === null || input === undefined) return input;
@@ -1180,7 +1248,30 @@ export const withLightTheme = (spec: any) => {
   const formatCurrency0 = (v: any) => {
     const normalized = unwrapFormatterInput(v);
     const num = typeof normalized === 'number' ? normalized : Number(normalized);
-    if (Number.isFinite(num)) return `$${Math.round(num).toLocaleString()}`;
+    if (Number.isFinite(num)) {
+      const divisor = valueScale.divisor || 1;
+      const scaled = num / divisor;
+      const absoluteScaled = Math.abs(scaled);
+      const decimals =
+        divisor === 1
+          ? absoluteScaled >= 100
+            ? 0
+            : absoluteScaled >= 10
+              ? 1
+              : absoluteScaled >= 1
+                ? 2
+                : 3
+          : absoluteScaled >= 100
+            ? 1
+            : 2;
+      const formattedNumber = scaled.toLocaleString(undefined, {
+        minimumFractionDigits: decimals,
+        maximumFractionDigits: decimals,
+      });
+      const suffix = valueScale.suffix ?? '';
+      const prefix = currencySymbol ?? '';
+      return `${prefix}${formattedNumber}${suffix}`;
+    }
     if (normalized === null || normalized === undefined) {
       return '';
     }
@@ -1262,25 +1353,48 @@ export const withLightTheme = (spec: any) => {
     },
     nameTextStyle: { ...((ax || {}).nameTextStyle || {}), color: '#333333' },
   });
-  const normalizeYAxis = (ax: any) => ({
-    ...(ax || {}),
-    // Always use smart formatter unless backend explicitly sends a function
-    axisLabel: {
-      ...((ax || {}).axisLabel || {}),
-      color: '#555555',
-      formatter: (typeof (ax?.axisLabel?.formatter) === 'function') ? ax.axisLabel.formatter : axisFormatter,
-    },
-    axisLine: {
-      ...((ax || {}).axisLine || {}),
-      lineStyle: { ...(((ax || {}).axisLine || {}).lineStyle || {}), color: '#cccccc' },
-    },
-    splitLine: {
-      ...((ax || {}).splitLine || {}),
-      show: true,
-      lineStyle: { ...(((ax || {}).splitLine || {}).lineStyle || {}), color: '#eeeeee' },
-    },
-    nameTextStyle: { ...((ax || {}).nameTextStyle || {}), color: '#333333' },
-  });
+  const normalizeYAxis = (ax: any) => {
+    const baseAxis = { ...(ax || {}) };
+    const existingName = typeof baseAxis.name === 'string' && baseAxis.name.trim().length ? baseAxis.name : undefined;
+    const derivedName = (() => {
+      if (usesPercent) {
+        return existingName;
+      }
+      if (!valueScale.label) {
+        return existingName ?? (currencySymbol && currencySymbol.trim().length ? currencySymbol : undefined);
+      }
+      if (existingName) {
+        const lower = existingName.toLowerCase();
+        if (lower.includes(valueScale.label.toLowerCase())) {
+          return existingName;
+        }
+        return `${existingName} (${valueScale.label})`;
+      }
+      return currencySymbol && currencySymbol.trim().length
+        ? `${currencySymbol} ${valueScale.label}`
+        : valueScale.label;
+    })();
+    return {
+      ...baseAxis,
+      ...(derivedName ? { name: derivedName } : {}),
+      // Always use smart formatter unless backend explicitly sends a function
+      axisLabel: {
+        ...((ax || {}).axisLabel || {}),
+        color: '#555555',
+        formatter: (typeof (ax?.axisLabel?.formatter) === 'function') ? ax.axisLabel.formatter : axisFormatter,
+      },
+      axisLine: {
+        ...((ax || {}).axisLine || {}),
+        lineStyle: { ...(((ax || {}).axisLine || {}).lineStyle || {}), color: '#cccccc' },
+      },
+      splitLine: {
+        ...((ax || {}).splitLine || {}),
+        show: true,
+        lineStyle: { ...(((ax || {}).splitLine || {}).lineStyle || {}), color: '#eeeeee' },
+      },
+      nameTextStyle: { ...((ax || {}).nameTextStyle || {}), color: '#333333' },
+    };
+  };
   const xAxisArr = Array.isArray(spec.xAxis) ? spec.xAxis : spec.xAxis ? [spec.xAxis] : [];
   const yAxisArr = Array.isArray(spec.yAxis) ? spec.yAxis : spec.yAxis ? [spec.yAxis] : [];
   if (xAxisArr.length) option.xAxis = xAxisArr.map(normalizeXAxis);
@@ -1343,17 +1457,74 @@ export const withLightTheme = (spec: any) => {
   }
 
   const palette = Array.isArray(option.color) ? option.color : [];
+  const resolveSeriesName = (series: any) => {
+    if (series && typeof series.name === 'string' && series.name.trim().length) {
+      return series.name.trim();
+    }
+    if (series && typeof series.seriesName === 'string' && series.seriesName.trim().length) {
+      return series.seriesName.trim();
+    }
+    return '';
+  };
+  const isAverageSeries = (name: string) => {
+    if (!name) {
+      return false;
+    }
+    const normalized = name.toLowerCase();
+    return (
+      normalized.includes('industry average') ||
+      normalized.includes('industry avg') ||
+      normalized.includes('peer average') ||
+      normalized.includes('peer avg') ||
+      normalized.includes('market average') ||
+      normalized.includes('benchmark')
+    );
+  };
+  const applySeriesColor = (series: any, color: string) => {
+    const nextItemStyle = { ...(series.itemStyle || {}) };
+    if (!nextItemStyle.color) {
+      nextItemStyle.color = color;
+    }
+    const baseLineStyle = series.lineStyle || {};
+    const nextLineStyle = {
+      ...baseLineStyle,
+      width: typeof baseLineStyle.width === 'number' ? Math.max(2, baseLineStyle.width) : 2,
+      color: baseLineStyle.color ?? color,
+    };
+    let finalAreaStyle = series.areaStyle;
+    if (series.type === 'line') {
+      const baseOpacity =
+        typeof (series.areaStyle || {}).opacity === 'number' ? series.areaStyle.opacity : 0.08;
+      finalAreaStyle = {
+        ...(series.areaStyle || {}),
+        opacity: baseOpacity,
+        color: (series.areaStyle || {}).color ?? applyAlphaToColor(color, baseOpacity),
+      };
+    }
+    return {
+      itemStyle: nextItemStyle,
+      lineStyle: nextLineStyle,
+      areaStyle: finalAreaStyle,
+    };
+  };
 
   if (Array.isArray(option.series)) {
     option.series = option.series.map((s: any, seriesIndex: number) => {
       const paletteColor =
         palette.length > 0 ? palette[seriesIndex % palette.length] : undefined;
+      const seriesName = resolveSeriesName(s);
+      const averageSeriesColor = '#F59E0B';
+      const overrideColor = isAverageSeries(seriesName) ? averageSeriesColor : undefined;
       const seriesColor =
+        overrideColor ||
         (s?.itemStyle?.color as string) ||
         paletteColor ||
         '#1D4ED8';
+      const styledSeries = applySeriesColor(s, seriesColor);
       return {
         ...s,
+        itemStyle: styledSeries.itemStyle,
+        lineStyle: styledSeries.lineStyle,
         label: {
           show: shouldShowPointLabels,
           position: 'top',
@@ -1389,10 +1560,9 @@ export const withLightTheme = (spec: any) => {
           }
         : undefined,
       smooth: true,
-      lineStyle: { ...(s.lineStyle || {}), width: 2 },
       symbol: 'circle',
       symbolSize: 6,
-      areaStyle: s.type === 'line' ? { opacity: 0.06 } : undefined,
+      areaStyle: styledSeries.areaStyle,
       };
     });
   }

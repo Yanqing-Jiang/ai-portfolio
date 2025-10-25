@@ -443,12 +443,6 @@ Multi-Agent: workload delegation & orchestration, fastest speed
               onSubmitClarification={submitClarification}
               processSteps={processSteps}
             />
-            {/* Current Analysis Streaming (temporary display) */}
-            {streamingText && !analysis && (
-              <div className="bg-gray-800/30 rounded-xl border border-gray-700">
-                <AnalysisCard analysis={streamingText} />
-              </div>
-            )}
           </div>
         </div>
 

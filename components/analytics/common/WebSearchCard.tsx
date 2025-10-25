@@ -57,20 +57,143 @@ export const WebSearchCard: React.FC<WebSearchCardProps> = ({
     provider,
     model,
     topics = [],
+    topicTotal,
   } = result;
 
   const isDisabled = error === 'search_api_missing' || reason === 'search_api_missing';
+  const FALLBACK_SNIPPETS_PER_TOPIC = 2;
 
-  const enrichedTopics: WebSearchTopic[] = topics.length
-    ? topics
-    : [{
-        label: searchTopic ?? 'Research topic',
-        query: searchTopic ?? query ?? '',
-        snippets,
+  const normalizedTopics = useMemo(() => {
+    if (!Array.isArray(topics) || !topics.length) {
+      return [] as WebSearchTopic[];
+    }
+    const toNumber = (value: unknown): number | undefined => {
+      if (typeof value === 'number' && Number.isFinite(value)) {
+        return value;
+      }
+      if (typeof value === 'string') {
+        const parsed = Number(value);
+        if (Number.isFinite(parsed)) {
+          return parsed;
+        }
+      }
+      return undefined;
+    };
+    const seen = new Map<string, WebSearchTopic>();
+    topics.forEach((entry, index) => {
+      if (!entry) {
+        return;
+      }
+      const topicIndex = toNumber((entry as any).topic_index ?? (entry as any).topicIndex);
+      const topicPosition = toNumber((entry as any).topic_position ?? (entry as any).topicPosition);
+      const label = (entry as any).topic_label ?? (entry as any).topicLabel ?? entry.label;
+      const baseQuery = entry.query || query || '';
+      const key =
+        topicIndex !== undefined
+          ? `idx-${topicIndex}`
+          : topicPosition !== undefined
+            ? `pos-${topicPosition}`
+            : label
+              ? `label-${label.trim().toLowerCase()}`
+              : baseQuery
+                ? `query-${baseQuery.trim().toLowerCase()}`
+                : `ord-${index}`;
+      const clonedSnippets = Array.isArray(entry.snippets)
+        ? entry.snippets.map((item) => ({ ...item }))
+        : [];
+      const payload: WebSearchTopic = {
+        ...entry,
+        label: label ?? entry.label,
+        topic_label: label ?? entry.topic_label,
+        topicLabel: label ?? entry.topicLabel,
+        query: baseQuery,
+        snippets: clonedSnippets,
+        topic_index: topicIndex ?? null,
+        topicIndex: topicIndex ?? null,
+        topic_position: topicPosition ?? null,
+        topicPosition: topicPosition ?? null,
+      };
+      const existing = seen.get(key);
+      if (!existing) {
+        seen.set(key, payload);
+        return;
+      }
+      existing.snippets = existing.snippets.concat(
+        clonedSnippets.filter(
+          (item) =>
+            !existing.snippets.some(
+              (prev) => prev.url === item.url && prev.snippet === item.snippet,
+            ),
+        ),
+      );
+      existing.summary = existing.summary ?? payload.summary;
+      existing.reason = existing.reason ?? payload.reason;
+      existing.label = existing.label ?? payload.label;
+      existing.query = existing.query || payload.query;
+      if (existing.topic_index == null && payload.topic_index != null) {
+        existing.topic_index = payload.topic_index;
+        existing.topicIndex = payload.topic_index;
+      }
+      if (existing.topic_position == null && payload.topic_position != null) {
+        existing.topic_position = payload.topic_position;
+        existing.topicPosition = payload.topic_position;
+      }
+      existing.latency_ms = existing.latency_ms ?? payload.latency_ms;
+      existing.search_id = existing.search_id ?? payload.search_id;
+    });
+    const ordered = Array.from(seen.values());
+    ordered.sort((a, b) => {
+      const idxA = toNumber(a.topic_index ?? (a as any).topicIndex) ?? Number.MAX_SAFE_INTEGER;
+      const idxB = toNumber(b.topic_index ?? (b as any).topicIndex) ?? Number.MAX_SAFE_INTEGER;
+      if (idxA !== idxB) {
+        return idxA - idxB;
+      }
+      const posA = toNumber(a.topic_position ?? (a as any).topicPosition) ?? Number.MAX_SAFE_INTEGER;
+      const posB = toNumber(b.topic_position ?? (b as any).topicPosition) ?? Number.MAX_SAFE_INTEGER;
+      if (posA !== posB) {
+        return posA - posB;
+      }
+      const labelA = ((a.label ?? (a as any).topicLabel ?? a.query) || '').toLowerCase();
+      const labelB = ((b.label ?? (b as any).topicLabel ?? b.query) || '').toLowerCase();
+      return labelA.localeCompare(labelB);
+    });
+    return ordered;
+  }, [topics, query]);
+
+  const enrichedTopics: WebSearchTopic[] = useMemo(() => {
+    if (normalizedTopics.length) {
+      return normalizedTopics;
+    }
+    const baseLabel = searchTopic ?? 'Research topic';
+    const baseQuery = searchTopic ?? query ?? '';
+    if (!snippets.length) {
+      return [
+        {
+          label: baseLabel,
+          query: baseQuery,
+          snippets,
+          reason: undefined,
+          search_id: result.searchId,
+          latency_ms: latencyMs ?? null,
+        },
+      ];
+    }
+    const grouped: WebSearchTopic[] = [];
+    for (let index = 0; index < snippets.length; index += FALLBACK_SNIPPETS_PER_TOPIC) {
+      const chunk = snippets.slice(index, index + FALLBACK_SNIPPETS_PER_TOPIC);
+      const suffix = grouped.length ? ` (${grouped.length + 1})` : '';
+      grouped.push({
+        label: `${baseLabel}${suffix}`.trim(),
+        query: baseQuery,
         reason: undefined,
+        summary: undefined,
         search_id: result.searchId,
         latency_ms: latencyMs ?? null,
-      }];
+        snippets: chunk,
+      });
+    }
+    return grouped;
+  }, [normalizedTopics, snippets, searchTopic, query, result.searchId, latencyMs]);
 
   const totalSnippets = useMemo(
     () => enrichedTopics.reduce((count, topic) => count + topic.snippets.length, 0),
@@ -85,24 +208,73 @@ export const WebSearchCard: React.FC<WebSearchCardProps> = ({
 
   const [activeTopicIndex, setActiveTopicIndex] = useState(0);
   useEffect(() => {
-    setActiveTopicIndex(0);
+    setActiveTopicIndex((prev) => {
+      if (!enrichedTopics.length) {
+        return 0;
+      }
+      if (prev >= enrichedTopics.length) {
+        return enrichedTopics.length - 1;
+      }
+      if (prev < 0) {
+        return 0;
+      }
+      return prev;
+    });
   }, [enrichedTopics.length, enrichedTopics[0]?.query]);
 
   const activeTopic = enrichedTopics[Math.min(activeTopicIndex, enrichedTopics.length - 1)];
-  const totalTopics = enrichedTopics.length;
+  const inferredTotal = typeof topicTotal === 'number' && topicTotal > 0 ? topicTotal : undefined;
+  const totalTopics = inferredTotal ?? enrichedTopics.length;
   const topicSnippets = activeTopic?.snippets ?? [];
 
   const handlePrev = () => setActiveTopicIndex((idx) => Math.max(0, idx - 1));
   const handleNext = () => setActiveTopicIndex((idx) => Math.min(totalTopics - 1, idx + 1));
   const snippetNumber = (index: number) => index + 1;
+  const displayTopics = useMemo(() => {
+    if (Array.isArray(searchTopics) && searchTopics.length) {
+      return searchTopics;
+    }
+    if (normalizedTopics.length) {
+      const labels = normalizedTopics
+        .map((topic) => topic.label ?? (topic as any).topicLabel ?? topic.query)
+        .filter((value): value is string => Boolean(value && value.trim()));
+      return labels.length ? Array.from(new Set(labels)) : undefined;
+    }
+    return undefined;
+  }, [searchTopics, normalizedTopics]);
+  const resolveTopicOrdinal = (topic: WebSearchTopic | undefined, fallbackIndex: number) => {
+    if (!topic) {
+      return fallbackIndex + 1;
+    }
+    const position =
+      typeof topic.topic_position === 'number'
+        ? topic.topic_position
+        : typeof (topic as any).topicPosition === 'number'
+          ? (topic as any).topicPosition
+          : undefined;
+    if (position && Number.isFinite(position)) {
+      return Math.round(position);
+    }
+    const index =
+      typeof topic.topic_index === 'number'
+        ? topic.topic_index
+        : typeof (topic as any).topicIndex === 'number'
+          ? (topic as any).topicIndex
+          : undefined;
+    if (index !== undefined && Number.isFinite(index)) {
+      return Math.round(index) + 1;
+    }
+    return fallbackIndex + 1;
+  };
+  const displayedTopicNumber = resolveTopicOrdinal(activeTopic, activeTopicIndex);
 
   return (
     <div className="rounded-xl border border-slate-700/70 bg-slate-900/50 overflow-hidden">
       <div className="flex items-start justify-between gap-3 px-4 py-3">
         <div>
           <h4 className="text-sm font-semibold text-slate-100">{title}</h4>
-          {searchTopics && searchTopics.length ? (
-            <p className="text-xs text-slate-300 mt-0.5">Topics: {searchTopics.join('; ')}</p>
+          {displayTopics && displayTopics.length ? (
+            <p className="text-xs text-slate-300 mt-0.5">Topics: {displayTopics.join('; ')}</p>
           ) : null}
           {fetchedAt ? (
             <p className="text-xs text-slate-500 mt-0.5">
@@ -139,7 +311,7 @@ export const WebSearchCard: React.FC<WebSearchCardProps> = ({
         >
           {'< Prev'}
         </button>
-        <span>Topic {activeTopicIndex + 1} of {totalTopics}</span>
+        <span>Topic {displayedTopicNumber} of {totalTopics}</span>
         <button
           type="button"
           onClick={handleNext}

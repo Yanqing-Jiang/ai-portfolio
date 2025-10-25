@@ -106,6 +106,12 @@ export interface WebSearchTopic {
   summary?: string;
   search_id?: string;
   latency_ms?: number | null;
+  topic_index?: number | null;
+  topicIndex?: number | null;
+  topic_position?: number | null;
+  topicPosition?: number | null;
+  topic_label?: string;
+  topicLabel?: string;
   snippets: Array<{
     title?: string;
     url?: string;
@@ -133,6 +139,10 @@ export interface WebSearchResult {
   searchId?: string;
   fromCache?: boolean;
   fetchedAt?: string;
+  topicTotal?: number;
+  topicIndex?: number | null;
+  topicPosition?: number | null;
+  topicLabel?: string;
   latencyMs?: number | null;
   ready?: boolean;
   error?: string;
