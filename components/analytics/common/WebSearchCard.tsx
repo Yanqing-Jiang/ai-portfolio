@@ -224,11 +224,20 @@ export const WebSearchCard: React.FC<WebSearchCardProps> = ({
 
   const activeTopic = enrichedTopics[Math.min(activeTopicIndex, enrichedTopics.length - 1)];
   const inferredTotal = typeof topicTotal === 'number' && topicTotal > 0 ? topicTotal : undefined;
-  const totalTopics = inferredTotal ?? enrichedTopics.length;
+  const actualTopicCount = enrichedTopics.length;
+  const totalTopics = actualTopicCount;
+  const announcedTopicTotal =
+    inferredTotal !== undefined ? Math.max(inferredTotal, actualTopicCount) : actualTopicCount;
   const topicSnippets = activeTopic?.snippets ?? [];
 
   const handlePrev = () => setActiveTopicIndex((idx) => Math.max(0, idx - 1));
-  const handleNext = () => setActiveTopicIndex((idx) => Math.min(totalTopics - 1, idx + 1));
+  const handleNext = () =>
+    setActiveTopicIndex((idx) => {
+      if (totalTopics <= 0) {
+        return 0;
+      }
+      return Math.min(totalTopics - 1, idx + 1);
+    });
   const snippetNumber = (index: number) => index + 1;
   const displayTopics = useMemo(() => {
     if (Array.isArray(searchTopics) && searchTopics.length) {
@@ -311,11 +320,11 @@ export const WebSearchCard: React.FC<WebSearchCardProps> = ({
         >
           {'< Prev'}
         </button>
-        <span>Topic {displayedTopicNumber} of {totalTopics}</span>
+        <span>Topic {displayedTopicNumber} of {announcedTopicTotal}</span>
         <button
           type="button"
           onClick={handleNext}
-          disabled={activeTopicIndex >= totalTopics - 1}
+          disabled={totalTopics === 0 || activeTopicIndex >= totalTopics - 1}
           className={`rounded-full border border-slate-700/70 px-2 py-1 transition ${activeTopicIndex >= totalTopics - 1 ? 'opacity-40 cursor-not-allowed' : 'hover:border-emerald-400 hover:text-emerald-300'}`}
           aria-label="Next topic"
         >
