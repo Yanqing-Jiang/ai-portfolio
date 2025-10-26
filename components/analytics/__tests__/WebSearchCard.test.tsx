@@ -1,4 +1,4 @@
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { describe, it, expect } from 'vitest';
 import { WebSearchCard } from '../common/WebSearchCard';
 import { WebSearchResult } from '../types';
@@ -32,14 +32,15 @@ describe('WebSearchCard', () => {
     expect(screen.getByText('Nvidia Q2 2025 results')).toBeInTheDocument();
     expect(screen.getByText('Nvidia posted $24B in revenue, up 89% year over year.')).toBeInTheDocument();
     expect(screen.getByText('1 result')).toBeInTheDocument();
-    expect(screen.getByText('Topic 1 of 1')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Previous topic' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Next topic' })).toBeDisabled();
-    expect(screen.getByRole('link', { name: 'Open source 1' })).toHaveAttribute('href', 'https://example.com/nvidia-q2');
+    expect(screen.getByText('Topics: 1')).toBeInTheDocument();
+    expect(screen.getByText('Topic 1')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open source 1-1' })).toHaveAttribute('href', 'https://example.com/nvidia-q2');
+    expect(screen.queryByRole('button', { name: 'Next topic' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Previous topic' })).not.toBeInTheDocument();
     expect(screen.queryByText('Nvidia beat expectations with record data center revenue.')).toBeNull();
   });
 
-  it('handles multiple topics and enables navigation', () => {
+  it('stacks multiple topics without pagination', () => {
     const result: WebSearchResult = {
       query: 'AMD vs NVIDIA revenue comparison 2021-2024',
       searchTopics: ['AMD vs NVIDIA revenue comparison 2021-2024', 'AMD semiconductor industry outlook 2025'],
@@ -87,20 +88,20 @@ describe('WebSearchCard', () => {
     render(<WebSearchCard result={result} />);
 
     expect(screen.getByText('Topics: AMD vs NVIDIA revenue comparison 2021-2024; AMD semiconductor industry outlook 2025')).toBeInTheDocument();
-    expect(screen.getByText('Topic 1 of 2')).toBeInTheDocument();
+    expect(screen.getByText('Topics: 2')).toBeInTheDocument();
+    expect(screen.getByText('Topic 1')).toBeInTheDocument();
+    expect(screen.getByText('Topic 2')).toBeInTheDocument();
     expect(screen.getByText('Primary question')).toBeInTheDocument();
     expect(screen.getByText('AMD vs NVIDIA revenue comparison 2021-2024')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Open source 1' })).toHaveAttribute('href', 'https://vertex.example/amd-q4');
-
-    fireEvent.click(screen.getByRole('button', { name: 'Next topic' }));
-
-    expect(screen.getByText('Topic 2 of 2')).toBeInTheDocument();
     expect(screen.getByText('Secondary question')).toBeInTheDocument();
     expect(screen.getByText('AMD semiconductor industry outlook 2025')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Open source 1' })).toHaveAttribute('href', 'https://vertex.example/industry');
+    expect(screen.getByRole('link', { name: 'Open source 1-1' })).toHaveAttribute('href', 'https://vertex.example/amd-q4');
+    expect(screen.getByRole('link', { name: 'Open source 2-1' })).toHaveAttribute('href', 'https://vertex.example/industry');
+    expect(screen.queryByRole('button', { name: 'Next topic' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Previous topic' })).not.toBeInTheDocument();
   });
 
-  it('chunks fallback snippets into paginated topics of two results', () => {
+  it('groups fallback snippets into sequential topics', () => {
     const result: WebSearchResult = {
       query: 'Semiconductor industry outlook',
       summary: 'Context on the semiconductor market.',
@@ -119,16 +120,14 @@ describe('WebSearchCard', () => {
 
     render(<WebSearchCard result={result} />);
 
-    expect(screen.getByText('Topic 1 of 2')).toBeInTheDocument();
+    expect(screen.getByText('Topics: 2')).toBeInTheDocument();
     expect(screen.getByText('Research topic')).toBeInTheDocument();
-    expect(screen.getByText('[1]')).toBeInTheDocument();
-    expect(screen.getByText('[2]')).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Next topic' }));
-
-    expect(screen.getByText('Topic 2 of 2')).toBeInTheDocument();
     expect(screen.getByText('Research topic (2)')).toBeInTheDocument();
-    expect(screen.getByText('[1]')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Open source 1' })).toHaveAttribute('href', 'https://example.com/3');
+    expect(screen.getAllByText('[1]')).toHaveLength(2);
+    expect(screen.getByText('[2]')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open source 1-1' })).toHaveAttribute('href', 'https://example.com/1');
+    expect(screen.getByRole('link', { name: 'Open source 1-2' })).toHaveAttribute('href', 'https://example.com/2');
+    expect(screen.getByRole('link', { name: 'Open source 2-1' })).toHaveAttribute('href', 'https://example.com/3');
+    expect(screen.queryByRole('button', { name: 'Next topic' })).not.toBeInTheDocument();
   });
 });

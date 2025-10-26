@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import React from 'react';
 import { describe, it, expect } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { WebSearchCard } from '../WebSearchCard';
 
 describe('WebSearchCard provider/model chips', () => {
@@ -38,18 +38,28 @@ describe('WebSearchCard topics', () => {
               label: 'Company focus',
               query: 'AMD market share',
               snippets: [
-                { title: 'Example', url: 'https://example.com', snippet: 'Snippet body', display_url: 'example.com', published_at: '2025-10-01' },
+                {
+                  title: 'Example',
+                  url: 'https://example.com',
+                  snippet: 'Snippet body',
+                  display_url: 'example.com',
+                  published_at: '2025-10-01',
+                },
               ],
             },
           ],
         }}
       />
     );
+
+    expect(screen.getByText('Topics: 1')).toBeInTheDocument();
+    expect(screen.getByText('Topic 1')).toBeInTheDocument();
     expect(screen.getByText('Company focus')).toBeInTheDocument();
     expect(screen.getByText(/Snippet body/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Next topic' })).not.toBeInTheDocument();
   });
 
-  it('keeps navigation disabled until additional topics arrive even if topicTotal advertises more', () => {
+  it('indicates when additional topics are still pending from the provider', () => {
     render(
       <WebSearchCard
         result={{
@@ -74,13 +84,13 @@ describe('WebSearchCard topics', () => {
       />
     );
 
-    expect(screen.getByText('Topic 1 of 2')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Previous topic' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Next topic' })).toBeDisabled();
+    expect(screen.getByText('Topics: 1 of 2')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Previous topic' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Next topic' })).not.toBeInTheDocument();
     expect(screen.getByText('AMD vs NVIDIA revenue comparison')).toBeInTheDocument();
   });
 
-  it('navigates between primary and secondary market research questions', () => {
+  it('renders primary and secondary market research questions together', () => {
     render(
       <WebSearchCard
         result={{
@@ -115,20 +125,11 @@ describe('WebSearchCard topics', () => {
       />
     );
 
+    expect(screen.getByText('Topics: 2')).toBeInTheDocument();
     expect(screen.getByText('Market Research Question A')).toBeInTheDocument();
     expect(screen.getByText('Primary insight body.')).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Next topic' }));
-
     expect(screen.getByText('Market Research Question B')).toBeInTheDocument();
     expect(screen.getByText('Secondary insight body.')).toBeInTheDocument();
-    expect(screen.queryByText('Primary insight body.')).not.toBeInTheDocument();
-    expect(screen.getByText('Topic 2 of 2')).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Previous topic' }));
-
-    expect(screen.getByText('Market Research Question A')).toBeInTheDocument();
-    expect(screen.getByText('Primary insight body.')).toBeInTheDocument();
-    expect(screen.getByText('Topic 1 of 2')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Next topic' })).not.toBeInTheDocument();
   });
 });
