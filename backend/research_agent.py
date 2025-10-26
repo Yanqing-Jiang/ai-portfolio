@@ -1,7 +1,7 @@
 import os
 from datetime import datetime
 from langchain_core.prompts import MessagesPlaceholder, PromptTemplate
-from langchain.agents import AgentType
+from langchain.agents.agent_types import AgentType
 from langchain.agents import initialize_agent, Tool
 from langchain_community.chat_models import ChatOpenAI
 from langchain.memory import ConversationSummaryBufferMemory
@@ -16,7 +16,7 @@ import json
 from langchain_core.messages import SystemMessage
 from dotenv import load_dotenv
 from pathlib import Path
-from langchain.callbacks.base import BaseCallbackHandler
+from langchain_core.callbacks.base import BaseCallbackHandler
 from langchain.callbacks.streaming_stdout import StreamingStdOutCallbackHandler
 import threading
 import queue
