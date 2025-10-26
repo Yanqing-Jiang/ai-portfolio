@@ -15,6 +15,10 @@ from ..core.context import get_configs
 from ..core.state import IntentModel, QueryPlanModel
 from ..semantic.catalog import get_semantic_catalog
 from .sql_planner import plan_sql_rule_based
+from ..core.margins import (
+    detect_margin_choice_from_plan,
+    detect_margin_choice_from_slots,
+)
 
 CONFIGS = get_configs()
 SEMANTIC_CATALOG = get_semantic_catalog()
@@ -174,6 +178,23 @@ def compile_sql_from_plan(
         sql = sql.replace('{year_filter_clause}', year_filter_clause)
         sql = sql.replace('{ticker_list}', ticker_clause)
         sql = sql.replace("('AMD','AVGO','INTC','MU','NVDA','QCOM','TXN')", f"({ticker_clause})")
+        if intent_key in {'margins_vs_peers', 'margin_growth_vs_peers'}:
+            margin_choice = detect_margin_choice_from_plan(plan)
+            if not margin_choice:
+                margin_choice = detect_margin_choice_from_slots(slots)
+            if not margin_choice:
+                raise ValueError("Margin selection required for margin-focused intents.")
+            replacements = {
+                '{company_margin_column}': margin_choice.value_column,
+                '{company_margin_alias}': margin_choice.value_alias,
+                '{peer_margin_alias}': margin_choice.peer_alias,
+                '{company_margin_growth_column}': margin_choice.growth_column,
+                '{company_margin_growth_alias}': margin_choice.growth_alias,
+                '{peer_margin_growth_alias}': margin_choice.growth_peer_alias,
+            }
+            for placeholder, replacement in replacements.items():
+                if placeholder in sql:
+                    sql = sql.replace(placeholder, replacement)
         # If granularity is annual, strip quarterly-only filters to avoid empty results
         if granularity != 'quarterly':
             sql = re.sub(r"\s+AND\s+calendar_quarter_num\s+IS\s+NOT\s+NULL\s*", " ", sql)

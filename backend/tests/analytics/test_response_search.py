@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 from typing import Any, Dict
 
 import pytest
@@ -106,12 +107,13 @@ def test_perform_response_search_uses_gemin_api_key(monkeypatch):
     plan_prompt = plan_call['contents'][0]['parts'][0]['text']
     assert 'User question: What is NVDA' in plan_prompt
     search_calls = instance.calls[1:]
-    for call, topic in zip(search_calls, result.search_topics):
+    assert len(search_calls) == len(result.search_topics) == 2
+    for call in search_calls:
         tools = call.get('tools')
         assert isinstance(tools, list) and len(tools) > 0
         assert isinstance(tools[0], dict) and 'google_search' in tools[0]
-        prompt_preview = call['contents'][0]
-        assert topic in prompt_preview
+    for topic in result.search_topics:
+        assert any(topic in call['contents'][0] for call in search_calls)
 
     payload = result.to_payload()
     assert 'Summary from Gemini' in (payload["summary"] or '')
@@ -279,12 +281,13 @@ def test_perform_response_search_runs_two_step_flow(monkeypatch):
     assert 'User question: Tell me about "NVDA 2025" revenue outlook?' in plan_prompt
 
     search_calls = instance.calls[1:]
-    for call, topic in zip(search_calls, result.search_topics):
+    assert len(search_calls) == len(result.search_topics) == 2
+    for call in search_calls:
         tools = call.get("tools")
         assert isinstance(tools, list) and len(tools) > 0
         assert isinstance(tools[0], dict) and 'google_search' in tools[0]
-        prompt_text = call["contents"][0]
-        assert topic in prompt_text
+    for topic in result.search_topics:
+        assert any(topic in call["contents"][0] for call in search_calls)
 
     assert result.topics and result.topics[0].summary == "Synthesized search answer"
     assert result.model == "gemini-two-step"
@@ -390,6 +393,84 @@ def test_perform_response_search_logs_steps(monkeypatch, caplog):
     assert result.snippets
     assert result.model == "gemini-amd-news"
 
+
+
+def test_perform_response_search_runs_topics_concurrently(monkeypatch):
+    async def fake_generate_topics(model, query, session_id=None, min_topics=2):
+        return [
+            response_search.SearchTopicPlan(label="Primary question", query="primary query", reason="Company focus"),
+            response_search.SearchTopicPlan(label="Industry context", query="industry context", reason="Sector backdrop"),
+        ]
+
+    DummyGenerativeModel.created_instances = []
+    model_instance = DummyGenerativeModel("gemini-concurrency", {})
+
+    monkeypatch.setattr(response_search, "_generate_search_topics", fake_generate_topics)
+    monkeypatch.setattr(response_search, "_ensure_model", lambda model=None: model_instance)
+    monkeypatch.setattr(response_search, "_MAX_ATTEMPTS", 1)
+    monkeypatch.setattr(response_search, "_REQUEST_TIMEOUT_SECONDS", 1.0, raising=False)
+    monkeypatch.setattr(
+        response_search,
+        "_build_request_args",
+        lambda search_query: {'contents': [search_query], 'tools': [{'google_search': {}}]},
+    )
+
+    call_records = []
+
+    async def fake_to_thread(fn, *args, **kwargs):
+        prompt = kwargs.get('contents', [''])[0]
+        call_records.append(('start', prompt, time.perf_counter()))
+        await asyncio.sleep(0.05)
+        result = fn(*args, **kwargs)
+        call_records.append(('end', prompt, time.perf_counter()))
+        return result
+
+    monkeypatch.setattr(asyncio, "to_thread", fake_to_thread)
+
+    start = time.perf_counter()
+    result = asyncio.run(response_search.perform_response_search("NVDA margins"))
+    elapsed = time.perf_counter() - start
+
+    starts = [record for record in call_records if record[0] == 'start']
+    assert len(starts) == 2
+    assert max(entry[2] for entry in starts) - min(entry[2] for entry in starts) < 0.02
+    assert elapsed < 0.12
+    assert len(result.search_topics) == 2
+
+
+def test_perform_response_search_times_out(monkeypatch):
+    async def fake_generate_topics(model, query, session_id=None, min_topics=2):
+        return [
+            response_search.SearchTopicPlan(label="Primary question", query="primary query", reason="Company focus"),
+            response_search.SearchTopicPlan(label="Industry context", query="industry context", reason="Sector backdrop"),
+        ]
+
+    DummyGenerativeModel.created_instances = []
+    model_instance = DummyGenerativeModel("gemini-timeout", {})
+
+    monkeypatch.setattr(response_search, "_generate_search_topics", fake_generate_topics)
+    monkeypatch.setattr(response_search, "_ensure_model", lambda model=None: model_instance)
+    monkeypatch.setattr(response_search, "_MAX_ATTEMPTS", 1)
+    monkeypatch.setattr(response_search, "_REQUEST_TIMEOUT_SECONDS", 0.05, raising=False)
+    monkeypatch.setattr(
+        response_search,
+        "_build_request_args",
+        lambda search_query: {'contents': [search_query], 'tools': [{'google_search': {}}]},
+    )
+
+    async def slow_to_thread(fn, *args, **kwargs):
+        try:
+            await asyncio.sleep(0.2)
+            return fn(*args, **kwargs)
+        except asyncio.CancelledError:
+            raise
+
+    monkeypatch.setattr(asyncio, "to_thread", slow_to_thread)
+
+    with pytest.raises(response_search.ResponseSearchError) as excinfo:
+        asyncio.run(response_search.perform_response_search("NVDA margins"))
+
+    assert "timed out" in str(excinfo.value)
 
 
 def test_default_model_guardrail(monkeypatch):

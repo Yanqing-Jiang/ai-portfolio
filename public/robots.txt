@@ -1,0 +1,7 @@
+User-agent: *
+Allow: /
+
+Disallow: /signin
+Disallow: /auth
+
+Sitemap: https://ai.jiangyanqing.com/sitemap.xml

@@ -1,156 +1,112 @@
 # Integrating the OpenAI Agent SDK into Next-Gen Analytics
 
-This guide outlines how to introduce the OpenAI Agent SDK into the analytics stack, replacing bespoke orchestration with SDK-managed agents, tooling, and guardrails. It assumes the repository layout as of October 22, 2025 and highlights the files/processes that benefit most from the migration.
+This revision explains how to evolve the existing analytics flow into “true agents” across both runtime modes: a single agent that wields multiple tools, and a supervisor that orchestrates a bench of specialists. The guidance leans on the current `planner_executor` pipeline and surfaces the concrete engineering effort, informed by recent OpenAI and Anthropic agency best practices.citeturn0search0turn0search1turn0search3turn0search5
 
 ---
 
-## 1. Why adopt the Agent SDK here?
+## 0. Difficulty snapshot
 
-| Current Component | Location | Pain Point | Agent SDK Benefit |
-|-------------------|----------|------------|-------------------|
-| Planner / supervisor loop | `backend/analytics/flows/planner_executor.py:320-4380` | Custom event bus, manual tool scheduling, difficult tracing | Model flows as first-class agents with `AgentRunner`, built-in handoffs, and centralized telemetry |
-| Schema clarifier | `backend/analytics/agents/schema_clarifier.py` | Manual intent validation, no guardrails | Convert to a focused agent using guardrail presets + structured outputs |
-| Research / web agent | `backend/research_agent.py` | LangChain-specific wiring; lacks Responses-native safety | Replace with Agent SDK tooling (web search, HTTP tool adapters) |
-| OpenAI client wrappers | `backend/unified_responses_client.py`, `backend/analytics/core/openai_client.py` | Hand-rolled Responses calls, compatibility shims | Use SDK’s native invocation + MCP tool registry |
-| Multi-agent coordination & events | `backend/analytics/flows/multi_agent.py`, `components/analytics/hooks/useAnalyticsMemoryStream.ts` | Custom event schema and state machine | Consume SDK tracing stream directly, reducing bespoke protocol |
+| Target architecture | FlowMode entry points | Difficulty | What changes |
+|---------------------|-----------------------|-----------|--------------|
+| Single agent, multi-tool (`FlowMode.SINGLE_AGENT`) | `backend/analytics/flows/planner_executor.py` → `PlannerExecutorFlow.events` | **Medium (1 sprint)** | Wrap the existing sequential phases in an `AgentRunner`, translate `SupervisorTools` into SDK tool definitions, and swap custom telemetry for SDK traces. |
+| Supervisor + specialists (`FlowMode.MULTI_AGENT`) | `backend/analytics/flows/multi_agent.py` → `MultiAgentFlow._run_agent_orchestration` | **High (2–3 sprints)** | Replace bespoke orchestrator/manifest logic with Supervisor + delegate agents, shared scratchpad state, guardrails, and retry policies while preserving cached receipts. |
 
----
-
-## 2. Prerequisites
-
-1. **Upgrade dependencies**
-   ```powershell
-   # backend virtualenv
-   pip install "openai-agent>=0.6.0" "openai>=1.110.0"
-   ```
-   Update `backend/requirements.txt` accordingly.
-
-2. **Set environment variables**
-   - `OPENAI_API_KEY` (existing)
-   - `AGENT_SDK_MODEL` (default `gpt-5-mini-2025-08-07` for schema compliance)
-   - Optional: `OPENAI_AGENT_LOG_LEVEL`, `OPENAI_AGENT_TRACING` (for SDK diagnostics)
-
-3. **Audit tool dependencies** – Identify internal tool call sites (SQL executor, web retriever, Supabase adapters) so they can be registered as SDK tools.
+The direct mode can remain as a regression safety net while both agentic implementations stabilize.
 
 ---
 
-## 3. Migration checklist
+## 1. How the planner_executor flow maps to Agent SDK constructs
 
-### Step 1 – Introduce an Agent SDK entry point
+### Single-agent lane (FlowMode.SINGLE_AGENT)
+- `PlannerExecutorFlow.events` already emits a linear sequence of lane events: classification → intent/clarification → SQL → chart → analysis. Each phase calls deterministic helpers (SQL planner, validator, chart builder) through `SupervisorTools`, making them natural candidates for Agent SDK tool registrations (`analytics/tools/registry.py`). 
+- The existing event envelope (`apply_mode_metadata`, `follow_up_route`, prompt versions) can migrate into the Agent SDK’s `trace` metadata and custom context payloads; use the emitted context to hydrate `AgentRunner.stream()` events instead of the bespoke `EventEmitter` pipeline.
+- Slot resolution and clarification logic (`decide_schema_clarification`, `_auto_fill_missing_slots`) become specialized tool calls or guarded reasoning steps within a single agent prompt.
 
-Create `backend/analytics/agents/runner.py` that instantiates the SDK `AgentRunner` with guardrails and a shared tool registry.
-
-Suggested scaffolding:
-```python
-from openai import AgentsClient
-from openai_agent import AgentRunner, GuardrailConfig
-from analytics.agents.tools import analytics_tools_registry
-
-def build_runner():
-    client = AgentsClient()
-    runner = AgentRunner(
-        client=client,
-        tools=analytics_tools_registry(),
-        guardrails=GuardrailConfig(strict=True, default_model="gpt-4o-mini-2024-07-18"),
-    )
-    return runner
-```
-
-### Step 2 – Register tools
-
-Convert existing Python callables into SDK tool adapters:
-
-| Tool | Current implementation | New adapter |
-|------|------------------------|-------------|
-| SQL execution | `backend/analytics/sql/executor.py:1-320` | Wrap in `@tool` decorated function (e.g. `sql_query_tool`) |
-| Chart design | `backend/analytics/core/charting.py:1-240` | Expose highlight or spec generator as tool |
-| Web retrieval | `backend/research_agent.py` | Replace with SDK’s `web-search` tool or register custom HTTP fetcher |
-| Market data | any Supabase or price fetcher functions | Register as data tools |
-
-Add a module `backend/analytics/agents/tools.py` collecting these wrappers. Consider using MCP if these tools require network/file isolation.
-
-### Step 3 – Translate planner phases into agents
-
-Break `planner_executor` responsibilities into dedicated agents:
-
-1. **Classifier agent** – Handles topic detection and off-topic responses.
-   - Source: `_intent_phase` initialization inside `planner_executor.py:3730-3860`.
-2. **Intent resolver agent** – Combines slot detection + schema clarifier.
-   - Source: `analytics.core.intent_impl.detection.resolve_intent_slots_async` and `analytics.agents.schema_clarifier`.
-3. **SQL specialist agent** – Plans and validates SQL (from `planner_executor.run_sql_phase`).
-4. **Chart specialist agent** – Builds chart specs (`planner_executor.run_chart_phase` + `charting.py`).
-5. **Narrative agent** – Streams analysis (`analytics/core/analysis.py`).
-
-Define each agent via the SDK:
-```python
-from openai_agent import Agent
-
-intent_agent = Agent(
-    name="IntentResolver",
-    instructions="Resolve company, timeframe, and metric slots. Use clarification tool when needed.",
-    tools=[sql_metadata_tool, clarification_tool],
-    model="gpt-4o-mini-2024-07-18",
-)
-```
-
-Then orchestrate them with `runner.handoff(intent_agent, sql_agent, context=...)` to mirror the existing lane ordering.
-
-### Step 4 – Replace manual event loop
-
-Where `planner_executor` currently yields JSON events to the frontend, switch to streaming traces from the SDK:
-
-```python
-async for event in runner.stream(task, trace=True):
-    socket.emit("agent_event", event.to_dict())
-```
-
-Remove redundant telemetry plumbing once the SDK trace events are wired into `useAnalyticsMemoryStream.ts`.
-
-### Step 5 – Integrate guardrails and structured outputs
-
-*Harness guardrails* – Standardize sensitive-data policies by loading guardrail YAML:
-```python
-from openai_agent import GuardrailConfig
-guardrails = GuardrailConfig.from_file("config/agent_guardrails.yaml")
-```
-
-*Structured responses* – Replace custom JSON schema validation with SDK-enforced outputs for clarification questions, analysis summaries, etc.
-
-### Step 6 – Adapt frontend stream handling
-
-Update `components/analytics/hooks/useAnalyticsMemoryStream.ts:3300-3760` to consume SDK trace schemas (`agent_turn`, `handoff`, `tool_call`, `deliberation`). The hook already recognizes similar events—map new field names to existing UI states.
-
-### Step 7 – Incremental rollout
-
-1. **Phase 0:** Wrap schema clarifier only. Keep planner executor intact; use Agent SDK for slot validation. Verify ledger logs show `resolver_status=structured` without fallback.
-2. **Phase 1:** Migrate research agent + SQL tool to SDK tools. Drive them through `AgentRunner` from the existing planner and compare outputs.
-3. **Phase 2:** Replace entire planner executor loop with Agent SDK orchestration. Decommission `planner_executor.py` once parity tests pass.
-4. **Phase 3:** Enable guardrails + external MCP tools; instrument telemetry around SDK traces.
+### Multi-agent lane (FlowMode.MULTI_AGENT)
+- `MultiAgentFlow` presently wraps `PlannerExecutorFlow` but injects an orchestration layer that manages cached receipts, rerun directives, and lane hedging. The metadata map (`SUPERVISOR_AGENT_SYSTEM_PROMPTS`) illustrates the existing “role prompts” for planner, analyst, chart, market, and web specialists.
+- `AgentExecutionOrchestrator` and `AgentTaskPlan` already encode task graphs; migratation consists of swapping the manually scheduled specialist invocations with Agent SDK handoffs while preserving cache-aware bookkeeping (`_drain_artifact_events`, `_maybe_agent_turn_start/_end`). 
+- The hedged tool list (`HEDGED_WEB_TOOLS`) should translate into retry policies or redundant specialist delegates within the Agent SDK’s supervisor workflow.
 
 ---
 
-## 4. Files to update / create
+## 2. Recommended single-agent multi-tool design (medium lift)
 
-| Action | File(s) |
-|--------|---------|
-| Add Agent SDK runner scaffolding | `backend/analytics/agents/runner.py` (new) |
-| Register tools | `backend/analytics/agents/tools.py` (new), update individual tool modules |
-| Convert schema clarifier | `backend/analytics/agents/schema_clarifier.py` |
-| Retrofit planner orchestration | `backend/analytics/flows/planner_executor.py`, `backend/analytics/flows/multi_agent.py` |
-| Update OpenAI client wrappers | `backend/unified_responses_client.py`, `backend/analytics/core/openai_client.py` |
-| Stream traces to frontend | `components/analytics/hooks/useAnalyticsMemoryStream.ts`, server push endpoints |
-| Configuration | `backend/config/agent_guardrails.yaml` (new), update `requirements.txt`, environment docs |
-| Tests | Add SDK integration tests under `backend/tests/agents/` |
+1. **Define a canonical runner** – Implement `backend/analytics/agents/runner.py` that builds an `AgentRunner` with the project guardrail profile (`GuardrailConfig`) and registers all analytics tools from a shared registry. Use the SDK context object to carry the planner metadata currently attached to events.citeturn0search2
+2. **Register deterministic tools** – Port each `SupervisorTools` function into SDK-compliant tool adapters (`@tool` or `ToolSpec`) with precise input/output JSON schemas mirroring the current function signatures; deterministic behavior satisfies Claude’s agency guidance on reliable tool execution.citeturn0search5
+3. **Prompt design** – Move the existing planner prompt scaffolding into a single-agent system prompt that enumerates the lane order and tool usage contract. Follow GPT‑5 handbook advice: label each instruction step, declare required outputs, and highlight when the agent must call a tool versus respond directly.citeturn0search6
+4. **Clarification workflow** – Convert `decide_schema_clarification` into a structured sub-task: the agent first inspects slot completeness, then either emits a `clarification_request` tool call or writes a reasoned assumption. Guardrails enforce that red-team questions or missing slots trigger clarifications rather than silent assumptions.citeturn0search0
+5. **Telemetry swap** – Replace the custom `EventEmitter` stream with `runner.stream()` traces. Forward `agent_turn`, `tool_call`, and `handoff` events to `useAnalyticsMemoryStream.ts`, mapping SDK event payloads onto existing UI states. Store trace IDs alongside the existing revision signatures for cross-run debugging.citeturn0search1
+6. **Risk mitigation** – Keep `FlowMode.DIRECT` behind a feature flag (`ANALYTICS_AGENT_SDK_MODE`) and run shadow comparisons using captured inputs to detect regressions before flipping traffic.
+
+Outcome: the single agent retains current UX semantics while gaining native guardrails, structured tool calling, and trace observability without rewriting downstream consumers.
 
 ---
 
-## 5. Additional considerations
+## 3. Supervisor + specialists orchestration (high lift)
 
-- **Telemetry:** The SDK emits structured logs; integrate them with `backend/analytics/core/telemetry.py` or migrate telemetry entirely to the SDK pipeline.
-- **Rollbacks:** Keep the existing planner executor behind a feature flag (`ANALYTICS_AGENT_SDK_ENABLED`) so you can revert quickly.
-- **Latency:** First-time schema enforcement may add startup latency; warm the runner during application boot.
-- **Security:** Guardrails replace some manual filtering, but continue to sanitize SQL inputs and web content before executing tools.
+1. **Supervisor agent** – Translate `MultiAgentFlow._run_agent_orchestration` into an SDK supervisor agent whose system prompt mirrors `SUPERVISOR_AGENT_SYSTEM_PROMPTS["planner"]`. It should build a task list, attach cached receipt metadata, and decide which specialists to invoke.citeturn0search0
+2. **Specialist lineup** – Instantiate SDK agents for `query`, `chart`, `market`, `web_research`, and `analyst` roles, reusing their existing prompt text but augmenting with explicit tool budgets and quality gates (e.g., SQL specialist must call `sql_validate` before `sql_execute`). Claude’s agency playbook stresses clearly bounded responsibilities, sandboxed tool usage, and zero-trust handling of tool outputs; adopt the same review checkpoints here.citeturn0search3turn0search5
+3. **Shared scratchpad** – Use the Agent SDK shared state (or an injected memory tool) to store receipts, rerun directives, and follow-up routes. The supervisor hands annotated context to specialists and ingests their outputs before emitting a consolidated narrative.citeturn0search1
+4. **Hedging & retries** – Encode `HEDGED_WEB_TOOLS` as redundant specialists or fallback tool invocations. Supervisor policies should specify retry budgets and escalation paths, matching OpenAI’s guidance on failure containment and deterministic replays for multi-agent systems.citeturn0search0turn0search7
+5. **Termination contract** – Specialists respond with structured payloads (status, artifacts, cache keys). The supervisor collates these into the final `analysis_complete` event while updating revision state. Any missing artifacts trigger automated rerun requests, keeping parity with existing logic (`set_follow_up_route`, `_artifact_flush_pending`).
+
+Expect to retire much of `AgentExecutionOrchestrator` once handoffs move into the SDK, but retain its caching utilities until the SDK-based exchange supports differential reruns.
 
 ---
 
-By introducing the Agent SDK progressively—starting with the schema clarifier and moving toward full planner orchestration—you can reduce custom orchestration code, gain official guardrails, and align with OpenAI’s agent tooling roadmap ahead of the Assistants API sunset.
+## 4. Implementation roadmap tied to planner_executor
+
+1. **Week 1: Tool registry parity**
+   - Generate SDK tool adapters for SQL, chart, clarification, and market helpers; host them in `analytics/agents/tools.py`.
+   - Build `AgentRunner` and prove single-agent parity by routing `FlowMode.SINGLE_AGENT` through it behind a feature flag.
+2. **Week 2: Trace integration + clarifier**
+   - Swap `PlannerExecutorFlow.events` to emit SDK trace events; adapt `useAnalyticsMemoryStream.ts` to the new schema.
+   - Convert schema clarifier into an SDK-enforced structured response and delete bespoke guardrail switches.
+3. **Week 3–4: Supervisor rollout**
+   - Create specialist agent configs, wire supervisor orchestration, and feed receipts/hedges through shared state.
+   - Shadow multi-agent runs, diffing artifacts (`PipelineArtifacts`) and telemetry to ensure cache reuse semantics survive.
+4. **Week 5: Hardening**
+   - Implement automated regression suites that replay saved sessions through both legacy and SDK pathways, comparing SQL, chart specs, and narratives.
+   - Finalize config knobs (guardrail YAML, retry budgets, evaluation thresholds) before deprecating the legacy orchestrator.
+
+---
+
+## 5. Direct-mode safeguards
+
+- Keep `FlowMode.DIRECT` routing exactly as it is today; do not instantiate the Agent SDK runner when `mode == FlowMode.DIRECT`, and leave `PlannerExecutorFlow`'s deterministic event emitter untouched (`apply_mode_metadata`, `EventEmitter`).
+- Gate all Agent SDK code paths behind explicit flags (for example `ANALYTICS_AGENT_SDK_MODE` and `AGENT_SUPERVISOR_ENABLED`) so direct sessions never opt into the new runners accidentally, even if teams toggle the global rollout.
+- Preserve the existing SSE contract for direct mode by continuing to stream events from `PlannerExecutorFlow.events` without trace remapping; smoke-test UI expectations using captured direct sessions before and after deployments.
+- Maintain the legacy telemetry and latency guardrails (`_evaluate_latency_guardrail`) for direct sessions to avoid shifts in dashboards or alert thresholds while the agentic flows iterate.
+
+---
+
+## 5. Testing, evaluation, and observability
+
+- **Regression harness** – Leverage the SDK’s evaluation hooks and OpenAI’s recommended regression runners to replay agent sessions and capture divergence scores automatically.citeturn0search7
+- **Prompt audits** – Apply GPT‑5 prompt linting rules (explicit instructions, role separation, bounded memory) before launch; store prompts under revision control to track drift.citeturn0search6
+- **Guardrail telemetry** – Pipe guardrail decisions and tool safety verdicts into the existing `analytics/core/telemetry.py` sinks so policy incidents share the same alerting dashboards.
+- **Sandbox enforcement** – Maintain Claude-style sandboxing discipline: deterministic tools, sanitized inputs, and explicit review of tool output before acting, especially for SQL execution and web retrieval.citeturn0search5
+- **Incident playbooks** – Document rollback steps that reinstate `FlowMode.DIRECT` paths if guardrail violations spike.
+
+---
+
+## 6. Risks & mitigations
+
+| Risk | Mitigation |
+|------|------------|
+| Tool schema drift between legacy SupervisorTools and SDK adapters | Align JSON Schemas, add contract tests that call both implementations with golden fixtures. |
+| Increased latency from guardrails and handoffs | Pre-warm agents at service startup and cache expensive tool responses; supervisors can reuse receipts or short-circuit lanes when cache is valid. |
+| Specialist disagreement on cached receipts | Supervisor maintains the single source of truth for cache validity; failing specialists must emit retry directives instead of overwriting receipts. |
+| Prompt sprawl across modes | Centralize prompts in `analytics/agents/prompts/` with shared macros so single-agent and supervisor share terminology and stop words.citeturn0search6 |
+
+---
+
+## 7. Recommended resources
+
+- **OpenAI multi-agent orchestration guides** – Supervisor/delegate patterns, failure handling, streaming telemetry.citeturn0search0turn0search1
+- **OpenAI Agent Framework quickstart** – Reference implementation for registering Python tools and wiring `AgentRunner`.citeturn0search2
+- **OpenAI GPT‑5 prompting handbook** – Detailed instructions for structured prompts, tool usage cues, and memory constraints.citeturn0search6
+- **OpenAI evaluation playbook** – Test harnesses, trace diffing, and regression workflows.citeturn0search7
+- **Anthropic Claude agency best practices** – Deterministic tool wrappers, sandboxing, and multi-agent case studies.citeturn0search3turn0search5
+
+These references, combined with the planner_executor architecture notes above, provide a concrete path to replace bespoke orchestration with the Agent SDK while preserving analytics fidelity.

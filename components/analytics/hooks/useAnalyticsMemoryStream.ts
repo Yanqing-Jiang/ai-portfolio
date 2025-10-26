@@ -1804,6 +1804,22 @@ const workflowDataRef = useRef<{
         }
         return (a.title || '').localeCompare(b.title || '');
       });
+      if (next.length > 1) {
+        const seen = new Set<string>();
+        const deduped: SpecialistCard[] = [];
+        for (let idx = next.length - 1; idx >= 0; idx -= 1) {
+          const entry = next[idx];
+          const hash = entry.payloadHash;
+          if (hash) {
+            if (seen.has(hash)) {
+              continue;
+            }
+            seen.add(hash);
+          }
+          deduped.push(entry);
+        }
+        next = deduped.reverse();
+      }
       workflowDataRef.current.specialistCards = next;
       return next;
     });
@@ -2217,6 +2233,8 @@ const workflowDataRef = useRef<{
       analysisOverview?: AnalysisOverview | null;
       banner?: FollowUpBanner | null;
       specialistCards?: SpecialistCard[];
+      replacePriorResult?: boolean;
+      revisionId?: string | null;
     },
   ) => {
     const snapshot = workflowDataRef.current;
@@ -2224,6 +2242,10 @@ const workflowDataRef = useRef<{
       type: 'result',
       content: options.content,
     };
+    if (options.revisionId) {
+      (payload as any).revisionId = options.revisionId;
+      (payload as any).revision = true;
+    }
 
     const applyField = (
       field: keyof Omit<ChatMessage, 'id' | 'timestamp' | 'type'>,
@@ -2250,11 +2272,25 @@ const workflowDataRef = useRef<{
     applyField('specialistCards', options.specialistCards, snapshot.specialistCards);
 
     setChatHistory((prev) => {
-      let base = prev;
+      const filtered = options.replacePriorResult
+        ? prev.filter((message) => {
+            if (message.type !== 'result') {
+              return true;
+            }
+            if (options.revisionId) {
+              return message.revisionId !== options.revisionId;
+            }
+            if (message.revision) {
+              return false;
+            }
+            return true;
+          })
+        : prev;
+      let base = filtered;
       let mutated = false;
       if (options.chartSpec != null) {
-        base = prev.map((message, index) => {
-          if (index !== prev.length - 1 || message.type !== 'result') {
+        base = filtered.map((message, index) => {
+          if (index !== filtered.length - 1 || message.type !== 'result') {
             return message;
           }
           if (
@@ -2280,7 +2316,7 @@ const workflowDataRef = useRef<{
         });
       }
 
-      const working = mutated ? base : prev;
+      const working = mutated ? base : filtered;
       const nextMessage: ChatMessage = {
         ...payload,
         id: generateMessageId(),
@@ -3422,6 +3458,8 @@ const workflowDataRef = useRef<{
           const normalizedStatus =
             typeof eventData?.status === 'string' ? eventData.status.toLowerCase() : '';
           const revisionApplied = normalizedStatus !== 'skipped';
+          const revisionIdForSnapshot =
+            effectiveRevisionId ?? coerceString(eventData?.revision_id ?? eventData?.revisionId);
 
           try {
             const updatedAnalysis =
@@ -3494,10 +3532,19 @@ const workflowDataRef = useRef<{
                 ['Revision: Analysis updated', ...summaryLines.map((line) => `- ${line}`)].join('\n');
               appendResultSnapshot({
                 content: revisionSummary,
+                analysis: updatedAnalysis,
+                chartSpec: null,
+                sqlQuery: null,
+                dataSample: null,
                 stockWidgetConfig: null,
-                toolFanoutManifest: undefined,
-                toolFanoutResults: undefined,
+                toolFanoutManifest: [],
+                toolFanoutResults: [],
                 webSearch: null,
+                analysisOverview: null,
+                banner: null,
+                specialistCards: [],
+                replacePriorResult: true,
+                revisionId: revisionIdForSnapshot ?? null,
               });
               markRevisionMode('analysis');
             } else {

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Tuple
@@ -161,14 +162,24 @@ def _run_agent(
         {"role": "user", "content": user_prompt},
     ]
 
-    try:
-        response, _ = client.create_structured(
+    async def _invoke() -> Tuple[ClarifierAgentResponse, Optional[str]]:
+        return await client.create_structured(
             response_model=ClarifierAgentResponse,
             messages=messages,
             model=model,
             reasoning_effort=reasoning_effort,
         )
+
+    try:
+        response, _ = asyncio.run(_invoke())
         return response
+    except RuntimeError:
+        # Fallback: if an event loop is already running in this thread, create a dedicated loop.
+        loop = asyncio.new_event_loop()
+        try:
+            return loop.run_until_complete(_invoke())[0]
+        finally:
+            loop.close()
     except Exception:
         return None
 

@@ -73,15 +73,14 @@ def _normalize_schema_for_responses(schema: Dict[str, Any]) -> Dict[str, Any]:
 
         properties = node.get("properties")
         if isinstance(properties, dict) and properties:
-            required_fields: List[str] = []
+            cleaned_props: Dict[str, Any] = {}
             for prop_name, prop_schema in properties.items():
                 if isinstance(prop_schema, dict):
                     prop_schema.pop("default", None)
-                if _should_require_property(prop_schema):
-                    required_fields.append(prop_name)
-                if isinstance(prop_schema, dict):
                     _visit(prop_schema)
-            node["required"] = required_fields
+                cleaned_props[prop_name] = prop_schema
+            node["properties"] = cleaned_props
+            node["required"] = list(cleaned_props.keys())
             node.setdefault("additionalProperties", False)
 
         for key in ("$defs", "definitions"):

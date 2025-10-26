@@ -6,7 +6,7 @@ from datetime import datetime
 import copy
 import time
 import logging
-from typing import Any, AsyncGenerator, Dict, Iterable, List, Optional, Set, Tuple, Mapping
+from typing import Any, AsyncGenerator, Dict, Iterable, List, Optional, Set, Tuple, Mapping, TYPE_CHECKING
 
 from analytics.artifacts.models import PipelineArtifacts
 from analytics.core.events import EventEmitter
@@ -26,6 +26,10 @@ from .pipeline_tools import get_planner_tool_registry
 from .schedulers import FlowMode, apply_mode_metadata, get_mode_config
 
 logger = logging.getLogger(__name__)
+
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from .revision_directive import RevisionDirective
 
 
 def _build_tool_metadata(manifest: Any) -> Dict[str, Dict[str, Any]]:
@@ -210,12 +214,31 @@ class _SingleAgentToolHooks(AnalyticsFlowHooks):
         self._last_analysis_payload: Optional[Dict[str, Any]] = None
         self._final_answer_emitted = False
         self._chart_revision_missing_session = False
+        self._agentic_revision_mode: bool = False
+        self._agentic_lane_targets: Set[str] = set()
+        self._sync_agentic_revision_state()
+
+    def _sync_agentic_revision_state(self) -> None:
+        self._agentic_revision_mode = bool(getattr(self._flow, "_agentic_revision_mode", False))
+        flow_targets = getattr(self._flow, "_agentic_lane_targets", None)
+        if isinstance(flow_targets, set):
+            lane_targets = set(flow_targets)
+        elif isinstance(flow_targets, Iterable) and not isinstance(flow_targets, (str, bytes)):
+            lane_targets = {
+                str(target).strip().lower()
+                for target in flow_targets
+                if target is not None and str(target).strip()
+            }
+        else:
+            lane_targets = set()
+        self._agentic_lane_targets = lane_targets
 
     async def on_flow_start(self, ctx: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
         self._emitted_cohesive = False
         self._last_analysis_payload = None
         self._final_answer_emitted = False
         self._chart_revision_missing_session = False
+        self._sync_agentic_revision_state()
         if ctx.get("session_id") and not self._session_id:
             session = ctx.get("session_id")
             if isinstance(session, str) and session:
@@ -224,6 +247,7 @@ class _SingleAgentToolHooks(AnalyticsFlowHooks):
             yield {}
 
     async def before_event(self, ctx: Dict[str, Any], event: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
+        self._sync_agentic_revision_state()
         if False:
             yield {}
         name = event.get("event")
@@ -382,6 +406,7 @@ class _SingleAgentToolHooks(AnalyticsFlowHooks):
         return False
 
     def _component_status(self) -> Dict[str, bool]:
+        self._sync_agentic_revision_state()
         artifacts = self._flow.latest_artifacts()
         has_sql = False
         has_stock = False
@@ -436,6 +461,14 @@ class _SingleAgentToolHooks(AnalyticsFlowHooks):
         if not has_web and self._web_payload_has_content(analysis_payload.get("web_context")):
             has_web = True
 
+        if self._agentic_revision_mode and self._agentic_lane_targets:
+            if "sql" not in self._agentic_lane_targets:
+                has_sql = True
+            if "market" not in self._agentic_lane_targets:
+                has_stock = True
+            if "web" not in self._agentic_lane_targets:
+                has_web = True
+
         return {
             "sql": has_sql,
             "stock": has_stock,
@@ -466,10 +499,14 @@ class _SingleAgentToolHooks(AnalyticsFlowHooks):
             # For chart-only revisions we intentionally reuse the existing SQL, stock, and web context,
             # so suppress the generic "Pending lanes" warning and surface a reuse hint instead.
             missing = []
-            note = "Chart revision applied. Reused cached datasets for consistency."
+            if self._agentic_revision_mode:
+                note = "Revision applied. Reused cached datasets for untouched lanes."
+            else:
+                note = "Chart revision applied. Reused cached datasets for consistency."
         elif missing:
-            readable = ", ".join(human_labels[name] for name in missing)
-            note = f"Pending lanes: {readable}. Ask me to rerun those tools when you're ready."
+            # Suppress redundant "Pending lanes" note to avoid noisy cards.
+            # We keep the existing analysis text (if any) and omit the extra banner.
+            note = None
         parts: List[str] = []
         if analysis_text:
             parts.append(analysis_text.rstrip())
@@ -638,15 +675,56 @@ class SingleAgentController:
             metadata = self._tool_metadata_by_registry.get(registry_name)
             if metadata:
                 self.tool_metadata[alias] = metadata
+        self._revision_directive: Optional["RevisionDirective"] = None
+        self._agentic_revision_mode: bool = False
+        self._agentic_lane_targets: Set[str] = set()
 
     def prime_with_snapshot(self, snapshot: Optional[SessionStateSnapshot]) -> None:
         self._planner.prime_with_snapshot(snapshot)
+
+    def set_revision_directive(self, directive: Optional["RevisionDirective"]) -> None:
+        self._revision_directive = directive
+        self._agentic_revision_mode = bool(directive.agentic if directive else False)
+        if directive and getattr(directive, "targets", None):
+            normalized = {
+                target
+                for target in (
+                    self._normalize_lane_target(entry) for entry in directive.targets
+                )
+                if target
+            }
+            self._agentic_lane_targets = normalized
+        else:
+            self._agentic_lane_targets = set()
+        self._planner.set_revision_directive(directive)
+        if self._agentic_revision_mode and self._agentic_lane_targets:
+            self._planner.set_revision_targets(self._agentic_lane_targets)
+        elif not self._agentic_revision_mode:
+            self._planner.set_revision_targets(set())
+        # Re-evaluate follow-up routing so agentic revisions can opt into reuse plans.
+        self.set_follow_up_route(self.follow_up_route)
 
     @classmethod
     def _lane_for_tool(cls, tool_name: Optional[str]) -> Optional[str]:
         if not tool_name:
             return None
         return cls.LANE_TOOL_LOOKUP.get(str(tool_name).strip().lower())
+
+    @staticmethod
+    def _normalize_lane_target(lane: Optional[str]) -> Optional[str]:
+        if not lane:
+            return None
+        normalized = str(lane).strip().lower()
+        alias_map = {
+            "stocks": "market",
+            "stock": "market",
+            "prices": "market",
+            "price": "market",
+            "charts": "chart",
+            "analysis_revision": "analysis",
+            "narrative": "analysis",
+        }
+        return alias_map.get(normalized, normalized)
 
     @staticmethod
     def _receipt_age_seconds(receipt: Optional[ToolInvocationReceipt]) -> Optional[float]:
@@ -851,6 +929,15 @@ class SingleAgentController:
         return self._planner._annotate({"event": "agent_decision", "data": payload})
 
     def _initial_lane_states(self) -> Dict[str, str]:
+        if self._agentic_revision_mode and self._agentic_lane_targets:
+            targets = self._agentic_lane_targets
+            return {
+                "sql": "queued" if "sql" in targets else "reused",
+                "chart": "queued" if "chart" in targets else "reused",
+                "analysis": "queued" if "analysis" in targets else "reused",
+                "market": "queued" if "market" in targets else "reused",
+                "web": "queued" if "web" in targets else "reused",
+            }
         if self.follow_up_route == FollowUpRoute.REUSE_SQL:
             return {
                 "sql": "reused",
@@ -945,9 +1032,19 @@ class SingleAgentController:
             return True
         return False
 
+    def _resolve_agentic_route(self, candidate: FollowUpRoute) -> FollowUpRoute:
+        if not (self._agentic_revision_mode and self._agentic_lane_targets):
+            return candidate
+        if "sql" in self._agentic_lane_targets:
+            return candidate
+        if self._agentic_lane_targets == {"market"}:
+            return FollowUpRoute.STOCK_ONLY
+        return FollowUpRoute.REUSE_SQL
+
     def set_follow_up_route(self, route: FollowUpRoute) -> None:
-        self.follow_up_route = route
-        self._planner.set_follow_up_route(route)
+        resolved = self._resolve_agentic_route(route)
+        self.follow_up_route = resolved
+        self._planner.set_follow_up_route(resolved)
 
     def set_revision_targets(self, targets: Iterable[str]) -> None:
         self._planner.set_revision_targets(targets)
@@ -993,10 +1090,23 @@ class SingleAgentController:
         session_id: str,
         query: Optional[str],
         hooks: _SingleAgentToolHooks,
+        revision_directive: Optional["RevisionDirective"] = None,
         **kwargs: Any,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         resolved_query = query if query is not None else await self._resolve_session_query(session_id)
         ctx = await self._planner.initialize_context(resolved_query or "", session_id=session_id)
+        if revision_directive is not None:
+            ctx.revision_directive = revision_directive
+            ctx.agentic_revision_mode = bool(getattr(revision_directive, "agentic", False))
+            ctx.revision_targets = set(getattr(revision_directive, "targets", []))
+            focus_hint = (
+                getattr(revision_directive, "requested_focus", None)
+                or getattr(revision_directive, "raw_text", None)
+            )
+            if focus_hint:
+                ctx.revision_focus = focus_hint
+            if getattr(revision_directive, "search_topics", None):
+                ctx.revision_search_topics = list(revision_directive.search_topics)
         registry = get_planner_tool_registry()
         tool_stream = registry.invoke(tool_name, self._planner._pipeline, ctx, **kwargs)
         async for event in self._forward_with_hooks(tool_stream, hooks, session_id):
@@ -1018,8 +1128,15 @@ class SingleAgentController:
         session_id: Optional[str],
     ) -> AsyncGenerator[Dict[str, Any], None]:
         lane_states = self._initial_lane_states()
-        revision_targets: Set[str] = set()
+        revision_targets: Set[str] = set(self._agentic_lane_targets) if self._agentic_revision_mode else set()
         summary_emitted = False
+        if self._agentic_revision_mode and self._agentic_lane_targets:
+            summary_event = self._emit_lane_summary(lane_states)
+            if summary_event:
+                summary_event.setdefault("data", {})
+                summary_event["data"]["mode"] = "agentic_revision"
+                yield summary_event
+                summary_emitted = True
         planner_stream = self._planner.events(query, session_id=session_id)
 
         async for event in planner_stream:
@@ -1068,6 +1185,7 @@ class SingleAgentController:
         reason: Optional[str] = None,
         source: Optional[str] = None,
         query: Optional[str] = None,
+        revision_directive: Optional["RevisionDirective"] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         hooks = _SingleAgentToolHooks(self, session_id=session_id)
         async for event in self._invoke_planner_tool(
@@ -1075,6 +1193,7 @@ class SingleAgentController:
             session_id=session_id,
             query=query,
             hooks=hooks,
+            revision_directive=revision_directive,
             analysis=analysis,
             reason=reason,
             source=source,

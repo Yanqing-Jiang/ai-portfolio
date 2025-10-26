@@ -128,3 +128,65 @@
 ---
 
 **Next Action**: confirm product priorities for telemetry & feature flags, then start Phase A with a short RFC validating the directive schema.  
+
+---
+
+## Progress Update — 2025-10-26
+
+What changed today:
+- Planner‑executor now respects revision directive targets:
+  - Implemented in `backend/analytics/flows/planner_executor.py:set_revision_directive()`. When a directive includes targets (e.g., `{analysis, web}` or `{chart}`), we seed `revision_targets` and set `revision_hint_active=True`, so the revision plan skips unrelated lanes. This avoids unintended fresh SQL executions on chart‑only or analysis‑only revisions.
+  - In `backend/analytics/flows/workflow.py`, merged classifier‑detected targets with directive targets before calling `set_revision_targets()` to preserve explicit user intent.
+- Analysis revision no longer short‑circuits the pipeline:
+  - We still emit an `analysis_revision` event for audit, but we do not return early. The pipeline continues so web retrievers fan out and analysis is regenerated with fresh context.
+- Removed redundant “Pending lanes…” cards in single‑agent and multi‑agent fallback payloads.
+
+Why this was needed:
+- Backend logs showed revision requests triggering full fresh runs (SQL + chart) even when the user asked for analysis- or chart‑only revisions. Root cause was planner‑executor ignoring `revision_directive.targets` and defaulting to the full pipeline in `derive_revision_targets()`.
+
+Verification plan:
+- Issue a chart‑only revision (e.g., “Change the chart to stacked bar”) and confirm backend logs do not show `Starting SQL pipeline`.
+- Issue an analysis‑only revision (e.g., “Rewrite the analysis to emphasize AMD capex drivers”) and confirm: web fan‑out runs, SQL/Chart lanes are skipped, analysis regenerates.
+
+Next hardening steps:
+- Add unit tests asserting lane booleans for chart‑only and analysis‑only cases.
+- Emit a `revision_plan` telemetry snapshot (targets + lane booleans) for quick log validation.
+- Keep behind `AGENTIC_REVISIONS_ENABLED` family while monitoring.
+
+---
+
+## Revision Triggers and Flow (Updated 2025-10-26)
+
+### Trigger Conditions
+- Chart revision
+  - Condition: the user query contains the word “chart” and a change verb (e.g., revise, update, change, convert, switch, make).
+  - Heuristics: chart-type phrases like “stacked bar”, “line chart”, “area chart” are recognized for patch planning.
+  - Implementation: `is_chart_revision_query(query)`, with optional ops from `infer_chart_patch_from_query(query)`.
+
+- Analysis revision
+  - Condition: the query mentions “analysis”/“summary”/“insight(s)” and includes a revise/refresh verb (rewrite, revise, update, refresh, etc.).
+  - Focus extraction: `infer_analysis_revision_from_query(query)` parses snippets like “rewrite the analysis to …”, “analysis focus: …”.
+  - Implementation: `is_analysis_revision_query(query)` + focus inference.
+
+- Precedence and session
+  - Precedence: if both could apply, chart revision takes priority for that turn; analysis revision is only considered if chart revision is not requested.
+  - Session requirement: revision routing requires an active `session_id` with a prior snapshot; otherwise the system treats it as a fresh run to rebuild artifacts.
+
+### Execution Flow by Revision Type
+- Analysis revision (targets = {analysis, web})
+  - Apply analysis revision event for audit/history (no early return).
+  - Accessories prefetch: web retrievers run (concurrent, topic‑planned when a Search API key is configured) to refresh context.
+  - Analysis generation runs using refreshed web context; SQL and chart lanes are skipped/reused when prior artifacts exist.
+  - Typical events: `analysis_revision` → `tool_fanout/web_ready` → `analysis_generation` → `analysis_complete`.
+
+- Chart revision (targets = {chart})
+  - Skip SQL and analysis; run the chart lane to update the visualization using the existing dataset.
+  - Optional: when a patch can be inferred, apply chart ops (e.g., change chart type) to the last saved spec; if no snapshot exists, a full rebuild may be needed.
+  - Typical events: `revision_request` → `chart_generation` → `chart_ready`.
+
+### Examples
+- Chart: “Switch the chart to stacked bar”, “Convert the chart to a line chart”.
+- Analysis: “Rewrite the analysis to emphasize AMD capex drivers”, “Analysis focus: customer retention signals.”
+
+### Notes
+- Agentic flags: per‑flow flags (`AGENTIC_REVISIONS_ENABLED`, `AGENTIC_REVISION_*`) can gate agent‑managed routing; current implementation continues through the pipeline after emitting the revision event so web fan‑out and analysis can run without unnecessary SQL.

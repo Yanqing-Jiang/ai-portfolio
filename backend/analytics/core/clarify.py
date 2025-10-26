@@ -8,6 +8,13 @@ from .types import IntentModel, QueryPlanModel, ClarifyRequestModel, ClarifyAnsw
 from .companies import resolve_alias_to_ticker, sanitize_ticker
 from .intent_impl.normalization import normalize_timeframe, normalize_metrics, timeframe_implies_quarterly
 from .slot_catalog import get_slot_catalog
+from .margins import (
+    DEFAULT_MARGIN_LABEL,
+    apply_margin_choice,
+    detect_margin_choice_from_metrics,
+    ensure_margin_choice,
+    list_margin_labels,
+)
 
 
 # In-memory session store with TTL
@@ -124,11 +131,14 @@ def detect_missing_slots(
         requests.append(comparison_request)
     
     # 5. Metrics slot detection (for ambiguous intents)
-    metrics_required = _requires('metric') or _requires('metrics')
+    margin_request = _detect_margin_metric_slot(intent, plan, configs)
+    if margin_request:
+        requests.append(margin_request)
+    metrics_required = (_requires('metric') or _requires('metrics')) and margin_request is None
     metrics_request = _detect_metrics_slot(intent, plan, configs) if metrics_required else None
     if metrics_request:
         requests.append(metrics_request)
-    
+
     return requests
 
 
@@ -354,6 +364,38 @@ def _detect_comparison_slot(
     return None
 
 
+def _detect_margin_metric_slot(
+    intent: IntentModel,
+    plan: QueryPlanModel,
+    configs: Dict[str, Any]
+) -> Optional[ClarifyRequestModel]:
+    """Ensure margin-focused intents capture a specific margin selection."""
+    if intent.intent_key not in {'margins_vs_peers', 'margin_growth_vs_peers'}:
+        return None
+
+    slots = intent.slots_detected if isinstance(intent.slots_detected, dict) else {}
+    choice = ensure_margin_choice(plan, intent, slots)
+    if choice:
+        return None
+
+    options = list_margin_labels()
+    if not options:
+        return None
+    default_option = DEFAULT_MARGIN_LABEL if DEFAULT_MARGIN_LABEL in options else options[0]
+    return ClarifyRequestModel(
+        slot='metric',
+        question='Which margin would you like to analyze?',
+        type='single',
+        options=options,
+        default=default_option,
+        reason='Margin type (gross, operating, or net) is required for precise SQL and charting.',
+        required=True,
+        request_id=str(uuid.uuid4()),
+        proposed=None,
+        proposed_confidence=0.0,
+    )
+
+
 def _detect_metrics_slot(
     intent: IntentModel,
     plan: QueryPlanModel, 
@@ -511,11 +553,20 @@ async def merge_answers(
             normalized_metrics = normalize_metrics(value, configs)
             if not normalized_metrics and value:
                 normalized_metrics = [str(value).strip()]
-            if normalized_metrics:
+            margin_choice = None
+            if normalized_metrics and intent.intent_key in {'margins_vs_peers', 'margin_growth_vs_peers'}:
+                margin_choice = detect_margin_choice_from_metrics(normalized_metrics)
+                if margin_choice:
+                    apply_margin_choice(plan, intent, margin_choice)
+            if normalized_metrics and not margin_choice:
                 plan.metrics = normalized_metrics
-                intent.slots_detected['metrics'] = normalized_metrics
-                intent.slots_detected['metric'] = normalized_metrics[0]
-            assumptions.append(f"Using metrics: {', '.join(plan.metrics)}")
+                if isinstance(intent.slots_detected, dict):
+                    intent.slots_detected['metrics'] = normalized_metrics
+                    intent.slots_detected['metric'] = normalized_metrics[0]
+            if plan.metrics:
+                assumptions.append(f"Using metrics: {', '.join(plan.metrics)}")
+                if margin_choice:
+                    assumptions.append(f"Focusing on {margin_choice.label.lower()}")
     
     return intent, plan, assumptions
 

@@ -175,21 +175,15 @@ query_patterns:
       peer_averages AS (
         SELECT 
           {group_by_clause},
-          AVG(CASE WHEN ticker != '{target_ticker}' THEN gross_margin END) AS peer_avg_gross_margin,
-          AVG(CASE WHEN ticker != '{target_ticker}' THEN operating_margin END) AS peer_avg_operating_margin,
-          AVG(CASE WHEN ticker != '{target_ticker}' THEN net_margin END) AS peer_avg_net_margin
+          AVG(CASE WHEN ticker != '{target_ticker}' THEN {company_margin_column} END) AS {peer_margin_alias}
         FROM margins
         GROUP BY {group_by_clause}
       )
       SELECT 
         {select_clause},
         m.ticker,
-        m.gross_margin AS company_gross_margin,
-        m.operating_margin AS company_operating_margin,
-        m.net_margin AS company_net_margin,
-        p.peer_avg_gross_margin,
-        p.peer_avg_operating_margin,
-        p.peer_avg_net_margin
+        m.{company_margin_column} AS {company_margin_alias},
+        p.{peer_margin_alias} AS {peer_margin_alias}
       FROM margins m
       JOIN peer_averages p USING ({group_by_clause})
       WHERE m.ticker = '{target_ticker}'
@@ -243,29 +237,21 @@ query_patterns:
         SELECT
           ticker,
           {select_clause},
-          gross_margin - LAG(gross_margin, 1) OVER (PARTITION BY ticker ORDER BY {order_by_clause}) AS gross_margin_change_pp,
-          operating_margin - LAG(operating_margin, 1) OVER (PARTITION BY ticker ORDER BY {order_by_clause}) AS operating_margin_change_pp,
-          net_margin - LAG(net_margin, 1) OVER (PARTITION BY ticker ORDER BY {order_by_clause}) AS net_margin_change_pp
+          {company_margin_column} - LAG({company_margin_column}, 1) OVER (PARTITION BY ticker ORDER BY {order_by_clause}) AS {company_margin_growth_column}
         FROM margins
       ),
       peer_avg AS (
         SELECT
           {group_by_clause},
-          AVG(CASE WHEN ticker <> '{target_ticker}' THEN gross_margin_change_pp END) AS peer_avg_gross_margin_change_pp,
-          AVG(CASE WHEN ticker <> '{target_ticker}' THEN operating_margin_change_pp END) AS peer_avg_operating_margin_change_pp,
-          AVG(CASE WHEN ticker <> '{target_ticker}' THEN net_margin_change_pp END) AS peer_avg_net_margin_change_pp
+          AVG(CASE WHEN ticker <> '{target_ticker}' THEN {company_margin_growth_column} END) AS {peer_margin_growth_alias}
         FROM growth
         GROUP BY {group_by_clause}
       )
       SELECT
         {select_clause},
         g.ticker,
-        g.gross_margin_change_pp AS company_gross_margin_change_pp,
-        g.operating_margin_change_pp AS company_operating_margin_change_pp,
-        g.net_margin_change_pp AS company_net_margin_change_pp,
-        p.peer_avg_gross_margin_change_pp,
-        p.peer_avg_operating_margin_change_pp,
-        p.peer_avg_net_margin_change_pp
+        g.{company_margin_growth_column} AS {company_margin_growth_alias},
+        p.{peer_margin_growth_alias} AS {peer_margin_growth_alias}
       FROM growth g
       JOIN peer_avg p USING ({group_by_clause})
       WHERE g.ticker = '{target_ticker}'

@@ -1023,7 +1023,7 @@ def test_margin_growth_template_quarterly_includes_quarter_fields():
     intent = IntentModel(
         intent_key='margin_growth_vs_peers',
         confidence=0.9,
-        slots_detected={'company': 'NVDA', 'granularity': 'quarterly'},
+        slots_detected={'company': 'NVDA', 'granularity': 'quarterly', 'metric': 'Gross Margin', 'metrics': ['Gross Margin']},
     )
     plan_dict = plan_sql_rule_based(intent)
     plan = QueryPlanModel(**plan_dict)
@@ -1037,13 +1037,16 @@ def test_margin_growth_template_quarterly_includes_quarter_fields():
     assert "OVER (PARTITION BY ticker ORDER BY calendar_year, calendar_quarter_num)" in normalized
     assert "JOIN peer_avg p USING (calendar_year, calendar_quarter_num, calendar_quarter)" in normalized
     assert "ORDER BY calendar_year, calendar_quarter_num" in normalized
+    assert "company_operating_margin_change_pp" not in normalized
+    assert "peer_avg_operating_margin_change_pp" not in normalized
+    assert "company_gross_margin_change_pp" in normalized
 
 
 def test_margin_growth_template_annual_strips_quarter_fields():
     intent = IntentModel(
         intent_key='margin_growth_vs_peers',
         confidence=0.9,
-        slots_detected={'company': 'NVDA'},
+        slots_detected={'company': 'NVDA', 'metric': 'Gross Margin', 'metrics': ['Gross Margin']},
     )
     plan_dict = plan_sql_rule_based(intent)
     plan_dict['granularity'] = 'annual'
@@ -1057,6 +1060,27 @@ def test_margin_growth_template_annual_strips_quarter_fields():
     assert "calendar_quarter" not in normalized
     assert "JOIN peer_avg p USING (calendar_year)" in normalized
     assert "ORDER BY calendar_year" in normalized
+    assert "company_operating_margin_change_pp" not in normalized
+    assert "peer_avg_operating_margin_change_pp" not in normalized
+    assert "company_gross_margin_change_pp" in normalized
+
+
+def test_margins_template_projects_single_selected_margin():
+    intent = IntentModel(
+        intent_key='margins_vs_peers',
+        confidence=0.9,
+        slots_detected={'company': 'NVDA', 'metric': 'Operating Margin', 'metrics': ['Operating Margin']},
+    )
+    plan_dict = plan_sql_rule_based(intent)
+    plan = QueryPlanModel(**plan_dict)
+    template = choose_template(intent, plan)
+    sql = compile_sql_from_plan(plan, intent, template=template)
+    normalized = " ".join(sql.split())
+
+    assert "company_operating_margin" in normalized
+    assert "peer_avg_operating_margin" in normalized
+    assert "company_gross_margin" not in normalized
+    assert "peer_avg_gross_margin" not in normalized
 
 
 def test_revenue_comparison_template_uses_between_and_custom_tickers():

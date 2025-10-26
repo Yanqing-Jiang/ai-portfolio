@@ -132,6 +132,7 @@ function HookHarness({ query, flow }: { query: string; flow: 'planner-executor' 
       <div data-testid="first-result-content">{firstResult?.content ?? ''}</div>
       <div data-testid="first-result-has-chart">{firstResult?.chartSpec ? 'yes' : 'no'}</div>
       <div data-testid="latest-result-has-chart">{latestResult?.chartSpec ? 'yes' : 'no'}</div>
+      <div data-testid="latest-result-content">{latestResult?.content ?? ''}</div>
       <ul data-testid="step-ids">
         {processSteps.map((step) => (
           <li key={step.id}>{`${step.id}:${step.status}`}</li>
@@ -449,8 +450,44 @@ describe('useAnalyticsMemoryStream result deduping', () => {
 
     const resultCount = Number(screen.getByTestId('result-count').textContent);
     expect(resultCount).toBe(2);
+    expect(screen.getByTestId('first-result-content').textContent || '').toContain('Streaming analysis');
+    expect(screen.getByTestId('latest-result-content').textContent || '').toContain('Revision: Analysis updated');
 
     expect(screen.getByTestId('revision-mode').textContent).toBe('analysis');
+  });
+
+  it('keeps existing result when analysis revision arrives', async () => {
+    (globalThis as any).__TEST_EVENTS__ = [
+      { event: 'analysis_complete', analysis: 'Original overview' },
+      { event: 'analysis_revision', data: { analysis: 'Updated summary', status: 'applied', revision_id: 'rev-keep' } },
+    ];
+
+    await act(async () => {
+      render(<HookHarness query="revise analysis keep" flow="single-agent" />);
+    });
+
+    const resultCount = Number(screen.getByTestId('result-count').textContent);
+    expect(resultCount).toBe(2);
+    expect(screen.getByTestId('first-result-content').textContent || '').toContain('Streaming analysis');
+    expect(screen.getByTestId('latest-result-content').textContent || '').toContain('Revision: Analysis updated');
+  });
+
+  it('dedupes repeated analysis_revision events with same revision id', async () => {
+    (globalThis as any).__TEST_EVENTS__ = [
+      { event: 'analysis_complete', analysis: 'Original baseline' },
+      { event: 'analysis_revision', data: { analysis: 'Updated summary', status: 'applied', revision_id: 'rev-dup' } },
+      { event: 'analysis_revision', data: { analysis: 'Updated summary second', status: 'applied', revision_id: 'rev-dup' } },
+    ];
+
+    await act(async () => {
+      render(<HookHarness query="revise analysis dedupe" flow="single-agent" />);
+    });
+
+    const resultCount = Number(screen.getByTestId('result-count').textContent);
+    expect(resultCount).toBe(2);
+    const latestContent = screen.getByTestId('latest-result-content').textContent || '';
+    expect(latestContent).toContain('Revision: Analysis updated');
+    expect(latestContent).toContain('Updated summary second');
   });
 
   it('replaces duplicate revision payloads instead of appending new messages', async () => {

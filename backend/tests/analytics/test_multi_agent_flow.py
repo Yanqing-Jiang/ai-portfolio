@@ -239,7 +239,8 @@ def test_multi_agent_emits_final_answer_when_cannot_cohere(monkeypatch):
     final_event = next(evt for evt in emitted if evt.get("event") == "final_answer")
     message = final_event["data"]["message"]
     assert message.startswith("Our analytics tools focus on finance.")
-    assert "Pending lanes:" in message
+    # Redundant pending-lanes banner removed; ensure it is not present.
+    assert "Pending lanes:" not in message
     assert final_event["data"].get("final_answer_only") is True
     assert final_event["data"].get("analysis_available") is True
     assert final_event["data"].get("flow_mode") == "multi_agent"

@@ -64,14 +64,10 @@ export const ProjectHelmet: React.FC<ProjectHelmetProps> = ({ project }) => {
       <meta property="og:site_name" content={SITE_NAME} />
       <meta property="og:locale" content={LANDING_SEO.locale} />
       <meta property="og:updated_time" content={dateModified} />
-      {image && (
-        <>
-          <meta property="og:image" content={image} />
-          <meta property="og:image:width" content="1200" />
-          <meta property="og:image:height" content="630" />
-          <meta property="og:image:alt" content={`${project.title} - AI systems project by Yanqing Jiang`} />
-        </>
-      )}
+      {image && <meta property="og:image" content={image} />}
+      {image && <meta property="og:image:width" content="1200" />}
+      {image && <meta property="og:image:height" content="630" />}
+      {image && <meta property="og:image:alt" content={`${project.title} - AI systems project by Yanqing Jiang`} />}
 
       <meta name="twitter:card" content="summary_large_image" />
       <meta name="twitter:site" content={DEFAULT_TWITTER_HANDLE} />

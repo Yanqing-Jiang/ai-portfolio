@@ -166,3 +166,78 @@ def test_topic_execute_includes_position_metadata(monkeypatch):
     topic_cache = repo.saved_snapshot.tool_cache.get("web_search_topics", {})
     assert adapter._topic_key in topic_cache
     assert topic_cache[adapter._topic_key].get("topic_position") == 2
+
+
+def test_expand_uses_revision_topics_when_available(monkeypatch):
+    adapter = WebRetrieverAdapter()
+    revision_topics = (
+        {"label": "CapEx Drivers", "query": "AMD capital expenditure drivers 2025"},
+        {"label": "Manufacturing Investments", "query": "AMD manufacturing investments"},
+    )
+    context = ToolExecutionContext(
+        session_id="sess-revision",
+        query="Rewrite the analysis to highlight capital expenditure drivers for AMD",
+        intent=SimpleNamespace(slots_detected={"original_query": "Rewrite the analysis to highlight capital expenditure drivers for AMD"}),
+        plan=SimpleNamespace(),
+        template=None,
+        configs={},
+        revision_focus="highlight capital expenditure drivers for AMD",
+        revision_search_topics=tuple(revision_topics),
+    )
+
+    monkeypatch.setattr(tooling, "has_search_api_key", lambda: True)
+
+    def _fail_generate(*args, **kwargs):
+        raise AssertionError("generate_search_topics should not be called")
+
+    monkeypatch.setattr(tooling, "generate_search_topics", _fail_generate)
+
+    expanded = asyncio.run(adapter.expand(context))
+
+    assert len(expanded) == len(revision_topics)
+    queries = {child._topic_plan.query for child in expanded if child._topic_plan}
+    assert "AMD capital expenditure drivers 2025" in queries
+    assert "AMD manufacturing investments" in queries
+
+
+def test_revision_skips_cache_and_forces_search(monkeypatch):
+    adapter = WebRetrieverAdapter()
+    context = ToolExecutionContext(
+        session_id="sess-refresh",
+        query="Rewrite the analysis to highlight capital expenditure drivers for AMD",
+        intent=SimpleNamespace(slots_detected={"original_query": "Rewrite the analysis to highlight capital expenditure drivers for AMD"}),
+        plan=SimpleNamespace(),
+        template=None,
+        configs={},
+        revision_directive=SimpleNamespace(agentic=False, search_topics=[], requested_focus="highlight capital expenditure drivers for AMD"),
+        revision_focus="highlight capital expenditure drivers for AMD",
+        revision_search_topics=tuple(),
+    )
+
+    repo = _DummyRepo()
+    cached_snapshot = SessionStateSnapshot(session_id="sess-refresh")
+    cached_snapshot.tool_cache["web_search"] = {"query": "highlight capital expenditure drivers for amd", "summary": "Old summary", "ready": True}
+    repo.saved_snapshot = cached_snapshot
+
+    async def _fake_load(session_id: str):
+        return cached_snapshot
+
+    async def _fake_search(*args, **kwargs):
+        return _DummySearchResult()
+
+    monkeypatch.setattr(tooling, "has_search_api_key", lambda: True)
+    monkeypatch.setattr(tooling, "get_session_state_repository", lambda: repo)
+    monkeypatch.setattr(repo, "load", _fake_load)
+    search_called = {"count": 0}
+
+    async def _tracking_search(*args, **kwargs):
+        search_called["count"] += 1
+        return await _fake_search(*args, **kwargs)
+
+    monkeypatch.setattr(tooling, "perform_response_search", _tracking_search)
+
+    result = asyncio.run(adapter.execute(context))
+
+    assert result.status == "completed"
+    assert search_called["count"] == 1
+    assert result.payload.get("from_cache") is not True
