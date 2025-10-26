@@ -3359,8 +3359,8 @@ const workflowDataRef = useRef<{
               const errorMessage = eventData?.error || 'Chart revision skipped';
               streamHook.setError(errorMessage);
             } else if (hasOps) {
-              if (patchedChartSpec && typeof patchedChartSpec === 'object') {
-                workflowDataRef.current.chartSpec = patchedChartSpec;
+              if (resolvedChartSpecRaw) {
+                scheduleProgressiveUpdate({ chartSpec: resolvedChartSpecRaw });
               }
 
               streamHook.setCurrentStatus('Chart revision applied');
