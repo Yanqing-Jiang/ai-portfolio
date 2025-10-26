@@ -87,10 +87,10 @@ describe('WebSearchCard', () => {
 
     render(<WebSearchCard result={result} />);
 
-    expect(screen.getByText('Topics: AMD vs NVIDIA revenue comparison 2021-2024; AMD semiconductor industry outlook 2025')).toBeInTheDocument();
+    expect(screen.getByText('1. AMD vs NVIDIA revenue comparison 2021-2024 | 2. AMD semiconductor industry outlook 2025')).toBeInTheDocument();
     expect(screen.getByText('Topics: 2')).toBeInTheDocument();
-    expect(screen.getByText('Topic 1')).toBeInTheDocument();
-    expect(screen.getByText('Topic 2')).toBeInTheDocument();
+    expect(screen.getByText('Topic 1 of 2')).toBeInTheDocument();
+    expect(screen.getByText('Topic 2 of 2')).toBeInTheDocument();
     expect(screen.getByText('Primary question')).toBeInTheDocument();
     expect(screen.getByText('AMD vs NVIDIA revenue comparison 2021-2024')).toBeInTheDocument();
     expect(screen.getByText('Secondary question')).toBeInTheDocument();

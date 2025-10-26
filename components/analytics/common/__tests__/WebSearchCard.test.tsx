@@ -52,8 +52,9 @@ describe('WebSearchCard topics', () => {
       />
     );
 
-    expect(screen.getByText('Topics: 1')).toBeInTheDocument();
-    expect(screen.getByText('Topic 1')).toBeInTheDocument();
+    expect(screen.getByText('Topics: showing 1 of 2')).toBeInTheDocument();
+    expect(screen.getByText('Waiting on 1 more topic from merge pipeline')).toBeInTheDocument();
+    expect(screen.getByText('Topic 1 of 2')).toBeInTheDocument();
     expect(screen.getByText('Company focus')).toBeInTheDocument();
     expect(screen.getByText(/Snippet body/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Next topic' })).not.toBeInTheDocument();
@@ -84,7 +85,8 @@ describe('WebSearchCard topics', () => {
       />
     );
 
-    expect(screen.getByText('Topics: 1 of 2')).toBeInTheDocument();
+    expect(screen.getByText('Topics: showing 1 of 2')).toBeInTheDocument();
+    expect(screen.getByText('Waiting on 1 more topic from merge pipeline')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Previous topic' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Next topic' })).not.toBeInTheDocument();
     expect(screen.getByText('AMD vs NVIDIA revenue comparison')).toBeInTheDocument();

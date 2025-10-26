@@ -211,8 +211,20 @@ export const WebSearchCard: React.FC<WebSearchCardProps> = ({
 
   const totalTopics = enrichedTopics.length;
   const inferredTotal = typeof topicTotal === 'number' && topicTotal > 0 ? topicTotal : undefined;
+  const expectedTopicTotal =
+    inferredTotal !== undefined
+      ? inferredTotal
+      : Array.isArray(searchTopics) && searchTopics.length > 0
+        ? searchTopics.length
+        : undefined;
   const announcedTopicTotal =
-    inferredTotal !== undefined ? Math.max(inferredTotal, totalTopics) : totalTopics;
+    expectedTopicTotal !== undefined ? Math.max(expectedTopicTotal, totalTopics) : totalTopics;
+  const hasExpectedTopicTotal = expectedTopicTotal !== undefined;
+  const missingTopicCount =
+    hasExpectedTopicTotal && announcedTopicTotal > totalTopics
+      ? announcedTopicTotal - totalTopics
+      : 0;
+  const hasAnnouncedTopicGap = missingTopicCount > 0;
   const snippetNumber = (index: number) => index + 1;
   const displayTopics = useMemo(() => {
     if (Array.isArray(searchTopics) && searchTopics.length) {
@@ -233,10 +245,29 @@ export const WebSearchCard: React.FC<WebSearchCardProps> = ({
           return topic.label ?? (topic as any).topicLabel ?? topic.query;
         })
         .filter((value): value is string => Boolean(value && value.trim()));
-      return labels.length ? Array.from(new Set(labels)) : undefined;
+      if (!labels.length) {
+        return undefined;
+      }
+      const seen = new Set<string>();
+      const unique: string[] = [];
+      labels.forEach((label) => {
+        const normalized = label.trim().toLowerCase();
+        if (!normalized || seen.has(normalized)) {
+          return;
+        }
+        seen.add(normalized);
+        unique.push(label.trim());
+      });
+      return unique.length ? unique : undefined;
     }
     return undefined;
   }, [searchTopics, normalizedTopics]);
+  const displayTopicSummaryItems = useMemo(() => {
+    if (!displayTopics || !displayTopics.length) {
+      return undefined;
+    }
+    return displayTopics.map((label, idx) => `${idx + 1}. ${label}`);
+  }, [displayTopics]);
   const resolveTopicOrdinal = (topic: WebSearchTopic | undefined, fallbackIndex: number) => {
     if (!topic) {
       return fallbackIndex + 1;
@@ -305,22 +336,39 @@ export const WebSearchCard: React.FC<WebSearchCardProps> = ({
     return `Topic ${fallbackIndex + 1}`;
   };
   const topicSummaryLabel = (() => {
-    if (totalTopics === 0) {
-      return announcedTopicTotal > 0 ? `Topics: 0 of ${announcedTopicTotal}` : 'Topics: 0';
+    if (hasExpectedTopicTotal) {
+      if (totalTopics === 0) {
+        return `Topics: showing 0 of ${announcedTopicTotal}`;
+      }
+      if (hasAnnouncedTopicGap) {
+        return `Topics: showing ${totalTopics} of ${announcedTopicTotal}`;
+      }
+      return totalTopics === 1 ? 'Topics: 1' : `Topics: ${totalTopics}`;
     }
-    if (announcedTopicTotal !== totalTopics) {
-      return `Topics: ${totalTopics} of ${announcedTopicTotal}`;
+    if (totalTopics === 0) {
+      return 'Topics: 0';
     }
     return totalTopics === 1 ? 'Topics: 1' : `Topics: ${totalTopics}`;
   })();
+  const missingTopicNotice = hasAnnouncedTopicGap
+    ? `Waiting on ${missingTopicCount} more ${missingTopicCount === 1 ? 'topic' : 'topics'} from merge pipeline`
+    : undefined;
+  const topicDenominator =
+    hasExpectedTopicTotal && (hasAnnouncedTopicGap || announcedTopicTotal > 1)
+      ? announcedTopicTotal
+      : totalTopics > 1
+        ? totalTopics
+        : undefined;
 
   return (
     <div className="rounded-xl border border-slate-700/70 bg-slate-900/50 overflow-hidden">
       <div className="flex items-start justify-between gap-3 px-4 py-3">
         <div>
           <h4 className="text-sm font-semibold text-slate-100">{title}</h4>
-          {displayTopics && displayTopics.length ? (
-            <p className="text-xs text-slate-300 mt-0.5">Topics: {displayTopics.join('; ')}</p>
+          {displayTopicSummaryItems?.length ? (
+            <p className="text-xs text-slate-300 mt-0.5">
+              {displayTopicSummaryItems.join(' | ')}
+            </p>
           ) : null}
           {fetchedAt ? (
             <p className="text-xs text-slate-500 mt-0.5">
@@ -347,8 +395,11 @@ export const WebSearchCard: React.FC<WebSearchCardProps> = ({
         </div>
       </div>
 
-      <div className="flex items-center px-4 pb-2 text-xs text-slate-400">
+      <div className="flex flex-wrap items-center gap-2 px-4 pb-2 text-xs text-slate-400">
         <span>{topicSummaryLabel}</span>
+        {missingTopicNotice ? (
+          <span className="text-amber-300">{missingTopicNotice}</span>
+        ) : null}
       </div>
 
       {isDisabled || totalSnippets === 0 ? (
@@ -359,6 +410,9 @@ export const WebSearchCard: React.FC<WebSearchCardProps> = ({
         <div className="px-4 pb-4 space-y-6">
           {enrichedTopics.map((topic, index) => {
             const ordinal = resolveTopicOrdinal(topic, index);
+            const ordinalDisplay = topicDenominator
+              ? `${ordinal} of ${topicDenominator}`
+              : `${ordinal}`;
             const badge = resolveTopicBadge(topic);
             const heading = resolveTopicHeading(topic, index);
             const reason =
@@ -375,7 +429,7 @@ export const WebSearchCard: React.FC<WebSearchCardProps> = ({
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                      Topic {ordinal}
+                      Topic {ordinalDisplay}
                     </p>
                     {badge ? (
                       <span className="mt-1 inline-flex items-center rounded-full border border-slate-700/70 bg-slate-800/70 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-200">
