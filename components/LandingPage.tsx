@@ -1,5 +1,6 @@
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { Link } from 'react-router-dom';
 import type { Project, ProjectYear } from '../types';
 import { ChevronLeftIcon } from './icons/ChevronLeftIcon';
 import { ChevronRightIcon } from './icons/ChevronRightIcon';
@@ -383,12 +384,13 @@ const LandingPage: React.FC<LandingPageProps> = ({ projectData, onSelectProject 
                     previewDescription.length > 200 ? `${previewDescription.substring(0, 200)}...` : previewDescription;
 
                   return (
-                    <div
+                    <Link
                       key={project.id}
+                      to={`/project/${project.id}`}
                       onClick={() => onSelectProject(project)}
                       className={`rounded-lg overflow-hidden transform hover:-translate-y-1 
-                             transition-transform duration-300 shadow-lg hover:shadow-blue-500/20 cursor-pointer 
-                             group border border-gray-700/50 bg-gray-800/50 flex flex-col md:flex-row items-stretch 
+                             transition-transform duration-300 shadow-lg hover:shadow-blue-500/20 
+                             group border border-gray-700/50 bg-gray-800/50 flex flex-col md:flex-row items-stretch cursor-pointer 
                              ${projectIndex % 2 !== 0 ? 'md:flex-row-reverse' : ''}`}
                     >
                       <div
@@ -420,7 +422,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ projectData, onSelectProject 
                           ))}
                         </div>
                       </div>
-                    </div>
+                    </Link>
                   );
                 })}
               </div>
@@ -462,8 +464,8 @@ const LandingPage: React.FC<LandingPageProps> = ({ projectData, onSelectProject 
                       {truncatedDescription}
                     </p>
                     <div className="mt-auto">
-                      <button
-                        type="button"
+                      <Link
+                        to={`/project/${project.id}`}
                         onClick={() => onSelectProject(project)}
                         className="inline-flex items-center gap-2 text-sm font-medium text-sky-300 hover:text-sky-100 transition-colors"
                       >
@@ -472,7 +474,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ projectData, onSelectProject 
                           <path strokeLinecap="round" strokeLinejoin="round" d="M17.25 6.75L6.75 17.25" />
                           <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 6.75h9v9" />
                         </svg>
-                      </button>
+                      </Link>
                     </div>
                   </div>
                 </div>

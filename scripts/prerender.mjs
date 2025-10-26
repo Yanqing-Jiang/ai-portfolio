@@ -74,6 +74,9 @@ const sitemapProjectsXml = buildUrlSet(projects);
 const rootDir = path.resolve(__dirname, '..');
 await writeFile(path.join(rootDir, 'sitemap-pages.xml'), sitemapPagesXml, 'utf-8');
 await writeFile(path.join(rootDir, 'sitemap-projects.xml'), sitemapProjectsXml, 'utf-8');
+await mkdir(distDir, { recursive: true });
+await writeFile(path.join(distDir, 'sitemap-pages.xml'), sitemapPagesXml, 'utf-8');
+await writeFile(path.join(distDir, 'sitemap-projects.xml'), sitemapProjectsXml, 'utf-8');
 
 const siteOrigin = pages[0] ? `${new URL(pages[0].loc).origin}/` : 'https://ai.jiangyanqing.com/';
 const sitemapIndexXml = [
@@ -91,6 +94,7 @@ const sitemapIndexXml = [
 ].join('\n');
 
 await writeFile(path.join(rootDir, 'sitemap.xml'), sitemapIndexXml, 'utf-8');
+await writeFile(path.join(distDir, 'sitemap.xml'), sitemapIndexXml, 'utf-8');
 
 console.log('Generated sitemap.xml, sitemap-pages.xml, and sitemap-projects.xml');
 

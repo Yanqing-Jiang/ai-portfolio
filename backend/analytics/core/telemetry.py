@@ -234,6 +234,35 @@ def step_timing(
     _emit(payload)
 
 
+def revision_plan(
+    *,
+    targets: Iterable[str],
+    run_sql_lane: bool,
+    run_chart_lane: bool,
+    run_analysis_lane: bool,
+    stock_only: bool,
+    session_id: Optional[str] = None,
+    flow: Optional[str] = None,
+    follow_up_route: Optional[str] = None,
+    revision_id: Optional[str] = None,
+) -> None:
+    payload = _base_payload("revision_plan", session_id=session_id, flow=flow)
+    payload.update(
+        {
+            "targets": list(targets or []),
+            "run_sql_lane": bool(run_sql_lane),
+            "run_chart_lane": bool(run_chart_lane),
+            "run_analysis_lane": bool(run_analysis_lane),
+            "stock_only": bool(stock_only),
+        }
+    )
+    if follow_up_route:
+        payload["follow_up_route"] = follow_up_route
+    if revision_id:
+        payload["revision_id"] = revision_id
+    _emit(payload)
+
+
 def responses_call(
     *,
     call_type: str,

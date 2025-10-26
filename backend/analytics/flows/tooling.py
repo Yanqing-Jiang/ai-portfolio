@@ -167,6 +167,9 @@ class ToolExecutionContext:
     plan: Any
     template: Optional[Any]
     configs: Dict[str, Any]
+    revision_directive: Optional[Any] = None
+    revision_focus: Optional[str] = None
+    revision_search_topics: Tuple[Dict[str, Any], ...] = field(default_factory=tuple)
 
 
 @dataclass
@@ -492,16 +495,34 @@ class WebRetrieverAdapter(BaseToolAdapter):
         if not base_query:
             return (self,)
 
-        try:
-            planned_topics = await generate_search_topics(base_query, session_id=context.session_id, min_topics=2)
-        except Exception as exc:  # pragma: no cover - defensive planning guard
-            logger.debug("WebRetrieverAdapter topic planning failed: %s", exc)
-            return (self,)
+        revision_topics_raw = tuple(getattr(context, "revision_search_topics", ()) or ())
+        filtered: List[SearchTopicPlan] = []
 
-        filtered = [
-            plan for plan in planned_topics if isinstance(plan, SearchTopicPlan) and plan.query and plan.query.strip()
-        ]
-        if len(filtered) <= 1:
+        if revision_topics_raw:
+            for raw_topic in revision_topics_raw:
+                if not isinstance(raw_topic, dict):
+                    continue
+                query_value = str(raw_topic.get("query") or raw_topic.get("label") or "").strip()
+                if not query_value:
+                    continue
+                label_value = str(raw_topic.get("label") or query_value).strip() or query_value
+                reason_value = raw_topic.get("reason")
+                reason = str(reason_value).strip() if isinstance(reason_value, str) and reason_value.strip() else None
+                filtered.append(SearchTopicPlan(label=label_value, query=query_value, reason=reason))
+        else:
+            try:
+                planned_topics = await generate_search_topics(base_query, session_id=context.session_id, min_topics=2)
+            except Exception as exc:  # pragma: no cover - defensive planning guard
+                logger.debug("WebRetrieverAdapter topic planning failed: %s", exc)
+                return (self,)
+            filtered = [
+                plan for plan in planned_topics if isinstance(plan, SearchTopicPlan) and plan.query and plan.query.strip()
+            ]
+
+        allow_single_topic = bool(revision_topics_raw)
+        if not filtered:
+            return (self,)
+        if len(filtered) <= 1 and not allow_single_topic:
             return (self,)
 
         label_keys: List[str] = []
@@ -568,12 +589,16 @@ class WebRetrieverAdapter(BaseToolAdapter):
             payload["error"] = "search_api_missing"
             return ToolAdapterResult(name=self.name, status="skip", payload=payload, metadata=metadata)
 
+        force_revision_refresh = bool(getattr(context, "revision_directive", None)) or bool(
+            getattr(context, "revision_search_topics", ())
+        )
+
         repository = get_session_state_repository()
         snapshot = await repository.load(context.session_id)
         if snapshot is None:
             snapshot = SessionStateSnapshot(session_id=context.session_id)
 
-        cached_payload = self._maybe_get_cached(snapshot, query_terms)
+        cached_payload = None if force_revision_refresh else self._maybe_get_cached(snapshot, query_terms)
         if cached_payload:
             metadata["summary"] = cached_payload.get("summary") or metadata.get("summary")
             metadata["cache_hit"] = True
@@ -595,7 +620,10 @@ class WebRetrieverAdapter(BaseToolAdapter):
             metadata["preview_keys"] = list(payload.keys())
             return ToolAdapterResult(name=self.name, status="completed", payload=payload, metadata=metadata)
 
-        if not self._should_refresh(query_terms, snapshot):
+        if force_revision_refresh:
+            metadata["revision_refresh"] = True
+
+        if not force_revision_refresh and not self._should_refresh(query_terms, snapshot):
             metadata["summary"] = "Web search will run when the user requests the latest context."
             metadata["preview_only"] = True
             metadata["cache_hit"] = False
@@ -675,6 +703,9 @@ class WebRetrieverAdapter(BaseToolAdapter):
     def _resolve_query_terms(self, context: ToolExecutionContext) -> str:
         if self._topic_plan and isinstance(self._topic_plan.query, str):
             return self._topic_plan.query.strip()
+        revision_focus = getattr(context, "revision_focus", None)
+        if isinstance(revision_focus, str) and revision_focus.strip():
+            return revision_focus.strip()
         slots = getattr(context.intent, "slots_detected", {}) or {}
         return str(slots.get("original_query") or context.query or "").strip()
 
@@ -1082,6 +1113,33 @@ async def run_tool_parallelism(
     if not selected_adapters:
         return
 
+    directive = getattr(ctx, "revision_directive", None)
+    revision_focus: Optional[str] = None
+    revision_topics: Tuple[Dict[str, Any], ...] = tuple()
+    if directive is not None:
+        focus_candidate = getattr(directive, "requested_focus", None) or getattr(directive, "raw_text", None)
+        if isinstance(focus_candidate, str) and focus_candidate.strip():
+            revision_focus = focus_candidate.strip()
+        topics_iterable = getattr(directive, "search_topics", None)
+        if topics_iterable:
+            normalized_topics: List[Dict[str, Any]] = []
+            for topic in topics_iterable:
+                if not isinstance(topic, dict):
+                    continue
+                query_value = str(topic.get("query") or topic.get("label") or "").strip()
+                if not query_value:
+                    continue
+                entry: Dict[str, Any] = {
+                    "label": str(topic.get("label") or query_value).strip() or query_value,
+                    "query": query_value,
+                }
+                reason_value = topic.get("reason")
+                if isinstance(reason_value, str) and reason_value.strip():
+                    entry["reason"] = reason_value.strip()
+                normalized_topics.append(entry)
+            if normalized_topics:
+                revision_topics = tuple(normalized_topics)
+
     execution_context = ToolExecutionContext(
         session_id=ctx.session_id,
         query=ctx.query,
@@ -1089,6 +1147,9 @@ async def run_tool_parallelism(
         plan=plan,
         template=getattr(ctx, "template", None),
         configs=getattr(ctx, "configs", {}),
+        revision_directive=directive,
+        revision_focus=revision_focus,
+        revision_search_topics=revision_topics,
     )
 
     expanded_adapters: List[BaseToolAdapter] = []

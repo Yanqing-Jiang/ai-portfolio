@@ -10,7 +10,7 @@ import asyncio
 import statistics
 import logging
 from datetime import datetime, date
-from typing import Any, AsyncGenerator, Dict, Iterable, List, Mapping, Optional, Sequence
+from typing import Any, AsyncGenerator, Dict, Iterable, List, Mapping, Optional, Sequence, TYPE_CHECKING
 
 from analytics.core.session_state import SessionStateSnapshot, get_session_state_repository
 from analytics.core.revision_snapshot import extract_revision_snapshot
@@ -31,6 +31,10 @@ from .pipeline_tools import get_planner_tool_registry
 from .schedulers import FlowMode, apply_mode_metadata
 
 logger = logging.getLogger(__name__)
+
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from .revision_directive import RevisionDirective
 
 
 def _build_tool_metadata(manifest: Any) -> Dict[str, Dict[str, Any]]:
@@ -1204,6 +1208,8 @@ class MultiAgentFlow:
         self._pending_artifact_events: List[Dict[str, Any]] = []
         self._artifact_flush_pending: bool = False
         self._chart_revision_missing_session: bool = False
+        self._revision_directive: Optional["RevisionDirective"] = None
+        self._agentic_revision_mode: bool = False
 
     def _hedged_tool_aliases(self) -> List[str]:
         manifest = self._shared_context.get("tool_manifest")
@@ -1961,8 +1967,8 @@ class MultiAgentFlow:
             missing = []
             note = "Chart revision applied. Reused cached datasets for consistency."
         elif missing:
-            readable = ", ".join(human_labels[name] for name in missing)
-            note = f"Pending lanes: {readable}. Ask me to rerun those tools when you're ready."
+            # Suppress redundant "Pending lanes" note to avoid noisy cards.
+            note = None
         parts: List[str] = []
         if text_value:
             parts.append(text_value)
@@ -1983,6 +1989,11 @@ class MultiAgentFlow:
     def prime_with_snapshot(self, snapshot: Optional[SessionStateSnapshot]) -> None:
         self._prefetched_snapshot = snapshot
         self._planner.prime_with_snapshot(snapshot)
+
+    def set_revision_directive(self, directive: Optional["RevisionDirective"]) -> None:
+        self._revision_directive = directive
+        self._agentic_revision_mode = bool(directive.agentic if directive else False)
+        self._planner.set_revision_directive(directive)
 
     def set_follow_up_route(self, route: FollowUpRoute) -> None:
         self.follow_up_route = route
@@ -2116,11 +2127,24 @@ class MultiAgentFlow:
         analysis: str,
         reason: Optional[str] = None,
         source: Optional[str] = None,
+        revision_directive: Optional["RevisionDirective"] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         if session_id is None:
             raise ValueError("analysis_revision requires an existing session_id")
         hooks = _MultiAgentHooks(self, query, session_id=session_id)
         ctx = await self._planner.initialize_context(query, session_id=session_id)
+        if revision_directive is not None:
+            ctx.revision_directive = revision_directive
+            ctx.agentic_revision_mode = bool(getattr(revision_directive, "agentic", False))
+            ctx.revision_targets = set(getattr(revision_directive, "targets", []))
+            focus_hint = (
+                getattr(revision_directive, "requested_focus", None)
+                or getattr(revision_directive, "raw_text", None)
+            )
+            if focus_hint:
+                ctx.revision_focus = focus_hint
+            if getattr(revision_directive, "search_topics", None):
+                ctx.revision_search_topics = list(revision_directive.search_topics)
         registry = get_planner_tool_registry()
         tool_stream = registry.invoke(
             "analysis_revision",
@@ -2158,6 +2182,11 @@ class MultiAgentFlow:
                 'prompt_versions': dict(self._prompt_versions),
             },
         }
+        if self._revision_directive is not None:
+            self._shared_context['revision_directive'] = self._revision_directive.to_dict()
+            self._shared_context.setdefault('_meta', {}).setdefault(
+                'revision_mode', 'agentic' if self._agentic_revision_mode else 'manual'
+            )
         runtime_state = self._shared_context.setdefault('_runtime', {})
         runtime_state['accessories_ready'] = asyncio.Event()
         receipts_cache: Dict[str, Any] = {}

@@ -9,7 +9,7 @@ export const PROJECT_DATA: ProjectYear[] = [
         id: 'next-gen-analytics-agent',
         title: 'Next Gen Analytics (Agents)',
         description: `Three Agentic Workflows:\nDirect (fixed path): no flexibility on tools, run through all tools all at once\nSingle-Agent (multi-tool use): ability to pick tools, revise single/multiple analytic element\nMulti-Agent (supervisor + specialists): workload delegation & orchestration\nHuman-in-the-loop: Compact widget for clarification on peers/metrics/range\nExplainable thinking process panel: plan graph + per-step trace.\nSQL database financials: AMD, AVGO, INTC, MU, NVDA, QCOM, TXN.\nMemory optimization: RAG optimized, Cached queries, vectorized prompts, stateful nodes`,
-        cardDescription: 'Demo the process difference between single and multi-agent workflows.\nExperience the 50% processing time reduction vs direct workflow.',
+        cardDescription: 'The future of analytics: no dashboards—just outcomes. Expereience the next gen analytics with agentic querying and analysis.',
         technologies: ['Single Agent Workflow', 'Multi-Agent Workflow', 'Human-in-the-Loop', 'RAG', 'Long-Term Memory'],
         systemInstruction: `You are the AI assistant for **Next Gen Analytics (Agents)**. You have full knowledge of the project described below. Use this embedded reference to answer questions with detail and accuracy. Quote or paraphrase the content to explain features, tech stack, workflow and technical implementation.
 
@@ -53,6 +53,7 @@ Memory System: Session-based conversation persistence with context awareness
         ],
         coverUrl: 'https://yanqinghot.blob.core.windows.net/public-access/Agent%20demo.gif',
         imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/Agent%20demo.gif',
+        ogImage: 'https://yanqinghot.blob.core.windows.net/public-access/Agent%20demo.gif',
         seoTitle: 'Next Gen Analytics Agents | LangGraph + FastAPI Copilot',
         seoDescription:
           'LangGraph-powered analytics agents copilot that orchestrates clarification, RAG-backed SQL, and streaming ECharts for semiconductor coverage.',
@@ -91,6 +92,7 @@ Memory System: Session-based conversation persistence with context awareness
         ],
         imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/Agentic%20Trading%20Pic.png',
         coverUrl: 'https://yanqinghot.blob.core.windows.net/public-access/Agentic%20Trading%20Pic.png',
+        ogImage: 'https://yanqinghot.blob.core.windows.net/public-access/Agentic%20Trading%20Pic.png',
         seoTitle: 'Agentic Trading Bot | LangGraph + IBKR Automation',
         seoDescription:
           'LangGraph multi-agent trading bot connecting IBKR execution, Unusual Whales flow, and Morningstar insights to size trades and achieve a 200% supervised gain.',
@@ -172,6 +174,7 @@ Time Series: Quarterly financial data
         ],
         coverUrl: 'https://yanqinghot.blob.core.windows.net/public-access/next-gen-sql.png',
         imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/next-gen-sql.png',
+        ogImage: 'https://yanqinghot.blob.core.windows.net/public-access/next-gen-sql.png',
         seoTitle: 'Next Gen Analytics SQL Copilot | LangGraph Streaming Insights',
         seoDescription:
           'Streaming SQL copilot that pairs LangGraph orchestration with Supabase analytics to generate charts, commentary, and comparisons for semiconductor tickers in real time.',

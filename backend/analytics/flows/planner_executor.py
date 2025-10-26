@@ -1,7 +1,19 @@
 from __future__ import annotations
 import json
 import hashlib
-from typing import AsyncGenerator, Dict, Any, Optional, List, Sequence, Tuple, Set, Mapping, Iterable
+from typing import (
+    AsyncGenerator,
+    Dict,
+    Any,
+    Optional,
+    List,
+    Sequence,
+    Tuple,
+    Set,
+    Mapping,
+    Iterable,
+    TYPE_CHECKING,
+)
 from dataclasses import dataclass, field
 import asyncio
 import contextlib
@@ -50,6 +62,9 @@ from analytics.artifacts import (
 )
 from analytics.routing import FollowUpRoute
 from analytics.validators import sanitize_for_json
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from .revision_directive import RevisionDirective
 from .hooks import AnalyticsFlowHooks, NullFlowHooks
 from .tooling import (
     run_tool_parallelism,
@@ -75,6 +90,10 @@ from analytics.agents.schema_clarifier import ClarifierDecision, decide_schema_c
 from analytics.core.intent_impl.models import IntentResolutionModel, SlotStatusModel, FollowUpModel
 from analytics.core.intent_impl.detection import resolve_intent_slots_async
 from analytics.core.charting import build_chart_spec, plan_chart_rule_based
+from analytics.core.margins import (
+    detect_margin_choice_from_metrics,
+    detect_margin_choice_from_plan,
+)
 from .tool_bundle import collect_tool_bundle
 from .chart_revision import emit_chart_patch as _chart_revision_emit, emit_analysis_revision as _analysis_revision_emit
 from analytics.core.telemetry import analysis_chunk as log_analysis_chunk, intent_resolution as log_intent_resolution
@@ -250,17 +269,34 @@ def _generate_chart_design(intent_key: Optional[str], plan: QueryPlanModel, data
             }
         })
     elif intent_key in ['margins_vs_peers', 'margin_growth_vs_peers']:
+        choice = detect_margin_choice_from_plan(plan)
+        if choice:
+            if intent_key == 'margins_vs_peers':
+                measures = [choice.value_alias, choice.peer_alias]
+            else:
+                measures = [choice.growth_alias, choice.growth_peer_alias]
+            default_selection = {alias: True for alias in measures}
+        else:
+            if intent_key == 'margins_vs_peers':
+                measures = ['gross_margin', 'operating_margin', 'net_margin']
+                default_selection = {'operating_margin': True, 'net_margin': True}
+            else:
+                measures = [
+                    'company_gross_margin_change_pp',
+                    'company_operating_margin_change_pp',
+                    'company_net_margin_change_pp',
+                    'peer_avg_gross_margin_change_pp',
+                    'peer_avg_operating_margin_change_pp',
+                    'peer_avg_net_margin_change_pp',
+                ]
+                default_selection = {
+                    'company_operating_margin_change_pp': True,
+                    'company_net_margin_change_pp': True,
+                }
         design.update({
-            'measure': ['gross_margin', 'operating_margin', 'net_margin'] if 'margins_vs_peers' in intent_key 
-                      else ['company_gross_margin_change_pp', 'company_operating_margin_change_pp', 'company_net_margin_change_pp', 'peer_avg_gross_margin_change_pp', 'peer_avg_operating_margin_change_pp', 'peer_avg_net_margin_change_pp'],
+            'measure': measures,
             'y_axis': {'type': 'percent_only'},
-            'defaultLegendSelection': {
-                'operating_margin': True,
-                'net_margin': True
-            } if 'margins_vs_peers' in intent_key else {
-                'company_operating_margin_change_pp': True,
-                'company_net_margin_change_pp': True
-            }
+            'defaultLegendSelection': default_selection,
         })
     elif intent_key in ['rnd_intensity_vs_peers', 'rnd_expense_vs_peers']:
         design.update({
@@ -400,6 +436,8 @@ class PlannerPhaseContext:
     revision_targets: Set[str] = field(default_factory=set)
     revision_id: Optional[str] = None
     revision_hint_active: bool = False
+    revision_directive: Optional["RevisionDirective"] = None
+    agentic_revision_mode: bool = False
     halted: bool = False
     halt_reason: Optional[str] = None
 
@@ -1913,6 +1951,12 @@ def _apply_plan_metric_defaults(
     if not normalized_metrics:
         return []
 
+    intent_key = getattr(getattr(ctx, "intent", None), "intent_key", None)
+    if intent_key in {"margins_vs_peers", "margin_growth_vs_peers"}:
+        margin_choice = detect_margin_choice_from_metrics(normalized_metrics)
+        if margin_choice is None:
+            return []
+
     updated = False
     metric_status = ctx.slot_statuses.get("metric")
     metric_value_missing = True
@@ -2089,6 +2133,8 @@ class PlannerPipeline:
         self._latest_artifacts: Optional[PipelineArtifacts] = None
         self.revision_targets: Set[str] = set()
         self.revision_hint_active: bool = False
+        self.revision_directive: Optional["RevisionDirective"] = None
+        self.agentic_revision_mode: bool = False
 
     async def _persist_session_state(
         self,
@@ -2192,6 +2238,32 @@ class PlannerPipeline:
             return
         self.revision_targets = normalized
         self.revision_hint_active = True
+
+    def set_revision_directive(self, directive: Optional["RevisionDirective"]) -> None:
+        """Attach a revision directive and seed explicit targets.
+
+        If the directive provides lane targets (e.g., {"analysis", "web"} or
+        {"chart"}), record them as `revision_targets` so the revision plan can
+        skip unrelated lanes (avoiding unnecessary fresh SQL runs). Also surface
+        agentic mode on the pipeline for downstream hooks.
+        """
+        self.revision_directive = directive
+        if directive is not None:
+            try:
+                targets_iter = getattr(directive, "targets", None) or []
+                normalized = {
+                    str(t).strip().lower()
+                    for t in targets_iter
+                    if t is not None and str(t).strip()
+                }
+                if normalized:
+                    self.revision_targets = normalized
+                    self.revision_hint_active = True
+            except Exception:
+                # Defensive: never break flow due to directive parsing
+                pass
+            self.agentic_revision_mode = bool(getattr(directive, "agentic", False))
+        self.agentic_revision_mode = bool(directive.agentic if directive else False)
 
     @staticmethod
     def _lane_for_tool_name(tool_name: str) -> Optional[str]:
@@ -3786,6 +3858,18 @@ class PlannerPipeline:
             run_sql_lane = revision_plan.run_sql_lane
             run_chart_lane = revision_plan.run_chart_lane
             run_analysis_lane = revision_plan.run_analysis_lane
+            # Telemetry snapshot of the computed revision plan to aid debugging
+            telemetry.revision_plan(
+                session_id=ctx.session_id,
+                flow=self.flow_label,
+                targets=sorted(revision_plan.targets),
+                run_sql_lane=run_sql_lane,
+                run_chart_lane=run_chart_lane,
+                run_analysis_lane=run_analysis_lane,
+                stock_only=revision_plan.stock_only,
+                follow_up_route=(ctx.follow_up_route.value if getattr(ctx, 'follow_up_route', None) else None),
+                revision_id=getattr(ctx, 'revision_id', None),
+            )
 
             if revision_targets:
                 follow_up_route = getattr(self, "follow_up_route", None)
@@ -3926,6 +4010,13 @@ async def _initialize_context(self, query: str, session_id: Optional[str]) -> Pl
     if ctx.revision_targets:
         ctx.revision_id = str(uuid.uuid4())
         ctx.parallelism_enabled = True
+    directive = getattr(self, "revision_directive", None)
+    if directive is not None:
+        ctx.revision_directive = directive
+        ctx.agentic_revision_mode = bool(getattr(self, "agentic_revision_mode", False) or getattr(directive, "agentic", False))
+    else:
+        ctx.revision_directive = None
+        ctx.agentic_revision_mode = bool(getattr(self, "agentic_revision_mode", False))
     return ctx
 
 
@@ -4844,6 +4935,10 @@ class PlannerExecutorFlow:
     def set_revision_targets(self, targets: Iterable[str]) -> None:
         self._pipeline.set_revision_targets(targets)
 
+    def set_revision_directive(self, directive: Optional["RevisionDirective"]) -> None:
+        self._pipeline.set_revision_directive(directive)
+        self.agentic_revision_mode = bool(directive.agentic if directive else False)
+
     async def initialize_context(self, query: str, session_id: Optional[str] = None) -> PlannerPhaseContext:
         return await self._pipeline.initialize_context(query, session_id)
 
@@ -5013,4 +5108,5 @@ def _auto_fill_missing_slots(ctx: PlannerPhaseContext, assumptions: List[str]) -
 
 
 from analytics.core.intent_impl.normalization import normalize_timeframe, normalize_metrics
+
 

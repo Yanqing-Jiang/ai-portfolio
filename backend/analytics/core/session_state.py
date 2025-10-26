@@ -5,7 +5,7 @@ import time
 import json
 import os
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 from copy import deepcopy
 
 from pydantic import BaseModel, Field, field_validator
@@ -16,6 +16,9 @@ except ImportError:  # pragma: no cover - redis optional in some test envs
     redis = None
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from analytics.flows.revision_directive import RevisionDirective
 
 __all__ = [
     "SessionStateSnapshot",
@@ -42,6 +45,7 @@ class SessionStateSnapshot(BaseModel):
     last_sql: Optional[str] = None
     last_chart_spec: Optional[Dict[str, Any]] = None
     last_analysis: Optional[str] = None
+    last_revision_directive: Optional[Dict[str, Any]] = None
     tool_cache: Dict[str, Any] = Field(default_factory=dict)
     routing: Dict[str, Any] = Field(default_factory=dict)
     messages: List[Dict[str, Any]] = Field(default_factory=list)
@@ -59,6 +63,21 @@ class SessionStateSnapshot(BaseModel):
     def record_query(self, query: str, intent_key: Optional[str]) -> None:
         self.last_query = query
         self.last_intent_key = intent_key
+        self.touch()
+
+    def record_revision_directive(
+        self, directive: Optional["RevisionDirective"], *, metadata: Optional[Dict[str, Any]] = None
+    ) -> None:
+        if directive is None:
+            self.last_revision_directive = None
+            self.touch()
+            return
+
+        payload = directive.to_dict()
+        payload["recorded_at"] = datetime.now(timezone.utc).isoformat()
+        if metadata:
+            payload.update({key: value for key, value in metadata.items() if value is not None})
+        self.last_revision_directive = payload
         self.touch()
 
     def record_tool_result(self, tool: str, payload: Dict[str, Any]) -> None:

@@ -358,6 +358,9 @@ export interface ChatMessage {
   banner?: FollowUpBanner | null;
   specialistCards?: SpecialistCard[];
   latencyGuardrail?: LatencyGuardrail | null;
+  revisionId?: string;
+  revision?: boolean;
+  revisionEvent?: boolean;
 }
 
 export interface ClarifyRequest {

@@ -6,6 +6,7 @@ import { ChevronRightIcon } from './icons/ChevronRightIcon';
 import { SignInIcon } from './icons/SignInIcon';
 import { authService, type AuthState } from '../services/auth';
 import { AuthModal } from './AuthModal';
+import { Link } from 'react-router-dom';
 
 interface SidebarProps {
   projectData: ProjectYear[];
@@ -115,9 +116,10 @@ const Sidebar: React.FC<SidebarProps> = ({ projectData, selectedProject, onSelec
                   <ul className="pl-3 sm:pl-4 mt-2 border-l border-gray-700 space-y-1">
                     {projects.map(project => (
                       <li key={project.id}>
-                        <button
+                        <Link
+                          to={`/project/${project.id}`}
                           onClick={() => onSelectProject(project)}
-                          className={`w-full text-left py-2 sm:py-2.5 px-3 sm:px-4 text-sm sm:text-base 
+                          className={`block w-full text-left py-2 sm:py-2.5 px-3 sm:px-4 text-sm sm:text-base 
                                    rounded-md transition-all duration-200 
                                    ${selectedProject?.id === project.id
                                      ? 'bg-blue-600/30 text-white font-medium shadow-sm'
@@ -125,7 +127,7 @@ const Sidebar: React.FC<SidebarProps> = ({ projectData, selectedProject, onSelec
                                    }`}
                         >
                           <span className="block truncate">{project.title}</span>
-                        </button>
+                        </Link>
                       </li>
                     ))}
                   </ul>

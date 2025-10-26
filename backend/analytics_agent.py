@@ -9,6 +9,13 @@ from typing import Dict, Any, List, Optional, AsyncGenerator, TypedDict, Tuple
 import asyncpg
 import sys
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+from analytics.core.margins import (
+    DEFAULT_MARGIN_LABEL,
+    MARGIN_CHOICES,
+    MarginChoice,
+    infer_margin_from_query,
+    normalize_margin_value,
+)
 from unified_responses_client import get_unified_client
 
 
@@ -708,6 +715,16 @@ class AnalyticsWorkflow:
         if template:
             print(f"[TEMPLATE DEBUG] Template length: {len(template)} chars, preview: {template[:100]}...")
         return template
+
+    def _resolve_margin_choice(self, query_text: Optional[str]) -> MarginChoice:
+        """Pick which margin the template should render, defaulting if the query is ambiguous."""
+        choice = infer_margin_from_query(query_text)
+        if not choice:
+            choice = normalize_margin_value(DEFAULT_MARGIN_LABEL)
+        if not choice:
+            # Fallback to the first configured choice (gross margin) to keep templates usable.
+            choice = next(iter(MARGIN_CHOICES))
+        return choice
         
     def _substitute_sql_template(
         self,
@@ -715,6 +732,7 @@ class AnalyticsWorkflow:
         target_ticker: str,
         years_back: Optional[int] = None,
         granularity: str = 'annual',
+        query_text: Optional[str] = None,
         *,
         primary_metric: Optional[str] = None,
         start_year: Optional[int] = None,
@@ -739,15 +757,19 @@ class AnalyticsWorkflow:
         if granularity == 'quarterly':
             select_clause = "calendar_year, calendar_quarter_num, calendar_quarter"
             group_by_clause = "calendar_year, calendar_quarter_num, calendar_quarter"
-            join_clause = "cr.calendar_year = mr.calendar_year AND cr.calendar_quarter_num = mr.calendar_quarter_num"
-            order_by_clause = "cr.calendar_year, cr.calendar_quarter_num"
+            join_clause = (
+                "cr.calendar_year = mr.calendar_year AND "
+                "cr.calendar_quarter_num = mr.calendar_quarter_num AND "
+                "cr.calendar_quarter = mr.calendar_quarter"
+            )
+            order_by_clause = "calendar_year, calendar_quarter_num"
             growth_window = "4"  # same quarter last year
             period_filter_clause = "calendar_quarter_num IS NOT NULL"
         else:  # annual
             select_clause = "calendar_year"
             group_by_clause = "calendar_year"
             join_clause = "cr.calendar_year = mr.calendar_year"
-            order_by_clause = "cr.calendar_year"
+            order_by_clause = "calendar_year"
             growth_window = "1"  # prior year
             period_filter_clause = "1=1"
 
@@ -782,6 +804,28 @@ class AnalyticsWorkflow:
         end_year_value = str(end_year) if end_year is not None else 'NULL'
         substituted = substituted.replace('{start_year}', start_year_value)
         substituted = substituted.replace('{end_year}', end_year_value)
+
+        margin_placeholders = {
+            '{company_margin_column}',
+            '{company_margin_alias}',
+            '{peer_margin_alias}',
+            '{company_margin_growth_column}',
+            '{company_margin_growth_alias}',
+            '{peer_margin_growth_alias}',
+        }
+        if any(placeholder in substituted for placeholder in margin_placeholders):
+            margin_choice = self._resolve_margin_choice(query_text)
+            replacements = {
+                '{company_margin_column}': margin_choice.value_column,
+                '{company_margin_alias}': margin_choice.value_alias,
+                '{peer_margin_alias}': margin_choice.peer_alias,
+                '{company_margin_growth_column}': margin_choice.growth_column,
+                '{company_margin_growth_alias}': margin_choice.growth_alias,
+                '{peer_margin_growth_alias}': margin_choice.growth_peer_alias,
+            }
+            for placeholder, value in replacements.items():
+                if placeholder in substituted and value:
+                    substituted = substituted.replace(placeholder, value)
 
         print(f"[SQL TEMPLATE] Using {granularity} granularity with clauses:")
         print(f"[SQL TEMPLATE]   SELECT: {select_clause}")
@@ -991,6 +1035,7 @@ class AnalyticsWorkflow:
                         target_ticker,
                         years_back,
                         granularity,
+                        query_text=state.get('query'),
                         primary_metric=primary_metric_override,
                         start_year=start_year,
                         end_year=end_year,
@@ -1016,6 +1061,7 @@ class AnalyticsWorkflow:
                             target_ticker,
                             years_back,
                             granularity,
+                            query_text=state.get('query'),
                             primary_metric=primary_metric_override,
                             start_year=start_year,
                             end_year=end_year,
@@ -1035,6 +1081,7 @@ class AnalyticsWorkflow:
                             target_ticker,
                             years_back,
                             granularity,
+                            query_text=state.get('query'),
                             primary_metric=primary_metric_override,
                             start_year=start_year,
                             end_year=end_year,

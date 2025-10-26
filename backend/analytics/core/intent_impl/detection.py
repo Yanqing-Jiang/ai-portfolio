@@ -221,6 +221,11 @@ def heuristic_intent(query: str, configs: Dict[str, Any]) -> IntentModel:
             intent_key = "rnd_expense_vs_peers"
             reasoning.append("Detected R&D expense vs peers intent")
             metric_defaults = ["R&D Expense"]
+            if comparison_default is None:
+                if average_cue_present:
+                    comparison_default = "vs_avg"
+                elif peers_cue_present:
+                    comparison_default = "vs_peers"
         else:
             intent_key = "rnd_intensity_vs_peers"
             reasoning.append("Detected R&D intensity vs peers intent")

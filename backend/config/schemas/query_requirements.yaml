@@ -7,9 +7,11 @@
   margins_vs_peers:
     - company
     - timeframe
+    - metric
   margin_growth_vs_peers:
     - company
     - timeframe
+    - metric
   revenue_growth_vs_avg:
     - company
     - timeframe

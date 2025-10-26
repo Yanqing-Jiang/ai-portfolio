@@ -38,6 +38,7 @@ _MAX_ATTEMPTS = int(os.getenv('WEB_SEARCH_RETRY_ATTEMPTS', '2'))
 _RETRY_BASE_DELAY = float(os.getenv('WEB_SEARCH_RETRY_BASE_DELAY', '0.6'))
 _DEFAULT_TEMPERATURE = float(os.getenv('GEMINI_SEARCH_TEMPERATURE', '0.2'))
 _MAX_TOKENS = int(os.getenv('GEMINI_SEARCH_MAX_TOKENS', '1024'))
+_REQUEST_TIMEOUT_SECONDS = float(os.getenv('WEB_SEARCH_TIMEOUT_SECONDS', '20'))
 
 _genai_configured = False
 _model: Optional["GenerativeModel"] = None
@@ -407,8 +408,9 @@ async def _generate_search_topics(
         seen.add(key)
         deduped.append(plan)
 
-    max_topics = max(1, min_topics, _MAX_TOPICS)
-    return deduped[:max_topics]
+    configured_max = max(1, min_topics, _MAX_TOPICS)
+    desired_count = min(2, configured_max)
+    return deduped[:desired_count]
 
 
 async def _generate_search_topic(
@@ -912,7 +914,49 @@ async def perform_response_search(
                 plans.append(candidate_plan)
     if not plans:
         plans.append(SearchTopicPlan(label='Primary question', query=_sanitize_search_query(query, query)))
-    plans = plans[: max(1, _MAX_TOPICS)]
+
+    def _select_primary_and_industry(candidate_plans: List[SearchTopicPlan]) -> List[SearchTopicPlan]:
+        """Ensure the first topic mirrors the user query and the second covers industry context."""
+        if not candidate_plans:
+            primary_query = _sanitize_search_query(query, query)
+            background_query = _sanitize_search_query(f"{primary_query} industry outlook", primary_query)
+            return [
+                SearchTopicPlan(label='Primary question', query=primary_query),
+                SearchTopicPlan(label='Industry context', query=background_query, reason='Provide wider sector context'),
+            ]
+
+        primary = candidate_plans[0]
+        industry: Optional[SearchTopicPlan] = None
+        for plan in candidate_plans[1:]:
+            text_blob = " ".join(filter(None, [plan.label, plan.query, plan.reason or ""])).lower()
+            if 'industry' in text_blob or 'sector' in text_blob:
+                industry = plan
+                break
+
+        if industry is None and len(candidate_plans) > 1:
+            industry = candidate_plans[1]
+
+        primary_query = _sanitize_search_query(primary.query, query)
+        if industry is None or industry.query.lower() == primary_query.lower():
+            fallback_seed = primary_query or query
+            fallback_query = _sanitize_search_query(f"{fallback_seed} industry outlook", fallback_seed or query)
+            industry = SearchTopicPlan(
+                label='Industry context',
+                query=fallback_query,
+                reason='Provide wider sector context',
+            )
+
+        # Ensure distinct queries
+        if industry.query.lower() == primary_query.lower():
+            industry = SearchTopicPlan(
+                label='Industry context',
+                query=_sanitize_search_query(f"{primary_query} broader industry trend", primary_query),
+                reason='Provide wider sector context',
+            )
+
+        return [SearchTopicPlan(label='Primary question', query=primary_query, reason=primary.reason), industry]
+
+    plans = _select_primary_and_industry(plans)
 
     logger.info('Generated search topics %s', [plan.query for plan in plans])
     logger.info(
@@ -934,7 +978,9 @@ async def perform_response_search(
     total_latency = 0
     last_usage: Optional[Dict[str, Any]] = None
 
-    for plan in plans:
+    timeout_seconds = max(0.1, _REQUEST_TIMEOUT_SECONDS)
+
+    async def _execute_plan(plan: SearchTopicPlan) -> Dict[str, Any]:
         request_args = _build_request_args(plan.query)
         try:
             preview_prompt = request_args.get('contents', [None])[0]
@@ -963,9 +1009,12 @@ async def perform_response_search(
             start_time = time.perf_counter()
             logger.debug('Gemini search attempt %s/%s for topic %s', attempt, attempts, plan.query)
             try:
-                response = await asyncio.to_thread(
-                    gemini_model.generate_content,
-                    **request_args,
+                response = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        gemini_model.generate_content,
+                        **request_args,
+                    ),
+                    timeout=timeout_seconds,
                 )
                 elapsed_ms = int((time.perf_counter() - start_time) * 1000)
                 response_dict = _as_dict(response)
@@ -983,6 +1032,24 @@ async def perform_response_search(
                 )
                 logger.info('Gemini search succeeded in %s ms on attempt %s', elapsed_ms, attempt)
                 break
+            except asyncio.TimeoutError as exc:
+                elapsed_ms = int((time.perf_counter() - start_time) * 1000)
+                last_error = exc
+                logger.warning(
+                    'Gemini search attempt %s timed out for %s after %sms',
+                    attempt,
+                    plan.query,
+                    elapsed_ms,
+                )
+                gemini_call(
+                    operation='google_search',
+                    model=gemini_model.model_name,
+                    duration_ms=elapsed_ms,
+                    status='error',
+                    session_id=session_id,
+                    error='timeout',
+                    metadata={'attempt': attempt, 'search_query': plan.query},
+                )
             except Exception as exc:
                 elapsed_ms = int((time.perf_counter() - start_time) * 1000)
                 last_error = exc
@@ -1002,17 +1069,22 @@ async def perform_response_search(
                     error=str(exc),
                     metadata={'attempt': attempt, 'search_query': plan.query},
                 )
-                if attempt >= attempts:
-                    logger.error('Gemini Google Search failed after %s attempts (last_error=%s)', attempts, type(exc).__name__)
-                    raise ResponseSearchError('Gemini Google Search failed', stage='search_execution') from exc
-                delay = _RETRY_BASE_DELAY * (2 ** (attempt - 1))
-                logger.debug('Retrying Gemini search in %.2f seconds', delay)
-                await asyncio.sleep(delay)
+            if response_dict:
+                break
+            if attempt >= attempts:
+                error_message = (
+                    'Gemini Google Search timed out'
+                    if isinstance(last_error, asyncio.TimeoutError)
+                    else 'Gemini Google Search failed'
+                )
+                logger.error('%s after %s attempts (last_error=%s)', error_message, attempts, type(last_error).__name__ if last_error else 'unknown')
+                raise ResponseSearchError(error_message, stage='search_execution') from last_error
+            delay = _RETRY_BASE_DELAY * (2 ** (attempt - 1))
+            logger.debug('Retrying Gemini search in %.2f seconds', delay)
+            await asyncio.sleep(delay)
 
         if not response_dict:
             raise ResponseSearchError(last_error or 'Gemini Google Search produced no output', stage='search_execution')
-
-        last_usage = response_dict.get('usage')
         topic_summary: Optional[str] = None
         raw_text = response_dict.get('text')
         if isinstance(raw_text, str) and raw_text.strip():
@@ -1059,9 +1131,6 @@ async def perform_response_search(
                 plan.query,
                 response_dict.get('response_id') or response_dict.get('id'),
             )
-        aggregated_annotations.extend(topic_annotations)
-        aggregated_snippets.extend(topic_snippets)
-
         topic_result = TopicSearchResult(
             label=plan.label,
             query=plan.query,
@@ -1071,12 +1140,29 @@ async def perform_response_search(
             search_id=response_dict.get('response_id') or response_dict.get('id'),
             latency_ms=elapsed_ms,
         )
-        topic_results.append(topic_result)
+        summary_text = f"{plan.label}: {topic_summary}" if topic_summary else None
 
-        if topic_summary:
-            summary_sections.append(f"{plan.label}: {topic_summary}")
-        if elapsed_ms:
-            total_latency += elapsed_ms
+        return {
+            'topic_result': topic_result,
+            'annotations': topic_annotations,
+            'snippets': topic_snippets,
+            'summary': summary_text,
+            'elapsed_ms': elapsed_ms,
+            'usage': response_dict.get('usage'),
+        }
+
+    execution_results = await asyncio.gather(*[_execute_plan(plan) for plan in plans])
+
+    for execution in execution_results:
+        topic_results.append(execution['topic_result'])
+        aggregated_annotations.extend(execution['annotations'])
+        aggregated_snippets.extend(execution['snippets'])
+        if execution['summary']:
+            summary_sections.append(execution['summary'])
+        if execution['elapsed_ms']:
+            total_latency += execution['elapsed_ms']
+        if execution['usage']:
+            last_usage = execution['usage']
 
     combined_snippets = _dedupe_snippets(aggregated_snippets)
     summary_text = '\n\n'.join(summary_sections) if summary_sections else None
