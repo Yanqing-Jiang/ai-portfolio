@@ -6,10 +6,10 @@ beautifulsoup4
 pyyaml
 pydantic
 openai>=1.107.3
-langchain
-langchain-core
-langchain-community
-langchain-openai
+langchain==0.3.27
+langchain-core==0.3.77
+langchain-community==0.3.30
+langchain-openai==0.3.34
 google-genai
 fastapi-limiter
 redis
