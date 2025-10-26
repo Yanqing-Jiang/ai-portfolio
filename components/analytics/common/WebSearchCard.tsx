@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useMemo } from 'react';
 import { WebSearchResult, WebSearchTopic } from '../types';
 
 interface WebSearchCardProps {
@@ -209,81 +209,10 @@ export const WebSearchCard: React.FC<WebSearchCardProps> = ({
       ? 'Provide a valid GOOGLE_API_KEY or GEMINI_API_KEY to re-enable live web context.'
       : 'No market research snippets available.');
 
-  const [activeTopicIndex, setActiveTopicIndex] = useState(0);
-  useEffect(() => {
-    setActiveTopicIndex((prev) => {
-      if (!enrichedTopics.length) {
-        return 0;
-      }
-      if (prev >= enrichedTopics.length) {
-        return enrichedTopics.length - 1;
-      }
-      if (prev < 0) {
-        return 0;
-      }
-      return prev;
-    });
-  }, [
-    enrichedTopics.length,
-    enrichedTopics[0]?.query,
-    (enrichedTopics[0] as any)?.display_name,
-    (enrichedTopics[0] as any)?.displayName,
-  ]);
-
-  const activeTopic = enrichedTopics[Math.min(activeTopicIndex, enrichedTopics.length - 1)];
+  const totalTopics = enrichedTopics.length;
   const inferredTotal = typeof topicTotal === 'number' && topicTotal > 0 ? topicTotal : undefined;
-  const actualTopicCount = enrichedTopics.length;
-  const totalTopics = actualTopicCount;
   const announcedTopicTotal =
-    inferredTotal !== undefined ? Math.max(inferredTotal, actualTopicCount) : actualTopicCount;
-  const topicSnippets = activeTopic?.snippets ?? [];
-  const topicBadgeRaw =
-    typeof activeTopic?.topic_label === 'string'
-      ? activeTopic.topic_label
-      : typeof activeTopic?.topicLabel === 'string'
-        ? activeTopic.topicLabel
-        : undefined;
-  const topicBadge = topicBadgeRaw?.trim() || undefined;
-  const topicHeading = (() => {
-    if (!activeTopic) {
-      return `Topic ${activeTopicIndex + 1}`;
-    }
-    const displayNameRaw =
-      typeof (activeTopic as any)?.display_name === 'string'
-        ? (activeTopic as any).display_name
-        : typeof (activeTopic as any)?.displayName === 'string'
-          ? (activeTopic as any).displayName
-          : '';
-    const displayNameTrimmed = typeof displayNameRaw === 'string' ? displayNameRaw.trim() : '';
-    if (displayNameTrimmed) {
-      return displayNameTrimmed;
-    }
-    const candidateLabel = typeof activeTopic.label === 'string' ? activeTopic.label.trim() : '';
-    const candidateQuery = typeof activeTopic.query === 'string' ? activeTopic.query.trim() : '';
-    const labelIsGeneric =
-      !candidateLabel ||
-      /^primary (question|topic)/i.test(candidateLabel) ||
-      /^secondary (question|topic)/i.test(candidateLabel);
-    if (!labelIsGeneric && candidateLabel) {
-      return candidateLabel.replace(/^Primary (question|topic):\s*/i, '').trim() || candidateLabel;
-    }
-    if (candidateQuery) {
-      return candidateQuery;
-    }
-    if (candidateLabel) {
-      return candidateLabel;
-    }
-    return `Topic ${activeTopicIndex + 1}`;
-  })();
-
-  const handlePrev = () => setActiveTopicIndex((idx) => Math.max(0, idx - 1));
-  const handleNext = () =>
-    setActiveTopicIndex((idx) => {
-      if (totalTopics <= 0) {
-        return 0;
-      }
-      return Math.min(totalTopics - 1, idx + 1);
-    });
+    inferredTotal !== undefined ? Math.max(inferredTotal, totalTopics) : totalTopics;
   const snippetNumber = (index: number) => index + 1;
   const displayTopics = useMemo(() => {
     if (Array.isArray(searchTopics) && searchTopics.length) {
@@ -332,7 +261,58 @@ export const WebSearchCard: React.FC<WebSearchCardProps> = ({
     }
     return fallbackIndex + 1;
   };
-  const displayedTopicNumber = resolveTopicOrdinal(activeTopic, activeTopicIndex);
+  const resolveTopicBadge = (topic?: WebSearchTopic) => {
+    if (!topic) {
+      return undefined;
+    }
+    const rawBadge =
+      typeof topic.topic_label === 'string'
+        ? topic.topic_label
+        : typeof (topic as any).topicLabel === 'string'
+          ? (topic as any).topicLabel
+          : undefined;
+    return rawBadge?.trim() || undefined;
+  };
+  const resolveTopicHeading = (topic: WebSearchTopic | undefined, fallbackIndex: number) => {
+    if (!topic) {
+      return `Topic ${fallbackIndex + 1}`;
+    }
+    const displayNameRaw =
+      typeof (topic as any)?.display_name === 'string'
+        ? (topic as any).display_name
+        : typeof (topic as any)?.displayName === 'string'
+          ? (topic as any).displayName
+          : '';
+    const displayNameTrimmed = typeof displayNameRaw === 'string' ? displayNameRaw.trim() : '';
+    if (displayNameTrimmed) {
+      return displayNameTrimmed;
+    }
+    const candidateLabel = typeof topic.label === 'string' ? topic.label.trim() : '';
+    const candidateQuery = typeof topic.query === 'string' ? topic.query.trim() : '';
+    const labelIsGeneric =
+      !candidateLabel ||
+      /^primary (question|topic)/i.test(candidateLabel) ||
+      /^secondary (question|topic)/i.test(candidateLabel);
+    if (!labelIsGeneric && candidateLabel) {
+      return candidateLabel.replace(/^Primary (question|topic):\s*/i, '').trim() || candidateLabel;
+    }
+    if (candidateQuery) {
+      return candidateQuery;
+    }
+    if (candidateLabel) {
+      return candidateLabel;
+    }
+    return `Topic ${fallbackIndex + 1}`;
+  };
+  const topicSummaryLabel = (() => {
+    if (totalTopics === 0) {
+      return announcedTopicTotal > 0 ? `Topics: 0 of ${announcedTopicTotal}` : 'Topics: 0';
+    }
+    if (announcedTopicTotal !== totalTopics) {
+      return `Topics: ${totalTopics} of ${announcedTopicTotal}`;
+    }
+    return totalTopics === 1 ? 'Topics: 1' : `Topics: ${totalTopics}`;
+  })();
 
   return (
     <div className="rounded-xl border border-slate-700/70 bg-slate-900/50 overflow-hidden">
@@ -367,26 +347,8 @@ export const WebSearchCard: React.FC<WebSearchCardProps> = ({
         </div>
       </div>
 
-      <div className="flex items-center justify-between px-4 pb-2 text-xs text-slate-400">
-        <button
-          type="button"
-          onClick={handlePrev}
-          disabled={activeTopicIndex === 0}
-          className={`rounded-full border border-slate-700/70 px-2 py-1 transition ${activeTopicIndex === 0 ? 'opacity-40 cursor-not-allowed' : 'hover:border-emerald-400 hover:text-emerald-300'}`}
-          aria-label="Previous topic"
-        >
-          {'< Prev'}
-        </button>
-        <span>Topic {displayedTopicNumber} of {announcedTopicTotal}</span>
-        <button
-          type="button"
-          onClick={handleNext}
-          disabled={totalTopics === 0 || activeTopicIndex >= totalTopics - 1}
-          className={`rounded-full border border-slate-700/70 px-2 py-1 transition ${activeTopicIndex >= totalTopics - 1 ? 'opacity-40 cursor-not-allowed' : 'hover:border-emerald-400 hover:text-emerald-300'}`}
-          aria-label="Next topic"
-        >
-          {'Next >'}
-        </button>
+      <div className="flex items-center px-4 pb-2 text-xs text-slate-400">
+        <span>{topicSummaryLabel}</span>
       </div>
 
       {isDisabled || totalSnippets === 0 ? (
@@ -394,86 +356,106 @@ export const WebSearchCard: React.FC<WebSearchCardProps> = ({
           {effectiveEmptyMessage}
         </div>
       ) : (
-        <div className="px-4 pb-4 space-y-3">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              {topicBadge ? (
-                <span className="inline-flex items-center rounded-full border border-slate-700/70 bg-slate-800/70 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-200">
-                  {topicBadge}
-                </span>
-              ) : null}
-              <p className="text-sm font-semibold text-slate-100 mt-1">
-                {topicHeading}
-              </p>
-              {activeTopic.reason ? (
-                <p className="text-xs text-slate-500 italic mt-0.5">Why: {activeTopic.reason}</p>
-              ) : null}
-            </div>
-          </div>
+        <div className="px-4 pb-4 space-y-6">
+          {enrichedTopics.map((topic, index) => {
+            const ordinal = resolveTopicOrdinal(topic, index);
+            const badge = resolveTopicBadge(topic);
+            const heading = resolveTopicHeading(topic, index);
+            const reason =
+              typeof topic?.reason === 'string' && topic.reason.trim().length
+                ? topic.reason.trim()
+                : undefined;
+            const topicSnippets = Array.isArray(topic.snippets) ? topic.snippets : [];
+            const sectionId = topic?.query || topic?.label || `topic-${index}`;
+            return (
+              <section
+                key={`${ordinal}-${sectionId}`}
+                className="space-y-3 border-t border-slate-800/70 pt-3 first:border-t-0 first:pt-0"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                      Topic {ordinal}
+                    </p>
+                    {badge ? (
+                      <span className="mt-1 inline-flex items-center rounded-full border border-slate-700/70 bg-slate-800/70 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-200">
+                        {badge}
+                      </span>
+                    ) : null}
+                    <p className="text-sm font-semibold text-slate-100 mt-1">{heading}</p>
+                    {reason ? (
+                      <p className="text-xs text-slate-500 italic mt-0.5">Why: {reason}</p>
+                    ) : null}
+                  </div>
+                </div>
 
-          {topicSnippets.length > 0 ? (
-            <ol className="mt-2 max-h-64 overflow-y-auto space-y-3 border-l border-slate-800/70 pl-4 pr-2">
-              {topicSnippets.map((item, snippetIdx) => {
-                const title = item.title || displayHost(item.url) || `Result ${snippetNumber(snippetIdx)}`;
-                const indexLabel = `[${snippetNumber(snippetIdx)}]`;
-                const indexClass = "text-xs text-slate-500 font-mono mt-0.5 inline-flex items-center";
-                return (
-                  <li key={item.url ?? `snippet-${activeTopicIndex}-${snippetIdx}`} className="text-sm text-slate-200">
-                    <div className="flex items-start gap-2">
-                      {item.url ? (
-                        <a
-                          href={item.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className={`${indexClass} hover:text-emerald-300 transition`}
-                          aria-label={`Open source ${snippetNumber(snippetIdx)}`}
-                        >
-                          {indexLabel}
-                        </a>
-                      ) : (
-                        <span className={indexClass}>{indexLabel}</span>
-                      )}
-                      <div>
-                        {item.url ? (
-                          <a
-                            href={item.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="font-medium text-slate-100 hover:text-emerald-300 transition"
-                          >
-                            {title}
-                          </a>
-                        ) : (
-                          <span className="font-medium text-slate-100">{title}</span>
-                        )}
-                        {item.snippet ? (
-                          <p className="mt-1 text-xs text-slate-300 leading-relaxed">{item.snippet}</p>
-                        ) : null}
-                        <div className="mt-2 flex flex-wrap items-center gap-3 text-[11px] text-slate-500">
-                          {displayHost(item.url) ? <span>{displayHost(item.url)}</span> : null}
-                          {item.published_at ? (
-                            <span>{formatPublishedDate(item.published_at) ?? item.published_at}</span>
-                          ) : null}
-                          {item.url ? (
-                            <a
-                              href={item.url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-emerald-300 hover:text-emerald-200"
-                            >
-                              View source
-                            </a>
-                          ) : null}
-                        </div>
-                      </div>
-                    </div>
-                  </li>
-                );
-              })}
-            </ol>
-          ) : (
-            <p className="mt-3 text-xs text-slate-400">No citations captured for this topic.</p>
-          )}
+                {topicSnippets.length > 0 ? (
+                  <ol className="mt-2 max-h-64 overflow-y-auto space-y-3 border-l border-slate-800/70 pl-4 pr-2">
+                    {topicSnippets.map((item, snippetIdx) => {
+                      const order = snippetNumber(snippetIdx);
+                      const title = item.title || displayHost(item.url) || `Result ${order}`;
+                      const indexLabel = `[${order}]`;
+                      const indexClass = "text-xs text-slate-500 font-mono mt-0.5 inline-flex items-center";
+                      return (
+                        <li key={item.url ?? `snippet-${ordinal}-${snippetIdx}`} className="text-sm text-slate-200">
+                          <div className="flex items-start gap-2">
+                            {item.url ? (
+                              <a
+                                href={item.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className={`${indexClass} hover:text-emerald-300 transition`}
+                                aria-label={`Open source ${ordinal}-${order}`}
+                              >
+                                {indexLabel}
+                              </a>
+                            ) : (
+                              <span className={indexClass}>{indexLabel}</span>
+                            )}
+                            <div>
+                              {item.url ? (
+                                <a
+                                  href={item.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="font-medium text-slate-100 hover:text-emerald-300 transition"
+                                >
+                                  {title}
+                                </a>
+                              ) : (
+                                <span className="font-medium text-slate-100">{title}</span>
+                              )}
+                              {item.snippet ? (
+                                <p className="mt-1 text-xs text-slate-300 leading-relaxed">{item.snippet}</p>
+                              ) : null}
+                              <div className="mt-2 flex flex-wrap items-center gap-3 text-[11px] text-slate-500">
+                                {displayHost(item.url) ? <span>{displayHost(item.url)}</span> : null}
+                                {item.published_at ? (
+                                  <span>{formatPublishedDate(item.published_at) ?? item.published_at}</span>
+                                ) : null}
+                                {item.url ? (
+                                  <a
+                                    href={item.url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-emerald-300 hover:text-emerald-200"
+                                  >
+                                    View source
+                                  </a>
+                                ) : null}
+                              </div>
+                            </div>
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ol>
+                ) : (
+                  <p className="mt-3 text-xs text-slate-400">No citations captured for this topic.</p>
+                )}
+              </section>
+            );
+          })}
         </div>
       )}
     </div>
