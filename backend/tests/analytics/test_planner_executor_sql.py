@@ -1019,6 +1019,46 @@ def test_market_share_sql_template_emits_annual_columns():
     assert 'AND 1=1' not in sql
 
 
+def test_margin_growth_template_quarterly_includes_quarter_fields():
+    intent = IntentModel(
+        intent_key='margin_growth_vs_peers',
+        confidence=0.9,
+        slots_detected={'company': 'NVDA', 'granularity': 'quarterly'},
+    )
+    plan_dict = plan_sql_rule_based(intent)
+    plan = QueryPlanModel(**plan_dict)
+    template = choose_template(intent, plan)
+    sql = compile_sql_from_plan(plan, intent, template=template)
+    normalized = " ".join(sql.split())
+
+    assert "calendar_quarter_num" in normalized
+    assert "calendar_quarter" in normalized
+    assert "calendar_quarter_num IS NOT NULL" in normalized
+    assert "OVER (PARTITION BY ticker ORDER BY calendar_year, calendar_quarter_num)" in normalized
+    assert "JOIN peer_avg p USING (calendar_year, calendar_quarter_num, calendar_quarter)" in normalized
+    assert "ORDER BY calendar_year, calendar_quarter_num" in normalized
+
+
+def test_margin_growth_template_annual_strips_quarter_fields():
+    intent = IntentModel(
+        intent_key='margin_growth_vs_peers',
+        confidence=0.9,
+        slots_detected={'company': 'NVDA'},
+    )
+    plan_dict = plan_sql_rule_based(intent)
+    plan_dict['granularity'] = 'annual'
+    plan_dict['group_by'] = ['calendar_year']
+    plan = QueryPlanModel(**plan_dict)
+    template = choose_template(intent, plan)
+    sql = compile_sql_from_plan(plan, intent, template=template)
+    normalized = " ".join(sql.split())
+
+    assert "calendar_quarter_num" not in normalized
+    assert "calendar_quarter" not in normalized
+    assert "JOIN peer_avg p USING (calendar_year)" in normalized
+    assert "ORDER BY calendar_year" in normalized
+
+
 def test_revenue_comparison_template_uses_between_and_custom_tickers():
     timeframe = TimeframeModel(start_year=2021, end_year=2024, granularity='annual')
     intent = IntentModel(
