@@ -37,8 +37,8 @@ Disallow: /node_modules/
 Disallow: /*.config.*$
 
 # Sitemaps
-Sitemap: https://ai.jiangyanqing.com/sitemap.xml
-Sitemap: https://ai.jiangyanqing.com/sitemap-projects.xml
+Sitemap: https://yanqing.app/sitemap.xml
+Sitemap: https://yanqing.app/sitemap-projects.xml
 
 # Crawl-delay to be respectful to server resources
 Crawl-delay: 1
