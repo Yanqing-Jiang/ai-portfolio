@@ -57,7 +57,7 @@ from analytics.flows.workflow import analytics_memory_workflow
 from analytics.core.clarify import put_answer
 from analytics.core.types import ClarifyAnswerModel
 
-from langchain_core.callbacks.base import BaseCallbackHandler
+from langchain.callbacks.base import BaseCallbackHandler
 
 
 
