@@ -513,7 +513,7 @@ export const ChartCard: React.FC<ChartCardProps> = ({
   }, [legendSelection]);
 
   return (
-    <div ref={containerRef} className="bg-gray-800 border border-gray-700 rounded-xl shadow-2xl p-4 sm:p-6 md:p-8">
+    <div ref={containerRef} className="bg-gray-800 border border-gray-700 rounded-xl shadow-2xl p-4 sm:p-6 md:p-8 w-full h-full flex flex-col">
       <div className="flex flex-col gap-3 mb-3 sm:mb-4">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
           <h2 className="text-lg sm:text-xl md:text-2xl font-semibold text-white">Interactive Visualization</h2>
@@ -557,7 +557,7 @@ export const ChartCard: React.FC<ChartCardProps> = ({
           </div>
         )}
       </div>
-      <div className={`${height} bg-white rounded-lg p-2 sm:p-3`}>
+      <div className={`${height} bg-white rounded-lg p-2 sm:p-3 flex flex-col h-full`}>
         {/* Controls row */}
         {(enableDropdown || enableCsvDownload) && (
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 sm:gap-4 mb-3 sm:mb-2">
@@ -590,40 +590,42 @@ export const ChartCard: React.FC<ChartCardProps> = ({
           </div>
         )}
         
-        <ChartErrorBoundary 
-          key={`chart-${chartRetryCount}-${JSON.stringify(spec)?.substring(0,50)}`} 
-          onError={handleChartError}
-        >
-          <EChartsReact 
-            option={withLightTheme(spec)} 
-            style={{ 
-              height: enableDropdown || enableCsvDownload ? 'calc(100% - 36px)' : 'calc(100% - 4px)', 
-              width: '100%' 
-            }} 
-            notMerge={false}
-            lazyUpdate={true}
-            opts={{ renderer: 'canvas', devicePixelRatio: window.devicePixelRatio || 1 }} 
-            onChartReady={(instance) => { 
-              chartRef.current = instance;
-              if (instance && legendSelection && Object.keys(legendSelection).length) {
-                try {
-                  const patched = {
-                    legend: [
-                      {
-                        selected: { ...legendSelection },
-                      },
-                    ],
-                  };
-                  instance.setOption(patched, { notMerge: false, replaceMerge: ['legend'] });
-                } catch (err) {
-                  console.warn('[ChartCard] Unable to apply legend selection on ready', err);
+        <div className="flex-1 min-h-0">
+          <ChartErrorBoundary 
+            key={`chart-${chartRetryCount}-${JSON.stringify(spec)?.substring(0,50)}`} 
+            onError={handleChartError}
+          >
+            <EChartsReact 
+              option={withLightTheme(spec)} 
+              style={{ 
+                height: '100%', 
+                width: '100%' 
+              }} 
+              notMerge={false}
+              lazyUpdate={true}
+              opts={{ renderer: 'canvas', devicePixelRatio: window.devicePixelRatio || 1 }} 
+              onChartReady={(instance) => { 
+                chartRef.current = instance;
+                if (instance && legendSelection && Object.keys(legendSelection).length) {
+                  try {
+                    const patched = {
+                      legend: [
+                        {
+                          selected: { ...legendSelection },
+                        },
+                      ],
+                    };
+                    instance.setOption(patched, { notMerge: false, replaceMerge: ['legend'] });
+                  } catch (err) {
+                    console.warn('[ChartCard] Unable to apply legend selection on ready', err);
+                  }
                 }
-              }
-              // Small delay to ensure proper initialization
-              setTimeout(() => instance.resize(), 100);
-            }}
-          />
-        </ChartErrorBoundary>
+                // Small delay to ensure proper initialization
+                setTimeout(() => instance.resize(), 100);
+              }}
+            />
+          </ChartErrorBoundary>
+        </div>
       </div>
     </div>
   );

@@ -136,55 +136,53 @@ query_patterns:
       - "vs average"
       
     sql_template: |
-      WITH quarterly_financials AS (
+      WITH metric_source AS (
         SELECT 
           ticker,
-          calendar_year,
-          calendar_quarter_num,
+          {select_clause},
           metric,
           value
         FROM comp_financials
         WHERE 
-          calendar_quarter_num IS NOT NULL
-          AND ticker IN ('AMD','AVGO','INTC','MU','NVDA','QCOM','TXN')
+          ticker IN ({ticker_list})
           AND metric IN ('Revenue', 'Gross Profit', 'Operating Income', 'Net Income')
-          AND calendar_year >= EXTRACT(YEAR FROM CURRENT_DATE) - {years_back}
+          AND {period_filter_clause}
+          AND {year_filter_clause}
           AND value IS NOT NULL
       ),
-      annual_aggregates AS (
+      revenue_rollup AS (
         SELECT 
           ticker,
-          calendar_year,
+          {select_clause},
           SUM(CASE WHEN metric = 'Revenue' THEN value END) AS revenue,
           SUM(CASE WHEN metric = 'Gross Profit' THEN value END) AS gross_profit,
           SUM(CASE WHEN metric = 'Operating Income' THEN value END) AS operating_income,
           SUM(CASE WHEN metric = 'Net Income' THEN value END) AS net_income
-        FROM quarterly_financials
-        GROUP BY ticker, calendar_year
+        FROM metric_source
+        GROUP BY ticker, {group_by_clause}
         HAVING SUM(CASE WHEN metric = 'Revenue' THEN value END) > 0
       ),
       margins AS (
         SELECT 
           ticker,
-          calendar_year,
+          {select_clause},
           revenue,
-          (gross_profit / revenue) * 100.0 AS gross_margin,
-          (operating_income / revenue) * 100.0 AS operating_margin,
-          (net_income / revenue) * 100.0 AS net_margin
-        FROM annual_aggregates
-        WHERE revenue > 0
+          CASE WHEN revenue > 0 THEN (gross_profit / revenue) * 100.0 ELSE NULL END AS gross_margin,
+          CASE WHEN revenue > 0 THEN (operating_income / revenue) * 100.0 ELSE NULL END AS operating_margin,
+          CASE WHEN revenue > 0 THEN (net_income / revenue) * 100.0 ELSE NULL END AS net_margin
+        FROM revenue_rollup
       ),
       peer_averages AS (
         SELECT 
-          calendar_year,
+          {group_by_clause},
           AVG(CASE WHEN ticker != '{target_ticker}' THEN gross_margin END) AS peer_avg_gross_margin,
           AVG(CASE WHEN ticker != '{target_ticker}' THEN operating_margin END) AS peer_avg_operating_margin,
           AVG(CASE WHEN ticker != '{target_ticker}' THEN net_margin END) AS peer_avg_net_margin
         FROM margins
-        GROUP BY calendar_year
+        GROUP BY {group_by_clause}
       )
       SELECT 
-        m.calendar_year,
+        {select_clause},
         m.ticker,
         m.gross_margin AS company_gross_margin,
         m.operating_margin AS company_operating_margin,
@@ -193,9 +191,9 @@ query_patterns:
         p.peer_avg_operating_margin,
         p.peer_avg_net_margin
       FROM margins m
-      JOIN peer_averages p ON m.calendar_year = p.calendar_year
+      JOIN peer_averages p USING ({group_by_clause})
       WHERE m.ticker = '{target_ticker}'
-      ORDER BY m.calendar_year
+      ORDER BY {order_by_clause}
       LIMIT 500;
 
   margin_growth_vs_peers:

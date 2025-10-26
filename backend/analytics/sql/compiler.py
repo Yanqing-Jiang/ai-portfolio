@@ -75,9 +75,14 @@ def compile_sql_from_plan(
         else None
     )
 
-    if sanitized_tickers and normalized_comparison and normalized_comparison not in {"single"}:
-        # Ensure peer-aware templates still fetch benchmark rows even when the
-        # user references a single company in the question.
+    if (
+        sanitized_tickers
+        and len(sanitized_tickers) == 1
+        and normalized_comparison
+        and normalized_comparison not in {"single"}
+    ):
+        # Ensure peer-aware templates still fetch benchmark rows when the user
+        # references a single company but is requesting an "all"/peer view.
         expanded: list[str] = list(sanitized_tickers)
         for fallback_ticker in default_tickers:
             if fallback_ticker not in expanded:
