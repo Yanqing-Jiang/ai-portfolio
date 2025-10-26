@@ -367,6 +367,7 @@ def plan_chart_rule_based(
                 numeric_cols = ['value']
 
         is_market_share_intent = bool(intent_key and intent_key.startswith('market_share'))
+        include_limit = 4
         if is_market_share_intent:
             preferred_slug = None
             if 'market_share_percent' in cols:
@@ -377,8 +378,24 @@ def plan_chart_rule_based(
                 numeric_cols = [preferred_slug]
             elif numeric_cols:
                 numeric_cols = [numeric_cols[0]]
+        elif intent_key == 'margin_growth_vs_peers':
+            prioritized: List[str] = []
+            margin_pairs = [
+                ('company_gross_margin_change_pp', 'peer_avg_gross_margin_change_pp'),
+                ('company_operating_margin_change_pp', 'peer_avg_operating_margin_change_pp'),
+                ('company_net_margin_change_pp', 'peer_avg_net_margin_change_pp'),
+            ]
+            for company_col, peer_col in margin_pairs:
+                if company_col in numeric_cols and company_col not in prioritized:
+                    prioritized.append(company_col)
+                if peer_col in numeric_cols and peer_col not in prioritized:
+                    prioritized.append(peer_col)
+            if prioritized:
+                remaining = [c for c in numeric_cols if c not in prioritized]
+                numeric_cols = prioritized + remaining
+            include_limit = 6
 
-        for c in numeric_cols[:4]:  # cap to avoid clutter
+        for c in numeric_cols[:include_limit]:  # cap to avoid clutter
             vtype = 'percent' if any(k in c.lower() for k in ['margin', 'share', 'ratio', 'growth', 'percent', 'pct']) else 'number'
 
             # Special naming for revenue growth comparisons

@@ -210,51 +210,56 @@ query_patterns:
       - "vs average"
       - "compare to industry"
     sql_template: |
-      WITH q AS (
-        SELECT * FROM comp_financials
-        WHERE calendar_quarter_num IS NOT NULL
+      WITH metric_source AS (
+        SELECT
+          ticker,
+          {select_clause},
+          SUM(CASE WHEN metric = 'Revenue' THEN value END) AS revenue,
+          SUM(CASE WHEN metric = 'Gross Profit' THEN value END) AS gross_profit,
+          SUM(CASE WHEN metric = 'Operating Income' THEN value END) AS operating_income,
+          SUM(CASE WHEN metric = 'Net Income' THEN value END) AS net_income
+        FROM comp_financials
+        WHERE
+          metric IN ('Revenue','Gross Profit','Operating Income','Net Income')
           AND ticker IN ('AMD','AVGO','INTC','MU','NVDA','QCOM','TXN')
-          AND metric IN ('Revenue','Gross Profit','Operating Income','Net Income')
-          AND calendar_year >= EXTRACT(YEAR FROM CURRENT_DATE) - {years_back}
-      ), yr AS (
+          AND {period_filter_clause}
+          AND {year_filter_clause}
+        GROUP BY
+          ticker,
+          {group_by_clause}
+        HAVING
+          SUM(CASE WHEN metric = 'Revenue' THEN value END) > 0
+      ),
+      margins AS (
         SELECT
           ticker,
-          calendar_year,
-          SUM(CASE WHEN metric='Revenue' THEN value END) AS rev,
-          SUM(CASE WHEN metric='Gross Profit' THEN value END) AS gp,
-          SUM(CASE WHEN metric='Operating Income' THEN value END) AS op,
-          SUM(CASE WHEN metric='Net Income' THEN value END) AS ni
-        FROM q
-        GROUP BY ticker, calendar_year
-        HAVING SUM(CASE WHEN metric='Revenue' THEN value END) > 0
-      ), margins AS (
+          {select_clause},
+          CASE WHEN revenue > 0 THEN (gross_profit / revenue) * 100.0 ELSE NULL END AS gross_margin,
+          CASE WHEN revenue > 0 THEN (operating_income / revenue) * 100.0 ELSE NULL END AS operating_margin,
+          CASE WHEN revenue > 0 THEN (net_income / revenue) * 100.0 ELSE NULL END AS net_margin
+        FROM metric_source
+      ),
+      growth AS (
         SELECT
           ticker,
-          calendar_year,
-          (gp/NULLIF(rev,0))*100.0 AS gross_margin,
-          (op/NULLIF(rev,0))*100.0 AS operating_margin,
-          (ni/NULLIF(rev,0))*100.0 AS net_margin
-        FROM yr
-      ), growth AS (
-        SELECT
-          ticker,
-          calendar_year,
-          (gross_margin - LAG(gross_margin, 1) OVER (PARTITION BY ticker ORDER BY calendar_year)) AS gross_margin_change_pp,
-          (operating_margin - LAG(operating_margin, 1) OVER (PARTITION BY ticker ORDER BY calendar_year)) AS operating_margin_change_pp,
-          (net_margin - LAG(net_margin, 1) OVER (PARTITION BY ticker ORDER BY calendar_year)) AS net_margin_change_pp
+          {select_clause},
+          gross_margin - LAG(gross_margin, 1) OVER (PARTITION BY ticker ORDER BY {order_by_clause}) AS gross_margin_change_pp,
+          operating_margin - LAG(operating_margin, 1) OVER (PARTITION BY ticker ORDER BY {order_by_clause}) AS operating_margin_change_pp,
+          net_margin - LAG(net_margin, 1) OVER (PARTITION BY ticker ORDER BY {order_by_clause}) AS net_margin_change_pp
         FROM margins
-      ), peer_avg AS (
+      ),
+      peer_avg AS (
         SELECT
-          calendar_year,
+          {group_by_clause},
           AVG(CASE WHEN ticker <> '{target_ticker}' THEN gross_margin_change_pp END) AS peer_avg_gross_margin_change_pp,
           AVG(CASE WHEN ticker <> '{target_ticker}' THEN operating_margin_change_pp END) AS peer_avg_operating_margin_change_pp,
           AVG(CASE WHEN ticker <> '{target_ticker}' THEN net_margin_change_pp END) AS peer_avg_net_margin_change_pp
         FROM growth
-        GROUP BY calendar_year
+        GROUP BY {group_by_clause}
       )
       SELECT
-        g.calendar_year,
-        '{target_ticker}'::text AS ticker,
+        {select_clause},
+        g.ticker,
         g.gross_margin_change_pp AS company_gross_margin_change_pp,
         g.operating_margin_change_pp AS company_operating_margin_change_pp,
         g.net_margin_change_pp AS company_net_margin_change_pp,
@@ -262,9 +267,9 @@ query_patterns:
         p.peer_avg_operating_margin_change_pp,
         p.peer_avg_net_margin_change_pp
       FROM growth g
-      JOIN peer_avg p USING (calendar_year)
+      JOIN peer_avg p USING ({group_by_clause})
       WHERE g.ticker = '{target_ticker}'
-      ORDER BY g.calendar_year
+      ORDER BY {order_by_clause}
       LIMIT 500;
 
   revenue_growth_analysis:
