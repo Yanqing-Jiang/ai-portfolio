@@ -89,11 +89,17 @@ export const WebSearchCard: React.FC<WebSearchCardProps> = ({
       const topicIndex = toNumber((entry as any).topic_index ?? (entry as any).topicIndex);
       const topicPosition = toNumber((entry as any).topic_position ?? (entry as any).topicPosition);
       const rawTopicLabel = (entry as any).topic_label ?? (entry as any).topicLabel;
+      const rawDisplayName = (entry as any).display_name ?? (entry as any).displayName;
+      const trimmedDisplayName =
+        typeof rawDisplayName === 'string' && rawDisplayName.trim().length
+          ? rawDisplayName.trim()
+          : undefined;
       const label = entry.label ?? rawTopicLabel ?? entry.query ?? query ?? '';
       const baseQuery = entry.query || query || '';
       const normalizedTopicLabel = normalize(rawTopicLabel);
       const normalizedLabel = normalize(label);
       const normalizedQuery = normalize(baseQuery);
+      const normalizedDisplayName = normalize(trimmedDisplayName);
       const keyParts: string[] = [];
       if (topicIndex !== undefined) {
         keyParts.push(`idx-${topicIndex}`);
@@ -107,13 +113,21 @@ export const WebSearchCard: React.FC<WebSearchCardProps> = ({
       if (normalizedLabel && normalizedLabel !== normalizedTopicLabel) {
         keyParts.push(`label-${normalizedLabel}`);
       }
+      if (normalizedDisplayName) {
+        keyParts.push(`display-${normalizedDisplayName}`);
+      }
       if (normalizedQuery) {
         keyParts.push(`query-${normalizedQuery}`);
       }
       if (!keyParts.length) {
         keyParts.push(`ord-${index}`);
       }
-      const key = keyParts.join('|');
+      let key = keyParts.join('|');
+      if (!key.length) {
+        key = `ord-${index}`;
+      } else if (seen.has(key)) {
+        key = `${key}|ord-${index}`;
+      }
       const clonedSnippets = Array.isArray(entry.snippets)
         ? entry.snippets.map((item) => ({ ...item }))
         : [];
@@ -130,6 +144,8 @@ export const WebSearchCard: React.FC<WebSearchCardProps> = ({
         topicIndex: topicIndex ?? null,
         topic_position: topicPosition ?? null,
         topicPosition: topicPosition ?? null,
+        display_name: trimmedDisplayName ?? undefined,
+        displayName: trimmedDisplayName ?? undefined,
       };
       const existing = seen.get(key);
       if (!existing) {
@@ -161,6 +177,12 @@ export const WebSearchCard: React.FC<WebSearchCardProps> = ({
       }
       if (!existing.topicLabel && payload.topicLabel) {
         existing.topicLabel = payload.topicLabel;
+      }
+      if (!existing.display_name && trimmedDisplayName) {
+        (existing as any).display_name = trimmedDisplayName;
+      }
+      if (!existing.displayName && trimmedDisplayName) {
+        (existing as any).displayName = trimmedDisplayName;
       }
       existing.query = existing.query || payload.query;
       if (existing.topic_index == null && payload.topic_index != null) {
@@ -253,7 +275,12 @@ export const WebSearchCard: React.FC<WebSearchCardProps> = ({
       }
       return prev;
     });
-  }, [enrichedTopics.length, enrichedTopics[0]?.query]);
+  }, [
+    enrichedTopics.length,
+    enrichedTopics[0]?.query,
+    (enrichedTopics[0] as any)?.display_name,
+    (enrichedTopics[0] as any)?.displayName,
+  ]);
 
   const activeTopic = enrichedTopics[Math.min(activeTopicIndex, enrichedTopics.length - 1)];
   const inferredTotal = typeof topicTotal === 'number' && topicTotal > 0 ? topicTotal : undefined;
@@ -272,6 +299,16 @@ export const WebSearchCard: React.FC<WebSearchCardProps> = ({
   const topicHeading = (() => {
     if (!activeTopic) {
       return `Topic ${activeTopicIndex + 1}`;
+    }
+    const displayNameRaw =
+      typeof (activeTopic as any)?.display_name === 'string'
+        ? (activeTopic as any).display_name
+        : typeof (activeTopic as any)?.displayName === 'string'
+          ? (activeTopic as any).displayName
+          : '';
+    const displayNameTrimmed = typeof displayNameRaw === 'string' ? displayNameRaw.trim() : '';
+    if (displayNameTrimmed) {
+      return displayNameTrimmed;
     }
     const candidateLabel = typeof activeTopic.label === 'string' ? activeTopic.label.trim() : '';
     const candidateQuery = typeof activeTopic.query === 'string' ? activeTopic.query.trim() : '';
@@ -306,7 +343,18 @@ export const WebSearchCard: React.FC<WebSearchCardProps> = ({
     }
     if (normalizedTopics.length) {
       const labels = normalizedTopics
-        .map((topic) => topic.label ?? (topic as any).topicLabel ?? topic.query)
+        .map((topic) => {
+          const dtName =
+            typeof (topic as any).display_name === 'string' && (topic as any).display_name.trim().length
+              ? (topic as any).display_name
+              : typeof (topic as any).displayName === 'string' && (topic as any).displayName.trim().length
+                ? (topic as any).displayName
+                : undefined;
+          if (dtName) {
+            return dtName;
+          }
+          return topic.label ?? (topic as any).topicLabel ?? topic.query;
+        })
         .filter((value): value is string => Boolean(value && value.trim()));
       return labels.length ? Array.from(new Set(labels)) : undefined;
     }

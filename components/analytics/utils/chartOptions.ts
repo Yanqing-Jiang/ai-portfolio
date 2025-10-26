@@ -1610,18 +1610,15 @@ export const withLightTheme = (spec: any) => {
     return name;
   };
 
+  const applyLegendFormatter = (legend: any) => ({
+    ...(legend || {}),
+    formatter: legendNameFormatter,
+    tooltip: { ...((legend || {}).tooltip || {}), show: true },
+  });
   if (Array.isArray(option.legend)) {
-    option.legend = option.legend.map((legend: any) => ({
-      ...(legend || {}),
-      formatter: legendNameFormatter,
-      tooltip: { show: true },
-    }));
+    option.legend = option.legend.map((legend: any) => applyLegendFormatter(legend));
   } else if (option.legend) {
-    option.legend = {
-      ...(option.legend || {}),
-      formatter: legendNameFormatter,
-      tooltip: { show: true },
-    };
+    option.legend = applyLegendFormatter(option.legend);
   }
 
   const paletteCandidates = Array.isArray(option.color)
@@ -1682,6 +1679,7 @@ export const withLightTheme = (spec: any) => {
     };
   };
 
+  const legendColorLookup: Record<string, string> = {};
   if (Array.isArray(option.series)) {
     option.series = option.series.map((s: any, seriesIndex: number) => {
       const seriesName = resolveSeriesName(s);
@@ -1697,6 +1695,13 @@ export const withLightTheme = (spec: any) => {
         (s?.itemStyle?.color as string) ||
         paletteColor ||
         hashedFallback;
+      if (seriesName) {
+        legendColorLookup[seriesName] = seriesColor;
+        const formattedLegend = legendNameFormatter(seriesName);
+        if (typeof formattedLegend === 'string' && formattedLegend.trim().length) {
+          legendColorLookup[formattedLegend] = seriesColor;
+        }
+      }
       resolvedSeriesColors.push(seriesColor);
       const styledSeries = applySeriesColor(s, seriesColor);
       return {
@@ -1746,6 +1751,83 @@ export const withLightTheme = (spec: any) => {
     if (resolvedSeriesColors.length) {
       option.color = resolvedSeriesColors;
     }
+  }
+
+  const syncLegendColors = (legendConfig: any) => {
+    if (!legendConfig) {
+      return legendConfig;
+    }
+    const baseLegend: any = { ...legendConfig };
+    const rawData = Array.isArray(baseLegend.data) ? baseLegend.data.slice() : [];
+    const fallbackNames = Array.isArray(option.series)
+      ? option.series
+          .map((series: any) => resolveSeriesName(series))
+          .filter((name): name is string => Boolean(name && name.trim().length))
+      : [];
+    const dataSource = rawData.length ? rawData : fallbackNames;
+    const ensureColor = (name: string | undefined) => {
+      if (!name) {
+        return undefined;
+      }
+      if (legendColorLookup[name]) {
+        return legendColorLookup[name];
+      }
+      const formatted = legendNameFormatter(name);
+      if (typeof formatted === 'string' && formatted.trim().length && legendColorLookup[formatted]) {
+        return legendColorLookup[formatted];
+      }
+      return undefined;
+    };
+    baseLegend.data = dataSource.map((entry: any) => {
+      if (typeof entry === 'string') {
+        const color = ensureColor(entry);
+        if (!color) {
+          return { name: entry, icon: baseLegend.icon || 'circle' };
+        }
+        return {
+          name: entry,
+          icon: baseLegend.icon || 'circle',
+          textStyle: { color, fontWeight: 600 },
+          itemStyle: { color },
+        };
+      }
+      if (!entry || typeof entry !== 'object') {
+        return entry;
+      }
+      const name = typeof entry.name === 'string' ? entry.name : undefined;
+      const color = ensureColor(name);
+      const nextIcon = entry.icon || baseLegend.icon || 'circle';
+      const nextItemStyle = color
+        ? { ...(entry.itemStyle || {}), color }
+        : entry.itemStyle;
+      const nextTextStyle = color
+        ? {
+            ...(entry.textStyle || {}),
+            color,
+            fontWeight: entry.textStyle?.fontWeight ?? 600,
+          }
+        : entry.textStyle;
+      return {
+        ...entry,
+        icon: nextIcon,
+        itemStyle: nextItemStyle,
+        textStyle: nextTextStyle,
+      };
+    });
+    baseLegend.icon = baseLegend.icon || 'circle';
+    baseLegend.tooltip = { ...(baseLegend.tooltip || {}), show: true };
+    const legendTextStyle = { ...(baseLegend.textStyle || {}) };
+    if (!legendTextStyle.color) {
+      legendTextStyle.color = '#333333';
+    }
+    baseLegend.textStyle = legendTextStyle;
+    return baseLegend;
+  };
+
+  if (Array.isArray(option.legend)) {
+    option.legend = option.legend.map((legend: any) => syncLegendColors(legend));
+  } else if (option.legend) {
+    option.legend = syncLegendColors(option.legend);
   }
 
   // Fallback: if legend.selected disables all series, auto-enable sensible defaults
