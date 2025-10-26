@@ -34,6 +34,71 @@ export const resolveChartSpecOption = (payload: any): any | null => {
   return null;
 };
 
+const DEFAULT_CHART_PALETTE = [
+  '#2563EB',
+  '#0EA5E9',
+  '#6366F1',
+  '#F97316',
+  '#10B981',
+  '#EC4899',
+  '#F59E0B',
+  '#14B8A6',
+  '#F43F5E',
+  '#8B5CF6',
+  '#22C55E',
+  '#D946EF',
+];
+
+const hslToHex = (h: number, s: number, l: number): string => {
+  const normalizedS = Math.max(0, Math.min(100, s)) / 100;
+  const normalizedL = Math.max(0, Math.min(100, l)) / 100;
+  const chroma = (1 - Math.abs(2 * normalizedL - 1)) * normalizedS;
+  const huePrime = ((h % 360) + 360) % 360 / 60;
+  const x = chroma * (1 - Math.abs((huePrime % 2) - 1));
+
+  let r1 = 0;
+  let g1 = 0;
+  let b1 = 0;
+  if (huePrime >= 0 && huePrime < 1) {
+    r1 = chroma;
+    g1 = x;
+  } else if (huePrime >= 1 && huePrime < 2) {
+    r1 = x;
+    g1 = chroma;
+  } else if (huePrime >= 2 && huePrime < 3) {
+    g1 = chroma;
+    b1 = x;
+  } else if (huePrime >= 3 && huePrime < 4) {
+    g1 = x;
+    b1 = chroma;
+  } else if (huePrime >= 4 && huePrime < 5) {
+    r1 = x;
+    b1 = chroma;
+  } else if (huePrime >= 5 && huePrime < 6) {
+    r1 = chroma;
+    b1 = x;
+  }
+
+  const match = normalizedL - chroma / 2;
+  const r = Math.round((r1 + match) * 255);
+  const g = Math.round((g1 + match) * 255);
+  const b = Math.round((b1 + match) * 255);
+
+  const toHex = (value: number) => value.toString(16).padStart(2, '0');
+  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+};
+
+const colorFromString = (input: string): string => {
+  const seed = input && input.trim().length ? input : 'series';
+  let hash = 0;
+  for (let i = 0; i < seed.length; i += 1) {
+    hash = (hash << 5) - hash + seed.charCodeAt(i);
+    hash |= 0;
+  }
+  const hue = Math.abs(hash) % 360;
+  return hslToHex(hue, 68, 55);
+};
+
 const coerceNumeric = (value: any) => {
   if (typeof value === 'number' || value === null) {
     return value;
@@ -594,6 +659,31 @@ const parseQuarter = (value: any): number | null => {
     if (mapping[trimmed] !== undefined) {
       return mapping[trimmed];
     }
+    const ordinalMap: Record<string, number> = {
+      first: 1,
+      '1st': 1,
+      second: 2,
+      '2nd': 2,
+      third: 3,
+      '3rd': 3,
+      fourth: 4,
+      '4th': 4,
+    };
+    if (ordinalMap[trimmed] !== undefined) {
+      return ordinalMap[trimmed];
+    }
+    const ordinalMatch = trimmed.match(/(first|second|third|fourth)/);
+    if (ordinalMatch && ordinalMap[ordinalMatch[1]]) {
+      return ordinalMap[ordinalMatch[1]];
+    }
+    const suffixMatch = trimmed.match(/([1-4])(st|nd|rd|th)?\s*quarter/);
+    if (suffixMatch) {
+      return Number(suffixMatch[1]);
+    }
+    const wordQuarterMatch = trimmed.match(/quarter\s*([1-4])/);
+    if (wordQuarterMatch) {
+      return Number(wordQuarterMatch[1]);
+    }
     const match = trimmed.match(/q?\s*([1-4])/);
     if (match) {
       return Number(match[1]);
@@ -655,8 +745,16 @@ const sortRawDataChronologically = (rawData: any[]): any[] => {
   return rawData
     .map((row, index) => {
       const year = parseYear(row?.calendar_year ?? row?.fiscal_year ?? row?.year);
-      const quarter = parseQuarter(row?.calendar_quarter ?? row?.fiscal_quarter ?? row?.quarter);
-      const month = parseMonth(row?.calendar_month ?? row?.month);
+      const quarterValue =
+        row?.calendar_quarter ??
+        row?.calendar_quarter_num ??
+        row?.fiscal_quarter ??
+        row?.fiscal_quarter_num ??
+        row?.quarter ??
+        row?.quarter_num ??
+        row?.quarter_number;
+      const quarter = parseQuarter(quarterValue);
+      const month = parseMonth(row?.calendar_month ?? row?.month ?? row?.calendar_month_num ?? row?.month_num);
       const timestamp = parseTimestamp(
         row?.period ?? row?.period_end_date ?? row?.period_start_date ?? row?.date ?? row?.timestamp ?? row?.as_of ?? row?.reported_at,
       );
@@ -692,6 +790,14 @@ export const hydrateChartSpec = (spec: any) => {
   const displayNames = spec.meta?.displayNames || {};
   const includedColumns = spec.meta?.includedColumns || Object.keys(displayNames || {});
   const baseClone = JSON.parse(JSON.stringify(spec));
+  const requestedGranularityValue =
+    (spec.meta?.requestedGranularity ??
+      spec.meta?.granularity ??
+      (typeof spec.meta?.timeframe === 'object' ? (spec.meta?.timeframe as any)?.granularity : undefined)) ||
+    null;
+  const preferQuarterly =
+    typeof requestedGranularityValue === 'string' &&
+    requestedGranularityValue.toLowerCase() === 'quarterly';
   if (!Array.isArray(rawData) || rawData.length === 0 || !Array.isArray(spec.series)) {
     return dedupePercentShadowSeries(normalizePercentSeriesData(normalizeSeriesNumericValues(baseClone), spec));
   }
@@ -701,33 +807,90 @@ export const hydrateChartSpec = (spec: any) => {
 
   const toLabel = (row: Record<string, any>) => {
     const yearRaw = row?.calendar_year ?? row?.fiscal_year ?? row?.year;
-    const quarterRaw = row?.calendar_quarter ?? row?.fiscal_quarter ?? row?.quarter;
-    const monthRaw = row?.calendar_month ?? row?.month;
-    const periodRaw = row?.period ?? row?.period_end_date ?? row?.date ?? row?.timestamp;
+    const quarterCandidates = [
+      row?.calendar_quarter,
+      row?.calendar_quarter_num,
+      row?.fiscal_quarter,
+      row?.fiscal_quarter_num,
+      row?.quarter,
+      row?.quarter_num,
+      row?.quarter_number,
+    ];
+    const monthRaw = row?.calendar_month ?? row?.month ?? row?.calendar_month_num ?? row?.month_num;
+    const periodRaw = row?.period ?? row?.period_end_date ?? row?.period_start_date ?? row?.date ?? row?.timestamp;
 
-    const year = resolveTemporalComponent(yearRaw);
-    const quarter = resolveTemporalComponent(quarterRaw);
-
-    if (quarter && year) {
-      return `${quarter} ${year}`;
-    }
-    if (year !== undefined && year !== null) {
-      return `${year}`;
-    }
-    const month = resolveTemporalComponent(monthRaw);
-    if (year !== undefined && month) {
-      try {
-        const date = new Date(Date.UTC(Number(year), Number(month) - 1, 1));
-        if (!Number.isNaN(date.valueOf())) {
-          return date.toLocaleString('en-US', { month: 'short', year: 'numeric' });
-        }
-      } catch {
-        /* ignore */
+    const parsedYear = parseYear(yearRaw);
+    let yearLabel = parsedYear !== null ? String(parsedYear) : undefined;
+    if (!yearLabel) {
+      const yearResolved = resolveTemporalComponent(yearRaw);
+      if (yearResolved !== undefined && yearResolved !== null && `${yearResolved}`.trim()) {
+        yearLabel = String(yearResolved).trim();
       }
     }
-    const period = resolveTemporalComponent(periodRaw);
-    if (period) {
-      return String(period);
+
+    let quarterNumber: number | null = null;
+    for (const candidate of quarterCandidates) {
+      const parsed = parseQuarter(candidate);
+      if (parsed !== null) {
+        quarterNumber = parsed;
+        break;
+      }
+    }
+
+    if (!quarterNumber && preferQuarterly) {
+      const monthNumber = parseMonth(monthRaw);
+      if (monthNumber) {
+        quarterNumber = Math.floor((monthNumber - 1) / 3) + 1;
+      }
+    }
+
+    if (!quarterNumber && preferQuarterly) {
+      const timestampMs = parseTimestamp(periodRaw);
+      if (timestampMs !== null) {
+        const date = new Date(timestampMs);
+        if (!Number.isNaN(date.valueOf())) {
+          quarterNumber = Math.floor(date.getUTCMonth() / 3) + 1;
+          if (!yearLabel) {
+            yearLabel = String(date.getUTCFullYear());
+          }
+        }
+      }
+    }
+
+    if (!quarterNumber && preferQuarterly) {
+      const periodQuarter = parseQuarter(resolveTemporalComponent(periodRaw));
+      if (periodQuarter !== null) {
+        quarterNumber = periodQuarter;
+      }
+    }
+
+    if (quarterNumber && quarterNumber >= 1 && quarterNumber <= 4) {
+      return yearLabel ? `Q${quarterNumber} ${yearLabel}` : `Q${quarterNumber}`;
+    }
+
+    const monthResolved = resolveTemporalComponent(monthRaw);
+    if (yearLabel && monthResolved) {
+      const monthNumber = parseMonth(monthResolved);
+      const numericYear = parseYear(yearLabel);
+      if (monthNumber && numericYear !== null) {
+        try {
+          const date = new Date(Date.UTC(numericYear, monthNumber - 1, 1));
+          if (!Number.isNaN(date.valueOf())) {
+            return date.toLocaleString('en-US', { month: 'short', year: 'numeric' });
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+
+    if (yearLabel) {
+      return yearLabel;
+    }
+
+    const periodResolved = resolveTemporalComponent(periodRaw);
+    if (periodResolved) {
+      return String(periodResolved);
     }
     return 'Value';
   };
@@ -762,7 +925,12 @@ export const hydrateChartSpec = (spec: any) => {
     'fiscal_year',
     'calendar_quarter',
     'fiscal_quarter',
+    'calendar_quarter_num',
+    'fiscal_quarter_num',
+    'quarter_num',
+    'quarter_number',
     'calendar_month',
+    'calendar_month_num',
     'month',
     'year',
     'quarter',
@@ -1456,7 +1624,13 @@ export const withLightTheme = (spec: any) => {
     };
   }
 
-  const palette = Array.isArray(option.color) ? option.color : [];
+  const paletteCandidates = Array.isArray(option.color)
+    ? (option.color as unknown[]).filter(
+        (entry): entry is string => typeof entry === 'string' && entry.trim().length > 0,
+      )
+    : [];
+  const palettePool = paletteCandidates.length ? paletteCandidates.slice() : DEFAULT_CHART_PALETTE.slice();
+  const resolvedSeriesColors: string[] = [];
   const resolveSeriesName = (series: any) => {
     if (series && typeof series.name === 'string' && series.name.trim().length) {
       return series.name.trim();
@@ -1510,16 +1684,20 @@ export const withLightTheme = (spec: any) => {
 
   if (Array.isArray(option.series)) {
     option.series = option.series.map((s: any, seriesIndex: number) => {
-      const paletteColor =
-        palette.length > 0 ? palette[seriesIndex % palette.length] : undefined;
       const seriesName = resolveSeriesName(s);
       const averageSeriesColor = '#F59E0B';
       const overrideColor = isAverageSeries(seriesName) ? averageSeriesColor : undefined;
+      if (palettePool.length <= seriesIndex) {
+        palettePool.push(colorFromString(seriesName || `series-${seriesIndex}`));
+      }
+      const paletteColor = palettePool[seriesIndex];
+      const hashedFallback = colorFromString(seriesName || `series-${seriesIndex}`);
       const seriesColor =
         overrideColor ||
         (s?.itemStyle?.color as string) ||
         paletteColor ||
-        '#1D4ED8';
+        hashedFallback;
+      resolvedSeriesColors.push(seriesColor);
       const styledSeries = applySeriesColor(s, seriesColor);
       return {
         ...s,
@@ -1565,6 +1743,9 @@ export const withLightTheme = (spec: any) => {
       areaStyle: styledSeries.areaStyle,
       };
     });
+    if (resolvedSeriesColors.length) {
+      option.color = resolvedSeriesColors;
+    }
   }
 
   // Fallback: if legend.selected disables all series, auto-enable sensible defaults

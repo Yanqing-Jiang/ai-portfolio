@@ -121,6 +121,8 @@ type SnapshotReuseInfo = {
   followUpRoute?: string | null;
 };
 
+type ChartGranularity = 'annual' | 'quarterly';
+
 const SLOT_LABEL_CACHE = new Map<string, string>();
 
 const formatSlotLabel = (slot: string): string => {
@@ -202,6 +204,125 @@ const formatTimeframeDisplay = (raw: any): string | undefined => {
     }
   }
   return undefined;
+};
+
+const detectGranularityFromText = (value: string): ChartGranularity | null => {
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+  if (/\bquarter(?:s|ly)?\b/.test(normalized) || /\bq[1-4]\b/.test(normalized) || /\bq\d{1}\s*\d{4}\b/.test(normalized)) {
+    return 'quarterly';
+  }
+  if (/\bannual(?:ly)?\b/.test(normalized) || /\byearly\b/.test(normalized)) {
+    return 'annual';
+  }
+  return null;
+};
+
+const normalizeGranularityValue = (value: unknown): ChartGranularity | null => {
+  if (value == null) {
+    return null;
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim().toLowerCase();
+    if (!trimmed) {
+      return null;
+    }
+    if (trimmed === 'quarterly' || trimmed === 'quarter') {
+      return 'quarterly';
+    }
+    if (trimmed === 'annual' || trimmed === 'yearly' || trimmed === 'year') {
+      return 'annual';
+    }
+    return detectGranularityFromText(trimmed);
+  }
+  if (typeof value === 'object' && !Array.isArray(value)) {
+    const explicit = (value as Record<string, unknown>).granularity;
+    const normalized = normalizeGranularityValue(explicit);
+    if (normalized) {
+      return normalized;
+    }
+  }
+  return null;
+};
+
+const extractGranularityFromTimeframe = (timeframe: unknown): ChartGranularity | null => {
+  if (!timeframe || typeof timeframe !== 'object') {
+    return null;
+  }
+  const tf = timeframe as Record<string, unknown>;
+  const direct = normalizeGranularityValue(tf.granularity);
+  if (direct) {
+    return direct;
+  }
+  const textualHints: Array<unknown> = [
+    tf.label,
+    tf.value,
+    tf.display,
+    tf.raw,
+    tf.original,
+    tf.title,
+    tf.description,
+  ];
+  for (const hint of textualHints) {
+    if (typeof hint === 'string') {
+      const detected = detectGranularityFromText(hint);
+      if (detected) {
+        return detected;
+      }
+    }
+  }
+  if (typeof tf.quarters_back === 'number' && Number.isFinite(tf.quarters_back) && tf.quarters_back > 0) {
+    return 'quarterly';
+  }
+  if (typeof tf.years_back === 'number' && Number.isFinite(tf.years_back) && tf.years_back > 0) {
+    const detected = detectGranularityFromText(`last ${tf.years_back} years`);
+    if (detected) {
+      return detected;
+    }
+  }
+  return null;
+};
+
+const resolveGranularityCandidate = (payload: unknown): ChartGranularity | null => {
+  if (payload == null) {
+    return null;
+  }
+  if (typeof payload === 'string') {
+    return normalizeGranularityValue(payload);
+  }
+  if (typeof payload === 'object') {
+    if (Array.isArray(payload)) {
+      for (const entry of payload) {
+        const candidate = resolveGranularityCandidate(entry);
+        if (candidate) {
+          return candidate;
+        }
+      }
+      return null;
+    }
+    const direct = normalizeGranularityValue(payload);
+    if (direct) {
+      return direct;
+    }
+    const timeframeCandidate = extractGranularityFromTimeframe(payload);
+    if (timeframeCandidate) {
+      return timeframeCandidate;
+    }
+    const textual = (() => {
+      try {
+        return JSON.stringify(payload);
+      } catch {
+        return undefined;
+      }
+    })();
+    if (textual) {
+      return detectGranularityFromText(textual);
+    }
+    return null;
+  }
+  return null;
 };
 
 const coerceClarificationValue = (value: any): string | undefined => {
@@ -863,7 +984,6 @@ const buildResultMessageFields = () => ({
       query,
       queryTerms,
       searchTopic: searchTopicValue,
-      searchTopics,
       summary,
       error,
       reason,
@@ -881,7 +1001,7 @@ const buildResultMessageFields = () => ({
       provider: coerceString(raw.provider) ?? (raw.model ? 'Gemini' : undefined),
       model: coerceString(raw.model) ?? coerceString(raw.model_name) ?? coerceString(raw.modelName),
       latencyStats,
-      searchTopics: mergedSearchTopics,
+      searchTopics: mergedSearchTopics ?? searchTopics,
       topicTotal:
         typeof raw.topic_total === 'number'
           ? raw.topic_total
@@ -1527,6 +1647,7 @@ const workflowDataRef = useRef<{
   specialistCards: SpecialistCard[];
   latencyGuardrail: LatencyGuardrail | null;
   snapshotReuse: SnapshotReuseInfo | null;
+  requestedGranularity: ChartGranularity | null;
 }>({
   chartSpec: null,
   analysis: '',
@@ -1549,7 +1670,66 @@ const workflowDataRef = useRef<{
   specialistCards: [],
     latencyGuardrail: null,
     snapshotReuse: null,
+  requestedGranularity: null,
   });
+
+  const commitRequestedGranularity = useCallback(
+    (candidate: ChartGranularity | null) => {
+      if (!candidate) {
+        return;
+      }
+      const current = workflowDataRef.current.requestedGranularity;
+      if (current === 'quarterly' && candidate !== 'quarterly') {
+        return;
+      }
+      if (current !== candidate) {
+        workflowDataRef.current.requestedGranularity = candidate;
+      }
+    },
+    [],
+  );
+
+  const applyGranularityToChartSpec = useCallback(
+    (spec: any): any => {
+      if (!spec || typeof spec !== 'object') {
+        return spec;
+      }
+      const granularity = workflowDataRef.current.requestedGranularity;
+      if (!granularity) {
+        return spec;
+      }
+      const currentMeta = (spec as any).meta ?? {};
+      const requestedMatches = currentMeta.requestedGranularity === granularity;
+      const hasMetaGranularity =
+        typeof currentMeta.granularity === 'string' && currentMeta.granularity.length > 0;
+      const timeframeMeta =
+        currentMeta.timeframe && typeof currentMeta.timeframe === 'object'
+          ? (currentMeta.timeframe as Record<string, any>)
+          : null;
+      const timeframeHasGranularity =
+        timeframeMeta && typeof timeframeMeta.granularity === 'string' && timeframeMeta.granularity.length > 0;
+      if (requestedMatches && (hasMetaGranularity || !currentMeta.granularity) && (!timeframeMeta || timeframeHasGranularity)) {
+        return spec;
+      }
+      const nextMeta: Record<string, any> = { ...currentMeta, requestedGranularity: granularity };
+      if (!hasMetaGranularity) {
+        nextMeta.granularity = granularity;
+      }
+      if (timeframeMeta) {
+        nextMeta.timeframe = { ...timeframeMeta };
+        if (!timeframeHasGranularity) {
+          nextMeta.timeframe.granularity = granularity;
+        }
+      } else {
+        nextMeta.timeframe = { granularity };
+      }
+      return {
+        ...spec,
+        meta: nextMeta,
+      };
+    },
+    [],
+  );
 
   const applyAnalysisSourcesUpdate = useCallback((incoming: AnalysisSources | null | undefined) => {
     if (!incoming || !Object.keys(incoming).length) {
@@ -1644,12 +1824,12 @@ const workflowDataRef = useRef<{
       const sanitized = sanitizeStructuredText(normalizedUpdates.analysis);
       normalizedUpdates.analysis = sanitized ?? normalizedUpdates.analysis;
     }
-    // Merge pending updates
-    Object.assign(pendingUpdatesRef.current, normalizedUpdates);
-
     if (normalizedUpdates.chartSpec !== undefined) {
+      normalizedUpdates.chartSpec = applyGranularityToChartSpec(normalizedUpdates.chartSpec);
       workflowDataRef.current.chartSpec = normalizedUpdates.chartSpec;
     }
+    // Merge pending updates
+    Object.assign(pendingUpdatesRef.current, normalizedUpdates);
 
     // Clear existing timeout
     if (updateTimeoutRef.current) {
@@ -1673,8 +1853,10 @@ const workflowDataRef = useRef<{
         workflowDataRef.current.progressiveText = pending.streamingText ?? '';
       }
       if (pending.chartSpec !== undefined) {
-        setChartSpec(pending.chartSpec);
-        workflowDataRef.current.chartSpec = pending.chartSpec;
+        const annotatedSpec = applyGranularityToChartSpec(pending.chartSpec);
+        setChartSpec(annotatedSpec);
+        workflowDataRef.current.chartSpec = annotatedSpec;
+        pending.chartSpec = annotatedSpec;
       }
       if (pending.sqlQuery !== undefined) {
         setSqlQuery(pending.sqlQuery);
@@ -2554,6 +2736,17 @@ const workflowDataRef = useRef<{
             }
           }
           const ackSlot = typeof eventData.slot === 'string' ? eventData.slot : 'answer';
+          if (ackSlot === 'timeframe') {
+            const statusValue =
+              (eventData.slot_status as any)?.value ??
+              (eventData.slot_status as any)?.display ??
+              (eventData.slot_status as any)?.label ??
+              eventData.slot_status;
+            const granularityCandidate =
+              resolveGranularityCandidate(statusValue) ??
+              resolveGranularityCandidate(eventData.answer);
+            commitRequestedGranularity(granularityCandidate);
+          }
           const pendingEcho = lastClarificationEchoRef.current;
           const ackEcho = formatClarificationEcho(ackSlot, eventData.answer);
           const isDuplicate =
@@ -2593,12 +2786,31 @@ const workflowDataRef = useRef<{
           break;
         }
           
-        case 'plan_built':
+        case 'plan_built': {
           // Combined planning step for streamlined agent flow
           // Handle both old (eventData.plan) and new (simplified) formats
-          const planData = eventData.plan || { metrics_count: eventData.metrics_count, granularity: eventData.granularity, comparison: eventData.comparison };
-          stepsHook.updateStepStatus('plan_and_select_template', 'in_progress', ['Plan built'], { plan: planData }, stepInfo.elapsed_ms);
+          const planData =
+            eventData.plan || {
+              metrics_count: eventData.metrics_count,
+              granularity: eventData.granularity,
+              comparison: eventData.comparison,
+              timeframe: eventData.timeframe,
+            };
+          const candidateGranularity =
+            resolveGranularityCandidate((planData as any)?.granularity) ??
+            resolveGranularityCandidate((planData as any)?.timeframe) ??
+            resolveGranularityCandidate(eventData.granularity) ??
+            resolveGranularityCandidate(eventData.timeframe);
+          commitRequestedGranularity(candidateGranularity);
+          stepsHook.updateStepStatus(
+            'plan_and_select_template',
+            'in_progress',
+            ['Plan built'],
+            { plan: planData },
+            stepInfo.elapsed_ms,
+          );
           break;
+        }
 
         case 'template_selected':
           // Complete combined planning + selection step
@@ -3027,31 +3239,25 @@ const workflowDataRef = useRef<{
             let opLines: string[] = [];
             let patchedChartSpec: any = null;
             if (hasOps) {
-              setChartSpec((prev) => {
-                const baseCandidate =
-                  (prev && typeof prev === 'object' ? prev : undefined) ??
-                  (pendingUpdatesRef.current.chartSpec &&
-                  typeof pendingUpdatesRef.current.chartSpec === 'object'
-                    ? pendingUpdatesRef.current.chartSpec
-                    : undefined) ??
-                  (workflowDataRef.current.chartSpec &&
-                  typeof workflowDataRef.current.chartSpec === 'object'
-                    ? workflowDataRef.current.chartSpec
-                    : undefined) ??
-                  (eventData?.chart_spec && typeof eventData.chart_spec === 'object'
-                    ? eventData.chart_spec
-                    : undefined);
+              const baseCandidate =
+                (pendingUpdatesRef.current.chartSpec && typeof pendingUpdatesRef.current.chartSpec === 'object'
+                  ? pendingUpdatesRef.current.chartSpec
+                  : undefined) ??
+                (workflowDataRef.current.chartSpec && typeof workflowDataRef.current.chartSpec === 'object'
+                  ? workflowDataRef.current.chartSpec
+                  : undefined) ??
+                (eventData?.chart_spec && typeof eventData.chart_spec === 'object'
+                  ? eventData.chart_spec
+                  : undefined);
 
-                if (!baseCandidate || typeof baseCandidate !== 'object') {
-                  return prev;
-                }
-
+              if (baseCandidate && typeof baseCandidate === 'object') {
                 const next = applyChartOps(baseCandidate, eventData);
-                workflowDataRef.current.chartSpec = next;
-                pendingUpdatesRef.current.chartSpec = next;
-                patchedChartSpec = next;
-                return next;
-              });
+                const annotatedNext = applyGranularityToChartSpec(next);
+                workflowDataRef.current.chartSpec = annotatedNext;
+                pendingUpdatesRef.current.chartSpec = annotatedNext;
+                patchedChartSpec = annotatedNext;
+                setChartSpec(annotatedNext);
+              }
 
               opLines = eventData.ops.map((op: any) => {
                 try {
@@ -3111,7 +3317,7 @@ const workflowDataRef = useRef<{
                   ? 'completed'
                   : 'in_progress';
 
-            const resolvedChartSpec =
+            const resolvedChartSpecRaw =
               patchedChartSpec && typeof patchedChartSpec === 'object'
                 ? patchedChartSpec
                 : eventData?.chart_spec && typeof eventData.chart_spec === 'object'
@@ -3119,6 +3325,9 @@ const workflowDataRef = useRef<{
                   : workflowDataRef.current.chartSpec && typeof workflowDataRef.current.chartSpec === 'object'
                     ? workflowDataRef.current.chartSpec
                     : undefined;
+            const resolvedChartSpec = resolvedChartSpecRaw
+              ? applyGranularityToChartSpec(resolvedChartSpecRaw)
+              : undefined;
 
             const stepDetails: Record<string, any> = {
               patch: eventData,
@@ -3437,8 +3646,10 @@ const workflowDataRef = useRef<{
               workflowDataRef.current.analysis = normalizedAnalysis;
             }
             if (bundle.chart_spec) {
-              scheduleProgressiveUpdate({ chartSpec: bundle.chart_spec });
-              workflowDataRef.current.chartSpec = bundle.chart_spec;
+              const annotatedBundleSpec = applyGranularityToChartSpec(bundle.chart_spec);
+              bundle.chart_spec = annotatedBundleSpec;
+              scheduleProgressiveUpdate({ chartSpec: annotatedBundleSpec });
+              workflowDataRef.current.chartSpec = annotatedBundleSpec;
             }
             if (bundle.sql) {
               scheduleProgressiveUpdate({ sqlQuery: bundle.sql });
