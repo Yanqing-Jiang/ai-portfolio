@@ -7,7 +7,7 @@ import {
   TradingViewSymbolOverview,
   WebSearchCard,
 } from '../common';
-import { isValidChartSpec } from '../utils';
+import { isValidChartSpec, sanitizeStructuredText } from '../utils';
 import type {
   FlowMode,
   StockWidgetConfig,
@@ -64,7 +64,14 @@ export const LiveArtifacts: React.FC<LiveArtifactsProps> = ({
   const finalAnalysis = (analysis || '').trim();
   const showingFinalAnalysis = finalAnalysis.length > 0 && (!progressiveDraft || persistOnComplete);
   const analysisForDisplay = showingFinalAnalysis ? finalAnalysis : progressiveDraft;
-  const hasAnalysis = Boolean(analysisForDisplay);
+  const renderedAnalysis = React.useMemo(() => {
+    if (!analysisForDisplay) {
+      return analysisForDisplay;
+    }
+    const sanitized = sanitizeStructuredText(analysisForDisplay);
+    return sanitized ?? analysisForDisplay;
+  }, [analysisForDisplay]);
+  const hasAnalysis = Boolean(renderedAnalysis);
   const runComplete = Boolean(finalAnalysis);
   const allowArtifacts = isLoading || !runComplete || persistOnComplete;
   const analysisHeading = showingFinalAnalysis ? 'Financial Analysis' : 'Analysis Draft';
@@ -224,7 +231,7 @@ export const LiveArtifacts: React.FC<LiveArtifactsProps> = ({
           </div>
         ) : null}
         <div className="p-4 sm:p-5">
-          <AnalysisCard analysis={analysisForDisplay} analysisSources={analysisSources} />
+          <AnalysisCard analysis={renderedAnalysis} analysisSources={analysisSources} />
         </div>
       </div>,
     );

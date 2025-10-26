@@ -54,7 +54,6 @@ const CHART_STYLE_VOCAB = [
   'a bar chart',
   'a stacked column chart',
   'a heatmap',
-  'a line chart that emphasises trend changes',
 ];
 
 const ANALYSIS_ANGLE_VOCAB = [
@@ -413,7 +412,7 @@ export const buildPromptCandidates = (
     }
     const angle = pickVariant('analysis', ANALYSIS_ANGLE_VOCAB, rotationKey, variantOffset, saltBase);
     const emphasise = context.primarySymbols.length ? ` for ${primary}` : '';
-    const copy = `Rewrite the insight but focus on ${angle}${emphasise}.`;
+    const copy = `Rewrite the analysis but focus on ${angle}${emphasise}.`;
     return { lane: 'analysis', copy, intent: 'analysis_revision' };
   };
 
@@ -432,7 +431,7 @@ export const buildPromptCandidates = (
     }
     const focus = pickVariant('mixed', MIXED_FOCUS_VOCAB, rotationKey, variantOffset, saltBase);
     const suffix = context.primarySymbols.length ? ` for ${primary}` : '';
-    const copy = `Keep the query but update both the chart and narrative to highlight ${focus}${suffix}.`;
+    const copy = `Keep the query but update both the chart and analysis to highlight ${focus}${suffix}.`;
     return { lane: 'mixed', copy, intent: 'mixed_revision' };
   };
 

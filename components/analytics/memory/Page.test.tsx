@@ -13,6 +13,9 @@ vi.mock('../hooks', () => ({
 
 vi.mock('../common', () => ({
   AnalysisCard: () => <div data-testid="analysis-card" />,
+}));
+
+vi.mock('../common/ProcessPanel', () => ({
   ProcessPanel: () => <div data-testid="process-panel" />,
 }));
 

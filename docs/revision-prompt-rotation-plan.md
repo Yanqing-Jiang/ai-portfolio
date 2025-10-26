@@ -22,9 +22,9 @@ After the first answer, replace the “discovery” chips with **lane-specific p
 | Lane | Trigger Logic | Prompt Copy Template | Example (NVDA focus) |
 | --- | --- | --- | --- |
 | Chart Revision | `availableLanes.chart` | `Change the chart to {chartStyle} and reuse the same dataset.` | “Change the SQL chart to a bar chart.” |
-| Analysis Revision | `availableLanes.analysis` | `Rewrite the insight but emphasise {analysisAngle}.` | “Rewrite the insight but focus on industry background.” |
+| Analysis Revision | `availableLanes.analysis` | `Rewrite the analysis but emphasise {analysisAngle}.` | “Rewrite the analysis but focus on industry background.” |
 | Market Revision | `availableLanes.market` | `Refresh only the market data for {symbol}.` | “Refresh only the market data for NVDA.” |
-| Mixed Revision | `availableLanes.chart && availableLanes.analysis` | `Keep the query but update both the chart and narrative to highlight {focus}.` | “Keep the query but update both chart and analysis to highlight margin recovery.” |
+| Mixed Revision | `availableLanes.chart && availableLanes.analysis` | `Keep the query but update both the chart and analysis to highlight {focus}.` | “Keep the query but update both chart and analysis to highlight margin recovery.” |
 | SQL Format Revision | `availableLanes.sql` | `Reuse the SQL results and adjust the chart to compare {metric} by {group}.` | “Reuse the SQL results and chart revenue share by company as stacked columns.” |
 | Stock Swap | `stockWidget.symbols.length > 0` | `Swap the stock widget to track {alternateSymbol}.` | “Change the stock chart to AVGO.” |
 | Web Research Refresh | `webSearch` present | `Refresh the web research only and look for {topic}.` | “Refresh the web research only and look for AI data centre headlines.” |
@@ -64,18 +64,18 @@ After the first answer, replace the “discovery” chips with **lane-specific p
 
 ### Example A – SQL + Chart + Analysis (NVDA vs AMD)
 - “Change the SQL chart to a bar chart.”
-- “Rewrite the insight but focus on industry background.”
+- “Rewrite the analysis but focus on industry background.”
 - “Refresh only the market data for NVDA.”
 - “Keep the query but update both chart and analysis to highlight supply constraints.”
 
 ### Example B – Chart + Stock Widget (AVGO)
 - “Change the chart to a stacked column view.”
-- “Rewrite the insight to speak to CFO-level priorities.”
+- “Rewrite the analysis to speak to CFO-level priorities.”
 - “Change the stock chart to AVGO.”
 - “Refresh the web research only and surface semiconductor export headlines.”
 
 ### Example C – Analysis + Web Research
-- “Rewrite the insight but emphasise competitive positioning.”
+- “Rewrite the analysis but emphasise competitive positioning.”
 - “Refresh only the market data for NVDA.”
 - “Refresh the web research only and gather AI accelerator news.”
 - “Change the chart to a heatmap comparing gross margin.”

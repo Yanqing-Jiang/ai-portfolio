@@ -1,9 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { motion } from 'framer-motion';
-import {
-  AnalysisCard,
-  ProcessPanel
-} from '../common';
+import { AnalysisCard } from '../common';
+import { ProcessPanel } from '../common/ProcessPanel';
 import { ChatHistory } from './';
 import { useAnalyticsMemoryStream } from '../hooks';
 import type { FlowMode } from '../types';

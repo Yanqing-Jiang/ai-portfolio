@@ -1,11 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import {
-  AnalysisCard,
-  SqlCard,
-  ProcessPanel,
-  ChartCard
-} from '../common';
+import { AnalysisCard, SqlCard, ChartCard } from '../common';
+import { ProcessPanel } from '../common/ProcessPanel';
 import { useAnalyticsSqlStream } from '../hooks';
 import { isValidChartSpec } from '../utils';
 
