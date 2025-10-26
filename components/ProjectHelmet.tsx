@@ -43,6 +43,29 @@ export const ProjectHelmet: React.FC<ProjectHelmetProps> = ({ project }) => {
     [project.title, canonicalUrl]
   );
   const articleSchema = useMemo(() => buildArticleSchema(project), [project]);
+  const imageType = useMemo(() => {
+    if (!image) return undefined;
+    try {
+      const pathname = new URL(image).pathname.toLowerCase();
+      const match = pathname.match(/\.([a-z0-9]+)$/);
+      if (!match) return undefined;
+      switch (match[1]) {
+        case 'jpg':
+        case 'jpeg':
+          return 'image/jpeg';
+        case 'png':
+          return 'image/png';
+        case 'gif':
+          return 'image/gif';
+        case 'webp':
+          return 'image/webp';
+        default:
+          return undefined;
+      }
+    } catch {
+      return undefined;
+    }
+  }, [image]);
 
   return (
     <Helmet>
@@ -65,6 +88,8 @@ export const ProjectHelmet: React.FC<ProjectHelmetProps> = ({ project }) => {
       <meta property="og:locale" content={LANDING_SEO.locale} />
       <meta property="og:updated_time" content={dateModified} />
       {image && <meta property="og:image" content={image} />}
+      {image && <meta property="og:image:secure_url" content={image} />}
+      {imageType && <meta property="og:image:type" content={imageType} />}
       {image && <meta property="og:image:width" content="1200" />}
       {image && <meta property="og:image:height" content="630" />}
       {image && <meta property="og:image:alt" content={`${project.title} - AI systems project by Yanqing Jiang`} />}
@@ -75,6 +100,7 @@ export const ProjectHelmet: React.FC<ProjectHelmetProps> = ({ project }) => {
       <meta name="twitter:title" content={title} />
       {description && <meta name="twitter:description" content={description} />}
       {image && <meta name="twitter:image" content={image} />}
+      {image && <meta name="twitter:image:src" content={image} />}
       {image && (
         <meta
           name="twitter:image:alt"
