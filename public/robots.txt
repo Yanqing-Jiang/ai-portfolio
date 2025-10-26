@@ -4,4 +4,4 @@ Allow: /
 Disallow: /signin
 Disallow: /auth
 
-Sitemap: https://ai.jiangyanqing.com/sitemap.xml
+Sitemap: https://yanqing.app/sitemap.xml

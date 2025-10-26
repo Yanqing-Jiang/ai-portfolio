@@ -3,7 +3,7 @@
     "id": "next-gen-analytics-agent",
     "title": "Next Gen Analytics Agents | LangGraph + FastAPI Copilot",
     "description": "LangGraph-powered analytics agents copilot orchestrating direct, single-agent, and supervisor workflows with RAG-backed SQL and streaming telemetry.",
-    "url": "https://ai.jiangyanqing.com/project/next-gen-analytics-agent",
+    "url": "https://yanqing.app/project/next-gen-analytics-agent",
     "technologies": ["Single Agent Workflow", "Multi-Agent Workflow", "Human-in-the-Loop", "RAG", "Long-Term Memory"],
     "serviceTags": ["Analytics Automation", "AI Agents", "Decision Intelligence"],
     "statHighlights": [
@@ -21,7 +21,7 @@
     "id": "agentic-trade-bot",
     "title": "Agentic Trading Bot | LangGraph + IBKR Automation",
     "description": "LangGraph multi-agent trading bot connecting IBKR execution, Unusual Whales flow, and Morningstar insights to size trades and achieve a 200% supervised gain.",
-    "url": "https://ai.jiangyanqing.com/project/agentic-trade-bot",
+    "url": "https://yanqing.app/project/agentic-trade-bot",
     "technologies": ["LangGraph", "IBKR API", "Unusual Whales", "Morningstar", "Agentic Framework"],
     "serviceTags": ["Agentic Trading", "Automation", "Risk Management"],
     "statHighlights": [
@@ -39,7 +39,7 @@
     "id": "next-gen-analytics-sql",
     "title": "Next Gen Analytics SQL Copilot | LangGraph Streaming Insights",
     "description": "Streaming SQL copilot that pairs LangGraph orchestration with Supabase analytics to generate charts, commentary, and comparisons for semiconductor tickers in real time.",
-    "url": "https://ai.jiangyanqing.com/project/next-gen-analytics-sql",
+    "url": "https://yanqing.app/project/next-gen-analytics-sql",
     "technologies": ["Agentic Workflow", "LangGraph", "State Management", "RAG", "Smart SQL"],
     "serviceTags": ["Analytics Automation", "SQL Generation", "Visualization"],
     "statHighlights": [
@@ -57,7 +57,7 @@
     "id": "llm-invoice-processor",
     "title": "LLM Invoice Processor | Multi-Format Automation Copilot",
     "description": "Production LLM invoice processor that parses PDFs/XLSB files, reconciles parent-child items, and auto-generates discrepancy reports saving 1,000+ hours every year.",
-    "url": "https://ai.jiangyanqing.com/project/llm-invoice-processor",
+    "url": "https://yanqing.app/project/llm-invoice-processor",
     "technologies": ["JavaScript", "TailwindCSS", "Function Calling", "Zero-Shot Prompting", "JSON Structured Output"],
     "serviceTags": ["Data Automation", "Document AI", "Finance Operations"],
     "statHighlights": [
@@ -75,7 +75,7 @@
     "id": "ask-my-resume",
     "title": "Ask My Resume | RAG Career Copilot",
     "description": "Retrieval-augmented resume agent that embeds roles and projects, answers hiring questions, and advocates with evidence-backed responses.",
-    "url": "https://ai.jiangyanqing.com/project/ask-my-resume",
+    "url": "https://yanqing.app/project/ask-my-resume",
     "technologies": ["RAG", "Vector Search", "FAISS", "Agent"],
     "serviceTags": ["RAG", "Talent AI", "Personal Branding"],
     "statHighlights": [
@@ -93,7 +93,7 @@
     "id": "goggins-gpt",
     "title": "Goggins GPT | Motivational Companion with Gemini + ElevenLabs",
     "description": "Voice-enabled motivational companion that streams Gemini responses through ElevenLabs while toggling Goggins Mode prompts for no-excuse coaching.",
-    "url": "https://ai.jiangyanqing.com/project/goggins-gpt",
+    "url": "https://yanqing.app/project/goggins-gpt",
     "technologies": ["Gemini API", "Prompt Engineering", "ElevenLabs", "State Management"],
     "serviceTags": ["Conversational AI", "Voice Agent", "Motivation"],
     "statHighlights": [
@@ -111,7 +111,7 @@
     "id": "research-gpt",
     "title": "Research GPT | Early LangChain Web Research Agent",
     "description": "LangChain research agent (pre-Perplexity) combining Serper search, Browserless scraping, and summarization loops for timely briefs.",
-    "url": "https://ai.jiangyanqing.com/project/research-gpt",
+    "url": "https://yanqing.app/project/research-gpt",
     "technologies": ["Serper API", "Browserless Scraping", "Lang Chain Agent", "Memory Chain", "OpenAI API"],
     "serviceTags": ["Research Automation", "Web Browsing", "LangChain"],
     "statHighlights": [
@@ -129,7 +129,7 @@
     "id": "global-inventory-dashboard",
     "title": "Global Inventory Control Tower | Power BI & Dataflow Automation",
     "description": "Power BI control tower consolidating 20+ regional inventory feeds, action cards, and Dataflow automation so leaders mitigate stock risks within minutes.",
-    "url": "https://ai.jiangyanqing.com/project/global-inventory-dashboard",
+    "url": "https://yanqing.app/project/global-inventory-dashboard",
     "technologies": ["Power BI", "Supply Chain Analytics", "Data Automation"],
     "serviceTags": ["Supply Chain Analytics", "BI Automation", "Data Governance"],
     "statHighlights": [
@@ -147,7 +147,7 @@
     "id": "time-series-forecasting-pre",
     "title": "R Time Series Forecasting | Power BI + Embedded R Models",
     "description": "Automated R forecasting pipeline embedded in Power BI to benchmark seven models, refresh results, and publish demand outlooks directly to merchandisers.",
-    "url": "https://ai.jiangyanqing.com/project/time-series-forecasting-pre",
+    "url": "https://yanqing.app/project/time-series-forecasting-pre",
     "technologies": ["Power BI", "R", "Forecasting"],
     "serviceTags": ["Forecasting", "Analytics Automation", "Power BI"],
     "statHighlights": [
@@ -165,7 +165,7 @@
     "id": "supplier-review-system",
     "title": "Supplier Review System | Power BI + Power Platform Workflow",
     "description": "Supplier review cockpit combining Power BI, Automate, and Apps for live scorecards, qualitative notes, and automated PDF/email distribution.",
-    "url": "https://ai.jiangyanqing.com/project/supplier-review-system",
+    "url": "https://yanqing.app/project/supplier-review-system",
     "technologies": ["Power BI", "Supplier Management", "Automation"],
     "serviceTags": ["Procurement Automation", "Power Platform", "Collaboration"],
     "statHighlights": [
@@ -183,7 +183,7 @@
     "id": "capex-project-tracker",
     "title": "Capex Project Tracker | Power Apps Intake & Approval Automation",
     "description": "Power Apps tracker that merges headers and line items, introduces shopping-cart style approvals, and feeds Power BI for capital planning alignment.",
-    "url": "https://ai.jiangyanqing.com/project/capex-project-tracker",
+    "url": "https://yanqing.app/project/capex-project-tracker",
     "technologies": ["Power Apps", "Project Management", "Process Automation"],
     "serviceTags": ["Power Platform", "Capital Planning", "Workflow Automation"],
     "statHighlights": [
@@ -201,7 +201,7 @@
     "id": "engagement-intake-pre",
     "title": "Engagement Intake Portal | Power Platform Business Rules Automation",
     "description": "Power Platform portal enforcing thousands of procurement business rules, orchestrating approvals, and syncing status to Power BI dataflows for 100-200 daily users.",
-    "url": "https://ai.jiangyanqing.com/project/engagement-intake-pre",
+    "url": "https://yanqing.app/project/engagement-intake-pre",
     "technologies": ["Power Platform", "Workflow Automation", "Procurement"],
     "serviceTags": ["Procurement Automation", "Workflow Platform", "Business Rules"],
     "statHighlights": [

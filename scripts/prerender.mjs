@@ -78,7 +78,7 @@ await mkdir(distDir, { recursive: true });
 await writeFile(path.join(distDir, 'sitemap-pages.xml'), sitemapPagesXml, 'utf-8');
 await writeFile(path.join(distDir, 'sitemap-projects.xml'), sitemapProjectsXml, 'utf-8');
 
-const siteOrigin = pages[0] ? `${new URL(pages[0].loc).origin}/` : 'https://ai.jiangyanqing.com/';
+const siteOrigin = pages[0] ? `${new URL(pages[0].loc).origin}/` : 'https://yanqing.app/';
 const sitemapIndexXml = [
   '<?xml version="1.0" encoding="UTF-8"?>',
   '<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
