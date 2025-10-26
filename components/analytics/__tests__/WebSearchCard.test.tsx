@@ -47,6 +47,7 @@ describe('WebSearchCard', () => {
       topics: [
         {
           label: 'Primary question',
+          topic_label: 'Primary question',
           query: 'AMD vs NVIDIA revenue comparison 2021-2024',
           topic_index: 0,
           snippets: [
@@ -60,7 +61,8 @@ describe('WebSearchCard', () => {
           ],
         },
         {
-          label: 'Industry context',
+          label: 'Secondary question',
+          topic_label: 'Secondary question',
           query: 'AMD semiconductor industry outlook 2025',
           topic_index: 1,
           snippets: [
@@ -87,12 +89,14 @@ describe('WebSearchCard', () => {
     expect(screen.getByText('Topics: AMD vs NVIDIA revenue comparison 2021-2024; AMD semiconductor industry outlook 2025')).toBeInTheDocument();
     expect(screen.getByText('Topic 1 of 2')).toBeInTheDocument();
     expect(screen.getByText('Primary question')).toBeInTheDocument();
+    expect(screen.getByText('AMD vs NVIDIA revenue comparison 2021-2024')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open source 1' })).toHaveAttribute('href', 'https://vertex.example/amd-q4');
 
     fireEvent.click(screen.getByRole('button', { name: 'Next topic' }));
 
     expect(screen.getByText('Topic 2 of 2')).toBeInTheDocument();
-    expect(screen.getByText('Industry context')).toBeInTheDocument();
+    expect(screen.getByText('Secondary question')).toBeInTheDocument();
+    expect(screen.getByText('AMD semiconductor industry outlook 2025')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open source 1' })).toHaveAttribute('href', 'https://vertex.example/industry');
   });
 

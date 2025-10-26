@@ -80,32 +80,50 @@ export const WebSearchCard: React.FC<WebSearchCardProps> = ({
       return undefined;
     };
     const seen = new Map<string, WebSearchTopic>();
+    const normalize = (value: unknown) =>
+      typeof value === 'string' ? value.trim().toLowerCase() : undefined;
     topics.forEach((entry, index) => {
       if (!entry) {
         return;
       }
       const topicIndex = toNumber((entry as any).topic_index ?? (entry as any).topicIndex);
       const topicPosition = toNumber((entry as any).topic_position ?? (entry as any).topicPosition);
-      const label = (entry as any).topic_label ?? (entry as any).topicLabel ?? entry.label;
+      const rawTopicLabel = (entry as any).topic_label ?? (entry as any).topicLabel;
+      const label = entry.label ?? rawTopicLabel ?? entry.query ?? query ?? '';
       const baseQuery = entry.query || query || '';
-      const key =
-        topicIndex !== undefined
-          ? `idx-${topicIndex}`
-          : topicPosition !== undefined
-            ? `pos-${topicPosition}`
-            : label
-              ? `label-${label.trim().toLowerCase()}`
-              : baseQuery
-                ? `query-${baseQuery.trim().toLowerCase()}`
-                : `ord-${index}`;
+      const normalizedTopicLabel = normalize(rawTopicLabel);
+      const normalizedLabel = normalize(label);
+      const normalizedQuery = normalize(baseQuery);
+      const keyParts: string[] = [];
+      if (topicIndex !== undefined) {
+        keyParts.push(`idx-${topicIndex}`);
+      }
+      if (topicPosition !== undefined) {
+        keyParts.push(`pos-${topicPosition}`);
+      }
+      if (normalizedTopicLabel) {
+        keyParts.push(`topic-${normalizedTopicLabel}`);
+      }
+      if (normalizedLabel && normalizedLabel !== normalizedTopicLabel) {
+        keyParts.push(`label-${normalizedLabel}`);
+      }
+      if (normalizedQuery) {
+        keyParts.push(`query-${normalizedQuery}`);
+      }
+      if (!keyParts.length) {
+        keyParts.push(`ord-${index}`);
+      }
+      const key = keyParts.join('|');
       const clonedSnippets = Array.isArray(entry.snippets)
         ? entry.snippets.map((item) => ({ ...item }))
         : [];
       const payload: WebSearchTopic = {
         ...entry,
-        label: label ?? entry.label,
-        topic_label: label ?? entry.topic_label,
-        topicLabel: label ?? entry.topicLabel,
+        label: typeof label === 'string' ? label : entry.label,
+        topic_label:
+          typeof rawTopicLabel === 'string' ? rawTopicLabel : (entry as any).topic_label ?? undefined,
+        topicLabel:
+          typeof rawTopicLabel === 'string' ? rawTopicLabel : (entry as any).topicLabel ?? undefined,
         query: baseQuery,
         snippets: clonedSnippets,
         topic_index: topicIndex ?? null,
@@ -128,7 +146,22 @@ export const WebSearchCard: React.FC<WebSearchCardProps> = ({
       );
       existing.summary = existing.summary ?? payload.summary;
       existing.reason = existing.reason ?? payload.reason;
-      existing.label = existing.label ?? payload.label;
+      const existingLabelTrimmed = existing.label?.trim() ?? '';
+      if (!existingLabelTrimmed) {
+        existing.label = payload.label;
+      } else if (
+        payload.label &&
+        /^primary (question|topic)$/i.test(existingLabelTrimmed) &&
+        !/^primary (question|topic)$/i.test(payload.label.trim())
+      ) {
+        existing.label = payload.label;
+      }
+      if (!existing.topic_label && payload.topic_label) {
+        existing.topic_label = payload.topic_label;
+      }
+      if (!existing.topicLabel && payload.topicLabel) {
+        existing.topicLabel = payload.topicLabel;
+      }
       existing.query = existing.query || payload.query;
       if (existing.topic_index == null && payload.topic_index != null) {
         existing.topic_index = payload.topic_index;
@@ -229,6 +262,34 @@ export const WebSearchCard: React.FC<WebSearchCardProps> = ({
   const announcedTopicTotal =
     inferredTotal !== undefined ? Math.max(inferredTotal, actualTopicCount) : actualTopicCount;
   const topicSnippets = activeTopic?.snippets ?? [];
+  const topicBadgeRaw =
+    typeof activeTopic?.topic_label === 'string'
+      ? activeTopic.topic_label
+      : typeof activeTopic?.topicLabel === 'string'
+        ? activeTopic.topicLabel
+        : undefined;
+  const topicBadge = topicBadgeRaw?.trim() || undefined;
+  const topicHeading = (() => {
+    if (!activeTopic) {
+      return `Topic ${activeTopicIndex + 1}`;
+    }
+    const candidateLabel = typeof activeTopic.label === 'string' ? activeTopic.label.trim() : '';
+    const candidateQuery = typeof activeTopic.query === 'string' ? activeTopic.query.trim() : '';
+    const labelIsGeneric =
+      !candidateLabel ||
+      /^primary (question|topic)/i.test(candidateLabel) ||
+      /^secondary (question|topic)/i.test(candidateLabel);
+    if (!labelIsGeneric && candidateLabel) {
+      return candidateLabel.replace(/^Primary (question|topic):\s*/i, '').trim() || candidateLabel;
+    }
+    if (candidateQuery) {
+      return candidateQuery;
+    }
+    if (candidateLabel) {
+      return candidateLabel;
+    }
+    return `Topic ${activeTopicIndex + 1}`;
+  })();
 
   const handlePrev = () => setActiveTopicIndex((idx) => Math.max(0, idx - 1));
   const handleNext = () =>
@@ -340,8 +401,13 @@ export const WebSearchCard: React.FC<WebSearchCardProps> = ({
         <div className="px-4 pb-4 space-y-3">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <p className="text-sm font-semibold text-slate-100">
-                {(activeTopic.label || `Topic ${activeTopicIndex + 1}`).replace(/^Primary (question|topic):\s*/i, '')}
+              {topicBadge ? (
+                <span className="inline-flex items-center rounded-full border border-slate-700/70 bg-slate-800/70 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-200">
+                  {topicBadge}
+                </span>
+              ) : null}
+              <p className="text-sm font-semibold text-slate-100 mt-1">
+                {topicHeading}
               </p>
               {activeTopic.reason ? (
                 <p className="text-xs text-slate-500 italic mt-0.5">Why: {activeTopic.reason}</p>
