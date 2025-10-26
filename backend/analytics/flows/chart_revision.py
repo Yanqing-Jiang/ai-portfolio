@@ -3,6 +3,7 @@
 import copy
 from dataclasses import dataclass, field
 from datetime import datetime
+import re
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from analytics.core.events import EventEmitter
@@ -412,10 +413,55 @@ ANALYSIS_TEXT_MARKERS = (
     "summary:",
     "summary ->",
     "rewrite analysis",
+    "rewrite the analysis to",
+    "rewrite the analysis:",
     "update analysis to",
     "revise analysis to",
+    "redo the analysis to",
+    "redo the analysis:",
+    "redo the analysis and",
+    "redo the analysis but",
     "replace analysis with",
+    "analysis focus:",
 )
+
+ANALYSIS_REVISION_REGEXES: List[re.Pattern[str]] = [
+    re.compile(
+        r"(?:redo|refresh|revise|rewrite|update)\s+the\s+analysis(?:\s+but|\s+and)?(?:\s+to)?\s+(?:focus|highlight|emphasize|emphasise)\s+(?:on\s+)?(?P<payload>.+)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:focus|refocus)\s+the\s+analysis\s+on\s+(?P<payload>.+)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"analysis(?:\s+should|\s+needs|\s+must)?\s+(?:now\s+)?(?:focus|highlight|emphasize|emphasise)\s+(?:on\s+)?(?P<payload>.+)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:please\s+)?rewrite\s+the\s+analysis\s+around\s+(?P<payload>.+)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"analysis\s+focus:\s*(?P<payload>.+)",
+        re.IGNORECASE,
+    ),
+]
+
+def _clean_revision_snippet(snippet: str) -> Optional[str]:
+    candidate = snippet.strip().strip('"\'. ')
+    if not candidate:
+        return None
+    # Split on sentence-ending punctuation to avoid dragging polite closers
+    parts = re.split(r"[.!?](?:\s|$)", candidate, maxsplit=1)
+    candidate = parts[0].strip()
+    if not candidate:
+        return None
+    # Remove trailing courtesy phrases
+    for suffix in ("please", "thanks", "thank you"):
+        if candidate.lower().endswith(f" {suffix}"):
+            candidate = candidate[: -(len(suffix) + 1)].strip()
+    return candidate or None
 
 def is_analysis_revision_query(query: Optional[str]) -> bool:
     if not query:
@@ -433,13 +479,38 @@ def infer_analysis_revision_from_query(query: str) -> Optional[str]:
         if idx != -1:
             start = idx + len(marker)
             candidate = normalized[start:].strip().lstrip(":").strip()
-            candidate = candidate.strip('"')
-            if candidate:
-                return candidate
+            cleaned = _clean_revision_snippet(candidate)
+            if cleaned:
+                return cleaned
     if '"' in normalized:
         segments = [segment.strip() for segment in normalized.split('"') if segment.strip()]
         if len(segments) >= 2:
-            return segments[-1]
+            cleaned = _clean_revision_snippet(segments[-1])
+            if cleaned:
+                return cleaned
+    for pattern in ANALYSIS_REVISION_REGEXES:
+        match = pattern.search(normalized)
+        if not match:
+            continue
+        payload = match.group("payload") if "payload" in match.groupdict() else match.group(1)
+        if not payload:
+            continue
+        cleaned = _clean_revision_snippet(payload)
+        if cleaned:
+            return cleaned
+    prefixes = (
+        "redo the analysis",
+        "rewrite the analysis",
+        "revise the analysis",
+        "refresh the analysis",
+        "update the analysis",
+    )
+    for prefix in prefixes:
+        if lower.startswith(prefix):
+            remainder = normalized[len(prefix):].strip(" :,-")
+            cleaned = _clean_revision_snippet(remainder) if remainder else None
+            if cleaned:
+                return cleaned
     return None
 
 CHART_TYPE_SYNONYMS: Dict[str, List[str]] = {
