@@ -1,9 +1,9 @@
-﻿import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import Draggable from 'react-draggable';
-import { WorkflowCanvas } from '../visualization/WorkflowCanvas';
-import { SingleAgentFanoutCanvas } from '../visualization/SingleAgentFanoutCanvas';
-import {
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import Draggable from 'react-draggable';
+import { WorkflowCanvas } from '../visualization/WorkflowCanvas';
+import { SingleAgentFanoutCanvas } from '../visualization/SingleAgentFanoutCanvas';
+import {
   ProcessStep,
   FlowMode,
   SingleAgentFanout,
@@ -13,8 +13,10 @@ import {
   SpecialistCard,
   ClarifyRequest,
   SlotStatusMap,
-  SlotStatusPayload,
-} from '../types';
+  SlotStatusPayload,
+} from '../types';
+import { isValidChartSpec } from '../utils';
+const ChartCardLazy = React.lazy(() => import('./ChartCard').then((module) => ({ default: module.ChartCard })));
 
 interface ProcessPanelProps {
   singleAgentFanout?: SingleAgentFanout | null;
@@ -784,22 +786,52 @@ export const ProcessPanel: React.FC<ProcessPanelProps> = ({
     }
   }, [displaySteps]);
 
-  const handleDismissFollowUpBanner = useCallback(() => {
-    if (!followUpBanner?.finalAnswerOnly) {
-      return;
-    }
-    const signature = bannerSignature ?? '__any__';
-    setDismissedFinalAnswerSignature(signature);
-  }, [followUpBanner, bannerSignature]);
-
-  if (!show) {
-    return null;
-  }
-
-  const flowMeta = FLOW_META[flowMode] ?? FLOW_META['planner-executor'];
-  const isCanvasExpanded = showVisualization && focusedPane === 'canvas';
-  const isLedgerExpanded = !showVisualization || focusedPane === 'ledger';
-
+  const handleDismissFollowUpBanner = useCallback(() => {
+    if (!followUpBanner?.finalAnswerOnly) {
+      return;
+    }
+    const signature = bannerSignature ?? '__any__';
+    setDismissedFinalAnswerSignature(signature);
+  }, [followUpBanner, bannerSignature]);
+
+  const hasLedgerChartPreview = useMemo(() => {
+    if (!show) {
+      return false;
+    }
+    return steps.some((step) => {
+      const details = (step.details ?? {}) as Record<string, any>;
+      const candidate =
+        (details as any)?.chart_spec ??
+        (details as any)?.chartSpec ??
+        (details as any)?.chart?.chart_spec ??
+        (details as any)?.chart?.spec ??
+        (details as any)?.patch?.chart_spec ??
+        null;
+      return candidate && typeof candidate === 'object';
+    });
+  }, [show, steps]);
+
+  useEffect(() => {
+    if (!show || !hasLedgerChartPreview) {
+      return;
+    }
+    const targetWidth = Math.min(maxWidth, 720);
+    setPanelState((prev) => {
+      if (prev.isMaximized || prev.isDragging || prev.width >= targetWidth) {
+        return prev;
+      }
+      return { ...prev, width: targetWidth };
+    });
+  }, [show, hasLedgerChartPreview, maxWidth]);
+
+  if (!show) {
+    return null;
+  }
+
+  const flowMeta = FLOW_META[flowMode] ?? FLOW_META['planner-executor'];
+  const isCanvasExpanded = showVisualization && focusedPane === 'canvas';
+  const isLedgerExpanded = !showVisualization || focusedPane === 'ledger';
+
   const renderCollapsedPane = (label: string, description: string, onRestore: () => void) => (
     <button
       type="button"
@@ -811,15 +843,33 @@ export const ProcessPanel: React.FC<ProcessPanelProps> = ({
     </button>
   );
 
-  const renderLedgerDetails = (step: ProcessStep) => {
-    const details = (step.details ?? {}) as {
-      banner?: FollowUpBanner;
-      analysis_overview?: AnalysisOverview;
-      specialist_card?: SpecialistCard;
+  const renderLedgerDetails = (step: ProcessStep) => {
+    const details = (step.details ?? {}) as {
+      banner?: FollowUpBanner;
+      analysis_overview?: AnalysisOverview;
+      specialist_card?: SpecialistCard;
       latency?: { total_ms?: number; p50_ms?: number; max_ms?: number; min_ms?: number; samples?: number };
       [key: string]: any;
-    };
-    const { banner, analysis_overview, analysis_sources, specialist_card, latency, latency_guardrail, web_context: _webContext, ...otherDetails } = details;
+    };
+    const { banner, analysis_overview, analysis_sources, specialist_card, latency, latency_guardrail, web_context: _webContext, ...otherDetails } = details;
+    const chartSpecCandidateRaw =
+      (details as any)?.chart_spec ??
+      (details as any)?.chartSpec ??
+      (details as any)?.chart?.chart_spec ??
+      (details as any)?.chart?.spec ??
+      (details as any)?.patch?.chart_spec ??
+      null;
+    const chartSpecCandidate =
+      chartSpecCandidateRaw && typeof chartSpecCandidateRaw === 'object' ? chartSpecCandidateRaw : null;
+    const chartSampleData =
+      Array.isArray((details as any)?.sample_data)
+        ? (details as any).sample_data
+        : Array.isArray((details as any)?.sampleData)
+          ? (details as any).sampleData
+          : Array.isArray((details as any)?.data_sample)
+            ? (details as any).data_sample
+            : undefined;
+    const stepHasChartPreview = chartSpecCandidate && isValidChartSpec(chartSpecCandidate);
     const evidenceEntries = analysis_overview?.evidence ?? [];
     const analysisSourceEntries = normalizeAnalysisSources(analysis_sources as AnalysisSources | undefined);
     const hasEvidence = evidenceEntries.length > 0;
@@ -909,6 +959,30 @@ export const ProcessPanel: React.FC<ProcessPanelProps> = ({
             </ul>
           </div>
         ) : null}
+        {stepHasChartPreview ? (
+          <div className="rounded-xl overflow-hidden border border-gray-700 bg-gray-900/40 w-full">
+            <div className="relative w-full aspect-[3/2] sm:aspect-[4/3] md:aspect-[16/9]">
+              <React.Suspense
+                fallback={
+                  <div className="absolute inset-0 flex items-center justify-center bg-gray-800/40 text-sm text-gray-300">
+                    Loading chart preview...
+                  </div>
+                }
+              >
+                <div className="absolute inset-0">
+                  <ChartCardLazy
+                    chartSpec={chartSpecCandidate as any}
+                    dataSample={chartSampleData}
+                    enableDropdown
+                    enableCsvDownload
+                    height="h-full"
+                  />
+                </div>
+              </React.Suspense>
+            </div>
+          </div>
+        ) : null}
+
         {banner ? (
           <div className="rounded-xl border border-amber-400/40 bg-amber-500/10 p-3 text-amber-100 shadow-inner">
             <div className="flex flex-wrap items-center gap-2 text-[10px] uppercase tracking-wide text-amber-300">
