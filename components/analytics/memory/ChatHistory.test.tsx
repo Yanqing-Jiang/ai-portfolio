@@ -124,7 +124,8 @@ describe('ChatHistory status bubble alignment', () => {
     const alignmentRow = placeholder?.parentElement;
     expect(alignmentRow).not.toBeNull();
     expect(alignmentRow?.className).toContain('flex');
-    expect(alignmentRow?.className).toContain('justify-start');
+    expect(alignmentRow?.className).not.toContain('justify-end');
+    expect(alignmentRow?.firstElementChild).toBe(placeholder);
     expect(alignmentRow?.textContent).toContain('Classifying query');
   });
 

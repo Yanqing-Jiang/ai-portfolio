@@ -74,4 +74,42 @@ describe('withLightTheme formatter resiliency', () => {
     expect(typeof formatter).toBe('function');
     expect(formatter({ value: 0.534 })).toBe('0.5%');
   });
+
+  it('aligns legend entry colors with their matching series colors', () => {
+    const paletteSpec = {
+      title: { text: 'Margin Comparison' },
+      tooltip: {},
+      legend: { data: ['Company Operating Margin', 'Peer Avg Operating Margin'] },
+      xAxis: {
+        type: 'category',
+        data: ['2023', '2024'],
+      },
+      series: [
+        { name: 'Company Operating Margin', type: 'line', data: [0.21, 0.26] },
+        { name: 'Peer Avg Operating Margin', type: 'line', data: [0.33, 0.35] },
+      ],
+      meta: {},
+    };
+
+    const themed = withLightTheme(paletteSpec as any);
+    const themedLegend = Array.isArray(themed.legend) ? themed.legend[0] : themed.legend;
+    const legendEntries: any[] = Array.isArray(themedLegend?.data) ? themedLegend.data : [];
+    const seriesColors = Array.isArray(themed.series)
+      ? themed.series.map((series: any) => series?.lineStyle?.color)
+      : [];
+
+    expect(seriesColors[0]).toBeDefined();
+    expect(seriesColors[1]).toBeDefined();
+    expect(seriesColors[0]).not.toBe(seriesColors[1]);
+
+    const entryA = legendEntries.find((entry) => (entry?.name ?? entry) === 'Company Operating Margin') as any;
+    const entryB = legendEntries.find((entry) => (entry?.name ?? entry) === 'Peer Avg Operating Margin') as any;
+
+    expect(entryA).toBeTruthy();
+    expect(entryB).toBeTruthy();
+    expect(entryA.textStyle?.color).toBe(seriesColors[0]);
+    expect(entryA.itemStyle?.color).toBe(seriesColors[0]);
+    expect(entryB.textStyle?.color).toBe(seriesColors[1]);
+    expect(entryB.itemStyle?.color).toBe(seriesColors[1]);
+  });
 });

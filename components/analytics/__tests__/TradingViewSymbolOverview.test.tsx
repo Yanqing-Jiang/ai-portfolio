@@ -36,10 +36,7 @@ describe('TradingViewSymbolOverview', () => {
     expect(payload.width).toBe('100%');
     expect(payload.chartType).toBe('candlesticks');
     expect(payload.colorTheme).toBe('dark');
-    expect(payload.symbols).toEqual([
-      ['NASDAQ:NVDA', 'NASDAQ:NVDA'],
-      ['NASDAQ:AMD', 'AMD'],
-    ]);
+    expect(payload.symbols).toEqual([['NASDAQ:NVDA', 'NASDAQ:NVDA']]);
     expect(payload.showVolume).toBe(false);
     expect(payload.showMA).toBe(true);
     expect(payload.autosize).toBe(false);

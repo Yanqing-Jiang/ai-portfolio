@@ -112,6 +112,8 @@ export interface WebSearchTopic {
   topicPosition?: number | null;
   topic_label?: string;
   topicLabel?: string;
+  display_name?: string;
+  displayName?: string;
   snippets: Array<{
     title?: string;
     url?: string;
