@@ -1652,15 +1652,21 @@ export const withLightTheme = (spec: any) => {
     );
   };
   const applySeriesColor = (series: any, color: string) => {
-    const nextItemStyle = { ...(series.itemStyle || {}) };
-    if (!nextItemStyle.color) {
-      nextItemStyle.color = color;
-    }
+    const nextItemStyle = {
+      ...(series.itemStyle || {}),
+      color,
+      borderColor: color,
+    };
     const baseLineStyle = series.lineStyle || {};
     const nextLineStyle = {
       ...baseLineStyle,
       width: typeof baseLineStyle.width === 'number' ? Math.max(2, baseLineStyle.width) : 2,
-      color: baseLineStyle.color ?? color,
+      color,
+    };
+    const emphasisItemStyle = {
+      ...(series.emphasis?.itemStyle || {}),
+      color,
+      borderColor: color,
     };
     let finalAreaStyle = series.areaStyle;
     if (series.type === 'line') {
@@ -1669,13 +1675,17 @@ export const withLightTheme = (spec: any) => {
       finalAreaStyle = {
         ...(series.areaStyle || {}),
         opacity: baseOpacity,
-        color: (series.areaStyle || {}).color ?? applyAlphaToColor(color, baseOpacity),
+        color: applyAlphaToColor(color, baseOpacity),
       };
     }
     return {
       itemStyle: nextItemStyle,
       lineStyle: nextLineStyle,
       areaStyle: finalAreaStyle,
+      emphasis: {
+        ...(series.emphasis || {}),
+        itemStyle: emphasisItemStyle,
+      },
     };
   };
 
@@ -1708,6 +1718,8 @@ export const withLightTheme = (spec: any) => {
         ...s,
         itemStyle: styledSeries.itemStyle,
         lineStyle: styledSeries.lineStyle,
+        areaStyle: styledSeries.areaStyle,
+        emphasis: styledSeries.emphasis,
         label: {
           show: shouldShowPointLabels,
           position: 'top',
@@ -1745,7 +1757,6 @@ export const withLightTheme = (spec: any) => {
       smooth: true,
       symbol: 'circle',
       symbolSize: 6,
-      areaStyle: styledSeries.areaStyle,
       };
     });
     if (resolvedSeriesColors.length) {
