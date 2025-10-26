@@ -1,10 +1,9 @@
 import os
 from datetime import datetime
-from langchain.prompts import PromptTemplate
-from langchain.agents import initialize_agent, Tool
+from langchain_core.prompts import MessagesPlaceholder, PromptTemplate
 from langchain.agents import AgentType
+from langchain.agents import initialize_agent, Tool
 from langchain_community.chat_models import ChatOpenAI
-from langchain.prompts import MessagesPlaceholder
 from langchain.memory import ConversationSummaryBufferMemory
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.chains.summarize import load_summarize_chain
@@ -14,7 +13,7 @@ from typing import Type, Generator
 from bs4 import BeautifulSoup
 import requests
 import json
-from langchain.schema import SystemMessage
+from langchain_core.messages import SystemMessage
 from dotenv import load_dotenv
 from pathlib import Path
 from langchain.callbacks.base import BaseCallbackHandler
