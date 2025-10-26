@@ -8,8 +8,8 @@ export const PROJECT_DATA: ProjectYear[] = [
       {
         id: 'next-gen-analytics-agent',
         title: 'Next Gen Analytics (Agents)',
-        description: `Three Agentic Workflows:\nDirect (fixed path): no flexibility on tools, run through all tools all at once\nSingle-Agent (multi-tool use): ability to pick tools, revise single/multiple analytic element\nMulti-Agent (supervisor + specialists): workload delegation & orchestration\nHuman-in-the-loop: Compact widget for clarification on peers/metrics/range\nExplainable thinking process panel: plan graph + per-step trace.\nSQL database financials: AMD, AVGO, INTC, MU, NVDA, QCOM, TXN.\nMemory optimization: RAG optimized, Cached queries, vectorized prompts, stateful nodes`,
-        cardDescription: 'The future of analytics: no dashboards—just outcomes. Expereience the next gen analytics with agentic querying and analysis.',
+        description: `Three Agentic Workflows:\nDirect (fixed path): deterministic tool orchestration for rapid answers\nSingle-Agent (multi-tool use): adaptive LangGraph agent that rewrites SQL, charts, and commentary\nMulti-Agent (supervisor + specialists): orchestrated analytics swarm with explainable task graph\nHuman-in-the-loop: Inline clarifications tuned for metrics, peers, and guardrail ranges\nExplainable thinking process panel: plan graph + per-step trace for analyst-grade transparency.\nLive semiconductor coverage: AMD, AVGO, INTC, MU, NVDA, QCOM, TXN.\nMemory optimization: RAG tuned recall, cached SQL, vector prompts, and stateful agents`,
+        cardDescription: 'Agentic analytics without dashboards—LangGraph copilots clarify questions, write SQL, and narrate semiconductor insights in real time.',
         technologies: ['Single Agent Workflow', 'Multi-Agent Workflow', 'Human-in-the-Loop', 'RAG', 'Long-Term Memory'],
         systemInstruction: `You are the AI assistant for **Next Gen Analytics (Agents)**. You have full knowledge of the project described below. Use this embedded reference to answer questions with detail and accuracy. Quote or paraphrase the content to explain features, tech stack, workflow and technical implementation.
 
@@ -56,7 +56,7 @@ Memory System: Session-based conversation persistence with context awareness
         ogImage: 'https://yanqinghot.blob.core.windows.net/public-access/Agent%20demo.gif',
         seoTitle: 'Next Gen Analytics Agents | LangGraph + FastAPI Copilot',
         seoDescription:
-          'LangGraph-powered analytics agents copilot that orchestrates clarification, RAG-backed SQL, and streaming ECharts for semiconductor coverage.',
+          'AI-first analytics copilot that clarifies intent, rewrites Supabase SQL, and streams ECharts narration through LangGraph multi-agent workflows.',
         seoKeywords: [
           'LangGraph analytics',
           'analytics agents',
