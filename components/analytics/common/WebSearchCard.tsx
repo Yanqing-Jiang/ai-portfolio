@@ -79,9 +79,12 @@ export const WebSearchCard: React.FC<WebSearchCardProps> = ({
       }
       return undefined;
     };
-    const seen = new Map<string, WebSearchTopic>();
     const normalize = (value: unknown) =>
       typeof value === 'string' ? value.trim().toLowerCase() : undefined;
+
+    const seenKeys = new Set<string>();
+    const ordered: WebSearchTopic[] = [];
+
     topics.forEach((entry, index) => {
       if (!entry) {
         return;
@@ -100,38 +103,30 @@ export const WebSearchCard: React.FC<WebSearchCardProps> = ({
       const normalizedLabel = normalize(label);
       const normalizedQuery = normalize(baseQuery);
       const normalizedDisplayName = normalize(trimmedDisplayName);
+
       const keyParts: string[] = [];
-      if (topicIndex !== undefined) {
-        keyParts.push(`idx-${topicIndex}`);
-      }
-      if (topicPosition !== undefined) {
-        keyParts.push(`pos-${topicPosition}`);
-      }
-      if (normalizedTopicLabel) {
-        keyParts.push(`topic-${normalizedTopicLabel}`);
-      }
-      if (normalizedLabel && normalizedLabel !== normalizedTopicLabel) {
-        keyParts.push(`label-${normalizedLabel}`);
-      }
-      if (normalizedDisplayName) {
-        keyParts.push(`display-${normalizedDisplayName}`);
-      }
-      if (normalizedQuery) {
-        keyParts.push(`query-${normalizedQuery}`);
-      }
-      if (!keyParts.length) {
-        keyParts.push(`ord-${index}`);
-      }
+      if (topicIndex !== undefined) keyParts.push(`idx-${topicIndex}`);
+      if (topicPosition !== undefined) keyParts.push(`pos-${topicPosition}`);
+      if (normalizedTopicLabel) keyParts.push(`topic-${normalizedTopicLabel}`);
+      if (normalizedLabel && normalizedLabel !== normalizedTopicLabel) keyParts.push(`label-${normalizedLabel}`);
+      if (normalizedDisplayName) keyParts.push(`display-${normalizedDisplayName}`);
+      if (normalizedQuery) keyParts.push(`query-${normalizedQuery}`);
+      if (!keyParts.length) keyParts.push(`ord-${index}`);
+
       let key = keyParts.join('|');
       if (!key.length) {
         key = `ord-${index}`;
-      } else if (seen.has(key)) {
-        key = `${key}|ord-${index}`;
       }
+      while (seenKeys.has(key)) {
+        key = `${key}|dup`;
+      }
+      seenKeys.add(key);
+
       const clonedSnippets = Array.isArray(entry.snippets)
         ? entry.snippets.map((item) => ({ ...item }))
         : [];
-      const payload: WebSearchTopic = {
+
+      ordered.push({
         ...entry,
         label: typeof label === 'string' ? label : entry.label,
         topic_label:
@@ -146,57 +141,9 @@ export const WebSearchCard: React.FC<WebSearchCardProps> = ({
         topicPosition: topicPosition ?? null,
         display_name: trimmedDisplayName ?? undefined,
         displayName: trimmedDisplayName ?? undefined,
-      };
-      const existing = seen.get(key);
-      if (!existing) {
-        seen.set(key, payload);
-        return;
-      }
-      existing.snippets = existing.snippets.concat(
-        clonedSnippets.filter(
-          (item) =>
-            !existing.snippets.some(
-              (prev) => prev.url === item.url && prev.snippet === item.snippet,
-            ),
-        ),
-      );
-      existing.summary = existing.summary ?? payload.summary;
-      existing.reason = existing.reason ?? payload.reason;
-      const existingLabelTrimmed = existing.label?.trim() ?? '';
-      if (!existingLabelTrimmed) {
-        existing.label = payload.label;
-      } else if (
-        payload.label &&
-        /^primary (question|topic)$/i.test(existingLabelTrimmed) &&
-        !/^primary (question|topic)$/i.test(payload.label.trim())
-      ) {
-        existing.label = payload.label;
-      }
-      if (!existing.topic_label && payload.topic_label) {
-        existing.topic_label = payload.topic_label;
-      }
-      if (!existing.topicLabel && payload.topicLabel) {
-        existing.topicLabel = payload.topicLabel;
-      }
-      if (!existing.display_name && trimmedDisplayName) {
-        (existing as any).display_name = trimmedDisplayName;
-      }
-      if (!existing.displayName && trimmedDisplayName) {
-        (existing as any).displayName = trimmedDisplayName;
-      }
-      existing.query = existing.query || payload.query;
-      if (existing.topic_index == null && payload.topic_index != null) {
-        existing.topic_index = payload.topic_index;
-        existing.topicIndex = payload.topic_index;
-      }
-      if (existing.topic_position == null && payload.topic_position != null) {
-        existing.topic_position = payload.topic_position;
-        existing.topicPosition = payload.topic_position;
-      }
-      existing.latency_ms = existing.latency_ms ?? payload.latency_ms;
-      existing.search_id = existing.search_id ?? payload.search_id;
+      });
     });
-    const ordered = Array.from(seen.values());
+
     ordered.sort((a, b) => {
       const idxA = toNumber(a.topic_index ?? (a as any).topicIndex) ?? Number.MAX_SAFE_INTEGER;
       const idxB = toNumber(b.topic_index ?? (b as any).topicIndex) ?? Number.MAX_SAFE_INTEGER;
@@ -212,6 +159,7 @@ export const WebSearchCard: React.FC<WebSearchCardProps> = ({
       const labelB = ((b.label ?? (b as any).topicLabel ?? b.query) || '').toLowerCase();
       return labelA.localeCompare(labelB);
     });
+
     return ordered;
   }, [topics, query]);
 

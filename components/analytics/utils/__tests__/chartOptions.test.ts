@@ -112,4 +112,37 @@ describe('withLightTheme formatter resiliency', () => {
     expect(entryB.textStyle?.color).toBe(seriesColors[1]);
     expect(entryB.itemStyle?.color).toBe(seriesColors[1]);
   });
+
+  it('overrides any preset series styles so legend and geometry stay in sync', () => {
+    const presetSpec = {
+      series: [
+        {
+          name: 'Preset Series',
+          type: 'line',
+          lineStyle: { color: '#123456' },
+          itemStyle: { color: '#654321' },
+          emphasis: { itemStyle: { color: '#abcdef' } },
+          data: [1, 2, 3],
+        },
+        {
+          name: 'Industry Average Margin',
+          type: 'line',
+          lineStyle: { color: '#123456' },
+          itemStyle: { color: '#654321' },
+          data: [2, 3, 4],
+        },
+      ],
+    };
+
+    const themed = withLightTheme(presetSpec as any);
+
+    const firstSeries = themed.series?.[0];
+    const secondSeries = themed.series?.[1];
+
+    expect(firstSeries.lineStyle.color).not.toBe('#123456');
+    expect(firstSeries.itemStyle.color).toBe(firstSeries.lineStyle.color);
+    expect(firstSeries.emphasis.itemStyle.color).toBe(firstSeries.lineStyle.color);
+    expect(secondSeries.lineStyle.color).toBe('#F59E0B');
+    expect(secondSeries.itemStyle.color).toBe('#F59E0B');
+  });
 });
