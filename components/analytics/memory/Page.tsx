@@ -187,7 +187,7 @@ Multi-Agent: workload delegation & orchestration, fastest speed
 **Available financials**: AMD, AVGO, INTC, MU, NVDA, QCOM, TXN.
 **Memory optimization**: RAG optimized, Cached queries, vectorized prompts, stateful nodes`,
     technologies: ['Single Agent Workflow', 'Multi-Agent Workflow', 'Human-in-the-Loop', 'RAG', 'Long-Term Memory'],
-    imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/Agent%20demo.gif'
+    imageUrl: 'https://yanqing.app/next-gen-analytics-agent-hero.gif'
   };
 
   const snapshotReuseChips = useMemo(() => {

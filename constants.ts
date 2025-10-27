@@ -51,9 +51,9 @@ Memory System: Session-based conversation persistence with context awareness
           'Show me AMD vs INTC margins - how do they compare to our last analysis?',
           'What clarification features help with ambiguous financial queries?',
         ],
-        coverUrl: 'https://yanqinghot.blob.core.windows.net/public-access/Agent%20demo.gif',
-        imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/Agent%20demo.gif',
-        ogImage: 'https://yanqinghot.blob.core.windows.net/public-access/Agent%20demo.gif',
+        coverUrl: 'https://yanqing.app/next-gen-analytics-agent-hero.gif',
+        imageUrl: 'https://yanqing.app/next-gen-analytics-agent-hero.gif',
+        ogImage: 'https://yanqing.app/next-gen-analytics-agent-hero.gif',
         seoTitle: 'Next Gen Analytics Agents | LangGraph + FastAPI Copilot',
         seoDescription:
           'AI-first analytics copilot that clarifies intent, rewrites Supabase SQL, and streams ECharts narration through LangGraph multi-agent workflows.',
