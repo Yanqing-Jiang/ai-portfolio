@@ -54,9 +54,9 @@ Memory System: Session-based conversation persistence with context awareness
         coverUrl: 'https://yanqing.app/next-gen-analytics-agent-hero.gif',
         imageUrl: 'https://yanqing.app/next-gen-analytics-agent-hero.gif',
         ogImage: 'https://yanqing.app/next-gen-analytics-agent-hero.gif',
-        seoTitle: 'Next Gen Analytics Agents | LangGraph + FastAPI Copilot',
+        seoTitle: 'Next Gen Analytics Agents | OpenAI Agent SDK, Agentic Analytics',
         seoDescription:
-          'AI-first analytics copilot that clarifies intent, rewrites Supabase SQL, and streams ECharts narration through LangGraph multi-agent workflows.',
+          'LLM-driven analytics built on the OpenAI Agent SDK framework that clarifies intent, pulls from Supabase SQL, streams stock charts, runs online research, and mirrors Claude code-like single-agent setups alongside multi-agent orchestration.',
         seoKeywords: [
           'LangGraph analytics',
           'analytics agents',

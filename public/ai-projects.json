@@ -1,8 +1,8 @@
 ﻿[
   {
     "id": "next-gen-analytics-agent",
-    "title": "Next Gen Analytics Agents | LangGraph + FastAPI Copilot",
-    "description": "LangGraph-powered analytics agents copilot orchestrating direct, single-agent, and supervisor workflows with RAG-backed SQL and streaming telemetry.",
+    "title": "Next Gen Analytics Agents | OpenAI Agent SDK, Agentic Analytics",
+    "description": "LLM-driven analytics built on the OpenAI Agent SDK framework that clarifies intent, queries Supabase SQL, streams stock charts, conducts online research, and mirrors Claude code-like single-agent setups alongside multi-agent orchestration.",
     "url": "https://yanqing.app/project/next-gen-analytics-agent",
     "technologies": ["Single Agent Workflow", "Multi-Agent Workflow", "Human-in-the-Loop", "RAG", "Long-Term Memory"],
     "serviceTags": ["Analytics Automation", "AI Agents", "Decision Intelligence"],
