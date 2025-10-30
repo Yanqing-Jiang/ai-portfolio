@@ -7,6 +7,7 @@ from typing import Any, AsyncGenerator, Dict, Optional, Tuple
 
 from analytics.core.session_state import SessionStateSnapshot, get_session_state_repository
 from analytics.artifacts import PipelineArtifacts
+from analytics.core.events import EventEmitter, TimedEventEmitter
 from analytics.validators import sanitize_for_json
 from .planner_executor import PlannerExecutorFlow, run_planner_executor
 from .schedulers import FlowMode, FlowStageIndex, get_stage_index, resolve_stage
@@ -60,6 +61,8 @@ PARALLEL_GROUP_BY_STEP = {
     "analysis_revision": "analysis",
     "chart_generation": "chart",
     "web_search": "web",
+    "web_refresh": "web",
+    "market_refresh": "web",
 }
 
 def _resolve_flow_mode(flow: Any) -> FlowMode:
@@ -230,6 +233,47 @@ def _maybe_update_session_state(
 
     return updated
 
+
+
+async def emit_revision_lane(
+    flow: Any,
+    *,
+    lane: str,
+    generator: AsyncGenerator[Dict[str, Any], None],
+    session_id: Optional[str],
+    flow_label: Optional[str],
+) -> AsyncGenerator[Dict[str, Any], None]:
+    """Wrap a revision lane generator with start/complete telemetry events."""
+    step_name = f"{lane}_revision"
+    emitter = TimedEventEmitter(session_id=session_id, flow=flow_label)
+    start_event = EventEmitter.status(step_name, f"Refreshing {lane} lane")
+    start_event.setdefault("data", {})
+    start_event["data"].update(
+        {
+            "lane": lane,
+            "revision": True,
+            "phase": "start",
+        }
+    )
+    yield start_event
+    emitter.start_step(step_name)
+    try:
+        async for event in generator:
+            yield event
+    finally:
+        elapsed_ms = emitter.end_step(step_name)
+        complete_event = EventEmitter.status(step_name, f"{lane.title()} lane complete")
+        complete_event.setdefault("data", {})
+        complete_event["data"].update(
+            {
+                "lane": lane,
+                "revision": True,
+                "phase": "complete",
+            }
+        )
+        if elapsed_ms:
+            complete_event["data"]["elapsed_ms"] = elapsed_ms
+        yield complete_event
 
 
 async def instrument_events(

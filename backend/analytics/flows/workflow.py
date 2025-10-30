@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import os
+import uuid
 import logging
+from datetime import datetime, timezone
 from dataclasses import asdict
-from typing import Any, AsyncGenerator, Callable, Dict, Optional, Set
+from typing import Any, AsyncGenerator, Callable, Dict, Iterable, List, Optional, Set
 
 from analytics.core.events import EventEmitter
 from analytics.core.session_state import SessionStateSnapshot, get_session_state_repository
@@ -17,7 +19,7 @@ from .chart_revision import (
     is_analysis_revision_query,
     is_chart_revision_query,
 )
-from .instrumentation import instrument_events
+from .instrumentation import emit_revision_lane, instrument_events
 from .revision_directive import RevisionDirective
 from analytics.services.response_search import generate_search_topics, has_search_api_key
 
@@ -73,6 +75,514 @@ def _agentic_revision_enabled(flow_name: Optional[str]) -> bool:
     env_key = "AGENTIC_REVISION_" + normalized.replace("-", "_").upper()
     return _env_flag(env_key, default=False)
 
+
+REVISION_LANE_ORDER: tuple[str, ...] = ("chart", "analysis", "market")
+
+
+def _lane_sort_key(lane: str) -> int:
+    try:
+        return REVISION_LANE_ORDER.index(lane)
+    except ValueError:
+        return len(REVISION_LANE_ORDER)
+
+
+def _normalize_revision_lanes(lanes: Iterable[str]) -> List[str]:
+    normalized: Set[str] = set()
+    for lane in lanes or []:
+        if not lane:
+            continue
+        value = str(lane).strip().lower()
+        if not value:
+            continue
+        if value == "stock":
+            value = "market"
+        normalized.add(value)
+    return sorted(normalized, key=_lane_sort_key)
+
+
+def _baseline_ready(snapshot: Optional[SessionStateSnapshot]) -> bool:
+    if snapshot is None:
+        return False
+    return bool(snapshot.last_chart_spec and snapshot.last_analysis)
+
+
+def _lane_available(snapshot: Optional[SessionStateSnapshot], lane: str) -> bool:
+    if snapshot is None:
+        return False
+    analytics_cache = {}
+    if isinstance(snapshot.tool_cache, dict):
+        analytics_cache = snapshot.tool_cache.get("analytics") or {}
+    artifacts = analytics_cache.get("artifacts") or {}
+    revision_snapshot = analytics_cache.get("revision_snapshot") or {}
+    lane = lane.strip().lower()
+    if lane == "chart":
+        return bool(snapshot.last_chart_spec or artifacts.get("chart"))
+    if lane == "analysis":
+        return bool(snapshot.last_analysis or artifacts.get("analysis"))
+    if lane == "web":
+        return bool(artifacts.get("web") or revision_snapshot.get("web_context"))
+    if lane == "market":
+        market_artifact = artifacts.get("market")
+        stock_widget = revision_snapshot.get("stock_widget")
+        return bool(market_artifact or stock_widget)
+    return False
+
+
+def _extract_revision_snapshot(snapshot: Optional[SessionStateSnapshot]) -> Dict[str, Any]:
+    if snapshot is None:
+        return {}
+    analytics_cache = {}
+    if isinstance(snapshot.tool_cache, dict):
+        analytics_cache = snapshot.tool_cache.get("analytics") or {}
+    payload = analytics_cache.get("revision_snapshot")
+    return payload if isinstance(payload, dict) else {}
+
+
+REVISION_BANNER_COPY: Dict[str, Dict[str, str]] = {
+    "chart_revision": {
+        "title": "Chart Updated",
+        "message": "Reapplying the cached dataset to refresh the chart.",
+    },
+    "analysis_only": {
+        "title": "Narrative Updated",
+        "message": "Refreshing the written analysis with cached evidence.",
+    },
+    "market_only": {
+        "title": "Market Snapshot Updated",
+        "message": "Refreshing live market context while keeping charts and analysis in place.",
+    },
+    "mixed_revision": {
+        "title": "Targeted Updates",
+        "message": "Applying the requested updates without rerunning SQL or planning.",
+    },
+    "reuse_sql": {
+        "title": "Reusing Cached Dataset",
+        "message": "Skipping SQL while updating downstream components.",
+    },
+}
+
+
+def _revision_route_label(lanes: List[str]) -> str:
+    if not lanes:
+        return "reuse_sql"
+    if lanes == ["chart"]:
+        return "chart_revision"
+    if lanes == ["analysis"]:
+        return "analysis_only"
+    if lanes == ["market"]:
+        return "market_only"
+    return "mixed_revision"
+
+
+def _initial_revision_status(lanes: List[str]) -> tuple[str, str]:
+    if not lanes:
+        return ("revision", "Applying cached updates")
+    if lanes == ["chart"]:
+        return ("chart_revision", "Applying chart update")
+    if lanes == ["analysis"]:
+        return ("analysis_revision", "Refreshing analysis")
+    if lanes == ["market"]:
+        return ("market_revision", "Refreshing market data")
+    return ("revision", "Applying targeted updates")
+
+
+def _build_revision_banner(route_label: str, lanes: List[str]) -> Dict[str, Any]:
+    template = REVISION_BANNER_COPY.get(route_label, REVISION_BANNER_COPY["mixed_revision"])
+    payload: Dict[str, Any] = {
+        "title": template["title"],
+        "message": template["message"],
+        "route": route_label,
+        "lanes": list(lanes),
+    }
+    return payload
+
+
+def _build_cannot_revise_banner(lanes: List[str], missing: List[str]) -> Dict[str, Any]:
+    sorted_missing = sorted(set(missing), key=_lane_sort_key)
+    return {
+        "title": "Cached Artifacts Missing",
+        "message": "Start a new question to rebuild the necessary results.",
+        "route": "cannot_revise",
+        "missing_components": sorted_missing,
+        "lanes": list(lanes),
+    }
+
+
+def _annotate_revision_event(event: Dict[str, Any], *, lane: str, revision_id: str) -> Dict[str, Any]:
+    if not isinstance(event, dict):
+        return {"event": "error", "data": {"error": "invalid_revision_event", "lane": lane}}
+    data = event.setdefault("data", {})
+    data.setdefault("lane", lane)
+    data["lane"] = data.get("lane") or lane
+    data["revision"] = True
+    data["revision_event"] = True
+    data["revision_id"] = revision_id
+    return event
+
+
+async def _annotated_lane_stream(
+    generator: AsyncGenerator[Dict[str, Any], None],
+    *,
+    lane: str,
+    revision_id: str,
+) -> AsyncGenerator[Dict[str, Any], None]:
+    async for event in generator:
+        yield _annotate_revision_event(event, lane=lane, revision_id=revision_id)
+
+
+async def _run_chart_lane(
+    flow_instance: Any,
+    *,
+    query: str,
+    session_id: str,
+    patch: Optional[Dict[str, Any]],
+    revision_id: str,
+    revision_kwargs: Dict[str, Any],
+) -> AsyncGenerator[Dict[str, Any], None]:
+    if not patch:
+        skip_event = EventEmitter.status("chart_revision", "No chart update detected")
+        skip_event.setdefault("data", {})
+        skip_event["data"].update(
+            {
+                "revision": True,
+                "revision_id": revision_id,
+                "lane": "chart",
+                "phase": "skipped",
+            }
+        )
+        yield skip_event
+        return
+
+    try:
+        if hasattr(flow_instance, "apply_chart_revision"):
+            generator = flow_instance.apply_chart_revision(
+                session_id=session_id,
+                patch=patch,
+                query=query,
+                **revision_kwargs,
+            )
+        elif hasattr(flow_instance, "chart_revision"):
+            generator = flow_instance.chart_revision(
+                query=query,
+                session_id=session_id,
+                patch=patch,
+                **revision_kwargs,
+            )
+        elif hasattr(flow_instance, "emit_chart_patch"):
+            generator = flow_instance.emit_chart_patch(
+                session_id=session_id,
+                patch=patch,
+                **revision_kwargs,
+            )
+        else:
+            raise AttributeError("Flow does not expose a chart revision helper")
+        annotated = _annotated_lane_stream(generator, lane="chart", revision_id=revision_id)
+        async for event in emit_revision_lane(
+            flow_instance,
+            lane="chart",
+            generator=annotated,
+            session_id=session_id,
+            flow_label=getattr(flow_instance, "flow_label", None),
+        ):
+            yield event
+    except Exception as exc:  # pragma: no cover - defensive logging
+        error_event = EventEmitter.error("chart_revision", str(exc))
+        error_event.setdefault("data", {})
+        error_event["data"].update(
+            {
+                "lane": "chart",
+                "revision": True,
+                "revision_id": revision_id,
+                "phase": "error",
+            }
+        )
+        yield error_event
+
+
+async def _run_analysis_lane(
+    flow_instance: Any,
+    *,
+    query: str,
+    session_id: str,
+    requested_analysis: Optional[str],
+    revision_directive: Optional[RevisionDirective],
+    revision_id: str,
+    snapshot: Optional[SessionStateSnapshot],
+    revision_kwargs: Dict[str, Any],
+) -> AsyncGenerator[Dict[str, Any], None]:
+    analysis_payload = requested_analysis
+    if not analysis_payload and snapshot:
+        analysis_payload = snapshot.last_analysis
+
+    try:
+        if hasattr(flow_instance, "run_analysis_refresh"):
+            generator = flow_instance.run_analysis_refresh(  # type: ignore[attr-defined]
+                session_id=session_id,
+                query=query,
+                requested_focus=analysis_payload,
+                revision_directive=revision_directive,
+                **revision_kwargs,
+            )
+        elif hasattr(flow_instance, "analysis_revision"):
+            generator = flow_instance.analysis_revision(
+                session_id=session_id,
+                analysis=analysis_payload,
+                query=query,
+                revision_directive=revision_directive,
+                refresh_web=True,
+                **revision_kwargs,
+            )
+        else:
+            generator = flow_instance.emit_analysis_revision(
+                session_id=session_id,
+                analysis=analysis_payload or "",
+                **revision_kwargs,
+            )
+        annotated = _annotated_lane_stream(generator, lane="analysis", revision_id=revision_id)
+        async for event in emit_revision_lane(
+            flow_instance,
+            lane="analysis",
+            generator=annotated,
+            session_id=session_id,
+            flow_label=getattr(flow_instance, "flow_label", None),
+        ):
+            yield event
+    except Exception as exc:  # pragma: no cover - defensive logging
+        error_event = EventEmitter.error("analysis_revision", str(exc))
+        error_event.setdefault("data", {})
+        error_event["data"].update(
+            {
+                "lane": "analysis",
+                "revision": True,
+                "revision_id": revision_id,
+                "phase": "error",
+            }
+        )
+        yield error_event
+
+
+async def _run_market_lane(
+    flow_instance: Any,
+    *,
+    query: str,
+    session_id: str,
+    revision_id: str,
+    revision_kwargs: Dict[str, Any],
+) -> AsyncGenerator[Dict[str, Any], None]:
+    try:
+        if hasattr(flow_instance, "refresh_market_lane"):
+            generator = flow_instance.refresh_market_lane(
+                session_id=session_id,
+                query=query,
+                **revision_kwargs,
+            )
+        elif hasattr(flow_instance, "run_market_refresh"):
+            generator = flow_instance.run_market_refresh(
+                session_id=session_id,
+                query=query,
+                **revision_kwargs,
+            )
+        else:
+            status_event = EventEmitter.status("market_revision", "Market lane not supported for this flow")
+            status_event.setdefault("data", {})
+            status_event["data"].update(
+                {
+                    "lane": "market",
+                    "revision": True,
+                    "revision_id": revision_id,
+                    "phase": "skipped",
+                }
+            )
+            yield status_event
+            return
+        annotated = _annotated_lane_stream(generator, lane="market", revision_id=revision_id)
+        async for event in emit_revision_lane(
+            flow_instance,
+            lane="market",
+            generator=annotated,
+            session_id=session_id,
+            flow_label=getattr(flow_instance, "flow_label", None),
+        ):
+            yield event
+    except Exception as exc:  # pragma: no cover - defensive logging
+        error_event = EventEmitter.error("market_revision", str(exc))
+        error_event.setdefault("data", {})
+        error_event["data"].update(
+            {
+                "lane": "market",
+                "revision": True,
+                "revision_id": revision_id,
+                "phase": "error",
+            }
+        )
+        yield error_event
+
+
+async def _stream_revision_fast_path(
+    flow_instance: Any,
+    *,
+    combined_query: str,
+    session_id: str,
+    lanes: List[str],
+    chart_patch: Optional[Dict[str, Any]],
+    analysis_text: Optional[str],
+    revision_directive: Optional[RevisionDirective],
+    selected_flow: str,
+    repository: Optional[Any],
+    snapshot: Optional[SessionStateSnapshot],
+) -> AsyncGenerator[Dict[str, Any], None]:
+    revision_id = uuid.uuid4().hex
+    status_step, status_message = _initial_revision_status(lanes)
+    status_event = EventEmitter.status(status_step, status_message)
+    status_event.setdefault("data", {})
+    status_event["data"].update(
+        {
+            "flow": selected_flow,
+            "session_id": session_id,
+            "phase": "initial",
+            "lanes": list(lanes),
+            "revision": True,
+            "revision_id": revision_id,
+        }
+    )
+    yield status_event
+
+    if revision_directive:
+        rev_event = revision_directive.to_event(session_id=session_id)
+    else:
+        rev_event = {
+            "event": "revision_request",
+            "data": {
+                "lanes": list(lanes),
+                "source": "analytics_memory_workflow",
+            },
+        }
+    rev_event.setdefault("data", {})
+    rev_event["data"].update(
+        {
+            "flow": selected_flow,
+            "phase": "initial",
+            "revision": True,
+            "revision_id": revision_id,
+        }
+    )
+    yield rev_event
+
+    route_label = _revision_route_label(lanes)
+    banner = _build_revision_banner(route_label, lanes)
+    follow_up_event = {
+        "event": "follow_up_route",
+        "data": {
+            "route": route_label,
+            "flow": selected_flow,
+            "lanes": list(lanes),
+            "revision": True,
+            "revision_id": revision_id,
+            "banner": banner,
+        },
+    }
+    yield follow_up_event
+
+    follow_up_route = FollowUpRoute.STOCK_ONLY if lanes == ["market"] else FollowUpRoute.REUSE_SQL
+    if hasattr(flow_instance, "set_revision_targets"):
+        flow_instance.set_revision_targets(lanes)
+    if hasattr(flow_instance, "set_follow_up_route"):
+        flow_instance.set_follow_up_route(follow_up_route)
+    if hasattr(flow_instance, "prime_with_snapshot") and snapshot is not None:
+        flow_instance.prime_with_snapshot(snapshot)
+
+    revision_kwargs: Dict[str, Any] = {"reason": "revision_request", "source": "analytics_memory_workflow"}
+
+    if "chart" in lanes:
+        async for event in _run_chart_lane(
+            flow_instance,
+            query=combined_query,
+            session_id=session_id,
+            patch=chart_patch,
+            revision_id=revision_id,
+            revision_kwargs=revision_kwargs,
+        ):
+            yield event
+
+    if "analysis" in lanes:
+        async for event in _run_analysis_lane(
+            flow_instance,
+            query=combined_query,
+            session_id=session_id,
+            requested_analysis=analysis_text,
+            revision_directive=revision_directive,
+            revision_id=revision_id,
+            snapshot=snapshot,
+            revision_kwargs=revision_kwargs,
+        ):
+            yield event
+
+    if "market" in lanes:
+        async for event in _run_market_lane(
+            flow_instance,
+            query=combined_query,
+            session_id=session_id,
+            revision_id=revision_id,
+            revision_kwargs=revision_kwargs,
+        ):
+            yield event
+
+    completion_event = EventEmitter.status("revision", "Revision complete")
+    completion_event.setdefault("data", {})
+    completion_event["data"].update(
+        {
+            "flow": selected_flow,
+            "session_id": session_id,
+            "phase": "complete",
+            "lanes": list(lanes),
+            "revision": True,
+            "revision_id": revision_id,
+        }
+    )
+    yield completion_event
+
+    if repository and snapshot:
+        try:
+            await repository.save(snapshot)
+        except Exception:  # pragma: no cover - defensive persistence
+            logger.debug("Failed to persist snapshot after revision fast path", exc_info=True)
+
+
+def _combine_queries(snapshot: Optional[SessionStateSnapshot], follow_up: str) -> str:
+    baseline = ""
+    if snapshot and isinstance(snapshot.last_query, str):
+        baseline = snapshot.last_query.strip()
+    follow_up_clean = follow_up.strip()
+    if not baseline:
+        return follow_up_clean
+    if not follow_up_clean:
+        return baseline
+    if follow_up_clean.lower().startswith("follow-up"):
+        return f"{baseline}\n\n{follow_up_clean}"
+    return f"{baseline}\n\nFollow-up request: {follow_up_clean}"
+
+
+def _append_session_message(
+    snapshot: Optional[SessionStateSnapshot],
+    *,
+    role: str,
+    content: str,
+) -> None:
+    if snapshot is None:
+        return
+    messages = snapshot.messages
+    if not isinstance(messages, list):
+        snapshot.messages = []
+        messages = snapshot.messages
+    timestamp = datetime.now(timezone.utc).isoformat()
+    messages.append(
+        {
+            "role": role,
+            "content": content,
+            "ts": timestamp,
+        }
+    )
+
 async def run_flow(
     flow_name: Optional[str],
     query: str,
@@ -119,21 +629,7 @@ async def analytics_memory_workflow(
     if repository and session_id:
         snapshot = await repository.load(session_id)
 
-    status_step = "initializing"
-    status_message = "Preparing analysis"
-    if chart_revision_requested:
-        status_step = "chart_revision"
-        status_message = "Applying chart update"
-    elif analysis_revision_requested:
-        status_step = "analysis_revision"
-        status_message = "Refreshing analysis"
-
-    initial_status = EventEmitter.status(status_step, status_message)
-    initial_status["data"]["flow"] = selected
-    if session_id:
-        initial_status["data"]["session_id"] = session_id
-    initial_status["data"]["phase"] = "initial"
-    yield initial_status
+    baseline_ready = _baseline_ready(snapshot)
 
     classifier = FollowUpClassifier()
     route = classifier.classify(query, snapshot)
@@ -148,36 +644,140 @@ async def analytics_memory_workflow(
     flow_instance = factory()
 
     agentic_enabled = _agentic_revision_enabled(selected)
-    inferred_targets: Set[str] = set(detected_targets or set())
+
+    requested_lanes: Set[str] = set(detected_targets or set())
     if chart_patch:
-        inferred_targets.add("chart")
+        requested_lanes.add("chart")
     if analysis_text:
-        inferred_targets.add("analysis")
-        inferred_targets.add("web")
+        requested_lanes.update({"analysis", "web"})
+    if route == FollowUpRoute.STOCK_ONLY:
+        requested_lanes.add("market")
+    if route == FollowUpRoute.REUSE_SQL and not requested_lanes.intersection({"chart", "analysis", "market"}):
+        requested_lanes.add("analysis")
+    needs_sql_lane = "sql" in requested_lanes
+    requested_lanes.discard("sql")
 
-    revision_directive: Optional[RevisionDirective] = None
-    search_topic_entries = []
-    if analysis_text and has_search_api_key():
-        try:
-            topic_plans = await generate_search_topics(analysis_text, session_id=session_id, min_topics=2)
-            for plan in topic_plans:
-                if plan and plan.query and plan.query.strip():
-                    search_topic_entries.append(asdict(plan))
-        except Exception as exc:  # pragma: no cover - defensive logging
-            logger.warning("Revision topic generation failed: %s", exc)
+    revision_lanes = _normalize_revision_lanes(requested_lanes)
+    explicit_revision = bool(chart_patch or analysis_text)
+    should_consider_revision = bool(revision_lanes or explicit_revision)
+    if route in {FollowUpRoute.REUSE_SQL, FollowUpRoute.STOCK_ONLY}:
+        should_consider_revision = True
+    should_take_revision = (
+        session_id
+        and baseline_ready
+        and should_consider_revision
+        and not needs_sql_lane
+        and (route != FollowUpRoute.FULL_PIPELINE or explicit_revision)
+    )
 
-    if session_id and (chart_patch or analysis_text):
-        directive_agentic = bool(agentic_enabled)
-        revision_directive = RevisionDirective.from_payload(
-            raw_text=query,
-            targets=inferred_targets or {"analysis" if analysis_text else "chart"},
-            requested_focus=analysis_text,
-            chart_patch=chart_patch,
-            agentic=directive_agentic,
-            search_topics=search_topic_entries,
-        )
+    missing_lanes = [lane for lane in revision_lanes if not _lane_available(snapshot, lane)]
+    if should_take_revision and missing_lanes:
+        banner = _build_cannot_revise_banner(revision_lanes, missing_lanes)
+        follow_up_event = {
+            "event": "follow_up_route",
+            "data": {
+                "route": "cannot_revise",
+                "flow": selected,
+                "session_id": session_id,
+                "lanes": revision_lanes,
+                "banner": banner,
+            },
+        }
+        yield follow_up_event
+        return
+
+    if should_take_revision and session_id:
+        directive_targets: Set[str] = set(requested_lanes)
+        if "analysis" in revision_lanes:
+            directive_targets.add("analysis")
+            directive_targets.add("web")
+        if "chart" in revision_lanes and chart_patch:
+            directive_targets.add("chart")
         if snapshot is None:
             snapshot = SessionStateSnapshot(session_id=session_id)
+        combined_query = _combine_queries(snapshot, query)
+        search_topic_entries: List[Dict[str, Any]] = []
+        needs_topics = any(lane in {"analysis", "web"} for lane in directive_targets)
+        if needs_topics:
+            topic_basis = (analysis_text or combined_query or query or "").strip()
+            if topic_basis and has_search_api_key():
+                try:
+                    topic_plans = await generate_search_topics(topic_basis, session_id=session_id, min_topics=2)
+                except Exception as exc:  # pragma: no cover - defensive logging
+                    logger.warning("Revision topic generation failed: %s", exc)
+                    topic_plans = []
+                for plan in topic_plans or []:
+                    if not plan or not getattr(plan, "query", None):
+                        continue
+                    query_value = str(plan.query).strip()
+                    if not query_value:
+                        continue
+                    entry = {key: value for key, value in asdict(plan).items() if value is not None}
+                    label_value = str(entry.get("label") or query_value).strip() or query_value
+                    reason_value = entry.get("reason")
+                    entry = {
+                        "label": label_value,
+                        "query": query_value,
+                    }
+                    if isinstance(reason_value, str) and reason_value.strip():
+                        entry["reason"] = reason_value.strip()
+                    search_topic_entries.append(entry)
+            if not search_topic_entries and snapshot and isinstance(snapshot.last_revision_directive, dict):
+                cached_topics = snapshot.last_revision_directive.get("search_topics") or []
+                for topic in cached_topics:
+                    if not isinstance(topic, dict):
+                        continue
+                    query_value = str(topic.get("query") or "").strip()
+                    if not query_value:
+                        continue
+                    entry = {
+                        "label": str(topic.get("label") or query_value).strip() or query_value,
+                        "query": query_value,
+                    }
+                    reason_value = topic.get("reason")
+                    if isinstance(reason_value, str) and reason_value.strip():
+                        entry["reason"] = reason_value.strip()
+                    search_topic_entries.append(entry)
+            if not search_topic_entries and topic_basis:
+                condensed = " ".join(topic_basis.split())
+                if condensed:
+                    search_topic_entries.append(
+                        {
+                            "label": condensed[:80],
+                            "query": condensed[:256],
+                        }
+                    )
+            if search_topic_entries:
+                deduped_topics: List[Dict[str, Any]] = []
+                seen_queries: Set[str] = set()
+                for topic in search_topic_entries:
+                    query_value = topic.get("query")
+                    if not isinstance(query_value, str):
+                        continue
+                    normalized = query_value.strip().lower()
+                    if not normalized or normalized in seen_queries:
+                        continue
+                    seen_queries.add(normalized)
+                    sanitized_topic = {
+                        "label": str(topic.get("label") or query_value).strip() or query_value.strip(),
+                        "query": query_value.strip(),
+                    }
+                    reason_value = topic.get("reason")
+                    if isinstance(reason_value, str):
+                        reason_clean = reason_value.strip()
+                        if reason_clean:
+                            sanitized_topic["reason"] = reason_clean
+                    deduped_topics.append(sanitized_topic)
+                search_topic_entries = deduped_topics[:5]
+        revision_directive = RevisionDirective.from_payload(
+            raw_text=combined_query,
+            targets=directive_targets or set(revision_lanes) or {"analysis"},
+            requested_focus=analysis_text,
+            chart_patch=chart_patch,
+            agentic=bool(agentic_enabled),
+            search_topics=search_topic_entries,
+        )
+        _append_session_message(snapshot, role="user", content=query)
         snapshot.record_revision_directive(
             revision_directive,
             metadata={
@@ -187,9 +787,43 @@ async def analytics_memory_workflow(
         )
         if repository:
             await repository.save(snapshot)
+        if hasattr(flow_instance, "set_revision_directive"):
+            flow_instance.set_revision_directive(revision_directive)  # type: ignore[attr-defined]
+        if hasattr(flow_instance, "prime_with_snapshot"):
+            flow_instance.prime_with_snapshot(snapshot)
+        async for event in _stream_revision_fast_path(
+            flow_instance,
+            combined_query=combined_query,
+            session_id=session_id,
+            lanes=revision_lanes,
+            chart_patch=chart_patch,
+            analysis_text=analysis_text,
+            revision_directive=revision_directive,
+            selected_flow=selected,
+            repository=repository,
+            snapshot=snapshot,
+        ):
+            yield event
+        return
 
-    if revision_directive and hasattr(flow_instance, "set_revision_directive"):
-        flow_instance.set_revision_directive(revision_directive)  # type: ignore[attr-defined]
+    status_step = "initializing"
+    status_message = "Preparing analysis"
+    if chart_revision_requested:
+        status_step = "chart_revision"
+        status_message = "Applying chart update"
+    elif analysis_revision_requested:
+        status_step = "analysis_revision"
+        status_message = "Refreshing analysis"
+
+    initial_status = EventEmitter.status(status_step, status_message)
+    initial_status.setdefault("data", {})
+    initial_status["data"]["flow"] = selected
+    if session_id:
+        initial_status["data"]["session_id"] = session_id
+    initial_status["data"]["phase"] = "initial"
+    yield initial_status
+
+    revision_directive: Optional[RevisionDirective] = None
 
     # Treat presence of a revision directive as sufficient to let the active flow
     # handle the revision inside the normal pipeline (even if not explicitly

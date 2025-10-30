@@ -205,6 +205,22 @@ def _bootstrap_registry(registry: PlannerToolRegistry) -> None:
         ):
             yield event
 
+    async def _run_web_refresh(pipeline: PlannerPipeline, ctx: PlannerPhaseContext, kwargs: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
+        async for event in pipeline.refresh_web_lane(
+            ctx,
+            reason=kwargs.get("reason"),
+            source=kwargs.get("source"),
+        ):
+            yield event
+
+    async def _run_market_refresh(pipeline: PlannerPipeline, ctx: PlannerPhaseContext, kwargs: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
+        async for event in pipeline.refresh_market_lane(
+            ctx,
+            reason=kwargs.get("reason"),
+            source=kwargs.get("source"),
+        ):
+            yield event
+
     registry.register(
         PlannerToolDefinition(
             name="classification",
@@ -328,6 +344,36 @@ def _bootstrap_registry(registry: PlannerToolRegistry) -> None:
             outputs=("analysis",),
             output_artifacts=("revision",),
             latency_budget_ms=1200,
+            concurrency_limit=2,
+        )
+    )
+
+    registry.register(
+        PlannerToolDefinition(
+            name="web_refresh",
+            description="Refresh cached web research artifacts for revision lanes",
+            handler=_run_web_refresh,
+            prerequisites=(),
+            telemetry_step="web_refresh",
+            inputs=(),
+            outputs=("web_ready",),
+            output_artifacts=("web",),
+            latency_budget_ms=800,
+            concurrency_limit=2,
+        )
+    )
+
+    registry.register(
+        PlannerToolDefinition(
+            name="market_refresh",
+            description="Refresh cached market data for revision lanes",
+            handler=_run_market_refresh,
+            prerequisites=(),
+            telemetry_step="market_refresh",
+            inputs=(),
+            outputs=("stock_ready",),
+            output_artifacts=("market",),
+            latency_budget_ms=800,
             concurrency_limit=2,
         )
     )

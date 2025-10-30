@@ -484,6 +484,8 @@ _ACTION_TERMS = (
 )
 _NUMERIC_HINTS = ("%", "bps", "basis point", "million", "billion", "m$", "bn")
 SNAPSHOT_MAX_AGE_SECONDS = int(os.getenv("ANALYTICS_SNAPSHOT_MAX_AGE_SECONDS", "600"))
+_WEB_TOOL_NAMES = {"web_retriever", "web_retriever_cached", "web_retriever_live"}
+_MARKET_TOOL_NAMES = {"stock_tracker", "market_question_a", "market_question_b"}
 
 FOLLOW_UP_BANNERS: Dict[FollowUpRoute, Dict[str, str]] = {
     FollowUpRoute.FULL_PIPELINE: {
@@ -1318,6 +1320,52 @@ def _is_snapshot_fresh(snapshot: Optional[Dict[str, Any]]) -> bool:
         return False
     return age_seconds <= SNAPSHOT_MAX_AGE_SECONDS
 
+def _clear_tool_state(
+    ctx: PlannerPhaseContext,
+    tool_names: Iterable[str],
+) -> None:
+    names = {str(name).strip().lower() for name in tool_names if name}
+    if not names:
+        return
+    receipts = getattr(ctx, "tool_receipts", None)
+    if isinstance(receipts, dict):
+        for key in list(receipts.keys()):
+            if str(key).strip().lower() in names:
+                receipts.pop(key, None)
+    results = getattr(ctx, "tool_parallel_results", None)
+    if isinstance(results, list):
+        filtered = []
+        for entry in results:
+            tool_id = str((entry or {}).get("tool") or "").strip().lower()
+            event_id = str((entry or {}).get("event") or "").strip().lower()
+            lane_id = str((entry or {}).get("lane") or "").strip().lower()
+            if tool_id in names or event_id in names or lane_id in {"web", "market"} and tool_id in names:
+                continue
+            filtered.append(entry)
+        ctx.tool_parallel_results = filtered
+    manifest = getattr(ctx, "tool_parallel_manifest", None)
+    if isinstance(manifest, list):
+        ctx.tool_parallel_manifest = [
+            entry for entry in manifest if str((entry or {}).get("tool") or "").strip().lower() not in names
+        ]
+
+def _reset_revision_accessories(ctx: PlannerPhaseContext, lanes: Iterable[str]) -> None:
+    lanes_normalized = {str(lane).strip().lower() for lane in lanes if lane}
+    if not lanes_normalized:
+        return
+    if "web" in lanes_normalized:
+        ctx.web_search = None
+        ctx.web_search_seeded = False
+        ctx.reused_web = False
+        ctx.web_ready_emitted = False  # type: ignore[attr-defined]
+        _clear_tool_state(ctx, _WEB_TOOL_NAMES)
+    if "market" in lanes_normalized or "stock" in lanes_normalized:
+        ctx.stock_widget_seeded = False
+        ctx.reused_stock = False
+        ctx.stock_ready_emitted = False  # type: ignore[attr-defined]
+        _clear_tool_state(ctx, _MARKET_TOOL_NAMES)
+    ctx.accessories_prefetched = False
+
 
 def _build_revision_snapshot_payload(ctx: PlannerPhaseContext) -> Optional[Dict[str, Any]]:
     signature = ctx.intent_signature or build_intent_signature(ctx.intent, ctx.plan or ctx.provisional_plan)
@@ -1367,6 +1415,72 @@ def _build_revision_snapshot_payload(ctx: PlannerPhaseContext) -> Optional[Dict[
 
     if ctx.artifacts.market and ctx.artifacts.market.snapshot and not payload.get("stock_widget"):
         payload["stock_widget"] = copy.deepcopy(ctx.artifacts.market.snapshot)
+
+    intent_model = getattr(ctx, "intent", None)
+    if intent_model is not None:
+        try:
+            payload["intent"] = intent_model.model_dump()
+        except Exception:
+            payload["intent"] = sanitize_for_json(intent_model)
+
+    plan_model = getattr(ctx, "plan", None) or getattr(ctx, "provisional_plan", None)
+    if plan_model is not None:
+        try:
+            payload["plan"] = plan_model.model_dump()
+        except Exception:
+            plan_payload = getattr(plan_model, "dict", None)
+            payload["plan"] = plan_payload() if callable(plan_payload) else sanitize_for_json(plan_model)
+
+    intent_resolution = getattr(ctx, "intent_resolution", None)
+    if intent_resolution is not None:
+        try:
+            payload["intent_resolution"] = intent_resolution.model_dump()
+        except Exception:
+            payload["intent_resolution"] = sanitize_for_json(intent_resolution)
+
+    slot_statuses_payload: Dict[str, Any] = {}
+    for slot_name, status in (getattr(ctx, "slot_statuses", {}) or {}).items():
+        if isinstance(status, SlotStatusModel):
+            try:
+                slot_statuses_payload[str(slot_name)] = status.model_dump()
+            except Exception:
+                slot_statuses_payload[str(slot_name)] = sanitize_for_json(status)
+        elif isinstance(status, Mapping):
+            slot_statuses_payload[str(slot_name)] = dict(status)
+    if slot_statuses_payload:
+        payload["slot_statuses"] = slot_statuses_payload
+
+    followup_payload: List[Dict[str, Any]] = []
+    for followup in getattr(ctx, "slot_followups", []) or []:
+        if isinstance(followup, FollowUpModel):
+            try:
+                followup_payload.append(followup.model_dump())
+            except Exception:
+                followup_payload.append(sanitize_for_json(followup))
+        elif isinstance(followup, Mapping):
+            followup_payload.append(dict(followup))
+    if followup_payload:
+        payload["slot_followups"] = followup_payload
+
+    clarification_payload: List[Dict[str, Any]] = []
+    for clarification in getattr(ctx, "clarifications", []) or []:
+        if isinstance(clarification, ClarifyRequestModel):
+            try:
+                clarification_payload.append(clarification.model_dump())
+            except Exception:
+                clarification_payload.append(sanitize_for_json(clarification))
+        elif isinstance(clarification, Mapping):
+            clarification_payload.append(dict(clarification))
+    if clarification_payload:
+        payload["clarifications"] = clarification_payload
+
+    clarification_rounds = getattr(ctx, "clarification_rounds", 0)
+    if isinstance(clarification_rounds, int) and clarification_rounds > 0:
+        payload["clarification_rounds"] = clarification_rounds
+
+    assumptions = getattr(ctx, "assumptions", None)
+    if isinstance(assumptions, (list, tuple, set)) and assumptions:
+        payload["assumptions"] = [str(item) for item in assumptions if item not in (None, "")]
 
     payload["updated_at"] = datetime.utcnow().isoformat()
     sanitized = sanitize_for_json(payload)
@@ -1683,6 +1797,104 @@ def _hydrate_context_from_snapshot(
     else:
         ctx.revision_snapshot = None
         ctx.prior_intent_signature = None
+
+    if ctx.revision_snapshot:
+        def _coerce_model(model_cls, payload):
+            if not isinstance(payload, Mapping):
+                return None
+            try:
+                if hasattr(model_cls, "model_validate"):
+                    return model_cls.model_validate(payload)
+                if hasattr(model_cls, "parse_obj"):
+                    return model_cls.parse_obj(payload)  # type: ignore[attr-defined]
+                return model_cls(**payload)
+            except Exception:
+                return None
+
+        hydrated_intent: Optional[IntentModel] = None
+        intent_payload = ctx.revision_snapshot.get("intent")
+        if intent_payload and getattr(ctx, "intent", None) is None:
+            intent_model = _coerce_model(IntentModel, intent_payload)
+            if intent_model:
+                hydrated_intent = intent_model
+                ctx.intent = intent_model
+
+        plan_payload = ctx.revision_snapshot.get("plan")
+        if plan_payload:
+            plan_model = _coerce_model(QueryPlanModel, plan_payload)
+            if plan_model:
+                ctx.plan = plan_model
+                ctx.provisional_plan = plan_model
+
+        resolution_payload = ctx.revision_snapshot.get("intent_resolution")
+        slot_status_models: Dict[str, SlotStatusModel] = {}
+        followup_models: List[FollowUpModel] = []
+        if resolution_payload:
+            resolution_model = _coerce_model(IntentResolutionModel, resolution_payload)
+            if resolution_model:
+                ctx.intent_resolution = resolution_model
+                slot_status_models = dict(resolution_model.slots or {})
+                followup_models = list(resolution_model.followups or [])
+
+        slot_status_payload = ctx.revision_snapshot.get("slot_statuses")
+        if isinstance(slot_status_payload, Mapping):
+            for slot_name, raw in slot_status_payload.items():
+                if slot_name in slot_status_models:
+                    continue
+                status_model = _coerce_model(SlotStatusModel, raw)
+                if status_model:
+                    slot_status_models[str(slot_name)] = status_model
+        if slot_status_models:
+            ctx.slot_statuses = slot_status_models
+
+        followup_payload = ctx.revision_snapshot.get("slot_followups")
+        if isinstance(followup_payload, Sequence):
+            for raw in followup_payload:
+                followup_model = _coerce_model(FollowUpModel, raw)
+                if followup_model:
+                    followup_models.append(followup_model)
+        if followup_models:
+            ctx.slot_followups = followup_models
+
+        if getattr(ctx, "intent_resolution", None) is None and (slot_status_models or followup_models):
+            ctx.intent_resolution = IntentResolutionModel(
+                slots=slot_status_models or {},
+                followups=followup_models or [],
+            )
+        elif getattr(ctx, "intent_resolution", None) is not None:
+            ctx.intent_resolution = ctx.intent_resolution.model_copy(  # type: ignore[assignment]
+                update={
+                    "slots": slot_status_models or dict(ctx.intent_resolution.slots or {}),
+                    "followups": followup_models or list(ctx.intent_resolution.followups or []),
+                }
+            )
+
+        clarifications_payload = ctx.revision_snapshot.get("clarifications")
+        if isinstance(clarifications_payload, Sequence):
+            clarifications: List[ClarifyRequestModel] = []
+            for raw in clarifications_payload:
+                clarification_model = _coerce_model(ClarifyRequestModel, raw)
+                if clarification_model:
+                    clarifications.append(clarification_model)
+            if clarifications:
+                ctx.clarifications = clarifications
+
+        rounds_value = ctx.revision_snapshot.get("clarification_rounds")
+        if isinstance(rounds_value, int) and rounds_value > 0:
+            ctx.clarification_rounds = max(ctx.clarification_rounds, rounds_value)
+
+        assumptions_payload = ctx.revision_snapshot.get("assumptions")
+        if isinstance(assumptions_payload, Sequence) and assumptions_payload:
+            ctx.assumptions = [str(item) for item in assumptions_payload if item not in (None, "")]
+        elif hydrated_intent and getattr(hydrated_intent, "assumptions", None):
+            ctx.assumptions = list(hydrated_intent.assumptions or [])
+        elif getattr(ctx, "intent", None) and getattr(ctx.intent, "assumptions", None):
+            ctx.assumptions = list(ctx.intent.assumptions or [])
+
+        if ctx.prior_intent_signature and not getattr(ctx, "intent_signature", None):
+            ctx.intent_signature = copy.deepcopy(ctx.prior_intent_signature)
+
+        ctx.reuse_snapshot_active = True
 
     if artifacts is None:
         if ctx.revision_snapshot:
@@ -2135,6 +2347,14 @@ class PlannerPipeline:
         self.revision_hint_active: bool = False
         self.revision_directive: Optional["RevisionDirective"] = None
         self.agentic_revision_mode: bool = False
+        self._tool_registry: Optional[Any] = None
+
+    @property
+    def tool_registry(self):
+        if self._tool_registry is None:
+            from .pipeline_tools import get_planner_tool_registry  # Local import to avoid circular dependency
+            self._tool_registry = get_planner_tool_registry()
+        return self._tool_registry
 
     async def _persist_session_state(
         self,
@@ -2354,6 +2574,22 @@ class PlannerPipeline:
         data["delta"] = True
         data.setdefault("parallel_group", "accessory_delta")
         return self._annotate_revision(event, ctx)
+
+    @staticmethod
+    def _apply_revision_metadata(
+        event: Dict[str, Any],
+        *,
+        reason: Optional[str],
+        source: Optional[str],
+    ) -> Dict[str, Any]:
+        if not isinstance(event, dict):
+            return event
+        data = event.setdefault("data", {})
+        if reason and not data.get("reason"):
+            data["reason"] = reason
+        if source and not data.get("source"):
+            data["source"] = source
+        return event
 
     def _update_tool_result_cache(self, ctx: PlannerPhaseContext, entries: Sequence[Dict[str, Any]]) -> None:
         if not entries:
@@ -2685,6 +2921,86 @@ class PlannerPipeline:
             async for event in self._web_search_phase(ctx):
                 yield self._mark_delta_event(event)
         await self._persist_session_state(ctx, record_artifacts=True)
+
+    async def refresh_web_lane(
+        self,
+        ctx: PlannerPhaseContext,
+        *,
+        reason: Optional[str] = None,
+        source: Optional[str] = None,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        _reset_revision_accessories(ctx, {"web"})
+        adapter_lookup = {adapter.name: adapter for adapter in get_default_tool_adapters()}
+        adapter_names = tuple(name for name in ("web_retriever", "web_retriever_cached", "web_retriever_live") if name in adapter_lookup)
+        if not adapter_names:
+            skip_event = EventEmitter.status("web_refresh", "Web retriever unavailable")
+            skip_event.setdefault("data", {})
+            skip_event["data"].update({"lane": "web", "revision": True, "phase": "skipped"})
+            yield self._apply_revision_metadata(skip_event, reason=reason, source=source)
+            return
+        adapters = tuple(adapter_lookup[name] for name in adapter_names)
+        try:
+            async for event in run_tool_parallelism(
+                ctx,
+                adapters=adapters,
+                concurrency_override=len(adapters),
+            ):
+                derived_events = self._ingest_tool_event(ctx, event)
+                base_event = self._apply_revision_metadata(
+                    self._mark_delta_event(event, ctx),
+                    reason=reason,
+                    source=source,
+                )
+                yield base_event
+                for derived_event in derived_events:
+                    yield self._apply_revision_metadata(
+                        derived_event,
+                        reason=reason,
+                        source=source,
+                    )
+        finally:
+            await self._persist_session_state(ctx, record_artifacts=True)
+
+    async def refresh_market_lane(
+        self,
+        ctx: PlannerPhaseContext,
+        *,
+        reason: Optional[str] = None,
+        source: Optional[str] = None,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        _reset_revision_accessories(ctx, {"market"})
+        adapter_lookup = {adapter.name: adapter for adapter in get_default_tool_adapters()}
+        adapter_names = tuple(
+            name for name in ("market_question_a", "market_question_b", "stock_tracker") if name in adapter_lookup
+        )
+        if not adapter_names:
+            skip_event = EventEmitter.status("market_refresh", "Market tools unavailable")
+            skip_event.setdefault("data", {})
+            skip_event["data"].update({"lane": "market", "revision": True, "phase": "skipped"})
+            yield self._apply_revision_metadata(skip_event, reason=reason, source=source)
+            return
+        adapters = tuple(adapter_lookup[name] for name in adapter_names)
+        try:
+            async for event in run_tool_parallelism(
+                ctx,
+                adapters=adapters,
+                concurrency_override=len(adapters),
+            ):
+                derived_events = self._ingest_tool_event(ctx, event)
+                base_event = self._apply_revision_metadata(
+                    self._mark_delta_event(event, ctx),
+                    reason=reason,
+                    source=source,
+                )
+                yield base_event
+                for derived_event in derived_events:
+                    yield self._apply_revision_metadata(
+                        derived_event,
+                        reason=reason,
+                        source=source,
+                    )
+        finally:
+            await self._persist_session_state(ctx, record_artifacts=True)
 
     async def emit_chart_patch(
         self,
@@ -4924,6 +5240,18 @@ class PlannerExecutorFlow:
 
     def latest_artifacts(self) -> Optional[PipelineArtifacts]:
         return self._pipeline.latest_artifacts()
+
+    @property
+    def tool_registry(self):
+        return self._pipeline.tool_registry
+
+    def invoke_tool(
+        self,
+        name: str,
+        ctx: PlannerPhaseContext,
+        **kwargs: Any,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        return self.tool_registry.invoke(name, self._pipeline, ctx, **kwargs)
 
     def prime_with_snapshot(self, snapshot: Optional[SessionStateSnapshot]) -> None:
         self._pipeline.prime_with_snapshot(snapshot)

@@ -24,6 +24,7 @@ from .planner_executor import (
     run_planner_executor,
     _evaluate_latency_guardrail,
     _hash_payload,
+    _reset_revision_accessories,
 )
 from .hooks import AnalyticsFlowHooks
 from .tool_bundle import collect_tool_bundle
@@ -1058,6 +1059,8 @@ class MultiAgentFlow:
         "chart_revision": "viz_designer",
         "analysis_generation": "insight_reviewer",
         "analysis_revision": "insight_reviewer",
+        "web_refresh": "insight_reviewer",
+        "market_refresh": "market_agent",
     }
 
     AGENT_END_EVENTS = {
@@ -1073,6 +1076,8 @@ class MultiAgentFlow:
         "chart_patch": "viz_designer",
         "analysis_revision": "insight_reviewer",
         "analysis_complete": "insight_reviewer",
+        "web_ready": "insight_reviewer",
+        "stock_ready": "market_agent",
     }
 
     TOOL_METADATA_STEP_MAP = {
@@ -1085,6 +1090,8 @@ class MultiAgentFlow:
         "chart_revision": "chart_revision",
         "analysis_generation": "analysis_generation",
         "analysis_revision": "analysis_revision",
+        "web_refresh": "web_refresh",
+        "market_refresh": "market_refresh",
     }
 
     TOOL_METADATA_EVENT_MAP = {
@@ -1100,6 +1107,8 @@ class MultiAgentFlow:
         "chart_patch": "chart_revision",
         "analysis_revision": "analysis_revision",
         "analysis_complete": "analysis_generation",
+        "web_ready": "web_refresh",
+        "stock_ready": "market_refresh",
     }
 
     TOOL_METADATA_ROLE_MAP = {
@@ -2119,15 +2128,144 @@ class MultiAgentFlow:
         async for event in self._forward_with_hooks(tool_stream, hooks, query, session_id):
             yield event
 
+    async def apply_chart_revision(
+        self,
+        query: str,
+        *,
+        session_id: Optional[str],
+        patch: Dict[str, Any],
+        reason: Optional[str] = None,
+        source: Optional[str] = None,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        async for event in self.chart_revision(
+            query,
+            session_id=session_id,
+            patch=patch,
+            reason=reason,
+            source=source,
+        ):
+            yield event
+
+    async def run_web_refresh(
+        self,
+        query: str,
+        *,
+        session_id: Optional[str],
+        reason: Optional[str] = None,
+        source: Optional[str] = None,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        if session_id is None:
+            raise ValueError("run_web_refresh requires an existing session_id")
+        hooks = _MultiAgentHooks(self, query, session_id=session_id)
+        ctx = await self._planner.initialize_context(query, session_id=session_id)
+        directive_topics = getattr(getattr(ctx, "revision_directive", None), "search_topics", None)
+        if directive_topics:
+            ctx.revision_search_topics = list(directive_topics)
+        _reset_revision_accessories(ctx, {"web"})
+
+        async def _stream() -> AsyncGenerator[Dict[str, Any], None]:
+            async for event in self._planner.invoke_tool(
+                "web_refresh",
+                ctx,
+                reason=reason,
+                source=source,
+            ):
+                yield event
+
+        async for event in self._forward_with_hooks(_stream(), hooks, query, session_id):
+            yield self._annotate(event)
+
+    async def refresh_market_lane(
+        self,
+        query: str,
+        *,
+        session_id: Optional[str],
+        reason: Optional[str] = None,
+        source: Optional[str] = None,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        if session_id is None:
+            raise ValueError("refresh_market_lane requires an existing session_id")
+        hooks = _MultiAgentHooks(self, query, session_id=session_id)
+        ctx = await self._planner.initialize_context(query, session_id=session_id)
+        _reset_revision_accessories(ctx, {"market"})
+
+        async def _stream() -> AsyncGenerator[Dict[str, Any], None]:
+            async for event in self._planner.invoke_tool(
+                "market_refresh",
+                ctx,
+                reason=reason,
+                source=source,
+            ):
+                yield event
+
+        async for event in self._forward_with_hooks(_stream(), hooks, query, session_id):
+            yield self._annotate(event)
+
+    async def run_analysis_refresh(
+        self,
+        query: str,
+        *,
+        session_id: Optional[str],
+        requested_focus: Optional[str] = None,
+        revision_directive: Optional["RevisionDirective"] = None,
+        reason: Optional[str] = None,
+        source: Optional[str] = None,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        if session_id is None:
+            raise ValueError("run_analysis_refresh requires an existing session_id")
+        hooks = _MultiAgentHooks(self, query, session_id=session_id)
+        ctx = await self._planner.initialize_context(query, session_id=session_id)
+        if revision_directive is not None:
+            ctx.revision_directive = revision_directive
+            ctx.agentic_revision_mode = bool(getattr(revision_directive, "agentic", False))
+            ctx.revision_targets = set(getattr(revision_directive, "targets", []))
+        if requested_focus:
+            setattr(ctx, "revision_focus", requested_focus)
+        directive_topics = getattr(getattr(ctx, "revision_directive", None), "search_topics", None)
+        if directive_topics:
+            ctx.revision_search_topics = list(directive_topics)
+        ctx.reused_analysis = False
+        ctx.web_ready_emitted = False
+        _reset_revision_accessories(ctx, {"web", "market"})
+        sql_artifact = getattr(ctx.artifacts, "sql_generation", None)
+        analysis_artifact = getattr(ctx.artifacts, "analysis", None)
+        if not sql_artifact or not getattr(sql_artifact, "sql", None) or analysis_artifact is None:
+            async for event in self.analysis_revision(
+                query,
+                session_id=session_id,
+                analysis=requested_focus or (analysis_artifact.analysis_text if analysis_artifact else None),
+                reason=reason,
+                source=source,
+                revision_directive=revision_directive,
+                refresh_web=True,
+            ):
+                yield event
+            return
+
+        async def _stream() -> AsyncGenerator[Dict[str, Any], None]:
+            async for event in self._planner._pipeline.run_analysis_phase(ctx):  # type: ignore[attr-defined]
+                yield event
+            async for event in self._planner._pipeline._emit_post_analysis_accessories(ctx):  # type: ignore[attr-defined]
+                yield event
+            await self._planner._pipeline._persist_session_state(  # type: ignore[attr-defined]
+                ctx,
+                record_analysis=True,
+                record_artifacts=True,
+            )
+
+        async for event in self._forward_with_hooks(_stream(), hooks, query, session_id):
+            yield self._annotate(event)
+
     async def analysis_revision(
         self,
         query: str,
         *,
         session_id: Optional[str],
-        analysis: str,
+        analysis: Optional[str] = None,
         reason: Optional[str] = None,
         source: Optional[str] = None,
         revision_directive: Optional["RevisionDirective"] = None,
+        refresh_web: bool = False,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         if session_id is None:
             raise ValueError("analysis_revision requires an existing session_id")
@@ -2145,12 +2283,19 @@ class MultiAgentFlow:
                 ctx.revision_focus = focus_hint
             if getattr(revision_directive, "search_topics", None):
                 ctx.revision_search_topics = list(revision_directive.search_topics)
-        registry = get_planner_tool_registry()
+        if refresh_web:
+            async for event in self.run_web_refresh(
+                query,
+                session_id=session_id,
+                reason=reason,
+                source=source,
+            ):
+                yield event
         tool_stream = registry.invoke(
             "analysis_revision",
             self._planner._pipeline,
             ctx,
-            analysis=analysis,
+            analysis=analysis or "",
             reason=reason,
             source=source,
         )
