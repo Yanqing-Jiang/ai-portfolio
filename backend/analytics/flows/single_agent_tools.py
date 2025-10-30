@@ -21,6 +21,7 @@ from .planner_executor import (
     _hash_payload,
     PlannerPhaseContext,
     PlannerExecutorFlow,
+    _reset_revision_accessories,
 )
 from .pipeline_tools import get_planner_tool_registry
 from .schedulers import FlowMode, apply_mode_metadata, get_mode_config
@@ -594,6 +595,8 @@ class SingleAgentController:
         "chart_revision": "chart_designer",
         "analysis_generation": "analysis_writer",
         "analysis_revision": "analysis_writer",
+        "web_refresh": "web_retriever",
+        "market_refresh": "stock_tracker",
     }
 
     TOOL_END_EVENTS = {
@@ -609,6 +612,8 @@ class SingleAgentController:
         "chart_patch": "chart_designer",
         "analysis_revision": "analysis_writer",
         "analysis_complete": "analysis_writer",
+        "web_ready": "web_retriever",
+        "stock_ready": "stock_tracker",
     }
 
     TOOL_METADATA_STEP_MAP = {
@@ -623,6 +628,8 @@ class SingleAgentController:
         "chart_revision": "chart_revision",
         "analysis_generation": "analysis_generation",
         "analysis_revision": "analysis_revision",
+        "web_refresh": "web_refresh",
+        "market_refresh": "market_refresh",
     }
 
     TOOL_METADATA_EVENT_MAP = {
@@ -639,6 +646,8 @@ class SingleAgentController:
         "chart_patch": "chart_revision",
         "analysis_revision": "analysis_revision",
         "analysis_complete": "analysis_generation",
+        "web_ready": "web_refresh",
+        "stock_ready": "market_refresh",
     }
 
     TOOL_METADATA_ALIAS_MAP = {
@@ -1177,24 +1186,153 @@ class SingleAgentController:
         ):
             yield event
 
+    async def apply_chart_revision(
+        self,
+        *,
+        session_id: str,
+        patch: Dict[str, Any],
+        reason: Optional[str] = None,
+        source: Optional[str] = None,
+        query: Optional[str] = None,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        async for event in self.chart_revision(
+            session_id=session_id,
+            patch=patch,
+            reason=reason,
+            source=source,
+            query=query,
+        ):
+            yield event
+
+    async def run_web_refresh(
+        self,
+        *,
+        session_id: str,
+        query: Optional[str] = None,
+        reason: Optional[str] = None,
+        source: Optional[str] = None,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        hooks = _SingleAgentToolHooks(self, session_id=session_id)
+        ctx = await self._planner.initialize_context(query or "", session_id=session_id)
+        directive = getattr(ctx, "revision_directive", None)
+        if directive and getattr(directive, "search_topics", None):
+            ctx.revision_search_topics = list(directive.search_topics)
+        _reset_revision_accessories(ctx, {"web"})
+
+        async def _stream() -> AsyncGenerator[Dict[str, Any], None]:
+            async for event in self._planner.invoke_tool(
+                "web_refresh",
+                ctx,
+                reason=reason,
+                source=source,
+            ):
+                yield event
+
+        async for event in self._forward_with_hooks(_stream(), hooks, session_id):
+            yield event
+
+    async def run_market_refresh(
+        self,
+        *,
+        session_id: str,
+        query: Optional[str] = None,
+        reason: Optional[str] = None,
+        source: Optional[str] = None,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        hooks = _SingleAgentToolHooks(self, session_id=session_id)
+        ctx = await self._planner.initialize_context(query or "", session_id=session_id)
+        _reset_revision_accessories(ctx, {"market"})
+
+        async def _stream() -> AsyncGenerator[Dict[str, Any], None]:
+            async for event in self._planner.invoke_tool(
+                "market_refresh",
+                ctx,
+                reason=reason,
+                source=source,
+            ):
+                yield event
+
+        async for event in self._forward_with_hooks(_stream(), hooks, session_id):
+            yield event
+
+    async def run_analysis_refresh(
+        self,
+        *,
+        session_id: str,
+        query: str,
+        requested_focus: Optional[str] = None,
+        revision_directive: Optional["RevisionDirective"] = None,
+        reason: Optional[str] = None,
+        source: Optional[str] = None,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        hooks = _SingleAgentToolHooks(self, session_id=session_id)
+        ctx = await self._planner.initialize_context(query or "", session_id=session_id)
+        if revision_directive is not None:
+            ctx.revision_directive = revision_directive  # type: ignore[attr-defined]
+        if requested_focus:
+            setattr(ctx, "revision_focus", requested_focus)
+        directive_topics = getattr(getattr(ctx, "revision_directive", None), "search_topics", None)
+        if directive_topics:
+            ctx.revision_search_topics = list(directive_topics)
+        ctx.reused_analysis = False
+        ctx.web_ready_emitted = False
+        _reset_revision_accessories(ctx, {"web", "market"})
+        sql_artifact = getattr(ctx.artifacts, "sql_generation", None)
+        analysis_artifact = getattr(ctx.artifacts, "analysis", None)
+        if not sql_artifact or not getattr(sql_artifact, "sql", None) or analysis_artifact is None:
+            async for event in self.analysis_revision(
+                session_id=session_id,
+                analysis=requested_focus or (analysis_artifact.analysis_text if analysis_artifact else None),
+                reason=reason,
+                source=source,
+                query=query,
+                revision_directive=revision_directive,
+                refresh_web=True,
+            ):
+                yield event
+            return
+
+        async def _stream() -> AsyncGenerator[Dict[str, Any], None]:
+            async for event in self._planner._pipeline.run_analysis_phase(ctx):  # type: ignore[attr-defined]
+                yield event
+            async for event in self._planner._pipeline._emit_post_analysis_accessories(ctx):  # type: ignore[attr-defined]
+                yield event
+            await self._planner._pipeline._persist_session_state(  # type: ignore[attr-defined]
+                ctx,
+                record_analysis=True,
+                record_artifacts=True,
+            )
+
+        async for event in self._forward_with_hooks(_stream(), hooks, session_id):
+            yield event
+
     async def analysis_revision(
         self,
         *,
         session_id: str,
-        analysis: str,
+        analysis: Optional[str] = None,
         reason: Optional[str] = None,
         source: Optional[str] = None,
         query: Optional[str] = None,
         revision_directive: Optional["RevisionDirective"] = None,
+        refresh_web: bool = False,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         hooks = _SingleAgentToolHooks(self, session_id=session_id)
+        if refresh_web:
+            async for event in self.run_web_refresh(
+                session_id=session_id,
+                query=query,
+                reason=reason,
+                source=source,
+            ):
+                yield event
         async for event in self._invoke_planner_tool(
             "analysis_revision",
             session_id=session_id,
             query=query,
             hooks=hooks,
             revision_directive=revision_directive,
-            analysis=analysis,
+            analysis=analysis or "",
             reason=reason,
             source=source,
         ):
