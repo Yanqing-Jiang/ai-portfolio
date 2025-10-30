@@ -58,13 +58,54 @@ const SINGLE_AGENT_LANE_BASE_POSITIONS: Record<LaneKey, { x: number; y: number }
   fanout: { x: -40, y: -200 },
 };
 
-const FLOW_START_POSITIONS: Partial<Record<FlowMode, { x: number; y: number }>> = {
-  'single-agent': { x: -620, y: -260 },
-  'multi-agent': { x: -540, y: -260 },
-};
-
 const START_NODE_ID = 'fanout_start';
 const START_NODE_LABEL = '__start__';
+
+const LANE_STACK_SPACING = 120;
+const COORDINATION_STACK_SPACING = 100;
+
+type MultiAgentLaneConfig = {
+  spineId: string;
+  offsetX?: number;
+  baseOffset?: number;
+  direction?: 'up' | 'down';
+  stride?: number;
+};
+
+const MULTI_AGENT_SPINE_POSITIONS: Record<string, { x: number; y: number }> = {
+  [START_NODE_ID]: { x: -1080, y: 0 },
+  agent_coordination: { x: -320, y: 0 },
+  tool_fanout: { x: 200, y: 0 },
+  analysis_generation: { x: 680, y: 0 },
+  follow_up_route: { x: 960, y: 0 },
+};
+
+const MULTI_AGENT_SPINE_STEPS = new Set(Object.keys(MULTI_AGENT_SPINE_POSITIONS));
+
+const DEFAULT_MULTI_AGENT_LANE_CONFIG: MultiAgentLaneConfig = {
+  spineId: 'tool_fanout',
+  direction: 'down',
+  baseOffset: LANE_STACK_SPACING,
+  stride: LANE_STACK_SPACING,
+};
+
+const MULTI_AGENT_LANE_CONFIG: Record<LaneKey, MultiAgentLaneConfig> = {
+  overview: { spineId: START_NODE_ID, direction: 'up', baseOffset: -LANE_STACK_SPACING * 1.2, stride: LANE_STACK_SPACING },
+  coordination: { spineId: 'agent_coordination', direction: 'up', baseOffset: -COORDINATION_STACK_SPACING, stride: COORDINATION_STACK_SPACING },
+  planner: { spineId: START_NODE_ID, direction: 'down', offsetX: 240, baseOffset: LANE_STACK_SPACING * 1.1, stride: LANE_STACK_SPACING },
+  sql: { spineId: 'tool_fanout', direction: 'down', offsetX: -40, baseOffset: LANE_STACK_SPACING * 1.2, stride: LANE_STACK_SPACING },
+  market: { spineId: 'tool_fanout', direction: 'up', offsetX: 210, baseOffset: -LANE_STACK_SPACING, stride: LANE_STACK_SPACING },
+  web: { spineId: 'tool_fanout', direction: 'up', offsetX: 80, baseOffset: -LANE_STACK_SPACING * 0.9, stride: LANE_STACK_SPACING },
+  chart: { spineId: 'tool_fanout', direction: 'down', offsetX: 200, baseOffset: LANE_STACK_SPACING * 2.2, stride: LANE_STACK_SPACING },
+  analysis: { spineId: 'analysis_generation', direction: 'down', baseOffset: LANE_STACK_SPACING, stride: LANE_STACK_SPACING },
+  fanout: { spineId: 'tool_fanout', direction: 'up', baseOffset: -LANE_STACK_SPACING * 2, stride: LANE_STACK_SPACING },
+};
+
+const FLOW_START_POSITIONS: Partial<Record<FlowMode, { x: number; y: number }>> = {
+  'single-agent': { x: -620, y: -260 },
+  'multi-agent': MULTI_AGENT_SPINE_POSITIONS[START_NODE_ID],
+};
+
 const SINGLE_AGENT_PREPROCESS_SEQUENCE = [
   'classification',
   'intent_classifier',
@@ -98,9 +139,6 @@ const HUB_STEP_IDS: Record<FlowMode, string> = {
   'single-agent': 'tool_fanout',
   'multi-agent': 'agent_coordination',
 };
-
-const LANE_STACK_SPACING = 120;
-const COORDINATION_STACK_SPACING = 100;
 const SQL_SPINE_STEPS = new Set([
   'sql_generator',
   'sql_validator',
@@ -227,7 +265,7 @@ const FLOW_THEMES: Record<FlowMode, FlowVisualTheme> = {
 const FLOW_LAYOUT: Record<FlowMode, { columns: number; horizontalGap: number; verticalGap: number }> = {
   'planner-executor': { columns: 4, horizontalGap: 420, verticalGap: 280 },
   'single-agent': { columns: 5, horizontalGap: 400, verticalGap: 270 },
-  'multi-agent': { columns: 5, horizontalGap: 520, verticalGap: 340 },
+  'multi-agent': { columns: 5, horizontalGap: 640, verticalGap: 360 },
 };
 
 const STEP_LANE_OVERRIDES: Record<string, LaneKey> = {
@@ -424,6 +462,19 @@ const computeSerpentinePlacement = (
 };
 
 const getLaneBasePosition = (lane: LaneKey, mode: FlowMode): { x: number; y: number } => {
+  if (mode === 'multi-agent') {
+    const config = MULTI_AGENT_LANE_CONFIG[lane] ?? DEFAULT_MULTI_AGENT_LANE_CONFIG;
+    const anchor = MULTI_AGENT_SPINE_POSITIONS[config.spineId] ?? MULTI_AGENT_SPINE_POSITIONS[START_NODE_ID];
+    const offsetX = config.offsetX ?? 0;
+    const direction = config.direction ?? DEFAULT_MULTI_AGENT_LANE_CONFIG.direction ?? 'down';
+    const stride = config.stride ?? DEFAULT_MULTI_AGENT_LANE_CONFIG.stride ?? LANE_STACK_SPACING;
+    const defaultOffset = direction === 'up' ? -stride : stride;
+    const baseOffset = config.baseOffset ?? defaultOffset;
+    return {
+      x: anchor.x + offsetX,
+      y: anchor.y + baseOffset,
+    };
+  }
   if (mode === 'single-agent') {
     return SINGLE_AGENT_LANE_BASE_POSITIONS[lane] ?? SINGLE_AGENT_LANE_BASE_POSITIONS.overview;
   }
@@ -588,6 +639,78 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
       return { step, index, phase, resolvedLane, laneGroupId, bandKey };
     });
 
+    if (flowMode === 'multi-agent') {
+      const multiGroupCounters = new Map<string, number>();
+
+      return laneMeta.map((meta) => {
+        const { step, index, phase, resolvedLane, laneGroupId, bandKey } = meta;
+
+        let positionX: number;
+        let positionY: number;
+        let bandIndex = 0;
+        let memberIndex = 0;
+
+        if (MULTI_AGENT_SPINE_STEPS.has(step.id)) {
+          const spinePosition = MULTI_AGENT_SPINE_POSITIONS[step.id];
+          positionX = spinePosition?.x ?? 0;
+          positionY = spinePosition?.y ?? 0;
+        } else {
+          const config = {
+            ...DEFAULT_MULTI_AGENT_LANE_CONFIG,
+            ...(MULTI_AGENT_LANE_CONFIG[resolvedLane] ?? {}),
+          };
+          const anchor =
+            MULTI_AGENT_SPINE_POSITIONS[config.spineId] ?? MULTI_AGENT_SPINE_POSITIONS[START_NODE_ID];
+          const direction = config.direction ?? 'down';
+          const stride = config.stride ?? LANE_STACK_SPACING;
+          const defaultOffset = direction === 'up' ? -stride : stride;
+          const baseOffset = config.baseOffset ?? defaultOffset;
+
+          const groupIndex = multiGroupCounters.get(bandKey) ?? 0;
+          multiGroupCounters.set(bandKey, groupIndex + 1);
+
+          const directionMultiplier = direction === 'up' ? -1 : 1;
+
+          positionX = anchor.x + (config.offsetX ?? 0);
+          positionY = anchor.y + baseOffset + groupIndex * stride * directionMultiplier;
+          bandIndex = groupIndex;
+          memberIndex = groupIndex;
+        }
+
+        const latestThinking = extractLatestThinking(step);
+        const isActive = step.status === 'in_progress';
+        const isCompleted = step.status === 'completed';
+        const hasError = step.status === 'error';
+
+        return {
+          step,
+          phase,
+          position: { x: positionX, y: positionY },
+          row: bandIndex,
+          stepInRow: memberIndex + 1,
+          columnsInRow: 1,
+          isEvenRow: bandIndex % 2 === 0,
+          isActive,
+          isCompleted,
+          hasError,
+          latestThinking,
+          index,
+          parallelGroup: step.parallelGroup ?? laneGroupId,
+          sequence: step.sequence,
+          lane: step.lane ?? resolvedLane,
+          resolvedLane,
+          laneGroupId,
+          bandKey,
+          bandIndex,
+          memberIndex,
+          reused: Boolean(step.reused),
+          finalAnswerOnly: Boolean(step.finalAnswerOnly),
+          missingComponents: step.missingComponents,
+          analysisAvailable: step.analysisAvailable,
+        };
+      });
+    }
+
     const laneGroupSizes = new Map<string, number>();
     laneMeta.forEach((meta) => {
       laneGroupSizes.set(meta.bandKey, (laneGroupSizes.get(meta.bandKey) ?? 0) + 1);
@@ -623,12 +746,12 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
           positionX = SINGLE_AGENT_PREPROCESS_BASE.x + orderIndex * PREPROCESS_HORIZONTAL_SPACING;
           positionY = SINGLE_AGENT_PREPROCESS_BASE.y;
         }
-      } else if (HORIZONTAL_GROUP_KEYS.has(bandKey)) {
+      } else if (flowMode !== 'multi-agent' && HORIZONTAL_GROUP_KEYS.has(bandKey)) {
         const offset = (memberIndex - (groupSize - 1) / 2) * LANE_GROUP_HORIZONTAL_SPACING;
         positionX = base.x + offset;
       } else {
         positionY += memberIndex * LANE_GROUP_VERTICAL_SPACING;
-        if (!STRICT_VERTICAL_LANES.has(resolvedLane) && memberIndex > 0) {
+        if (flowMode !== 'multi-agent' && !STRICT_VERTICAL_LANES.has(resolvedLane) && memberIndex > 0) {
           const indent = Math.min(memberIndex, 3) * 28;
           positionX += indent;
         }
