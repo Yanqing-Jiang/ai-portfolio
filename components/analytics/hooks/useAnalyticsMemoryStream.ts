@@ -61,6 +61,26 @@ const FOLLOW_UP_BANNER_COPY: Record<string, { title: string; message: string }> 
     title: 'Market Snapshot Only',
     message: 'Pulling fresh price data while charts and analysis stay pinned to the prior run.',
   },
+  chart_revision: {
+    title: 'Chart Update Requested',
+    message: 'Applying the cached dataset to refresh the chart.',
+  },
+  analysis_only: {
+    title: 'Narrative Refresh',
+    message: 'Refreshing the analysis narrative and citations without replanning or rerunning SQL.',
+  },
+  market_only: {
+    title: 'Market Refresh',
+    message: 'Updating market context while preserving the previous chart and narrative.',
+  },
+  mixed_revision: {
+    title: 'Targeted Revision',
+    message: 'Applying the requested updates without replaying the full pipeline.',
+  },
+  cannot_revise: {
+    title: 'Revision Not Available',
+    message: 'Start a new question to rebuild missing results before revising again.',
+  },
 };
 
 const SPECIALIST_LANE_PRIORITY: Record<string, number> = {
@@ -411,6 +431,7 @@ export const useAnalyticsMemoryStream = (
   const [slotFollowups, setSlotFollowups] = useState<ClarifyRequest[]>([]);
   const [snapshotReuse, setSnapshotReuse] = useState<SnapshotReuseInfo | null>(null);
   const revisionContextRef = useRef<{ id?: string; lanes: string[] }>({ id: undefined, lanes: [] });
+  const revisionModeRef = useRef<'none' | 'chart' | 'analysis' | 'market' | 'mixed'>('none');
   const lastClarificationEchoRef = useRef<{ slot: string; content: string } | null>(null);
   const resultSentRef = useRef<boolean>(false);
   const summarySentRef = useRef<boolean>(false);
@@ -2382,7 +2403,8 @@ const workflowDataRef = useRef<{
   };
 
   const handleQuery = async (query: string) => {
-    if (!query.trim()) return;
+    const trimmed = query.trim();
+    if (!trimmed) return;
     
     // Stop any existing stream before starting a new one
     if (streamHook.isLoading) {
@@ -2406,30 +2428,46 @@ const workflowDataRef = useRef<{
     // Add user query to chat history
     addChatMessage({
       type: 'user',
-      content: query.trim(),
+      content: trimmed,
     });
-    
-    // Reset only temporary state for new query (keep results in chat history)
+
+    const activeSessionId = sessionId || lastSessionIdRef.current;
+    const hadResult = resultSentRef.current;
+    const isFollowUp = Boolean(hadResult && activeSessionId);
+    if (isFollowUp) {
+      revisionModeRef.current = revisionModeRef.current === 'none' ? 'mixed' : revisionModeRef.current;
+    } else {
+      revisionModeRef.current = 'none';
+      revisionContextRef.current = { id: undefined, lanes: [] };
+    }
+
+    // Reset stream accumulators for new query while preserving prior cards when revising
     setStreamingText('');
     setProgressiveText('');
     setProgressiveAnalysis('');
     workflowDataRef.current.streamingText = '';
     workflowDataRef.current.progressiveText = '';
     workflowDataRef.current.progressiveAnalysis = '';
-    setWebSearch(null);
-    setStockWidget(null);
-    setAnalysisOverview(null);
-    setFollowUpBanner(null);
-    setSpecialistCards([]);
-    setRevisionMode('none');
+
+    if (!isFollowUp) {
+      setWebSearch(null);
+      setStockWidget(null);
+      setAnalysisOverview(null);
+      setFollowUpBanner(null);
+      setSpecialistCards([]);
+      setRevisionMode('none');
+      revisionModeRef.current = 'none';
+      setSnapshotReuse(null);
+      workflowDataRef.current.webSearch = null;
+      workflowDataRef.current.analysisOverview = null;
+      workflowDataRef.current.followUpBanner = null;
+      workflowDataRef.current.specialistCards = [];
+      workflowDataRef.current.snapshotReuse = null;
+    } else {
+      setRevisionMode((prev) => (prev === 'none' ? 'mixed' : prev));
+    }
     setLatencyGuardrail(null);
-    setSnapshotReuse(null);
-    workflowDataRef.current.webSearch = null;
-    workflowDataRef.current.analysisOverview = null;
-    workflowDataRef.current.followUpBanner = null;
-    workflowDataRef.current.specialistCards = [];
     workflowDataRef.current.latencyGuardrail = null;
-    workflowDataRef.current.snapshotReuse = null;
     setPendingClarification(null);
     clearClarificationState();
     setCriteria(null);
@@ -2454,8 +2492,7 @@ const workflowDataRef = useRef<{
 
     const baseEndpoint = `/api/analytics/memory/stream`;
 
-    const params = new URLSearchParams({ query: query.trim() });
-    const activeSessionId = sessionId || lastSessionIdRef.current;
+    const params = new URLSearchParams({ query: trimmed });
     if (activeSessionId) {
       params.append('session_id', activeSessionId);
     }
@@ -2540,6 +2577,20 @@ const workflowDataRef = useRef<{
       const laneFromEvent = resolveLane(eventData, eventData?.metadata, eventData?.details, data);
       const reusedFlag = resolveReusedFlag(eventData, eventData?.metadata, eventData?.details, data);
 
+      const suppressedRevisionSteps = new Set([
+        'classification',
+        'intent_detection',
+        'clarification',
+        'schema_validation',
+        'plan_and_select_template',
+        'sql_generator',
+        'sql_compilation',
+        'sql_validation',
+        'sql_executor',
+        'sql_execution',
+        'sql_lane',
+      ]);
+
       const updateStep = (
         stepId: string,
         status: ProcessStep['status'],
@@ -2556,6 +2607,9 @@ const workflowDataRef = useRef<{
           analysisAvailable?: boolean;
         },
       ) => {
+        if (revisionModeRef.current !== 'none' && suppressedRevisionSteps.has(stepId)) {
+          return;
+        }
         stepsHook.updateStepStatus(
           stepId,
           status,
@@ -2610,12 +2664,27 @@ const workflowDataRef = useRef<{
               ? (eventData.lanes as unknown[])
                   .map((lane) => (typeof lane === 'string' ? lane.toLowerCase() : ''))
                   .filter((lane): lane is string => lane.length > 0)
-              : [];
+            : [];
           revisionContextRef.current = {
             id: effectiveRevisionId ?? revisionContextRef.current.id,
             lanes: normalizedLanes,
           };
-          setRevisionMode('none');
+          if (normalizedLanes.length === 1) {
+            const lane = normalizedLanes[0] === 'web' ? 'analysis' : normalizedLanes[0] === 'stock' ? 'market' : normalizedLanes[0];
+            if (lane === 'chart' || lane === 'analysis' || lane === 'market') {
+              setRevisionMode(lane);
+              revisionModeRef.current = lane;
+            } else {
+              setRevisionMode('mixed');
+              revisionModeRef.current = revisionModeRef.current === 'none' ? 'mixed' : revisionModeRef.current;
+            }
+          } else if (normalizedLanes.length > 1) {
+            setRevisionMode('mixed');
+            revisionModeRef.current = 'mixed';
+          } else if (revisionModeRef.current === 'none') {
+            setRevisionMode('mixed');
+            revisionModeRef.current = 'mixed';
+          }
           if (normalizedLanes.length) {
             streamHook.setCurrentStatus(`Revision requested: ${normalizedLanes.join(', ')}`);
           }
@@ -2723,9 +2792,71 @@ const workflowDataRef = useRef<{
             route,
           };
           setFollowUpBanner(banner);
+          const normalizedLanes = Array.isArray(eventData.lanes)
+            ? (eventData.lanes as unknown[])
+                .map((lane) => (typeof lane === 'string' ? lane.toLowerCase() : ''))
+                .filter((lane): lane is string => lane.length > 0)
+            : undefined;
+          if (normalizedLanes && normalizedLanes.length) {
+            revisionContextRef.current = {
+              id: revisionContextRef.current.id,
+              lanes: normalizedLanes,
+            };
+          }
+          switch (route) {
+            case 'full_pipeline': {
+              setRevisionMode('none');
+              revisionModeRef.current = 'none';
+              break;
+            }
+            case 'analysis_only': {
+              setRevisionMode('analysis');
+              revisionModeRef.current = 'analysis';
+              break;
+            }
+            case 'market_only': {
+              setRevisionMode('market');
+              revisionModeRef.current = 'market';
+              break;
+            }
+            case 'chart_revision': {
+              setRevisionMode('chart');
+              revisionModeRef.current = 'chart';
+              break;
+            }
+            case 'mixed_revision': {
+              setRevisionMode('mixed');
+              revisionModeRef.current = 'mixed';
+              break;
+            }
+            case 'reuse_sql': {
+              setRevisionMode((prev) => (prev === 'none' ? 'mixed' : prev));
+              if (revisionModeRef.current === 'none') {
+                revisionModeRef.current = 'mixed';
+              }
+              break;
+            }
+            case 'cannot_revise': {
+              setRevisionMode('none');
+              revisionModeRef.current = 'none';
+              break;
+            }
+            default: {
+              if (route !== 'full_pipeline') {
+                setRevisionMode((prev) => (prev === 'none' ? 'mixed' : prev));
+                if (revisionModeRef.current === 'none') {
+                  revisionModeRef.current = 'mixed';
+                }
+              }
+              break;
+            }
+          }
           workflowDataRef.current.followUpBanner = banner;
           refreshResultMessage();
           const thinking = [`Route selected: ${route.replace(/[_-]/g, ' ')}`];
+          if (normalizedLanes && normalizedLanes.length) {
+            thinking.push(`Revision lanes: ${normalizedLanes.join(', ')}`);
+          }
           updateStep('follow_up_route', 'in_progress', thinking, { banner }, stepInfo.elapsed_ms, stepInfo.ts);
           streamHook.setCurrentStatus(hasExplicitResultContentRef.current ? '' : copy.message);
           break;
@@ -3110,7 +3241,7 @@ const workflowDataRef = useRef<{
           updateStep('web_research_agent', 'completed', ['Web context ready'], eventData, stepInfo.elapsed_ms, stepInfo.ts);
           emitResultOnce();
           if (isRevisionEvent) {
-            markRevisionMode('market');
+            markRevisionMode('analysis');
           }
           refreshResultMessage();
           break;
@@ -4766,6 +4897,8 @@ const workflowDataRef = useRef<{
     if (!preserveSession) {
       setSessionId('');
       lastSessionIdRef.current = '';
+      revisionContextRef.current = { id: undefined, lanes: [] };
+      revisionModeRef.current = 'none';
     }
     setPendingClarification(null);
     clearClarificationState();
@@ -4785,6 +4918,7 @@ const workflowDataRef = useRef<{
     setStockWidget(null);
     setSingleAgentFanout(null);
     setRevisionMode('none');
+    revisionModeRef.current = 'none';
     setAnalysisOverview(null);
     setAnalysisSources(null);
     setAnalysisBundle(null);

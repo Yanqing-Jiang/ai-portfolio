@@ -396,15 +396,14 @@ export const buildPromptCandidates = (
   const primary = context.primarySymbols[0] ?? 'the lead ticker';
   const saltBase = context.primarySymbols.join('|') || context.chartType || 'default';
 
-  const buildChartPrompt = (variantOffset: number): PromptCandidate | null => {
-    if (!context.availableLanes.chart) {
-      return null;
-    }
-    const style = pickVariant('chart', CHART_STYLE_VOCAB, rotationKey, variantOffset, saltBase);
-    const descriptor = context.availableLanes.sql ? 'the SQL chart' : 'the chart';
-    const copy = `Change ${descriptor} to ${style} and reuse the same dataset.`;
-    return { lane: 'chart', copy, intent: 'chart_revision' };
-  };
+const buildChartPrompt = (variantOffset: number): PromptCandidate | null => {
+  if (!context.availableLanes.chart) {
+    return null;
+  }
+  const style = pickVariant('chart', CHART_STYLE_VOCAB, rotationKey, variantOffset, saltBase);
+  const copy = `Change the chart to ${style}.`;
+  return { lane: 'chart', copy, intent: 'chart_revision' };
+};
 
   const buildAnalysisPrompt = (variantOffset: number): PromptCandidate | null => {
     if (!context.availableLanes.analysis) {
