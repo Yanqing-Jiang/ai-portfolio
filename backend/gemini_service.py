@@ -3,8 +3,12 @@ import asyncio
 import json
 from typing import AsyncGenerator, Optional, List, Dict, Any, Generator
 from types import SimpleNamespace
-from google import genai as google_genai
-from google.genai import types as genai_types
+try:
+    from google import genai as google_genai  # type: ignore
+    from google.genai import types as genai_types  # type: ignore
+except ImportError:  # pragma: no cover - optional dependency
+    google_genai = None  # type: ignore
+    genai_types = None  # type: ignore
 from dotenv import load_dotenv
 from pathlib import Path
 

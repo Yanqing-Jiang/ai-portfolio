@@ -120,9 +120,16 @@ class FollowUpClassifier:
             lanes.add("market")
         if _contains_any(normalized_query, self.web_keywords):
             lanes.add("web")
-        if _contains_any(normalized_query, self.chart_keywords) or _contains_any(normalized_query, self.sql_keywords):
+        if _contains_any(normalized_query, self.chart_keywords):
+            lanes.add("chart")
+        if _contains_any(normalized_query, self.sql_keywords):
             lanes.add("sql")
         if _contains_any(normalized_query, self.analysis_keywords):
             lanes.add("analysis")
         available = self._lanes_available(snapshot)
-        return {lane for lane in lanes if lane in available}
+        requested = {lane for lane in lanes if lane in available}
+        if "analysis" in lanes:
+            requested.add("analysis")
+            requested.add("web")
+        return requested
+

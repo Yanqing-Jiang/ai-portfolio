@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import logging
 import time
-from contextlib import contextmanager
 from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -289,26 +288,6 @@ def responses_call(
     if metadata:
         payload["metadata"] = metadata
     _emit(payload)
-
-
-@contextmanager
-def timed_metric(
-    event: str,
-    *,
-    session_id: Optional[str] = None,
-    flow: Optional[str] = None,
-    metadata: Optional[Dict[str, Any]] = None,
-):
-    start = time.time()
-    try:
-        yield
-    finally:
-        elapsed_ms = int((time.time() - start) * 1000)
-        payload = _base_payload(event, session_id=session_id, flow=flow)
-        payload["elapsed_ms"] = elapsed_ms
-        if metadata:
-            payload.update(metadata)
-        _emit(payload)
 
 
 def gemini_call(

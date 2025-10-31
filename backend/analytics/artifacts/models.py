@@ -5,18 +5,6 @@ from dataclasses import MISSING, dataclass, field, fields
 from typing import Any, Dict, List, Optional, Sequence, Type, TypeVar
 
 
-def _clone_dict(source: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    if not isinstance(source, dict):
-        return {}
-    return {key: value for key, value in source.items()}
-
-
-def _clone_list(source: Optional[Sequence[Any]]) -> List[Any]:
-    if source is None:
-        return []
-    return list(source)
-
-
 T = TypeVar("T", bound="BaseArtifact")
 
 

@@ -362,6 +362,7 @@ export interface ChatMessage {
   revisionId?: string;
   revision?: boolean;
   revisionEvent?: boolean;
+  revisionFocus?: string | null;
 }
 
 export interface ClarifyRequest {

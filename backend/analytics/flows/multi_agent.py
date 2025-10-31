@@ -10,9 +10,10 @@ import asyncio
 import statistics
 import logging
 from datetime import datetime, date
-from typing import Any, AsyncGenerator, Dict, Iterable, List, Mapping, Optional, Sequence, TYPE_CHECKING
+from typing import Any, AsyncGenerator, Dict, Iterable, List, Mapping, Optional, Sequence, Set, TYPE_CHECKING
 
 from analytics.core.session_state import SessionStateSnapshot, get_session_state_repository
+from analytics.core.events import EventEmitter
 from analytics.core.revision_snapshot import extract_revision_snapshot
 from analytics.core.telemetry import analysis_chunk as log_analysis_chunk, agent_handoff, policy_decision
 from analytics.services.polygon import PolygonMarketDataClient, PolygonError, fetch_daily_snapshot
@@ -274,8 +275,27 @@ def _derive_tasks(
     *,
     web_ctx: Optional[Dict[str, Any]] = None,
     revision_completed: Optional[Sequence[str]] = None,
+    lane_refresh_required: Optional[Mapping[str, Any]] = None,
 ) -> AgentTaskPlan:
     plan = AgentTaskPlan()
+    lane_refresh_raw: Dict[str, Any] = {}
+    force_run_lanes: Set[str] = set()
+    force_skip_lanes: Set[str] = set()
+    if lane_refresh_required:
+        for lane, required in lane_refresh_required.items():
+            if lane is None:
+                continue
+            key = str(lane).strip().lower()
+            if not key:
+                continue
+            lane_refresh_raw[key] = required
+            if required is False:
+                force_skip_lanes.add(key)
+            elif bool(required):
+                force_run_lanes.add(key)
+    if lane_refresh_raw:
+        planner_ctx.setdefault("lane_refresh_required", dict(lane_refresh_raw))
+
     attempts = sql_ctx.get("attempts") or []
     last_attempt = attempts[-1] if attempts else None
     reuse_sql = bool(sql_ctx.get("status") in {"reused", "success"} and (sql_ctx.get("row_count") or 0) > 0)
@@ -290,6 +310,20 @@ def _derive_tasks(
         completed_lanes.add("market")
     if "web" in completed_lanes:
         completed_lanes.add("web")
+    if force_run_lanes:
+        for lane in force_run_lanes:
+            completed_lanes.discard(lane)
+            if lane == "market":
+                completed_lanes.discard("stock")
+            elif lane == "stock":
+                completed_lanes.discard("market")
+    if force_skip_lanes:
+        for lane in force_skip_lanes:
+            completed_lanes.add(lane)
+            if lane == "market":
+                completed_lanes.add("stock")
+            elif lane == "stock":
+                completed_lanes.add("market")
     analysis_revision_text = None
     if isinstance(analysis_ctx, Mapping):
         analysis_revision_text = analysis_ctx.get("revision_text")
@@ -314,6 +348,7 @@ def _derive_tasks(
     chart_revision = is_chart_revision_query(query)
     revision_patch = infer_chart_patch_from_query(query) if chart_revision else None
 
+    web_ctx = web_ctx or {}
     analysis_ready = bool(analysis_ctx.get("final"))
     chart_ready = bool(chart_ctx.get("spec_summary")) and (sql_ctx.get("row_count", 0) > 0)
     tickers = planner_ctx.get("tickers", []) or market_ctx.get("tickers", []) or []
@@ -324,13 +359,31 @@ def _derive_tasks(
             analysis_ctx["revision_text"] = analysis_revision_text
         plan.add_step("analyst", "run", reason="analysis_revision")
         plan.add_step("chart", "reuse", reason="analysis_revision")
+
+        market_reason = "analysis_revision"
         plan.add_step(
             "market",
             "skip",
-            reason="analysis_revision",
+            reason=market_reason,
             metadata={"tickers": tickers},
         )
-        plan.add_step("web_research", "skip", reason="analysis_revision")
+
+        web_skipped = "web" in force_skip_lanes
+        web_required = not web_skipped
+        if web_required:
+            plan.add_step(
+                "web_research",
+                "run",
+                reason="forced_refresh" if "web" in force_run_lanes else "analysis_revision",
+                metadata={"source": web_ctx.get("source") if isinstance(web_ctx, Mapping) else None},
+            )
+        else:
+            plan.add_step(
+                "web_research",
+                "skip",
+                reason="lane_skipped" if web_skipped else "analysis_revision",
+                metadata={"source": web_ctx.get("source") if isinstance(web_ctx, Mapping) else None},
+            )
         return plan
 
     if chart_revision:
@@ -340,16 +393,30 @@ def _derive_tasks(
         chart_reason = "revision_completed" if chart_status == "reuse" else "chart_revision"
         plan.add_step("chart", chart_status, reason=chart_reason)
         plan.add_step("analyst", "skip", reason="chart_revision")
-        market_status = "reuse" if "stock" in completed_lanes else "skip"
-        market_reason = "revision_completed" if market_status == "reuse" else "chart_revision"
+        if "market" in force_skip_lanes:
+            market_status = "skip"
+            market_reason = "lane_skipped"
+        elif "market" in force_run_lanes:
+            market_status = "run"
+            market_reason = "forced_refresh"
+        else:
+            market_status = "reuse" if "stock" in completed_lanes else "skip"
+            market_reason = "revision_completed" if market_status == "reuse" else "chart_revision"
         plan.add_step(
             "market",
             market_status,
             reason=market_reason,
             metadata={"tickers": tickers},
         )
-        web_status = "reuse" if "web" in completed_lanes else "skip"
-        web_reason = "revision_completed" if web_status == "reuse" else "chart_revision"
+        if "web" in force_skip_lanes:
+            web_status = "skip"
+            web_reason = "lane_skipped"
+        elif "web" in force_run_lanes:
+            web_status = "run"
+            web_reason = "forced_refresh"
+        else:
+            web_status = "reuse" if "web" in completed_lanes else "skip"
+            web_reason = "revision_completed" if web_status == "reuse" else "chart_revision"
         plan.add_step(
             "web_research",
             web_status,
@@ -374,16 +441,23 @@ def _derive_tasks(
     )
     plan.add_step("chart", chart_status, reason=chart_reason)
 
-    stock_cached = bool(market_ctx.get("snapshot") or market_ctx.get("stock_widget")) or ("stock" in completed_lanes)
-    if stock_cached:
-        market_status = "reuse"
-        market_reason = "revision_completed" if "stock" in completed_lanes else "market_cached"
-    elif bool(tickers) and chart_ready:
-        market_status = "run"
-        market_reason = "tickers_detected"
-    else:
+    if "market" in force_skip_lanes:
         market_status = "skip"
-        market_reason = "no_tickers"
+        market_reason = "lane_skipped"
+    elif "market" in force_run_lanes:
+        market_status = "run"
+        market_reason = "forced_refresh"
+    else:
+        stock_cached = bool(market_ctx.get("snapshot") or market_ctx.get("stock_widget")) or ("stock" in completed_lanes)
+        if stock_cached:
+            market_status = "reuse"
+            market_reason = "revision_completed" if "stock" in completed_lanes else "market_cached"
+        elif bool(tickers) and chart_ready:
+            market_status = "run"
+            market_reason = "tickers_detected"
+        else:
+            market_status = "skip"
+            market_reason = "no_tickers"
     plan.add_step(
         "market",
         market_status,
@@ -391,10 +465,24 @@ def _derive_tasks(
         metadata={"tickers": tickers, "source": market_ctx.get("source")},
     )
 
-    web_context = web_ctx or {}
-    web_should_run = _needs_web_refresh(query, web_context) and ("web" not in completed_lanes)
-    web_status = "reuse" if "web" in completed_lanes else ("run" if web_should_run else "skip")
-    web_reason = "revision_completed" if "web" in completed_lanes else ("recency_requested" if web_should_run else "cached_web_context")
+    web_context = web_ctx if isinstance(web_ctx, Mapping) else {}
+    if "web" in force_skip_lanes:
+        web_status = "skip"
+        web_reason = "lane_skipped"
+    else:
+        web_should_run = _needs_web_refresh(query, web_context) and ("web" not in completed_lanes)
+        if "web" in force_run_lanes:
+            web_status = "run"
+            web_reason = "forced_refresh"
+        elif "web" in completed_lanes:
+            web_status = "reuse"
+            web_reason = "revision_completed"
+        elif web_should_run:
+            web_status = "run"
+            web_reason = "recency_requested"
+        else:
+            web_status = "skip"
+            web_reason = "cached_web_context"
     plan.add_step("web_research", web_status, reason=web_reason)
 
     if revision_completed:
@@ -536,6 +624,7 @@ async def _planner_agent(context: AgentRunContext) -> AgentResult:
         shared.get('query', context.query),
         web_ctx=shared.setdefault('web', {}),
         revision_completed=shared.get('revision_completed_lanes'),
+        lane_refresh_required=shared.get('lane_refresh_required'),
     )
     tasks = plan.to_dicts()
     bundle = _create_planner_bundle(
@@ -643,6 +732,24 @@ async def _chart_agent(context: AgentRunContext) -> AgentResult:
 
 
 async def _market_agent(context: AgentRunContext) -> AgentResult:
+    lane_flags: Dict[str, bool] = {}
+    shared_flags = context.shared.get('lane_refresh_required')
+    if isinstance(shared_flags, Mapping):
+        lane_flags.update({str(k).strip().lower(): bool(v) for k, v in shared_flags.items()})
+    ctx_flags = getattr(context, 'lane_refresh_required', None)
+    if isinstance(ctx_flags, Mapping):
+        lane_flags.update({str(k).strip().lower(): bool(v) for k, v in ctx_flags.items()})
+    if lane_flags.get('market') is False:
+        tickers = context.shared.get('planner', {}).get('tickers', [])
+        return AgentResult(
+            name='market',
+            output={
+                'status': 'skip',
+                'tickers': tickers,
+                'refresh': False,
+            },
+        )
+
     gate = context.shared.get('_runtime', {}).get('accessories_ready')
     if isinstance(gate, asyncio.Event) and not gate.is_set():
         try:
@@ -1219,6 +1326,7 @@ class MultiAgentFlow:
         self._chart_revision_missing_session: bool = False
         self._revision_directive: Optional["RevisionDirective"] = None
         self._agentic_revision_mode: bool = False
+        self._lane_refresh_required: Dict[str, bool] = {}
 
     def _hedged_tool_aliases(self) -> List[str]:
         manifest = self._shared_context.get("tool_manifest")
@@ -1866,6 +1974,7 @@ class MultiAgentFlow:
                 payload.setdefault("source", "fanout")
         self._queue_artifact_event("stock_ready", payload)
         meta["stock_ready"] = True
+        self._maybe_emit_hedged_accessories_complete()
 
     def _maybe_queue_web_ready(self) -> None:
         web_ctx = self._shared_context.get("web")
@@ -1888,6 +1997,34 @@ class MultiAgentFlow:
             payload.setdefault("source", "fanout")
         self._queue_artifact_event("web_ready", payload)
         meta["web_ready"] = True
+        self._maybe_emit_hedged_accessories_complete()
+
+    def _emit_hedged_accessories_complete(self, *, queue_only: bool = False) -> Optional[Dict[str, Any]]:
+        if self._shared_context.get("hedged_accessories_emitted"):
+            return None
+        tools = list(self._hedged_completion.keys())
+        event = {
+            "event": "hedged_accessories_complete",
+            "data": {
+                "tools": tools,
+                "schedule_stage": "hedged_accessories",
+                "parallel_group": "specialist_fanout",
+                "ts": datetime.utcnow().isoformat(),
+            },
+        }
+        self._shared_context["hedged_accessories_emitted"] = True
+        if queue_only:
+            self._pending_artifact_events.append(event)
+            self._artifact_flush_pending = True
+            return None
+        return self._annotate(event)
+
+    def _maybe_emit_hedged_accessories_complete(self) -> None:
+        if self._shared_context.get("hedged_accessories_emitted"):
+            return
+        if not self._hedged_accessories_ready():
+            return
+        self._emit_hedged_accessories_complete(queue_only=True)
 
     def _maybe_queue_analysis_ready(self) -> None:
         analysis_ctx = self._shared_context.get("analysis", {})
@@ -2012,6 +2149,21 @@ class MultiAgentFlow:
         self._planner.set_revision_targets(targets)
 
     def set_lane_refresh_requirements(self, requirements: Optional[Mapping[str, Any]]) -> None:
+        normalized: Dict[str, bool] = {}
+        if requirements:
+            for lane, required in requirements.items():
+                if lane is None:
+                    continue
+                key = str(lane).strip().lower()
+                if not key:
+                    continue
+                normalized[key] = bool(required)
+                if required is False:
+                    normalized[key] = False
+        self._lane_refresh_required = normalized
+        if self._shared_context is not None:
+            self._shared_context.setdefault("lane_refresh_required", {})
+            self._shared_context["lane_refresh_required"] = dict(normalized)
         self._planner.set_lane_refresh_requirements(requirements)
 
     def set_analysis_refresh_mode(self, mode: Optional[str]) -> None:
@@ -2159,11 +2311,16 @@ class MultiAgentFlow:
         session_id: Optional[str],
         reason: Optional[str] = None,
         source: Optional[str] = None,
+        revision_directive: Optional["RevisionDirective"] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         if session_id is None:
             raise ValueError("run_web_refresh requires an existing session_id")
         hooks = _MultiAgentHooks(self, query, session_id=session_id)
         ctx = await self._planner.initialize_context(query, session_id=session_id)
+        if revision_directive is not None:
+            ctx.revision_directive = revision_directive
+            ctx.agentic_revision_mode = bool(getattr(revision_directive, "agentic", False))
+            ctx.revision_targets = set(getattr(revision_directive, "targets", []))
         directive_topics = getattr(getattr(ctx, "revision_directive", None), "search_topics", None)
         if directive_topics:
             ctx.revision_search_topics = list(directive_topics)
@@ -2220,16 +2377,20 @@ class MultiAgentFlow:
         if session_id is None:
             raise ValueError("run_analysis_refresh requires an existing session_id")
         hooks = _MultiAgentHooks(self, query, session_id=session_id)
+
+        def _apply_revision_context(ctx_obj: Any) -> None:
+            if revision_directive is not None:
+                ctx_obj.revision_directive = revision_directive
+                ctx_obj.agentic_revision_mode = bool(getattr(revision_directive, "agentic", False))
+                ctx_obj.revision_targets = set(getattr(revision_directive, "targets", []))
+            if requested_focus:
+                setattr(ctx_obj, "revision_focus", requested_focus)
+            directive_topics = getattr(getattr(ctx_obj, "revision_directive", None), "search_topics", None)
+            if directive_topics:
+                ctx_obj.revision_search_topics = list(directive_topics)
+
         ctx = await self._planner.initialize_context(query, session_id=session_id)
-        if revision_directive is not None:
-            ctx.revision_directive = revision_directive
-            ctx.agentic_revision_mode = bool(getattr(revision_directive, "agentic", False))
-            ctx.revision_targets = set(getattr(revision_directive, "targets", []))
-        if requested_focus:
-            setattr(ctx, "revision_focus", requested_focus)
-        directive_topics = getattr(getattr(ctx, "revision_directive", None), "search_topics", None)
-        if directive_topics:
-            ctx.revision_search_topics = list(directive_topics)
+        _apply_revision_context(ctx)
         ctx.reused_analysis = False
         ctx.web_ready_emitted = False
         _reset_revision_accessories(ctx, {"web", "market"})
@@ -2252,6 +2413,87 @@ class MultiAgentFlow:
             ):
                 yield event
             return
+
+        web_ready_seen = False
+        web_failure_reason: Optional[str] = None
+        async for event in self.run_web_refresh(
+            query,
+            session_id=session_id,
+            reason=reason,
+            source="fresh_revision",
+            revision_directive=revision_directive,
+        ):
+            name = str(event.get("event") or "")
+            data = event.setdefault("data", {})
+            data.setdefault("lane", "web")
+            if data.get("source") != "fresh_revision":
+                data["source"] = "fresh_revision"
+            reused_flag = bool(data.get("reused"))
+            data["from_cache"] = reused_flag
+            if not reused_flag:
+                data["reason"] = "fresh_revision"
+            if name in {"web_ready", "web_revision_ready"}:
+                web_ready_seen = True
+                data.setdefault("reason", "fresh_revision")
+                data["from_cache"] = reused_flag
+            elif name == "error":
+                web_failure_reason = data.get("error") or web_failure_reason or "web_refresh_error"
+            elif name == "status":
+                phase = str(data.get("phase") or "").lower()
+                if phase == "skipped":
+                    web_failure_reason = data.get("message") or web_failure_reason or "web_refresh_skipped"
+            yield event
+
+        if web_ready_seen:
+            ready_event = EventEmitter.status(
+                "web_revision_ready",
+                "Web context refreshed for analysis revision",
+            )
+            ready_event.setdefault("data", {})
+            ready_event["data"].update(
+                {
+                    "lane": "web",
+                    "revision": True,
+                    "source": "fresh_revision",
+                    "from_cache": False,
+                    "reason": "fresh_revision",
+                }
+            )
+            yield self._annotate(ready_event)
+
+        if not web_ready_seen:
+            warning_event = EventEmitter.status(
+                "web_refresh",
+                "Web research unavailable - analysis reused previous context",
+            )
+            warning_event.setdefault("data", {})
+            warning_event["data"].update(
+                {
+                    "lane": "web",
+                    "level": "warning",
+                    "revision": True,
+                    "source": "fresh_revision",
+                    "reason": web_failure_reason or "web_refresh_unavailable",
+                    "from_cache": True,
+                    "banner": {
+                        "title": "Web Research Unavailable",
+                        "message": "Web research unavailable - analysis reused previous context.",
+                        "route": "analysis_only",
+                    },
+                }
+            )
+            yield self._annotate(warning_event)
+
+        ctx = await self._planner.initialize_context(query, session_id=session_id)
+        _apply_revision_context(ctx)
+        ctx.reused_analysis = False
+        ctx.web_ready_emitted = web_ready_seen
+        _reset_revision_accessories(ctx, {"market"})
+        refresh_flags = dict(getattr(ctx, "lane_refresh_required", {}) or {})
+        refresh_flags.setdefault("analysis", True)
+        refresh_flags["web"] = False
+        refresh_flags["market"] = False
+        ctx.lane_refresh_required = refresh_flags
 
         async def _stream() -> AsyncGenerator[Dict[str, Any], None]:
             async for event in self._planner._pipeline.run_analysis_phase(ctx):  # type: ignore[attr-defined]
@@ -2299,7 +2541,8 @@ class MultiAgentFlow:
                 query,
                 session_id=session_id,
                 reason=reason,
-                source=source,
+                source=source or "fresh_revision",
+                revision_directive=revision_directive,
             ):
                 yield event
         tool_stream = registry.invoke(
@@ -2338,6 +2581,7 @@ class MultiAgentFlow:
                 'prompt_versions': dict(self._prompt_versions),
             },
         }
+        self._shared_context['lane_refresh_required'] = dict(self._lane_refresh_required)
         if self._revision_directive is not None:
             self._shared_context['revision_directive'] = self._revision_directive.to_dict()
             self._shared_context.setdefault('_meta', {}).setdefault(
@@ -2849,17 +3093,11 @@ class MultiAgentFlow:
             "sources": sanitized_cohesive_payload.get("sources") if isinstance(sanitized_cohesive_payload, Mapping) else None,
         }
         hedged_ready = self._hedged_accessories_ready()
-        if hedged_ready and not self._shared_context.get("hedged_accessories_emitted"):
-            completion_event = {
-                "event": "hedged_accessories_complete",
-                "data": {
-                    "tools": list(self._hedged_completion.keys()),
-                    "ts": datetime.utcnow().isoformat(),
-                },
-            }
-            yield self._annotate(completion_event)
-            self._shared_context["hedged_accessories_emitted"] = True
-        if not hedged_ready:
+        if hedged_ready:
+            completion_event = self._emit_hedged_accessories_complete(queue_only=False)
+            if completion_event is not None:
+                yield completion_event
+        else:
             pending = [tool for tool, ready in self._hedged_completion.items() if not ready]
             logger.info(
                 "Cohesive result delayed until accessories finish",

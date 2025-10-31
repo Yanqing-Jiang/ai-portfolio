@@ -14,7 +14,6 @@ from .models import (
     SQLGenerationArtifact,
     WebContextArtifact,
 )
-from .spike_artifacts import classification_from_event, intent_from_event
 
 __all__ = [
     "AnalysisArtifact",
@@ -29,7 +28,5 @@ __all__ = [
     "SQLExecutionArtifact",
     "SQLGenerationArtifact",
     "WebContextArtifact",
-    "classification_from_event",
-    "intent_from_event",
 ]
 

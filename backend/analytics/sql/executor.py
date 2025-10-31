@@ -76,15 +76,3 @@ async def execute_sql(sql: str, *, timeout: float = 15.0) -> List[Dict[str, Any]
     finally:
         if conn:
             await conn.close()
-
-
-async def execute_sql_with_limit(
-    sql: str,
-    *,
-    max_rows: int = 10000,
-    timeout: float = 20.0,
-) -> List[Dict[str, Any]]:
-    results = await execute_sql(sql, timeout=timeout)
-    if len(results) > max_rows:
-        raise ValueError(f"Result set exceeds limit of {max_rows} rows")
-    return results

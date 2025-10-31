@@ -139,7 +139,7 @@ except (ModuleNotFoundError, ImportError):  # pragma: no cover - optional depend
 
     def generate_search_topic(query: str) -> str:  # type: ignore[no-redef]
         return query
-from analytics.core.analysis import summarize, stream_insights_llm
+from analytics.core.analysis import stream_insights_llm
 from analytics.core.clarify import (
     detect_missing_slots,
     merge_answers,
@@ -195,19 +195,6 @@ _INTENT_LANE_HINTS: Dict[str, Tuple[str, ...]] = {
 }
 
 _TOOL_QUEUE_SENTINEL = TOOL_QUEUE_SENTINEL
-
-def _env_flag(name: str, *, default: bool = False) -> bool:
-    # Legacy env flag helper retained for backwards compatibility in logs only.
-    # Behavioural flags have been removed; flows use built-in defaults.
-    value = os.getenv(name)
-    if value is None:
-        return default
-    normalized = value.strip().lower()
-    if normalized in {'1', 'true', 'yes', 'on'}:
-        return True
-    if normalized in {'0', 'false', 'no', 'off'}:
-        return False
-    return default
 
 # Schema clarifier is now always enabled (legacy env flag removed)
 SCHEMA_CLARIFIER_ENABLED = True
@@ -1631,6 +1618,9 @@ def compose_web_ready_payload(ctx: PlannerPhaseContext) -> Optional[Dict[str, An
     if not isinstance(payload, dict):
         return None
     payload["reused"] = bool(getattr(ctx, "reused_web", False))
+    payload["from_cache"] = bool(payload.get("reused"))
+    if "source" not in payload and getattr(ctx, "is_revision_follow_up", False):
+        payload["source"] = "fresh_revision"
     payload.setdefault("schedule_stage", "hedged_accessories")
     if ctx.snapshot_age_seconds is not None:
         payload["snapshot_age_seconds"] = ctx.snapshot_age_seconds
@@ -3863,6 +3853,11 @@ class PlannerPipeline:
         sql = sql_artifact.sql if sql_artifact and sql_artifact.sql else ""
         chart_artifact = ctx.artifacts.chart
         chart_spec = chart_artifact.spec if chart_artifact and chart_artifact.spec else None
+        revision_focus = getattr(ctx, "revision_focus", None)
+        if not revision_focus:
+            directive_focus = getattr(getattr(ctx, "revision_directive", None), "requested_focus", None)
+            if isinstance(directive_focus, str) and directive_focus.strip():
+                revision_focus = directive_focus.strip()
         input_payload = {
             "query": query,
             "sql_hash": _hash_payload(sql) if sql else None,
@@ -3887,6 +3882,7 @@ class PlannerPipeline:
             chart_spec=chart_spec,
             search_result=ctx.web_search,
             session_id=session_id,
+            focus=revision_focus,
         ):
             if text_chunk:
                 full_analysis += text_chunk
@@ -4221,15 +4217,44 @@ class PlannerPipeline:
         setattr(ctx, "is_revision_follow_up", is_revision_follow_up)
 
         try:
-            async for event in registry.invoke("classification", self, ctx, executed=executed):
-                yield event
-            await self._persist_session_state(ctx, record_artifacts=True)
-            if not ctx.is_financial_query and not is_revision_follow_up:
-                return
+            if is_revision_follow_up:
+                executed.add("classification")
+                executed.add("clarification")
+                classification_artifact = getattr(ctx.artifacts, "classification", None)
+                if classification_artifact is not None:
+                    is_financial = getattr(classification_artifact, "is_financial", None)
+                    if is_financial is not None:
+                        ctx.is_financial_query = bool(is_financial)
+                    if getattr(ctx, "classification", None) is None:
+                        raw_payload = getattr(classification_artifact, "raw", None)
+                        if isinstance(raw_payload, dict):
+                            try:
+                                ctx.classification = OffTopicClassifierSchema.model_validate(raw_payload)
+                            except Exception:
+                                pass
+                else:
+                    ctx.is_financial_query = True
+                await self._persist_session_state(ctx, record_artifacts=True)
+            else:
+                async for event in registry.invoke("classification", self, ctx, executed=executed):
+                    yield event
+                await self._persist_session_state(ctx, record_artifacts=True)
+                if not ctx.is_financial_query:
+                    return
 
             tool_sequence: Tuple[str, ...]
             if is_revision_follow_up:
-                tool_sequence = ("intent_detection", "plan_generation")
+                needs_intent = ctx.intent is None
+                needs_plan = (ctx.plan or ctx.provisional_plan) is None
+                if needs_intent:
+                    tool_sequence = ("intent_detection",)
+                else:
+                    tool_sequence = ()
+                    executed.add("intent_detection")
+                if needs_plan:
+                    tool_sequence = tool_sequence + ("plan_generation",)
+                else:
+                    executed.add("plan_generation")
             else:
                 tool_sequence = ("intent_detection", "clarification", "plan_generation")
             for tool_name in tool_sequence:
