@@ -709,7 +709,7 @@ class SingleAgentController:
         if self._agentic_revision_mode and self._agentic_lane_targets:
             self._planner.set_revision_targets(self._agentic_lane_targets)
         elif not self._agentic_revision_mode:
-        self._planner.set_revision_targets(set())
+            self._planner.set_revision_targets(set())
         # Re-evaluate follow-up routing so agentic revisions can opt into reuse plans.
         self.set_follow_up_route(self.follow_up_route)
 
