@@ -56,6 +56,17 @@
 - **Follow-up prompts persisted.** Each revision appends the user message to `SessionStateSnapshot.messages`, keeping downstream directives aware of the conversation history.
 - **Regression coverage added.** `backend/tests/analytics/test_revision_routing.py` seeds realistic snapshots and asserts routing, search topic generation, and snapshot persistence for analysis and market fast-paths.
 
+### October 30, 2025 Hotfix Recap
+- **Finalization gate now respects applied patches.** Planner flow skips the non-financial decline path when a revision is in-flight, allowing successful chart updates to surface instead of fallback refusals.
+- **Clarification suppressed for revisions.** Revision follow-ups bypass the clarification loop, trimming extra chatter while keeping plan generation in place.
+- **Chart patch telemetry richer.** `_build_patch_event` records `chart_type`, `stack`, and `stack_mode` so supervisors and UI hooks can confirm the applied spec.
+- **Market agent budget relaxed.** Multi-agent `market` specialist latency budget increased to 1500 ms to prevent premature guardrail aborts during mixed revisions.
+- **Web research budget tuned.** Multi-agent `web_research` specialist now has 2000 ms to finish targeted lookups, eliminating premature timeouts during analysis revisions.
+- **Analysis refresh wired through workflow.** `analytics_memory_workflow` now calls `run_analysis_refresh` (or falls back with `refresh_web=True`) and passes the requested focus so revisions trigger fresh web context before recombining cached SQL/analysis.
+- **Revision flag plumbed through context.** `PlannerExecutorFlow` sets `ctx.is_revision_follow_up` so classification decline checks and downstream helpers use the flag without runtime errors.
+- **Banner copy sanitized.** Reuse SQL banner now renders ASCII hyphenation (`"Skipping the SQL rerun - updating visuals..."`) to avoid mojibake in follow-up guidance.
+- **Test attempt noted.** `py -m pytest backend/tests/analytics/test_chart_revision.py backend/tests/analytics/test_planner_executor_sql.py` (PowerShell) failed early because `pytest` is not installed in the environment; rerun once dependencies are available.
+
 ## Validation Plan
 - **Unit tests:** ? `python -m pytest backend/tests/analytics/test_revision_routing.py -q` verifies revision routing, topic seeding, snapshot persistence, and market lane refreshes.
 - **Integration smoke:** ? Still recommended: manual run of baseline ? chart tweak ? analysis follow-up in the playground using both single- and multi-agent flows to observe SSE sequencing.

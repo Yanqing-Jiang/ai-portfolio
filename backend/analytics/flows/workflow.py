@@ -5,7 +5,7 @@ import uuid
 import logging
 from datetime import datetime, timezone
 from dataclasses import asdict
-from typing import Any, AsyncGenerator, Callable, Dict, Iterable, List, Optional, Set
+from typing import Any, AsyncGenerator, Callable, Dict, Iterable, List, Optional, Set, Mapping
 
 from analytics.core.events import EventEmitter
 from analytics.core.session_state import SessionStateSnapshot, get_session_state_repository
@@ -126,6 +126,66 @@ def _lane_available(snapshot: Optional[SessionStateSnapshot], lane: str) -> bool
         stock_widget = revision_snapshot.get("stock_widget")
         return bool(market_artifact or stock_widget)
     return False
+
+LANE_TTL_DEFAULTS: Dict[str, int] = {
+    "analysis": 300,
+    "web": 120,
+    "chart": 600,
+    "market": 300,
+}
+
+LANE_TTL_ENV_KEYS: Dict[str, str] = {
+    "analysis": "ANALYTICS_ANALYSIS_REFRESH_TTL_SECONDS",
+    "web": "ANALYTICS_WEB_REFRESH_TTL_SECONDS",
+    "chart": "ANALYTICS_CHART_REFRESH_TTL_SECONDS",
+    "market": "ANALYTICS_MARKET_REFRESH_TTL_SECONDS",
+}
+
+
+def _resolve_lane_ttls() -> Dict[str, int]:
+    resolved: Dict[str, int] = {}
+    for lane, default in LANE_TTL_DEFAULTS.items():
+        env_key = LANE_TTL_ENV_KEYS.get(lane)
+        ttl = default
+        if env_key:
+            raw = os.getenv(env_key)
+            if raw:
+                try:
+                    ttl = int(raw)
+                except ValueError:
+                    ttl = default
+        if ttl < 0:
+            ttl = 0
+        resolved[lane] = ttl
+    return resolved
+
+
+def _compute_lane_refresh_requirements(
+    snapshot: Optional[SessionStateSnapshot],
+    lanes: Iterable[str],
+    ttl_map: Mapping[str, int],
+) -> Dict[str, bool]:
+    requirements: Dict[str, bool] = {}
+    now = datetime.now(timezone.utc)
+    for lane in lanes:
+        if lane is None:
+            continue
+        normalized = str(lane).strip().lower()
+        if not normalized:
+            continue
+        ttl = ttl_map.get(normalized, 0)
+        if snapshot is None:
+            requirements[normalized] = True
+            continue
+        age = snapshot.lane_age_seconds(normalized, now=now)
+        if age is None:
+            requirements[normalized] = True
+            continue
+        if ttl <= 0:
+            requirements[normalized] = True
+            continue
+        requirements[normalized] = age > ttl
+    return requirements
 
 
 def _extract_revision_snapshot(snapshot: Optional[SessionStateSnapshot]) -> Dict[str, Any]:
@@ -670,6 +730,36 @@ async def analytics_memory_workflow(
         and (route != FollowUpRoute.FULL_PIPELINE or explicit_revision)
     )
 
+    lane_refresh_required: Dict[str, bool] = {}
+    analysis_refresh_mode = "full"
+    ttl_map = _resolve_lane_ttls()
+    ttl_lanes: Set[str] = set(revision_lanes)
+    if analysis_revision_requested or "analysis" in ttl_lanes or analysis_text:
+        ttl_lanes.update({"analysis", "web"})
+    if chart_patch:
+        ttl_lanes.add("chart")
+    if "market" in revision_lanes or route == FollowUpRoute.STOCK_ONLY:
+        ttl_lanes.add("market")
+    if ttl_lanes:
+        lane_refresh_required = _compute_lane_refresh_requirements(snapshot, ttl_lanes, ttl_map)
+        if (
+            ("analysis" in ttl_lanes or analysis_text)
+            and not lane_refresh_required.get("analysis", True)
+            and not lane_refresh_required.get("web", True)
+        ):
+            analysis_refresh_mode = "light"
+
+    if hasattr(flow_instance, "set_lane_refresh_requirements"):
+        try:
+            flow_instance.set_lane_refresh_requirements(lane_refresh_required)
+        except Exception:
+            logger.exception("Failed to set lane refresh requirements on flow %s", selected)
+    if hasattr(flow_instance, "set_analysis_refresh_mode"):
+        try:
+            flow_instance.set_analysis_refresh_mode(analysis_refresh_mode)
+        except Exception:
+            logger.exception("Failed to set analysis refresh mode on flow %s", selected)
+
     missing_lanes = [lane for lane in revision_lanes if not _lane_available(snapshot, lane)]
     if should_take_revision and missing_lanes:
         banner = _build_cannot_revise_banner(revision_lanes, missing_lanes)
@@ -889,19 +979,45 @@ async def analytics_memory_workflow(
         revision_kwargs = {"reason": "revision_request", "source": "analytics_memory_workflow"}
 
         if isinstance(flow_instance, MultiAgentFlow):
-            generator = flow_instance.analysis_revision(
-                query,
-                session_id=session_id,
-                analysis=analysis_text,
-                revision_directive=revision_directive,
-                **revision_kwargs,
-            )
+            if hasattr(flow_instance, "run_analysis_refresh"):
+                generator = flow_instance.run_analysis_refresh(
+                    query,
+                    session_id=session_id,
+                    requested_focus=analysis_text,
+                    revision_directive=revision_directive,
+                    **revision_kwargs,
+                )
+            else:
+                generator = flow_instance.analysis_revision(
+                    query,
+                    session_id=session_id,
+                    analysis=analysis_text,
+                    revision_directive=revision_directive,
+                    refresh_web=True,
+                    **revision_kwargs,
+                )
         elif isinstance(flow_instance, SingleAgentController):
-            generator = flow_instance.analysis_revision(
+            if hasattr(flow_instance, "run_analysis_refresh"):
+                generator = flow_instance.run_analysis_refresh(
+                    session_id=session_id,
+                    query=query or "",
+                    requested_focus=analysis_text,
+                    revision_directive=revision_directive,
+                    **revision_kwargs,
+                )
+            else:
+                generator = flow_instance.analysis_revision(
+                    session_id=session_id,
+                    analysis=analysis_text,
+                    query=query,
+                    revision_directive=revision_directive,
+                    refresh_web=True,
+                    **revision_kwargs,
+                )
+        elif isinstance(flow_instance, PlannerExecutorFlow):
+            generator = flow_instance.emit_analysis_revision(
                 session_id=session_id,
                 analysis=analysis_text,
-                query=query,
-                revision_directive=revision_directive,
                 **revision_kwargs,
             )
         else:
@@ -910,7 +1026,30 @@ async def analytics_memory_workflow(
                 analysis=analysis_text,
                 **revision_kwargs,
             )
+        async for event in generator:
+            yield event
+        # No early return here — proceed to run the selected flow with the
+        # revision targets already set (analysis + web).
 
+    if analysis_revision_requested and analysis_text and supports_agentic and has_analysis:
+        # Agentic revision flows handle the refresh internally; ensure explicit
+        # analysis patch still records the requested focus for history.
+        revision_kwargs = {"reason": "revision_request", "source": "analytics_memory_workflow"}
+        if hasattr(flow_instance, "analysis_revision"):
+            generator = flow_instance.analysis_revision(
+                query,
+                session_id=session_id,
+                analysis=analysis_text,
+                revision_directive=revision_directive,
+                refresh_web=True,
+                **revision_kwargs,
+            )
+        else:
+            generator = flow_instance.emit_analysis_revision(
+                session_id=session_id,
+                analysis=analysis_text,
+                **revision_kwargs,
+            )
         async for event in generator:
             yield event
         # No early return here — proceed to run the selected flow with the

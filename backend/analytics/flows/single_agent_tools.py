@@ -709,9 +709,15 @@ class SingleAgentController:
         if self._agentic_revision_mode and self._agentic_lane_targets:
             self._planner.set_revision_targets(self._agentic_lane_targets)
         elif not self._agentic_revision_mode:
-            self._planner.set_revision_targets(set())
+        self._planner.set_revision_targets(set())
         # Re-evaluate follow-up routing so agentic revisions can opt into reuse plans.
         self.set_follow_up_route(self.follow_up_route)
+
+    def set_lane_refresh_requirements(self, requirements: Optional[Mapping[str, Any]]) -> None:
+        self._planner.set_lane_refresh_requirements(requirements)
+
+    def set_analysis_refresh_mode(self, mode: Optional[str]) -> None:
+        self._planner.set_analysis_refresh_mode(mode)
 
     @classmethod
     def _lane_for_tool(cls, tool_name: Optional[str]) -> Optional[str]:
@@ -1280,6 +1286,11 @@ class SingleAgentController:
         sql_artifact = getattr(ctx.artifacts, "sql_generation", None)
         analysis_artifact = getattr(ctx.artifacts, "analysis", None)
         if not sql_artifact or not getattr(sql_artifact, "sql", None) or analysis_artifact is None:
+            ctx.analysis_refresh_mode = "full"
+            refresh_flags = dict(getattr(ctx, "lane_refresh_required", {}) or {})
+            refresh_flags["analysis"] = True
+            refresh_flags["web"] = True
+            ctx.lane_refresh_required = refresh_flags
             async for event in self.analysis_revision(
                 session_id=session_id,
                 analysis=requested_focus or (analysis_artifact.analysis_text if analysis_artifact else None),

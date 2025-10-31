@@ -205,19 +205,29 @@ Multi-Agent: workload delegation & orchestration, fastest speed
     if (!snapshotReuse) return null;
     if (snapshotReuse.criteriaChanged) {
       return {
-        text: 'Criteria changed â€” running fresh pipeline',
+        text: 'Criteria changed - running full pipeline',
         className: 'bg-amber-600/20 text-amber-100 border-amber-500/40',
       };
     }
     if (snapshotReuseChips.length === 0) {
       return null;
     }
-    const detail = snapshotReuseChips.join(' Â· ');
+    const detail = snapshotReuseChips.join(', ');
     return {
       text: `Reusing cached ${detail}`,
       className: 'bg-emerald-600/15 text-emerald-200 border-emerald-500/30',
     };
   }, [snapshotReuse, snapshotReuseChips]);
+
+  const analysisRefreshBadge = useMemo(() => {
+    if (followUpBanner?.refreshMode !== 'light') {
+      return null;
+    }
+    return {
+      text: 'Quick narrative refresh',
+      className: 'bg-emerald-600/20 text-emerald-200 border-emerald-500/30',
+    };
+  }, [followUpBanner?.refreshMode]);
 
   const handleAnalyticsQuery = async () => {
     if (!query.trim() || isLoading) return;
@@ -511,6 +521,14 @@ Multi-Agent: workload delegation & orchestration, fastest speed
                     {snapshotReuseBadge.text}
                   </span>
                 )}
+                {analysisRefreshBadge && (
+                  <span
+                    className={`px-2 py-1 text-xs rounded-full border transition-colors duration-200 ${analysisRefreshBadge.className}`}
+                    title="Cached SQL and web context reused for this revision"
+                  >
+                    {analysisRefreshBadge.text}
+                  </span>
+                )}
               </div>
               
               {/* Input row */}
@@ -561,6 +579,8 @@ Multi-Agent: workload delegation & orchestration, fastest speed
 };
 
 export default MemoryAnalyticsPage;
+
+
 
 
 

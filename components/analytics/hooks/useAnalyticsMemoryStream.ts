@@ -55,7 +55,7 @@ const FOLLOW_UP_BANNER_COPY: Record<string, { title: string; message: string }> 
   },
   reuse_sql: {
     title: 'Reusing Last Dataset',
-    message: 'Skipping the SQL rerun-updating visuals and narrative on top of the validated table.',
+    message: 'Skipping the SQL rerun - updating visuals and narrative on top of the validated table.',
   },
   stock_only: {
     title: 'Market Snapshot Only',
@@ -3953,6 +3953,13 @@ const workflowDataRef = useRef<{
               !isThinkingEvent
                 ? eventData.analysis || data.analysis || streamingText
                 : eventData.analysis || data.analysis;
+            const refreshModeRaw = coerceString(eventData.refresh_mode ?? data.refresh_mode);
+            const refreshMode = refreshModeRaw ? (refreshModeRaw.toLowerCase() as 'light' | 'full') : undefined;
+            const reusedFlag = coerceBoolean(eventData.reused ?? data.reused);
+            const revisionFlag = coerceBoolean(eventData.revision ?? data.revision);
+            if (revisionFlag || reusedFlag || refreshMode === 'light') {
+              markRevisionMode('analysis');
+            }
 
             if (!isThinkingEvent && typeof finalAnalysis === 'string') {
               scheduleProgressiveUpdate({ analysis: finalAnalysis });
@@ -4020,6 +4027,21 @@ const workflowDataRef = useRef<{
 
             setStreamingText('');
             setProgressiveText('');
+
+            if (refreshMode === 'light' && !isThinkingEvent) {
+              const existingBanner = followUpBanner ?? workflowDataRef.current.followUpBanner ?? null;
+              const routeCandidate = existingBanner?.route ?? (revisionFlag ? 'analysis_only' : 'reuse_sql');
+              const banner: FollowUpBanner = {
+                title: 'Narrative Updated (Cached)',
+                message: 'Quickly refreshed the narrative using cached SQL and web context.',
+                route: routeCandidate,
+                flowMode: existingBanner?.flowMode ?? flowModeValue ?? flow,
+                refreshMode: 'light',
+              };
+              setFollowUpBanner(banner);
+              workflowDataRef.current.followUpBanner = banner;
+              refreshResultMessage();
+            }
 
             stepsHook.updateStepStatus(
               'analysis_generation',

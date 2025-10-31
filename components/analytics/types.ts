@@ -216,6 +216,7 @@ export interface FollowUpBanner {
   missingComponents?: string[];
   analysisAvailable?: boolean;
   summary?: string;
+  refreshMode?: 'light' | 'full';
 }
 
 export interface SpecialistCard {

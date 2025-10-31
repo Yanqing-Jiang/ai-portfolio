@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 import json
 import hashlib
 from typing import (
@@ -440,6 +440,8 @@ class PlannerPhaseContext:
     agentic_revision_mode: bool = False
     halted: bool = False
     halt_reason: Optional[str] = None
+    lane_refresh_required: Dict[str, bool] = field(default_factory=dict)
+    analysis_refresh_mode: str = "full"
 
 AGGREGATE_METRIC_MARKERS = (
     "'r&d expense'",
@@ -494,7 +496,7 @@ FOLLOW_UP_BANNERS: Dict[FollowUpRoute, Dict[str, str]] = {
     },
     FollowUpRoute.REUSE_SQL: {
         "title": "Reusing Last Dataset",
-        "message": "Skipping the SQL rerunï¿½updating visuals and narrative on top of the validated table.",
+        "message": "Skipping the SQL rerun - updating visuals and narrative on top of the validated table.",
     },
     FollowUpRoute.STOCK_ONLY: {
         "title": "Market Snapshot Only",
@@ -1531,6 +1533,8 @@ def _compose_reused_analysis_payload(ctx: PlannerPhaseContext) -> Optional[Dict[
     if tool_bundle:
         payload["tool_bundle"] = tool_bundle
 
+    payload["refresh_mode"] = getattr(ctx, "analysis_refresh_mode", "full")
+
     sanitized = sanitize_for_json(payload)
     return sanitized or None
 
@@ -1545,6 +1549,7 @@ def _build_reused_analysis_event(flow_mode: FlowMode, ctx: PlannerPhaseContext) 
     event["data"]["reused"] = True
     event["data"]["flow_mode"] = flow_mode.value
     event["data"]["lane"] = "analysis"
+    event["data"]["refresh_mode"] = getattr(ctx, "analysis_refresh_mode", "full")
     return event
 
 
@@ -1592,6 +1597,8 @@ def _compose_reused_analysis_payload(ctx: PlannerPhaseContext) -> Optional[Dict[
     if tool_bundle:
         payload["tool_bundle"] = tool_bundle
 
+    payload["refresh_mode"] = getattr(ctx, "analysis_refresh_mode", "full")
+
     sanitized = sanitize_for_json(payload)
     return sanitized or None
 
@@ -1606,6 +1613,7 @@ def _build_reused_analysis_event(flow_mode: FlowMode, ctx: PlannerPhaseContext) 
     event["data"]["reused"] = True
     event["data"]["flow_mode"] = flow_mode.value
     event["data"]["lane"] = "analysis"
+    event["data"]["refresh_mode"] = getattr(ctx, "analysis_refresh_mode", "full")
     return event
 
 
@@ -2348,6 +2356,8 @@ class PlannerPipeline:
         self.revision_directive: Optional["RevisionDirective"] = None
         self.agentic_revision_mode: bool = False
         self._tool_registry: Optional[Any] = None
+        self._lane_refresh_required: Dict[str, bool] = {}
+        self._analysis_refresh_mode: str = "full"
 
     @property
     def tool_registry(self):
@@ -2398,6 +2408,7 @@ class PlannerPipeline:
                 "planner_stock_widget",
                 sanitize_for_json(market_artifact.snapshot),
             )
+            snapshot.touch_lane("market")
             updated = True
         analysis_artifact = ctx.artifacts.analysis if record_analysis else None
         if analysis_artifact and analysis_artifact.analysis_text:
@@ -2406,11 +2417,25 @@ class PlannerPipeline:
         if tool_bundle:
             sanitized_bundle = sanitize_for_json(tool_bundle)
             snapshot.record_tool_result("planner_bundle", sanitized_bundle)
+            if isinstance(tool_bundle, Mapping):
+                if tool_bundle.get("web_context"):
+                    snapshot.touch_lane("web")
+                if tool_bundle.get("stock_widget"):
+                    snapshot.touch_lane("market")
             updated = True
         if record_artifacts:
             artifacts_payload = ctx.artifacts.to_dict()
             if artifacts_payload:
                 snapshot.record_artifacts(artifacts_payload)
+                if isinstance(artifacts_payload, Mapping):
+                    if artifacts_payload.get("web"):
+                        snapshot.touch_lane("web")
+                    analysis_payload = artifacts_payload.get("analysis")
+                    if isinstance(analysis_payload, Mapping) and analysis_payload.get("web_context"):
+                        snapshot.touch_lane("web")
+                    market_payload = artifacts_payload.get("market")
+                    if isinstance(market_payload, Mapping) and market_payload.get("snapshot"):
+                        snapshot.touch_lane("market")
                 updated = True
         revision_payload = _build_revision_snapshot_payload(ctx)
         if revision_payload:
@@ -2484,6 +2509,25 @@ class PlannerPipeline:
                 pass
             self.agentic_revision_mode = bool(getattr(directive, "agentic", False))
         self.agentic_revision_mode = bool(directive.agentic if directive else False)
+    def set_lane_refresh_requirements(self, requirements: Optional[Mapping[str, Any]]) -> None:
+        normalized: Dict[str, bool] = {}
+        if requirements:
+            for lane, required in requirements.items():
+                if lane is None:
+                    continue
+                key = str(lane).strip().lower()
+                if not key:
+                    continue
+                normalized[key] = bool(required)
+        self._lane_refresh_required = normalized
+
+    def set_analysis_refresh_mode(self, mode: Optional[str]) -> None:
+        normalized = "full"
+        if isinstance(mode, str):
+            candidate = mode.strip().lower()
+            if candidate in {"light", "full"}:
+                normalized = candidate
+        self._analysis_refresh_mode = normalized
 
     @staticmethod
     def _lane_for_tool_name(tool_name: str) -> Optional[str]:
@@ -2899,7 +2943,16 @@ class PlannerPipeline:
         if mode_config.accessories_in_critical_path:
             return
 
-        accessory_tools = {"web_retriever", "stock_tracker"}
+        lane_refresh_flags = dict(getattr(ctx, "lane_refresh_required", {}) or {})
+        web_refresh_required = bool(lane_refresh_flags.get("web", True))
+        market_refresh_required = bool(lane_refresh_flags.get("market", True))
+
+        accessory_tools: Set[str] = set()
+        if web_refresh_required:
+            accessory_tools.add("web_retriever")
+        if market_refresh_required:
+            accessory_tools.add("stock_tracker")
+
         existing_results = getattr(ctx, "tool_parallel_results", []) or []
         completed_tools = {result.get("tool") for result in existing_results}
         pending_tools = [tool for tool in accessory_tools if tool not in completed_tools]
@@ -2917,7 +2970,7 @@ class PlannerPipeline:
                     for derived_event in derived_events:
                         yield derived_event
 
-        if ctx.web_search is None and not getattr(ctx, "web_search_seeded", False):
+        if web_refresh_required and ctx.web_search is None and not getattr(ctx, "web_search_seeded", False):
             async for event in self._web_search_phase(ctx):
                 yield self._mark_delta_event(event)
         await self._persist_session_state(ctx, record_artifacts=True)
@@ -3750,6 +3803,28 @@ class PlannerPipeline:
     async def run_analysis_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[str, Any], None]:
         mode_config = get_mode_config(ctx.flow_mode)
         receipt = ctx.tool_receipts.get("analysis_synthesis")
+        refresh_mode = getattr(ctx, "analysis_refresh_mode", "full")
+        if refresh_mode == "light":
+            if receipt:
+                receipt.status = "reused"
+                receipt.reused = True
+                receipt.error = None
+                receipt.metadata["refresh_mode"] = "light"
+            else:
+                receipt = ToolInvocationReceipt(
+                    tool="analysis_synthesis",
+                    status="reused",
+                    attempts=0,
+                    reused=True,
+                    metadata={"refresh_mode": "light"},
+                )
+                ctx.tool_receipts["analysis_synthesis"] = receipt
+            ctx.reused_analysis = True
+            event = _build_reused_analysis_event(self.flow_mode, ctx)
+            if event:
+                event["data"]["refresh_mode"] = "light"
+                yield self._annotate_revision(event, ctx)
+            return
         if ctx.reused_analysis:
             if receipt:
                 receipt.status = "reused"
@@ -3769,11 +3844,13 @@ class PlannerPipeline:
             receipt.reused = False
             receipt.error = None
             receipt.output_hash = None
+            receipt.metadata["refresh_mode"] = refresh_mode
         else:
             receipt = ToolInvocationReceipt(
                 tool="analysis_synthesis",
                 status="running",
                 attempts=0,
+                metadata={"refresh_mode": refresh_mode},
             )
         ctx.tool_receipts["analysis_synthesis"] = receipt
         data = _get_sql_dataset(ctx)
@@ -3907,6 +3984,7 @@ class PlannerPipeline:
             analysis_payload["evidence"] = list(ctx.artifacts.analysis.evidence)
         if guardrail_payload:
             analysis_payload["latency_guardrail"] = guardrail_payload
+        analysis_payload["refresh_mode"] = refresh_mode or "full"
         self._capture_artifacts(ctx)
         await self._persist_session_state(ctx, record_analysis=True, tool_bundle=tool_bundle or None)
         receipt.status = "completed"
@@ -4136,15 +4214,25 @@ class PlannerPipeline:
         mode_config = get_mode_config(self.flow_mode)
         tool_runtime: Optional[ToolParallelRuntime] = None
         tool_state: Optional[Dict[str, Any]] = None
+        is_revision_follow_up = (
+            ctx.follow_up_route != FollowUpRoute.FULL_PIPELINE
+            or bool(getattr(ctx, "revision_targets", None))
+        )
+        setattr(ctx, "is_revision_follow_up", is_revision_follow_up)
 
         try:
             async for event in registry.invoke("classification", self, ctx, executed=executed):
                 yield event
             await self._persist_session_state(ctx, record_artifacts=True)
-            if not ctx.is_financial_query:
+            if not ctx.is_financial_query and not is_revision_follow_up:
                 return
 
-            for tool_name in ("intent_detection", "clarification", "plan_generation"):
+            tool_sequence: Tuple[str, ...]
+            if is_revision_follow_up:
+                tool_sequence = ("intent_detection", "plan_generation")
+            else:
+                tool_sequence = ("intent_detection", "clarification", "plan_generation")
+            for tool_name in tool_sequence:
                 async for event in registry.invoke(tool_name, self, ctx, executed=executed):
                     yield event
                 await self._persist_session_state(ctx, record_artifacts=True)
@@ -4333,6 +4421,8 @@ async def _initialize_context(self, query: str, session_id: Optional[str]) -> Pl
     else:
         ctx.revision_directive = None
         ctx.agentic_revision_mode = bool(getattr(self, "agentic_revision_mode", False))
+    ctx.lane_refresh_required = dict(getattr(self, "_lane_refresh_required", {}))
+    ctx.analysis_refresh_mode = getattr(self, "_analysis_refresh_mode", "full")
     return ctx
 
 
@@ -4404,7 +4494,7 @@ async def _classification_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerato
     if classification_elapsed:
         classification_complete["data"]["elapsed_ms"] = classification_elapsed
     yield classification_complete
-    if not ctx.is_financial_query:
+    if not ctx.is_financial_query and not getattr(ctx, "is_revision_follow_up", False):
         polite_default = (
             "I'm focused on financial analytics questions. Please rephrase with a company, metric, or ticker so I can help."
         )
@@ -5267,6 +5357,12 @@ class PlannerExecutorFlow:
         self._pipeline.set_revision_directive(directive)
         self.agentic_revision_mode = bool(directive.agentic if directive else False)
 
+    def set_lane_refresh_requirements(self, requirements: Optional[Mapping[str, Any]]) -> None:
+        self._pipeline.set_lane_refresh_requirements(requirements)
+
+    def set_analysis_refresh_mode(self, mode: Optional[str]) -> None:
+        self._pipeline.set_analysis_refresh_mode(mode)
+
     async def initialize_context(self, query: str, session_id: Optional[str] = None) -> PlannerPhaseContext:
         return await self._pipeline.initialize_context(query, session_id)
 
@@ -5436,5 +5532,7 @@ def _auto_fill_missing_slots(ctx: PlannerPhaseContext, assumptions: List[str]) -
 
 
 from analytics.core.intent_impl.normalization import normalize_timeframe, normalize_metrics
+
+
 
 
