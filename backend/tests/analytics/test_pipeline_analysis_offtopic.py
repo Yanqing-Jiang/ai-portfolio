@@ -40,6 +40,7 @@ def test_analysis_runs_with_empty_dataset(monkeypatch: pytest.MonkeyPatch) -> No
         chart_spec=None,
         search_result=None,
         session_id=None,
+        focus=None,
     ):
         if False:
             yield  # pragma: no cover

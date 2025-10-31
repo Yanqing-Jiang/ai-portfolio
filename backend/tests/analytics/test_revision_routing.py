@@ -131,16 +131,47 @@ async def test_analysis_revision_routed_fast_path(monkeypatch):
     follow_up_events = [evt for evt in events if evt.get("event") == "follow_up_route"]
     assert follow_up_events, "Expected follow_up_route event for analysis revision"
     assert follow_up_events[0].get("data", {}).get("route") in {"analysis_only", "mixed_revision"}
+    lanes = follow_up_events[0].get("data", {}).get("lanes")
+    assert lanes == ["analysis", "web"], f"Unexpected lanes payload: {lanes}"
+    refresh_flags = follow_up_events[0].get("data", {}).get("lane_refresh_required") or {}
+    assert refresh_flags.get("analysis") is True
+    assert refresh_flags.get("web") is True
+    assert refresh_flags.get("market") is False
 
     assert not _has_forbidden_events(events), "Analysis revision should avoid full pipeline events"
     revision_requests = [evt for evt in events if evt.get("event") == "revision_request"]
-    assert revision_requests and revision_requests[0].get("data", {}).get("search_topics"), "Revision directive should include search topics"
+    assert revision_requests, "Revision directive event missing"
+    topics_emitted = revision_requests[0].get("data", {}).get("search_topics") or []
+    assert len(topics_emitted) >= 2, f"Expected at least two topics, got {topics_emitted}"
+    web_events = [evt for evt in events if evt.get("event") == "web_revision_ready"]
+    assert web_events, "Expected web_revision_ready event before analysis refresh"
+    web_data = web_events[0].get("data", {})
+    assert web_data.get("source") == "fresh_revision"
+    assert web_data.get("from_cache") is False
+    analysis_events = [
+        evt for evt in events if evt.get("event") in {"analysis_revision_ready", "analysis_ready", "analysis_complete"}
+    ]
+    assert analysis_events, "Expected analysis completion events during revision"
+    web_index = events.index(web_events[0])
+    analysis_index = events.index(analysis_events[0])
+    assert web_index < analysis_index, "Web refresh should complete before analysis events"
+    assert not any(evt.get("event") in {"market_refresh", "market_revision_ready"} for evt in events), "Market lane should stay unused"
 
     stored = await repo.load(session_id)
     analytics_cache = stored.tool_cache.get("analytics", {})
     revision_snapshot = analytics_cache.get("revision_snapshot") or {}
     assert "intent" in revision_snapshot and "plan" in revision_snapshot and "slot_statuses" in revision_snapshot
     assert stored.messages and stored.messages[-1].get("content") == query
+    directive_meta = stored.last_revision_directive or {}
+    lane_meta = directive_meta.get("lane_refresh_required") or {}
+    assert lane_meta.get("analysis") is True
+    assert lane_meta.get("web") is True
+    assert lane_meta.get("market") is False
+    assert directive_meta.get("revision_lanes") == ["analysis", "web"]
+    topic_payload = directive_meta.get("search_topics") or []
+    assert len(topic_payload) >= 2
+    baseline_query = topic_payload[0].get("query")
+    assert any(topic.get("query") != baseline_query for topic in topic_payload[1:]), topic_payload
 
     await repo.delete(session_id)
     await close_session_state_repository()
@@ -174,7 +205,15 @@ async def test_followup_generates_search_topics_without_explicit_patch(monkeypat
 
     revision_requests = [evt for evt in events if evt.get("event") == "revision_request"]
     assert revision_requests, "Expected revision request for follow-up"
-    assert revision_requests[0].get("data", {}).get("search_topics"), "Follow-up should include search topics"
+    emitted_topics = revision_requests[0].get("data", {}).get("search_topics") or []
+    assert len(emitted_topics) >= 2, f"Expected dual topics, received {emitted_topics}"
+
+    stored = await repo.load(session_id)
+    directive_meta = stored.last_revision_directive or {}
+    topic_payload = directive_meta.get("search_topics") or []
+    assert len(topic_payload) >= 2, topic_payload
+    first_query = topic_payload[0].get("query")
+    assert any(topic.get("query") != first_query for topic in topic_payload[1:]), topic_payload
 
     await repo.delete(session_id)
     await close_session_state_repository()

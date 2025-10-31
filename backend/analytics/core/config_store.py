@@ -437,13 +437,6 @@ def get_config_store() -> ConfigStore:
     return _config_store
 
 
-async def close_config_store() -> None:
-    global _config_store
-    if _config_store:
-        await _config_store.close()
-        _config_store = None
-
-
 if __name__ == "__main__":
     import asyncio
 

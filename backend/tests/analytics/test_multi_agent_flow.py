@@ -4,6 +4,7 @@ import asyncio
 import copy
 from datetime import datetime
 import types
+from typing import Any, Dict
 
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 
@@ -39,6 +40,32 @@ def test_multi_agent_plan_dependencies():
         "market_phase",
         "web_research_phase",
     }
+
+
+def test_derive_tasks_respects_lane_refresh_requests():
+    planner_ctx = {"tickers": ["AMD"]}
+    sql_ctx = {"status": "success", "row_count": 12}
+    analysis_ctx = {"final": "Cached narrative"}
+    chart_ctx = {"spec_summary": {"chart_type": "line"}}
+    market_ctx: Dict[str, Any] = {}
+    web_ctx = {"summary": "cached", "snippets": [{"snippet": "cached"}]}
+
+    plan = _derive_tasks(
+        planner_ctx,
+        sql_ctx,
+        analysis_ctx,
+        chart_ctx,
+        market_ctx,
+        "analysis: refresh narrative",
+        web_ctx=web_ctx,
+        revision_completed=(),
+        lane_refresh_required={"web": True, "market": False},
+    )
+    step_map = {step.name: step for step in plan.steps}
+    assert step_map["web_research"].status == "run"
+    assert step_map["web_research"].reason in {"forced_refresh", "recency_requested"}
+    assert step_map["market"].status == "skip"
+    assert step_map["market"].reason in {"lane_skipped", "market_cached", "no_tickers", "analysis_revision"}
 
 
 class DummyPlannerFlow:
@@ -99,6 +126,95 @@ def test_accessories_gate_marks_on_criteria_ready():
     assert not gate.is_set()
     flow._capture_event({"event": "criteria_ready", "data": {}})
     assert gate.is_set()
+
+
+def test_hedged_accessories_complete_emitted_when_fanout_finishes():
+    flow = MultiAgentFlow()
+    flow._prepare_context("NVDA outlook")
+
+    manifest = [
+        {"name": "market_question_a"},
+        {"name": "market_question_b"},
+        {"name": "stock_tracker"},
+        {"name": "web_retriever_primary-question"},
+        {"name": "web_retriever_industry-context"},
+    ]
+    flow._capture_event(
+        {
+            "event": "tool_parallel_start",
+            "data": {
+                "tools": manifest,
+                "tool_group": "single_agent",
+                "parallel_group": "tool_fanout",
+                "tool_count": len(manifest),
+                "concurrency_limit": 5,
+            },
+        }
+    )
+    flow._drain_artifact_events()
+    flow._artifact_flush_pending = False
+
+    now_iso = datetime.utcnow().isoformat()
+    stock_payload = {
+        "tickers": ["NVDA"],
+        "ready": True,
+        "stock_widget": {"symbols": [["NASDAQ:NVDA", "NVDA"]]},
+    }
+    flow._capture_event(
+        {
+            "event": "tool_parallel_result",
+            "data": {
+                "tool": "stock_tracker",
+                "status": "completed",
+                "payload": stock_payload,
+                "metadata": {},
+                "error": None,
+                "elapsed_ms": 640,
+                "started_at": now_iso,
+                "completed_at": now_iso,
+                "fatal": False,
+                "parallel_group": "tool_fanout",
+                "tool_group": "single_agent",
+                "concurrency_limit": 5,
+                "ts": now_iso,
+            },
+        }
+    )
+    stock_events = flow._drain_artifact_events()
+    flow._artifact_flush_pending = False
+    assert any(event["event"] == "stock_ready" for event in stock_events)
+    assert not any(event["event"] == "hedged_accessories_complete" for event in stock_events)
+
+    web_payload = {
+        "ready": True,
+        "summary": "NVIDIA guidance commentary",
+        "snippets": [{"title": "Headline", "snippet": "Context", "url": "https://example.com"}],
+    }
+    flow._capture_event(
+        {
+            "event": "tool_parallel_result",
+            "data": {
+                "tool": "web_retriever_primary-question",
+                "status": "completed",
+                "payload": web_payload,
+                "metadata": {},
+                "error": None,
+                "elapsed_ms": 2300,
+                "started_at": now_iso,
+                "completed_at": now_iso,
+                "fatal": False,
+                "parallel_group": "tool_fanout",
+                "tool_group": "single_agent",
+                "concurrency_limit": 5,
+                "ts": now_iso,
+            },
+        }
+    )
+    accessory_events = flow._drain_artifact_events()
+    flow._artifact_flush_pending = False
+    event_names = [event["event"] for event in accessory_events]
+    assert "web_ready" in event_names
+    assert "hedged_accessories_complete" in event_names
 
 
 def test_multi_agent_flow_handles_web_context(monkeypatch):
@@ -358,8 +474,7 @@ def test_stock_ready_event_carries_source_metadata():
     flow._maybe_queue_stock_ready()
 
     assert flow._pending_artifact_events
-    stock_event = flow._pending_artifact_events[-1]
-    assert stock_event["event"] == "stock_ready"
+    stock_event = next(evt for evt in flow._pending_artifact_events if evt["event"] == "stock_ready")
     assert stock_event["data"]["source"] == "planner_fanout"
 
 

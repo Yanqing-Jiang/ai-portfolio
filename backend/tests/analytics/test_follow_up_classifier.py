@@ -47,3 +47,13 @@ def test_classifier_full_when_keywords_missing_or_no_sql() -> None:
     snapshot = _snapshot(sql="")
     route = classifier.classify("Show me stock chart", snapshot)
     assert route is FollowUpRoute.FULL_PIPELINE
+
+
+def test_detect_revision_targets_pairs_analysis_with_web() -> None:
+    classifier = FollowUpClassifier()
+    snapshot = SessionStateSnapshot(session_id="analysis-unit")
+    snapshot.last_analysis = "Cached narrative"
+    analytics_cache = snapshot.tool_cache.setdefault("analytics", {})
+    analytics_cache["artifacts"] = {"web": {"ready": True}}
+    targets = classifier.detect_revision_targets("analysis: refresh the summary", snapshot)
+    assert targets == {"analysis", "web"}

@@ -226,6 +226,64 @@ const formatTimeframeDisplay = (raw: any): string | undefined => {
   return undefined;
 };
 
+const extractAnalysisFocus = (raw: string): string | undefined => {
+  if (!raw) {
+    return undefined;
+  }
+  const normalized = raw.trim();
+  if (!normalized) {
+    return undefined;
+  }
+
+  const cleanFocus = (value?: string | null): string | undefined => {
+    if (!value) {
+      return undefined;
+    }
+    let result = value.trim();
+    if (!result) {
+      return undefined;
+    }
+    result = result.replace(/^[\s:,\-–—]+/, '').trim();
+    result = result.replace(/\s*(?:please|pls)\.?$/i, '').trim();
+    result = result.replace(/\s*(?:thanks?|thank you)\.?$/i, '').trim();
+    result = result.replace(/^to\s+/, '').trim();
+    result = result.replace(/^(?:focus|highlight|emphasize)\s+(?:on\s+)?/i, '').trim();
+    result = result.replace(/["']+$/g, '').trim();
+    if (!result) {
+      return undefined;
+    }
+    const MAX_LENGTH = 160;
+    if (result.length > MAX_LENGTH) {
+      result = result.slice(0, MAX_LENGTH).trimEnd();
+    }
+    return result || undefined;
+  };
+
+  const direct = normalized.match(/analysis\s*[:\-–—]\s*(.+)$/i);
+  const directFocus = cleanFocus(direct?.[1]);
+  if (directFocus) {
+    return directFocus;
+  }
+
+  const rewrite = normalized.match(
+    /analysis(?:\s+revision|\s+update|\s+refresh|\s+rewrite|\s+redo)?\s*(?:to\s+)?(?:focus|highlight|emphasize)\s+(.*)$/i,
+  );
+  const rewriteFocus = cleanFocus(rewrite?.[1]);
+  if (rewriteFocus) {
+    return rewriteFocus;
+  }
+
+  if (/analysis/i.test(normalized)) {
+    const generic = normalized.match(/(?:focus|highlight|emphasize)\s+(?:on\s+)?(.+)/i);
+    const genericFocus = cleanFocus(generic?.[1]);
+    if (genericFocus) {
+      return genericFocus;
+    }
+  }
+
+  return undefined;
+};
+
 const detectGranularityFromText = (value: string): ChartGranularity | null => {
   const normalized = value.trim().toLowerCase();
   if (!normalized) {
@@ -430,7 +488,12 @@ export const useAnalyticsMemoryStream = (
   const [slotStatuses, setSlotStatuses] = useState<SlotStatusMap>({});
   const [slotFollowups, setSlotFollowups] = useState<ClarifyRequest[]>([]);
   const [snapshotReuse, setSnapshotReuse] = useState<SnapshotReuseInfo | null>(null);
-  const revisionContextRef = useRef<{ id?: string; lanes: string[] }>({ id: undefined, lanes: [] });
+  const revisionContextRef = useRef<{ id?: string; lanes: string[]; focus?: string }>({
+    id: undefined,
+    lanes: [],
+    focus: undefined,
+  });
+  const pendingRevisionFocusRef = useRef<string | undefined>(undefined);
   const revisionModeRef = useRef<'none' | 'chart' | 'analysis' | 'market' | 'mixed'>('none');
   const lastClarificationEchoRef = useRef<{ slot: string; content: string } | null>(null);
   const resultSentRef = useRef<boolean>(false);
@@ -1669,6 +1732,7 @@ const workflowDataRef = useRef<{
   latencyGuardrail: LatencyGuardrail | null;
   snapshotReuse: SnapshotReuseInfo | null;
   requestedGranularity: ChartGranularity | null;
+  revisionFocus: string | null;
 }>({
   chartSpec: null,
   analysis: '',
@@ -1692,6 +1756,7 @@ const workflowDataRef = useRef<{
     latencyGuardrail: null,
     snapshotReuse: null,
   requestedGranularity: null,
+  revisionFocus: null,
   });
 
   const commitRequestedGranularity = useCallback(
@@ -2256,6 +2321,7 @@ const workflowDataRef = useRef<{
       specialistCards?: SpecialistCard[];
       replacePriorResult?: boolean;
       revisionId?: string | null;
+      revisionFocus?: string | null;
     },
   ) => {
     const snapshot = workflowDataRef.current;
@@ -2291,6 +2357,12 @@ const workflowDataRef = useRef<{
     applyField('analysisOverview', options.analysisOverview, snapshot.analysisOverview);
     applyField('banner', options.banner, snapshot.followUpBanner);
     applyField('specialistCards', options.specialistCards, snapshot.specialistCards);
+    applyField('revisionFocus', options.revisionFocus, snapshot.revisionFocus);
+
+    workflowDataRef.current.revisionFocus =
+      (payload as any).revisionFocus !== undefined
+        ? ((payload as any).revisionFocus ?? null)
+        : snapshot.revisionFocus ?? null;
 
     setChatHistory((prev) => {
       const filtered = options.replacePriorResult
@@ -2434,12 +2506,16 @@ const workflowDataRef = useRef<{
     const activeSessionId = sessionId || lastSessionIdRef.current;
     const hadResult = resultSentRef.current;
     const isFollowUp = Boolean(hadResult && activeSessionId);
+    const focusCandidate = extractAnalysisFocus(trimmed);
     if (isFollowUp) {
       revisionModeRef.current = revisionModeRef.current === 'none' ? 'mixed' : revisionModeRef.current;
+      pendingRevisionFocusRef.current = focusCandidate;
     } else {
       revisionModeRef.current = 'none';
-      revisionContextRef.current = { id: undefined, lanes: [] };
+      revisionContextRef.current = { id: undefined, lanes: [], focus: undefined };
+      pendingRevisionFocusRef.current = undefined;
     }
+    workflowDataRef.current.revisionFocus = null;
 
     // Reset stream accumulators for new query while preserving prior cards when revising
     setStreamingText('');
@@ -2527,6 +2603,7 @@ const workflowDataRef = useRef<{
         revisionContextRef.current = {
           id: revisionId ?? revisionContextRef.current.id,
           lanes: normalizedRevisionLanes.length ? normalizedRevisionLanes : revisionContextRef.current.lanes,
+          focus: revisionContextRef.current.focus,
         };
       }
       const revisionFlag = coerceBoolean(data.revision ?? eventData.revision);
@@ -2664,11 +2741,12 @@ const workflowDataRef = useRef<{
               ? (eventData.lanes as unknown[])
                   .map((lane) => (typeof lane === 'string' ? lane.toLowerCase() : ''))
                   .filter((lane): lane is string => lane.length > 0)
-            : [];
-          revisionContextRef.current = {
-            id: effectiveRevisionId ?? revisionContextRef.current.id,
-            lanes: normalizedLanes,
-          };
+          : [];
+        revisionContextRef.current = {
+          id: effectiveRevisionId ?? revisionContextRef.current.id,
+          lanes: normalizedLanes,
+          focus: revisionContextRef.current.focus,
+        };
           if (normalizedLanes.length === 1) {
             const lane = normalizedLanes[0] === 'web' ? 'analysis' : normalizedLanes[0] === 'stock' ? 'market' : normalizedLanes[0];
             if (lane === 'chart' || lane === 'analysis' || lane === 'market') {
@@ -2797,36 +2875,61 @@ const workflowDataRef = useRef<{
                 .map((lane) => (typeof lane === 'string' ? lane.toLowerCase() : ''))
                 .filter((lane): lane is string => lane.length > 0)
             : undefined;
+          const rawFocus =
+            coerceString((eventData as Record<string, unknown>)?.analysis_focus) ??
+            coerceString((eventData as Record<string, unknown>)?.requested_focus) ??
+            coerceString((eventData as Record<string, unknown>)?.focus);
+          const trimmedFocus =
+            rawFocus && typeof rawFocus === 'string' && rawFocus.trim().length ? rawFocus.trim() : undefined;
+          const pendingFocus =
+            trimmedFocus ?? (route === 'analysis_only' ? pendingRevisionFocusRef.current : undefined);
           if (normalizedLanes && normalizedLanes.length) {
             revisionContextRef.current = {
               id: revisionContextRef.current.id,
               lanes: normalizedLanes,
+              focus: pendingFocus ?? revisionContextRef.current.focus,
             };
           }
           switch (route) {
             case 'full_pipeline': {
               setRevisionMode('none');
               revisionModeRef.current = 'none';
+              revisionContextRef.current.focus = undefined;
+              workflowDataRef.current.revisionFocus = null;
+              pendingRevisionFocusRef.current = undefined;
               break;
             }
             case 'analysis_only': {
               setRevisionMode('analysis');
               revisionModeRef.current = 'analysis';
+              revisionContextRef.current.focus =
+                pendingFocus ?? revisionContextRef.current.focus ?? pendingRevisionFocusRef.current;
+              workflowDataRef.current.revisionFocus = revisionContextRef.current.focus ?? null;
+              pendingRevisionFocusRef.current = undefined;
               break;
             }
             case 'market_only': {
               setRevisionMode('market');
               revisionModeRef.current = 'market';
+              workflowDataRef.current.revisionFocus = null;
+              pendingRevisionFocusRef.current = undefined;
               break;
             }
             case 'chart_revision': {
               setRevisionMode('chart');
               revisionModeRef.current = 'chart';
+              workflowDataRef.current.revisionFocus = null;
+              pendingRevisionFocusRef.current = undefined;
               break;
             }
             case 'mixed_revision': {
               setRevisionMode('mixed');
               revisionModeRef.current = 'mixed';
+              if (route !== 'analysis_only') {
+                workflowDataRef.current.revisionFocus =
+                  normalizedLanes?.includes('analysis') ? pendingFocus ?? revisionContextRef.current.focus ?? null : null;
+              }
+              pendingRevisionFocusRef.current = undefined;
               break;
             }
             case 'reuse_sql': {
@@ -2834,11 +2937,15 @@ const workflowDataRef = useRef<{
               if (revisionModeRef.current === 'none') {
                 revisionModeRef.current = 'mixed';
               }
+              workflowDataRef.current.revisionFocus = null;
+              pendingRevisionFocusRef.current = undefined;
               break;
             }
             case 'cannot_revise': {
               setRevisionMode('none');
               revisionModeRef.current = 'none';
+              workflowDataRef.current.revisionFocus = null;
+              pendingRevisionFocusRef.current = undefined;
               break;
             }
             default: {
@@ -2847,6 +2954,10 @@ const workflowDataRef = useRef<{
                 if (revisionModeRef.current === 'none') {
                   revisionModeRef.current = 'mixed';
                 }
+              }
+              if (route !== 'analysis_only') {
+                workflowDataRef.current.revisionFocus = null;
+                pendingRevisionFocusRef.current = undefined;
               }
               break;
             }
@@ -3670,12 +3781,11 @@ const workflowDataRef = useRef<{
                 stockWidgetConfig: null,
                 toolFanoutManifest: [],
                 toolFanoutResults: [],
-                webSearch: null,
-                analysisOverview: null,
-                banner: null,
                 specialistCards: [],
                 replacePriorResult: true,
                 revisionId: revisionIdForSnapshot ?? null,
+                revisionFocus:
+                  workflowDataRef.current.revisionFocus ?? revisionContextRef.current.focus ?? null,
               });
               markRevisionMode('analysis');
             } else {
@@ -4706,6 +4816,7 @@ const workflowDataRef = useRef<{
               specialistCards: [],
               latencyGuardrail: null,
               snapshotReuse: null,
+              revisionFocus: null,
             };
             setChartSpec(null);
             setAnalysis('');
@@ -4919,7 +5030,7 @@ const workflowDataRef = useRef<{
     if (!preserveSession) {
       setSessionId('');
       lastSessionIdRef.current = '';
-      revisionContextRef.current = { id: undefined, lanes: [] };
+    revisionContextRef.current = { id: undefined, lanes: [], focus: undefined };
       revisionModeRef.current = 'none';
     }
     setPendingClarification(null);
@@ -4970,6 +5081,8 @@ const workflowDataRef = useRef<{
     workflowDataRef.current = {
       chartSpec: null,
       analysis: '',
+      progressiveAnalysis: '',
+      progressiveText: '',
       sqlQuery: '',
       dataSample: null,
       streamingText: '',
@@ -4987,6 +5100,8 @@ const workflowDataRef = useRef<{
       specialistCards: [],
       latencyGuardrail: null,
       snapshotReuse: null,
+      requestedGranularity: null,
+      revisionFocus: null,
     };
   };
 

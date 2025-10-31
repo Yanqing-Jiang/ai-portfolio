@@ -27,6 +27,7 @@
    - Emit the existing status and `revision_request` events before branching so telemetry stays consistent.
    - Build/record a `RevisionDirective` with explicit targets, requested focus, and generated search topics; persist it alongside the appended user message so future revisions inherit context.
    - Derive `follow_up_route` values (`reuse_sql`, `analysis_only`, `market_only`, `mixed_revision`) and emit them immediately so the UI can adjust copy.
+   - Ensure each analysis/web revision seeds at least two related web topics (primary focus + derived angle) so retrievers can run in parallel before the analyst resumes.
    - Invoke targeted helpers in sequence based on requested lanes:
      - `apply_chart_revision` (chart lane)
      - `run_analysis_refresh` (analysis + web lane)
@@ -37,11 +38,13 @@
 
 3. **Single-Agent Helper Enhancements**
    - Expose `run_web_refresh`, `run_market_refresh`, and `run_analysis_refresh` on `SingleAgentController`, each delegating to the planner tool registry and the new pipeline helpers.
+   - Force `run_analysis_refresh` to call `run_web_refresh` first (with dual-topic seeds) and wait for `web_ready` before streaming the revised analysis, while explicitly skipping the market lane unless the user requested it.
    - Seed revision search topics from the directive and refresh helpers before dispatching tool parallelism, ensuring live web snippets are fetched on narrative revisions.
    - Reset accessory state (`web_search`, cached tool receipts/results, guardrail seeds) before invoking revision-only adapters, then persist refreshed artifacts back into the snapshot.
 
 4. **Multi-Agent Helper Enhancements**
    - Mirror the single-agent helpers using the orchestrator: short-circuit planner scheduling on revision-only runs, forward events through `_forward_with_hooks`, and reuse the planner tool registry for web/market refreshes.
+   - Respect lane refresh flags so analysis-only revisions run the web specialist first, mark the market lane as skipped, and surface a warning banner if `web_ready` never arrives.
    - Respect `RevisionDirective.agentic` so future agentic revisions can opt into richer behavior without planner replay while still benefiting from cached context.
 
 5. **Telemetry & Guardrails**
@@ -81,3 +84,21 @@
 4. **Reset accessory state.** ? `_reset_revision_accessories` clears cached tool receipts/results before revision helpers execute.
 5. **Record follow-up prompts.** ? `_append_session_message` invoked for each revision; messages stored in the snapshot.
 6. **Update tests.** ? Revision routing tests expanded to cover analysis and market fast-path scenarios.
+
+## Current Gaps (October 31, 2025 23:20 UTC)
+- Single-agent revisions still showed cached web context in ledger `2025-10-31T23:18:11Z` because the follow-up executed before the latest changes landed; the attempted refresh right after failed on `EventEmitter` import.
+- Multi-agent fast-path raised `name 'EventEmitter' is not defined` (ledger `2025-10-31T23:19:10Z`), so the web lane aborted before emitting `web_revision_ready`; this regression passed tests because we mocked the planner hooks.
+- We have not yet captured a post-fix ledger proving that `web_refresh` emits before `analysis_revision`; confidence currently rests on unit tests.
+
+- Single-agent runs continued to display the fallback banner because the `web_ready` event inherited `reason="ready_cached"`; a fresh refresh now explicitly emits `web_revision_ready` with `reason="fresh_revision"` and `from_cache=False`.
+- Multi-agent analysis-only revisions still spawned the market agent, tripping the 1500 ms guardrail. `_market_agent` now honors `lane_refresh_required["market"] = False` and exits early.
+- Single-agent revisions still showed cached web context in ledger `2025-10-31T23:18:11Z` because the follow-up executed before the latest changes landed; the attempted refresh right after failed on `EventEmitter` import.
+- Multi-agent fast-path raised `name 'EventEmitter' is not defined` (ledger `2025-10-31T23:19:10Z`), so the web lane aborted before emitting `web_revision_ready`; this regression passed tests because we mocked the planner hooks.
+- We have not yet captured a post-fix ledger proving that `web_refresh` emits before `analysis_revision`; confidence currently rests on unit tests.
+
+### Next Actions
+1. **Redeploy + validate:** After reloading the backend with the restored import, run an analysis-only follow-up and confirm `web_revision_ready` precedes analysis events in the ledger. If not, capture the emitted warning/error for debugging.
+2. **Add regression coverage:** Extend `backend/tests/analytics/test_revision_routing.py` to assert that `EventEmitter`-driven warning paths surface cleanly (e.g., simulate a missing dependency) so similar issues fail fast.
+3. **Playground verification:** Manually exercise multi-agent revisions to ensure `web_ready` arrives before `analysis_ready` and that the market lane stays skipped unless requested; record timestamps for the runbook.
+
+

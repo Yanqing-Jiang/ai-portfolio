@@ -258,15 +258,59 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
           const isUser = message.type === 'user';
           const isResult = message.type === 'result';
           const combinedAnalysis = isResult ? buildCombinedAnalysis(message) : undefined;
+          const isAnalysisRevisionResult =
+            isResult && message.banner?.route === 'analysis_only';
+          const revisionFocus =
+            typeof message.revisionFocus === 'string' && message.revisionFocus.trim().length
+              ? message.revisionFocus.trim()
+              : undefined;
+          const primaryAnalysisContent =
+            (combinedAnalysis && combinedAnalysis.trim().length ? combinedAnalysis : undefined) ??
+            (typeof message.analysis === 'string' && message.analysis.trim().length
+              ? message.analysis
+              : undefined) ??
+            (typeof message.progressiveAnalysis === 'string' && message.progressiveAnalysis.trim().length
+              ? message.progressiveAnalysis
+              : undefined) ??
+            (typeof message.progressiveText === 'string' && message.progressiveText.trim().length
+              ? message.progressiveText
+              : undefined);
+          const baseWebSearch = message.webSearch;
+          const resolvedWebSearch = isAnalysisRevisionResult
+            ? (() => {
+                if (baseWebSearch) {
+                  return {
+                    ...baseWebSearch,
+                    snippets: Array.isArray(baseWebSearch.snippets) ? baseWebSearch.snippets : [],
+                  };
+                }
+                return {
+                  query: revisionFocus ?? '',
+                  summary: '',
+                  snippets: [],
+                  ready: false,
+                  reason: 'no_web_research',
+                };
+              })()
+            : baseWebSearch
+            ? {
+                ...baseWebSearch,
+                snippets: Array.isArray(baseWebSearch.snippets) ? baseWebSearch.snippets : [],
+              }
+            : null;
           const showTradingView =
-            Array.isArray(message.stockWidgetConfig?.symbols) && message.stockWidgetConfig?.symbols?.length;
-          const attachmentsAvailable = Boolean(
-            (message.chartSpec && isValidChartSpec(message.chartSpec)) ||
-              (showTradingView && message.stockWidgetConfig) ||
-              combinedAnalysis ||
-              message.webSearch ||
-              message.sqlQuery,
-            );
+            !isAnalysisRevisionResult &&
+            Array.isArray(message.stockWidgetConfig?.symbols) &&
+            message.stockWidgetConfig?.symbols?.length;
+          const attachmentsAvailable = isAnalysisRevisionResult
+            ? Boolean(primaryAnalysisContent) || Boolean(resolvedWebSearch)
+            : Boolean(
+                (message.chartSpec && isValidChartSpec(message.chartSpec)) ||
+                  (showTradingView && message.stockWidgetConfig) ||
+                  primaryAnalysisContent ||
+                  resolvedWebSearch ||
+                  message.sqlQuery,
+              );
           const contentText =
             typeof message.content === 'string' && message.content.trim().length > 0 ? message.content : '';
 
@@ -324,66 +368,103 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
                     )}
 
                     {attachmentsAvailable && message.type === 'result' && (
-                      <div className="space-y-4">
-                        {message.chartSpec && isValidChartSpec(message.chartSpec) && (
-                          <Suspense
-                            fallback={
-                              <div className="rounded-xl border border-gray-700 bg-gray-800/40 p-6 text-sm text-gray-300">
-                                Loading chart...
-                              </div>
-                            }
-                          >
-                            <div className="rounded-xl overflow-hidden border border-gray-700 bg-gray-900/40">
-                              <ChartCard
-                                chartSpec={message.chartSpec}
-                                dataSample={message.dataSample}
-                                enableDropdown
-                                enableCsvDownload
+                      isAnalysisRevisionResult ? (
+                        <div className="space-y-4">
+                          {revisionFocus ? (
+                            <div className="text-[11px] uppercase tracking-wide text-emerald-300">
+                              Focus: {revisionFocus}
+                            </div>
+                          ) : null}
+                          {primaryAnalysisContent ? (
+                            <div className="rounded-xl overflow-hidden border border-blue-500/30 bg-blue-500/10">
+                              <AnalysisCard
+                                analysis={primaryAnalysisContent}
+                                analysisSources={message.analysisSources}
+                                evidenceLinks={message.analysisOverview?.evidence}
                               />
                             </div>
-                          </Suspense>
-                        )}
-
-                        {combinedAnalysis && (
-                          <div className="rounded-xl overflow-hidden border border-blue-500/30 bg-blue-500/10">
-                            <AnalysisCard
-                              analysis={combinedAnalysis}
-                              analysisSources={message.analysisSources}
-                              evidenceLinks={message.analysisOverview?.evidence}
-                            />
-                          </div>
-                        )}
-
-                        {showTradingView && message.stockWidgetConfig && (
-                          <div className="rounded-xl border border-gray-700 bg-gray-900/50 p-3 sm:p-4 overflow-hidden">
-                            <TradingViewSymbolOverview config={message.stockWidgetConfig} height={480} />
-                          </div>
-                        )}
-
-                        {message.webSearch ? (
+                          ) : null}
                           <CollapsibleSection title="Market Research" defaultOpen={false} className="bg-gray-800/50">
                             <WebSearchCard
-                              result={message.webSearch}
+                              result={
+                                resolvedWebSearch ?? {
+                                  query: revisionFocus ?? '',
+                                  summary: '',
+                                  snippets: [],
+                                  ready: false,
+                                  reason: 'no_web_research',
+                                }
+                              }
                               title="Market Research"
-                              emptyMessage="No market research snippets available."
+                              emptyMessage="No web research snippets available."
                             />
                           </CollapsibleSection>
-                        ) : null}
-
-                        {message.sqlQuery && (
-                          <CollapsibleSection
-                            title="Generated SQL Query"
-                            defaultOpen={false}
-                            className="bg-gray-800/50"
-                          >
-                            <SqlCard sqlQuery={message.sqlQuery} compact={true} />
-                          </CollapsibleSection>
-                        )}
-
-                        <div className="pt-3 border-t border-dashed border-gray-700 text-xs text-gray-400">
-                          Need another update? Ask to continue generating results or request the latest status.
+                          <div className="pt-3 border-t border-dashed border-gray-700 text-xs text-gray-400">
+                            Need another update? Ask to continue generating results or request the latest status.
+                          </div>
                         </div>
-                      </div>
+                      ) : (
+                        <div className="space-y-4">
+                          {message.chartSpec && isValidChartSpec(message.chartSpec) && (
+                            <Suspense
+                              fallback={
+                                <div className="rounded-xl border border-gray-700 bg-gray-800/40 p-6 text-sm text-gray-300">
+                                  Loading chart...
+                                </div>
+                              }
+                            >
+                              <div className="rounded-xl overflow-hidden border border-gray-700 bg-gray-900/40">
+                                <ChartCard
+                                  chartSpec={message.chartSpec}
+                                  dataSample={message.dataSample}
+                                  enableDropdown
+                                  enableCsvDownload
+                                />
+                              </div>
+                            </Suspense>
+                          )}
+
+                          {primaryAnalysisContent ? (
+                            <div className="rounded-xl overflow-hidden border border-blue-500/30 bg-blue-500/10">
+                              <AnalysisCard
+                                analysis={primaryAnalysisContent}
+                                analysisSources={message.analysisSources}
+                                evidenceLinks={message.analysisOverview?.evidence}
+                              />
+                            </div>
+                          ) : null}
+
+                          {showTradingView && message.stockWidgetConfig && (
+                            <div className="rounded-xl border border-gray-700 bg-gray-900/50 p-3 sm:p-4 overflow-hidden">
+                              <TradingViewSymbolOverview config={message.stockWidgetConfig} height={480} />
+                            </div>
+                          )}
+
+                          {resolvedWebSearch ? (
+                            <CollapsibleSection title="Market Research" defaultOpen={false} className="bg-gray-800/50">
+                              <WebSearchCard
+                                result={resolvedWebSearch}
+                                title="Market Research"
+                                emptyMessage="No market research snippets available."
+                              />
+                            </CollapsibleSection>
+                          ) : null}
+
+                          {message.sqlQuery && (
+                            <CollapsibleSection
+                              title="Generated SQL Query"
+                              defaultOpen={false}
+                              className="bg-gray-800/50"
+                            >
+                              <SqlCard sqlQuery={message.sqlQuery} compact={true} />
+                            </CollapsibleSection>
+                          )}
+
+                          <div className="pt-3 border-t border-dashed border-gray-700 text-xs text-gray-400">
+                            Need another update? Ask to continue generating results or request the latest status.
+                          </div>
+                        </div>
+                      )
                     )}
                   </div>
                 </div>

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import uuid
 import logging
 from datetime import datetime, timezone
@@ -32,6 +33,18 @@ FLOW_FACTORIES: Dict[str, Callable[[], Any]] = {
 }
 
 DEFAULT_FLOW = "planner-executor"
+
+
+_FOCUS_VARIANTS: List[tuple[str, str]] = [
+    ("capital expenditure", "capital expenditure drivers"),
+    ("capex", "capex outlook"),
+    ("opex", "operating expense outlook"),
+    ("ai", "AI infrastructure investment"),
+    ("data center", "data center build-out"),
+    ("supply chain", "supply chain capacity"),
+    ("guidance", "management guidance update"),
+    ("inventory", "inventory positioning"),
+]
 
 
 def get_available_flows() -> Dict[str, str]:
@@ -97,6 +110,8 @@ def _normalize_revision_lanes(lanes: Iterable[str]) -> List[str]:
         if value == "stock":
             value = "market"
         normalized.add(value)
+    if "analysis" in normalized and "web" not in normalized:
+        normalized.add("web")
     return sorted(normalized, key=_lane_sort_key)
 
 
@@ -188,16 +203,6 @@ def _compute_lane_refresh_requirements(
     return requirements
 
 
-def _extract_revision_snapshot(snapshot: Optional[SessionStateSnapshot]) -> Dict[str, Any]:
-    if snapshot is None:
-        return {}
-    analytics_cache = {}
-    if isinstance(snapshot.tool_cache, dict):
-        analytics_cache = snapshot.tool_cache.get("analytics") or {}
-    payload = analytics_cache.get("revision_snapshot")
-    return payload if isinstance(payload, dict) else {}
-
-
 REVISION_BANNER_COPY: Dict[str, Dict[str, str]] = {
     "chart_revision": {
         "title": "Chart Updated",
@@ -223,25 +228,27 @@ REVISION_BANNER_COPY: Dict[str, Dict[str, str]] = {
 
 
 def _revision_route_label(lanes: List[str]) -> str:
-    if not lanes:
+    normalized = _normalize_revision_lanes(lanes)
+    if not normalized:
         return "reuse_sql"
-    if lanes == ["chart"]:
+    if normalized == ["chart"]:
         return "chart_revision"
-    if lanes == ["analysis"]:
+    if normalized in (["analysis"], ["analysis", "web"]):
         return "analysis_only"
-    if lanes == ["market"]:
+    if normalized == ["market"]:
         return "market_only"
     return "mixed_revision"
 
 
 def _initial_revision_status(lanes: List[str]) -> tuple[str, str]:
-    if not lanes:
+    normalized = _normalize_revision_lanes(lanes)
+    if not normalized:
         return ("revision", "Applying cached updates")
-    if lanes == ["chart"]:
+    if normalized == ["chart"]:
         return ("chart_revision", "Applying chart update")
-    if lanes == ["analysis"]:
+    if normalized in (["analysis"], ["analysis", "web"]):
         return ("analysis_revision", "Refreshing analysis")
-    if lanes == ["market"]:
+    if normalized == ["market"]:
         return ("market_revision", "Refreshing market data")
     return ("revision", "Applying targeted updates")
 
@@ -490,6 +497,7 @@ async def _stream_revision_fast_path(
     selected_flow: str,
     repository: Optional[Any],
     snapshot: Optional[SessionStateSnapshot],
+    lane_refresh_required: Dict[str, bool],
 ) -> AsyncGenerator[Dict[str, Any], None]:
     revision_id = uuid.uuid4().hex
     status_step, status_message = _initial_revision_status(lanes)
@@ -503,6 +511,7 @@ async def _stream_revision_fast_path(
             "lanes": list(lanes),
             "revision": True,
             "revision_id": revision_id,
+            "lane_refresh_required": dict(lane_refresh_required),
         }
     )
     yield status_event
@@ -524,6 +533,7 @@ async def _stream_revision_fast_path(
             "phase": "initial",
             "revision": True,
             "revision_id": revision_id,
+            "lane_refresh_required": dict(lane_refresh_required),
         }
     )
     yield rev_event
@@ -538,6 +548,7 @@ async def _stream_revision_fast_path(
             "lanes": list(lanes),
             "revision": True,
             "revision_id": revision_id,
+            "lane_refresh_required": dict(lane_refresh_required),
             "banner": banner,
         },
     }
@@ -597,6 +608,7 @@ async def _stream_revision_fast_path(
             "lanes": list(lanes),
             "revision": True,
             "revision_id": revision_id,
+            "lane_refresh_required": dict(lane_refresh_required),
         }
     )
     yield completion_event
@@ -622,6 +634,111 @@ def _combine_queries(snapshot: Optional[SessionStateSnapshot], follow_up: str) -
     return f"{baseline}\n\nFollow-up request: {follow_up_clean}"
 
 
+def _sanitize_topic_value(value: str, *, limit: int) -> str:
+    trimmed = (value or "").strip()
+    if len(trimmed) > limit:
+        return trimmed[:limit].rstrip()
+    return trimmed
+
+
+def _extract_company_token(*texts: str) -> Optional[str]:
+    ignore = {"follow", "request", "analysis", "drivers"}
+    for text in texts:
+        if not text:
+            continue
+        matches = re.findall(r"\b[A-Z][A-Za-z0-9&-]{1,}\b", text)
+        for candidate in matches:
+            normalized = candidate.strip()
+            if len(normalized) >= 3 and normalized.lower() not in ignore:
+                return normalized
+    return None
+
+
+def _make_topic_entry(query: str, *, label: Optional[str] = None, reason: Optional[str] = None) -> Dict[str, str]:
+    sanitized_query = _sanitize_topic_value(query, limit=256)
+    sanitized_label = _sanitize_topic_value(label or sanitized_query, limit=80)
+    entry: Dict[str, str] = {
+        "label": sanitized_label or sanitized_query,
+        "query": sanitized_query,
+    }
+    if reason:
+        entry["reason"] = reason
+    return entry
+
+
+def _derive_related_queries(
+    base_query: str,
+    *,
+    reference_text: Optional[str] = None,
+    company_hint: Optional[str] = None,
+) -> List[str]:
+    reference = (reference_text or "").lower()
+    company = company_hint or _extract_company_token(reference_text or "", base_query)
+    prefix = f"{company} " if company else ""
+    derived: List[str] = []
+    for trigger, variant in _FOCUS_VARIANTS:
+        if trigger in reference:
+            derived.append(f"{prefix}{variant}".strip())
+    if not derived:
+        derived.extend(
+            [
+                f"{prefix}key drivers".strip(),
+                f"{prefix}industry outlook".strip(),
+            ]
+        )
+    seen: Set[str] = set()
+    unique: List[str] = []
+    for query in derived:
+        normalized = query.lower()
+        if not normalized or normalized == base_query.lower() or normalized in seen:
+            continue
+        seen.add(normalized)
+        unique.append(query)
+    return unique
+
+
+def _ensure_dual_topics(
+    topics: List[Dict[str, Any]],
+    *,
+    topic_basis: str,
+    user_query: str,
+    analysis_text: Optional[str],
+) -> List[Dict[str, Any]]:
+    working: List[Dict[str, Any]] = [dict(item) for item in topics if isinstance(item, Mapping)]
+    canonical_queries: Set[str] = {
+        str(item.get("query") or "").strip().lower() for item in working if item.get("query")
+    }
+    reference_text = " ".join(filter(None, [analysis_text, topic_basis, user_query]))
+    if not working:
+        fallback_query = _sanitize_topic_value(topic_basis or user_query, limit=256)
+        if fallback_query:
+            working.append(_make_topic_entry(fallback_query, reason="fallback_base_topic"))
+            canonical_queries.add(fallback_query.lower())
+    if not working:
+        return working
+    if len(working) >= 2:
+        return working[:5]
+    base_query = working[0]["query"]
+    related_queries = _derive_related_queries(
+        base_query,
+        reference_text=reference_text,
+        company_hint=_extract_company_token(topic_basis, user_query, analysis_text or ""),
+    )
+    for related in related_queries:
+        normalized = related.lower()
+        if normalized in canonical_queries or normalized == base_query.lower():
+            continue
+        working.append(_make_topic_entry(related, reason="derived_from_follow_up"))
+        canonical_queries.add(normalized)
+        if len(working) >= 2:
+            break
+    if len(working) < 2:
+        generic = _sanitize_topic_value(f"{base_query} market context", limit=256)
+        if generic.lower() not in canonical_queries and generic.lower() != base_query.lower():
+            working.append(_make_topic_entry(generic, reason="derived_generic_context"))
+    return working[:5]
+
+
 def _append_session_message(
     snapshot: Optional[SessionStateSnapshot],
     *,
@@ -642,30 +759,6 @@ def _append_session_message(
             "ts": timestamp,
         }
     )
-
-async def run_flow(
-    flow_name: Optional[str],
-    query: str,
-    session_id: Optional[str] = None,
-    *,
-    instrument: bool = False,
-    flow_label: Optional[str] = None,
-) -> AsyncGenerator[Dict[str, Any], None]:
-    factory = _get_flow_factory(flow_name)
-    flow = factory()
-    if instrument:
-        label = flow_label or getattr(flow, "flow_label", flow_name or DEFAULT_FLOW)
-        async for event in instrument_events(
-            flow,
-            query,
-            session_id=session_id,
-            flow_label=label,
-        ):
-            yield event
-    else:
-        async for event in flow.events(query, session_id=session_id):
-            yield event
-
 
 async def analytics_memory_workflow(
     query: str,
@@ -699,26 +792,30 @@ async def analytics_memory_workflow(
     analysis_text = (
         infer_analysis_revision_from_query(query) if analysis_revision_requested else None
     )
+    analysis_focus = bool(analysis_revision_requested or analysis_text)
 
     factory = _get_flow_factory(selected)
     flow_instance = factory()
 
     agentic_enabled = _agentic_revision_enabled(selected)
 
-    requested_lanes: Set[str] = set(detected_targets or set())
+    requested_lanes: Set[str] = set()
+    explicit_targets: Set[str] = set(detected_targets or set())
     if chart_patch:
         requested_lanes.add("chart")
-    if analysis_text:
+    if analysis_focus:
         requested_lanes.update({"analysis", "web"})
+        explicit_targets = {lane for lane in explicit_targets if lane not in {"analysis", "web"}}
+    requested_lanes.update(explicit_targets)
     if route == FollowUpRoute.STOCK_ONLY:
         requested_lanes.add("market")
     if route == FollowUpRoute.REUSE_SQL and not requested_lanes.intersection({"chart", "analysis", "market"}):
-        requested_lanes.add("analysis")
+        requested_lanes.update({"analysis", "web"})
     needs_sql_lane = "sql" in requested_lanes
     requested_lanes.discard("sql")
 
     revision_lanes = _normalize_revision_lanes(requested_lanes)
-    explicit_revision = bool(chart_patch or analysis_text)
+    explicit_revision = bool(chart_patch or analysis_focus or analysis_text)
     should_consider_revision = bool(revision_lanes or explicit_revision)
     if route in {FollowUpRoute.REUSE_SQL, FollowUpRoute.STOCK_ONLY}:
         should_consider_revision = True
@@ -734,7 +831,7 @@ async def analytics_memory_workflow(
     analysis_refresh_mode = "full"
     ttl_map = _resolve_lane_ttls()
     ttl_lanes: Set[str] = set(revision_lanes)
-    if analysis_revision_requested or "analysis" in ttl_lanes or analysis_text:
+    if analysis_focus or "analysis" in ttl_lanes:
         ttl_lanes.update({"analysis", "web"})
     if chart_patch:
         ttl_lanes.add("chart")
@@ -743,11 +840,19 @@ async def analytics_memory_workflow(
     if ttl_lanes:
         lane_refresh_required = _compute_lane_refresh_requirements(snapshot, ttl_lanes, ttl_map)
         if (
-            ("analysis" in ttl_lanes or analysis_text)
+            not analysis_focus
+            and ("analysis" in ttl_lanes or analysis_focus)
             and not lane_refresh_required.get("analysis", True)
             and not lane_refresh_required.get("web", True)
         ):
             analysis_refresh_mode = "light"
+    if analysis_focus:
+        lane_refresh_required.setdefault("analysis", True)
+        lane_refresh_required.setdefault("web", True)
+        lane_refresh_required["analysis"] = True
+        lane_refresh_required["web"] = True
+        if "market" not in revision_lanes:
+            lane_refresh_required["market"] = False
 
     if hasattr(flow_instance, "set_lane_refresh_requirements"):
         try:
@@ -770,6 +875,7 @@ async def analytics_memory_workflow(
                 "flow": selected,
                 "session_id": session_id,
                 "lanes": revision_lanes,
+                "lane_refresh_required": dict(lane_refresh_required),
                 "banner": banner,
             },
         }
@@ -858,7 +964,12 @@ async def analytics_memory_workflow(
                         if reason_clean:
                             sanitized_topic["reason"] = reason_clean
                     deduped_topics.append(sanitized_topic)
-                search_topic_entries = deduped_topics[:5]
+                search_topic_entries = _ensure_dual_topics(
+                    deduped_topics[:5],
+                    topic_basis=topic_basis,
+                    user_query=query,
+                    analysis_text=analysis_text,
+                )
         revision_directive = RevisionDirective.from_payload(
             raw_text=combined_query,
             targets=directive_targets or set(revision_lanes) or {"analysis"},
@@ -873,6 +984,8 @@ async def analytics_memory_workflow(
             metadata={
                 "flow": selected,
                 "route": route.value if isinstance(route, FollowUpRoute) else None,
+                "revision_lanes": list(revision_lanes),
+                "lane_refresh_required": dict(lane_refresh_required),
             },
         )
         if repository:
@@ -892,6 +1005,7 @@ async def analytics_memory_workflow(
             selected_flow=selected,
             repository=repository,
             snapshot=snapshot,
+            lane_refresh_required=lane_refresh_required,
         ):
             yield event
         return
@@ -1072,6 +1186,8 @@ async def analytics_memory_workflow(
         "data": {
             "route": route.value,
             "flow": selected,
+            "lanes": list(revision_lanes),
+            "lane_refresh_required": dict(lane_refresh_required),
         },
     }
     yield follow_up_event

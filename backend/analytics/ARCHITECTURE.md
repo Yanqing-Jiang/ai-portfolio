@@ -17,8 +17,8 @@
 
 ## 3. Flow Entry Points & Selection
 - FastAPI exposes `/api/analytics/stream` and `/api/analytics/memory/stream` (see `backend/main.py`), both of which wrap helpers in `backend/analytics/flows/workflow.py`.
-- `run_flow()` selects a factory from `FLOW_FACTORIES`, instantiates the requested flow, and streams `EventEmitter` payloads; instrumentation can be toggled per request.
-- `analytics_memory_workflow()` adds follow-up routing, chart and analysis revision detection, and primes the flow with persisted session state before streaming results.
+- `analytics_memory_workflow()` selects a factory from `FLOW_FACTORIES`, primes the flow instance with revision context, and streams `EventEmitter` payloads. Instrumentation toggles are handled inline via `_env_flag("ANALYTICS_MEMORY_INSTRUMENT")`.
+- Session snapshotting, follow-up routing, and revision lane targeting all funnel through this helper before the chosen flow's `.events()` coroutine runs.
 
 | Flow name        | Class (module)                                        | `FlowMode`            | Default label      | Typical usage                                                |
 |------------------|-------------------------------------------------------|-----------------------|--------------------|--------------------------------------------------------------|
@@ -161,13 +161,15 @@ The `FollowUpClassifier` (`routing/follow_up_classifier.py`) runs ahead of every
 - Logging relies on the `analytics.telemetry` logger; configure sinks via standard `logging` config or FastAPI startup hooks, and ensure guardrail outputs flow to your log aggregation.
 - Environment variables: `REDIS_URL`, `WEB_SEARCH_GUARDRAIL_P50_MS`, `WEB_SEARCH_GUARDRAIL_P95_MS`, `WEB_SEARCH_TIMEOUT_SECONDS`, `WEB_SEARCH_MAX_TOPICS`, `WEB_SEARCH_RETRY_ATTEMPTS`, `GEMINI_SEARCH_MODEL`, `GEMINI_SEARCH_TEMPERATURE`, plus tool API keys handled in `.env`. The project expects `npm install` + `npm run dev` for the frontend and `py -m uvicorn main:app --reload --port 8000` for the backend.
 
-## 11. Roadmap & Focus Areas
-- **Topic planner tuning:** Stress-test Gemini topic planning (min topic counts, label dedupe) and measure how multi-topic fan-out affects latency and snippet diversity across `FlowMode` variants.
-- **Analysis revision quality:** Expand regression suites for `analysis_revision` to ensure narrative-only reruns respect guardrails and reuse cached evidence correctly.
-- **Cache/handshake telemetry:** Expose `core.cache.CacheService` circuit-breaker metrics and Redis hit ratios to observability dashboards for quicker diagnosis.
-- **Guardrail calibration:** Revisit `WEB_SEARCH_GUARDRAIL_*` thresholds and ensure frontend indicators match backend verdicts, especially when multiple topics return partial latency stats.
-- **Test coverage:** Continue backfilling pytest suites for planner fan-out drains, intent normalization corner cases, and single-agent cohesive payloads, plus Vitest snapshots for topic badges and guardrail banners.
 
 ---
+
+## 12. Legacy Cleanup (Completed: October 31, 2025)
+- Removed `backend/analytics/artifacts/spike_artifacts.py` along with the `classification_from_event` / `intent_from_event` shims so downstream code relies exclusively on the dataclass artifacts in `analytics.artifacts.models`.
+- Deleted the placeholder `summarize` helper from `backend/analytics/core/analysis.py`, ensuring narrative streaming always flows through `stream_insights_llm`.
+- Dropped compatibility aliases `backend/analytics/sql/db.py` and `backend/analytics/sql/sql_validate.py`, and inlined the unused `execute_sql_with_limit` / `quick_validate_sql_syntax` helpers; callers import directly from `analytics.sql.executor` / `analytics.sql.validator`.
+- Retired unused convenience APIs (`core.events.emit_progress|emit_result|emit_error`, `core.telemetry.timed_metric`, `flows/workflow.run_flow`, `flows/workflow.get_available_flows`, `flows/workflow._extract_revision_snapshot`, `flows/planner_executor._env_flag`, `core.config_store.close_config_store`) to tighten the supported surface.
+- Trimmed dead artifact utilities (`_clone_dict`, `_clone_list`) and refreshed documentation to note that `analytics_memory_workflow()` now orchestrates flow selection and instrumentation inline.
+
 
 This architecture reference reflects the current state of the `next-gen-analytics-agent` project and should be updated alongside significant planner, tool, or telemetry changes.

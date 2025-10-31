@@ -377,21 +377,3 @@ class TimedEventEmitter(EventEmitter):
         return self.status(step, message, elapsed)
 
 
-# Convenience functions for backward compatibility
-def emit_progress(step: str, message: str = None) -> Dict[str, Any]:
-    """Convenience function for progress events."""
-    return EventEmitter.progress(step, message)
-
-def emit_result(step: str, data: Any) -> Dict[str, Any]:
-    """Convenience function for result events."""
-    return EventEmitter.result(step, data)
-
-def emit_error(
-    step: str,
-    error: Union[str, Exception],
-    *,
-    details: Union[str, Dict[str, Any], None] = None,
-    code: Optional[str] = None,
-) -> Dict[str, Any]:
-    """Convenience function for error events."""
-    return EventEmitter.error(step, error, details=details, code=code)

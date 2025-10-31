@@ -13,7 +13,7 @@ from .revision import mark_revision_completion
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from ..pipeline_tools import PlannerToolRegistry
-    from .planner_executor import PlannerPipeline, PlannerPhaseContext
+    from ..planner_executor import PlannerPipeline, PlannerPhaseContext
 
 
 __all__ = [

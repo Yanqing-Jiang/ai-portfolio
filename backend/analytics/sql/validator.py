@@ -79,11 +79,3 @@ def validate_sql(
         issues.append("Quarterly queries must reference calendar_quarter_num")
 
     return len(issues) == 0, issues
-
-
-def quick_validate_sql_syntax(sql: str) -> Tuple[bool, str]:
-    try:
-        sqlglot.parse_one(sql, read="postgres")
-        return True, ""
-    except Exception as exc:
-        return False, f"SQL syntax error: {exc}"

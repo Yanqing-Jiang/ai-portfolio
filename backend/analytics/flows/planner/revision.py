@@ -6,7 +6,7 @@ from typing import Any, Dict, Iterable, Mapping, Optional, Set, TYPE_CHECKING
 import uuid
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from .planner_executor import PlannerPhaseContext
+    from ..planner_executor import PlannerPhaseContext
 
 
 REVISION_EVENT_ALIASES: Mapping[str, str] = {

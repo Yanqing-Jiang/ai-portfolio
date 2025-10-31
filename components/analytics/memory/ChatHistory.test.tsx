@@ -60,6 +60,41 @@ describe('ChatHistory attachments', () => {
     expect(screen.getByTestId('stock-widget')).toBeInTheDocument();
     expect(screen.getByTestId('web-card')).toHaveTextContent('Market summary');
   });
+
+  it('renders only analysis and collapsed web card for analysis-only revisions', () => {
+    const messages = [
+      {
+        id: 'rev-1',
+        type: 'result' as const,
+        content: 'Narrative refresh ready.',
+        timestamp: new Date().toISOString(),
+        banner: { route: 'analysis_only', title: 'Narrative Refresh', message: 'Updated narrative' },
+        analysis: 'Updated analysis focusing on customer adoption signals for NVDA.',
+        revisionFocus: 'highlight customer adoption signals for NVDA',
+        chartSpec: { series: [{ data: [3, 4, 5] }] },
+        stockWidgetConfig: { symbols: [['NASDAQ:NVDA', 'NVDA']] },
+        sqlQuery: 'SELECT * FROM adoption;',
+        webSearch: null,
+      },
+    ];
+
+    render(
+      <ChatHistory
+        messages={messages}
+        isLoading={false}
+        status={{ text: 'Revision complete', timestamp: new Date().toISOString() }}
+        processSteps={[]}
+      />,
+    );
+
+    expect(screen.queryByTestId('chart-card')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('sql-card')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('stock-widget')).not.toBeInTheDocument();
+    expect(screen.getByTestId('analysis-card')).toHaveTextContent('customer adoption signals for NVDA');
+    expect(screen.getByText(/Focus:/i)).toHaveTextContent('highlight customer adoption signals for NVDA');
+    expect(screen.getByTestId('section-Market Research')).toBeInTheDocument();
+    expect(screen.getByTestId('web-card')).toBeInTheDocument();
+  });
 });
 
 describe('ChatHistory specialist updates', () => {

@@ -1217,9 +1217,12 @@ class SingleAgentController:
         query: Optional[str] = None,
         reason: Optional[str] = None,
         source: Optional[str] = None,
+        revision_directive: Optional["RevisionDirective"] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         hooks = _SingleAgentToolHooks(self, session_id=session_id)
         ctx = await self._planner.initialize_context(query or "", session_id=session_id)
+        if revision_directive is not None:
+            ctx.revision_directive = revision_directive  # type: ignore[attr-defined]
         directive = getattr(ctx, "revision_directive", None)
         if directive and getattr(directive, "search_topics", None):
             ctx.revision_search_topics = list(directive.search_topics)
@@ -1272,14 +1275,20 @@ class SingleAgentController:
         source: Optional[str] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         hooks = _SingleAgentToolHooks(self, session_id=session_id)
+
+        def _apply_revision_context(ctx_obj: Any) -> None:
+            if revision_directive is not None:
+                ctx_obj.revision_directive = revision_directive  # type: ignore[attr-defined]
+                ctx_obj.agentic_revision_mode = bool(getattr(revision_directive, "agentic", False))
+                ctx_obj.revision_targets = set(getattr(revision_directive, "targets", []))
+            if requested_focus:
+                setattr(ctx_obj, "revision_focus", requested_focus)
+            directive_topics = getattr(getattr(ctx_obj, "revision_directive", None), "search_topics", None)
+            if directive_topics:
+                ctx_obj.revision_search_topics = list(directive_topics)
+
         ctx = await self._planner.initialize_context(query or "", session_id=session_id)
-        if revision_directive is not None:
-            ctx.revision_directive = revision_directive  # type: ignore[attr-defined]
-        if requested_focus:
-            setattr(ctx, "revision_focus", requested_focus)
-        directive_topics = getattr(getattr(ctx, "revision_directive", None), "search_topics", None)
-        if directive_topics:
-            ctx.revision_search_topics = list(directive_topics)
+        _apply_revision_context(ctx)
         ctx.reused_analysis = False
         ctx.web_ready_emitted = False
         _reset_revision_accessories(ctx, {"web", "market"})
@@ -1302,6 +1311,91 @@ class SingleAgentController:
             ):
                 yield event
             return
+
+        web_ready_seen = False
+        web_failure_reason: Optional[str] = None
+        async for event in self.run_web_refresh(
+            session_id=session_id,
+            query=query,
+            reason=reason,
+            source="fresh_revision",
+            revision_directive=revision_directive,
+        ):
+            name = str(event.get("event") or "")
+            data = event.setdefault("data", {})
+            data.setdefault("lane", "web")
+            if data.get("source") != "fresh_revision":
+                data["source"] = "fresh_revision"
+            reused_flag = bool(data.get("reused"))
+            data["from_cache"] = reused_flag
+            if not reused_flag:
+                data["reason"] = "fresh_revision"
+            if name in {"web_ready", "web_revision_ready"}:
+                web_ready_seen = True
+                data.setdefault("reason", "fresh_revision")
+                data["from_cache"] = reused_flag
+            elif name == "error":
+                web_failure_reason = data.get("error") or web_failure_reason or "web_refresh_error"
+            elif name == "status":
+                phase = str(data.get("phase") or "").lower()
+                if phase == "skipped":
+                    web_failure_reason = data.get("message") or web_failure_reason or "web_refresh_skipped"
+            yield event
+
+        if web_ready_seen:
+            confirmation = EventEmitter.status(
+                "web_revision_ready",
+                "Web context refreshed for analysis revision",
+            )
+            confirmation.setdefault("data", {})
+            confirmation["data"].update(
+                {
+                    "lane": "web",
+                    "revision": True,
+                    "source": "fresh_revision",
+                    "from_cache": False,
+                    "reason": "fresh_revision",
+                }
+            )
+            annotated_confirmation = apply_mode_metadata(confirmation, self.flow_mode)
+            annotated_confirmation["data"]["follow_up_route"] = self.follow_up_route.value
+            yield annotated_confirmation
+
+        if not web_ready_seen:
+            warning_event = EventEmitter.status(
+                "web_refresh",
+                "Web research unavailable - analysis reused previous context",
+            )
+            warning_event.setdefault("data", {})
+            warning_event["data"].update(
+                {
+                    "lane": "web",
+                    "level": "warning",
+                    "revision": True,
+                    "source": "fresh_revision",
+                    "reason": web_failure_reason or "web_refresh_unavailable",
+                    "from_cache": True,
+                    "banner": {
+                        "title": "Web Research Unavailable",
+                        "message": "Web research unavailable - analysis reused previous context.",
+                        "route": "analysis_only",
+                    },
+                }
+            )
+            annotated_warning = apply_mode_metadata(warning_event, self.flow_mode)
+            annotated_warning["data"]["follow_up_route"] = self.follow_up_route.value
+            yield annotated_warning
+
+        ctx = await self._planner.initialize_context(query or "", session_id=session_id)
+        _apply_revision_context(ctx)
+        ctx.reused_analysis = False
+        ctx.web_ready_emitted = web_ready_seen
+        _reset_revision_accessories(ctx, {"market"})
+        refresh_flags = dict(getattr(ctx, "lane_refresh_required", {}) or {})
+        refresh_flags.setdefault("analysis", True)
+        refresh_flags["web"] = False
+        refresh_flags["market"] = False
+        ctx.lane_refresh_required = refresh_flags
 
         async def _stream() -> AsyncGenerator[Dict[str, Any], None]:
             async for event in self._planner._pipeline.run_analysis_phase(ctx):  # type: ignore[attr-defined]
@@ -1334,7 +1428,8 @@ class SingleAgentController:
                 session_id=session_id,
                 query=query,
                 reason=reason,
-                source=source,
+                source=source or "fresh_revision",
+                revision_directive=revision_directive,
             ):
                 yield event
         async for event in self._invoke_planner_tool(

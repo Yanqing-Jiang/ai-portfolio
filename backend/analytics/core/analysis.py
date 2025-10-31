@@ -69,11 +69,10 @@ def _summarize_search_result(search_result: Optional[Any], article_limit: int = 
 _PROMPT_INSTRUCTIONS = (
     "You are an equity research assistant. Fuse fundamentals, chart behaviour, and fresh headlines into a single cohesive story.\n"
     "Output requirements:\n"
-    "1. Begin with `TL;DR:` followed by two concise sentences covering SQL metrics, the chart direction, and headline sentiment.\n"
+    "1. Begin with `TL;DR:` followed by two concise sentences covering web research result, metrics, and chart direction.\n"
     "2. Add a `Key points:` heading and provide 3-5 markdown bullets (each starting with `- `) mixing SQL values, chart takeaways, and headline references using bracketed [n] citations.\n"
     "3. When fundamentals and headlines diverge, append a `Watchouts:` sentence after the bullets.\n"
     "4. Return clean markdown only - avoid raw JSON or code fences unless explicitly asked.\n"
-    "5. If the SQL is empty, the row count is zero, or the user question is clearly outside financial analytics, reply with a concise acknowledgement that your tooling focuses on finance and suggest a finance-focused follow-up instead of fabricating numbers."
 )
 
 
@@ -92,7 +91,11 @@ def _build_analysis_prompt(
     data_preview: str,
     chart_summary: str,
     news_summary: str,
+    focus: Optional[str] = None,
 ) -> str:
+    focus_block = ""
+    if focus:
+        focus_block = f"\nFollow-up emphasis: {focus}"
     return f"""
 User question: {query}
 SQL query executed:
@@ -103,10 +106,9 @@ Chart summary:
 {chart_summary}
 Headline summary (ordered for references):
 {news_summary}
+{focus_block}
 {_PROMPT_INSTRUCTIONS}
 """.strip()
-def summarize(data: List[Dict[str, Any]], sql: str, query: str) -> str:
-    return "Analysis will stream here (Phase 2/3)."
 async def stream_insights_llm(
     data: List[Dict[str, Any]],
     sql: str,
@@ -115,6 +117,7 @@ async def stream_insights_llm(
     chart_spec: Optional[Dict[str, Any]] = None,
     search_result: Optional[Any] = None,
     session_id: Optional[str] = None,
+    focus: Optional[str] = None,
 ) -> AsyncGenerator[str, None]:
     data_preview = _prepare_data_preview(data)
     chart_summary = _summarize_chart_spec(chart_spec)
@@ -134,6 +137,7 @@ async def stream_insights_llm(
         data_preview=data_preview,
         chart_summary=chart_summary,
         news_summary=news_summary,
+        focus=focus,
     )
     messages = [
         {"role": "system", "content": system_prompt},

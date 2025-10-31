@@ -241,3 +241,41 @@ def test_revision_skips_cache_and_forces_search(monkeypatch):
     assert result.status == "completed"
     assert search_called["count"] == 1
     assert result.payload.get("from_cache") is not True
+
+
+def test_revision_refresh_web_lane(monkeypatch):
+    adapter = WebRetrieverAdapter()
+    context = ToolExecutionContext(
+        session_id="sess-web-lane",
+        query="Analysis: refresh the AMD capex focus",
+        intent=SimpleNamespace(slots_detected={"original_query": "Analysis: refresh the AMD capex focus"}),
+        plan=SimpleNamespace(),
+        template=None,
+        configs={},
+        revision_directive=SimpleNamespace(agentic=False, search_topics=[], requested_focus="highlight capex drivers for AMD"),
+        revision_focus="highlight capex drivers for AMD",
+        revision_search_topics=tuple(),
+    )
+
+    repo = _DummyRepo()
+
+    async def _fake_load(session_id: str):
+        snapshot = SessionStateSnapshot(session_id=session_id)
+        snapshot.tool_cache["web_search"] = {"query": "analysis: refresh the amd capex focus", "summary": "Old summary", "ready": True}
+        return snapshot
+
+    async def _fake_search(*args, **kwargs):
+        return _DummySearchResult()
+
+    monkeypatch.setattr(tooling, "has_search_api_key", lambda: True)
+    monkeypatch.setattr(tooling, "get_session_state_repository", lambda: repo)
+    monkeypatch.setattr(repo, "load", _fake_load)
+    monkeypatch.setattr(tooling.WebRetrieverAdapter, "_maybe_get_cached", lambda self, snapshot, query_terms: None)
+    monkeypatch.setattr(tooling.WebRetrieverAdapter, "_should_refresh", lambda self, query_terms, snapshot: True)
+    monkeypatch.setattr(tooling, "perform_response_search", _fake_search)
+
+    result = asyncio.run(adapter.execute(context))
+
+    assert result.status == "completed"
+    assert result.payload.get("from_cache") is False
+    assert result.payload.get("summary") == "Stub summary"
