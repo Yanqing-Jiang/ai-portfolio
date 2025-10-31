@@ -50,6 +50,7 @@ class SessionStateSnapshot(BaseModel):
     routing: Dict[str, Any] = Field(default_factory=dict)
     messages: List[Dict[str, Any]] = Field(default_factory=list)
     schedule_history: List[Dict[str, Any]] = Field(default_factory=list)
+    lane_timestamps: Dict[str, datetime] = Field(default_factory=dict)
 
     model_config = {
         "extra": "allow",
@@ -59,6 +60,46 @@ class SessionStateSnapshot(BaseModel):
     def touch(self) -> None:
         """Refresh the updated_at marker."""
         self.updated_at = datetime.now(timezone.utc)
+
+    def touch_lane(self, lane: str, *, at: Optional[datetime] = None) -> None:
+        """Record the last-updated timestamp for a revision lane."""
+        if not lane:
+            return
+        normalized = lane.strip().lower()
+        if not normalized:
+            return
+        timestamp = at or datetime.now(timezone.utc)
+        self.lane_timestamps[normalized] = timestamp
+        self.touch()
+
+    def get_lane_timestamp(self, lane: str) -> Optional[datetime]:
+        if not lane:
+            return None
+        normalized = lane.strip().lower()
+        if not normalized:
+            return None
+        timestamp = self.lane_timestamps.get(normalized)
+        if timestamp is None:
+            return None
+        if isinstance(timestamp, datetime):
+            return timestamp
+        if isinstance(timestamp, str):
+            try:
+                return datetime.fromisoformat(timestamp)
+            except ValueError:
+                return None
+        return None
+
+    def lane_age_seconds(self, lane: str, *, now: Optional[datetime] = None) -> Optional[float]:
+        timestamp = self.get_lane_timestamp(lane)
+        if timestamp is None:
+            return None
+        now_dt = now or datetime.now(timezone.utc)
+        delta = now_dt - timestamp
+        try:
+            return max(delta.total_seconds(), 0.0)
+        except Exception:
+            return None
 
     def record_query(self, query: str, intent_key: Optional[str]) -> None:
         self.last_query = query
@@ -125,10 +166,13 @@ class SessionStateSnapshot(BaseModel):
     ) -> None:
         if sql is not None:
             self.last_sql = sql
+            self.touch_lane("sql")
         if chart_spec is not None:
             self.last_chart_spec = chart_spec
+            self.touch_lane("chart")
         if analysis is not None:
             self.last_analysis = analysis
+            self.touch_lane("analysis")
         self.touch()
 
     def record_schedule_stage(

@@ -72,12 +72,16 @@ type MultiAgentLaneConfig = {
   stride?: number;
 };
 
+const MULTI_AGENT_MAINLINE_Y = -360;
+const MULTI_AGENT_VERTICAL_OFFSET = 220;
+const MULTI_AGENT_COLUMN_STRIDE = 160;
+
 const MULTI_AGENT_SPINE_POSITIONS: Record<string, { x: number; y: number }> = {
-  [START_NODE_ID]: { x: -1080, y: 0 },
-  agent_coordination: { x: -320, y: 0 },
-  tool_fanout: { x: 200, y: 0 },
-  analysis_generation: { x: 680, y: 0 },
-  follow_up_route: { x: 960, y: 0 },
+  [START_NODE_ID]: { x: -1080, y: MULTI_AGENT_MAINLINE_Y },
+  agent_coordination: { x: -320, y: MULTI_AGENT_MAINLINE_Y },
+  tool_fanout: { x: 200, y: MULTI_AGENT_MAINLINE_Y },
+  analysis_generation: { x: 680, y: MULTI_AGENT_MAINLINE_Y },
+  follow_up_route: { x: 960, y: MULTI_AGENT_MAINLINE_Y },
 };
 
 const MULTI_AGENT_SPINE_STEPS = new Set(Object.keys(MULTI_AGENT_SPINE_POSITIONS));
@@ -85,20 +89,73 @@ const MULTI_AGENT_SPINE_STEPS = new Set(Object.keys(MULTI_AGENT_SPINE_POSITIONS)
 const DEFAULT_MULTI_AGENT_LANE_CONFIG: MultiAgentLaneConfig = {
   spineId: 'tool_fanout',
   direction: 'down',
-  baseOffset: LANE_STACK_SPACING,
-  stride: LANE_STACK_SPACING,
+  baseOffset: MULTI_AGENT_VERTICAL_OFFSET,
+  stride: MULTI_AGENT_COLUMN_STRIDE,
 };
 
 const MULTI_AGENT_LANE_CONFIG: Record<LaneKey, MultiAgentLaneConfig> = {
-  overview: { spineId: START_NODE_ID, direction: 'up', baseOffset: -LANE_STACK_SPACING * 1.2, stride: LANE_STACK_SPACING },
-  coordination: { spineId: 'agent_coordination', direction: 'up', baseOffset: -COORDINATION_STACK_SPACING, stride: COORDINATION_STACK_SPACING },
-  planner: { spineId: START_NODE_ID, direction: 'down', offsetX: 240, baseOffset: LANE_STACK_SPACING * 1.1, stride: LANE_STACK_SPACING },
-  sql: { spineId: 'tool_fanout', direction: 'down', offsetX: -40, baseOffset: LANE_STACK_SPACING * 1.2, stride: LANE_STACK_SPACING },
-  market: { spineId: 'tool_fanout', direction: 'up', offsetX: 210, baseOffset: -LANE_STACK_SPACING, stride: LANE_STACK_SPACING },
-  web: { spineId: 'tool_fanout', direction: 'up', offsetX: 80, baseOffset: -LANE_STACK_SPACING * 0.9, stride: LANE_STACK_SPACING },
-  chart: { spineId: 'tool_fanout', direction: 'down', offsetX: 200, baseOffset: LANE_STACK_SPACING * 2.2, stride: LANE_STACK_SPACING },
-  analysis: { spineId: 'analysis_generation', direction: 'down', baseOffset: LANE_STACK_SPACING, stride: LANE_STACK_SPACING },
-  fanout: { spineId: 'tool_fanout', direction: 'up', baseOffset: -LANE_STACK_SPACING * 2, stride: LANE_STACK_SPACING },
+  overview: {
+    spineId: START_NODE_ID,
+    direction: 'down',
+    offsetX: 300,
+    baseOffset: MULTI_AGENT_VERTICAL_OFFSET,
+    stride: MULTI_AGENT_COLUMN_STRIDE,
+  },
+  coordination: {
+    spineId: 'agent_coordination',
+    direction: 'down',
+    baseOffset: MULTI_AGENT_VERTICAL_OFFSET,
+    stride: MULTI_AGENT_COLUMN_STRIDE,
+  },
+  planner: {
+    spineId: START_NODE_ID,
+    direction: 'down',
+    offsetX: 660,
+    baseOffset: MULTI_AGENT_VERTICAL_OFFSET,
+    stride: MULTI_AGENT_COLUMN_STRIDE,
+  },
+  sql: {
+    spineId: 'tool_fanout',
+    direction: 'down',
+    offsetX: -460,
+    baseOffset: MULTI_AGENT_VERTICAL_OFFSET,
+    stride: MULTI_AGENT_COLUMN_STRIDE,
+  },
+  market: {
+    spineId: 'tool_fanout',
+    direction: 'down',
+    offsetX: -160,
+    baseOffset: MULTI_AGENT_VERTICAL_OFFSET,
+    stride: MULTI_AGENT_COLUMN_STRIDE,
+  },
+  web: {
+    spineId: 'tool_fanout',
+    direction: 'down',
+    offsetX: 140,
+    baseOffset: MULTI_AGENT_VERTICAL_OFFSET,
+    stride: MULTI_AGENT_COLUMN_STRIDE,
+  },
+  chart: {
+    spineId: 'tool_fanout',
+    direction: 'down',
+    offsetX: 400,
+    baseOffset: MULTI_AGENT_VERTICAL_OFFSET,
+    stride: MULTI_AGENT_COLUMN_STRIDE,
+  },
+  analysis: {
+    spineId: 'analysis_generation',
+    direction: 'down',
+    offsetX: -80,
+    baseOffset: MULTI_AGENT_VERTICAL_OFFSET,
+    stride: MULTI_AGENT_COLUMN_STRIDE,
+  },
+  fanout: {
+    spineId: 'tool_fanout',
+    direction: 'down',
+    offsetX: 400,
+    baseOffset: MULTI_AGENT_VERTICAL_OFFSET,
+    stride: MULTI_AGENT_COLUMN_STRIDE,
+  },
 };
 
 const FLOW_START_POSITIONS: Partial<Record<FlowMode, { x: number; y: number }>> = {

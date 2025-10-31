@@ -1007,14 +1007,14 @@ def _build_default_agent_registry() -> Dict[str, AgentSpec]:
             name='market',
             system_prompt=SUPERVISOR_AGENT_SYSTEM_PROMPTS['market'],
             capabilities=('market_data', 'ticker_updates'),
-            latency_budget_ms=400,
+            latency_budget_ms=1500,
             entrypoint=_market_agent,
         ),
         'web_research': AgentSpec(
             name='web_research',
             system_prompt=SUPERVISOR_AGENT_SYSTEM_PROMPTS['web_research'],
             capabilities=('web_search', 'context_enrichment'),
-            latency_budget_ms=600,
+            latency_budget_ms=2000,
             entrypoint=_web_research_agent,
         ),
     }
@@ -2011,6 +2011,12 @@ class MultiAgentFlow:
     def set_revision_targets(self, targets: Iterable[str]) -> None:
         self._planner.set_revision_targets(targets)
 
+    def set_lane_refresh_requirements(self, requirements: Optional[Mapping[str, Any]]) -> None:
+        self._planner.set_lane_refresh_requirements(requirements)
+
+    def set_analysis_refresh_mode(self, mode: Optional[str]) -> None:
+        self._planner.set_analysis_refresh_mode(mode)
+
     def _annotate(self, event: Dict[str, Any]) -> Dict[str, Any]:
         annotated = apply_mode_metadata(event, self.flow_mode)
         data = annotated.setdefault("data", {})
@@ -2230,6 +2236,11 @@ class MultiAgentFlow:
         sql_artifact = getattr(ctx.artifacts, "sql_generation", None)
         analysis_artifact = getattr(ctx.artifacts, "analysis", None)
         if not sql_artifact or not getattr(sql_artifact, "sql", None) or analysis_artifact is None:
+            ctx.analysis_refresh_mode = "full"
+            refresh_flags = dict(getattr(ctx, "lane_refresh_required", {}) or {})
+            refresh_flags["analysis"] = True
+            refresh_flags["web"] = True
+            ctx.lane_refresh_required = refresh_flags
             async for event in self.analysis_revision(
                 query,
                 session_id=session_id,

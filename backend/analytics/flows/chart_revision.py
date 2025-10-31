@@ -367,12 +367,40 @@ def _build_patch_event(
         "ts": datetime.utcnow().isoformat(),
         "session_id": session_id,
     }
+    chart_type: Optional[str] = None
+    stack_enabled: Optional[bool] = None
+    stack_mode: Optional[str] = None
+    for op in patch.get("ops", []):
+        if not isinstance(op, dict):
+            continue
+        name = op.get("op")
+        if name == "set_chart_type":
+            value = op.get("value")
+            if isinstance(value, str):
+                stripped = value.strip()
+                if stripped:
+                    chart_type = stripped
+        elif name == "set_stack":
+            stack_flag = op.get("stack")
+            if isinstance(stack_flag, bool):
+                stack_enabled = stack_flag
+            mode_value = op.get("mode")
+            if isinstance(mode_value, str):
+                stripped_mode = mode_value.strip()
+                if stripped_mode:
+                    stack_mode = stripped_mode
     if "reason" in patch:
         payload["reason"] = patch["reason"]
     if "source" in patch:
         payload["source"] = patch["source"]
     if "chart_id" in patch:
         payload["chart_id"] = patch["chart_id"]
+    if chart_type:
+        payload["chart_type"] = chart_type
+    if stack_enabled is not None:
+        payload["stack"] = stack_enabled
+    if stack_mode:
+        payload["stack_mode"] = stack_mode
     if error:
         payload["error"] = error
     event = EventEmitter.result("chart_patch", payload)

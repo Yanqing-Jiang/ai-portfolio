@@ -31,6 +31,9 @@ async def ensure_analysis_dependencies(
         return
 
     required_tools: Set[str] = set()
+    lane_refresh_flags = dict(getattr(ctx, "lane_refresh_required", {}) or {})
+    stock_refresh_required = bool(lane_refresh_flags.get("market", True))
+    web_refresh_required = bool(lane_refresh_flags.get("web", True))
     has_cached_stock = bool(ctx.artifacts.analysis and ctx.artifacts.analysis.stock_widget)
     if not has_cached_stock:
         market_artifact = getattr(ctx.artifacts, "market", None)
@@ -86,12 +89,12 @@ async def ensure_analysis_dependencies(
                 payload=telemetry_payload,
             )
 
-        if not has_cached_stock:
+        if not has_cached_stock and stock_refresh_required:
             if stock_ready_entry:
                 _emit_cache_hit("stock_tracker", stock_ready_entry)
             elif not _has_completed("stock_tracker"):
                 required_tools.add("stock_tracker")
-        if not has_cached_web:
+        if not has_cached_web and web_refresh_required:
             if web_ready_entry:
                 _emit_cache_hit("web_retriever", web_ready_entry)
             elif not _has_completed("web_retriever"):
@@ -112,9 +115,12 @@ async def ensure_analysis_dependencies(
         or has_cached_web
         or getattr(ctx, "web_search_seeded", False)
     )
+    if not has_web_context and not web_refresh_required:
+        has_web_context = True
     if not has_web_context and mode_config.accessories_in_critical_path:
-        async for event in pipeline._web_search_phase(ctx):
-            yield event
+        if web_refresh_required:
+            async for event in pipeline._web_search_phase(ctx):
+                yield event
 
     ctx.accessories_prefetched = True
 
