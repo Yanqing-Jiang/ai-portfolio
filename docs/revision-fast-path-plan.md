@@ -102,3 +102,4 @@
 3. **Playground verification:** Manually exercise multi-agent revisions to ensure `web_ready` arrives before `analysis_ready` and that the market lane stays skipped unless requested; record timestamps for the runbook.
 
 
+

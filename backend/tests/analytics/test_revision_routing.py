@@ -149,7 +149,9 @@ async def test_analysis_revision_routed_fast_path(monkeypatch):
     assert web_data.get("source") == "fresh_revision"
     assert web_data.get("from_cache") is False
     analysis_events = [
-        evt for evt in events if evt.get("event") in {"analysis_revision_ready", "analysis_ready", "analysis_complete"}
+        evt
+        for evt in events
+        if evt.get("event") in {"analysis_revision", "analysis_revision_ready", "analysis_ready", "analysis_complete"}
     ]
     assert analysis_events, "Expected analysis completion events during revision"
     web_index = events.index(web_events[0])

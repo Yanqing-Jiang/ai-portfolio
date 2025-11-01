@@ -2495,18 +2495,33 @@ class MultiAgentFlow:
         refresh_flags["market"] = False
         ctx.lane_refresh_required = refresh_flags
 
-        async def _stream() -> AsyncGenerator[Dict[str, Any], None]:
-            async for event in self._planner._pipeline.run_analysis_phase(ctx):  # type: ignore[attr-defined]
-                yield event
-            async for event in self._planner._pipeline._emit_post_analysis_accessories(ctx):  # type: ignore[attr-defined]
-                yield event
-            await self._planner._pipeline._persist_session_state(  # type: ignore[attr-defined]
-                ctx,
-                record_analysis=True,
-                record_artifacts=True,
-            )
+        async for _ in self._planner._pipeline.run_analysis_phase(ctx):  # type: ignore[attr-defined]
+            pass
+        async for _ in self._planner._pipeline._emit_post_analysis_accessories(ctx):  # type: ignore[attr-defined]
+            pass
+        await self._planner._pipeline._persist_session_state(  # type: ignore[attr-defined]
+            ctx,
+            record_analysis=True,
+            record_artifacts=True,
+        )
 
-        async for event in self._forward_with_hooks(_stream(), hooks, query, session_id):
+        refreshed_analysis = getattr(ctx.artifacts, "analysis", None)
+        refreshed_text = getattr(refreshed_analysis, "analysis_text", None)
+        analysis_payload = refreshed_text or requested_focus or ""
+
+        async for event in self._forward_with_hooks(
+            self.analysis_revision(  # type: ignore[misc]
+                query,
+                session_id=session_id,
+                analysis=analysis_payload,
+                reason=reason,
+                source=source or "fresh_revision",
+                revision_directive=revision_directive,
+            ),
+            hooks,
+            query,
+            session_id,
+        ):
             yield self._annotate(event)
 
     async def analysis_revision(
