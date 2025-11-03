@@ -56,6 +56,7 @@ from analytics_agent import create_analytics_workflow
 from analytics.flows.workflow import analytics_memory_workflow
 from analytics.core.clarify import put_answer
 from analytics.core.types import ClarifyAnswerModel
+from analytics.core.session_state import get_session_state_repository
 
 from langchain.callbacks.base import BaseCallbackHandler
 
@@ -78,6 +79,22 @@ def _match_ai_crawlers(user_agent: str) -> List[str]:
         return []
     lowered = user_agent.lower()
     return [pattern for pattern in AI_CRAWLER_PATTERNS if pattern in lowered]
+
+
+def _serialize_debug(value: Any) -> Any:
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if isinstance(value, (_DateTime, _Date)):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {str(key): _serialize_debug(val) for key, val in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_serialize_debug(item) for item in value]
+    if hasattr(value, "model_dump"):
+        return _serialize_debug(value.model_dump())
+    if hasattr(value, "__dict__"):
+        return _serialize_debug(vars(value))
+    return str(value)
 
 
 def load_ai_facts_cache() -> List[Dict[str, Any]]:
@@ -172,6 +189,44 @@ async def ai_facts_endpoint():
             "facts": facts,
         }
     )
+
+
+@app.get("/api/debug/session/{session_id}")
+async def debug_session_state(session_id: str):
+    repo = get_session_state_repository()
+    try:
+        snapshot = await repo.load(session_id)
+    except Exception as exc:
+        logger.warning("[DEBUG_SESSION] load failed session=%s error=%s", session_id, exc)
+        raise HTTPException(status_code=500, detail="Failed to load session snapshot")
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    tool_cache = snapshot.tool_cache if isinstance(snapshot.tool_cache, dict) else {}
+    analytics_cache = tool_cache.get("analytics") if isinstance(tool_cache, dict) else {}
+    receipts_cache = tool_cache.get("tool_receipts") if isinstance(tool_cache, dict) else {}
+    logger.info(
+        "[DEBUG_SESSION] cache_keys session=%s tool_cache=%s analytics=%s receipts=%s",
+        snapshot.session_id,
+        sorted(tool_cache.keys()) if tool_cache else None,
+        sorted(analytics_cache.keys()) if isinstance(analytics_cache, dict) else None,
+        sorted(receipts_cache.keys()) if isinstance(receipts_cache, dict) else None,
+    )
+    payload: Dict[str, Any] = {
+        "session_id": snapshot.session_id,
+        "created_at": snapshot.created_at.isoformat(),
+        "updated_at": snapshot.updated_at.isoformat(),
+        "last_query": snapshot.last_query,
+        "last_intent_key": snapshot.last_intent_key,
+        "last_sql": snapshot.last_sql,
+        "last_chart_spec": snapshot.last_chart_spec,
+        "last_analysis": snapshot.last_analysis,
+        "last_revision_directive": snapshot.last_revision_directive,
+        "lane_timestamps": {lane: ts.isoformat() for lane, ts in snapshot.lane_timestamps.items()},
+        "tool_cache": _serialize_debug(tool_cache),
+        "routing": _serialize_debug(snapshot.routing),
+        "messages": _serialize_debug(snapshot.messages),
+    }
+    return JSONResponse(_serialize_debug(payload))
 
 class StreamingCallbackHandler(BaseCallbackHandler):
     def __init__(self):

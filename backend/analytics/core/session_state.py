@@ -281,9 +281,12 @@ class SessionStateRepository:
 
         payload: Optional[str] = None
         client = await self._ensure_redis()
+        redis_used = False
         if client:
             try:
                 payload = await client.get(key)
+                if payload:
+                    redis_used = True
             except Exception as exc:  # pragma: no cover - network failure
                 logger.warning("Redis load failed for %s: %s", session_id, exc)
                 self._record_failure()
@@ -292,8 +295,11 @@ class SessionStateRepository:
             payload = self._fallback_get(key)
             if not payload:
                 return None
+            logger.info("Session state fallback load session=%s", session_id)
         else:
             self._fallback_set(key, payload)
+            if not redis_used:
+                logger.info("Session state fallback cache refresh session=%s", session_id)
 
         try:
             data = json.loads(payload)
@@ -309,14 +315,18 @@ class SessionStateRepository:
         key = self._key(snapshot.session_id)
 
         client = await self._ensure_redis()
+        redis_used = False
         if client:
             try:
                 await client.setex(key, self._ttl_seconds, serialized)
+                redis_used = True
             except Exception as exc:  # pragma: no cover - network failure
                 logger.warning("Redis save failed for %s: %s", snapshot.session_id, exc)
                 self._record_failure()
 
         self._fallback_set(key, serialized)
+        if not redis_used:
+            logger.info("Session state fallback save session=%s", snapshot.session_id)
         return snapshot
 
     async def delete(self, session_id: str) -> None:
