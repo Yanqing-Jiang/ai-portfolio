@@ -213,6 +213,14 @@ class ConfigStore:
             include=include,
         )
 
+    def get_agent_mode_config(self, mode: str) -> Dict[str, Any]:
+        agents_section = self.yaml_configs.get("agents", {})
+        if not isinstance(agents_section, dict):
+            return {}
+        key = str(mode or "").strip()
+        payload = agents_section.get(key, {})
+        return dict(payload) if isinstance(payload, dict) else {}
+
     # =============== YAML LOOKUPS ===============
 
     async def _yaml_templates_search(self, query: str, **kwargs: Any) -> List[Dict[str, Any]]:

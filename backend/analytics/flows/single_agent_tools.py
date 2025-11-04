@@ -2,12 +2,20 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from dataclasses import dataclass, field
 from datetime import datetime
 import copy
+import json
+import uuid
+import os
 import time
 import logging
 from typing import Any, AsyncGenerator, Dict, Iterable, List, Optional, Set, Tuple, Mapping, TYPE_CHECKING
 
+from agents import Agent, Runner
+from agents.tool import FunctionTool
+from agents.tool_context import ToolContext
+from agents.run import RunConfig
 from analytics.artifacts.models import PipelineArtifacts
 from analytics.core.events import EventEmitter
 from analytics.core.telemetry import tool_iteration as log_tool_iteration
@@ -23,8 +31,9 @@ from .planner_executor import (
     PlannerExecutorFlow,
     _reset_revision_accessories,
 )
-from .pipeline_tools import get_planner_tool_registry
+from .pipeline_tools import PlannerToolDefinition, get_planner_tool_registry
 from .schedulers import FlowMode, apply_mode_metadata, get_mode_config
+from analytics.core.config_store import get_config_store
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +60,16 @@ def _build_tool_metadata(manifest: Any) -> Dict[str, Dict[str, Any]]:
             "concurrency_limit": entry.get("concurrency_limit"),
         }
     return metadata
+
+
+@dataclass
+class _SingleAgentRunContext:
+    controller: "SingleAgentController"
+    session_id: Optional[str]
+    query: str
+    queue: "asyncio.Queue[Optional[Dict[str, Any]]]"
+    revision_directive: Optional["RevisionDirective"]
+    tool_attempts: Dict[str, int] = field(default_factory=dict)
 
 
 
@@ -676,14 +695,50 @@ class SingleAgentController:
         self._planner.set_follow_up_route(self.follow_up_route)
         self.flow_mode = FlowMode.SINGLE_AGENT
         self.flow_label = "single-agent"
-        registry = get_planner_tool_registry()
-        self.planner_tool_manifest = registry.describe_tools()
+        self._config_store = get_config_store()
+        self._agent_settings = self._config_store.get_agent_mode_config("single_agent")
+        self._agent_model = str(self._agent_settings.get("model") or "gpt-4.1")
+        self._agent_reasoning_effort = str(
+            self._agent_settings.get("reasoning_effort") or "medium"
+        )
+        self._max_turns = int(self._agent_settings.get("max_turns") or 10)
+        self._tool_retry_limit = int(self._agent_settings.get("max_tool_retries") or 2)
+
+        self._registry = get_planner_tool_registry()
+        self.planner_tool_manifest = self._registry.describe_tools()
         self._tool_metadata_by_registry = _build_tool_metadata(self.planner_tool_manifest)
         self.tool_metadata: Dict[str, Dict[str, Any]] = {}
         for alias, registry_name in self.TOOL_METADATA_ALIAS_MAP.items():
             metadata = self._tool_metadata_by_registry.get(registry_name)
             if metadata:
                 self.tool_metadata[alias] = metadata
+
+        flag = str(os.getenv("ANALYTICS_ENABLE_AGENTS", "")).strip().lower()
+        self._agents_enabled = flag in {"1", "true", "yes", "on"}
+        if self._agents_enabled and not os.getenv("OPENAI_API_KEY"):
+            self._agents_enabled = False
+        self._function_tools: List[FunctionTool] = []
+        self._agent: Optional[Agent[Any]] = None
+        if self._agents_enabled:
+            self._function_tools = [
+                self._build_function_tool(tool_definition)
+                for tool_definition in self._registry.list_tools()
+            ]
+            instructions = self._agent_settings.get(
+                "instructions",
+                (
+                    "You are the Analytics Planner. Execute classification, planning, SQL, chart, "
+                    "market, and analysis tools to fulfill the user's analytics request. Respect "
+                    "cached receipts when provided, and only call tools necessary to refresh stale lanes."
+                ),
+            )
+            self._agent = Agent(
+                name="analytics_single_agent",
+                instructions=instructions,
+                model=self._agent_model,
+                tools=list(self._function_tools),
+            )
+
         self._revision_directive: Optional["RevisionDirective"] = None
         self._agentic_revision_mode: bool = False
         self._agentic_lane_targets: Set[str] = set()
@@ -724,6 +779,163 @@ class SingleAgentController:
         if not tool_name:
             return None
         return cls.LANE_TOOL_LOOKUP.get(str(tool_name).strip().lower())
+
+    def _build_function_tool(self, definition: PlannerToolDefinition) -> FunctionTool:
+        params_schema = definition.parameters_schema or {"type": "object", "properties": {}}
+
+        async def _on_invoke(tool_ctx: ToolContext[Any], args_json: str) -> str:
+            run_context = tool_ctx.context
+            if not isinstance(run_context, _SingleAgentRunContext):
+                raise RuntimeError("Single agent run context missing for tool invocation")
+            try:
+                parsed_args = json.loads(args_json) if args_json else {}
+                if not isinstance(parsed_args, dict):
+                    raise ValueError("arguments must be an object")
+            except Exception as exc:  # pragma: no cover - defensive logging
+                logger.error("Failed to parse tool arguments for %s: %s", definition.name, exc)
+                parsed_args = {}
+                error_payload = {
+                    "status": "error",
+                    "error_code": "INVALID_TOOL_ARGS",
+                    "summary": f"Unable to parse arguments for {definition.name}",
+                }
+                return json.dumps(error_payload)
+
+            tool_result = await self._execute_planner_tool_for_agent(
+                definition=definition,
+                run_context=run_context,
+                tool_ctx=tool_ctx,
+                tool_args=parsed_args,
+            )
+            return json.dumps(tool_result)
+
+        return FunctionTool(
+            name=definition.name,
+            description=definition.description,
+            params_json_schema=sanitize_for_json(params_schema) if params_schema else {},
+            on_invoke_tool=_on_invoke,
+            strict_json_schema=True,
+        )
+
+    async def _execute_planner_tool_for_agent(
+        self,
+        *,
+        definition: PlannerToolDefinition,
+        run_context: _SingleAgentRunContext,
+        tool_ctx: ToolContext[Any],
+        tool_args: Mapping[str, Any],
+    ) -> Dict[str, Any]:
+        session_id = run_context.session_id
+        if not session_id:
+            session_id = str(uuid.uuid4())
+            run_context.session_id = session_id
+
+        hooks = _SingleAgentToolHooks(self, session_id=session_id)
+        resolved_query = run_context.query or tool_args.get("query") or ""
+        ctx = await self._planner.initialize_context(resolved_query, session_id=session_id)
+        revision_directive = run_context.revision_directive or self._revision_directive
+        if revision_directive is not None:
+            ctx.revision_directive = revision_directive  # type: ignore[attr-defined]
+            ctx.agentic_revision_mode = bool(getattr(revision_directive, "agentic", False))
+            ctx.revision_targets = set(getattr(revision_directive, "targets", []))
+            focus_hint = getattr(revision_directive, "requested_focus", None) or getattr(
+                revision_directive, "raw_text", None
+            )
+            if focus_hint:
+                ctx.revision_focus = focus_hint
+            if getattr(revision_directive, "search_topics", None):
+                ctx.revision_search_topics = list(revision_directive.search_topics)
+
+        async def _stream() -> AsyncGenerator[Dict[str, Any], None]:
+            async for event in self._registry.invoke(
+                definition.name,
+                self._planner._pipeline,
+                ctx,
+                **dict(tool_args),
+            ):
+                yield event
+
+        last_event: Optional[Dict[str, Any]] = None
+        try:
+            async for event in self._forward_with_hooks(_stream(), hooks, session_id):
+                last_event = event
+                await run_context.queue.put(event)
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.exception("Planner tool %s failed: %s", definition.name, exc)
+            return {
+                "status": "error",
+                "error_code": getattr(exc, "code", "TOOL_FAILURE"),
+                "summary": f"{definition.name} failed: {exc}",
+            }
+
+        receipt = self._extract_tool_receipt(ctx, definition.name)
+        status = "completed"
+        error_code = None
+        if receipt.get("error"):
+            status = "error"
+            error_code = receipt.get("error")
+        summary = self._summarize_tool_result(definition.name, receipt, last_event)
+        result_payload: Dict[str, Any] = {
+            "status": status,
+            "summary": summary,
+            "receipt": receipt,
+        }
+        if error_code:
+            result_payload["error_code"] = error_code
+        artifacts = self._collect_artifacts_snapshot(ctx)
+        if artifacts:
+            result_payload["artifacts"] = artifacts
+        if definition.response_schema:
+            result_payload["expected_schema"] = definition.response_schema
+        return sanitize_for_json(result_payload)
+
+    def _extract_tool_receipt(self, ctx: PlannerPhaseContext, tool_name: str) -> Dict[str, Any]:
+        receipts = getattr(ctx, "tool_receipts", {}) or {}
+        receipt = receipts.get(tool_name)
+        if isinstance(receipt, ToolInvocationReceipt):
+            return receipt.to_dict()
+        if isinstance(receipt, Mapping):
+            try:
+                return sanitize_for_json(dict(receipt))
+            except Exception:  # pragma: no cover - defensive
+                return dict(receipt)
+        return {}
+
+    @staticmethod
+    def _summarize_tool_result(
+        tool_name: str,
+        receipt_payload: Mapping[str, Any],
+        last_event: Optional[Mapping[str, Any]],
+    ) -> str:
+        summary = ""
+        metadata = receipt_payload.get("metadata") if isinstance(receipt_payload, Mapping) else None
+        if isinstance(metadata, Mapping):
+            summary = str(metadata.get("summary") or metadata.get("message") or "").strip()
+        if not summary:
+            if isinstance(last_event, Mapping):
+                data = last_event.get("data")
+                if isinstance(data, Mapping):
+                    summary = str(
+                        data.get("summary") or data.get("message") or data.get("status") or ""
+                    ).strip()
+        if not summary:
+            summary = f"{tool_name} completed"
+        return summary
+
+    @staticmethod
+    def _collect_artifacts_snapshot(ctx: PlannerPhaseContext) -> Dict[str, Any]:
+        artifacts = getattr(ctx, "artifacts", None)
+        if not artifacts:
+            return {}
+        if hasattr(artifacts, "to_dict"):
+            try:
+                return sanitize_for_json(artifacts.to_dict())
+            except Exception:  # pragma: no cover - defensive
+                pass
+        try:
+            return sanitize_for_json(dict(artifacts))
+        except Exception:  # pragma: no cover - defensive
+            return {}
 
     @staticmethod
     def _normalize_lane_target(lane: Optional[str]) -> Optional[str]:
@@ -1122,7 +1334,7 @@ class SingleAgentController:
                 ctx.revision_focus = focus_hint
             if getattr(revision_directive, "search_topics", None):
                 ctx.revision_search_topics = list(revision_directive.search_topics)
-        registry = get_planner_tool_registry()
+        registry = self._registry
         tool_stream = registry.invoke(tool_name, self._planner._pipeline, ctx, **kwargs)
         async for event in self._forward_with_hooks(tool_stream, hooks, session_id):
             yield event
@@ -1143,7 +1355,9 @@ class SingleAgentController:
         session_id: Optional[str],
     ) -> AsyncGenerator[Dict[str, Any], None]:
         lane_states = self._initial_lane_states()
-        revision_targets: Set[str] = set(self._agentic_lane_targets) if self._agentic_revision_mode else set()
+        revision_targets: Set[str] = (
+            set(self._agentic_lane_targets) if self._agentic_revision_mode else set()
+        )
         summary_emitted = False
         if self._agentic_revision_mode and self._agentic_lane_targets:
             summary_event = self._emit_lane_summary(lane_states)
@@ -1152,23 +1366,112 @@ class SingleAgentController:
                 summary_event["data"]["mode"] = "agentic_revision"
                 yield summary_event
                 summary_emitted = True
-        planner_stream = self._planner.events(query, session_id=session_id)
-
-        async for event in planner_stream:
-            self._update_lane_state_from_event(lane_states, event, revision_targets=revision_targets)
-            if not summary_emitted and self._should_emit_lane_summary_before(event):
+        if not self._agents_enabled or self._agent is None:
+            planner_stream = self._planner.events(query, session_id=session_id)
+            async for event in planner_stream:
+                self._update_lane_state_from_event(
+                    lane_states, event, revision_targets=revision_targets
+                )
+                if not summary_emitted and self._should_emit_lane_summary_before(event):
+                    summary_event = self._emit_lane_summary(lane_states)
+                    if summary_event:
+                        yield summary_event
+                    summary_emitted = True
+                yield event
+            if not summary_emitted and any(
+                state not in {"pending", "queued", "skipped"} for state in lane_states.values()
+            ):
                 summary_event = self._emit_lane_summary(lane_states)
                 if summary_event:
                     yield summary_event
-                summary_emitted = True
-            yield event
+            return
 
-        if not summary_emitted and any(
-            state not in {"pending", "queued", "skipped"} for state in lane_states.values()
-        ):
-            summary_event = self._emit_lane_summary(lane_states)
-            if summary_event:
-                yield summary_event
+        queue: "asyncio.Queue[Optional[Dict[str, Any]]]" = asyncio.Queue()
+        run_context = _SingleAgentRunContext(
+            controller=self,
+            session_id=session_id,
+            query=query,
+            queue=queue,
+            revision_directive=self._revision_directive if self._agentic_revision_mode else None,
+        )
+        run_config = RunConfig(
+            model=self._agent_model,
+            trace_id=str(uuid.uuid4()),
+        )
+        run_task = asyncio.create_task(
+            Runner.run(
+                self._agent,
+                input=query,
+                context=run_context,
+                max_turns=self._max_turns,
+                run_config=run_config,
+            )
+        )
+
+        try:
+            while True:
+                if run_task.done() and queue.empty():
+                    break
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=0.1)
+                except asyncio.TimeoutError:
+                    continue
+                if event is None:
+                    continue
+                self._update_lane_state_from_event(
+                    lane_states, event, revision_targets=revision_targets
+                )
+                if not summary_emitted and self._should_emit_lane_summary_before(event):
+                    summary_event = self._emit_lane_summary(lane_states)
+                    if summary_event:
+                        yield summary_event
+                    summary_emitted = True
+                yield event
+        finally:
+            run_exc: Optional[BaseException] = None
+            try:
+                run_result = await asyncio.shield(run_task)
+            except BaseException as exc:  # pragma: no cover - propagate agent failure
+                run_exc = exc
+                run_result = None  # type: ignore[assignment]
+
+            if run_exc is not None:
+                raise run_exc
+
+            if not summary_emitted and any(
+                state not in {"pending", "queued", "skipped"} for state in lane_states.values()
+            ):
+                summary_event = self._emit_lane_summary(lane_states)
+                if summary_event:
+                    yield summary_event
+
+            artifacts = self._planner.latest_artifacts()
+            if artifacts:
+                analysis_payload: Dict[str, Any] = {}
+                if run_result and isinstance(run_result.final_output, Mapping):
+                    analysis_payload = dict(run_result.final_output)
+                cohesive_payload = _build_single_agent_cohesive_payload(
+                    analysis_payload,
+                    artifacts,
+                    default_manifest=self.planner_tool_manifest,
+                )
+                if cohesive_payload:
+                    try:
+                        sanitized_payload = sanitize_for_json(cohesive_payload)
+                    except Exception:  # pragma: no cover - defensive
+                        sanitized_payload = cohesive_payload
+                    if isinstance(sanitized_payload, Mapping):
+                        sanitized_payload = dict(sanitized_payload)
+                    final_event = {
+                        "event": "analysis_bundle",
+                        "data": {
+                            "analysis_bundle": sanitized_payload,
+                            "session_id": session_id,
+                            "flow": self.flow_label,
+                            "query": query,
+                        },
+                    }
+                    yield apply_mode_metadata(final_event, self.flow_mode)
 
     async def chart_revision(
         self,

@@ -16,6 +16,7 @@ class Configs:
         self.companies: Dict[str, Any] = {}
         self.database: Dict[str, Any] = {}
         self.semantic: Dict[str, Any] = {}
+        self.agents: Dict[str, Any] = {}
 
     def load(self) -> "Configs":
         def _load(name: str) -> Dict[str, Any]:
@@ -40,6 +41,8 @@ class Configs:
         else:
             self.database = database_fallback
             self.semantic = database_fallback if isinstance(database_fallback, dict) else {}
+
+        self.agents = _load("agents").get("agents", {})
 
         return self
 
