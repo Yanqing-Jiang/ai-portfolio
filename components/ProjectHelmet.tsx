@@ -18,6 +18,15 @@ interface ProjectHelmetProps {
   project: Project;
 }
 
+const toAbsoluteUrl = (value?: string) => {
+  if (!value || !value.trim()) return undefined;
+  try {
+    return new URL(value, SITE_BASE_URL).toString();
+  } catch {
+    return value;
+  }
+};
+
 const truncate = (value: string, maxLength = 160) => {
   if (!value) return '';
   if (value.length <= maxLength) return value;
@@ -29,7 +38,8 @@ export const ProjectHelmet: React.FC<ProjectHelmetProps> = ({ project }) => {
   const description = truncate(project.seoDescription ?? project.description);
   const keywords = project.seoKeywords?.length ? project.seoKeywords : project.technologies;
   const keywordList = keywords?.join(', ');
-  const image = project.ogImage ?? project.coverUrl ?? project.imageUrl ?? DEFAULT_OG_IMAGE;
+  const imageSource = project.ogImage ?? project.coverUrl ?? project.imageUrl ?? DEFAULT_OG_IMAGE;
+  const image = useMemo(() => toAbsoluteUrl(imageSource), [imageSource]);
   const canonicalUrl = `${SITE_BASE_URL}/project/${project.id}`;
   const datePublished = project.datePublished ?? LANDING_SEO.updatedTime;
   const dateModified = project.dateModified ?? LANDING_SEO.updatedTime;

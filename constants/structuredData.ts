@@ -51,6 +51,15 @@ const sanitizeText = (value?: string) => {
 const sanitizeStringList = (values?: string[]) =>
   values?.map((item) => sanitizeText(item)).filter(Boolean) ?? [];
 
+const toAbsoluteUrl = (value?: string) => {
+  if (!value || !value.trim()) return undefined;
+  try {
+    return new URL(value, SITE_BASE_URL).toString();
+  } catch {
+    return value;
+  }
+};
+
 const toQuantitativeValue = (metric: MetricDefinition) => ({
   '@type': 'QuantitativeValue',
   name: sanitizeText(metric.name),
@@ -187,6 +196,9 @@ export const buildArticleSchema = (project: Project) => {
   const description = sanitizeText(ensureDescription(project));
   const headline = sanitizeText(project.seoTitle ?? `${project.title} | AI Systems Project`);
   const authorName = sanitizeText(LANDING_SEO.author);
+  const resolvedImage =
+    toAbsoluteUrl(project.ogImage ?? project.coverUrl ?? project.imageUrl ?? DEFAULT_OG_IMAGE) ??
+    DEFAULT_OG_IMAGE;
 
   return {
     '@context': 'https://schema.org',
@@ -209,7 +221,7 @@ export const buildArticleSchema = (project: Project) => {
       },
     },
     mainEntityOfPage: `${SITE_BASE_URL}/project/${project.id}`,
-    image: project.ogImage ?? project.coverUrl ?? project.imageUrl ?? DEFAULT_OG_IMAGE,
+    image: resolvedImage,
     datePublished: project.datePublished ?? LANDING_SEO.updatedTime,
     dateModified: project.dateModified ?? LANDING_SEO.updatedTime,
     about: sanitizeStringList(project.serviceTags),
