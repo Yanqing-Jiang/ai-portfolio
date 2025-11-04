@@ -6,9 +6,7 @@ from typing import Dict, Any, Optional, AsyncGenerator, TypeVar, Type
 from pydantic import BaseModel
 import openai
 from openai import OpenAI, AsyncOpenAI
-import sys
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from unified_responses_client import get_unified_client
+from backend import unified_responses_client
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +21,7 @@ class OpenAIClient:
             raise ValueError("OpenAI API key not found")
 
         # Use unified client for Responses API
-        self.unified_client = get_unified_client()
+        self.unified_client = unified_responses_client.get_unified_client()
         if not self.unified_client:
             raise ValueError("Failed to initialize unified responses client")
 

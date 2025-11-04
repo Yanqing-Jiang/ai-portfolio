@@ -30,6 +30,10 @@ class PlannerToolDefinition:
     output_artifacts: Sequence[str] = field(default_factory=tuple)
     latency_budget_ms: Optional[int] = None
     concurrency_limit: Optional[int] = None
+    parameters_schema: Optional[Dict[str, Any]] = None
+    response_schema: Optional[Dict[str, Any]] = None
+    retryable_errors: Sequence[str] = field(default_factory=tuple)
+    error_severity: str = "transient"
 
 
 class PlannerToolRegistry:
@@ -85,6 +89,10 @@ class PlannerToolRegistry:
                 "output_artifacts": list(definition.output_artifacts or definition.outputs),
                 "latency_budget_ms": definition.latency_budget_ms,
                 "concurrency_limit": definition.concurrency_limit,
+                "parameters_schema": dict(definition.parameters_schema or {}),
+                "response_schema": dict(definition.response_schema or {}),
+                "retryable_errors": list(definition.retryable_errors or ()),
+                "error_severity": definition.error_severity,
             }
             for definition in self.list_tools()
         )
@@ -221,6 +229,39 @@ def _bootstrap_registry(registry: PlannerToolRegistry) -> None:
         ):
             yield event
 
+    base_response_schema: Dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "status": {
+                "type": "string",
+                "enum": ["completed", "skipped", "error"],
+            },
+            "summary": {"type": "string"},
+            "artifacts": {"type": "object"},
+            "error_code": {"type": "string"},
+            "reused": {"type": "boolean"},
+        },
+        "required": ["status"],
+        "additionalProperties": True,
+    }
+
+    def _schema(
+        properties: Optional[Dict[str, Any]] = None,
+        *,
+        required: Optional[Sequence[str]] = None,
+        allow_extra: bool = False,
+    ) -> Dict[str, Any]:
+        schema: Dict[str, Any] = {
+            "type": "object",
+            "properties": properties or {},
+            "additionalProperties": allow_extra,
+        }
+        if required:
+            schema["required"] = list(required)
+        return schema
+
+    retryable_default = ("transient_tool_error", "rate_limit", "upstream_timeout")
+
     registry.register(
         PlannerToolDefinition(
             name="classification",
@@ -232,6 +273,20 @@ def _bootstrap_registry(registry: PlannerToolRegistry) -> None:
             output_artifacts=("classification",),
             latency_budget_ms=500,
             concurrency_limit=1,
+            parameters_schema=_schema(
+                {
+                    "query": {
+                        "type": "string",
+                        "description": "User query to classify; defaults to pipeline context when omitted.",
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "Optional rationale for telemetry and audits.",
+                    },
+                }
+            ),
+            response_schema=base_response_schema,
+            retryable_errors=retryable_default,
         )
     )
     registry.register(
@@ -246,6 +301,17 @@ def _bootstrap_registry(registry: PlannerToolRegistry) -> None:
             output_artifacts=("intent",),
             latency_budget_ms=1500,
             concurrency_limit=1,
+            parameters_schema=_schema(
+                {
+                    "classification": {
+                        "type": "object",
+                        "description": "Structured classification result to reuse instead of recomputing.",
+                    },
+                    "reason": {"type": "string"},
+                }
+            ),
+            response_schema=base_response_schema,
+            retryable_errors=retryable_default,
         )
     )
     registry.register(
@@ -260,6 +326,18 @@ def _bootstrap_registry(registry: PlannerToolRegistry) -> None:
             output_artifacts=("clarification",),
             latency_budget_ms=2000,
             concurrency_limit=1,
+            parameters_schema=_schema(
+                {
+                    "clarification_budget": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Max clarification rounds to run.",
+                    },
+                    "reason": {"type": "string"},
+                }
+            ),
+            response_schema=base_response_schema,
+            retryable_errors=retryable_default,
         )
     )
     registry.register(
@@ -274,6 +352,17 @@ def _bootstrap_registry(registry: PlannerToolRegistry) -> None:
             output_artifacts=("plan",),
             latency_budget_ms=2000,
             concurrency_limit=1,
+            parameters_schema=_schema(
+                {
+                    "reason": {"type": "string"},
+                    "force_template": {
+                        "type": "string",
+                        "description": "Template identifier to force when planner should reuse a cached template.",
+                    },
+                }
+            ),
+            response_schema=base_response_schema,
+            retryable_errors=retryable_default,
         )
     )
     registry.register(
@@ -288,6 +377,21 @@ def _bootstrap_registry(registry: PlannerToolRegistry) -> None:
             output_artifacts=("sql_generation", "sql_execution"),
             latency_budget_ms=7000,
             concurrency_limit=1,
+            parameters_schema=_schema(
+                {
+                    "reason": {"type": "string"},
+                    "rerun": {
+                        "type": "boolean",
+                        "description": "Force SQL generation even when cached receipts exist.",
+                    },
+                    "allow_cached_execution": {
+                        "type": "boolean",
+                        "description": "Permit reuse of previous execution results.",
+                    },
+                }
+            ),
+            response_schema=base_response_schema,
+            retryable_errors=retryable_default,
         )
     )
     registry.register(
@@ -302,6 +406,17 @@ def _bootstrap_registry(registry: PlannerToolRegistry) -> None:
             output_artifacts=("chart",),
             latency_budget_ms=1500,
             concurrency_limit=1,
+            parameters_schema=_schema(
+                {
+                    "reason": {"type": "string"},
+                    "chart_intent": {
+                        "type": "string",
+                        "description": "Override detected chart intent for experimentation.",
+                    },
+                }
+            ),
+            response_schema=base_response_schema,
+            retryable_errors=retryable_default,
         )
     )
     registry.register(
@@ -316,6 +431,21 @@ def _bootstrap_registry(registry: PlannerToolRegistry) -> None:
             output_artifacts=("analysis",),
             latency_budget_ms=5000,
             concurrency_limit=1,
+            parameters_schema=_schema(
+                {
+                    "reason": {"type": "string"},
+                    "include_market": {
+                        "type": "boolean",
+                        "description": "Indicate whether market context must be incorporated.",
+                    },
+                    "clarity_mode": {
+                        "type": "string",
+                        "description": "Optional style override for summarization.",
+                    },
+                }
+            ),
+            response_schema=base_response_schema,
+            retryable_errors=retryable_default,
         )
     )
     registry.register(
@@ -330,6 +460,19 @@ def _bootstrap_registry(registry: PlannerToolRegistry) -> None:
             output_artifacts=("revision",),
             latency_budget_ms=800,
             concurrency_limit=2,
+            parameters_schema=_schema(
+                {
+                    "patch": {
+                        "oneOf": [{"type": "object"}, {"type": "string"}],
+                        "description": "Chart patch operations to apply.",
+                    },
+                    "reason": {"type": "string"},
+                    "source": {"type": "string"},
+                },
+                required=["patch"],
+            ),
+            response_schema=base_response_schema,
+            retryable_errors=retryable_default,
         )
     )
 
@@ -345,6 +488,19 @@ def _bootstrap_registry(registry: PlannerToolRegistry) -> None:
             output_artifacts=("revision",),
             latency_budget_ms=1200,
             concurrency_limit=2,
+            parameters_schema=_schema(
+                {
+                    "analysis": {
+                        "type": "string",
+                        "description": "Revised analysis text to apply.",
+                    },
+                    "reason": {"type": "string"},
+                    "source": {"type": "string"},
+                },
+                required=["analysis"],
+            ),
+            response_schema=base_response_schema,
+            retryable_errors=retryable_default,
         )
     )
 
@@ -360,6 +516,22 @@ def _bootstrap_registry(registry: PlannerToolRegistry) -> None:
             output_artifacts=("web",),
             latency_budget_ms=800,
             concurrency_limit=2,
+            parameters_schema=_schema(
+                {
+                    "queries": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional override queries to fetch.",
+                    },
+                    "reason": {"type": "string"},
+                    "force_live": {
+                        "type": "boolean",
+                        "description": "Set true to bypass cached web receipts.",
+                    },
+                }
+            ),
+            response_schema=base_response_schema,
+            retryable_errors=retryable_default,
         )
     )
 
@@ -375,6 +547,22 @@ def _bootstrap_registry(registry: PlannerToolRegistry) -> None:
             output_artifacts=("market",),
             latency_budget_ms=800,
             concurrency_limit=2,
+            parameters_schema=_schema(
+                {
+                    "tickers": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Tickers to refresh; defaults to session tickers.",
+                    },
+                    "reason": {"type": "string"},
+                    "force_live": {
+                        "type": "boolean",
+                        "description": "Bypass cached market data when true.",
+                    },
+                }
+            ),
+            response_schema=base_response_schema,
+            retryable_errors=retryable_default,
         )
     )
 
@@ -390,6 +578,17 @@ def _bootstrap_registry(registry: PlannerToolRegistry) -> None:
             output_artifacts=("sql_generation", "sql_execution"),
             latency_budget_ms=7000,
             concurrency_limit=1,
+            parameters_schema=_schema(
+                {
+                    "reason": {"type": "string"},
+                    "strategy": {
+                        "type": "string",
+                        "description": "Planner strategy override (e.g., 'fallback_template').",
+                    },
+                }
+            ),
+            response_schema=base_response_schema,
+            retryable_errors=retryable_default,
         )
     )
 
