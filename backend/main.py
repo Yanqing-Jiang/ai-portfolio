@@ -9,10 +9,15 @@ from pathlib import Path
 import os
 from dotenv import load_dotenv
 import json
-from datetime import date as _Date, datetime as _DateTime
+from datetime import date as _Date, datetime as _DateTime, timezone
 from decimal import Decimal
 import uuid
 import time
+try:
+    import stripe  # type: ignore
+except ImportError:  # pragma: no cover - optional dependency
+    stripe = None  # type: ignore
+import httpx
 
 logger = logging.getLogger(__name__)
 
@@ -37,11 +42,83 @@ _ai_facts_mtime: float = 0.0
 env_path = Path(__file__).resolve().parent / ".env"
 load_dotenv(dotenv_path=env_path, override=False)
 
+STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY")
+STRIPE_PRICE_PROMPT_PACK = os.getenv("STRIPE_PRICE_PROMPT_PACK")
+STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET")
+STRIPE_TOKEN_UNITS = int(os.getenv("STRIPE_TOKEN_UNITS", "100"))
+if STRIPE_SECRET_KEY and stripe:
+    stripe.api_key = STRIPE_SECRET_KEY
+
+PAYPAL_CLIENT_ID = os.getenv("PAYPAL_CLIENT_ID")
+PAYPAL_CLIENT_SECRET = os.getenv("PAYPAL_CLIENT_SECRET")
+PAYPAL_WEBHOOK_ID = os.getenv("PAYPAL_WEBHOOK_ID")
+PAYPAL_ENV = os.getenv("PAYPAL_ENV", "sandbox").lower()
+PAYPAL_TOKEN_UNITS = int(os.getenv("PAYPAL_TOKEN_UNITS", "100"))
+
+def _extract_user_uuid(identifier: str) -> Optional[str]:
+    if identifier.startswith("user:"):
+        return identifier.split("user:", 1)[-1]
+    return None
+
+
+def _paypal_base_url() -> str:
+    return "https://api-m.paypal.com" if PAYPAL_ENV == "live" else "https://api-m.sandbox.paypal.com"
+
+
+async def _get_paypal_access_token() -> str:
+    if not PAYPAL_CLIENT_ID or not PAYPAL_CLIENT_SECRET:
+        raise RuntimeError("PayPal credentials not configured")
+
+    auth = httpx.BasicAuth(PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET)
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        response = await client.post(
+            f"{_paypal_base_url()}/v1/oauth2/token",
+            data={"grant_type": "client_credentials"},
+            auth=auth,
+        )
+        response.raise_for_status()
+        data = response.json()
+        return data["access_token"]
+
+
+async def _paypal_verify_webhook(
+    transmission_id: str,
+    timestamp: str,
+    signature: str,
+    cert_url: str,
+    webhook_id: str,
+    event_body: str,
+) -> bool:
+    access_token = await _get_paypal_access_token()
+    headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
+    payload = {
+        "transmission_id": transmission_id,
+        "transmission_time": timestamp,
+        "cert_url": cert_url,
+        "auth_algo": "SHA256withRSA",
+        "transmission_sig": signature,
+        "webhook_id": webhook_id,
+        "webhook_event": json.loads(event_body),
+    }
+
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        response = await client.post(
+            f"{_paypal_base_url()}/v1/notifications/verify-webhook-signature",
+            json=payload,
+            headers=headers,
+        )
+        response.raise_for_status()
+        data = response.json()
+        return data.get("verification_status") == "SUCCESS"
 
 from research_agent import run_research_agent, run_research_agent_stream
 from resume_agent import run_resume_agent, run_resume_agent_stream
 from tts import get_voice_bytes
 from gemini_service import gemini_service
+try:
+    from linkedin_photo import router as linkedin_photo_router
+except ImportError:  # pragma: no cover - support running as module
+    from .linkedin_photo import router as linkedin_photo_router  # type: ignore
 from rate_limiter import (
     init_rate_limiter,
     smart_rate_limit,
@@ -49,9 +126,14 @@ from rate_limiter import (
     who_am_i,
     resolve_scope,
     build_scoped_identifier,
+    RateLimitScope,
     analytics_agent_rate_limit,
     analytics_sql_rate_limit,
 )
+try:
+    from token_store import token_store
+except ImportError:  # pragma: no cover - support module execution
+    from .token_store import token_store  # type: ignore
 from analytics_agent import create_analytics_workflow
 from analytics.flows.workflow import analytics_memory_workflow
 from analytics.core.clarify import put_answer
@@ -72,6 +154,7 @@ logging.basicConfig(
 )
 
 app = FastAPI()
+app.include_router(linkedin_photo_router)
 
 
 def _match_ai_crawlers(user_agent: str) -> List[str]:
@@ -117,6 +200,12 @@ def load_ai_facts_cache() -> List[Dict[str, Any]]:
 @app.on_event("startup")
 async def startup_event():
     await init_rate_limiter()
+    await token_store.initialize()
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    await token_store.shutdown()
 
 # Allow CORS for local frontend dev
 origins = [
@@ -174,6 +263,22 @@ class GeminiMessageRequest(BaseModel):
 class TTSStreamRequest(BaseModel):
     text: str
     session_id: Optional[str] = None
+
+
+class StripeSessionRequest(BaseModel):
+    success_url: str
+    cancel_url: str
+
+
+class PayPalOrderRequest(BaseModel):
+    return_url: str
+    cancel_url: str
+
+
+class TokenSpendRequest(BaseModel):
+    amount: int
+    reference_id: Optional[str] = None
+    source: Optional[str] = None
 
 # In-memory chat sessions storage
 chat_sessions = {}
@@ -814,37 +919,67 @@ async def count_user_input(request: Request):
             body = {}
         
         scope = resolve_scope(body.get("scope"))
-        
+        weight_raw = body.get("weight", 1)
+        try:
+            weight = int(weight_raw)
+        except (TypeError, ValueError):
+            weight = 1
+        if weight < 1:
+            weight = 1
+        elif weight > 1000:
+            weight = 1000
+
         # Enforce the scoped rate limit before returning usage stats
-        await smart_rate_limit(request, scope=scope)
-        
+        await smart_rate_limit(request, scope=scope, weight=weight)
+
         identifier = await who_am_i(request)
         scoped_identifier = build_scoped_identifier(identifier, scope)
         is_authenticated = not identifier.startswith("ip:")
         user_type = "member" if is_authenticated else "guest"
-        
-        # Add a small delay to ensure Redis counter is updated after rate limiting
-        import asyncio
-        await asyncio.sleep(0.1)
-        
-        # Now get the updated usage count for the scoped identifier
-        current_usage, limit = await get_user_usage(identifier, scope)
-        
+
+        snapshot = getattr(request.state, "rate_limit_snapshot", None)
+        if snapshot is None:
+            snapshot = await get_user_usage(identifier, scope)
+
+        remaining = max(0, snapshot.limit - min(snapshot.count, snapshot.limit))
+        daily_reset_iso = _DateTime.fromtimestamp(snapshot.reset_epoch, tz=timezone.utc).isoformat()
+        token_fallback_used = bool(getattr(request.state, "token_fallback_used", False))
+
+        token_balance = None
+        token_balance_updated_at = None
+        if is_authenticated and token_store.is_available:
+            user_id = identifier.split("user:", 1)[-1] if ":" in identifier else None
+            if user_id:
+                balance = await token_store.get_balance(user_id)
+                if balance is not None:
+                    token_balance = balance.balance
+                    if balance.updated_at:
+                        token_balance_updated_at = balance.updated_at.isoformat()
+
         print(
             f"User input counted - Identifier: {identifier}, Scope: {scope.value}, "
-            f"Scoped ID: {scoped_identifier}, Usage: {current_usage}/{limit}, Type: {user_type}"
+            f"Scoped ID: {scoped_identifier}, Usage: {snapshot.count}/{snapshot.limit}, "
+            f"Type: {user_type}, Weight: {weight}, TokensUsed: {token_fallback_used}"
         )
-        
+
         return JSONResponse(
             content={
                 "success": True,
                 "scope": scope.value,
                 "identifier": scoped_identifier,
                 "base_identifier": identifier,
-                "current_usage": current_usage,
-                "limit": limit,
-                "remaining": max(0, limit - current_usage),
+                "current_usage": snapshot.count,
+                "limit": snapshot.limit,
+                "remaining": remaining,
                 "user_type": user_type,
+                "prompt_units_spent_today": snapshot.count,
+                "daily_reset_epoch": snapshot.reset_epoch,
+                "daily_reset_iso": daily_reset_iso,
+                "weight_applied": weight,
+                "token_fallback_used": token_fallback_used,
+                "token_balance": token_balance,
+                "token_balance_updated_at": token_balance_updated_at,
+                "daily_reset_notice": "Free daily quota resets at 00:00 UTC.",
                 "message": "User input counted successfully"
             },
             headers={"Access-Control-Allow-Origin": "*"}
@@ -868,28 +1003,48 @@ async def get_usage_stats(request: Request):
         scope = resolve_scope(request.query_params.get("scope"))
         
         # Get usage stats
-        current_usage, limit = await get_user_usage(identifier, scope)
+        snapshot = await get_user_usage(identifier, scope)
         scoped_identifier = build_scoped_identifier(identifier, scope)
         
         # Determine user type
         is_authenticated = not identifier.startswith("ip:")
         user_type = "member" if is_authenticated else "guest"
+        remaining = max(0, snapshot.limit - min(snapshot.count, snapshot.limit))
+        daily_reset_iso = _DateTime.fromtimestamp(snapshot.reset_epoch, tz=timezone.utc).isoformat()
+
+        token_balance = None
+        token_balance_updated_at = None
+        if is_authenticated and token_store.is_available:
+            user_id = identifier.split("user:", 1)[-1] if ":" in identifier else None
+            if user_id:
+                balance = await token_store.get_balance(user_id)
+                if balance is not None:
+                    token_balance = balance.balance
+                    if balance.updated_at:
+                        token_balance_updated_at = balance.updated_at.isoformat()
         
         # Debug logging
         print(
             f"Usage stats - Identifier: {identifier}, Scope: {scope.value}, "
-            f"Scoped ID: {scoped_identifier}, Usage: {current_usage}/{limit}, Type: {user_type}"
+            f"Scoped ID: {scoped_identifier}, Usage: {snapshot.count}/{snapshot.limit}, "
+            f"Type: {user_type}"
         )
         
         return JSONResponse(
             content={
-                "current_usage": current_usage,
-                "limit": limit,
-                "remaining": max(0, limit - current_usage),
+                "current_usage": snapshot.count,
+                "limit": snapshot.limit,
+                "remaining": remaining,
                 "user_type": user_type,
                 "identifier": scoped_identifier,
                 "base_identifier": identifier,
                 "scope": scope.value,
+                "prompt_units_spent_today": snapshot.count,
+                "daily_reset_epoch": snapshot.reset_epoch,
+                "daily_reset_iso": daily_reset_iso,
+                "token_balance": token_balance,
+                "token_balance_updated_at": token_balance_updated_at,
+                "daily_reset_notice": "Free daily quota resets at 00:00 UTC.",
             },
             headers={"Access-Control-Allow-Origin": "*"}
         )
@@ -900,6 +1055,267 @@ async def get_usage_stats(request: Request):
             status_code=500, 
             headers={"Access-Control-Allow-Origin": "*"}
         )
+
+
+@app.get("/api/token-balance")
+async def get_token_balance(request: Request):
+    """Return the user's purchased token balance along with daily quota info."""
+    identifier = await who_am_i(request)
+    user_id = _extract_user_uuid(identifier)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Sign in to view token balance.")
+
+    snapshot = await get_user_usage(identifier, RateLimitScope.GLOBAL)
+    daily_reset_iso = _DateTime.fromtimestamp(snapshot.reset_epoch, tz=timezone.utc).isoformat()
+
+    if not token_store.is_available:
+        return JSONResponse(
+            content={
+                "balance": 0,
+                "balance_updated_at": None,
+                "token_store_available": False,
+                "daily_prompt_limit": snapshot.limit,
+                "prompt_units_spent_today": snapshot.count,
+                "daily_reset_epoch": snapshot.reset_epoch,
+                "daily_reset_iso": daily_reset_iso,
+                "daily_reset_notice": "Free daily quota resets at 00:00 UTC.",
+            },
+            headers={"Access-Control-Allow-Origin": "*"},
+        )
+
+    balance = await token_store.get_balance(user_id)
+    balance_value = balance.balance if balance else 0
+    balance_updated_at = balance.updated_at.isoformat() if balance and balance.updated_at else None
+
+    return JSONResponse(
+        content={
+            "balance": balance_value,
+            "balance_updated_at": balance_updated_at,
+            "token_store_available": True,
+            "daily_prompt_limit": snapshot.limit,
+            "prompt_units_spent_today": snapshot.count,
+            "daily_reset_epoch": snapshot.reset_epoch,
+            "daily_reset_iso": daily_reset_iso,
+            "daily_reset_notice": "Free daily quota resets at 00:00 UTC.",
+        },
+        headers={"Access-Control-Allow-Origin": "*"},
+    )
+
+
+@app.post("/api/token-spend")
+async def spend_tokens(request: Request, payload: TokenSpendRequest):
+    """Spend purchased prompt tokens manually."""
+    if payload.amount <= 0:
+        raise HTTPException(status_code=400, detail="Amount must be positive.")
+
+    identifier = await who_am_i(request)
+    user_id = _extract_user_uuid(identifier)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Sign in to spend tokens.")
+
+    if not token_store.is_available:
+        raise HTTPException(status_code=503, detail="Token store unavailable.")
+
+    succeeded = await token_store.consume(user_id, payload.amount)
+    if not succeeded:
+        raise HTTPException(status_code=400, detail="Insufficient token balance.")
+
+    balance = await token_store.get_balance(user_id)
+    balance_value = balance.balance if balance else 0
+    balance_updated_at = balance.updated_at.isoformat() if balance and balance.updated_at else None
+
+    return JSONResponse(
+        content={
+            "success": True,
+            "balance": balance_value,
+            "balance_updated_at": balance_updated_at,
+        },
+        headers={"Access-Control-Allow-Origin": "*"},
+    )
+
+
+@app.post("/api/payments/stripe/session")
+async def create_stripe_checkout_session(request: Request, payload: StripeSessionRequest):
+    """Create a Stripe Checkout session for purchasing prompt tokens."""
+    if stripe is None or not STRIPE_SECRET_KEY or not STRIPE_PRICE_PROMPT_PACK:
+        raise HTTPException(status_code=503, detail="Stripe payments not configured.")
+
+    identifier = await who_am_i(request)
+    user_id = _extract_user_uuid(identifier)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Sign in to purchase tokens.")
+
+    metadata = {"user_id": user_id, "token_units": str(STRIPE_TOKEN_UNITS)}
+
+    try:
+        session = stripe.checkout.Session.create(
+            mode="payment",
+            line_items=[{"price": STRIPE_PRICE_PROMPT_PACK, "quantity": 1}],
+            success_url=payload.success_url,
+            cancel_url=payload.cancel_url,
+            metadata=metadata,
+            payment_intent_data={"metadata": metadata},
+        )
+    except Exception as exc:  # pragma: no cover - network/lib errors
+        raise HTTPException(status_code=500, detail=f"Stripe session creation failed: {exc}") from exc
+
+    return JSONResponse(
+        content={"url": session.url, "session_id": session.id},
+        headers={"Access-Control-Allow-Origin": "*"},
+    )
+
+
+@app.post("/api/payments/stripe/webhook")
+async def stripe_webhook(request: Request):
+    """Handle Stripe webhook events to credit purchased tokens."""
+    if stripe is None or not STRIPE_WEBHOOK_SECRET:
+        raise HTTPException(status_code=503, detail="Stripe webhook not configured.")
+
+    payload = await request.body()
+    sig_header = request.headers.get("Stripe-Signature")
+    if sig_header is None:
+        raise HTTPException(status_code=400, detail="Missing Stripe-Signature header.")
+
+    try:
+        event = stripe.Webhook.construct_event(payload, sig_header, STRIPE_WEBHOOK_SECRET)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid Stripe webhook: {exc}") from exc
+
+    if event["type"] == "checkout.session.completed":
+        session = event["data"]["object"]
+        metadata = session.get("metadata") or {}
+        user_id = metadata.get("user_id")
+        token_units = int(metadata.get("token_units") or STRIPE_TOKEN_UNITS)
+        reference_id = session.get("id")
+
+        if user_id and token_units > 0 and token_store.is_available:
+            await token_store.increment(
+                user_id,
+                token_units,
+                source="stripe_checkout",
+                reference_id=reference_id,
+            )
+
+    return JSONResponse(content={"received": True})
+
+
+@app.post("/api/payments/paypal/order")
+async def create_paypal_order(request: Request, payload: PayPalOrderRequest):
+    """Create a PayPal order for purchasing prompt tokens."""
+    if not PAYPAL_CLIENT_ID or not PAYPAL_CLIENT_SECRET:
+        raise HTTPException(status_code=503, detail="PayPal payments not configured.")
+
+    identifier = await who_am_i(request)
+    user_id = _extract_user_uuid(identifier)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Sign in to purchase tokens.")
+
+    access_token = await _get_paypal_access_token()
+    headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
+    body = {
+        "intent": "CAPTURE",
+        "purchase_units": [
+            {
+                "reference_id": str(uuid.uuid4()),
+                "custom_id": user_id,
+                "description": f"{PAYPAL_TOKEN_UNITS} prompt tokens",
+                "amount": {"currency_code": "USD", "value": "1.00"},
+            }
+        ],
+        "application_context": {
+            "brand_name": "AI Portfolio",
+            "shipping_preference": "NO_SHIPPING",
+            "user_action": "PAY_NOW",
+            "return_url": payload.return_url,
+            "cancel_url": payload.cancel_url,
+        },
+    }
+
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        response = await client.post(
+            f"{_paypal_base_url()}/v2/checkout/orders",
+            json=body,
+            headers=headers,
+        )
+
+    if response.status_code >= 400:
+        detail = response.text
+        raise HTTPException(status_code=response.status_code, detail=f"PayPal order failed: {detail}")
+
+    data = response.json()
+    approve_link = next((link.get("href") for link in data.get("links", []) if link.get("rel") == "approve"), None)
+
+    return JSONResponse(
+        content={"id": data.get("id"), "approve_link": approve_link},
+        headers={"Access-Control-Allow-Origin": "*"},
+    )
+
+
+@app.post("/api/payments/paypal/webhook")
+async def paypal_webhook(request: Request):
+    """Handle PayPal webhook events."""
+    if not PAYPAL_WEBHOOK_ID:
+        raise HTTPException(status_code=503, detail="PayPal webhook not configured.")
+
+    transmission_id = request.headers.get("PAYPAL-TRANSMISSION-ID")
+    timestamp = request.headers.get("PAYPAL-TRANSMISSION-TIME")
+    signature = request.headers.get("PAYPAL-TRANSMISSION-SIG")
+    cert_url = request.headers.get("PAYPAL-CERT-URL")
+
+    if not all([transmission_id, timestamp, signature, cert_url]):
+        raise HTTPException(status_code=400, detail="Missing PayPal webhook headers.")
+
+    body_bytes = await request.body()
+    body_text = body_bytes.decode("utf-8")
+
+    try:
+        verified = await _paypal_verify_webhook(
+            transmission_id,
+            timestamp,
+            signature,
+            cert_url,
+            PAYPAL_WEBHOOK_ID,
+            body_text,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"PayPal verification failed: {exc}") from exc
+
+    if not verified:
+        raise HTTPException(status_code=400, detail="Invalid PayPal webhook signature.")
+
+    event = json.loads(body_text)
+    event_type = event.get("event_type")
+
+    if event_type == "CHECKOUT.ORDER.APPROVED":
+        order = event.get("resource", {})
+        purchase_units = order.get("purchase_units") or []
+        custom_id = purchase_units[0].get("custom_id") if purchase_units else None
+        order_id = order.get("id")
+
+        if custom_id and order_id and token_store.is_available:
+            try:
+                access_token = await _get_paypal_access_token()
+                headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    capture_response = await client.post(
+                        f"{_paypal_base_url()}/v2/checkout/orders/{order_id}/capture",
+                        json={},
+                        headers=headers,
+                    )
+                    capture_response.raise_for_status()
+            except Exception as exc:
+                print(f"PayPal capture failed for order {order_id}: {exc}")
+                raise HTTPException(status_code=500, detail="Failed to capture PayPal order.")
+
+            await token_store.increment(
+                custom_id,
+                PAYPAL_TOKEN_UNITS,
+                source="paypal_checkout",
+                reference_id=order_id,
+            )
+
+    return JSONResponse(content={"received": True})
+
 
 # -------------------- Analytics Endpoints --------------------
 

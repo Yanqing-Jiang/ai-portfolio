@@ -9,32 +9,36 @@ export interface StylePreset {
   prompt: string;
   gradientFrom: string;
   gradientTo: string;
+  expansionMode: 'fixed' | 'expand';
 }
 
-export const STYLE_PRESETS: StylePreset[] = [
+export const INITIAL_STYLE_PRESETS: StylePreset[] = [
   {
     id: 'professional',
     title: 'Professional Corporate',
     description: 'Classic business look with neutral tones',
-    prompt: 'professional business attire, charcoal blazer over crisp white shirt, soft studio lighting with gradient backdrop transitioning from light gray to white, confident and approachable expression',
+    prompt: '',
     gradientFrom: '#1e293b',
     gradientTo: '#64748b',
+    expansionMode: 'fixed',
   },
   {
     id: 'creative',
     title: 'Creative Editorial',
     description: 'Bold and modern with vibrant colors',
-    prompt: 'contemporary professional style, jewel-toned backdrop with rich blues and teals, editorial lighting with dramatic contrast, modern blazer, confident creative professional vibe',
+    prompt: '',
     gradientFrom: '#0891b2',
     gradientTo: '#6366f1',
+    expansionMode: 'fixed',
   },
   {
     id: 'warm',
     title: 'Warm Approachable',
     description: 'Friendly and inviting atmosphere',
-    prompt: 'approachable professional setting, warm natural lighting, soft earth-toned backdrop with subtle texture, smart casual blazer, genuine welcoming smile, relaxed yet polished demeanor',
+    prompt: '',
     gradientFrom: '#ea580c',
     gradientTo: '#facc15',
+    expansionMode: 'fixed',
   },
   {
     id: 'custom',
@@ -43,6 +47,7 @@ export const STYLE_PRESETS: StylePreset[] = [
     prompt: '',
     gradientFrom: '#6b7280',
     gradientTo: '#9ca3af',
+    expansionMode: 'expand',
   },
 ];
 
@@ -50,16 +55,18 @@ interface StylePresetCardProps {
   preset: StylePreset;
   isSelected: boolean;
   onClick: () => void;
+  disabled?: boolean;
 }
 
-export const StylePresetCard: React.FC<StylePresetCardProps> = ({ preset, isSelected, onClick }) => {
+export const StylePresetCard: React.FC<StylePresetCardProps> = ({ preset, isSelected, onClick, disabled }) => {
   return (
     <Card
       className={cn(
         'cursor-pointer transition-all duration-200 hover:shadow-md hover:scale-105',
-        isSelected && 'ring-2 ring-primary ring-offset-2'
+        isSelected && 'ring-2 ring-primary ring-offset-2',
+        disabled && 'pointer-events-none opacity-50'
       )}
-      onClick={onClick}
+      onClick={disabled ? undefined : onClick}
     >
       <CardContent className="p-4">
         <div
