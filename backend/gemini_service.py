@@ -306,17 +306,45 @@ class _GenerativeModel:
             content_list = [str(contents)]
 
         resp = client.models.generate_content(model=self.model_name, contents=content_list, config=config)
+
+        def _extract_text_from_dict(payload: Dict[str, Any]) -> Optional[str]:
+            candidates = payload.get("candidates")
+            if isinstance(candidates, list):
+                for candidate in candidates:
+                    content = candidate.get("content") if isinstance(candidate, dict) else None
+                    parts = content.get("parts") if isinstance(content, dict) else None
+                    if isinstance(parts, list):
+                        for part in parts:
+                            text = part.get("text") if isinstance(part, dict) else None
+                            if isinstance(text, str) and text.strip():
+                                return text
+            text_value = payload.get("text")
+            if isinstance(text_value, str) and text_value.strip():
+                return text_value
+            return None
+
         for attr in ("to_dict", "model_dump"):
             fn = getattr(resp, attr, None)
             if callable(fn):
                 try:
                     data = fn()
                     if isinstance(data, dict):
+                        text = _extract_text_from_dict(data)
+                        if text:
+                            data["text"] = text
                         return data
                 except Exception:
                     pass
+
         text = getattr(resp, "text", None)
-        return {"text": text} if isinstance(text, str) else {}
+        if not isinstance(text, str) or not text.strip():
+            try:
+                data_dict = resp.to_dict()  # type: ignore[attr-defined]
+                if isinstance(data_dict, dict):
+                    text = _extract_text_from_dict(data_dict) or ""
+            except Exception:
+                text = ""
+        return {"text": text} if isinstance(text, str) and text else {}
 
 
 def _generate_content_stream(*, model: str, contents: Any, generation_config: Optional[Dict[str, Any]] = None, tools: Optional[List[Dict[str, Any]]] = None):

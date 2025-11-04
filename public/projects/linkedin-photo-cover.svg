@@ -1,0 +1,44 @@
+<svg width="800" height="450" viewBox="0 0 800 450" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1f3b73"/>
+      <stop offset="50%" stop-color="#2b5fc2"/>
+      <stop offset="100%" stop-color="#79a5ff"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#1f2937" stop-opacity="0.95"/>
+      <stop offset="100%" stop-color="#0f172a" stop-opacity="0.9"/>
+    </linearGradient>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feDropShadow dx="0" dy="0" stdDeviation="18" flood-color="#8ab4ff" flood-opacity="0.55"/>
+    </filter>
+  </defs>
+
+  <rect width="800" height="450" fill="url(#bg)"/>
+
+  <rect x="70" y="80" width="280" height="290" rx="28" fill="url(#panel)" stroke="#8ab4ff" stroke-opacity="0.25"/>
+  <rect x="450" y="70" width="280" height="310" rx="32" fill="rgba(15,23,42,0.85)" stroke="#8ab4ff" stroke-opacity="0.35"/>
+
+  <circle cx="610" cy="225" r="82" fill="#0f172a" stroke="#8ab4ff" stroke-width="6" filter="url(#glow)"/>
+  <circle cx="610" cy="225" r="54" fill="#1e293b" stroke="#8ab4ff" stroke-width="4"/>
+  <circle cx="610" cy="225" r="16" fill="#93c5fd"/>
+
+  <rect x="495" y="132" width="70" height="26" rx="10" fill="#8ab4ff" opacity="0.75"/>
+
+  <text x="110" y="155" font-family="Segoe UI, sans-serif" font-size="20" fill="#94a3b8" letter-spacing="0.08em">THREE-STEP WIZARD</text>
+  <text x="110" y="190" font-family="Segoe UI, sans-serif" font-size="36" fill="#e2e8f0" font-weight="600">LinkedIn Photo Generator</text>
+  <text x="110" y="225" font-family="Segoe UI, sans-serif" font-size="18" fill="#cbd5f5">
+    Upload a portrait, describe the vibe, review the AI-expanded prompt.
+  </text>
+
+  <g font-family="Segoe UI, sans-serif" font-size="16" fill="#dbeafe">
+    <text x="110" y="270">1. Upload portrait - JPEG/PNG up to 8&nbsp;MB - instant preview</text>
+    <text x="110" y="300">2. Describe style - one concise sentence - prompt expansion</text>
+    <text x="110" y="330">3. Generate - Gemini Nano Banana - download + share controls</text>
+  </g>
+
+  <rect x="470" y="310" width="210" height="48" rx="14" fill="#1d4ed8" opacity="0.9"/>
+  <text x="485" y="341" font-family="Segoe UI, sans-serif" font-size="20" fill="#e0f2fe" font-weight="600">
+    Generate Headshot
+  </text>
+</svg>

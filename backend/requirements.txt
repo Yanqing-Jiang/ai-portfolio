@@ -11,6 +11,7 @@ langchain-core==0.3.77
 langchain-community==0.3.30
 langchain-openai==0.3.34
 google-genai
+python-multipart
 fastapi-limiter
 redis
 asyncpg
@@ -18,3 +19,6 @@ sqlglot
 python-jose[cryptography]
 fakeredis
 pytest-asyncio>=0.23.6
+Pillow
+stripe
+httpx

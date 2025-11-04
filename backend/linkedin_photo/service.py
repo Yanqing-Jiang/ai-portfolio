@@ -24,6 +24,7 @@ try:
     from ..gemini_service import gemini_service  # type: ignore
 except ImportError:  # pragma: no cover - running as top-level module
     from gemini_service import gemini_service  # type: ignore
+from .fixed_prompts import match_fixed_prompt
 from .prompt_templates import SYSTEM_PROMPT, PROMPT_EXPANSION_TEMPLATE
 from .schemas import LinkedInPhotoResponse, ImageVariation
 
@@ -33,6 +34,19 @@ ALLOWED_IMAGE_FORMATS = {"JPEG", "PNG"}
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 DEFAULT_IMAGE_MODEL = os.getenv("LINKEDIN_PHOTO_IMAGE_MODEL", "gemini-2.5-flash-image")
+
+
+def _normalize_variation_value(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    normalized = value.strip()
+    if not normalized:
+        return None
+
+    lowered = normalized.lower()
+    if lowered in {"none", "no change", "original", "keep", "unchanged", "default"}:
+        return None
+    return normalized
 
 
 @dataclass(slots=True)
@@ -45,6 +59,14 @@ class ValidatedImage:
     height: int
 
 
+@dataclass(slots=True)
+class VariationDirectives:
+    background: Optional[str] = None
+    expression: Optional[str] = None
+    pose: Optional[str] = None
+    prop: Optional[str] = None
+
+
 class LinkedInPhotoService:
     """Co-ordinates prompt expansion and image generation for LinkedIn headshots."""
 
@@ -53,7 +75,12 @@ class LinkedInPhotoService:
         self._image_model: str = DEFAULT_IMAGE_MODEL
         self._logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
 
-    async def generate(self, photo: UploadFile, user_prompt: str) -> LinkedInPhotoResponse:
+    async def generate(
+        self,
+        photo: UploadFile,
+        user_prompt: str,
+        prompt_mode: Optional[str] = None,
+    ) -> LinkedInPhotoResponse:
         """Entry point invoked by the FastAPI router."""
         start = time.perf_counter()
         request_id = uuid.uuid4().hex[:8]
@@ -74,6 +101,10 @@ class LinkedInPhotoService:
                 detail="Describe the style or setting to generate your LinkedIn headshot.",
             )
 
+        prompt_mode_normalized = (prompt_mode or "auto").strip().lower()
+        matched_fixed_prompt = match_fixed_prompt(user_prompt)
+        should_passthrough = prompt_mode_normalized in {"fixed", "passthrough"}
+
         try:
             validated = await self._read_and_validate_image(photo, request_id=request_id)
             self._logger.debug(
@@ -85,19 +116,33 @@ class LinkedInPhotoService:
                 len(validated.raw_bytes),
             )
 
-            self._logger.debug("%sExpanding style prompt (length=%d)", ctx, len(user_prompt))
-            expanded_prompt = await self._expand_prompt(
-                user_prompt,
-                validated,
-                request_id=request_id,
-            )
-            self._logger.debug(
-                "%sExpanded prompt ready (length=%d)",
-                ctx,
-                len(expanded_prompt),
-            )
+            if should_passthrough or matched_fixed_prompt:
+                expanded_prompt = matched_fixed_prompt or user_prompt
+                reason = (
+                    "prompt_mode-fixed"
+                    if should_passthrough
+                    else "matched-canonical-fixed-prompt"
+                )
+                self._logger.debug(
+                    "%sBypassing prompt expansion (%s, length=%d)",
+                    ctx,
+                    reason,
+                    len(expanded_prompt),
+                )
+            else:
+                self._logger.debug("%sExpanding style prompt (length=%d)", ctx, len(user_prompt))
+                expanded_prompt = await self._expand_prompt(
+                    user_prompt,
+                    validated,
+                    request_id=request_id,
+                )
+                self._logger.debug(
+                    "%sExpanded prompt ready (length=%d)",
+                    ctx,
+                    len(expanded_prompt),
+                )
 
-            num_variations = 3
+            num_variations = 1
             self._logger.debug(
                 "%sDispatching %d variation tasks using model '%s'",
                 ctx,
@@ -140,6 +185,81 @@ class LinkedInPhotoService:
             processing_ms=processing_ms,
         )
 
+    async def generate_variation(
+        self,
+        photo: UploadFile,
+        base_prompt: str,
+        *,
+        background: Optional[str] = None,
+        expression: Optional[str] = None,
+        pose: Optional[str] = None,
+        prop: Optional[str] = None,
+    ) -> LinkedInPhotoResponse:
+        """Generate a follow-up portrait variation based on an existing prompt."""
+        start = time.perf_counter()
+        request_id = uuid.uuid4().hex[:8]
+        ctx = f"[req:{request_id}] "
+
+        self._logger.info("%sReceived LinkedIn photo variation request", ctx)
+
+        normalized_base = (base_prompt or "").strip()
+        if not normalized_base:
+            self._logger.warning("%sRejected variation: base prompt missing", ctx)
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Provide the previous expanded prompt to create a variation.",
+            )
+
+        directives = VariationDirectives(
+            background=_normalize_variation_value(background),
+            expression=_normalize_variation_value(expression),
+            pose=_normalize_variation_value(pose),
+            prop=_normalize_variation_value(prop),
+        )
+
+        try:
+            validated = await self._read_and_validate_image(photo, request_id=request_id)
+            self._logger.debug(
+                "%sVariation portrait validated (%dx%d)",
+                ctx,
+                validated.width,
+                validated.height,
+            )
+            variation_prompt = self._build_variation_prompt(
+                normalized_base,
+                directives,
+                request_id=request_id,
+            )
+            self._logger.debug(
+                "%sVariation prompt ready (length=%d)",
+                ctx,
+                len(variation_prompt),
+            )
+            variation = await self._generate_single_variation(
+                validated,
+                variation_prompt,
+                0,
+                request_id=request_id,
+            )
+        except HTTPException:
+            raise
+        except Exception:
+            self._logger.exception("%sUnexpected error during variation generation", ctx)
+            raise
+
+        processing_ms = int((time.perf_counter() - start) * 1000)
+        self._logger.info(
+            "%sCompleted variation request in %d ms",
+            ctx,
+            processing_ms,
+        )
+
+        return LinkedInPhotoResponse(
+            expanded_prompt=variation_prompt,
+            variations=[variation],
+            processing_ms=processing_ms,
+        )
+
     async def _generate_single_variation(
         self,
         image: ValidatedImage,
@@ -168,6 +288,44 @@ class LinkedInPhotoService:
             width=width,
             height=height,
         )
+
+    def _build_variation_prompt(
+        self,
+        base_prompt: str,
+        directives: VariationDirectives,
+        *,
+        request_id: Optional[str] = None,
+    ) -> str:
+        """Blend the base prompt with guided adjustments for a new iteration."""
+        ctx = f"[req:{request_id}] " if request_id else ""
+        adjustments: list[str] = []
+
+        if directives.background:
+            adjustments.append(f"Adjust the background to {directives.background}.")
+        if directives.expression:
+            adjustments.append(f"Guide the facial expression toward {directives.expression}.")
+        if directives.pose:
+            adjustments.append(f"Refine the pose to {directives.pose}.")
+        if directives.prop:
+            adjustments.append(f"Introduce the following prop interaction: {directives.prop}.")
+
+        if not adjustments:
+            adjustments.append(
+                "Refresh the portrait subtly while preserving the previous lighting balance and professional polish."
+            )
+
+        adjustments.append(
+            "Maintain the subject's identity, proportions, and wardrobe while keeping the image LinkedIn-ready."
+        )
+        adjustments.append(
+            "Render exactly one finished portrait image—do not create grids, diptychs, or multiple outputs."
+        )
+
+        variation_prompt = (
+            f"{base_prompt.strip()}\n\nVariation directives:\n- " + "\n- ".join(adjustments)
+        )
+        self._logger.debug("%sConstructed variation prompt", ctx)
+        return variation_prompt
 
     async def _read_and_validate_image(
         self,

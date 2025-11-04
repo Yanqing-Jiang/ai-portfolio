@@ -6,6 +6,46 @@ export const PROJECT_DATA: ProjectYear[] = [
     subtitle: '(Agentic AI & Autonomous Trading)',
     projects: [
       {
+        id: 'linkedin-photo',
+        title: 'LinkedIn Photo Generator',
+        description: `Three-step UX flow that turns a casual portrait into a LinkedIn-ready headshot.\nStep 1 �?" Upload: validate JPEG or PNG up to 8 MB, show an inline preview, and prep metadata.\nStep 2 �?" Describe: capture a single style sentence and expand it with Gemini into a photography-grade brief (lighting, background, wardrobe) that preserves identity.\nStep 3 �?" Generate: FastAPI validates the file, expands the prompt, calls Gemini Nano Banana image editing, and returns the professional headshot alongside the transparent prompt display with download/share actions.`,
+        cardDescription:
+          'Upload a portrait, describe the vibe, and watch Gemini Nano Banana deliver a LinkedIn headshot with the exact expanded prompt beside it.',
+        technologies: [
+          'Tailwind CSS',
+          'Image Iterations',
+          'Gemini Nano Banana',
+          'Prompt Engineering',
+          'Gemini SDK',
+        ],
+        systemInstruction: `You are the AI assistant for **LinkedIn Photo Generator**. You have full knowledge of how the three-step wizard, FastAPI pipeline, and Gemini Nano Banana integration work. Use the details below to answer questions about UX, validation rules, and AI workflow.\n\n+--------------------\nFEATURE OVERVIEW\nStep 1 �?" Upload: drag-and-drop interface, JPEG/PNG up to 8 MB, EXIF stripped, portrait preview.\nStep 2 �?" Style Prompt: single control, hints for wardrobe/background, Gemini text model expands into full photography instructions.\nStep 3 �?" Generate: FastAPI validates, expands prompt, calls Gemini image model with reference photo, returns headshot and displays the prompt for transparency.\n\nSECURITY & TRUST\n- Pillow ensures the upload is truly an image and enforces size/type limits.\n- Expanded prompt is read-only and surfaced next to the final photo.\n- Download + Web Share actions keep the experience self-contained without third-party uploads.\n\nTECH STACK\nFrontend: React 19 + Tailwind utility classes, wizard flow on /project/linkedin-photo.\nBackend: FastAPI router /api/linkedin-photo/generate, Gemini LLM for prompt expansion plus Nano Banana image editing.\n+--------------------`,
+        defaultPrompts: [
+          'Summarize the three LinkedIn Photo wizard steps and why they stay on one screen.',
+          'How does the FastAPI backend validate uploads before calling Gemini Nano Banana?',
+          'What transparency do users get after generation finishes?',
+        ],
+        coverUrl: '/projects/linkedin-photo-cover.svg',
+        imageUrl: '/projects/linkedin-photo-cover.svg',
+        ogImage: '/projects/linkedin-photo-cover.svg',
+        seoTitle: 'LinkedIn Photo Generator | Gemini Nano Banana Headshots',
+        seoDescription:
+          'Upload a portrait, describe the vibe, and generate a LinkedIn-ready professional headshot with Gemini Nano Banana. The app shows the exact prompt used so users trust the workflow.',
+        seoKeywords: [
+          'LinkedIn headshot generator',
+          'Gemini Nano Banana',
+          'FastAPI image workflow',
+          'LLM prompt expansion',
+          'React wizard UI',
+        ],
+        datePublished: '2025-11-01',
+        dateModified: '2025-11-01',
+        serviceTags: ['AI Image Editing', 'UX Wizard Design', 'Prompt Engineering'],
+        statHighlights: [
+          'Three-step wizard keeps upload, style prompt, and review on a single focused screen',
+          'Displays the expanded prompt beside the generated headshot for transparency and trust',
+        ],
+      },
+      {
         id: 'next-gen-analytics-agent',
         title: 'Next Gen Analytics (Agents)',
         description: `Three Agentic Workflows:\nDirect (fixed path): deterministic tool orchestration for rapid answers\nSingle-Agent (multi-tool use): adaptive LangGraph agent that rewrites SQL, charts, and commentary\nMulti-Agent (supervisor + specialists): orchestrated analytics swarm with explainable task graph\nHuman-in-the-loop: Inline clarifications tuned for metrics, peers, and guardrail ranges\nExplainable thinking process panel: plan graph + per-step trace for analyst-grade transparency.\nLive semiconductor coverage: AMD, AVGO, INTC, MU, NVDA, QCOM, TXN.\nMemory optimization: RAG tuned recall, cached SQL, vector prompts, and stateful agents`,
@@ -115,7 +155,7 @@ Memory System: Session-based conversation persistence with context awareness
           value: 200,
           unitText: 'Percent',
         },
-      }
+      },
     ],
   },
   {
@@ -649,6 +689,7 @@ This production-grade web application automates the invoice validation and match
     ],
   },
 ];
+
 
 
 

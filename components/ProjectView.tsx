@@ -4,6 +4,7 @@ import type { Project } from '../types';
 import Chat from './Chat';
 import { Page as AnalyticsSqlPage } from './analytics/sql';
 import { Page as AnalyticsMemoryPage } from './analytics/memory';
+import { Page as LinkedInPhotoPage } from './linkedinPhoto/Page';
 import LegacyProjectPage from './LegacyProjectPage';
 import ProjectHelmet from './ProjectHelmet';
 
@@ -41,6 +42,15 @@ const ProjectView: React.FC<ProjectViewProps> = ({ project }) => {
       <>
         <ProjectHelmet project={project} />
         <AnalyticsMemoryPage />
+      </>
+    );
+  }
+
+  if (project.id === 'linkedin-photo') {
+    return (
+      <>
+        <ProjectHelmet project={project} />
+        <LinkedInPhotoPage />
       </>
     );
   }
