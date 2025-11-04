@@ -1,11 +1,11 @@
-# Next-Gen Analytics Agent Architecture - October 26, 2025
+# Next-Gen Analytics Agent Architecture - November 4, 2025
 
 ## 1. Project Overview
 - The **next-gen analytics agent** delivers LangGraph-style orchestration on top of FastAPI (`backend/main.py`) using the Python modules under `backend/analytics`.
 - The system supports three operating modes: deterministic planner-executor, single agent with explicit tool telemetry, and supervisor-led multi-agent. Each mode is exposed through SSE endpoints that feed the Vite UI.
 - Product positioning (see `public/ai-projects.json`) highlights a unified UI that switches between direct, single-agent, and supervisor workflows, reuses cached SQL/RAG/chart artifacts, and targets a 60% improvement in clarification latency.
-- The October 26 refresh folds in Gemini-planned multi-topic web fan-out (`flows/tooling.WebRetrieverAdapter.expand`), ranking and operating leverage intent heuristics (`core.intent_impl.detection.heuristic_intent` + `normalization`), and latency guardrails plus cache orchestration that span `flows/planner_executor.py`, `core/cache.py`, and `services/response_search.py`.
-- This reference captures implementation details current to **October 26, 2025** and replaces the earlier agentic refactor notes.
+- The November 4 refresh adds environment-gated agentic revisions (`flows/workflow._agentic_revision_enabled`), lane TTL-based refresh heuristics (`flows/workflow._resolve_lane_ttls` + `set_lane_refresh_requirements`), and pushes planner execution through the shared `PlannerToolRegistry`/`run_tool_parallelism` stack so tool telemetry and cache reuse stay aligned across modes.
+- This reference captures implementation details current to **November 4, 2025** and replaces the earlier agentic refactor notes.
 
 ## 2. Guiding Principles & Guardrails
 - **Reuse the planner core.** `flows/planner_executor.PlannerExecutorFlow` stays the source of truth for SQL planning, execution, charting, and analysis so every mode shares identical business logic.
@@ -13,12 +13,14 @@
 - **Observability first.** Flows annotate events via `flows.schedulers.apply_mode_metadata`, emit structured telemetry through `core.telemetry`, and now attach latency guardrail payloads (`planner_executor._evaluate_latency_guardrail`) so web fan-out breaches surface immediately.
 - **Cache circuit-breakers.** `core.cache.CacheService` fronts Redis with warm handshakes, circuit-breaker thresholds, and in-process fallbacks, keeping `core.config_store.ConfigStore` responsive even when Redis is unavailable.
 - **Explicit caching.** Hashed `ToolInvocationReceipt` objects, `SessionStateSnapshot` helpers, and lane metadata make reuse versus fresh work auditable; merged tool bundles tag topic counts and reuse flags so the UI can badge cached accessories.
-- **Incremental rollout.** Flow selection, revision handling, and telemetry toggles live inside Python rather than ad-hoc environment flags to reduce operational drift.
+- **Agentic gating.** Flow selection stays centralized, while agentic revision modes are now toggled via explicit env flags (`AGENTIC_REVISIONS_ENABLED`, `AGENTIC_REVISION_*`) so rollouts remain auditable and reversible.
 
 ## 3. Flow Entry Points & Selection
 - FastAPI exposes `/api/analytics/stream` and `/api/analytics/memory/stream` (see `backend/main.py`), both of which wrap helpers in `backend/analytics/flows/workflow.py`.
 - `analytics_memory_workflow()` selects a factory from `FLOW_FACTORIES`, primes the flow instance with revision context, and streams `EventEmitter` payloads. Instrumentation toggles are handled inline via `_env_flag("ANALYTICS_MEMORY_INSTRUMENT")`.
 - Session snapshotting, follow-up routing, and revision lane targeting all funnel through this helper before the chosen flow's `.events()` coroutine runs.
+- `get_available_flows()` is exposed again to surface the active registry to the frontend and CLI tools, mirroring the keys in `FLOW_FACTORIES`.
+- The helper resolves lane TTLs via `_resolve_lane_ttls()`, applies lane refresh requirements (`set_lane_refresh_requirements`) / analysis refresh modes, and enables agentic revisions per `_agentic_revision_enabled()` based on overrides such as `ANALYTICS_ANALYSIS_REFRESH_TTL_SECONDS` and `AGENTIC_REVISION_SINGLE_AGENT`.
 
 | Flow name        | Class (module)                                        | `FlowMode`            | Default label      | Typical usage                                                |
 |------------------|-------------------------------------------------------|-----------------------|--------------------|--------------------------------------------------------------|
@@ -45,7 +47,7 @@ The `FollowUpClassifier` (`routing/follow_up_classifier.py`) runs ahead of every
 - `flows/planner/sql_lane.stream_sql_lane` orchestrates SQL execution and reuse, emitting `sql_ready` with `lane: "sql"` plus `parallel_group: "core_sequential"` when cached payloads are replayed. Fresh runs call `sql.executor.execute_sql` to hydrate sample rows, tickers, and column metadata.
 - `stream_chart_lane` blends `compose_chart_ready_payload` with `core.charting.plan_chart_rule_based`/`build_chart_spec`; recent updates normalize axis ordering, enforce quarterly granularity when intent slots demand it, and propagate legend colors for peer comparisons.
 - `flows/planner/analysis_lane.stream_analysis_lane` now streams via `stream_insights_llm`, merging accessory bundles, applying latency guardrails (`latency_guardrail` payload), and emitting `analysis_revision` hooks when revision directives request insight-focused rewrites.
-- Validators in `validators/cohesive_result.py` still gate the cohesive payload, while `mark_revision_completion` (from `flows/planner/revision.py`) marks lanes complete for revision-aware consumers and carries forward `analysis_revision_history` for audit.
+- Validators in `validators/cohesive_result.py` still gate the cohesive payload, while `mark_revision_completion` (from `flows/planner/revision.py`) marks lanes complete for revision-aware consumers and relies on the session artifact history (`tool_cache["analytics"]["artifacts_history"]`) for audit trails.
 
 ### 4.4 Tool Fan-Out & Accessory Prefetch
 - Tool fan-out starts via `flows/planner.fanout.start_tool_parallelism`, which buffers adapter output on an async queue while `derive_accessory_events` synthesizes `stock_ready`/`web_ready` deltas stamped with lane metadata.
@@ -80,21 +82,22 @@ The `FollowUpClassifier` (`routing/follow_up_classifier.py`) runs ahead of every
 ### 4.5 Artifacts, Receipts & Snapshotting
 - Artifacts are tracked via `artifacts/models.py` (`PipelineArtifacts`, `SQLGenerationArtifact`, `SQLExecutionArtifact`, `ChartArtifact`, `AnalysisArtifact`, `MarketArtifact`, `WebContextArtifact`); web artifacts now capture `latency_stats` and merged topic summaries for guardrail evaluation.
 - Tool receipts use `ToolInvocationReceipt` (hashes, attempt counts, lane hints, metadata) attached to `PlannerPhaseContext` and persisted through `SessionStateSnapshot.record_tool_receipt`; metadata tracks guardrail outcomes and reused accessories.
-- Session state (`core/session_state.py`) records last SQL, chart, analysis, tool cache, and schedule history with Redis (or in-memory) storage and a TTL bounded between 1 and 15 minutes, and now stores `analysis_revision_history`/`chart_revision_history` for audit.
+- Session state (`core/session_state.py`) tracks last SQL/chart/analysis outputs, tool cache entries, schedule history (capped at 50), and per-lane timestamps with Redis (or in-memory) storage; TTL is clamped between 1 and 60 minutes via `ANALYTICS_SESSION_TTL_MINUTES`, with a fallback store and `MAX_ARTIFACT_HISTORY = 5` to keep artifact snapshots fresh.
 - Revision snapshots (`core/revision_snapshot`) capture query signatures and artifact snapshots for targeted reruns; `flows/planner/revision.build_revision_plan` narrows reruns to the lanes that actually need fresh work and can trigger analysis-only revisions when `revision_targets` exclude SQL/chart.
 
 ## 5. Flow Implementations
 ### 5.1 Planner-Executor (Deterministic Mode)
-- `PlannerExecutorFlow.events()` delegates to `PlannerPipeline` to run lane-specific helpers (`stream_sql_lane`, `stream_chart_lane`, `stream_analysis_lane`) after classification, applying `apply_mode_metadata` to every delta.
-- Streaming pairs `TimedEventEmitter` with `ToolParallelRuntime` so mode configs can enable hedged accessories without blocking the core SQL lane; emitted artifacts include lane + parallel group metadata for the canvas.
+- `PlannerExecutorFlow.events()` boots `PlannerPipeline` with the shared `PlannerToolRegistry`, invoking registered tools like `classification`, `intent_detection`, and `plan_generation` so the stage order stays declarative while `apply_mode_metadata` annotates every delta.
+- Streaming pairs `TimedEventEmitter` with `ToolParallelRuntime`/`run_tool_parallelism()`, emitting `tool_parallel_start`/`tool_parallel_result`/`tool_parallel_complete` for adapters (e.g., web, market) so telemetry and cached receipts remain aligned even when lanes run hedged.
 - Cached snapshots seed the pipeline through `_seed_web_search_from_payload` and `_seed_stock_widget_from_payload`, allowing revision runs to reuse accessories before new fan-out kicks off.
+- Revision runs rely on `set_revision_directive()` and `set_lane_refresh_requirements()` so explicit targets, lane TTL heuristics, and agentic directives (`agentic_revision_mode`) govern which lanes refresh versus reuse cached receipts.
 - `PlannerExecutorFlow.get_prompt_versions()` exposes inline prompt registries (replacing `prompt_versions.py`) so downstream flows can display current prompt fingerprints.
-- `run_planner_executor()` exposes a backwards-compatible helper for legacy callers and unit tests, while receipts update after each stage with `snapshot_age_seconds`, guardrail status, and reuse flags for UI badging.
+- `run_planner_executor()` exposes a backwards-compatible helper for legacy callers and unit tests, while receipts update after each stage with `snapshot_age_seconds`, guardrail status, lane refresh hints, and reuse flags for UI badging.
 
 ### 5.2 Single-Agent Controller
 - `SingleAgentController` composes the planner core with tool metadata from `pipeline_tools.get_planner_tool_registry()`, piggybacks on `PlannerPipeline.events`, and exposes a manifest consumed by the frontend.
 - Fan-out adapters (`MarketQuestionAdapter`, `StockTrackerAdapter`, `WebRetrieverAdapter`) reuse the planner's `ToolParallelRuntime`; the web adapter expands into topic-specific adapters, while market adapters remain hedged but rate-limited to avoid Polygon throttling.
-- Tool lifecycle events (`tool_call` start and end) include latency budgets, topic labels, output artifact hints, and follow-up routing info; telemetry mirrors these updates via `telemetry.tool_iteration`.
+- Tool lifecycle events (`tool_call`, `tool_parallel_*`) include latency budgets, topic labels, output artifact hints, and follow-up routing info; telemetry mirrors these updates via `telemetry.tool_iteration` so canvases can visualize hedged adapters alongside sequential tool calls.
 - Analysis completion (`analysis_complete`) triggers `_build_single_agent_cohesive_payload`, which now merges latency guardrail verdicts, topic-level snippets, and tool manifests into a single `cohesive_result`.
 - Cached receipts respect `LANE_TOOL_MAP` and `LANE_CONCURRENCY_LIMITS`; receipts store prompt versions and guardrail outcomes so cache hits remain explainable.
 
@@ -117,8 +120,8 @@ The `FollowUpClassifier` (`routing/follow_up_classifier.py`) runs ahead of every
 - Supervisor-facing tools (`tools/registry.SupervisorTools`) expose function-call schemas for template lookup, metric search, company lookup, and analytics context retrieval so LLM agents stay deterministic.
 
 ## 7. Session Memory, Revisions & Follow-Ups
-- `SessionStateRepository` lazily instantiates Redis clients (or logs an in-memory fallback) and enforces TTLs via `_read_ttl_from_env()`. Helper methods record queries, tool results, artifacts history, analysis/chart revision history, and schedule events for later fan-out decisions.
-- Revision helpers (`flows/chart_revision.py`, `RevisionContext`, `flows/planner/revision.py`) enrich revision requests with prior SQL, dataset previews, and analysis history. `build_revision_plan` + `derive_revision_targets` decide which lanes re-run, while `mark_revision_completion` stops redundant delta emissions and `emit_analysis_revision` streams narrative-only patches.
+- `SessionStateRepository` lazily instantiates Redis clients (or logs an in-memory fallback) and enforces TTLs via `_read_ttl_from_env()`. Helper methods record queries, tool results, artifact history (`tool_cache["analytics"]["artifacts_history"]`), lane timestamps, and schedule events for later fan-out decisions.
+- Revision helpers (`flows/chart_revision.py`, `flows/revision_directive.py`, `flows/planner/revision.py`) enrich revision requests with prior SQL, dataset previews, and analysis history. `build_revision_plan` + `derive_revision_targets` decide which lanes re-run, while `mark_revision_completion` stops redundant delta emissions and `emit_analysis_revision` streams narrative-only patches.
 - `analytics_memory_workflow()` detects revision intent with `chart_revision.is_chart_revision_query` and `analysis_revision` helpers before running the main flow, optionally short-circuiting to the stock-only lane when `revision_plan.stock_only` is set or reusing cached accessories when `ctx.web_search_seeded` is true.
 - `FollowUpClassifier` inspects the latest snapshot (including which lanes have reusable artifacts) to choose `FollowUpRoute.STOCK_ONLY`, `REUSE_SQL`, or `FULL_PIPELINE`, trimming revision targets to lanes that actually exist in the snapshot.
 
@@ -159,16 +162,16 @@ The `FollowUpClassifier` (`routing/follow_up_classifier.py`) runs ahead of every
 - Run `pytest backend/tests/analytics` before shipping backend changes; tests rely on mocked services for Polygon and response search, and new cases should stub `ToolParallelRuntime` queues plus Gemini topic planners to avoid async flakiness.
 - Frontend Vitest coverage (see `docs/analytics-canvas-overview.md`) should validate lane rendering, topic badges, latency guardrail indicators, and cohesive card updates.
 - Logging relies on the `analytics.telemetry` logger; configure sinks via standard `logging` config or FastAPI startup hooks, and ensure guardrail outputs flow to your log aggregation.
-- Environment variables: `REDIS_URL`, `WEB_SEARCH_GUARDRAIL_P50_MS`, `WEB_SEARCH_GUARDRAIL_P95_MS`, `WEB_SEARCH_TIMEOUT_SECONDS`, `WEB_SEARCH_MAX_TOPICS`, `WEB_SEARCH_RETRY_ATTEMPTS`, `GEMINI_SEARCH_MODEL`, `GEMINI_SEARCH_TEMPERATURE`, plus tool API keys handled in `.env`. The project expects `npm install` + `npm run dev` for the frontend and `py -m uvicorn main:app --reload --port 8000` for the backend.
+- Environment variables: `REDIS_URL`, `WEB_SEARCH_GUARDRAIL_P50_MS`, `WEB_SEARCH_GUARDRAIL_P95_MS`, `WEB_SEARCH_TIMEOUT_SECONDS`, `WEB_SEARCH_MAX_TOPICS`, `WEB_SEARCH_RETRY_ATTEMPTS`, `GEMINI_SEARCH_MODEL`, `GEMINI_SEARCH_TEMPERATURE`, `ANALYTICS_SESSION_TTL_MINUTES`, lane TTL overrides (`ANALYTICS_ANALYSIS_REFRESH_TTL_SECONDS`, `ANALYTICS_WEB_REFRESH_TTL_SECONDS`, `ANALYTICS_CHART_REFRESH_TTL_SECONDS`, `ANALYTICS_MARKET_REFRESH_TTL_SECONDS`), and agentic toggles (`AGENTIC_REVISIONS_ENABLED`, `AGENTIC_REVISION_SINGLE_AGENT`, `AGENTIC_REVISION_MULTI_AGENT`, `AGENTIC_REVISION_PLANNER_EXECUTOR`), plus tool API keys handled in `.env`. The project expects `npm install` + `npm run dev` for the frontend and `py -m uvicorn main:app --reload --port 8000` for the backend.
 
 
 ---
 
-## 12. Legacy Cleanup (Completed: October 31, 2025)
+## 12. Legacy Cleanup (Updated: November 4, 2025)
 - Removed `backend/analytics/artifacts/spike_artifacts.py` along with the `classification_from_event` / `intent_from_event` shims so downstream code relies exclusively on the dataclass artifacts in `analytics.artifacts.models`.
 - Deleted the placeholder `summarize` helper from `backend/analytics/core/analysis.py`, ensuring narrative streaming always flows through `stream_insights_llm`.
 - Dropped compatibility aliases `backend/analytics/sql/db.py` and `backend/analytics/sql/sql_validate.py`, and inlined the unused `execute_sql_with_limit` / `quick_validate_sql_syntax` helpers; callers import directly from `analytics.sql.executor` / `analytics.sql.validator`.
-- Retired unused convenience APIs (`core.events.emit_progress|emit_result|emit_error`, `core.telemetry.timed_metric`, `flows/workflow.run_flow`, `flows/workflow.get_available_flows`, `flows/workflow._extract_revision_snapshot`, `flows/planner_executor._env_flag`, `core.config_store.close_config_store`) to tighten the supported surface.
+- Retired unused convenience APIs (`core.events.emit_progress|emit_result|emit_error`, `core.telemetry.timed_metric`, `flows/workflow.run_flow`, `flows/workflow._extract_revision_snapshot`, `flows/planner_executor._env_flag`, `core.config_store.close_config_store`) to tighten the supported surface, while `flows/workflow.get_available_flows()` was reinstated for UI introspection.
 - Trimmed dead artifact utilities (`_clone_dict`, `_clone_list`) and refreshed documentation to note that `analytics_memory_workflow()` now orchestrates flow selection and instrumentation inline.
 
 

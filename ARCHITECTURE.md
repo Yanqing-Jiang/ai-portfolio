@@ -1,111 +1,210 @@
-﻿# System Architecture
+# System Architecture
 
-This is a full-stack AI-powered portfolio application with a React frontend and FastAPI backend.
+Yanqing Jiang’s AI portfolio is a full-stack system that pairs a Vite + React experience with a FastAPI backend. The platform showcases multiple AI workflows (analytics copilots, research agents, resume Q&A, LinkedIn headshot generation) while prerendering static assets and streaming real-time insights.
 
-## Frontend (React + TypeScript + Vite)
-- **Main App**: `App.tsx` manages routing and layout
-- **Components**: Individual page components in `/components`
-- **Services**: API communication layer in `/services`
-- **Types**: TypeScript definitions in `types.ts`
-- **Constants**: Project data in `constants.ts`
+```
+┌──────────────┐      HTTPS / SSE       ┌──────────────────────────┐
+│  React 19 /  │  ───────────────────▶  │  FastAPI (uvicorn)        │
+│  Vite client │   Auth, REST, Streams  │  - Analytics suite        │
+│  (SSR-ready) │  ◀───────────────────  │  - LinkedIn photo router  │
+└──────┬───────┘      JSON / events     │  - Research & resume      │
+       │                                │  - Rate limiting & auth   │
+       │                                └────────────┬──────────────┘
+       │                                             │
+       │        External APIs / Services             │
+       ├───────────────┬─────────────────────────────┘
+       │               │
+  Supabase Auth   Gemini / OpenAI / Search APIs   Redis / Stripe / PayPal
+```
 
-## Backend (FastAPI + Python)
-- **Main API**: `backend/main.py` exposes all FastAPI endpoints
-- **Unified Analytics Suite**: `backend/analytics/` houses `core/`, `sql/`, `flows/`, `tools/`, and `streaming/`. The former `analytics_memory/*`, `analytics_shared/*`, and `analytics_supervisor/*` packages have been removed now that consumers import from this namespace.
-- **Workflow Dispatcher**: `backend/analytics/flows/workflow.py` selects the active analytics flow (`planner-executor`, `single-agent`, or `multi-agent`) and invokes the Responses API-first pipeline used by `/api/analytics/memory/stream`.
-- **SQL Catalogue**: `backend/analytics/sql/` compiles YAML templates from `backend/config/schemas/*.yaml` to propose, validate, and execute database queries with deterministic fallbacks.
-- **Standalone Analytics Agent**: `backend/analytics_agent.py` remains an independent workflow unless a shared frontend pathway requires changes.
-- **Shared Services**: Gemini AI, TTS, and rate limiting helpers in dedicated modules.
-- **Rate Limiting**: Redis-backed with in-memory fallback
+## Platform Overview
 
-## Key API Endpoints
+- **Frontend**: React 19 with TypeScript, Vite 6, Tailwind utility classes (via `tailwind-merge`), Framer Motion, React Router 6, and `react-helmet-async` for SEO.
+- **Backend**: FastAPI with Python 3.11, orchestrating analytics LangGraph-style flows, Gemini integrations, research/resume agents, LinkedIn image editing, and payments-aware rate limiting.
+- **Static delivery**: Vite builds both SPA and SSR bundles; `scripts/prerender.mjs` renders HTML snapshots and sitemaps for every project page.
+- **Docs**: Deep-dives live in `backend/analytics/ARCHITECTURE.md`, `docs/linkedin-photo-*.md`, and `docs/analytics-agent-openai-sdk-roadmap.md`.
 
-### Analytics Endpoints (Suite-Managed)
-- **Analytics SQL** (`/api/analytics/stream`)
-  - LangGraph SQL workflow for financial analytics driven by the analytics suite
-  - Direct SQL generation and execution
-  - Real-time streaming with chart generation
-  - No clarifications, direct query processing
+## Frontend Architecture
 
-- **Analytics Memory** (`/api/analytics/memory/stream`)
-  - Responses API-first planner that hydrates YAML-guided SQL suggestions before validation and execution
-  - `flow` query param selects demo experiences (`planner-executor` default, `single-agent`, `multi-agent`); the legacy `mode` alias remains for backwards compatibility
-  - Streams SSE telemetry (`progress`, `sql_generated`, `tool_call`, `agent_turn`, `agent_reasoning`, `final_answer`) for visualization overlays
-  - Session-based memory management with clarification loops
+### App Shell & Routing
 
-- **Memory Clarifications** (`/api/analytics/memory/clarify`)
-  - Handles user responses to clarification requests
-  - Session-based clarification tracking
-  - Supports single/multi/free-form responses
+- `App.tsx` mounts the React Router hierarchy inside a `HelmetProvider`. It renders the landing page at `/` and project pages at `/project/:projectId`.
+- `components/Sidebar.tsx` drives navigation. `components/ProjectView.tsx` selects feature modules (analytics demos, LinkedIn Photo page, legacy markdown content) and renders `ProjectHelmet`.
+- `components/LandingPage.tsx` builds the animated project grid, injecting metadata via `useMemo` and `LANDING_SEO`.
 
-### Other Endpoints
-- `/api/research/stream` - Research agent with web search
-- `/api/resume-search/stream` - Resume-specific queries
-- `/api/gemini/chat/*` - Gemini AI chat sessions
-- `/api/tts` - Text-to-speech generation
-- `/api/rate-limit/*` - Usage tracking and limits
+### Feature Modules
 
-## Code Architecture
+- **Analytics demos** (`components/analytics/**`):
+  - `memory/`, `sql/`, `common/`, and `visualization/` combine to render planner-executor, single-agent, and multi-agent flows.
+  - UI surfaces streaming telemetry (progress lanes, SQL output, charts, topic cards) that maps onto backend SSE events.
+- **LinkedIn Photo generator** (`components/linkedinPhoto/**`):
+  - `Page.tsx` hosts the three-step wizard (upload, style, review), using `fetch` calls against `/api/linkedin-photo/*` routes.
+  - `CustomStyleBuilder`, `VariationControls`, and `ImageVariationGallery` let users craft and download Gemini-edited iterations.
+- **Chat surface** (`components/Chat.tsx`) powers conversations with selected agents, managing message state and typing indicators.
+- **Shared UI** lives in `components/ui/` (cards, buttons, progress) and `components/icons/`.
 
-### Frontend-Backend Communication
-- **Authentication**: Supabase JWT tokens sent via `apiService.streamWithAuth()`
-- **Rate Limiting**: Guest users (5/day) vs authenticated users (20/day)
-- **Streaming**: Server-Sent Events (SSE) deliver `progress`, `sql_generated`, `tool_call`, `agent_turn`, `agent_reasoning`, and result/final_answer payloads for analytics flows
-- **Error Handling**: Unified error payloads prompting auth when required
-- **Config Service**: Centralized environment management through `services/config.ts`
+### State, Services, and Utilities
 
-### Analytics Suite Boundaries
-- `backend/analytics/` is the canonical package; no legacy proxies remain in the repository.
-- YAML catalogues in `backend/config/schemas/*.yaml` drive the planner, validator, and executor under `analytics/sql/`.
-- Planner-executor, single-agent, and multi-agent flows reuse `analytics.core` services for state, cache, events, and config.
-- `analytics_agent.py` stays separate and only changes when a shared frontend experience explicitly depends on it.
+- `services/apiService.ts` centralizes REST + SSE calls, attaches Supabase JWTs, and normalizes error handling (`needsAuth`, rate-limit flags).
+- `services/backendGeminiService.ts` handles Gemini text streaming for chat experiences.
+- `services/auth.ts` wraps Supabase client helpers.
+- `services/config.ts` exposes environment-driven backend URLs, cached in refs for runtime overrides.
+- Project metadata, SEO, and stats come from `constants.ts`, `constants/seo.ts`, and `constants/structuredData.ts`.
 
-### AI Integration
-- **Research Agent**: LangChain + OpenAI for web research
-- **Resume Agent**: Vector-backed resume queries
-- **Gemini Chat**: Backend-hosted Gemini 2.5 Flash conversations
-- **Analytics Suite**: Cohesive LangGraph workflows spanning memory, shared tooling, and supervisor orchestration
+### Styling, Animations, and Accessibility
 
-### Authentication Flow
-1. Frontend: Supabase Auth for user sign-in
-2. Backend: JWT validation using the Supabase secret
-3. Rate limiting applied based on authentication status
+- Tailwind-style class composition handled by `tailwind-merge`.
+- Transitions and layout animations run through Framer Motion (`components/ProjectView.tsx`, analytics panels).
+- Inputs and ARIA-friendly patterns leveraged from Radix UI (`@radix-ui/react-progress` etc.).
 
-## Development Commands
+### SEO, SSR, and Prerendering
 
-### Frontend Development
-- **Start development server**: `npm run dev` (http://localhost:5173)
-- **Build for production**: `npm run build`
-- **Preview production build**: `npm run preview`
-- **Install dependencies**: `npm install`
+- `components/ProjectHelmet.tsx` assembles canonical, Open Graph, Twitter, and schema.org metadata per project using the shared SEO constants.
+- `constants/structuredData.ts` builds JSON-LD payloads (Website, OfferCatalog, BreadcrumbList, Article).
+- `ssr/entry-server.tsx` renders routes server-side for the prerender step; exports sitemap helpers that rely on project metadata.
+- `scripts/prerender.mjs` crawls every route, writes `dist/` HTML snapshots, `sitemap*.xml`, and normalized JSON assets.
 
-### Backend Development
-- **Install Python dependencies**:
-  1. `cd backend`
-  2. `pip install -r requirements.txt`
-- **Start backend server**:
-  1. `cd backend`
-  2. `uvicorn main:app`
-  3. Use `uvicorn main:app --reload` for auto-reload during development
-- **Alternative start**:
-  1. `cd backend`
-  2. `python main.py`
+## Backend Architecture
 
-### Full Stack Development
-1. Start backend:
-   - `cd backend`
-   - `uvicorn main:app`
-2. Start frontend: `npm run dev`
-3. Access the application at http://localhost:5173
+### FastAPI Entry Point
 
-## Git Sync Rules
-- **Do not overwrite local `.env` files** when syncing from GitHub
-- `.env` files contain sensitive API keys and environment-specific configuration
-- If `.env` templates require updates, adjust documentation rather than committed secrets
-- Preserve existing local environment settings
+- `backend/main.py` loads `.env`, configures CORS, initializes logging, and includes routers:
+  - Analytics suite endpoints (`/api/analytics/...`)
+  - LinkedIn photo routes (`/api/linkedin-photo/...`)
+  - Research agent, resume agent, Gemini chat proxy, TTS service
+  - Rate-limit counters, payments endpoints, health checks
+- SSE responses stream via `StreamingResponse` with async generators feeding analytics telemetry.
 
-## Adding New Features
-1. Frontend changes go in appropriate `/components` or `/services`
-2. Backend changes go in `backend/` with new endpoints in `main.py`
-3. Update TypeScript types in `types.ts` if needed
-4. Test with both frontend and backend running
+### Analytics Suite (`backend/analytics/`)
+
+- **Core** modules manage session state, caching, telemetry events, and output normalization shared across flows.
+- **Flows** (`flows/workflow.py`) orchestrate:
+  - `planner-executor` (deterministic tool chain)
+  - `single-agent` (adaptive LangGraph agent)
+  - `multi-agent` (supervisor + specialists)
+- **SQL** (`sql/`) compiles YAML templates from `backend/config/schemas/*.yaml`, validates proposed queries, and coordinates execution/caching.
+- **Streaming** utilities map backend events to structured payloads consumed by the frontend process panel.
+- Legacy packages (`analytics_memory`, `analytics_shared`, `analytics_supervisor`) were replaced; this repo imports exclusively from `backend/analytics/`.
+- `backend/analytics/ARCHITECTURE.md` documents flow diagrams and component-level contracts.
+
+### LinkedIn Photo Service (`backend/linkedin_photo/`)
+
+- `router.py` hosts endpoints:
+  - `GET /prompts` returns canonical preset expansions.
+  - `POST /generate` validates image uploads (Pillow), expands style prompts with Gemini, and returns headshot + metadata.
+  - `POST /variation` produces follow-up edits.
+- `service.py` manages storage, Gemini API orchestration (Nano Banana endpoint), and output packaging.
+- `fixed_prompts.py` maintains curated style presets used by the frontend wizard.
+- Docs in `docs/linkedin-photo-rate-limit-plan.md` and `docs/linkedin-photo-next-steps.md` describe upcoming quotas, DB schema migrations, and backlog.
+
+### Agent APIs and Shared Services
+
+- `research_agent.py` executes web searches (via configured APIs), performs summarization, and streams responses.
+- `resume_agent.py` loads resume embeddings and answers candidate-specific queries.
+- `gemini_service.py` wraps Gemini text sessions with caching and token accounting.
+- `tts.py` produces speech assets for front-of-house demos.
+- `token_store.py`, `rate_limiter.py`, and `analytics_agent.py` provide shared utilities for session quotas and legacy workflows.
+- Payments: optional Stripe and PayPal integrations (configured via `.env`) grant additional token balances; Stripe webhooks validated when keys are present.
+
+### Configuration and Environment
+
+- `.env` files at repo root and `backend/.env` control Supabase, Gemini, OpenAI, Redis, Stripe, PayPal, and rate-limit toggles.
+- `backend/config/schemas/` stores YAML definitions for analytics catalogues and SQL scaffolding.
+- `public/` holds static assets (project images, OG banners, JSON feeds) served by the frontend build and referenced in SEO metadata.
+
+### Testing
+
+- Backend tests live in `backend/tests/`, leveraging pytest fixtures to mock Gemini, Supabase, HTTP clients, and storage.
+- Frontend unit tests use Vitest within `components/**/__tests__`.
+- E2E and playwright screenshots in the repo demonstrate UI regression steps (e.g., `playwright_snapshot.png`).
+
+## Data & Interaction Flows
+
+### Authentication & Rate Limiting
+
+```
+Browser                    Frontend API                 FastAPI Backend            Supabase / Redis
+   |  Sign in via Supabase UI   |                            |                          |
+   |--------------------------->|                            |                          |
+   |   receives JWT (client)    |                            |                          |
+   |                            |  request + Authorization   |                          |
+   |                            |--------------------------->|                          |
+   |                            |                            | verify JWT via Supabase |
+   |                            |                            | check rate limits (Redis)|
+   |                            |                            |------------------------->|
+   |                            |                            |<-------------------------|
+   |                            |<---------------------------| JSON / SSE payload       |
+```
+
+- Guest quota: 5 requests/day (IP-based). Authenticated quota: 20 requests/day (user-based). Token purchases merge through `token_store.py`.
+
+### Analytics Streaming Pipeline
+
+1. Frontend calls `apiService.streamWithAuth('/api/analytics/memory/stream')`.
+2. `backend/analytics/flows/workflow.py` selects the configured flow (`flow` query parameter).
+3. Planner builds task graph, invokes SQL template builder, executes queries, and emits telemetry events.
+4. `StreamingResponse` yields event types (`progress`, `sql_generated`, `tool_call`, `agent_turn`, `agent_reasoning`, `final_answer`).
+5. `components/analytics/common/ProcessPanel.tsx` maps events into lanes, charts, and summaries in real time.
+
+### LinkedIn Photo Pipeline
+
+```
+Upload Photo (Step 1)
+   ↓ validate file type/size via FastAPI + Pillow
+Style Prompt (Step 2)
+   ↓ Gemini text expansion → prompt transparency copy
+Generate / Variation (Step 3)
+   ↓ Gemini image edit (Nano Banana) → PNG response
+Review & Download
+   ↓ Frontend stores preview URLs, exposes share/download actions
+```
+
+- Additional preset requests (`GET /prompts`) hydrate Step 2 cards with curated style text.
+- Variation endpoint reuses base metadata and produces iterative assets for gallery download.
+
+### Research & Resume Agents
+
+- `/api/research/stream`:
+  1. Frontend streams query.
+  2. Backend performs HTTP search, collects snippets, and summarizes with OpenAI/Gemini.
+  3. SSE responses feed `components/analytics/common/WebSearchCard`.
+- `/api/resume-search/stream`:
+  - Uses vector recall against stored resume data, returning structured answers with citations.
+
+## Build, Tooling, and Deployment
+
+- **Frontend commands** (`package.json`):
+  - `npm run dev` – Vite dev server (`http://localhost:5173`).
+  - `npm run build` – client + SSR builds plus prerender step.
+  - `npm run preview` – serve production bundle.
+  - `npm run test` – Vitest unit suite.
+- **Backend commands**:
+  - `pip install -r backend/requirements.txt`
+  - `py -m uvicorn main:app --reload --port 8000`
+  - `pytest backend`
+- **Prerender**: `node scripts/prerender.mjs` (invoked by build) emits `dist/`, `dist-ssr/`, `sitemap.xml`, `sitemap-pages.xml`, `sitemap-projects.xml`, and project JSON caches.
+- **PowerShell automation**: Root-level workflow (see README) clears ports 8000/5173, launches backend/frontend processes, tails logs, and cleans up.
+- **Deployment**:
+  - Static hosting of `dist/` (Vercel, Netlify, Azure Static Web Apps).
+  - Backend hosted on containers/VMs with Redis, Supabase keys, and Stripe/PayPal credentials configured.
+  - `SITE_BASE_URL` in `constants/seo.ts` must match the deployed domain before publishing to ensure correct canonicals and sitemaps.
+
+## Observability & Assets
+
+- `backend/backend_uvicorn.log` captures FastAPI access logs (tail via PowerShell snippet in README).
+- Prerender logs (and analytics demo replays) live in `backend/baseline_log.txt`, `scripts/replay_revision.py`, and `scripts/report_slot_catalog_usage.py`.
+- Generated LinkedIn photos (demo) stored temporarily via `scripts/run_linkedin_photo_demo.py`.
+- Sitemap and SSR outputs reside in `dist/`, `dist-ssr/`, and `docs/` snapshots for verification.
+
+## Documentation Map
+
+- `README.md` – Quickstart, repository layout, commands, deployment.
+- `ARCHITECTURE.md` (this file) – System-wide overview.
+- `backend/analytics/ARCHITECTURE.md` – Deep dive into analytics flows, agents, and telemetry event contracts.
+- `docs/linkedin-photo-rate-limit-plan.md` – Proposed database schema and smart rate limit guardrails for the headshot generator.
+- `docs/linkedin-photo-next-steps.md` – Implementation backlog, UX enhancements, and monitoring tasks.
+- `docs/analytics-agent-openai-sdk-roadmap.md` – Future plan for OpenAI SDK integration within analytics agents.
+
+---
+
+This document should be updated whenever new agents, payment flows, or frontend modules land so that diagrams and references stay accurate.
