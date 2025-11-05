@@ -4,7 +4,7 @@ import json
 import logging
 import time
 from datetime import datetime
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Mapping
 
 _TELEMETRY_LOGGER = logging.getLogger("analytics.telemetry")
 
@@ -259,6 +259,29 @@ def revision_plan(
         payload["follow_up_route"] = follow_up_route
     if revision_id:
         payload["revision_id"] = revision_id
+    _emit(payload)
+
+
+def agent_run(
+    *,
+    session_id: Optional[str],
+    flow: Optional[str],
+    run_id: Optional[str],
+    trace_id: Optional[str],
+    model: Optional[str],
+    tool_attempts: Mapping[str, int],
+    retry_counts: Mapping[str, int],
+) -> None:
+    payload = _base_payload("agent_run", session_id=session_id, flow=flow)
+    payload.update(
+        {
+            "run_id": run_id,
+            "trace_id": trace_id,
+            "model": model,
+            "tool_attempts": dict(tool_attempts or {}),
+            "retry_counts": dict(retry_counts or {}),
+        }
+    )
     _emit(payload)
 
 

@@ -10,6 +10,8 @@ from copy import deepcopy
 
 from pydantic import BaseModel, Field, field_validator
 
+from analytics.validators import sanitize_for_json
+
 try:
     import redis.asyncio as redis  # type: ignore
 except ImportError:  # pragma: no cover - redis optional in some test envs
@@ -128,6 +130,35 @@ class SessionStateSnapshot(BaseModel):
     def record_tool_receipt(self, tool: str, payload: Dict[str, Any]) -> None:
         receipts = self.tool_cache.setdefault("tool_receipts", {})
         receipts[tool] = deepcopy(payload)
+        self.touch()
+
+    def record_agent_run(
+        self,
+        *,
+        run_id: Optional[str],
+        trace_id: Optional[str],
+        model: Optional[str],
+        tool_attempts: Dict[str, int],
+        retry_counts: Dict[str, int],
+        receipts: Dict[str, Any],
+    ) -> None:
+        agent_cache = self.tool_cache.setdefault("agent", {})
+        if run_id:
+            agent_cache["last_run_id"] = run_id
+        if trace_id:
+            agent_cache["trace_id"] = trace_id
+        if model:
+            agent_cache["model"] = model
+        agent_cache["recorded_at"] = datetime.now(timezone.utc).isoformat()
+        if tool_attempts:
+            agent_cache["tool_attempts"] = dict(tool_attempts)
+        if retry_counts:
+            agent_cache["retry_counts"] = dict(retry_counts)
+        if receipts:
+            try:
+                agent_cache["receipts"] = sanitize_for_json(receipts)
+            except Exception:
+                agent_cache["receipts"] = json.loads(json.dumps(receipts, default=str))
         self.touch()
 
     def get_tool_receipt(self, tool: str) -> Optional[Dict[str, Any]]:
