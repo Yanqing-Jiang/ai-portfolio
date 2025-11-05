@@ -30,9 +30,11 @@ This roadmap translates the architecture in backend/analytics/ARCHITECTURE.md in
 - Specialists stream directly into existing lanes while the supervisor supplies ordering metadata so the current card stack contract is preserved.
 - Keep the roster minimal: one SQL lane agent with multiple planner tools, one web lane agent, one stock lane agent, and one analysis agent that synthesizes after upstream lanes finish.
 - SQL, web, and stock specialists may run concurrently; the analysis specialist waits for all upstream lanes (success or error) before producing the final narrative and card stack.
+- Supervisor retry policy is fixed at two attempts per specialist invocation; no lane-specific overrides are required unless future lanes demand them.
 - The supervisor retains session cache and passes relevant context to specialists; each specialist stores lane-specific cache for the active session. Caches reset after 10 minutes of inactivity or when the user starts a new chat.
 - The supervisor handles all revision reassignments; user feedback always routes through the supervisor before triggering specialist reruns.
 - Errors never block downstream execution - after the retry limit, the supervisor marks the lane status and continues so the analysis specialist can incorporate partial results.
+- Frontend updates should surface the supervisor's decision process and resulting outputs, but keep the presentation minimal so the existing card stack remains uncluttered.
 - Specialists operate autonomously during their turn; the supervisor intervenes only on errors. No additional human approval loop is required.
 - Automated evaluation stays minimal (smoke tests only); production validation happens manually post-deployment.
 
@@ -45,6 +47,7 @@ This roadmap translates the architecture in backend/analytics/ARCHITECTURE.md in
 - _agentic_revision_enabled: extend env toggles so single-agent runs can request critique/self-review passes while honoring retry and cache guardrails.
 - analytics_memory_workflow(): wrap Agents Runner.run(...); translate streamed responses into SSE events, attach session IDs, record tool receipts, and ensure intent clarification runs before invoking any tools.
 - _resolve_lane_ttls / set_lane_refresh_requirements: keep TTL logic in sync with supervisor directives so cached accessories remain consistent across retries.
+- After intent classification and clarification finish, allow the single agent to fan out across planner tools; revision passes should skip the intent/clarify stage and proceed directly to tool execution while respecting existing guardrails.
 
 ### backend/analytics/flows/single_agent_tools.py
 - SingleAgentController.__init__: instantiate the Agents SDK agent with planner-aware instructions, default tool manifest, and run config sourced from ConfigStore.
@@ -53,6 +56,7 @@ This roadmap translates the architecture in backend/analytics/ARCHITECTURE.md in
 - _invoke_planner_tool: call Agents function tools with strict schemas, pass retryable error codes back to the supervisor, and enforce planner guardrail hooks.
 - chart_revision, run_web_refresh, run_market_refresh: issue scoped Agents tool calls while tagging revision directives for cache reconciliation and retry tracking.
 - _forward_with_hooks: enrich telemetry (core.telemetry.tool_iteration) with Agents message IDs, retry counts, and error codes to support long-running diagnostics.
+- Retain the existing PlannerToolRegistry JSON schemas wherever possible so contract tests and downstream validation stay stable.
 
 ### backend/analytics/flows/planner_executor.py
 - PlannerExecutorFlow.events: host planner stages inside an Agents execution context; emit tool start/complete metadata compatible with Agents streaming and record retry outcomes.
@@ -158,8 +162,15 @@ This function-by-function plan keeps the existing analytics experience intact wh
 - Handoff-based delegation remains a fallback for peer agents, but the manager-as-tool pattern offers better observability and aligns with our session cache + retry rules where the supervisor must log every tool result. citeturn0search3turn0search11
 
 Research dumps:
-- `docs/references/openai-agents-python-readme-2025-11-03.md` – canonical Runner/function-tool notes.
-- `docs/references/openai-agents-patterns-2025-11-04.md` – curated excerpts on manager vs handoff and multi-agent portfolio patterns (new).
+- `docs/references/openai-agents-python-readme-2025-11-03.md` — canonical Runner/function-tool notes.
+- `docs/references/openai-agents-patterns-2025-11-04.md` — curated excerpts on manager vs handoff and multi-agent portfolio patterns (new).
+
+---
+
+## Rollout & Documentation (Updated November 4, 2025)
+- Deploy the combined single-agent and supervisor flows directly to production once internal validation passes; no environment-specific feature flags are required.
+- Limit launch collateral to documentation updates (roadmap, architecture addendums, release notes). No compliance or audit checkpoints are needed ahead of ship.
+- Post-deployment testing will occur in production, led by the requesting stakeholder.
 
 ---
 
@@ -167,16 +178,83 @@ Research dumps:
 1. **Single-agent streaming parity**
    - Replace planner event loop with `Runner.run`/`RunResultStreaming.stream_events` and translate queue items into SSE payloads.
    - Fold retry/error metadata into `EventEmitter` data and ensure planner receipts reconcile with Agents trace IDs.
-   - Add pytest smoke covering: intent gate → tool selection → SSE lane ordering (cached vs fresh).
+   - Add pytest smoke covering: intent gate + tool selection + SSE lane ordering (cached vs fresh).
+   - Step checklist:
+     - [ ] Wire `analytics_memory_workflow` to call `Runner.run` and stream events into the existing SSE channel.
+     - [ ] Translate Agents stream payloads into current planner event formats, including cache receipts and tool deltas.
+     - [x] Propagate retry/error metadata through `EventEmitter` and SSE payloads.
+     - [ ] Update Vitest SSE mocks with Agents metadata and lane ordering assertions.
+     - [ ] Add pytest smoke tests for intent gating, tool selection, and streaming parity.
+     - [ ] Modularize the planner queue into a shared sequencer so single- and multi-agent controllers can plug in without diverging ordering.
 2. **Supervisor + specialists over Agents SDK**
    - Instantiate supervisor agent with manager-as-tool pattern; expose SQL/web/market/analysis specialists via `as_tool()`.
    - Implement concurrency gates (await all upstream lanes before analysis) and enforce two-retry policy with structured error codes.
    - Extend multi-agent flow hooks to broadcast `agent_turn_start|end` and retry events back to the UI.
+   - Step checklist:
+     - [ ] Implement supervisor `Agent` initialization with SQL, web, stock, and analysis specialists registered via `as_tool()`.
+     - [ ] Build orchestration loop enforcing two retries per specialist and parallel execution for SQL/web/stock lanes.
+     - [ ] Emit minimal supervisor decision events (agent_turn_start/end, retry summaries) for the frontend.
+     - [ ] Extend backend SSE schema and frontend consumers to display supervisor outcomes without clutter.
+     - [ ] Add backend tests covering supervisor retries, concurrency gates, and SSE payload structure.
+     - [ ] Add frontend tests validating minimal supervisor UI indicators.
+     - [ ] Adopt the shared planner sequencer so supervisor orchestration respects the canonical lane order.
+### Planner Sequencer Modularization (New)
+- Introduce a shared PlannerSequencer that codifies the required ordering: intent + clarification (blocking), sequential SQL generation/validation/execution + chart, concurrent web research, concurrent market refresh, and final analysis once all lanes settle.
+- Expose a lightweight FlowOrchestrator protocol for controllers to plug in (single-agent via Agents SDK tools, supervisor-led multi-agent via specialists). The sequencer drives ordering; orchestrators execute lane-specific work.
+- Establish a PlannerEventBus abstraction so both modes emit SSE-friendly events with consistent retry/attempt metadata and planner receipts.
+- Migration steps:
+  1. Extract lane completion tracking and dependency gating into the sequencer while keeping the current single-agent flow as the orchestration backend.
+  2. Switch SingleAgentController to implement the orchestrator interface; validate SSE parity and retry metadata.
+  3. Adapt MultiAgentFlow to the same interface so the supervisor controls specialists without diverging from the canonical order.
+  4. Share telemetry + cache utilities across modes (run IDs, retries, lane summaries).
+  5. Document the contract and update tests to cover ordering, concurrency, and fallbacks.
+
+#### Sequencer Extraction – Iteration Plan (Detailed)
+- **Create shared module**
+  - [x] Add `backend/analytics/flows/sequencer.py` with a `PlannerSequencer` class and supporting dataclasses (`LaneState`, `SequencerConfig`).
+  - [x] Define the canonical phase order inside the module and expose async helpers for each phase gate (`run_intent_stage`, `run_sql_stage`, `run_analysis_stage`).
+- **Define orchestration protocol**
+  - [x] Introduce `FlowOrchestrator` protocol (new file `backend/analytics/flows/orchestrator_protocol.py`) describing the callbacks required by the sequencer (intent/clarification executor, sql executor, web/market runners, analysis finisher, telemetry hooks).
+  - [x] Implement a simple adapter in the sequencer that can call into a planner-backed orchestrator and emit events via a provided callback.
+- **Lift existing lane tracking**
+  - [ ] Move lane readiness bookkeeping (`lane_refresh_required`, `lane_states`, dependencies) from `SingleAgentController` into the sequencer. _(Sequencer now exposes lane state + event bus wiring in `backend/analytics/flows/sequencer.py`; controller integration still pending.)_
+  - [ ] Ensure the sequencer reports completion/error transitions via a neutral event bus interface so current SSE events remain stable. _(New `PlannerEventBus` publishes `planner_lane_transition` events; subscribers to be hooked from controllers.)_
+  - [x] Define stage boundaries: `run_intent_stage` covers intent + clarification, while `run_sql_stage`, `run_web_stage`, and `run_market_stage` can execute independently before `run_analysis_stage` waits on all lanes. (_SingleAgentController scaffolding: `_SequencerRunState` plus planner lane imports in progress._)
+  - [x] Split `SingleAgentController` into sequencer-ready stage runners (`_intent_stage`, `_sql_stage`, `_web_stage`, `_market_stage`, `_analysis_stage`, `_agent_run_stage`) so both the planner-driven and agents-enabled flows execute under `PlannerSequencer` + `PlannerOrchestratorAdapter` (`backend/analytics/flows/single_agent_tools.py:799-1180`).
+- **Thread into analytics workflow (Phase 1)**
+  - [ ] Update `analytics_memory_workflow` to instantiate the sequencer and pass a planner orchestrator instance while leaving tool invocation logic untouched.
+  - [ ] Confirm intent/clarification still runs before any tool fan-out by gating the existing planner events behind the sequencer’s intent stage.
+- **Telemetry & caching touchpoints**
+  - [ ] Preserve existing retry counters, receipts, and telemetry calls by forwarding sequencer callbacks through the current `SingleAgentController` hooks.
+  - [ ] Add TODO markers for later phases where supervisor mode and caching changes will bind into the sequencer.
+- **Validation scaffolding**
+  - [x] Draft pytest placeholders (`backend/tests/analytics/test_planner_sequencer.py`) that will eventually cover ordering, dependencies, and error handling once the sequencer logic lands.
+
+### Streaming Integration Gap (Action Required)
+- To wire Runner.stream() (or RunResultStreaming) into _agentic_event_stream, we need concrete examples of the SDK's streaming payload structure:
+  - Event/message schema (keys for tool calls, deltas, final output, trace IDs).
+  - How tool invocation results are surfaced (function name, arguments, status).
+  - How the final aggregated result is delivered alongside streamed chunks.
+- Once we have sample payloads, the sequencer can map them into planner events and maintain existing SSE semantics.
+
 3. **Shared infrastructure + cache discipline**
    - Persist Agents run IDs, tool attempts, and retry counters in `SessionStateSnapshot` + cache TTL logic.
    - Augment telemetry sinks (`core.telemetry`, tracing exporters) to include manager trace IDs for audits.
    - Document new fields and dependency bumps in `backend/analytics/ARCHITECTURE.md` and frontend SSE schemas.
+   - Step checklist:
+     - [ ] Extend session state models to store run IDs, retry counts, and structured tool receipts.
+     - [ ] Update cache services to honor session TTLs with Agents metadata and fan-out receipts.
+     - [ ] Propagate manager trace IDs through telemetry exporters and log sinks.
+     - [ ] Refresh architecture docs and SSE schema docs with new fields and dependencies.
+     - [ ] Document the planner sequencer/orchestrator contract for both single and multi-agent flows.
 4. **Validation & Observability**
    - Add evaluations for single-agent tool selection and supervisor delegation (OpenAI eval recipes).
    - Smoke test revision lanes (chart/analysis/market) under both single-agent and supervisor modes.
    - Prepare rollout checklist (env flags, cache warmers, evaluation scripts) before prod launch.
+   - Step checklist:
+     - [ ] Assemble evaluation scripts targeting single-agent tool selection accuracy.
+     - [ ] Add evaluation coverage and reporting for supervisor delegation outcomes and retry handling.
+     - [ ] Run smoke tests for revision lanes across both modes and document the results.
+     - [ ] Finalize production rollout checklist (flags, cache warmers, monitoring) and share with stakeholders.
+
+

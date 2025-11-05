@@ -7,6 +7,7 @@ from typing import List
 
 import pytest
 
+from agents import Runner
 from analytics.artifacts.models import (
     AnalysisArtifact,
     MarketArtifact,
@@ -16,7 +17,9 @@ from analytics.artifacts.models import (
 )
 from analytics.core.events import TimedEventEmitter
 from analytics.flows.planner_executor import PlannerPhaseContext, _TOOL_QUEUE_SENTINEL, ToolParallelRuntime
-from analytics.flows.single_agent_tools import SingleAgentController, _build_single_agent_cohesive_payload
+from analytics.flows.single_agent_tools import SingleAgentController, _SequencerRunState, _build_single_agent_cohesive_payload
+from analytics.flows.sequencer import LANE_STATUS_FAILED, LANE_STATUS_RUNNING, LANE_STATUS_SKIPPED
+from analytics.flows.schedulers import get_mode_config
 from analytics.routing import FollowUpRoute
 
 
@@ -35,69 +38,66 @@ def _build_context(controller: SingleAgentController) -> PlannerPhaseContext:
     return ctx
 
 
-@pytest.mark.asyncio
-async def test_market_lane_uses_stock_tracker_and_concurrency_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_lane_transition_event_updates_states() -> None:
     controller = SingleAgentController()
-    captured: dict = {}
+    lane_states = controller._initial_lane_states()
+    revision_targets: Set[str] = set()
 
-    def _fake_start(
-        ctx: PlannerPhaseContext,
-        *,
-        adapters: List[object] | None = None,
-        concurrency_override: int | None = None,
-    ):
-        captured["adapters"] = tuple(getattr(adapter, "name", repr(adapter)) for adapter in adapters or [])
-        captured["concurrency"] = concurrency_override
-        queue = asyncio.Queue()
-        return ToolParallelRuntime(
-            runner=None,
-            dispatcher=None,
-            raw_queue=queue,
-            queue=queue,
-        )
+    controller._apply_lane_transition_event(
+        lane_states,
+        {
+            "event": "planner_lane_transition",
+            "data": {"lane": "web", "status": LANE_STATUS_RUNNING},
+        },
+        revision_targets=revision_targets,
+    )
+    assert lane_states["web"] == "running"
 
-    monkeypatch.setattr(controller._planner, "_start_tool_parallelism", _fake_start)
-    dummy_ctx = SimpleNamespace()
+    controller._apply_lane_transition_event(
+        lane_states,
+        {
+            "event": "planner_lane_transition",
+            "data": {"lane": "web", "status": LANE_STATUS_SKIPPED, "success": True, "reused": True},
+        },
+        revision_targets=revision_targets,
+    )
+    assert lane_states["web"] == "reused"
 
-    active = controller._start_fanout_lanes(dummy_ctx, ("market",))
-    assert "market" in active
-    assert isinstance(active["market"], ToolParallelRuntime)
-    assert captured["adapters"] == ("market_question_a", "market_question_b", "stock_tracker")
-    assert captured["concurrency"] == 3
-    await active["market"].close()
+    controller._apply_lane_transition_event(
+        lane_states,
+        {
+            "event": "planner_lane_transition",
+            "data": {"lane": "market", "status": LANE_STATUS_FAILED, "success": False},
+        },
+        revision_targets=revision_targets,
+    )
+    assert lane_states["market"] == "error"
 
 
-def test_iter_fresh_accessory_events_emit_once() -> None:
+def test_initial_lane_states_respect_follow_up_route() -> None:
     controller = SingleAgentController()
-    ctx = _build_context(controller)
-    ctx.artifacts.market = MarketArtifact(
-        query=ctx.query,
-        snapshot={"symbols": [["NASDAQ:AAPL", "AAPL"]]},
-    )
-    ctx.artifacts.web = WebContextArtifact(
-        query=ctx.query,
-        summary="Apple expands services revenue.",
-        snippets=[{"title": "Article", "url": "https://example.com/article"}],
-    )
+    default_states = controller._initial_lane_states()
+    assert default_states["sql"] == "pending"
+    assert default_states["market"] == "skipped"
 
-    lane_states = {"market": "fresh", "web": "fresh"}
-    events = list(controller._iter_fresh_accessory_events(ctx, lane_states))
-    assert [event["event"] for event in events] == ["stock_ready", "web_ready"]
+    controller.follow_up_route = FollowUpRoute.REUSE_SQL
+    reuse_states = controller._initial_lane_states()
+    assert reuse_states["sql"] == "reused"
+    assert reuse_states["web"] == "skipped"
 
-    stock_event, web_event = events
-    assert stock_event["data"]["reused"] is False
-    assert stock_event["data"]["parallel_group"] == controller.LANE_PARALLEL_GROUPS["market"]
-    assert stock_event["data"]["lane"] == "market"
-    assert stock_event["data"]["flow_mode"] == controller.flow_mode.value
-    assert stock_event["data"]["stock_widget"]["symbols"]
 
-    assert web_event["data"]["reused"] is False
-    assert web_event["data"]["parallel_group"] == controller.LANE_PARALLEL_GROUPS["web"]
-    assert web_event["data"]["lane"] == "web"
-    assert web_event["data"]["flow_mode"] == controller.flow_mode.value
+def test_handle_lane_complete_updates_reuse_flags() -> None:
+    controller = SingleAgentController()
+    dummy_ctx = SimpleNamespace(reused_web=False, reused_stock=False)
+    controller._sequencer_state = SimpleNamespace(ctx=dummy_ctx)
 
-    # Subsequent calls should not emit duplicates.
-    assert list(controller._iter_fresh_accessory_events(ctx, lane_states)) == []
+    controller._handle_lane_complete("web", success=True, reused=True, reason=None)
+    assert dummy_ctx.reused_web is True
+
+    controller._handle_lane_complete("market", success=True, reused=False, reason=None)
+    assert dummy_ctx.reused_stock is False
+
+    controller._sequencer_state = None
 
 
 def test_cohesive_payload_includes_analysis_sources() -> None:
@@ -154,6 +154,59 @@ def test_lane_summary_adds_rerun_scope_for_chart_revision() -> None:
     reuse_set = set(scope.get("reuse", []))
     assert reuse_set >= {"sql", "market", "web", "analysis"}
     assert scope.get("route") == FollowUpRoute.REUSE_SQL.value
+
+
+@pytest.mark.asyncio
+async def test_agent_run_stage_streams_queue(monkeypatch: pytest.MonkeyPatch) -> None:
+    controller = SingleAgentController()
+    controller._agents_enabled = True
+    controller._agent = object()
+
+    ctx = await controller._planner.initialize_context("agent queue test", session_id="agent-queue")
+    state = _SequencerRunState(
+        ctx=ctx,
+        registry=controller._registry,
+        executed=set(),
+        mode_config=get_mode_config(controller.flow_mode),
+        query="agent queue test",
+        session_id="agent-queue",
+    )
+    state.lane_states = controller._initial_lane_states()
+    controller._sequencer_state = state
+
+    controller._planner._annotate_revision = lambda event, _: event  # type: ignore[attr-defined]
+    controller._planner.latest_artifacts = lambda: PipelineArtifacts(
+        analysis=AnalysisArtifact(query="agent queue test", analysis_text="Agent output", length=20),
+    )
+
+    async def fake_runner_run(agent, input, context, max_turns, run_config):
+        annotated = controller._attach_retry_metadata(
+            {"event": "tool_call", "data": {"tool": "analysis_writer"}},
+            "analysis_generation",
+            1,
+        )
+        await context.queue.put(annotated)
+        return SimpleNamespace(final_output={"analysis": "Agent output", "analysis_length": 20})
+
+    monkeypatch.setattr(Runner, "run", fake_runner_run)
+
+    emitted = []
+    async for event in controller._agent_run_stage():
+        emitted.append(event)
+        if event.get("event") == "workflow_complete":
+            break
+
+    controller._sequencer_state = None
+
+    assert emitted, "Agent run stage should emit events"
+    tool_event = emitted[0]
+    assert tool_event["event"] == "tool_call"
+    data = tool_event["data"]
+    assert data["tool"] == "analysis_writer"
+    assert data["attempt"] == 1
+    assert data["retry"] is False
+    event_names = [evt.get("event") for evt in emitted]
+    assert "workflow_complete" in event_names, f"missing workflow_complete in events: {event_names}"
 
 
 def test_flush_tool_events_marks_deltas_and_preserves_sentinel() -> None:

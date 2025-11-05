@@ -179,3 +179,30 @@ def test_web_receipts_expire_when_stale() -> None:
     )
 
     assert not controller._should_reuse_web(ctx)
+
+
+def test_record_agent_run_persists_attempts_and_receipts() -> None:
+    snapshot = SessionStateSnapshot(session_id="agent-session")
+    receipts = {
+        "analysis_writer": {
+            "status": "completed",
+            "finished_at": datetime.utcnow(),
+        }
+    }
+    snapshot.record_agent_run(
+        run_id="run-001",
+        trace_id="trace-xyz",
+        model="gpt-4.1",
+        tool_attempts={"analysis_writer": 2},
+        retry_counts={"analysis_writer": 1},
+        receipts=receipts,
+    )
+    agent_cache = snapshot.tool_cache.get("agent") or {}
+    assert agent_cache["last_run_id"] == "run-001"
+    assert agent_cache["trace_id"] == "trace-xyz"
+    assert agent_cache["model"] == "gpt-4.1"
+    assert agent_cache["tool_attempts"]["analysis_writer"] == 2
+    assert agent_cache["retry_counts"]["analysis_writer"] == 1
+    recorded_receipt = agent_cache["receipts"]["analysis_writer"]
+    assert recorded_receipt["status"] == "completed"
+    assert "finished_at" in recorded_receipt
