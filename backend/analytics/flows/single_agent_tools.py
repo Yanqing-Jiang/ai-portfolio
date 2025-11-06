@@ -298,7 +298,8 @@ def _build_single_agent_cohesive_payload(
 class _SingleAgentToolHooks(AnalyticsFlowHooks):
     def __init__(self, flow: "SingleAgentController", session_id: Optional[str] = None) -> None:
         self._flow = flow
-        self._timers: Dict[str, float] = {}
+        self._timers: Dict[str, Deque[float]] = {}
+        self._tool_active_counts: Dict[str, int] = {}
         self._sql_compile_details: Dict[str, Any] = {}
         self._session_id: Optional[str] = session_id
         self._emitted_cohesive = False
@@ -329,6 +330,8 @@ class _SingleAgentToolHooks(AnalyticsFlowHooks):
         self._last_analysis_payload = None
         self._final_answer_emitted = False
         self._chart_revision_missing_session = False
+        self._timers.clear()
+        self._tool_active_counts.clear()
         self._sync_agentic_revision_state()
         if ctx.get("session_id") and not self._session_id:
             session = ctx.get("session_id")
@@ -353,7 +356,9 @@ class _SingleAgentToolHooks(AnalyticsFlowHooks):
         tool = self._flow.TOOL_START_STEPS.get(step)
         if not tool:
             return
-        self._timers[tool] = time.time()
+        timer_queue = self._timers.setdefault(tool, deque())
+        timer_queue.append(time.time())
+        self._tool_active_counts[tool] = self._tool_active_counts.get(tool, 0) + 1
         log_tool_iteration(
             tool=tool,
             status="start",
@@ -419,8 +424,27 @@ class _SingleAgentToolHooks(AnalyticsFlowHooks):
 
         tool = self._flow.TOOL_END_EVENTS.get(event_name)
         if tool:
-            start = self._timers.pop(tool, None)
-            elapsed = int((time.time() - start) * 1000) if start else None
+            requires_active_run = event_name not in self.READY_EVENT_NAMES
+            elapsed = None
+            start_value: Optional[float] = None
+            if requires_active_run:
+                active_runs = self._tool_active_counts.get(tool, 0)
+                if active_runs <= 0:
+                    return
+                start_queue = self._timers.get(tool)
+                if start_queue:
+                    start_value = start_queue.popleft()
+                    if not start_queue:
+                        self._timers.pop(tool, None)
+                self._tool_active_counts[tool] = active_runs - 1
+            else:
+                start_queue = self._timers.get(tool)
+                if start_queue:
+                    start_value = start_queue.popleft()
+                    if not start_queue:
+                        self._timers.pop(tool, None)
+            if start_value is not None:
+                elapsed = int((time.time() - start_value) * 1000)
             payload: Dict[str, Any] = {
                 "tool": tool,
                 "status": "end",
@@ -714,6 +738,19 @@ class SingleAgentController:
         "analysis_complete": "analysis_writer",
         "web_ready": "web_retriever",
         "stock_ready": "stock_tracker",
+    }
+
+    READY_EVENT_NAMES = {
+        "sql_ready",
+        "sql_revision_ready",
+        "chart_ready",
+        "chart_revision_ready",
+        "analysis_ready",
+        "analysis_revision_ready",
+        "web_ready",
+        "web_revision_ready",
+        "stock_ready",
+        "stock_revision_ready",
     }
 
     TOOL_METADATA_STEP_MAP = {

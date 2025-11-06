@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import inspect
 import logging
 from dataclasses import dataclass
@@ -450,10 +451,34 @@ class PlannerSequencer:
             self._finish_lane(lane, success=True)
 
     async def _kickoff_parallel_lanes(self) -> AsyncGenerator[SequencerEvent, None]:
-        async for event in self._run_lane("web", self._orchestrator.run_web_stage):
-            yield event
-        async for event in self._run_lane("market", self._orchestrator.run_market_stage):
-            yield event
+        lanes: Tuple[Tuple[str, Callable[[], AsyncGenerator[SequencerEvent, None]]], ...] = (
+            ("web", self._orchestrator.run_web_stage),
+            ("market", self._orchestrator.run_market_stage),
+        )
+
+        queue: "asyncio.Queue[Optional[SequencerEvent]]" = asyncio.Queue()
+
+        async def _drain_lane(lane_name: str, runner: Callable[[], AsyncGenerator[SequencerEvent, None]]) -> None:
+            try:
+                async for event in self._run_lane(lane_name, runner):
+                    await queue.put(event)
+            finally:
+                await queue.put(None)
+
+        tasks = [asyncio.create_task(_drain_lane(lane, runner)) for lane, runner in lanes]
+        finished = 0
+        try:
+            while finished < len(tasks):
+                item = await queue.get()
+                if item is None:
+                    finished += 1
+                    continue
+                yield item
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     async def _await_analysis_stage(self) -> AsyncGenerator[SequencerEvent, None]:
         lane = "analysis"
@@ -478,6 +503,9 @@ class PlannerSequencer:
         if lane not in self._lane_states:
             return
         state = self._lane_states[lane]
+        if state.completed:
+            logger.debug("Lane '%s' already settled (status=%s); skipping runner.", lane, state.status)
+            return
         if not state.required and lane in self._optional_lanes and not self._should_run_lane(lane):
             self._skip_lane(lane, reason="cached_reuse")
             return
