@@ -54,8 +54,7 @@ agents:
         - rate_limited
         - schema_validation_failed
   single_agent:
-    model: gpt-4.1
-    temperature: 0.0
+    model: gpt-5-mini-2025-08-07
     reasoning_effort: medium
     max_tool_retries: 2
     instructions: |
@@ -66,8 +65,7 @@ agents:
       Always populate the `tool_outputs` object describing what changed, including cache reuse flags from receipts when present.
       Treat tool errors as retryable when the tool schema allows; include the `error_code` you received so the supervisor can decide whether to retry.
   supervisor:
-    model: gpt-4.1
-    temperature: 0.1
+    model: gpt-5-mini-2025-08-07
     reasoning_effort: high
     max_tool_retries: 2
     instructions: |

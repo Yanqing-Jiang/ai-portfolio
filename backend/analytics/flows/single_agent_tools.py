@@ -940,17 +940,17 @@ class SingleAgentController:
                     pending_followups = len(followups)
                 except TypeError:
                     pending_followups = 0
-            skip_classification = bool(cached_classification) and (
-                confidence >= REVISION_INTENT_CONFIDENCE_THRESHOLD
+            cached_revision_ready = cached_intent_ready and cached_plan_ready and pending_followups == 0
+            skip_classification = (
+                (cached_classification is not None and confidence >= REVISION_INTENT_CONFIDENCE_THRESHOLD)
+                or cached_revision_ready
             )
-            reuse_intent = (
-                skip_classification
-                and cached_intent_ready
-                and cached_plan_ready
-                and pending_followups == 0
-            )
+            reuse_intent = cached_revision_ready
             if skip_classification:
                 executed.add("classification")
+                skip_reason = "cached_intent" if cached_classification is not None else "revision_context"
+                if classification_artifact is None and getattr(ctx, "is_financial_query", None) is None:
+                    ctx.is_financial_query = True
                 log_tool_iteration(
                     tool="intent_classifier",
                     status="skipped",
@@ -958,7 +958,7 @@ class SingleAgentController:
                     session_id=ctx.session_id,
                     flow=self.flow_label,
                     details={
-                        "reason": "cached_intent",
+                        "reason": skip_reason,
                         "confidence": confidence,
                         "pending_followups": pending_followups,
                     },
@@ -968,6 +968,7 @@ class SingleAgentController:
                     ctx.is_financial_query = True
             if reuse_intent:
                 executed.update({"intent_detection", "clarification", "plan_generation"})
+                intent_skip_reason = "cached_intent" if cached_classification is not None else "revision_context"
                 log_tool_iteration(
                     tool="intent_classifier",
                     status="skipped",
@@ -975,7 +976,7 @@ class SingleAgentController:
                     session_id=ctx.session_id,
                     flow=self.flow_label,
                     details={
-                        "reason": "cached_intent",
+                        "reason": intent_skip_reason,
                         "confidence": confidence,
                     },
                 )
@@ -985,7 +986,7 @@ class SingleAgentController:
                     step="clarification",
                     session_id=ctx.session_id,
                     flow=self.flow_label,
-                    details={"reason": "cached_intent"},
+                    details={"reason": intent_skip_reason},
                 )
                 log_tool_iteration(
                     tool="planner",
@@ -993,7 +994,7 @@ class SingleAgentController:
                     step="plan_generation",
                     session_id=ctx.session_id,
                     flow=self.flow_label,
-                    details={"reason": "cached_intent"},
+                    details={"reason": intent_skip_reason},
                 )
             ctx.intent_reused = reuse_intent
             await self._planner._persist_session_state(ctx, record_artifacts=True)
