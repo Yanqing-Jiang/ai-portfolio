@@ -225,6 +225,27 @@ class CacheService:
                 pass
             self.redis_client = None
 
+    async def set_agent_metadata(
+        self,
+        session_id: str,
+        metadata: Any,
+        *,
+        ttl: Optional[int] = None,
+    ) -> bool:
+        if not session_id:
+            return False
+        return await self.set("agent_run", session_id, metadata, ttl=ttl)
+
+    async def get_agent_metadata(self, session_id: str) -> Optional[Any]:
+        if not session_id:
+            return None
+        return await self.get("agent_run", session_id)
+
+    async def clear_agent_metadata(self, session_id: str) -> bool:
+        if not session_id:
+            return False
+        return await self.delete("agent_run", session_id)
+
 
 _cache_service: Optional[CacheService] = None
 

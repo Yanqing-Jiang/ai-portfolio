@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 import time
 import json
 import os
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
+from typing import Any, Dict, Iterable, List, Optional, Tuple, TYPE_CHECKING
 from copy import deepcopy
 
 from pydantic import BaseModel, Field, field_validator
@@ -30,10 +31,18 @@ __all__ = [
 ]
 
 
-DEFAULT_TTL_MINUTES = 30
+DEFAULT_TTL_MINUTES = 10
 MIN_TTL_MINUTES = 1
 MAX_TTL_MINUTES = 60
 MAX_ARTIFACT_HISTORY = 5
+
+
+def _hash_arguments(payload: Any) -> str:
+    try:
+        serialized = json.dumps(payload, sort_keys=True, default=str)
+    except TypeError:
+        serialized = repr(payload)
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()[:16]
 
 
 class SessionStateSnapshot(BaseModel):
@@ -53,6 +62,17 @@ class SessionStateSnapshot(BaseModel):
     messages: List[Dict[str, Any]] = Field(default_factory=list)
     schedule_history: List[Dict[str, Any]] = Field(default_factory=list)
     lane_timestamps: Dict[str, datetime] = Field(default_factory=dict)
+    agents_run_id: Optional[str] = None
+    agents_trace_id: Optional[str] = None
+    agents_manager_trace_id: Optional[str] = None
+    agents_model: Optional[str] = None
+    agents_tool_attempts: Dict[str, int] = Field(default_factory=dict)
+    agents_retry_counts: Dict[str, int] = Field(default_factory=dict)
+    agents_tool_receipts: Dict[str, Any] = Field(default_factory=dict)
+    agents_recorded_at: Optional[str] = None
+    agents_parallel_groups: Dict[str, Any] = Field(default_factory=dict)
+    agents_delegation_policy_version: Optional[str] = None
+    agents_delegation_decisions: List[Dict[str, Any]] = Field(default_factory=list)
 
     model_config = {
         "extra": "allow",
@@ -129,7 +149,17 @@ class SessionStateSnapshot(BaseModel):
 
     def record_tool_receipt(self, tool: str, payload: Dict[str, Any]) -> None:
         receipts = self.tool_cache.setdefault("tool_receipts", {})
-        receipts[tool] = deepcopy(payload)
+        enhanced = deepcopy(payload)
+        enhanced.setdefault("tool", tool)
+        enhanced.setdefault("recorded_at", datetime.now(timezone.utc).isoformat())
+        if "arguments_hash" not in enhanced and "arguments" in enhanced:
+            enhanced["arguments_hash"] = _hash_arguments(enhanced.get("arguments"))
+        if "attempts" not in enhanced and "attempt" in enhanced:
+            try:
+                enhanced["attempts"] = int(enhanced.get("attempt", 0))
+            except (TypeError, ValueError):
+                enhanced["attempts"] = 0
+        receipts[tool] = enhanced
         self.touch()
 
     def record_agent_run(
@@ -137,29 +167,145 @@ class SessionStateSnapshot(BaseModel):
         *,
         run_id: Optional[str],
         trace_id: Optional[str],
+        manager_trace_id: Optional[str] = None,
         model: Optional[str],
         tool_attempts: Dict[str, int],
         retry_counts: Dict[str, int],
         receipts: Dict[str, Any],
+        parallel_groups: Optional[Dict[str, Any]] = None,
+        delegation_policy_version: Optional[str] = None,
+        decisions: Optional[Iterable[Dict[str, Any]]] = None,
     ) -> None:
         agent_cache = self.tool_cache.setdefault("agent", {})
+        previous_run_id = agent_cache.get("last_run_id")
         if run_id:
-            agent_cache["last_run_id"] = run_id
+            normalized_run_id = str(run_id)
+            agent_cache["last_run_id"] = normalized_run_id
+            self.agents_run_id = normalized_run_id
         if trace_id:
-            agent_cache["trace_id"] = trace_id
+            normalized_trace_id = str(trace_id)
+            agent_cache["trace_id"] = normalized_trace_id
+            self.agents_trace_id = normalized_trace_id
+        if manager_trace_id:
+            normalized_manager_trace_id = str(manager_trace_id)
+            agent_cache["manager_trace_id"] = normalized_manager_trace_id
+            self.agents_manager_trace_id = normalized_manager_trace_id
+        elif previous_run_id and self.agents_run_id and self.agents_run_id != previous_run_id:
+            agent_cache.pop("manager_trace_id", None)
+            self.agents_manager_trace_id = None
         if model:
-            agent_cache["model"] = model
-        agent_cache["recorded_at"] = datetime.now(timezone.utc).isoformat()
+            normalized_model = str(model)
+            agent_cache["model"] = normalized_model
+            self.agents_model = normalized_model
+        if previous_run_id and self.agents_run_id and self.agents_run_id != previous_run_id:
+            agent_cache.pop("tool_attempts", None)
+            agent_cache.pop("retry_counts", None)
+            agent_cache.pop("receipts", None)
+            self.agents_tool_attempts = {}
+            self.agents_retry_counts = {}
+            self.agents_tool_receipts = {}
+        recorded_at = datetime.now(timezone.utc).isoformat()
+        agent_cache["recorded_at"] = recorded_at
+        self.agents_recorded_at = recorded_at
         if tool_attempts:
-            agent_cache["tool_attempts"] = dict(tool_attempts)
+            attempts_payload = {
+                str(key): int(value)
+                for key, value in tool_attempts.items()
+                if key is not None
+            }
+            agent_cache["tool_attempts"] = attempts_payload
+            self.agents_tool_attempts = dict(attempts_payload)
+        else:
+            agent_cache.pop("tool_attempts", None)
+            self.agents_tool_attempts = {}
         if retry_counts:
-            agent_cache["retry_counts"] = dict(retry_counts)
+            retry_payload = {
+                str(key): int(value)
+                for key, value in retry_counts.items()
+                if key is not None
+            }
+            agent_cache["retry_counts"] = retry_payload
+            self.agents_retry_counts = dict(retry_payload)
+        else:
+            agent_cache.pop("retry_counts", None)
+            self.agents_retry_counts = {}
         if receipts:
             try:
-                agent_cache["receipts"] = sanitize_for_json(receipts)
+                sanitized_receipts = sanitize_for_json(receipts)
             except Exception:
-                agent_cache["receipts"] = json.loads(json.dumps(receipts, default=str))
+                sanitized_receipts = json.loads(json.dumps(receipts, default=str))
+            if not isinstance(sanitized_receipts, dict):
+                sanitized_receipts = {"receipt": sanitized_receipts}
+            agent_cache["receipts"] = sanitized_receipts
+            self.agents_tool_receipts = dict(sanitized_receipts)
+        else:
+            agent_cache.pop("receipts", None)
+            self.agents_tool_receipts = {}
+        if parallel_groups:
+            try:
+                sanitized_groups = sanitize_for_json(parallel_groups)
+            except Exception:
+                sanitized_groups = json.loads(json.dumps(parallel_groups, default=str))
+            if not isinstance(sanitized_groups, dict):
+                sanitized_groups = {"groups": sanitized_groups}
+            agent_cache["parallel_groups"] = sanitized_groups
+            self.agents_parallel_groups = dict(sanitized_groups)
+        else:
+            agent_cache.pop("parallel_groups", None)
+            self.agents_parallel_groups = {}
+        if delegation_policy_version:
+            normalized_version = str(delegation_policy_version)
+            agent_cache["delegation_policy_version"] = normalized_version
+            self.agents_delegation_policy_version = normalized_version
+        else:
+            agent_cache.pop("delegation_policy_version", None)
+            self.agents_delegation_policy_version = None
+        if decisions:
+            decisions_list = []
+            for entry in decisions:
+                try:
+                    sanitized_entry = sanitize_for_json(entry)
+                except Exception:
+                    sanitized_entry = json.loads(json.dumps(entry, default=str))
+                decisions_list.append(sanitized_entry)
+            agent_cache["delegation_decisions"] = decisions_list
+            normalized_decisions: List[Dict[str, Any]] = []
+            for item in decisions_list:
+                if isinstance(item, dict):
+                    normalized_decisions.append(item)
+                else:
+                    normalized_decisions.append({"value": item})
+            self.agents_delegation_decisions = normalized_decisions
+        else:
+            agent_cache.pop("delegation_decisions", None)
+            self.agents_delegation_decisions = []
         self.touch()
+
+    def agent_run_metadata(self) -> Dict[str, Any]:
+        metadata: Dict[str, Any] = {}
+        if self.agents_run_id:
+            metadata["runId"] = self.agents_run_id
+        if self.agents_trace_id:
+            metadata["traceId"] = self.agents_trace_id
+        if self.agents_manager_trace_id:
+            metadata["managerTraceId"] = self.agents_manager_trace_id
+        if self.agents_model:
+            metadata["model"] = self.agents_model
+        if self.agents_recorded_at:
+            metadata["recordedAt"] = self.agents_recorded_at
+        if self.agents_tool_attempts:
+            metadata["toolAttempts"] = dict(self.agents_tool_attempts)
+        if self.agents_retry_counts:
+            metadata["retryCounts"] = dict(self.agents_retry_counts)
+        if self.agents_tool_receipts:
+            metadata["toolReceipts"] = sanitize_for_json(self.agents_tool_receipts)
+        if self.agents_parallel_groups:
+            metadata["parallelGroups"] = dict(self.agents_parallel_groups)
+        if self.agents_delegation_policy_version:
+            metadata["delegationPolicyVersion"] = self.agents_delegation_policy_version
+        if self.agents_delegation_decisions:
+            metadata["delegationDecisions"] = [dict(entry) for entry in self.agents_delegation_decisions]
+        return metadata
 
     def get_tool_receipt(self, tool: str) -> Optional[Dict[str, Any]]:
         receipts = self.tool_cache.get("tool_receipts") or {}
@@ -306,6 +452,22 @@ class SessionStateRepository:
     def ttl_seconds(self) -> int:
         return self._ttl_seconds
 
+    def _deserialize_snapshot(self, payload: str, session_id: str) -> Optional[SessionStateSnapshot]:
+        try:
+            data = json.loads(payload)
+            snapshot = SessionStateSnapshot(**data)
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.warning("Failed to deserialize session state for %s: %s", session_id, exc)
+            return None
+        return snapshot
+
+    def _snapshot_expired(self, snapshot: SessionStateSnapshot) -> bool:
+        try:
+            age = datetime.now(timezone.utc) - snapshot.updated_at
+        except Exception:
+            return False
+        return age.total_seconds() >= self._ttl_seconds
+
     async def load(self, session_id: str) -> Optional[SessionStateSnapshot]:
         self._cleanup_fallback()
         key = self._key(session_id)
@@ -326,13 +488,14 @@ class SessionStateRepository:
         else:
             self._fallback_set(key, payload)
 
-        try:
-            data = json.loads(payload)
-            return SessionStateSnapshot(**data)
-        except Exception as exc:  # pragma: no cover - defensive logging
-            raise ValueError(
-                f"Failed to deserialize session state for {session_id}: {exc}"
-            ) from exc
+        snapshot = self._deserialize_snapshot(payload, session_id)
+        if snapshot is None:
+            await self.delete(session_id)
+            return None
+        if self._snapshot_expired(snapshot):
+            await self.delete(session_id)
+            return None
+        return snapshot
 
     async def save(self, snapshot: SessionStateSnapshot) -> SessionStateSnapshot:
         snapshot.touch()
@@ -463,14 +626,20 @@ async def close_session_state_repository() -> None:
 
 
 def _read_ttl_from_env() -> int:
-    raw = os.getenv("ANALYTICS_SESSION_TTL_MINUTES")
-    if not raw:
-        return DEFAULT_TTL_MINUTES
-    try:
-        value = int(raw)
-    except ValueError:
-        return DEFAULT_TTL_MINUTES
-    return value
+    candidates = [
+        os.getenv("AGENTS_SESSION_TTL_MINUTES"),
+        os.getenv("ANALYTICS_SESSION_TTL_MINUTES"),
+    ]
+    for raw in candidates:
+        if not raw:
+            continue
+        try:
+            value = int(raw)
+        except ValueError:
+            continue
+        if value > 0:
+            return value
+    return DEFAULT_TTL_MINUTES
 
 
 def _string_similarity(a: str, b: str) -> float:

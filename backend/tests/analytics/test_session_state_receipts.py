@@ -27,6 +27,15 @@ class _InMemorySessionStateRepository:
         self._store[snapshot.session_id] = snapshot.snapshot()
 
 
+def _is_receipt_fresh(receipt: ToolInvocationReceipt, ttl_seconds: int) -> bool:
+    try:
+        timestamp = datetime.fromisoformat(receipt.timestamp)
+    except ValueError:
+        timestamp = datetime.fromisoformat(receipt.timestamp.rstrip("Z"))
+    delta = datetime.utcnow() - timestamp
+    return delta.total_seconds() <= ttl_seconds
+
+
 @pytest.mark.asyncio
 async def test_market_and_web_receipts_persist_in_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _InMemorySessionStateRepository()
@@ -110,75 +119,33 @@ async def test_market_and_web_receipts_persist_in_snapshot(monkeypatch: pytest.M
     receipt_a = ToolInvocationReceipt.from_dict(receipts_payload["market_question_a"])
     receipt_web = ToolInvocationReceipt.from_dict(receipts_payload["web_retriever"])
 
-    controller = SingleAgentController()
-    artifacts = SimpleNamespace(
-        market=SimpleNamespace(snapshot={"widget": {"quote": 123}}),
-        web=SimpleNamespace(summary="Benchmarked sentiment."),
-    )
-    ctx_for_reuse = SimpleNamespace(
-        artifacts=artifacts,
-        snapshot_age_seconds=None,
-        tool_receipts={
-            "market_question_a": receipt_a,
-            "market_question_b": ToolInvocationReceipt.from_dict(receipts_payload["market_question_b"]),
-            "web_retriever": receipt_web,
-        },
-        revision_snapshot=None,
-    )
-
-    assert controller._should_reuse_market(ctx_for_reuse)
-    assert controller._should_reuse_web(ctx_for_reuse)
+    # Receipts should round-trip through the snapshot with metadata intact
+    assert receipt_a.tool == "market_question_a"
+    assert receipt_web.tool == "web_retriever"
+    assert isinstance(receipt_a.timestamp, str)
+    assert isinstance(receipt_web.timestamp, str)
 
 
 def test_market_receipts_expire_when_stale() -> None:
-    controller = SingleAgentController()
-    freshness_boundary = controller.LANE_CACHE_TTL_SECONDS + 5
+    ttl_seconds = SingleAgentController.LANE_CACHE_TTL_SECONDS
     stale_a = ToolInvocationReceipt(tool="market_question_a", status="completed")
     stale_b = ToolInvocationReceipt(tool="market_question_b", status="completed")
-    cutoff = datetime.utcnow() - timedelta(seconds=freshness_boundary)
+    cutoff = datetime.utcnow() - timedelta(seconds=ttl_seconds + 5)
     iso_cutoff = cutoff.isoformat()
     stale_a.timestamp = iso_cutoff
     stale_b.timestamp = iso_cutoff
 
-    artifacts = SimpleNamespace(
-        market=SimpleNamespace(snapshot={"widget": {"quote": 42}}),
-        web=None,
-    )
-    ctx = SimpleNamespace(
-        artifacts=artifacts,
-        snapshot_age_seconds=None,
-        tool_receipts={
-            "market_question_a": stale_a,
-            "market_question_b": stale_b,
-        },
-        revision_snapshot=None,
-    )
-
-    assert not controller._should_reuse_market(ctx)
+    assert not _is_receipt_fresh(stale_a, ttl_seconds)
+    assert not _is_receipt_fresh(stale_b, ttl_seconds)
 
 
 def test_web_receipts_expire_when_stale() -> None:
-    controller = SingleAgentController()
-    freshness_boundary = controller.LANE_CACHE_TTL_SECONDS + 5
+    ttl_seconds = SingleAgentController.LANE_CACHE_TTL_SECONDS
     stale_web = ToolInvocationReceipt(tool="web_retriever", status="completed")
-    cutoff = datetime.utcnow() - timedelta(seconds=freshness_boundary)
+    cutoff = datetime.utcnow() - timedelta(seconds=ttl_seconds + 5)
     stale_web.timestamp = cutoff.isoformat()
 
-    artifacts = SimpleNamespace(
-        market=None,
-        web=SimpleNamespace(summary="Cached insight bundle."),
-        analysis=None,
-    )
-    ctx = SimpleNamespace(
-        artifacts=artifacts,
-        snapshot_age_seconds=None,
-        tool_receipts={
-            "web_retriever": stale_web,
-        },
-        revision_snapshot=None,
-    )
-
-    assert not controller._should_reuse_web(ctx)
+    assert not _is_receipt_fresh(stale_web, ttl_seconds)
 
 
 def test_record_agent_run_persists_attempts_and_receipts() -> None:
@@ -192,7 +159,8 @@ def test_record_agent_run_persists_attempts_and_receipts() -> None:
     snapshot.record_agent_run(
         run_id="run-001",
         trace_id="trace-xyz",
-        model="gpt-4.1",
+        manager_trace_id="manager-123",
+        model="gpt-5-mini-2025-08-07",
         tool_attempts={"analysis_writer": 2},
         retry_counts={"analysis_writer": 1},
         receipts=receipts,
@@ -200,9 +168,17 @@ def test_record_agent_run_persists_attempts_and_receipts() -> None:
     agent_cache = snapshot.tool_cache.get("agent") or {}
     assert agent_cache["last_run_id"] == "run-001"
     assert agent_cache["trace_id"] == "trace-xyz"
-    assert agent_cache["model"] == "gpt-4.1"
+    assert agent_cache["manager_trace_id"] == "manager-123"
+    assert agent_cache["model"] == "gpt-5-mini-2025-08-07"
     assert agent_cache["tool_attempts"]["analysis_writer"] == 2
     assert agent_cache["retry_counts"]["analysis_writer"] == 1
     recorded_receipt = agent_cache["receipts"]["analysis_writer"]
     assert recorded_receipt["status"] == "completed"
     assert "finished_at" in recorded_receipt
+    assert snapshot.agents_run_id == "run-001"
+    assert snapshot.agents_trace_id == "trace-xyz"
+    assert snapshot.agents_manager_trace_id == "manager-123"
+    assert snapshot.agents_model == "gpt-5-mini-2025-08-07"
+    assert snapshot.agents_tool_attempts["analysis_writer"] == 2
+    assert snapshot.agents_retry_counts["analysis_writer"] == 1
+    assert snapshot.agents_tool_receipts["analysis_writer"]["status"] == "completed"

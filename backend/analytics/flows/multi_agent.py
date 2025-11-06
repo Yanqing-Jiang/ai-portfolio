@@ -7,36 +7,88 @@ import time
 import copy
 import os
 import asyncio
+import contextlib
 import statistics
 import logging
+import uuid
 from datetime import datetime, date
-from typing import Any, AsyncGenerator, Dict, Iterable, List, Mapping, Optional, Sequence, Set, TYPE_CHECKING
+from dataclasses import dataclass, field
+from typing import Any, AsyncGenerator, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple, TYPE_CHECKING
 
 from analytics.core.session_state import SessionStateSnapshot, get_session_state_repository
+from analytics.core.cache import get_cache_service
 from analytics.core.events import EventEmitter
 from analytics.core.revision_snapshot import extract_revision_snapshot
-from analytics.core.telemetry import analysis_chunk as log_analysis_chunk, agent_handoff, policy_decision
+from analytics.core.telemetry import (
+    analysis_chunk as log_analysis_chunk,
+    agent_handoff,
+    agent_run as log_agent_run,
+    backpressure_event,
+    tool_iteration as log_tool_iteration,
+    policy_decision,
+)
+from analytics.core.config_store import get_config_store
+from analytics.policies.delegation_policy import DelegationPolicy
 from analytics.services.polygon import PolygonMarketDataClient, PolygonError, fetch_daily_snapshot
 from analytics.services.response_search import ResponseSearchError, perform_response_search
 from analytics.routing import FollowUpRoute
 from analytics.validators import CohesiveResultValidationError, CohesiveResultValidator, sanitize_for_json
 from .planner_executor import (
     PlannerExecutorFlow,
+    PlannerPhaseContext,
     run_planner_executor,
+    FOLLOW_UP_BANNERS,
+    _build_planner_result_payload,
+    _build_reused_analysis_event,
     _evaluate_latency_guardrail,
     _hash_payload,
     _reset_revision_accessories,
+    _INTENT_LANE_HINTS,
 )
 from .hooks import AnalyticsFlowHooks
 from .tool_bundle import collect_tool_bundle
-from .pipeline_tools import get_planner_tool_registry
-from .schedulers import FlowMode, apply_mode_metadata
+from .pipeline_tools import (
+    PlannerToolRegistry,
+    get_planner_tool_registry,
+)
+from .orchestrator_adapter import PlannerOrchestratorAdapter, LaneCompleteCallback
+from .schedulers import FlowMode, apply_mode_metadata, get_mode_config
+from .sequencer import (
+    PlannerEventBus,
+    PlannerSequencer,
+    LANE_STATUS_RUNNING,
+    LANE_STATUS_COMPLETED,
+    LANE_STATUS_FAILED,
+    LANE_STATUS_PENDING,
+    LANE_STATUS_SKIPPED,
+)
+from .supervisor_orchestrator import (
+    SupervisorSpecialistConfig,
+    build_supervisor_bundle,
+)
+from .planner import (
+    annotate_revision_event,
+    apply_revision_plan,
+    build_revision_plan,
+    build_revision_request_event,
+    derive_revision_targets,
+    ensure_analysis_dependencies,
+    stream_analysis_lane,
+    stream_chart_lane,
+    stream_sql_lane,
+    ToolParallelRuntime,
+)
+from .tooling import StockTrackerAdapter
+from .supervisor_retry_manager import SupervisorRetryManager
 
 logger = logging.getLogger(__name__)
 
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .revision_directive import RevisionDirective
+
+
+REVISION_INTENT_CONFIDENCE_THRESHOLD: float = 0.6
 
 
 def _build_tool_metadata(manifest: Any) -> Dict[str, Dict[str, Any]]:
@@ -120,8 +172,14 @@ class _MultiAgentHooks(AnalyticsFlowHooks):
         self._query = query
         self._active_session: Optional[str] = session_id
         self._flow._chart_revision_missing_session = False
+        self._started: bool = False
 
     async def on_flow_start(self, ctx: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
+        if self._started:
+            if False:
+                yield {}
+            return
+        self._started = True
         self._flow._prepare_context(self._query)
         if ctx.get("session_id") and not self._active_session:
             session = ctx.get("session_id")
@@ -167,6 +225,7 @@ class _MultiAgentHooks(AnalyticsFlowHooks):
         if (
             not self._flow._orchestrated
             and event.get("event") == "analysis_complete"
+            and self._flow._active_sequencer is None
         ):
             async for orchestrated_event in self._flow._run_agent_orchestration(
                 self._query,
@@ -1147,6 +1206,26 @@ def _build_default_plan() -> List[AgentTask]:
 
 
 
+@dataclass
+class _SupervisorSequencerState:
+    ctx: PlannerPhaseContext
+    registry: PlannerToolRegistry
+    executed: Set[str]
+    mode_config: Any
+    query: str
+    session_id: Optional[str]
+    hooks: "_MultiAgentHooks"
+    tool_runtime: Optional[ToolParallelRuntime] = None
+    tool_state: Optional[Dict[str, Any]] = None
+    revision_plan: Optional[Any] = None
+    derived_targets: Optional[Set[str]] = None
+    lane_states: Optional[Dict[str, str]] = None
+    run_sql_lane: bool = True
+    run_chart_lane: bool = True
+    run_analysis_lane: bool = True
+    stock_only_run: bool = False
+    is_revision_follow_up: bool = False
+
 
 class MultiAgentFlow:
     """Coordinates specialist agents while reusing the planner-executor core."""
@@ -1242,10 +1321,10 @@ class MultiAgentFlow:
     }
     ROLE_PARALLEL_GROUPS: Dict[str, str] = {
         "planner_agent": "supervisor_intent",
-        "sql_specialist": "supervisor_sql",
-        "viz_designer": "multi_supervisor_fanout",
-        "market_agent": "multi_supervisor_fanout",
-        "web_research_agent": "multi_supervisor_fanout",
+        "sql_specialist": "sql_web",
+        "viz_designer": "chart_parallel",
+        "market_agent": "sql_web",
+        "web_research_agent": "sql_web",
         "insight_reviewer": "supervisor_summary",
     }
     ROLE_LANES: Dict[str, str] = {
@@ -1264,11 +1343,18 @@ class MultiAgentFlow:
         "analysis_ready": "analysis",
     }
     ARTIFACT_PARALLEL_GROUPS: Dict[str, str] = {
-        "sql_ready": "supervisor_sql",
-        "chart_ready": "multi_supervisor_fanout",
-        "stock_ready": "multi_supervisor_fanout",
-        "web_ready": "multi_supervisor_fanout",
+        "sql_ready": "sql_web",
+        "chart_ready": "chart_parallel",
+        "stock_ready": "sql_web",
+        "web_ready": "sql_web",
         "analysis_ready": "supervisor_summary",
+    }
+    DEFAULT_PARALLEL_GROUP = "sql_web"
+    SUPERVISOR_PARALLEL_LIMITS: Dict[str, int] = {
+        "supervisor_intent": 1,
+        "sql_web": 2,
+        "chart_parallel": 1,
+        "supervisor_summary": 1,
     }
     RECEIPT_TTL_SECONDS: int = 600
 
@@ -1294,6 +1380,62 @@ class MultiAgentFlow:
         return age_seconds <= ttl_seconds
 
     def __init__(self) -> None:
+        self._config_store = get_config_store()
+        self._supervisor_settings = self._config_store.get_agent_mode_config("supervisor")
+        policy_version = os.getenv("AGENTS_DELEGATION_POLICY_VERSION", "baseline")
+        agents_yaml = getattr(self._config_store, "yaml_configs", {})
+        self._delegation_policy = DelegationPolicy.load(
+            version=policy_version,
+            config=agents_yaml,
+        )
+        self._retry_manager = SupervisorRetryManager(
+            self._delegation_policy,
+            task_roles=self.ORCHESTRATION_ROLES,
+            role_lanes=self.ROLE_LANES,
+        )
+        self._max_tool_retries = int(self._supervisor_settings.get("max_tool_retries") or 2)
+        supervisor_name = str(self._supervisor_settings.get("name") or "analytics_supervisor")
+        supervisor_instructions = str(self._supervisor_settings.get("instructions") or "")
+        supervisor_model = str(self._supervisor_settings.get("model") or "gpt-5-mini-2025-08-07")
+        supervisor_reasoning = self._supervisor_settings.get("reasoning_effort")
+        supervisor_max_turns = self._supervisor_settings.get("max_turns")
+
+        specialist_configs: List[SupervisorSpecialistConfig] = []
+        for entry in self._supervisor_settings.get("specialists", []) or []:
+            lane = str(entry.get("lane") or "").strip()
+            if not lane:
+                continue
+            specialist_configs.append(
+                SupervisorSpecialistConfig(
+                    lane=lane,
+                    name=str(entry.get("name") or f"{lane}_specialist"),
+                    instructions=str(entry.get("instructions") or supervisor_instructions),
+                    description=entry.get("description"),
+                    model=entry.get("model"),
+                    reasoning_effort=entry.get("reasoning_effort"),
+                    max_turns=entry.get("max_turns"),
+                )
+            )
+
+        self._supervisor_bundle = (
+            build_supervisor_bundle(
+                supervisor_name=supervisor_name,
+                supervisor_instructions=supervisor_instructions,
+                model=supervisor_model,
+                reasoning_effort=supervisor_reasoning,
+                max_turns=supervisor_max_turns,
+                specialist_configs=specialist_configs,
+            )
+            if specialist_configs
+            else None
+        )
+        self._supervisor_agent = self._supervisor_bundle.supervisor if self._supervisor_bundle else None
+        self._specialist_tools = (
+            {binding.lane: binding.tool for binding in self._supervisor_bundle.bindings}
+            if self._supervisor_bundle
+            else {}
+        )
+
         self._planner = PlannerExecutorFlow(flow_mode=FlowMode.MULTI_AGENT)
         self.follow_up_route = FollowUpRoute.FULL_PIPELINE
         self._planner.set_follow_up_route(self.follow_up_route)
@@ -1310,15 +1452,25 @@ class MultiAgentFlow:
             if registry_name in self._tool_metadata_by_registry
         }
         self._timers: Dict[str, float] = {}
+        self._latest_lane_states: Dict[str, str] = {}
         self._agent_registry = _build_default_agent_registry()
         # Analyst orchestration traverses supervisor -> specialists -> reviewer which requires a deeper DAG budget.
-        self._orchestrator = AgentExecutionOrchestrator(self._agent_registry, max_depth=4)
+        self._orchestrator = AgentExecutionOrchestrator(
+            self._agent_registry,
+            max_depth=4,
+            max_retries=self._max_tool_retries,
+            retry_decider=self._retry_manager.should_retry,
+        )
         self._base_plan = _build_default_plan()
         self._market_client = PolygonMarketDataClient()
         self._market_fetcher = fetch_daily_snapshot
         self._session_snapshot: Optional[SessionStateSnapshot] = None
         self._prefetched_snapshot: Optional[SessionStateSnapshot] = None
         self._shared_context: Dict[str, Any] = {}
+        if self._supervisor_agent:
+            supervisor_meta = self._shared_context.setdefault("_meta", {}).setdefault("supervisor", {})
+            supervisor_meta["agent_name"] = self._supervisor_agent.name
+            supervisor_meta["specialists"] = [binding.lane for binding in self._supervisor_bundle.bindings]
         self._orchestrated = False
         self._hedged_completion: Dict[str, bool] = {}
         self._pending_artifact_events: List[Dict[str, Any]] = []
@@ -1327,6 +1479,12 @@ class MultiAgentFlow:
         self._revision_directive: Optional["RevisionDirective"] = None
         self._agentic_revision_mode: bool = False
         self._lane_refresh_required: Dict[str, bool] = {}
+        self._agent_retry_counts: Dict[str, int] = {}
+        self._agent_cache_ttl: int = 600
+        self._planner_event_bus: Optional[PlannerEventBus] = None
+        self._sequencer_state: Optional[_SupervisorSequencerState] = None
+        self._active_sequencer: Optional["PlannerSequencer"] = None  # type: ignore[name-defined]
+        self._lane_retry_counts: Dict[str, int] = {}
 
     def _hedged_tool_aliases(self) -> List[str]:
         manifest = self._shared_context.get("tool_manifest")
@@ -1538,10 +1696,10 @@ class MultiAgentFlow:
             enriched_payload.setdefault("lane", lane)
             enriched_payload.setdefault(
                 "parallel_group",
-                self.ARTIFACT_PARALLEL_GROUPS.get(event_name, "multi_supervisor_fanout"),
+                self.ARTIFACT_PARALLEL_GROUPS.get(event_name, self.DEFAULT_PARALLEL_GROUP),
             )
         else:
-            enriched_payload.setdefault("parallel_group", "multi_supervisor_fanout")
+            enriched_payload.setdefault("parallel_group", self.DEFAULT_PARALLEL_GROUP)
         if "reused" not in enriched_payload:
             enriched_payload["reused"] = False
         enriched_payload.setdefault("flow_mode", self.flow_mode.value)
@@ -1564,6 +1722,11 @@ class MultiAgentFlow:
             )
         except Exception:
             pass
+
+    def _queue_supervisor_event(self, event_name: str, payload: Dict[str, Any]) -> None:
+        event = apply_mode_metadata({"event": event_name, "data": payload}, self.flow_mode)
+        self._pending_artifact_events.append(event)
+        self._artifact_flush_pending = True
 
     def _drain_artifact_events(self) -> List[Dict[str, Any]]:
         pending = self._pending_artifact_events
@@ -1808,6 +1971,8 @@ class MultiAgentFlow:
         return None
 
     def _lane_state_snapshot(self) -> Dict[str, str]:
+        if getattr(self, "_latest_lane_states", None):
+            return dict(self._latest_lane_states)
         bundle_sources = self._shared_context.get("_meta", {}).get("bundle_sources", {})
 
         def classify(ctx: Mapping[str, Any], *, has_payload: bool, source_keys: Iterable[str]) -> str:
@@ -1875,6 +2040,40 @@ class MultiAgentFlow:
             return FollowUpRoute.FULL_PIPELINE
         return self.follow_up_route
 
+    def _initial_lane_states(self) -> Dict[str, str]:
+        route = getattr(self, "follow_up_route", FollowUpRoute.FULL_PIPELINE)
+        if route == FollowUpRoute.REUSE_SQL:
+            return {
+                "sql": "reused",
+                "chart": "reused",
+                "analysis": "reused",
+                "market": "skipped",
+                "web": "skipped",
+            }
+        if route == FollowUpRoute.STOCK_ONLY:
+            return {
+                "sql": "reused",
+                "chart": "reused",
+                "analysis": "reused",
+                "market": "pending",
+                "web": "reused",
+            }
+        return {
+            "sql": "pending",
+            "chart": "queued",
+            "analysis": "queued",
+            "market": "pending",
+            "web": "pending",
+        }
+
+    def _sync_lane_states_from_sequencer(
+        self,
+        lane_states: Dict[str, str],
+        sequencer: PlannerSequencer,
+    ) -> None:
+        lane_states.clear()
+        lane_states.update(sequencer.lane_presentations())
+
     def _emit_lane_summary(self, lane_states: Mapping[str, str]) -> Optional[Dict[str, Any]]:
         meta = self._shared_context.setdefault("_meta", {})
         if meta.get("lane_summary_emitted"):
@@ -1896,7 +2095,7 @@ class MultiAgentFlow:
 
         payload = {
             "lane_summary": dict(normalized_states),
-            "parallel_group": "multi_supervisor_fanout",
+            "parallel_group": "supervisor_summary",
             "ts": datetime.utcnow().isoformat(),
             "flow_mode": self.flow_mode.value,
             "rerun_scope": {
@@ -2031,9 +2230,12 @@ class MultiAgentFlow:
         if analysis_ctx.get("_emitted_ready"):
             return
         if analysis_ctx.get("final"):
+            analysis_length_value = analysis_ctx.get("length")
+            if analysis_length_value is None:
+                analysis_length_value = analysis_ctx.get("analysis_length")
             payload = {
                 "analysis": analysis_ctx.get("final"),
-                "analysis_length": analysis_ctx.get("length"),
+                "analysis_length": analysis_length_value,
                 "schedule_stage": "analysis",
             }
             self._queue_artifact_event("analysis_ready", payload)
@@ -2169,6 +2371,64 @@ class MultiAgentFlow:
     def set_analysis_refresh_mode(self, mode: Optional[str]) -> None:
         self._planner.set_analysis_refresh_mode(mode)
 
+    def set_planner_event_bus(self, event_bus: Optional[PlannerEventBus]) -> None:
+        self._planner_event_bus = event_bus
+
+    def build_planner_orchestrator(
+        self,
+        *,
+        metadata: Optional[Dict[str, Any]] = None,
+        lane_complete_callback: Optional[LaneCompleteCallback] = None,
+    ) -> PlannerOrchestratorAdapter:
+        base_metadata = {
+            "flow": self.flow_label,
+            "flow_mode": self.flow_mode.value,
+        }
+        if metadata:
+            base_metadata.update(metadata)
+        callback = lane_complete_callback or self._handle_lane_complete
+        return PlannerOrchestratorAdapter(
+            intent_runner=self._intent_stage,
+            sql_runner=self._sql_stage,
+            web_runner=self._web_stage,
+            market_runner=self._market_stage,
+            analysis_runner=self._analysis_stage,
+            metadata=base_metadata,
+            optional_lanes=("web", "market"),
+            lane_complete_callback=callback,
+        )
+
+    def _handle_lane_complete(
+        self,
+        lane: str,
+        success: bool,
+        reused: bool,
+        reason: Optional[str],
+    ) -> None:
+        state = self._sequencer_state
+        if state is None:
+            return
+        ctx = getattr(state, "ctx", None)
+        if ctx is None:
+            return
+        if lane == "web":
+            setattr(ctx, "reused_web", bool(reused))
+        elif lane == "market":
+            setattr(ctx, "reused_stock", bool(reused))
+
+    def _handle_retry(
+        self,
+        lane: str,
+        attempt: int,
+        reason: Optional[str],
+        error: Optional[str],
+        metadata: Optional[Mapping[str, Any]],
+    ) -> None:
+        retry_count = max(int(attempt) - 1, 0)
+        if retry_count <= 0:
+            return
+        self._lane_retry_counts[lane] = retry_count
+
     def _annotate(self, event: Dict[str, Any]) -> Dict[str, Any]:
         annotated = apply_mode_metadata(event, self.flow_mode)
         data = annotated.setdefault("data", {})
@@ -2180,6 +2440,44 @@ class MultiAgentFlow:
         else:
             annotated["data"] = data
         return annotated
+
+    def _emit_lane_transition(
+        self,
+        lane: Optional[str],
+        *,
+        status: str,
+        success: Optional[bool] = None,
+        reused: Optional[bool] = None,
+        error: Optional[str] = None,
+        reason: Optional[str] = None,
+    ) -> None:
+        if not lane:
+            return
+        payload: Dict[str, Any] = {
+            "lane": lane,
+            "status": status,
+            "ts": datetime.utcnow().isoformat(),
+        }
+        if success is not None:
+            payload["success"] = success
+        if reused is not None:
+            payload["reused"] = reused
+        if error:
+            payload["error"] = error
+        if reason:
+            payload["reason"] = reason
+        event = apply_mode_metadata({"event": "planner_lane_transition", "data": payload}, self.flow_mode)
+        self._pending_artifact_events.append(event)
+        self._artifact_flush_pending = True
+        if self._planner_event_bus:
+            self._planner_event_bus.emit_lane_transition(
+                lane=lane,
+                status=status,
+                success=success,
+                error=error,
+                reused=reused,
+                reason=reason,
+            )
 
     def _get_tool_metadata_for_step(self, step: Optional[str]) -> Optional[Dict[str, Any]]:
         if not step:
@@ -2239,9 +2537,400 @@ class MultiAgentFlow:
             async for end_event in hooks.on_flow_end(hook_ctx):
                 yield self._annotate(end_event)
 
-    async def events(
-        self, query: str, session_id: Optional[str] = None
+    async def _intent_stage(self) -> AsyncGenerator[Dict[str, Any], None]:
+        state = self._sequencer_state
+        if state is None:
+            raise RuntimeError("Sequencer state not initialized")
+        ctx = state.ctx
+        registry = state.registry
+        executed = state.executed
+        hooks = state.hooks
+
+        if (not state.is_revision_follow_up) or ("classification" not in executed):
+            async for event in self._forward_with_hooks(
+                registry.invoke("classification", self._planner, ctx, executed=executed),
+                hooks,
+                state.query,
+                state.session_id,
+            ):
+                yield event
+            await self._planner._persist_session_state(ctx, record_artifacts=True)
+            if not getattr(ctx, "is_financial_query", True):
+                ctx.halted = True
+                return
+        elif state.is_revision_follow_up and "classification" in executed:
+            await self._planner._persist_session_state(ctx, record_artifacts=True)
+
+        tool_sequence: Tuple[str, ...]
+        if state.is_revision_follow_up:
+            needs_intent = ctx.intent is None
+            needs_plan = (ctx.plan or ctx.provisional_plan) is None
+            sequence_parts: List[str] = []
+            if needs_intent:
+                sequence_parts.append("intent_detection")
+            else:
+                executed.add("intent_detection")
+            if needs_plan:
+                sequence_parts.append("plan_generation")
+            else:
+                executed.add("plan_generation")
+            tool_sequence = tuple(sequence_parts)
+        else:
+            tool_sequence = ("intent_detection", "clarification", "plan_generation")
+
+        for tool_name in tool_sequence:
+            async for event in self._forward_with_hooks(
+                registry.invoke(tool_name, self._planner, ctx, executed=executed),
+                hooks,
+                state.query,
+                state.session_id,
+            ):
+                yield event
+            await self._planner._persist_session_state(ctx, record_artifacts=True)
+            executed.add(tool_name)
+
+        if ctx.intent is None or (ctx.plan or ctx.provisional_plan) is None:
+            ctx.halted = True
+            return
+
+        fanout_adapters: Tuple[Any, ...] = self._planner._fanout_adapters_for_context(ctx)
+        should_run_parallel = (
+            ctx.parallelism_enabled
+            and bool(fanout_adapters)
+            and not (ctx.reuse_sql and ctx.reuse_snapshot_active)
+        )
+        if should_run_parallel:
+            runtime = self._planner._start_tool_parallelism(
+                ctx,
+                adapters=fanout_adapters,
+            )
+            state.tool_runtime = runtime
+            state.tool_state = {"queue": runtime.queue, "active": True, "runtime": runtime}
+
+            async def _drain_tool_deltas() -> AsyncGenerator[Dict[str, Any], None]:
+                for tool_event in self._planner._collect_tool_deltas_now(state.tool_state, ctx):
+                    yield tool_event
+
+            async for event in self._forward_with_hooks(
+                _drain_tool_deltas(),
+                hooks,
+                state.query,
+                state.session_id,
+            ):
+                yield event
+
+        state.derived_targets = set(derive_revision_targets(ctx, intent_lane_map=_INTENT_LANE_HINTS) or set())
+        revision_plan = build_revision_plan(ctx, targets=state.derived_targets)
+        apply_revision_plan(ctx, revision_plan)
+        state.revision_plan = revision_plan
+        state.run_sql_lane = revision_plan.run_sql_lane
+        state.run_chart_lane = revision_plan.run_chart_lane
+        state.run_analysis_lane = revision_plan.run_analysis_lane
+        state.stock_only_run = revision_plan.stock_only
+
+    async def _sql_stage(self) -> AsyncGenerator[Dict[str, Any], None]:
+        state = self._sequencer_state
+        if state is None:
+            raise RuntimeError("Sequencer state not initialized")
+        ctx = state.ctx
+        if getattr(ctx, "halted", False):
+            return
+        hooks = state.hooks
+
+        revision_plan = state.revision_plan
+        revision_targets: Set[str] = set(revision_plan.targets) if revision_plan else set()
+        if revision_targets:
+            follow_up_route = getattr(self, "follow_up_route", None)
+            revision_event = annotate_revision_event(
+                build_revision_request_event(
+                    ctx,
+                    flow_mode_value=self.flow_mode.value,
+                    follow_up_route_value=follow_up_route.value if follow_up_route is not None else None,
+                ),
+                ctx,
+            )
+
+            async def _revision_stream() -> AsyncGenerator[Dict[str, Any], None]:
+                yield revision_event
+
+            async for event in self._forward_with_hooks(
+                _revision_stream(),
+                hooks,
+                state.query,
+                state.session_id,
+            ):
+                yield event
+
+        async for event in self._forward_with_hooks(
+            stream_sql_lane(
+                self._planner,
+                ctx=ctx,
+                registry=state.registry,
+                executed=state.executed,
+                tool_state=state.tool_state,
+                run_sql_lane=state.run_sql_lane,
+            ),
+            hooks,
+            state.query,
+            state.session_id,
+        ):
+            yield event
+
+        async for event in self._forward_with_hooks(
+            self._planner._stream_with_tool_state(
+                ensure_analysis_dependencies(self._planner, ctx, mode_config=state.mode_config),
+                state.tool_state,
+                ctx,
+            ),
+            hooks,
+            state.query,
+            state.session_id,
+        ):
+            yield event
+
+    async def _web_stage(self) -> AsyncGenerator[Dict[str, Any], None]:
+        state = self._sequencer_state
+        if state is None:
+            raise RuntimeError("Sequencer state not initialized")
+        ctx = state.ctx
+        if getattr(ctx, "halted", False):
+            return
+        async for event in self._forward_with_hooks(
+            self._planner.refresh_web_lane(
+                ctx,
+                reason="sequencer_web_refresh",
+                source="multi_agent_sequencer",
+            ),
+            state.hooks,
+            state.query,
+            state.session_id,
+        ):
+            yield event
+
+    async def _market_stage(self) -> AsyncGenerator[Dict[str, Any], None]:
+        state = self._sequencer_state
+        if state is None:
+            raise RuntimeError("Sequencer state not initialized")
+        ctx = state.ctx
+        if getattr(ctx, "halted", False):
+            return
+        async for event in self._forward_with_hooks(
+            self._planner.refresh_market_lane(
+                ctx,
+                reason="sequencer_market_refresh",
+                source="multi_agent_sequencer",
+            ),
+            state.hooks,
+            state.query,
+            state.session_id,
+        ):
+            yield event
+
+    async def _analysis_stage(self) -> AsyncGenerator[Dict[str, Any], None]:
+        state = self._sequencer_state
+        if state is None:
+            raise RuntimeError("Sequencer state not initialized")
+        ctx = state.ctx
+        hooks = state.hooks
+        try:
+            if state.stock_only_run:
+                ctx.reused_stock = False
+                if state.tool_state and state.tool_state.get("active", False):
+                    async for event in self._forward_with_hooks(
+                        self._planner._drain_tool_state_async(state.tool_state, ctx),
+                        hooks,
+                        state.query,
+                        state.session_id,
+                    ):
+                        yield event
+                else:
+                    runtime = self._planner._start_tool_parallelism(
+                        ctx,
+                        adapters=(StockTrackerAdapter(),),
+                        concurrency_override=1,
+                    )
+                    ad_hoc_state = {"queue": runtime.queue, "active": True, "runtime": runtime}
+                    try:
+                        async for event in self._forward_with_hooks(
+                            self._planner._drain_tool_state_async(ad_hoc_state, ctx),
+                            hooks,
+                            state.query,
+                            state.session_id,
+                        ):
+                            yield event
+                    finally:
+                        await runtime.close()
+                await self._planner._persist_session_state(ctx, record_artifacts=True)
+
+                analysis_event = _build_reused_analysis_event(self.flow_mode, ctx)
+
+                async def _analysis_reuse_stream() -> AsyncGenerator[Dict[str, Any], None]:
+                    if analysis_event:
+                        yield analysis_event
+
+                async for event in self._forward_with_hooks(
+                    _analysis_reuse_stream(),
+                    hooks,
+                    state.query,
+                    state.session_id,
+                ):
+                    yield event
+
+                banner_config = FOLLOW_UP_BANNERS.get(
+                    ctx.follow_up_route,
+                    FOLLOW_UP_BANNERS[FollowUpRoute.FULL_PIPELINE],
+                )
+                banner_event = EventEmitter.progress("follow_up_route", banner_config["message"])
+                banner_event["data"]["route"] = ctx.follow_up_route.value
+                banner_event["data"]["ts"] = datetime.utcnow().isoformat()
+
+                async def _banner_stream() -> AsyncGenerator[Dict[str, Any], None]:
+                    yield banner_event
+
+                async for event in self._forward_with_hooks(
+                    _banner_stream(),
+                    hooks,
+                    state.query,
+                    state.session_id,
+                ):
+                    yield event
+
+                planner_payload = _build_planner_result_payload(ctx)
+                result_event = EventEmitter.result("planner_result", planner_payload)
+                result_event["event"] = "planner_result"
+                result_event["data"]["ts"] = datetime.utcnow().isoformat()
+
+                async def _planner_result_stream() -> AsyncGenerator[Dict[str, Any], None]:
+                    yield result_event
+
+                async for event in self._forward_with_hooks(
+                    _planner_result_stream(),
+                    hooks,
+                    state.query,
+                    state.session_id,
+                ):
+                    yield event
+            else:
+                if getattr(ctx, "halted", False):
+                    return
+
+                async for event in self._forward_with_hooks(
+                    stream_chart_lane(
+                        self._planner,
+                        ctx=ctx,
+                        registry=state.registry,
+                        executed=state.executed,
+                        tool_state=state.tool_state,
+                        run_chart_lane=state.run_chart_lane,
+                    ),
+                    hooks,
+                    state.query,
+                    state.session_id,
+                ):
+                    yield event
+
+                async for event in self._forward_with_hooks(
+                    stream_analysis_lane(
+                        self._planner,
+                        ctx=ctx,
+                        registry=state.registry,
+                        executed=state.executed,
+                        tool_state=state.tool_state,
+                        mode_config=state.mode_config,
+                    ),
+                    hooks,
+                    state.query,
+                    state.session_id,
+                ):
+                    yield event
+        finally:
+            if state.tool_runtime:
+                await state.tool_runtime.close()
+                state.tool_runtime = None
+
+        ctx_session = ctx.session_id or state.session_id
+        async for event in self._run_agent_orchestration(
+            state.query,
+            ctx_session,
+        ):
+            yield event
+        self._orchestrated = True
+
+    async def sequencer_stream(
+        self,
+        query: str,
+        *,
+        session_id: Optional[str],
+        sequencer: PlannerSequencer,
+        state: Optional[_SupervisorSequencerState] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
+        if state is None:
+            state = await self._prepare_sequencer_state(query, session_id=session_id)
+        else:
+            self._sequencer_state = state
+        revision_targets: Set[str] = set()
+        if state.revision_plan:
+            revision_targets = set(getattr(state.revision_plan, "targets", []) or [])
+        elif state.derived_targets:
+            revision_targets = set(state.derived_targets)
+        working_lane_states = dict(state.lane_states or self._initial_lane_states())
+        state.lane_states = working_lane_states
+        self._latest_lane_states = dict(working_lane_states)
+
+        def _on_lane_transition(event: Dict[str, Any]) -> None:
+            self._sync_lane_states_from_sequencer(working_lane_states, sequencer)
+            self._latest_lane_states = dict(working_lane_states)
+
+        sequencer.event_bus.subscribe(_on_lane_transition)
+        self._planner_event_bus = sequencer.event_bus
+        self._active_sequencer = sequencer
+        sequencer.on_retry(self._handle_retry)
+        sequencer.prefill_lane_states(working_lane_states)
+        sequencer.set_revision_targets(revision_targets)
+        self._sync_lane_states_from_sequencer(working_lane_states, sequencer)
+        self._latest_lane_states = dict(working_lane_states)
+
+        try:
+            async for event in sequencer.run():
+                annotated_event = self._annotate(event)
+                yield annotated_event
+                self._sync_lane_states_from_sequencer(working_lane_states, sequencer)
+                self._latest_lane_states = dict(working_lane_states)
+        except Exception:
+            raise
+        finally:
+            sequencer.remove_retry_callback(self._handle_retry)
+            sequencer.event_bus.unsubscribe(_on_lane_transition)
+            if self._active_sequencer is sequencer:
+                self._active_sequencer = None
+            self._sequencer_state = None
+            self._sync_lane_states_from_sequencer(working_lane_states, sequencer)
+            self._latest_lane_states = dict(working_lane_states)
+
+        state.lane_states = dict(working_lane_states)
+        self._latest_lane_states = dict(working_lane_states)
+        summary_event = self._emit_lane_summary(working_lane_states)
+        if summary_event:
+            yield self._annotate(summary_event)
+
+    async def events(
+        self,
+        query: str,
+        session_id: Optional[str] = None,
+        *,
+        sequencer: Optional[PlannerSequencer] = None,
+        sequencer_state: Optional[_SupervisorSequencerState] = None,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        if sequencer is not None:
+            async for event in self.sequencer_stream(
+                query,
+                session_id=session_id,
+                sequencer=sequencer,
+                state=sequencer_state,
+            ):
+                yield event
+            return
+
         planner_events = getattr(self._planner, "events", None)
         hooks = _MultiAgentHooks(self, query, session_id=session_id)
         if callable(planner_events):
@@ -2539,6 +3228,7 @@ class MultiAgentFlow:
             raise ValueError("analysis_revision requires an existing session_id")
         hooks = _MultiAgentHooks(self, query, session_id=session_id)
         ctx = await self._planner.initialize_context(query, session_id=session_id)
+        registry = get_planner_tool_registry()
         if revision_directive is not None:
             ctx.revision_directive = revision_directive
             ctx.agentic_revision_mode = bool(getattr(revision_directive, "agentic", False))
@@ -2629,7 +3319,19 @@ class MultiAgentFlow:
             analysis_ctx = self._shared_context.setdefault('analysis', {'fragments': [], 'final': None})
             if revision_snapshot.get('analysis'):
                 analysis_ctx['final'] = revision_snapshot['analysis']
-                analysis_ctx['analysis_length'] = revision_snapshot.get('analysis_length')
+                length_value = revision_snapshot.get('analysis_length')
+                if length_value is None and isinstance(revision_snapshot.get('analysis'), str):
+                    length_value = len(revision_snapshot['analysis'])
+                if length_value is not None:
+                    try:
+                        length_int = int(length_value)
+                    except (TypeError, ValueError):
+                        length_int = None
+                    else:
+                        analysis_ctx['length'] = length_int
+                        analysis_ctx['analysis_length'] = length_int
+                else:
+                    analysis_ctx['analysis_length'] = length_value
             if revision_snapshot.get('stock_widget'):
                 stock_widget_copy = copy.deepcopy(revision_snapshot['stock_widget'])
                 self._shared_context['stock_widget'] = stock_widget_copy
@@ -2671,6 +3373,136 @@ class MultiAgentFlow:
         else:
             self._shared_context.pop('revision_snapshot', None)
         self._orchestrated = False
+
+    async def _prepare_sequencer_state(
+        self,
+        query: str,
+        *,
+        session_id: Optional[str],
+    ) -> _SupervisorSequencerState:
+        self._prepare_context(query)
+        ctx = await self._planner.initialize_context(query, session_id=session_id)
+        registry: PlannerToolRegistry = get_planner_tool_registry()
+        executed: Set[str] = set()
+        mode_config = get_mode_config(self.flow_mode)
+        hooks = _MultiAgentHooks(self, query, session_id=ctx.session_id or session_id)
+        classification_artifact = getattr(ctx.artifacts, "classification", None)
+        cached_classification: Optional[Mapping[str, Any]] = getattr(ctx, "classification", None)
+        if classification_artifact is not None:
+            is_financial = getattr(classification_artifact, "is_financial", None)
+            if is_financial is not None:
+                ctx.is_financial_query = bool(is_financial)
+            if cached_classification is None:
+                raw_payload = getattr(classification_artifact, "raw", None)
+                if isinstance(raw_payload, Mapping):
+                    cached_classification = dict(raw_payload)
+                    ctx.classification = cached_classification
+        elif getattr(ctx, "is_financial_query", None) is None:
+            ctx.is_financial_query = True
+        state = _SupervisorSequencerState(
+            ctx=ctx,
+            registry=registry,
+            executed=executed,
+            mode_config=mode_config,
+            query=query,
+            session_id=ctx.session_id or session_id,
+            hooks=hooks,
+        )
+        revision_directive_active = bool(self._revision_directive or getattr(ctx, "revision_directive", None))
+        has_revision_targets = bool(getattr(ctx, "revision_targets", None))
+        agentic_revision_mode = bool(getattr(ctx, "agentic_revision_mode", False) or self._agentic_revision_mode)
+        is_revision_follow_up = (
+            ctx.follow_up_route != FollowUpRoute.FULL_PIPELINE
+            or revision_directive_active
+            or has_revision_targets
+            or agentic_revision_mode
+        )
+        state.is_revision_follow_up = is_revision_follow_up
+        setattr(ctx, "is_revision_follow_up", is_revision_follow_up)
+        if is_revision_follow_up:
+            confidence = 0.0
+            if isinstance(cached_classification, Mapping):
+                confidence_value = cached_classification.get("confidence")
+                try:
+                    confidence = float(confidence_value or 0.0)
+                except (TypeError, ValueError):
+                    confidence = 0.0
+            cached_intent_ready = bool(getattr(ctx, "intent", None))
+            cached_plan_ready = bool(getattr(ctx, "plan", None) or getattr(ctx, "provisional_plan", None))
+            pending_followups = 0
+            intent_resolution = getattr(ctx, "intent_resolution", None)
+            if intent_resolution is not None:
+                followups = getattr(intent_resolution, "followups", None) or []
+                try:
+                    pending_followups = len(followups)
+                except TypeError:
+                    pending_followups = 0
+            skip_classification = bool(cached_classification) and (
+                confidence >= REVISION_INTENT_CONFIDENCE_THRESHOLD
+            )
+            reuse_intent = (
+                skip_classification
+                and cached_intent_ready
+                and cached_plan_ready
+                and pending_followups == 0
+            )
+            if skip_classification:
+                executed.add("classification")
+                log_tool_iteration(
+                    tool="intent_classifier",
+                    status="skipped",
+                    step="classification",
+                    session_id=ctx.session_id,
+                    flow=self.flow_label,
+                    details={
+                        "reason": "cached_intent",
+                        "confidence": confidence,
+                        "pending_followups": pending_followups,
+                    },
+                )
+            else:
+                if classification_artifact is None and getattr(ctx, "is_financial_query", None) is None:
+                    ctx.is_financial_query = True
+            if reuse_intent:
+                executed.update({"intent_detection", "clarification", "plan_generation"})
+                log_tool_iteration(
+                    tool="intent_classifier",
+                    status="skipped",
+                    step="intent_detection",
+                    session_id=ctx.session_id,
+                    flow=self.flow_label,
+                    details={
+                        "reason": "cached_intent",
+                        "confidence": confidence,
+                    },
+                )
+                log_tool_iteration(
+                    tool="clarification_manager",
+                    status="skipped",
+                    step="clarification",
+                    session_id=ctx.session_id,
+                    flow=self.flow_label,
+                    details={"reason": "cached_intent"},
+                )
+                log_tool_iteration(
+                    tool="planner",
+                    status="skipped",
+                    step="plan_generation",
+                    session_id=ctx.session_id,
+                    flow=self.flow_label,
+                    details={"reason": "cached_intent"},
+                )
+                self._emit_lane_transition(
+                    "intent",
+                    status=LANE_STATUS_COMPLETED,
+                    success=True,
+                    reused=True,
+                    reason="cached_intent",
+                )
+            ctx.intent_reused = reuse_intent
+            await self._planner._persist_session_state(ctx, record_artifacts=True)
+        self._sequencer_state = state
+        return state
 
     def _capture_event(self, event: Dict[str, Any]) -> None:
         name = event.get("event")
@@ -2822,7 +3654,13 @@ class MultiAgentFlow:
                 truncated = final_text[:_MAX_ANALYSIS_STORED]
                 analysis_ctx["final"] = truncated
                 analysis_ctx["id"] = _make_identifier(self._session_id, "analysis", final_text)
-                analysis_ctx["length"] = data.get("analysis_length", len(final_text))
+                length_value = data.get("analysis_length", len(final_text))
+                try:
+                    length_int = int(length_value)
+                except (TypeError, ValueError):
+                    length_int = len(final_text)
+                analysis_ctx["length"] = length_int
+                analysis_ctx["analysis_length"] = length_int
                 self._record_snapshot(analysis=final_text)
             tool_bundle = collect_tool_bundle(
                 manifest=self._shared_context.get("tool_manifest"),
@@ -2993,6 +3831,17 @@ class MultiAgentFlow:
         web_context = self._shared_context.get("web")
         tool_manifest = self._shared_context.get("tool_manifest")
         tool_results = self._shared_context.get("tool_results")
+        self._agent_retry_counts = {lane: 0 for lane in self.ROLE_LANES.values()}
+        supervisor_run_id = f"{self.flow_label}-run-{uuid.uuid4().hex}"
+        supervisor_trace_id = f"{self.flow_label}-trace-{uuid.uuid4().hex}"
+        supervisor_meta = self._shared_context.setdefault("_meta", {}).setdefault("supervisor", {})
+        supervisor_meta["run_id"] = supervisor_run_id
+        supervisor_meta["trace_id"] = supervisor_trace_id
+        supervisor_meta["delegation_policy_version"] = self._delegation_policy.version
+        tool_attempts: Dict[str, int] = {}
+        retry_counts: Dict[str, int] = {}
+        failure_markers: Dict[str, str] = {}
+        self._retry_manager.reset()
 
         for task in self._base_plan:
             role = self.ORCHESTRATION_ROLES.get(task.name)
@@ -3004,7 +3853,75 @@ class MultiAgentFlow:
             session_id=session_id,
             shared=self._shared_context,
         )
-        results = await self._orchestrator.run(self._base_plan, context)
+        task_groups = {
+            task_name: self.ROLE_PARALLEL_GROUPS.get(role)
+            for task_name, role in self.ORCHESTRATION_ROLES.items()
+            if self.ROLE_PARALLEL_GROUPS.get(role)
+        }
+        backpressure_queue: asyncio.Queue[Dict[str, Any]] = asyncio.Queue()
+
+        def _handle_backpressure(task_name: str, payload: Mapping[str, Any]) -> None:
+            event = self._format_backpressure_event(task_name, payload)
+            if event:
+                backpressure_queue.put_nowait(event)
+
+        run_task = asyncio.create_task(
+            self._orchestrator.run(
+                self._base_plan,
+                context,
+                task_groups=task_groups,
+                group_limits=self.SUPERVISOR_PARALLEL_LIMITS,
+                on_backpressure=_handle_backpressure,
+            )
+        )
+
+        pending_get: Optional[asyncio.Task] = None
+        try:
+            while True:
+                wait_set = {run_task}
+                if pending_get is None:
+                    pending_get = asyncio.create_task(backpressure_queue.get())
+                wait_set.add(pending_get)
+                done, _ = await asyncio.wait(wait_set, return_when=asyncio.FIRST_COMPLETED)
+                if pending_get in done:
+                    event = pending_get.result()
+                    yield event
+                    backpressure_queue.task_done()
+                    pending_get = None
+                if run_task in done:
+                    break
+        finally:
+            if pending_get and not pending_get.done():
+                pending_get.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await pending_get
+        while True:
+            try:
+                pending_event = backpressure_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            else:
+                yield pending_event
+                backpressure_queue.task_done()
+
+        results = run_task.result()
+
+        decision_payloads = list(self._retry_manager.decisions())
+        for decision in decision_payloads:
+            payload = dict(decision)
+            payload.setdefault("ts", datetime.utcnow().isoformat())
+            self._queue_supervisor_event("delegation_decision", payload)
+            metadata = payload.get("metadata") if isinstance(payload.get("metadata"), Mapping) else None
+            policy_decision(
+                policy=f"delegation:{self._delegation_policy.version}",
+                score=float(metadata.get("attempt", 0)) if metadata else 0.0,
+                threshold=float(metadata.get("window", {}).get("limit", 0) if metadata else 0),
+                action=str(payload.get("decision") or "allow"),
+                reason=payload.get("reason"),
+                session_id=session_id,
+                flow=self.flow_label,
+                metadata=metadata,
+            )
 
         planner_result = results.get("planner_phase")
         bundle = planner_result.output.get("bundle") if planner_result else None
@@ -3030,9 +3947,66 @@ class MultiAgentFlow:
             result = results.get(task.name)
             if not role or not result:
                 continue
+            lane = self.ROLE_LANES.get(role)
+            lane_key = lane or role
             reasoning = self._format_reasoning(role, result)
             if reasoning:
                 yield reasoning
+            output_payload = result.output or {}
+            status_value_normalized: Optional[str] = None
+            error_detail: Optional[str] = None
+            reused_lane = False
+            transition_status = LANE_STATUS_COMPLETED
+            success_value: Optional[bool] = True if lane else None
+            if isinstance(output_payload, Mapping):
+                attempt_count = output_payload.get("attempts")
+                if isinstance(attempt_count, int) and lane_key:
+                    tool_attempts[lane_key] = attempt_count
+                status_value = output_payload.get("status")
+                if isinstance(status_value, str):
+                    status_value_normalized = status_value.lower()
+                    if lane_key and status_value_normalized in {"failed", "error"}:
+                        failure_markers[lane_key] = status_value_normalized
+                    if status_value_normalized in {"reuse", "reused"}:
+                        reused_lane = True
+                    elif status_value_normalized in {"skip", "skipped"}:
+                        transition_status = LANE_STATUS_SKIPPED
+                        success_value = True
+                error_detail = output_payload.get("error") or output_payload.get("error_code")
+            retry_trace = output_payload.get("retry_trace") if isinstance(output_payload, Mapping) else None
+            if retry_trace:
+                yield self._agent_retry_event(role, retry_trace)
+                if lane_key:
+                    retry_counts[lane_key] = len(retry_trace)
+            if result.events:
+                extra_context: Dict[str, Any] = {"flow_mode": getattr(self, "flow_mode", FlowMode.MULTI_AGENT).value}
+                if lane:
+                    extra_context["lane"] = lane
+                parallel_group = self.ROLE_PARALLEL_GROUPS.get(role)
+                if parallel_group:
+                    extra_context["parallel_group"] = parallel_group
+                for agent_event in result.to_events(
+                    role=role,
+                    run_id=supervisor_run_id,
+                    retry_count=self._agent_retry_counts.get(lane, 0) if lane else None,
+                    extra=extra_context,
+                ):
+                    yield self._annotate(agent_event)
+            if lane:
+                if lane_key and lane_key in failure_markers:
+                    transition_status = LANE_STATUS_FAILED
+                    success_value = False
+                    error_detail = error_detail or failure_markers[lane_key]
+                elif transition_status != LANE_STATUS_SKIPPED and status_value_normalized in {"failed", "error"}:
+                    transition_status = LANE_STATUS_FAILED
+                    success_value = False
+                self._emit_lane_transition(
+                    lane,
+                    status=transition_status,
+                    success=success_value,
+                    reused=reused_lane if transition_status != LANE_STATUS_FAILED else None,
+                    error=error_detail,
+                )
             yield self._format_agent_turn(
                 role,
                 "complete",
@@ -3055,9 +4029,92 @@ class MultiAgentFlow:
                 },
             )
 
+        for lane_name, count in self._agent_retry_counts.items():
+            if count and lane_name not in retry_counts:
+                retry_counts[lane_name] = count
+
+        parallel_groups: Dict[str, List[str]] = {}
+        for task_name in results.keys():
+            role = self.ORCHESTRATION_ROLES.get(task_name)
+            lane = self.ROLE_LANES.get(role or "")
+            group = self.ROLE_PARALLEL_GROUPS.get(role or "")
+            if not lane or not group:
+                continue
+            attempt_index = retry_counts.get(lane, 0)
+            identifier = f"{lane}_lane_{attempt_index}"
+            bucket = parallel_groups.setdefault(group, [])
+            if identifier not in bucket:
+                bucket.append(identifier)
+
+        receipts_map: Dict[str, Any] = {}
+        if isinstance(tool_results, list):
+            for entry in tool_results:
+                if isinstance(entry, Mapping):
+                    tool_name = entry.get("tool")
+                    if isinstance(tool_name, str):
+                        receipts_map[tool_name] = entry
+
+        repository = get_session_state_repository()
+        if repository and session_id:
+            snapshot = await repository.load(session_id)
+            if snapshot is None:
+                snapshot = SessionStateSnapshot(session_id=session_id)
+            snapshot.record_agent_run(
+                run_id=supervisor_run_id,
+                trace_id=supervisor_trace_id,
+                manager_trace_id=supervisor_trace_id,
+                model=getattr(self._supervisor_agent, "model", None),
+                tool_attempts=tool_attempts,
+                retry_counts=retry_counts,
+                receipts=receipts_map,
+                parallel_groups=parallel_groups,
+                delegation_policy_version=self._delegation_policy.version,
+                decisions=decision_payloads,
+            )
+            await repository.save(snapshot)
+
+        log_agent_run(
+            session_id=session_id,
+            flow=self.flow_label,
+            run_id=supervisor_run_id,
+            trace_id=supervisor_trace_id,
+            manager_trace_id=supervisor_trace_id,
+            model=getattr(self._supervisor_agent, "model", None),
+            tool_attempts=tool_attempts,
+            retry_counts=retry_counts,
+            parallel_groups=parallel_groups,
+            delegation_policy_version=self._delegation_policy.version,
+            decisions=decision_payloads,
+        )
+        try:
+            cache_service = get_cache_service()
+            if cache_service and session_id:
+                await cache_service.set_agent_metadata(
+                    session_id,
+                    {
+                        "run_id": supervisor_run_id,
+                        "trace_id": supervisor_trace_id,
+                        "manager_trace_id": supervisor_trace_id,
+                        "model": getattr(self._supervisor_agent, "model", None),
+                        "tool_attempts": tool_attempts,
+                        "retry_counts": retry_counts,
+                        "failures": failure_markers,
+                        "parallel_groups": parallel_groups,
+                        "delegation_policy_version": self._delegation_policy.version,
+                        "delegation_decisions": decision_payloads,
+                        "recorded_at": datetime.utcnow().isoformat(),
+                    },
+                    ttl=self._agent_cache_ttl,
+                )
+        except Exception:  # pragma: no cover - defensive logging
+            logger.exception("Failed to cache supervisor run metadata for session %s", session_id)
+
+        analysis_length_value = analysis_ctx.get("length")
+        if analysis_length_value is None:
+            analysis_length_value = analysis_ctx.get("analysis_length")
         final_payload = {
             "analysis": analysis_ctx.get("final"),
-            "analysis_length": analysis_ctx.get("length"),
+            "analysis_length": analysis_length_value,
             "chart_spec": chart_ctx.get("spec"),
             "chart_spec_id": chart_ctx.get("spec_id"),
             "sql": sql_ctx.get("sql"),
@@ -3184,21 +4241,26 @@ class MultiAgentFlow:
         if not role:
             return None
         self._timers[role] = time.time()
+        lane = self.ROLE_LANES.get(role)
+        retry_count = self._agent_retry_counts.get(lane, 0) if lane else 0
         payload: Dict[str, Any] = {
-            "event": "agent_turn",
-            "data": {
-                "role": role,
-                "status": "start",
-                "step": step,
-                "ts": datetime.utcnow().isoformat(),
-            },
+            "role": role,
+            "status": "start",
+            "step": step,
+            "ts": datetime.utcnow().isoformat(),
+            "retry_count": retry_count,
         }
+        if lane:
+            payload["lane"] = lane
+        parallel_group = self.ROLE_PARALLEL_GROUPS.get(role)
+        if parallel_group:
+            payload["parallel_group"] = parallel_group
         metadata = self._get_tool_metadata_for_step(step)
         if metadata:
-            payload["data"]["latency_budget_ms"] = metadata.get("latency_budget_ms")
-            payload["data"]["output_artifacts"] = metadata.get("output_artifacts")
-            payload["data"]["concurrency_limit"] = metadata.get("concurrency_limit")
-        return payload
+            payload["latency_budget_ms"] = metadata.get("latency_budget_ms")
+            payload["output_artifacts"] = metadata.get("output_artifacts")
+            payload["concurrency_limit"] = metadata.get("concurrency_limit")
+        return self._annotate({"event": "agent_turn_start", "data": payload})
 
     def _maybe_agent_turn_end(self, event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         role = self.AGENT_END_EVENTS.get(event.get("event"))
@@ -3206,22 +4268,54 @@ class MultiAgentFlow:
             return None
         start = self._timers.pop(role, None)
         elapsed = int((time.time() - start) * 1000) if start else None
+        lane = self.ROLE_LANES.get(role)
+        retry_count = self._agent_retry_counts.get(lane, 0) if lane else 0
         payload: Dict[str, Any] = {
             "role": role,
             "status": "complete",
             "ts": datetime.utcnow().isoformat(),
+            "retry_count": retry_count,
         }
+        if lane:
+            payload["lane"] = lane
         summary = self._agent_summary(role, event)
         if summary:
             payload["summary"] = summary
         if elapsed is not None:
             payload["elapsed_ms"] = elapsed
+        parallel_group = self.ROLE_PARALLEL_GROUPS.get(role)
+        if parallel_group:
+            payload["parallel_group"] = parallel_group
         metadata = self._get_tool_metadata_for_event(event.get("event")) or self._get_tool_metadata_for_role(role)
         if metadata:
             payload["latency_budget_ms"] = metadata.get("latency_budget_ms")
             payload["output_artifacts"] = metadata.get("output_artifacts")
             payload["concurrency_limit"] = metadata.get("concurrency_limit")
-        return {"event": "agent_turn", "data": payload}
+        return self._annotate({"event": "agent_turn_end", "data": payload})
+
+    def _agent_retry_event(self, role: str, trace: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
+        last = trace[-1] if trace else {}
+        lane = self.ROLE_LANES.get(role)
+        retry_count = len(trace)
+        if lane:
+            self._agent_retry_counts[lane] = retry_count
+        payload: Dict[str, Any] = {
+            "role": role,
+            "lane": lane,
+            "status": "retry",
+            "retry_count": retry_count,
+            "ts": datetime.utcnow().isoformat(),
+            "retry_trace": [dict(entry) for entry in trace],
+        }
+        if "error_code" in last:
+            payload["error_code"] = last.get("error_code")
+        error_message = last.get("error") or last.get("message")
+        if error_message:
+            payload["error"] = error_message
+        parallel_group = self.ROLE_PARALLEL_GROUPS.get(role)
+        if parallel_group:
+            payload["parallel_group"] = parallel_group
+        return self._annotate({"event": "tool_retry", "data": payload})
 
     def _agent_reasoning(self, event: Dict[str, Any], session_id: Optional[str]) -> Optional[Dict[str, Any]]:
         delta = (event.get("data") or {}).get("partial_analysis")
@@ -3262,6 +4356,50 @@ class MultiAgentFlow:
             return {"analysis_length": data.get("analysis_length")}
         return None
 
+    def _format_backpressure_event(
+        self,
+        task_name: str,
+        payload: Mapping[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        role = self.ORCHESTRATION_ROLES.get(task_name)
+        lane = self.ROLE_LANES.get(role) if role else None
+        parallel_group = payload.get("group") or (self.ROLE_PARALLEL_GROUPS.get(role) if role else None)
+        if not parallel_group and not lane:
+            return None
+        data: Dict[str, Any] = {
+            "ts": datetime.utcnow().isoformat(),
+            "parallel_group": parallel_group or self.DEFAULT_PARALLEL_GROUP,
+            "pending": int(payload.get("queue_size", 0) or 0),
+            "running": int(payload.get("running", 0) or 0),
+            "task": task_name,
+        }
+        limit = payload.get("limit")
+        if isinstance(limit, (int, float)):
+            data["limit"] = int(limit)
+        position = payload.get("position")
+        if isinstance(position, int):
+            data["position"] = position
+        if role:
+            data["role"] = role
+        if lane:
+            data["lane"] = lane
+            data["retry_count"] = self._agent_retry_counts.get(lane, 0)
+        event = {"event": "agent_turn_backpressure", "data": data}
+        annotated = self._annotate(event)
+        try:
+            backpressure_event(
+                lane=lane,
+                group=parallel_group or data.get("parallel_group"),
+                pending=int(data.get("pending", 0) or 0),
+                running=int(data.get("running", 0) or 0),
+                limit=data.get("limit"),
+                session_id=self._shared_context.get("session_id") if isinstance(self._shared_context, Mapping) else None,
+                flow=self.flow_label,
+            )
+        except Exception:  # pragma: no cover - defensive
+            pass
+        return annotated
+
     def _format_agent_turn(
         self,
         role: str,
@@ -3270,23 +4408,35 @@ class MultiAgentFlow:
         summary: Optional[Dict[str, Any]] = None,
         elapsed: Optional[int] = None,
     ) -> Dict[str, Any]:
+        lane = self.ROLE_LANES.get(role)
+        retry_count = self._agent_retry_counts.get(lane, 0) if lane else 0
         payload: Dict[str, Any] = {
             "role": role,
             "status": status,
             "ts": datetime.utcnow().isoformat(),
+            "retry_count": retry_count,
         }
         parallel_group = self.ROLE_PARALLEL_GROUPS.get(role)
         if parallel_group:
             payload["parallel_group"] = parallel_group
-        lane = self.ROLE_LANES.get(role)
         if lane:
             payload["lane"] = lane
-        payload["flow_mode"] = self.flow_mode.value
+            tool_obj = self._specialist_tools.get(lane)
+            if tool_obj:
+                payload["tool"] = getattr(tool_obj, "name", f"{lane}_specialist")
+                payload.setdefault("specialist", getattr(tool_obj, "name", f"{lane}_specialist"))
         if summary:
             payload["summary"] = summary
         if elapsed is not None:
             payload["elapsed_ms"] = elapsed
-        return {"event": "agent_turn", "data": payload}
+        event_name = "agent_turn_start" if status == "start" else "agent_turn_end"
+        annotated = self._annotate({"event": event_name, "data": payload})
+        if lane and status == "start":
+            self._emit_lane_transition(
+                lane,
+                status=LANE_STATUS_RUNNING,
+            )
+        return annotated
 
     def _format_reasoning(self, role: str, result: AgentResult) -> Optional[Dict[str, Any]]:
         output = result.output or {}

@@ -25,6 +25,7 @@ from analytics.flows.multi_agent import (
     _market_agent,
     _web_research_agent,
 )
+from analytics.flows.sequencer import PlannerSequencer
 from analytics.flows.orchestrator import AgentResult, AgentRunContext
 from analytics.routing import FollowUpRoute
 
@@ -40,6 +41,15 @@ def test_multi_agent_plan_dependencies():
         "market_phase",
         "web_research_phase",
     }
+
+
+def test_agent_turn_events_include_specialist_tool_metadata():
+    flow = MultiAgentFlow()
+    event = flow._format_agent_turn("sql_specialist", "start")
+    payload = event.get("data") or {}
+    assert payload.get("lane") == "sql"
+    assert payload.get("tool") or payload.get("specialist")
+    assert "agent_turn_start" == event.get("event")
 
 
 def test_derive_tasks_respects_lane_refresh_requests():
@@ -260,7 +270,7 @@ def test_multi_agent_cohesive_result_payload(monkeypatch):
     flow._shared_context["tool_manifest"] = [{"name": "stock_tracker"}]
     flow._shared_context["tool_results"] = [{"tool": "stock_tracker", "status": "completed"}]
 
-    async def fake_run(plan, context):
+    async def fake_run(plan, context, **kwargs):
         return {
             "planner_phase": AgentResult(name="planner", output={"bundle": {"query": context.query, "chart_id": "chart-123"}}),
             "chart_phase": AgentResult(name="chart", output={"status": "complete"}),
@@ -315,7 +325,7 @@ def test_multi_agent_cohesive_result_payload(monkeypatch):
     lane_summary = next((evt for evt in emitted if evt.get("event") == "agent_decision"), None)
     assert lane_summary is not None
     lane_data = lane_summary.get("data", {})
-    assert lane_data.get("parallel_group") == "multi_supervisor_fanout"
+    assert lane_data.get("parallel_group") == "supervisor_summary"
     assert lane_data.get("ts")
     scope = lane_data.get("rerun_scope")
     assert isinstance(scope, dict)
@@ -332,7 +342,7 @@ def test_multi_agent_emits_final_answer_when_cannot_cohere(monkeypatch):
         {"tool": "web_retriever", "status": "completed", "payload": {"ready": True}}
     ]
 
-    async def fake_run(plan, context):
+    async def fake_run(plan, context, **kwargs):
         return {
             "planner_phase": AgentResult(name="planner", output={}),
             "query_phase": AgentResult(name="query", output={"status": "complete"}),
@@ -626,3 +636,39 @@ def test_multi_agent_supervisor_reuses_planner_fanout():
     assert web_ctx["status"] == "skip"
     assert market_ctx["status"] == "reuse"
     assert flow._shared_context["tool_results"] == initial_tool_results
+
+def test_sequencer_lane_order():
+    flow = MultiAgentFlow()
+    calls = []
+
+    def make_stage(name: str):
+        async def stage(self):
+            calls.append(name)
+            yield {"event": f"{name}_stage", "data": {}}
+        return stage
+
+    flow._intent_stage = types.MethodType(make_stage("intent"), flow)
+    flow._sql_stage = types.MethodType(make_stage("sql"), flow)
+    flow._web_stage = types.MethodType(make_stage("web"), flow)
+    flow._market_stage = types.MethodType(make_stage("market"), flow)
+    flow._analysis_stage = types.MethodType(make_stage("analysis"), flow)
+
+    adapter = flow.build_planner_orchestrator()
+    sequencer = PlannerSequencer(adapter)
+
+    async def _run():
+        events_local = []
+        async for event in sequencer.run():
+            events_local.append(event)
+        return events_local
+
+    events = asyncio.run(_run())
+
+    assert calls == ["intent", "sql", "web", "market", "analysis"]
+    assert [evt["event"] for evt in events] == [
+        "intent_stage",
+        "sql_stage",
+        "web_stage",
+        "market_stage",
+        "analysis_stage",
+    ]

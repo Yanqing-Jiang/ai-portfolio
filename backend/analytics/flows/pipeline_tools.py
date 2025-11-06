@@ -256,7 +256,7 @@ def _bootstrap_registry(registry: PlannerToolRegistry) -> None:
             "properties": properties or {},
             "additionalProperties": allow_extra,
         }
-        if required:
+        if required is not None:
             schema["required"] = list(required)
         return schema
 
@@ -280,10 +280,11 @@ def _bootstrap_registry(registry: PlannerToolRegistry) -> None:
                         "description": "User query to classify; defaults to pipeline context when omitted.",
                     },
                     "reason": {
-                        "type": "string",
+                        "type": ["string", "null"],
                         "description": "Optional rationale for telemetry and audits.",
                     },
-                }
+                },
+                required=("query",),
             ),
             response_schema=base_response_schema,
             retryable_errors=retryable_default,
@@ -301,15 +302,7 @@ def _bootstrap_registry(registry: PlannerToolRegistry) -> None:
             output_artifacts=("intent",),
             latency_budget_ms=1500,
             concurrency_limit=1,
-            parameters_schema=_schema(
-                {
-                    "classification": {
-                        "type": "object",
-                        "description": "Structured classification result to reuse instead of recomputing.",
-                    },
-                    "reason": {"type": "string"},
-                }
-            ),
+            parameters_schema=_schema({}, required=()),
             response_schema=base_response_schema,
             retryable_errors=retryable_default,
         )

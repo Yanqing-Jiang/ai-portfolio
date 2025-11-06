@@ -1,4 +1,58 @@
 agents:
+  defaults:
+    plan_template:
+      name: single_agent_default
+      version: v1
+      nodes:
+        - name: clarify_intent
+          kind: clarification
+          max_retries: 1
+          metadata:
+            tool: clarification
+        - name: sql_lane
+          kind: tool
+          depends_on:
+            - clarify_intent
+          max_retries: 2
+          metadata:
+            lane: sql
+            required: true
+        - name: web_lane
+          kind: tool
+          depends_on:
+            - clarify_intent
+          max_retries: 1
+          metadata:
+            lane: web
+        - name: market_lane
+          kind: tool
+          depends_on:
+            - clarify_intent
+          max_retries: 1
+          metadata:
+            lane: market
+        - name: chart_lane
+          kind: tool
+          depends_on:
+            - sql_lane
+          max_retries: 1
+          metadata:
+            lane: chart
+        - name: analysis_lane
+          kind: analysis
+          depends_on:
+            - sql_lane
+            - web_lane
+            - market_lane
+            - chart_lane
+          metadata:
+            lane: analysis
+    retry_policy:
+      max_attempts: 2
+      backoff_seconds: 5
+      retryable_error_codes:
+        - rate_limited
+        - schema_validation_failed
   single_agent:
     model: gpt-4.1
     temperature: 0.0
@@ -19,3 +73,32 @@ agents:
     instructions: |
       You are the Analytics Supervisor. Plan the workload, fan out to specialists when needed, and enforce the contract that SQL, web, and market lanes finish before analysis.
       Use specialist tools only once per turn, observe cache directives, and record retry rationales in `retry_trace`.
+    specialists:
+      - lane: sql
+        name: sql_specialist
+        instructions: |
+          You operate the SQL lane. Inspect cached receipts and only request fresh compilation or execution when planner context marks the lane stale.
+          When you rerun SQL, summarize the generated query, row counts, and sample columns for the supervisor.
+        reasoning_effort: medium
+        max_turns: 4
+      - lane: web
+        name: web_research_specialist
+        instructions: |
+          You operate the web research lane. Reuse cached excerpts whenever possible and request new retrievals only when cache TTLs expire or the supervisor explicitly asks for fresh context.
+          Return concise summaries with citation metadata so the analyst can reference them.
+        reasoning_effort: medium
+        max_turns: 4
+      - lane: market
+        name: market_specialist
+        instructions: |
+          You operate the market lane. Reuse cached market snapshots when they are fresh; otherwise fetch updated pricing for the supervisor's tickers.
+          Include timestamps and retry metadata so the supervisor can audit freshness.
+        reasoning_effort: medium
+        max_turns: 4
+      - lane: analysis
+        name: analysis_reviewer
+        instructions: |
+          You operate the analysis lane. Blend SQL, web, and market summaries into a coherent narrative.
+          If upstream lanes fail or reuse cached receipts, explain how that influences the final story and flag any missing components for follow-up.
+        reasoning_effort: high
+        max_turns: 6

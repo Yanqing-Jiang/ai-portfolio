@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from functools import lru_cache
 from typing import Any, Dict, Mapping, Optional, Tuple
@@ -21,6 +21,9 @@ class ModeConfig:
     accessory_strategy: str
     allow_hedging: bool
     delta_accessories: bool
+    concurrency: Dict[str, int] = field(default_factory=dict)
+    retry_ceiling: Optional[int] = None
+    supervisor_model: Optional[str] = None
 
 
 _MODE_CONFIGS: Mapping[FlowMode, ModeConfig] = {
@@ -32,6 +35,9 @@ _MODE_CONFIGS: Mapping[FlowMode, ModeConfig] = {
         accessory_strategy="post_analysis",
         allow_hedging=False,
         delta_accessories=True,
+        concurrency={},
+        retry_ceiling=None,
+        supervisor_model=None,
     ),
     FlowMode.SINGLE_AGENT: ModeConfig(
         name=FlowMode.SINGLE_AGENT,
@@ -41,6 +47,9 @@ _MODE_CONFIGS: Mapping[FlowMode, ModeConfig] = {
         accessory_strategy="pre_analysis_fanout",
         allow_hedging=False,
         delta_accessories=True,
+        concurrency={},
+        retry_ceiling=2,
+        supervisor_model="gpt-5-mini-2025-08-07",
     ),
     FlowMode.MULTI_AGENT: ModeConfig(
         name=FlowMode.MULTI_AGENT,
@@ -50,6 +59,9 @@ _MODE_CONFIGS: Mapping[FlowMode, ModeConfig] = {
         accessory_strategy="specialist_parallel",
         allow_hedging=True,
         delta_accessories=True,
+        concurrency={"sql_web": 2, "chart_parallel": 1, "supervisor_summary": 1},
+        retry_ceiling=2,
+        supervisor_model="gpt-5-mini-2025-08-07",
     ),
 }
 
@@ -346,7 +358,15 @@ MULTI_AGENT_SCHEDULE = FlowSchedule(
             label="Supervisor Kickoff",
             parallel_group="supervisor",
             allows_parallel=False,
-            emits=("agent_supervisor_started", "agent_turn", "agent_reasoning", "agent_coordination"),
+            emits=(
+                "agent_supervisor_started",
+                "agent_turn_start",
+                "agent_turn_end",
+                "tool_retry",
+                "agent_turn",
+                "agent_reasoning",
+                "agent_coordination",
+            ),
             description="Supervisor agent sets up shared artifacts and objectives.",
         ),
         FlowStage(
@@ -540,6 +560,7 @@ def apply_mode_metadata(event: Dict[str, Any], mode: FlowMode) -> Dict[str, Any]
         event["mode"] = mode.value
         return event
     data.setdefault("mode", mode.value)
+    data.setdefault("flow_mode", mode.value)
     config = get_mode_config(mode)
     badges = data.setdefault("badges", {})
     if isinstance(badges, dict):
@@ -551,6 +572,12 @@ def apply_mode_metadata(event: Dict[str, Any], mode: FlowMode) -> Dict[str, Any]
         badges.setdefault("hedging", "enabled")
     if config.delta_accessories:
         data.setdefault("supports_deltas", True)
+    if config.concurrency:
+        data.setdefault("parallel_limits", dict(config.concurrency))
+    if config.retry_ceiling is not None:
+        data.setdefault("retry_ceiling", config.retry_ceiling)
+    if config.supervisor_model:
+        data.setdefault("supervisor_model", config.supervisor_model)
     stage_index = get_stage_index(mode)
     stage = resolve_stage(
         stage_index,
@@ -561,4 +588,13 @@ def apply_mode_metadata(event: Dict[str, Any], mode: FlowMode) -> Dict[str, Any]
         data.setdefault("parallel_group", stage.parallel_group)
         data.setdefault("schedule_stage", stage.key)
         data.setdefault("stage_allows_parallel", stage.allows_parallel)
+    role_value = data.get("role")
+    if role_value and "agent_role" not in data:
+        data["agent_role"] = role_value
+    run_id = data.get("run_id") or event.get("run_id")
+    if run_id and "agents_run_id" not in data:
+        data["agents_run_id"] = run_id
+    retry_value = data.get("retry_count") or data.get("attempt")
+    if retry_value is not None and "agents_retry_count" not in data:
+        data["agents_retry_count"] = retry_value
     return event

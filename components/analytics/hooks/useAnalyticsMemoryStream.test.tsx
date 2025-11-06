@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, act, screen, renderHook } from '@testing-library/react';
+import { render, act, screen, renderHook, waitFor } from '@testing-library/react';
 import { useAnalyticsMemoryStream } from './useAnalyticsMemoryStream';
 import { apiService } from '../../../services/apiService';
 
@@ -977,5 +977,96 @@ describe('useAnalyticsMemoryStream follow-up guidance', () => {
 
     const stepIds = Array.from(screen.getByTestId('step-ids').querySelectorAll('li')).map((li) => li.textContent || '');
     expect(stepIds).toContain('follow_up_route:completed');
+  });
+});
+
+describe('useAnalyticsMemoryStream agent tool events', () => {
+  it('records tool call deltas with lane metadata', async () => {
+    const ts = new Date().toISOString();
+    (globalThis as any).__TEST_EVENTS__ = [
+      {
+        event: 'tool_call_delta',
+        data: {
+          tool_call: {
+            id: 'call-1',
+            name: 'web_retriever',
+            arguments_delta: { query: 'AMD revenue' },
+            sequence_number: 1,
+            output_index: 0,
+          },
+          lane: 'web',
+          parallel_group: 'single_agent_fanout',
+          tool_group: 'web_retriever',
+          ts,
+          sequence: 5,
+        },
+      },
+      {
+        event: 'tool_call_arguments',
+        data: {
+          tool_call: {
+            id: 'call-1',
+            name: 'web_retriever',
+            arguments: { query: 'AMD revenue' },
+            sequence_number: 2,
+            output_index: 0,
+          },
+          lane: 'web',
+          parallel_group: 'single_agent_fanout',
+          tool_group: 'web_retriever',
+          ts,
+          sequence: 6,
+        },
+      },
+    ];
+
+    const { result } = renderHook(() => useAnalyticsMemoryStream('single-agent'));
+
+    await act(async () => {
+      await result.current.handleQuery('agent tool telemetry');
+    });
+
+    await waitFor(() => {
+      const toolStep = result.current.processSteps.find((step) => step.id === 'tool_execution');
+      expect(toolStep).toBeDefined();
+      const toolCalls = (toolStep?.details as any)?.tool_calls as any[] | undefined;
+      expect(toolCalls?.length).toBeGreaterThan(0);
+      const latest = toolCalls?.[toolCalls.length - 1];
+      expect(latest?.tool).toBe('web_retriever');
+      expect(latest?.lane).toBe('web');
+      expect(latest?.status).toBe('completed');
+    });
+  });
+
+  it('captures supervisor agent turn metadata including specialist tool', async () => {
+    const ts = new Date().toISOString();
+    (globalThis as any).__TEST_EVENTS__ = [
+      {
+        event: 'agent_turn',
+        data: {
+          role: 'sql_specialist',
+          status: 'start',
+          lane: 'sql',
+          tool: 'sql_specialist',
+          specialist: 'sql_specialist',
+          ts,
+        },
+      },
+    ];
+
+    const { result } = renderHook(() => useAnalyticsMemoryStream('multi-agent'));
+
+    await act(async () => {
+      await result.current.handleQuery('supervisor telemetry');
+    });
+
+    const coordinationStep = result.current.processSteps.find((step) => step.id === 'agent_coordination');
+    expect(coordinationStep).toBeDefined();
+    const agentTurns = (coordinationStep?.details as any)?.agent_turns as any[] | undefined;
+    expect(agentTurns?.length).toBeGreaterThan(0);
+    const latest = agentTurns?.[agentTurns.length - 1];
+    expect(latest?.lane).toBe('sql');
+    expect(latest?.tool).toBe('sql_specialist');
+    expect(latest?.specialist).toBe('sql_specialist');
   });
 });

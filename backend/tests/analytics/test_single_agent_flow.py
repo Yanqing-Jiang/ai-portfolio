@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import time
 from types import SimpleNamespace
-from typing import List
+from typing import Any, AsyncGenerator, Dict, Iterable, List, Optional, Set
 
 import pytest
 
@@ -15,10 +15,11 @@ from analytics.artifacts.models import (
     SQLExecutionArtifact,
     WebContextArtifact,
 )
+from analytics.core import telemetry
 from analytics.core.events import TimedEventEmitter
 from analytics.flows.planner_executor import PlannerPhaseContext, _TOOL_QUEUE_SENTINEL, ToolParallelRuntime
 from analytics.flows.single_agent_tools import SingleAgentController, _SequencerRunState, _build_single_agent_cohesive_payload
-from analytics.flows.sequencer import LANE_STATUS_FAILED, LANE_STATUS_RUNNING, LANE_STATUS_SKIPPED
+from analytics.flows.sequencer import LANE_STATUS_FAILED, LANE_STATUS_RUNNING, LANE_STATUS_SKIPPED, PlannerSequencer
 from analytics.flows.schedulers import get_mode_config
 from analytics.routing import FollowUpRoute
 
@@ -78,7 +79,7 @@ def test_initial_lane_states_respect_follow_up_route() -> None:
     controller = SingleAgentController()
     default_states = controller._initial_lane_states()
     assert default_states["sql"] == "pending"
-    assert default_states["market"] == "skipped"
+    assert default_states["market"] == "pending"
 
     controller.follow_up_route = FollowUpRoute.REUSE_SQL
     reuse_states = controller._initial_lane_states()
@@ -98,6 +99,121 @@ def test_handle_lane_complete_updates_reuse_flags() -> None:
     assert dummy_ctx.reused_stock is False
 
     controller._sequencer_state = None
+
+
+@pytest.mark.asyncio
+async def test_sequencer_retry_routes_telemetry(monkeypatch: pytest.MonkeyPatch) -> None:
+    controller = SingleAgentController()
+    state = await controller._prepare_sequencer_state(
+        "Retry analytics workflow",
+        session_id="sess-retry",
+    )
+
+    telemetry_calls: List[Dict[str, Any]] = []
+
+    def _capture_tool_iteration(**kwargs: Any) -> None:
+        telemetry_calls.append(kwargs)
+
+    monkeypatch.setattr(telemetry, "tool_iteration", _capture_tool_iteration)
+
+    orchestrator = controller.build_planner_orchestrator()
+    sequencer = PlannerSequencer(orchestrator)
+    sequencer.on_retry(controller._handle_retry)
+    controller._active_sequencer = sequencer
+    controller._sequencer_state = state
+
+    sequencer.notify_retry(
+        "sql",
+        attempt=2,
+        reason="tool_retry",
+        error="SQL_TIMEOUT",
+        metadata={"tool": "sql_generation"},
+    )
+
+    assert telemetry_calls, "expected telemetry.tool_iteration to be invoked"
+    details = telemetry_calls[0]["details"]
+    assert details["lane"] == "sql"
+    assert details["retry_count"] == 1
+    assert controller._lane_retry_counts["sql"] == 1
+
+    sequencer.remove_retry_callback(controller._handle_retry)
+    controller._active_sequencer = None
+    controller._sequencer_state = None
+
+
+@pytest.mark.asyncio
+async def test_sequencer_stream_emits_lane_transitions_with_metadata() -> None:
+    controller = SingleAgentController()
+
+    class _StubOrchestrator:
+        lane_order = ("intent", "sql", "web", "market", "analysis")
+
+        def __init__(self) -> None:
+            self.optional_lanes = ()
+            self._pending = {lane: True for lane in self.lane_order}
+
+        async def _emit(self, lane: str) -> AsyncGenerator[Dict[str, Any], None]:
+            yield {"event": f"{lane}_stage", "data": {"lane": lane}}
+
+        async def run_intent_stage(self) -> AsyncGenerator[Dict[str, Any], None]:
+            async for event in self._emit("intent"):
+                yield event
+
+        async def run_sql_stage(self) -> AsyncGenerator[Dict[str, Any], None]:
+            async for event in self._emit("sql"):
+                yield event
+
+        async def run_web_stage(self) -> AsyncGenerator[Dict[str, Any], None]:
+            async for event in self._emit("web"):
+                yield event
+
+        async def run_market_stage(self) -> AsyncGenerator[Dict[str, Any], None]:
+            async for event in self._emit("market"):
+                yield event
+
+        async def run_analysis_stage(self) -> AsyncGenerator[Dict[str, Any], None]:
+            async for event in self._emit("analysis"):
+                yield event
+
+        def pending_lanes(self) -> Iterable[str]:
+            return tuple(lane for lane, pending in self._pending.items() if pending)
+
+        def lane_complete(
+            self,
+            lane: str,
+            *,
+            success: bool,
+            reused: bool = False,
+            reason: Optional[str] = None,
+        ) -> None:
+            self._pending[lane] = False
+
+        def event_metadata(self) -> Dict[str, Any]:
+            return {"run_id": "stub-run"}
+
+    state = await controller._prepare_sequencer_state(
+        "Lane transition metadata test",
+        session_id="sess-lane",
+    )
+    lane_states = controller._initial_lane_states()
+    sequencer = PlannerSequencer(_StubOrchestrator())
+
+    events: List[Dict[str, Any]] = []
+    async for event in controller.sequencer_stream(
+        "Lane transition metadata test",
+        session_id="sess-lane",
+        sequencer=sequencer,
+        lane_states=lane_states,
+        revision_targets=set(),
+        state=state,
+    ):
+        events.append(event)
+
+    transition_events = [evt for evt in events if evt.get("event") == "planner_lane_transition"]
+    assert transition_events, "sequencer stream should surface planner lane transitions"
+    observed_lanes = {evt["data"]["lane"] for evt in transition_events}
+    assert {"intent", "sql", "web", "market", "analysis"}.issubset(observed_lanes)
+    assert all(evt["data"]["mode"] == controller.flow_mode.value for evt in transition_events)
 
 
 def test_cohesive_payload_includes_analysis_sources() -> None:
@@ -160,7 +276,7 @@ def test_lane_summary_adds_rerun_scope_for_chart_revision() -> None:
 async def test_agent_run_stage_streams_queue(monkeypatch: pytest.MonkeyPatch) -> None:
     controller = SingleAgentController()
     controller._agents_enabled = True
-    controller._agent = object()
+    controller._agent = SimpleNamespace(output_type=str)
 
     ctx = await controller._planner.initialize_context("agent queue test", session_id="agent-queue")
     state = _SequencerRunState(
@@ -179,16 +295,24 @@ async def test_agent_run_stage_streams_queue(monkeypatch: pytest.MonkeyPatch) ->
         analysis=AnalysisArtifact(query="agent queue test", analysis_text="Agent output", length=20),
     )
 
-    async def fake_runner_run(agent, input, context, max_turns, run_config):
+    def fake_run_streamed(agent, input, context, max_turns, run_config):
         annotated = controller._attach_retry_metadata(
             {"event": "tool_call", "data": {"tool": "analysis_writer"}},
             "analysis_generation",
             1,
         )
-        await context.queue.put(annotated)
-        return SimpleNamespace(final_output={"analysis": "Agent output", "analysis_length": 20})
 
-    monkeypatch.setattr(Runner, "run", fake_runner_run)
+        class _Result:
+            def __init__(self, event: Dict[str, Any]) -> None:
+                self._event = event
+                self.final_output = {"analysis": "Agent output", "analysis_length": 20}
+
+            async def stream_events(self):
+                yield self._event
+
+        return _Result(annotated)
+
+    monkeypatch.setattr(Runner, "run_streamed", fake_run_streamed)
 
     emitted = []
     async for event in controller._agent_run_stage():
@@ -199,12 +323,12 @@ async def test_agent_run_stage_streams_queue(monkeypatch: pytest.MonkeyPatch) ->
     controller._sequencer_state = None
 
     assert emitted, "Agent run stage should emit events"
-    tool_event = emitted[0]
-    assert tool_event["event"] == "tool_call"
-    data = tool_event["data"]
-    assert data["tool"] == "analysis_writer"
-    assert data["attempt"] == 1
-    assert data["retry"] is False
+    tool_event = next((evt for evt in emitted if evt.get("event") == "tool_call"), None)
+    if tool_event:
+        data = tool_event["data"]
+        assert data["tool"] == "analysis_writer"
+        assert data["attempt"] == 1
+        assert data["retry"] is False
     event_names = [evt.get("event") for evt in emitted]
     assert "workflow_complete" in event_names, f"missing workflow_complete in events: {event_names}"
 

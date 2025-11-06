@@ -50,9 +50,18 @@ _ANCHOR_TAG_RE = re.compile(r'<a[^>]+href="([^"]+)"[^>]*>(.*?)</a>', re.IGNORECA
 
 
 class ResponseSearchError(RuntimeError):
-    def __init__(self, message: str, *, stage: str = "unknown") -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        stage: str = "unknown",
+        retryable: bool = True,
+        code: Optional[str] = None,
+    ) -> None:
         super().__init__(message)
         self.stage = stage
+        self.retryable = retryable
+        self.code = code
 
     '''Raised when the Gemini-powered web search call fails.'''
 
@@ -118,6 +127,37 @@ class ResponseSearchResult:
         }
         return payload
 
+    def to_agent_envelope(self, *, status: str = "completed", cached: bool = False) -> Dict[str, Any]:
+        snippets_payload = [
+            {
+                "title": snippet.title,
+                "url": snippet.url,
+                "summary": snippet.snippet,
+                "published_at": snippet.published_at,
+            }
+            for snippet in self.snippets[:3]
+        ]
+        topics_payload = [
+            {
+                "label": topic.label,
+                "query": topic.query,
+                "summary": topic.summary,
+                "snippets": len(topic.snippets),
+            }
+            for topic in self.topics
+        ]
+        return {
+            "status": status,
+            "query": self.query,
+            "summary": self.summary,
+            "search_id": self.search_id,
+            "model": self.model,
+            "latency_ms": self.latency_ms,
+            "from_cache": cached or self.from_cache,
+            "snippets": snippets_payload,
+            "topics": topics_payload,
+        }
+
 
 def _resolve_search_api_key() -> Optional[str]:
     """Find a configured API key env var without logging secrets.
@@ -144,6 +184,8 @@ def _ensure_google_genai(stage: str) -> None:
         raise ResponseSearchError(
             "google-genai SDK not available; install google-genai to enable response_search integration.",
             stage=stage,
+            retryable=False,
+            code="sdk_missing",
         )
 
 
@@ -162,6 +204,8 @@ def _ensure_model(preferred_model: Optional[str] = None) -> "GenerativeModel":
         raise ResponseSearchError(
             'GOOGLE_API_KEY or GEMINI_API_KEY must be configured for Gemini search',
             stage='configuration',
+            retryable=False,
+            code='configuration_missing',
         )
 
     if not _genai_configured:
@@ -1078,13 +1122,23 @@ async def perform_response_search(
                     else 'Gemini Google Search failed'
                 )
                 logger.error('%s after %s attempts (last_error=%s)', error_message, attempts, type(last_error).__name__ if last_error else 'unknown')
-                raise ResponseSearchError(error_message, stage='search_execution') from last_error
+                raise ResponseSearchError(
+                    error_message,
+                    stage='search_execution',
+                    retryable=True,
+                    code='search_execution_error',
+                ) from last_error
             delay = _RETRY_BASE_DELAY * (2 ** (attempt - 1))
             logger.debug('Retrying Gemini search in %.2f seconds', delay)
             await asyncio.sleep(delay)
 
         if not response_dict:
-            raise ResponseSearchError(last_error or 'Gemini Google Search produced no output', stage='search_execution')
+            raise ResponseSearchError(
+                last_error or 'Gemini Google Search produced no output',
+                stage='search_execution',
+                retryable=True,
+                code='search_empty',
+            )
         topic_summary: Optional[str] = None
         raw_text = response_dict.get('text')
         if isinstance(raw_text, str) and raw_text.strip():

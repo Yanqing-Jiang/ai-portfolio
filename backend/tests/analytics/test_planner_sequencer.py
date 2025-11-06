@@ -147,6 +147,18 @@ async def test_sequencer_preserves_stage_order_and_metadata() -> None:
     assert all(orchestrator.success_map[lane] is True for lane in orchestrator.lane_order)
     assert all(orchestrator.reused_map[lane] is False for lane in orchestrator.lane_order)
 
+    intent_completed_seen = False
+    for transition in lane_transitions:
+        lane = transition["data"]["lane"]
+        status = transition["data"]["status"]
+        if lane == "intent" and status == LANE_STATUS_COMPLETED:
+            intent_completed_seen = True
+            continue
+        if status == LANE_STATUS_RUNNING and lane != "intent":
+            assert intent_completed_seen, (
+                "Lane %s started (%s) before intent completed" % (lane, status)
+            )
+
 
 @pytest.mark.asyncio
 async def test_optional_lanes_skipped_when_not_required() -> None:
@@ -198,3 +210,31 @@ async def test_lane_failure_propagates_and_emits_error() -> None:
     assert orchestrator.success_map["market"] is False
     # Analysis should not be marked complete after failure
     assert orchestrator.success_map["analysis"] is None
+
+
+def test_retry_callbacks_invoked() -> None:
+    orchestrator = FakeOrchestrator()
+    sequencer = PlannerSequencer(orchestrator)
+    recorded: List[Tuple[str, int, Optional[str], Optional[str], Optional[Dict[str, Any]]]] = []
+
+    def _on_retry(
+        lane: str,
+        attempt: int,
+        reason: Optional[str],
+        error: Optional[str],
+        metadata: Optional[Dict[str, Any]],
+    ) -> None:
+        recorded.append((lane, attempt, reason, error, dict(metadata or {})))
+
+    sequencer.on_retry(_on_retry)
+    sequencer.notify_retry(
+        "sql",
+        attempt=2,
+        reason="tool_retry",
+        error="SQL_TIMEOUT",
+        metadata={"tool": "sql_generation"},
+    )
+
+    assert recorded == [
+        ("sql", 2, "tool_retry", "SQL_TIMEOUT", {"tool": "sql_generation"})
+    ]
