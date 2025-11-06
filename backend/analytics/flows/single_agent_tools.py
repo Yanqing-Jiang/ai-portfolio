@@ -1722,12 +1722,48 @@ class SingleAgentController:
                 ctx.revision_search_topics = list(revision_directive.search_topics)
 
         registry_name = self._resolve_registry_name(definition.name)
-        attempt = self._record_tool_attempt(registry_name or definition.name)
         normalized_key = self._normalize_tool_key(registry_name or definition.name) or definition.name
+        tool_label = registry_name or definition.name
+        lane = self._lane_for_tool(registry_name) or self._lane_for_tool(definition.name)
+        current_attempt = self._tool_attempts.get(normalized_key, 0)
+        if self._tool_retry_limit and current_attempt >= self._tool_retry_limit:
+            retry_count_value = max(current_attempt - 1, 0)
+            summary = (
+                f"{tool_label} skipped after reaching retry limit ({self._tool_retry_limit})"
+            )
+            await self._emit_tool_event(
+                run_context,
+                event_name="tool_result",
+                tool=tool_label,
+                lane=lane,
+                status="skipped",
+                session_id=session_id,
+                attempt=current_attempt,
+                retry_count=retry_count_value,
+                summary=summary,
+                extra={"reason": "retry_limit_reached"},
+            )
+            telemetry.tool_iteration(
+                tool=tool_label,
+                status="skipped",
+                step=lane,
+                session_id=session_id,
+                flow=self.flow_label,
+                agents_run_id=run_context.run_id,
+                agent_role="single_agent",
+                retry_count=retry_count_value,
+                details={"reason": "retry_limit_reached", "retry_limit": self._tool_retry_limit},
+            )
+            return {
+                "status": "skipped",
+                "reason": "retry_limit_reached",
+                "attempt": current_attempt,
+                "retry_limit": self._tool_retry_limit,
+            }
+
+        attempt = self._record_tool_attempt(registry_name or definition.name)
         run_context.tool_attempts[normalized_key] = attempt
         run_context.tool_attempts[definition.name] = attempt
-        lane = self._lane_for_tool(registry_name) or self._lane_for_tool(definition.name)
-        tool_label = registry_name or definition.name
         retry_count_value = max(attempt - 1, 0)
         start_ts = time.time()
 

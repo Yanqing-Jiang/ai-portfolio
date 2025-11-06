@@ -160,6 +160,9 @@ LANE_TTL_ENV_KEYS: Dict[str, str] = {
     "market": "ANALYTICS_MARKET_REFRESH_TTL_SECONDS",
 }
 
+SESSION_MESSAGE_LIMIT = 20
+SESSION_MESSAGE_ARCHIVE_LIMIT = 50
+
 
 def _resolve_lane_ttls() -> Dict[str, int]:
     resolved: Dict[str, int] = {}
@@ -756,13 +759,37 @@ def _append_session_message(
         snapshot.messages = []
         messages = snapshot.messages
     timestamp = datetime.now(timezone.utc).isoformat()
-    messages.append(
-        {
-            "role": role,
-            "content": content,
-            "ts": timestamp,
-        }
-    )
+    entry = {
+        "role": role,
+        "content": content,
+        "ts": timestamp,
+    }
+    messages.append(entry)
+
+    overflow: List[Dict[str, Any]] = []
+    while len(messages) > SESSION_MESSAGE_LIMIT:
+        try:
+            overflow.append(messages.pop(0))
+        except IndexError:  # pragma: no cover - defensive guard
+            break
+
+    if overflow:
+        tool_cache = snapshot.tool_cache
+        if not isinstance(tool_cache, dict):
+            tool_cache = {}
+            snapshot.tool_cache = tool_cache
+        agent_cache = tool_cache.get("agent")
+        if not isinstance(agent_cache, dict):
+            agent_cache = {}
+            tool_cache["agent"] = agent_cache
+        backlog = agent_cache.get("message_backlog")
+        if not isinstance(backlog, list):
+            backlog = []
+        backlog.extend(overflow)
+        if len(backlog) > SESSION_MESSAGE_ARCHIVE_LIMIT:
+            backlog = backlog[-SESSION_MESSAGE_ARCHIVE_LIMIT:]
+        agent_cache["message_backlog"] = backlog
+    snapshot.touch()
 
 async def analytics_memory_workflow(
     query: str,
@@ -805,9 +832,29 @@ async def analytics_memory_workflow(
         except (MissingRevisionSnapshot, MissingAnalysis):
             revision_snapshot_ready = False
         if not revision_snapshot_ready:
-            analysis_revision_requested = False
-            analysis_text = None
-            route = FollowUpRoute.FULL_PIPELINE
+            missing_lanes = ["analysis", "web"]
+            banner = _build_cannot_revise_banner(missing_lanes, ["analysis"])
+            banner["reason"] = "missing_analysis"
+            follow_up_event = {
+                "event": "follow_up_route",
+                "data": {
+                    "route": "cannot_revise",
+                    "flow": selected,
+                    "session_id": session_id,
+                    "lanes": missing_lanes,
+                    "lane_refresh_required": {"analysis": True, "web": True},
+                    "banner": banner,
+                },
+            }
+            yield follow_up_event
+            _append_session_message(
+                snapshot,
+                role="system",
+                content="Revision skipped because no prior analysis was cached for this session. Start a new question to rebuild the results.",
+            )
+            if repository and snapshot is not None:
+                await repository.save(snapshot)
+            return
     analysis_focus = bool(analysis_revision_requested or analysis_text)
 
     factory = _get_flow_factory(selected)

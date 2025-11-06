@@ -25,8 +25,8 @@ class OpenAIClient:
         if not self.unified_client:
             raise ValueError("Failed to initialize unified responses client")
 
-        # Direct async client for responses API only
-        self.async_client = AsyncOpenAI(api_key=self.api_key)
+        # Direct async client for responses API only (retry capped at 3 total attempts)
+        self.async_client = AsyncOpenAI(api_key=self.api_key, max_retries=3)
 
     def _get_model_name(self, model: Optional[str] = None) -> str:
         """Get model name with fallback logic"""

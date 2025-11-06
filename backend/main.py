@@ -136,6 +136,7 @@ except ImportError:  # pragma: no cover - support module execution
     from .token_store import token_store  # type: ignore
 from analytics_agent import create_analytics_workflow
 from analytics.flows.workflow import analytics_memory_workflow
+from analytics.flows.chart_revision import infer_chart_patch_from_query, is_analysis_revision_query
 from analytics.core.clarify import put_answer
 from analytics.core.types import ClarifyAnswerModel
 from analytics.core.session_state import get_session_state_repository
@@ -1413,9 +1414,16 @@ async def analytics_memory_stream_endpoint(
     requested_flow_raw = (flow or legacy_mode or '').strip() if (flow or legacy_mode) else ''
     selected_flow = requested_flow_raw.lower() or None
 
-    # Generate a session ID if not provided
-    if not session_id:
-        session_id = str(uuid.uuid4())
+    normalized_session = (session_id or "").strip()
+    revision_requested = bool(infer_chart_patch_from_query(query)) or bool(is_analysis_revision_query(query))
+
+    # Generate a session ID if not provided (revision flows must supply one)
+    if not normalized_session:
+        if revision_requested:
+            raise HTTPException(status_code=400, detail="Revision follow-ups require an existing session_id.")
+        normalized_session = str(uuid.uuid4())
+
+    session_id = normalized_session
     
     async def generate_analytics_memory_stream():
         try:
