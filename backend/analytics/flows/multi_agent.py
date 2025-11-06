@@ -1995,8 +1995,15 @@ class MultiAgentFlow:
         analysis_ctx = self._shared_context.get("analysis", {})
         market_ctx = self._shared_context.get("market", {})
         web_ctx = self._shared_context.get("web", {})
+        planner_ctx = self._shared_context.get("planner", {})
+        intent_state = "missing"
+        if planner_ctx.get("intent_reused"):
+            intent_state = "reused"
+        elif planner_ctx.get("intent_key") or planner_ctx.get("slots"):
+            intent_state = "fresh"
 
         lane_states = {
+            "intent": intent_state,
             "sql": classify(
                 sql_ctx,
                 has_payload=bool(sql_ctx.get("sql") or sql_ctx.get("row_count") is not None),
@@ -2044,6 +2051,7 @@ class MultiAgentFlow:
         route = getattr(self, "follow_up_route", FollowUpRoute.FULL_PIPELINE)
         if route == FollowUpRoute.REUSE_SQL:
             return {
+                "intent": "pending",
                 "sql": "reused",
                 "chart": "reused",
                 "analysis": "reused",
@@ -2052,6 +2060,7 @@ class MultiAgentFlow:
             }
         if route == FollowUpRoute.STOCK_ONLY:
             return {
+                "intent": "pending",
                 "sql": "reused",
                 "chart": "reused",
                 "analysis": "reused",
@@ -2059,6 +2068,7 @@ class MultiAgentFlow:
                 "web": "reused",
             }
         return {
+            "intent": "pending",
             "sql": "pending",
             "chart": "queued",
             "analysis": "queued",
@@ -3408,6 +3418,8 @@ class MultiAgentFlow:
             session_id=ctx.session_id or session_id,
             hooks=hooks,
         )
+        if state.lane_states is None:
+            state.lane_states = dict(self._initial_lane_states())
         revision_directive_active = bool(self._revision_directive or getattr(ctx, "revision_directive", None))
         has_revision_targets = bool(getattr(ctx, "revision_targets", None))
         agentic_revision_mode = bool(getattr(ctx, "agentic_revision_mode", False) or self._agentic_revision_mode)
@@ -3438,14 +3450,22 @@ class MultiAgentFlow:
                 except TypeError:
                     pending_followups = 0
             cached_revision_ready = cached_intent_ready and cached_plan_ready and pending_followups == 0
-            skip_classification = (
-                (cached_classification is not None and confidence >= REVISION_INTENT_CONFIDENCE_THRESHOLD)
-                or cached_revision_ready
-            )
-            reuse_intent = cached_revision_ready
+            hydrated_intent_ready = bool(getattr(ctx, "intent", None))
+            hydrated_plan_ready = bool(getattr(ctx, "plan", None) or getattr(ctx, "provisional_plan", None))
+            no_pending_followups = pending_followups == 0
+            if not hydrated_intent_ready and cached_intent_ready:
+                hydrated_intent_ready = True
+            if not hydrated_plan_ready and cached_plan_ready:
+                hydrated_plan_ready = True
+            skip_reason = "revision_follow_up"
+            if cached_classification is not None and confidence >= REVISION_INTENT_CONFIDENCE_THRESHOLD:
+                skip_reason = "cached_intent"
+            elif cached_revision_ready:
+                skip_reason = "revision_context"
+            skip_classification = True
+            reuse_intent = hydrated_intent_ready and hydrated_plan_ready and no_pending_followups
             if skip_classification:
                 executed.add("classification")
-                skip_reason = "cached_intent" if cached_classification is not None else "revision_context"
                 if classification_artifact is None and getattr(ctx, "is_financial_query", None) is None:
                     ctx.is_financial_query = True
                 log_tool_iteration(
@@ -3460,12 +3480,17 @@ class MultiAgentFlow:
                         "pending_followups": pending_followups,
                     },
                 )
-            else:
-                if classification_artifact is None and getattr(ctx, "is_financial_query", None) is None:
-                    ctx.is_financial_query = True
+            lane_states = state.lane_states or {}
+            lane_states["intent"] = "reused" if reuse_intent else "pending"
+            state.lane_states = lane_states
             if reuse_intent:
                 executed.update({"intent_detection", "clarification", "plan_generation"})
-                intent_skip_reason = "cached_intent" if cached_classification is not None else "revision_context"
+                if skip_reason == "cached_intent":
+                    intent_skip_reason = "cached_intent"
+                elif cached_revision_ready:
+                    intent_skip_reason = "revision_context"
+                else:
+                    intent_skip_reason = "revision_follow_up"
                 log_tool_iteration(
                     tool="intent_classifier",
                     status="skipped",
@@ -3501,6 +3526,9 @@ class MultiAgentFlow:
                     reason=intent_skip_reason,
                 )
             ctx.intent_reused = reuse_intent
+            planner_snapshot = self._shared_context.setdefault("planner", {})
+            planner_snapshot["intent_reused"] = bool(reuse_intent)
+
             await self._planner._persist_session_state(ctx, record_artifacts=True)
         self._sequencer_state = state
         return state

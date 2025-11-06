@@ -163,6 +163,8 @@ def build_revision_plan(
     normalized_targets = normalize_revision_targets(targets or ctx.revision_targets or ())
     if not normalized_targets:
         normalized_targets = derive_revision_targets(ctx)
+    if "analysis" in normalized_targets and "web" not in normalized_targets:
+        normalized_targets.add("web")
     stock_only = normalized_targets == {"stock"}
     run_sql_lane = not normalized_targets or "sql" in normalized_targets
     run_chart_lane = not normalized_targets or bool({"sql", "chart"} & normalized_targets)
@@ -185,6 +187,15 @@ def apply_revision_plan(ctx: "PlannerPhaseContext", plan: RevisionPlan) -> None:
     ctx.revision_hint_active = bool(plan.targets)
     if plan.targets:
         ctx.revision_id = getattr(ctx, "revision_id", None) or str(uuid.uuid4())
+    lane_refresh_required = getattr(ctx, "lane_refresh_required", None)
+    if not isinstance(lane_refresh_required, dict):
+        lane_refresh_required = {}
+        ctx.lane_refresh_required = lane_refresh_required
+    if "web" in plan.targets:
+        lane_refresh_required["web"] = True
+        ctx.reused_web = False
+    if "market" in plan.targets or "stock" in plan.targets:
+        lane_refresh_required["market"] = True
     if plan.stock_only:
         ctx.stock_only = True
         ctx.reuse_sql = True
