@@ -816,10 +816,11 @@ class SingleAgentController:
                 self._agent_plan_template = PlanTemplate(name="single_agent_default", nodes=())
         else:
             self._agent_plan_template = PlanTemplate(name="single_agent_default", nodes=())
+        raw_temperature = self._agent_settings.get("temperature")
         try:
-            temperature_value = float(self._agent_settings.get("temperature"))
+            temperature_value = float(raw_temperature) if raw_temperature is not None else None
         except (TypeError, ValueError):
-            temperature_value = 0.0
+            temperature_value = None
         self._agent_runtime_config = AgentRuntimeConfig(
             model=self._agent_model,
             max_turns=self._max_turns,
