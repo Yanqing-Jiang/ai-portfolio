@@ -830,8 +830,16 @@ async def analytics_memory_workflow(
     needs_sql_lane = "sql" in requested_lanes
     requested_lanes.discard("sql")
 
-    revision_lanes = _normalize_revision_lanes(requested_lanes)
     explicit_revision = bool(chart_patch or analysis_focus or analysis_text)
+    provisional_revision = bool(requested_lanes or explicit_revision)
+    if provisional_revision:
+        if requested_lanes and requested_lanes.issubset({"market"}):
+            route = FollowUpRoute.STOCK_ONLY
+        else:
+            route = FollowUpRoute.REUSE_SQL
+            if not requested_lanes.intersection({"analysis", "web", "chart", "market"}):
+                requested_lanes.update({"analysis", "web"})
+    revision_lanes = _normalize_revision_lanes(requested_lanes)
     should_consider_revision = bool(revision_lanes or explicit_revision)
     if route in {FollowUpRoute.REUSE_SQL, FollowUpRoute.STOCK_ONLY}:
         should_consider_revision = True

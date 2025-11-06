@@ -11,6 +11,8 @@ from typing import Any, Dict, Mapping, Optional
 from agents import Agent, Runner
 from agents.result import RunResultStreaming
 from agents.run import RunConfig
+from agents.model_settings import ModelSettings
+from openai.types.shared import Reasoning
 
 from analytics.core import telemetry
 from analytics.core.events import EventEmitter
@@ -192,15 +194,17 @@ class AgentRuntime:
         )
 
     def _build_run_config(self) -> RunConfig:
-        kwargs: Dict[str, Any] = {
-            "model": self._config.model,
-            "trace_id": str(uuid.uuid4()),
-        }
+        settings_kwargs: Dict[str, Any] = {}
         if self._config.temperature is not None:
-            kwargs["temperature"] = self._config.temperature
+            settings_kwargs["temperature"] = self._config.temperature
         if self._config.reasoning_effort is not None:
-            kwargs["reasoning_effort"] = self._config.reasoning_effort
-        return RunConfig(**kwargs)
+            settings_kwargs["reasoning"] = Reasoning(effort=self._config.reasoning_effort)
+        model_settings = ModelSettings(**settings_kwargs) if settings_kwargs else None
+        return RunConfig(
+            model=self._config.model,
+            model_settings=model_settings,
+            trace_id=str(uuid.uuid4()),
+        )
 
     def _select_active_node(self, plan_state: PlanState) -> str:
         ready = plan_state.ready_nodes()

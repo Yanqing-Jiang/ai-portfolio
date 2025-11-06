@@ -5,6 +5,7 @@ Do not add fallback code unless requested;
 Prioritize PowerShell over Bash.  
 List any unresolved questions at the end, if any.
 - Favor JS/TS-aware scripts (e.g. `node -e`) when editing TSX to avoid PowerShell escaping loops.
+- Always prioritize `gpt-5-mini-2025-08-07` for agent models and see `docs/gpt5-best-practices.md` for GPT-5 configuration guidance.
 
 ## Project Structure & Module Organization
 The Vite frontend lives at the repo root, with `App.tsx` routing into feature components. UI pieces sit under `components/`, shared data in `constants/` + `constants.ts`, and network helpers in `services/`. The FastAPI backend is in `backend/`, See `ARCHITECTURE.md` for deeper diagrams.

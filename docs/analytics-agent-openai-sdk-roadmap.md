@@ -37,6 +37,11 @@ This roadmap tracks the end-to-end migration of the analytics planner to the Ope
 - Enriched supervisor telemetry with `agent_turn_start` / `agent_turn_end` payloads, updated frontend consumers, and executed live delegation through `Runner.stream`.
 - Finalized lane-specific adapters, added integration coverage for fresh and revision runs, and prepared the frontend for removing legacy planner hooks.
 
+### Iteration 6 (November 6, 2025)
+- **Plan (Revision Fast-Path Enhancements):** Align revision follow-ups with the GPT-5 Agents SDK best practices by upgrading run configuration primitives, forcing revision sessions to bypass classification/clarification, and routing directly into web refresh + analysis synthesis without replaying the full card stack.
+- **Execution:** Updated `backend/analytics/agent_orchestrator/agent_runtime.py` to hydrate `RunConfig` with Agents `ModelSettings`/`Reasoning`, forced `analytics_memory_workflow` to emit `FollowUpRoute.REUSE_SQL` for revision lanes, and taught the single- and multi-agent controllers to treat revision flags as cached-intent hits. Both controllers now skip classification/intent/plan regeneration, invoke the existing `run_analysis_refresh` helpers for delta analysis, and suppress the legacy “Fresh Run Scheduled” banner. Regression suites `backend/tests/analytics/test_single_agent_stream_events.py` and `backend/tests/analytics/test_multi_agent_flow.py` cover the new behavior.
+- **Cleanup Plan:** Sunset planner-era revision fallbacks once telemetry confirms agent parity (remove `emit_analysis_revision` wrappers and redundant tool seeding), merge duplicated revision target derivations (`_INTENT_LANE_HINTS`), and strip legacy “Fresh Run” banners from revision paths after rollout validation.
+
 ## Implementation Footprint (Complete)
 - `backend/analytics/flows/multi_agent.py`: registers supervisor + specialists, enforces retry policy, emits agent reasoning, and persists receipts.
 - `backend/analytics/flows/orchestrator.py`: coordinates specialist DAG execution with concurrency limits, retry decider, and structured result events.
@@ -83,4 +88,4 @@ This roadmap tracks the end-to-end migration of the analytics planner to the Ope
    - Support handover session material logged in `docs/ops/support-macros-agents.md`.
 
 ## Current State
-All migration objectives are complete. Supervisor-led multi-agent flows share the same telemetry, cache, and SSE contracts as the single-agent path, and launch readiness artifacts are signed off for production deployment during the week of November 10, 2025.
+All migration objectives are complete. Supervisor-led multi-agent flows share the same telemetry, cache, and SSE contracts as the single-agent path, and launch readiness artifacts are signed off for production deployment during the week of November 10, 2025. Revision follow-ups now skip classification/clarification entirely, jump straight into web refresh + analysis deltas, and rely on the Agents SDK runtime for tool streaming and telemetry.
