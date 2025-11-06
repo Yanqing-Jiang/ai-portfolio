@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import uuid
 from datetime import datetime
-from typing import Any, AsyncGenerator, Dict, Optional, Tuple
+from typing import Any, AsyncGenerator, Dict, Mapping, Optional, Set, Tuple
 
 from analytics.core.session_state import SessionStateSnapshot, get_session_state_repository
 from analytics.artifacts import PipelineArtifacts
@@ -42,9 +42,15 @@ PARALLEL_GROUP_BY_EVENT = {
     "analysis_ready": "analysis",
     "workflow_complete": "workflow",
     "tool_call": "tools",
+    "tool_call_delta": "agents",
+    "tool_call_arguments": "agents",
+    "agent_tool_complete": "agents",
     "tool_fanout": "web",
     "tool_execution": "web",
     "agent_turn": "agents",
+    "agent_turn_start": "agents",
+    "agent_turn_end": "agents",
+    "tool_retry": "agents",
     "agent_reasoning": "agents",
     "web_research_agent": "web",
     "web_ready": "web",
@@ -104,7 +110,13 @@ def _resolve_tool_group(event: Dict[str, Any]) -> Optional[str]:
     data = event.get("data") or {}
     if name == "tool_call":
         return data.get("tool")
-    if name == "agent_turn":
+    if name in {"tool_call_delta", "tool_call_arguments", "agent_tool_complete"}:
+        tool_call = data.get("tool_call")
+        if isinstance(tool_call, Mapping):
+            tool_name = tool_call.get("name") or tool_call.get("tool")
+            if tool_name:
+                return str(tool_name)
+    if name in {"agent_turn", "agent_turn_start", "agent_turn_end", "tool_retry"}:
         return data.get("role")
     if name == "agent_reasoning":
         return data.get("role")
@@ -132,6 +144,23 @@ def _extract_latest_artifacts(flow: Any) -> Optional[PipelineArtifacts]:
         if isinstance(value, PipelineArtifacts):
             return value
     return None
+
+
+def _attach_agent_metadata(event: Dict[str, Any], snapshot: SessionStateSnapshot) -> Dict[str, Any]:
+    metadata = snapshot.agent_run_metadata()
+    if not metadata:
+        return event
+    data = event.setdefault("data", {})
+    if not isinstance(data, dict):
+        return event
+    agent_block = data.get("agent_metadata")
+    if isinstance(agent_block, dict):
+        merged = {**metadata, **agent_block}
+    else:
+        merged = metadata
+    data["agent_metadata"] = sanitize_for_json(merged)
+    event["data"] = sanitize_for_json(data)
+    return event
 
 
 def _enrich_event(
@@ -205,6 +234,15 @@ def _maybe_update_session_state(
         if chart_spec is not None:
             snapshot.record_outputs(chart_spec=chart_spec)
             updated = True
+    elif name in {"analysis_complete", "analysis_ready", "analysis_revision_ready"}:
+        analysis_text = data.get("analysis") or data.get("analysis_text")
+        if isinstance(analysis_text, str) and analysis_text.strip():
+            snapshot.record_outputs(analysis=analysis_text)
+            metadata = snapshot.tool_cache.setdefault("analytics", {})
+            analysis_length = data.get("analysis_length")
+            if isinstance(analysis_length, int):
+                metadata["last_analysis_length"] = analysis_length
+            updated = True
     elif name == "analysis_complete":
         analysis = data.get("analysis")
         analysis_text: Optional[str] = None
@@ -230,6 +268,38 @@ def _maybe_update_session_state(
             cache_payload.setdefault("query", cache_payload.get("query_terms"))
             snapshot.record_tool_result("web_search", cache_payload)
             updated = True
+    elif name in {"tool_call_delta", "tool_call_arguments"}:
+        tool_call = data.get("tool_call")
+        if isinstance(tool_call, Mapping):
+            tool_name = tool_call.get("name") or tool_call.get("id")
+            if tool_name:
+                receipt_payload = {
+                    "call_id": tool_call.get("id"),
+                    "arguments": tool_call.get("arguments"),
+                    "arguments_delta": tool_call.get("arguments_delta"),
+                    "sequence_number": tool_call.get("sequence_number"),
+                    "output_index": tool_call.get("output_index"),
+                }
+                snapshot.record_tool_receipt(str(tool_name), receipt_payload)
+                updated = True
+    elif name == "agent_tool_complete":
+        tool_call = data.get("tool_call")
+        if isinstance(tool_call, Mapping):
+            tool_name = tool_call.get("name") or tool_call.get("id")
+            if tool_name:
+                receipt_payload = {
+                    "call_id": tool_call.get("id"),
+                    "status": tool_call.get("status"),
+                    "sequence_number": tool_call.get("sequence_number"),
+                    "output_index": tool_call.get("output_index"),
+                }
+                existing = snapshot.tool_cache.get("tool_receipts", {}).get(str(tool_name))
+                if isinstance(existing, Mapping):
+                    merged = dict(existing)
+                    merged.update({k: v for k, v in receipt_payload.items() if v is not None})
+                    receipt_payload = merged
+                snapshot.record_tool_receipt(str(tool_name), receipt_payload)
+                updated = True
 
     return updated
 
@@ -281,6 +351,12 @@ async def instrument_events(
     query: str,
     session_id: Optional[str],
     flow_label: Optional[str],
+    *,
+    sequencer: Optional[Any] = None,
+    lane_states: Optional[Dict[str, str]] = None,
+    revision_targets: Optional[Set[str]] = None,
+    emit_prefill_summary: Optional[bool] = None,
+    sequencer_state: Optional[Any] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     repository = get_session_state_repository()
     resolved_session = _ensure_session_id(session_id)
@@ -294,7 +370,18 @@ async def instrument_events(
     stage_index = get_stage_index(flow_mode)
 
     if hasattr(flow, "events") and callable(getattr(flow, "events")):
-        event_stream = flow.events(query, session_id=resolved_session)
+        event_kwargs: Dict[str, Any] = {"session_id": resolved_session}
+        if sequencer is not None:
+            event_kwargs["sequencer"] = sequencer
+            if lane_states is not None:
+                event_kwargs["lane_states"] = lane_states
+            if revision_targets is not None:
+                event_kwargs["revision_targets"] = revision_targets
+            if emit_prefill_summary is not None:
+                event_kwargs["emit_prefill_summary"] = emit_prefill_summary
+            if sequencer_state is not None:
+                event_kwargs["sequencer_state"] = sequencer_state
+        event_stream = flow.events(query, **event_kwargs)
     elif isinstance(flow, PlannerExecutorFlow):
         event_stream = run_planner_executor(query, session_id=resolved_session)
     else:
@@ -311,6 +398,7 @@ async def instrument_events(
             stage_key=stage_key,
             stage_allows_parallel=stage_allows_parallel,
         )
+        enriched_event = _attach_agent_metadata(enriched_event, snapshot)
         yield enriched_event
 
         if _maybe_update_session_state(snapshot, enriched_event, query, flow_mode=flow_mode):

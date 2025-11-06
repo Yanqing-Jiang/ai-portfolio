@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from enum import Enum
 import logging
@@ -213,13 +214,60 @@ class ConfigStore:
             include=include,
         )
 
+    @staticmethod
+    def _merge_nested(base: Dict[str, Any], extra: Dict[str, Any]) -> Dict[str, Any]:
+        merged = dict(base)
+        for key, value in extra.items():
+            if key in merged and isinstance(merged[key], dict) and isinstance(value, dict):
+                merged[key] = ConfigStore._merge_nested(merged[key], value)
+            else:
+                merged[key] = value
+        return merged
+
     def get_agent_mode_config(self, mode: str) -> Dict[str, Any]:
         agents_section = self.yaml_configs.get("agents", {})
         if not isinstance(agents_section, dict):
             return {}
         key = str(mode or "").strip()
+        defaults = agents_section.get("defaults", {})
+        resolved: Dict[str, Any] = {}
+        if isinstance(defaults, dict):
+            resolved = self._merge_nested(resolved, defaults)
         payload = agents_section.get(key, {})
-        return dict(payload) if isinstance(payload, dict) else {}
+        if isinstance(payload, dict):
+            resolved = self._merge_nested(resolved, payload)
+        return resolved
+
+    def get_agent_feature_flags(self) -> Dict[str, Any]:
+        flags_section = self.yaml_configs.get("agent_feature_flags", {})
+        if not isinstance(flags_section, dict):
+            return {}
+
+        resolved: Dict[str, Any] = {}
+        for key, meta in flags_section.items():
+            if not isinstance(meta, dict):
+                continue
+            env_name = str(meta.get("env") or "").strip()
+            default_value = meta.get("default")
+            raw = os.getenv(env_name) if env_name else None
+
+            if isinstance(default_value, bool):
+                if raw is None:
+                    resolved_value = bool(default_value)
+                else:
+                    normalized = raw.strip().lower()
+                    resolved_value = normalized in {"1", "true", "yes", "on"}
+            else:
+                resolved_value = raw if raw is not None else default_value
+
+            resolved[key] = {
+                "value": resolved_value,
+                "env": env_name or None,
+                "default": default_value,
+                "description": meta.get("description"),
+            }
+
+        return resolved
 
     # =============== YAML LOOKUPS ===============
 

@@ -7,6 +7,7 @@ import copy
 import json
 import os
 import re
+import time
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -586,7 +587,10 @@ class WebRetrieverAdapter(BaseToolAdapter):
             metadata["summary"] = "Web search disabled until GOOGLE_API_KEY or GEMINI_API_KEY is configured."
             metadata["preview_only"] = True
             metadata["error"] = "search_api_missing"
+            metadata["retryable"] = False
+            metadata["retryable_error_code"] = "missing_credentials"
             payload["error"] = "search_api_missing"
+            payload["retryable"] = False
             return ToolAdapterResult(name=self.name, status="skip", payload=payload, metadata=metadata)
 
         force_revision_refresh = bool(getattr(context, "revision_directive", None)) or bool(
@@ -604,10 +608,22 @@ class WebRetrieverAdapter(BaseToolAdapter):
             metadata["cache_hit"] = True
             metadata["preview_only"] = False
             metadata["snippets_count"] = len(cached_payload.get("snippets") or [])
+            metadata["latency_ms"] = cached_payload.get("latency_ms")
             payload.update(cached_payload)
             payload["query_terms"] = query_terms
             payload["ready"] = True
             payload.setdefault("from_cache", True)
+            if "latency_ms" not in payload:
+                payload["latency_ms"] = 0
+            if "agent_envelope" not in payload:
+                payload["agent_envelope"] = {
+                    "status": "reused",
+                    "query": payload.get("query") or base_query,
+                    "summary": payload.get("summary"),
+                    "snippets": payload.get("snippets"),
+                    "topics": payload.get("topics"),
+                    "from_cache": True,
+                }
             if self.is_topic_adapter:
                 payload.setdefault("topic_index", self._topic_index)
                 payload.setdefault("topic_total", self._topic_total)
@@ -618,6 +634,7 @@ class WebRetrieverAdapter(BaseToolAdapter):
                 if self._topic_position is not None:
                     metadata["topic_position"] = self._topic_position
             metadata["preview_keys"] = list(payload.keys())
+            metadata["agent_envelope"] = payload.get("agent_envelope")
             return ToolAdapterResult(name=self.name, status="completed", payload=payload, metadata=metadata)
 
         if force_revision_refresh:
@@ -630,22 +647,40 @@ class WebRetrieverAdapter(BaseToolAdapter):
             return ToolAdapterResult(name=self.name, status="queued", payload=payload, metadata=metadata)
 
         try:
+            start_time = time.perf_counter()
             search_result = await perform_response_search(
                 base_query,
                 session_id=context.session_id,
                 context=self._build_context(context),
                 topic_plans=[self._topic_plan] if self._topic_plan else None,
             )
+            elapsed_ms = int((time.perf_counter() - start_time) * 1000)
+            if getattr(search_result, "latency_ms", None) is None:
+                search_result.latency_ms = elapsed_ms
+
         except ResponseSearchError as exc:
             error_stage = getattr(exc, "stage", "unknown")
             metadata["summary"] = "Web search unavailable (Gemini search error)."
             metadata["preview_only"] = True
             metadata["error"] = str(exc)
             metadata["error_stage"] = error_stage
+            metadata["retryable_error_code"] = getattr(exc, "code", None) or f"search_{error_stage}"
+            metadata["retryable"] = bool(getattr(exc, "retryable", True))
             payload["error"] = str(exc)
             payload["error_stage"] = error_stage
+            payload["retryable"] = bool(getattr(exc, "retryable", True))
+            payload["agent_envelope"] = {
+                "status": "error",
+                "query": base_query,
+                "summary": None,
+                "error": str(exc),
+                "error_code": metadata["retryable_error_code"],
+                "retryable": metadata["retryable"],
+                "from_cache": False,
+            }
             existing_keys = metadata.get("preview_keys", list(payload.keys()))
             metadata["preview_keys"] = list(dict.fromkeys(list(existing_keys) + list(payload.keys())))
+            metadata["agent_envelope"] = payload["agent_envelope"]
             logger.warning("WebRetrieverAdapter search failed during %s: %s", error_stage, exc)
             return ToolAdapterResult(
                 name=self.name,
@@ -659,6 +694,8 @@ class WebRetrieverAdapter(BaseToolAdapter):
         result_payload["query_terms"] = query_terms
         result_payload["ready"] = True
         result_payload["from_cache"] = False
+        if search_result.latency_ms is not None:
+            result_payload["latency_ms"] = search_result.latency_ms
         if self.is_topic_adapter:
             result_payload.setdefault("search_topics", [self._topic_plan.query])
             result_payload["topic_index"] = self._topic_index
@@ -667,6 +704,8 @@ class WebRetrieverAdapter(BaseToolAdapter):
             result_payload["base_query"] = base_query
             if self._topic_position is not None:
                 result_payload["topic_position"] = self._topic_position
+        agent_envelope = search_result.to_agent_envelope(cached=False)
+        result_payload["agent_envelope"] = agent_envelope
         payload.update(result_payload)
         metadata["summary"] = search_result.summary or "Web search results ready."
         metadata["preview_only"] = False
@@ -685,6 +724,7 @@ class WebRetrieverAdapter(BaseToolAdapter):
             if self._topic_position is not None:
                 metadata["topic_position"] = self._topic_position
         metadata["preview_keys"] = list(payload.keys())
+        metadata["agent_envelope"] = agent_envelope
 
         cache_payload = dict(result_payload)
         cache_payload.setdefault("query", base_query)
@@ -910,6 +950,9 @@ class StockTrackerAdapter(BaseToolAdapter):
             metadata["summary"] = "Polygon client not configured; showing TradingView fallback."
             metadata["preview_only"] = False
             payload["ready"] = False
+            metadata["retryable"] = False
+            metadata["retryable_error_code"] = "polygon_not_configured"
+            payload["retryable"] = False
             return ToolAdapterResult(
                 name=self.name,
                 status="completed",
@@ -918,13 +961,17 @@ class StockTrackerAdapter(BaseToolAdapter):
             )
 
         symbol = tickers[0].upper()
+        start_time = time.perf_counter()
         try:
             snapshot = await fetch_daily_snapshot(symbol, client=client)
         except PolygonError as exc:
             error_message = str(exc)
             metadata["summary"] = f"Polygon error for {symbol}: {error_message}"
             metadata["error"] = error_message
+            metadata["retryable_error_code"] = "polygon_error"
+            metadata["retryable"] = True
             payload["error"] = error_message
+            payload["retryable"] = True
             return ToolAdapterResult(
                 name=self.name,
                 status="error",
@@ -932,6 +979,7 @@ class StockTrackerAdapter(BaseToolAdapter):
                 metadata=metadata,
             )
 
+        elapsed_ms = int((time.perf_counter() - start_time) * 1000)
         bars = snapshot.bars[-30:]
         formatted_bars = [
             {
@@ -985,6 +1033,8 @@ class StockTrackerAdapter(BaseToolAdapter):
         )
         metadata["preview_only"] = False
         metadata["preview_keys"] = sorted(set(metadata["preview_keys"]))
+        metadata["latency_ms"] = elapsed_ms
+        payload["latency_ms"] = elapsed_ms
 
         return ToolAdapterResult(
             name=self.name,

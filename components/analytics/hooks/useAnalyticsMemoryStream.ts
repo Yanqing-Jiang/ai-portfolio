@@ -2151,6 +2151,14 @@ const workflowDataRef = useRef<{
     if (lane) {
       entry.lane = lane;
     }
+    if (payload.tool) {
+      entry.tool = String(payload.tool);
+    }
+    if (payload.specialist) {
+      entry.specialist = String(payload.specialist);
+    } else if (payload.tool) {
+      entry.specialist = String(payload.tool);
+    }
     const reusedFlag = resolveReusedFlag(payload, payload.metadata);
     if (reusedFlag !== undefined) {
       entry.reused = reusedFlag;
@@ -4261,6 +4269,60 @@ const workflowDataRef = useRef<{
               parallelGroup
             );
           }
+          break;
+        }
+
+        case 'tool_call_delta':
+        case 'tool_call_arguments':
+        case 'agent_tool_complete': {
+          const toolCall = (eventData.tool_call ?? {}) as Record<string, any>;
+          const toolName =
+            coerceString(toolCall.name) ??
+            coerceString(toolCall.tool) ??
+            coerceString(toolCall.id) ??
+            'agent_tool';
+          const eventTimestamp = coerceString(eventData.ts) ?? stepInfo.ts ?? new Date().toISOString();
+          const syntheticMetadata: Record<string, any> = {};
+          const laneCandidate = resolveLane(eventData, toolCall, { lane: laneFromEvent });
+          if (laneCandidate) {
+            syntheticMetadata.lane = laneCandidate;
+          }
+          if (toolCall.sequence_number !== undefined && toolCall.sequence_number !== null) {
+            syntheticMetadata.sequence_number = toolCall.sequence_number;
+          }
+          if (toolCall.output_index !== undefined && toolCall.output_index !== null) {
+            syntheticMetadata.output_index = toolCall.output_index;
+          }
+          if (eventType === 'tool_call_delta' && toolCall.arguments_delta) {
+            syntheticMetadata.arguments_delta = toolCall.arguments_delta;
+          }
+          if (toolCall.arguments) {
+            syntheticMetadata.arguments = toolCall.arguments;
+          }
+          if (typeof toolCall.status === 'string') {
+            syntheticMetadata.status = toolCall.status;
+          }
+          const syntheticPayload = {
+            tool: toolName,
+            status:
+              eventType === 'tool_call_arguments' || eventType === 'agent_tool_complete'
+                ? 'completed'
+                : 'running',
+            ts: eventTimestamp,
+            metadata: syntheticMetadata,
+            details: {
+              arguments: toolCall.arguments,
+              arguments_delta: toolCall.arguments_delta,
+              status: toolCall.status,
+            },
+          };
+          recordToolCallEvent(syntheticPayload, {
+            ts: eventTimestamp,
+            elapsed_ms: stepInfo.elapsed_ms,
+            sequence,
+            parallel_group: parallelGroup,
+            tool_group: toolGroup ?? toolName,
+          });
           break;
         }
 

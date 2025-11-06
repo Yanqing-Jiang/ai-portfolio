@@ -19,10 +19,14 @@ from .chart_revision import (
     infer_chart_patch_from_query,
     is_analysis_revision_query,
     is_chart_revision_query,
+    MissingAnalysis,
+    MissingRevisionSnapshot,
+    RevisionContext,
 )
 from .instrumentation import emit_revision_lane, instrument_events
 from .revision_directive import RevisionDirective
 from analytics.services.response_search import generate_search_topics, has_search_api_key
+from .sequencer import PlannerSequencer, PlannerEventBus
 
 logger = logging.getLogger(__name__)
 
@@ -792,6 +796,18 @@ async def analytics_memory_workflow(
     analysis_text = (
         infer_analysis_revision_from_query(query) if analysis_revision_requested else None
     )
+    if analysis_revision_requested and session_id:
+        revision_snapshot_ready = True
+        try:
+            revision_ctx = await RevisionContext.load(session_id, repository=repository)
+            if not isinstance(revision_ctx.last_analysis, str) or not revision_ctx.last_analysis.strip():
+                revision_snapshot_ready = False
+        except (MissingRevisionSnapshot, MissingAnalysis):
+            revision_snapshot_ready = False
+        if not revision_snapshot_ready:
+            analysis_revision_requested = False
+            analysis_text = None
+            route = FollowUpRoute.FULL_PIPELINE
     analysis_focus = bool(analysis_revision_requested or analysis_text)
 
     factory = _get_flow_factory(selected)
@@ -1191,6 +1207,34 @@ async def analytics_memory_workflow(
         },
     }
     yield follow_up_event
+    sequencer: Optional[PlannerSequencer] = None
+    sequencer_state: Optional[Any] = None
+    emit_prefill_summary: Optional[bool] = None
+    if isinstance(flow_instance, SingleAgentController):
+        sequencer_state = await flow_instance._prepare_sequencer_state(
+            query,
+            session_id=session_id,
+        )
+        lane_refresh_config = dict(getattr(sequencer_state.ctx, "lane_refresh_required", {}) or {})
+        orchestrator = flow_instance.build_planner_orchestrator()
+        sequencer = PlannerSequencer(
+            orchestrator,
+            lane_refresh_required=lane_refresh_config,
+        )
+        emit_prefill_summary = None
+    elif isinstance(flow_instance, MultiAgentFlow):
+        sequencer_state = await flow_instance._prepare_sequencer_state(
+            query,
+            session_id=session_id,
+        )
+        lane_refresh_config = dict(getattr(sequencer_state.ctx, "lane_refresh_required", {}) or {})
+        orchestrator = flow_instance.build_planner_orchestrator()
+        sequencer = PlannerSequencer(
+            orchestrator,
+            lane_refresh_required=lane_refresh_config,
+        )
+        flow_instance.set_planner_event_bus(sequencer.event_bus)
+        emit_prefill_summary = None
     if should_instrument:
         label = selected
         async for event in instrument_events(
@@ -1198,6 +1242,9 @@ async def analytics_memory_workflow(
             query,
             session_id=session_id,
             flow_label=label,
+            sequencer=sequencer,
+            emit_prefill_summary=emit_prefill_summary,
+            sequencer_state=sequencer_state,
         ):
             yield event
         # Deferred revisions after initial build
@@ -1222,7 +1269,17 @@ async def analytics_memory_workflow(
             async for evt in gen3:
                 yield evt
     else:
-        async for event in flow_instance.events(query, session_id=session_id):
+        if sequencer is not None:
+            stream = flow_instance.events(
+                query,
+                session_id=session_id,
+                sequencer=sequencer,
+                emit_prefill_summary=emit_prefill_summary,
+                sequencer_state=sequencer_state,
+            )
+        else:
+            stream = flow_instance.events(query, session_id=session_id)
+        async for event in stream:
             yield event
         # Deferred revisions after initial build
         if defer_chart_revision and chart_patch:

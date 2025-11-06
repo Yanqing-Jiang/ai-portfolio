@@ -17,6 +17,7 @@ class Configs:
         self.database: Dict[str, Any] = {}
         self.semantic: Dict[str, Any] = {}
         self.agents: Dict[str, Any] = {}
+        self.agent_feature_flags: Dict[str, Any] = {}
 
     def load(self) -> "Configs":
         def _load(name: str) -> Dict[str, Any]:
@@ -42,7 +43,9 @@ class Configs:
             self.database = database_fallback
             self.semantic = database_fallback if isinstance(database_fallback, dict) else {}
 
-        self.agents = _load("agents").get("agents", {})
+        agents_blob = _load("agents")
+        self.agents = agents_blob.get("agents", {}) if isinstance(agents_blob, dict) else {}
+        self.agent_feature_flags = agents_blob.get("feature_flags", {}) if isinstance(agents_blob, dict) else {}
 
         return self
 

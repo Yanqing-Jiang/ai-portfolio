@@ -39,6 +39,8 @@ def get_runtime() -> AnalyticsRuntime:
     extra = {
         "responses_reasoning_effort": os.getenv("SUPERVISOR_REASONING_EFFORT", "low"),
         "analytics_mode": os.getenv("ANALYTICS_MODE", "flow"),
+        "supervisor_beta_enabled": os.getenv("ANALYTICS_SUPERVISOR_BETA_ENABLED", "false").lower() in {"1", "true", "yes", "on"},
+        "delegation_policy_version": os.getenv("AGENTS_DELEGATION_POLICY_VERSION", "baseline"),
     }
     return AnalyticsRuntime(
         configs=CONFIGS,

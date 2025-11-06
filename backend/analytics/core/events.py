@@ -160,6 +160,64 @@ class EventEmitter:
         return StreamEvent("complete", step, data=data).to_dict()
 
     @staticmethod
+    def agent_turn_start(
+        role: str,
+        *,
+        lane: Optional[str] = None,
+        parallel_group: Optional[str] = None,
+        retry_count: Optional[int] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        data: Dict[str, Any] = {"role": role}
+        if lane:
+            data["lane"] = lane
+        if parallel_group:
+            data["parallel_group"] = parallel_group
+        if retry_count is not None:
+            data["retry_count"] = retry_count
+        if metadata:
+            data.update(metadata)
+        return StreamEvent("agent_turn_start", role, data=data).to_dict()
+
+    @staticmethod
+    def agent_turn_end(
+        role: str,
+        *,
+        lane: Optional[str] = None,
+        summary: Optional[Dict[str, Any]] = None,
+        elapsed_ms: Optional[int] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        data: Dict[str, Any] = {"role": role}
+        if lane:
+            data["lane"] = lane
+        if summary:
+            data["summary"] = summary
+        if elapsed_ms is not None:
+            data["elapsed_ms"] = elapsed_ms
+        if metadata:
+            data.update(metadata)
+        return StreamEvent("agent_turn_end", role, data=data).to_dict()
+
+    @staticmethod
+    def tool_retry(
+        tool: str,
+        *,
+        attempt: int,
+        reason: Optional[str] = None,
+        error_code: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        data: Dict[str, Any] = {"tool": tool, "attempt": attempt}
+        if reason:
+            data["reason"] = reason
+        if error_code:
+            data["error_code"] = error_code
+        if metadata:
+            data.update(metadata)
+        return StreamEvent("tool_retry", tool, data=data).to_dict()
+
+    @staticmethod
     def session_started(session_id: str) -> Dict[str, Any]:
         """
         Emit a session start event.

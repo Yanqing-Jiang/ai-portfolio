@@ -39,6 +39,8 @@ export interface AgentTurnTelemetry {
   summary?: Record<string, any> | string;
   sequence?: number;
   parallelGroup?: string;
+  tool?: string;
+  specialist?: string;
   latencyBudgetMs?: number;
   concurrencyLimit?: number;
   outputArtifacts?: string[];

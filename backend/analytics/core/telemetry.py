@@ -101,6 +101,9 @@ def tool_iteration(
     details: Optional[Dict[str, Any]] = None,
     session_id: Optional[str] = None,
     flow: Optional[str] = None,
+    agents_run_id: Optional[str] = None,
+    agent_role: Optional[str] = None,
+    retry_count: Optional[int] = None,
 ) -> None:
     payload = _base_payload("tool_iteration", session_id=session_id, flow=flow)
     payload.update(
@@ -113,6 +116,12 @@ def tool_iteration(
     )
     if details:
         payload["details"] = details
+    if agents_run_id:
+        payload["agents_run_id"] = agents_run_id
+    if agent_role:
+        payload["agent_role"] = agent_role
+    if retry_count is not None:
+        payload["retry_count"] = retry_count
     _emit(payload)
 
 def tool_parallelism(
@@ -136,6 +145,7 @@ def analysis_chunk(
     role: Optional[str] = None,
     session_id: Optional[str] = None,
     flow: Optional[str] = None,
+    agents_run_id: Optional[str] = None,
 ) -> None:
     payload = _base_payload("analysis_chunk", session_id=session_id, flow=flow)
     payload.update(
@@ -145,6 +155,8 @@ def analysis_chunk(
             "chars": len(chunk or ""),
         }
     )
+    if agents_run_id:
+        payload["agents_run_id"] = agents_run_id
     _emit(payload)
 
 
@@ -158,6 +170,9 @@ def agent_handoff(
     session_id: Optional[str] = None,
     flow: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
+    agents_run_id: Optional[str] = None,
+    agent_role: Optional[str] = None,
+    retry_count: Optional[int] = None,
 ) -> None:
     payload = _base_payload('agent_handoff', session_id=session_id, flow=flow)
     payload.update(
@@ -171,6 +186,12 @@ def agent_handoff(
     )
     if metadata:
         payload['metadata'] = metadata
+    if agents_run_id:
+        payload['agents_run_id'] = agents_run_id
+    if agent_role:
+        payload['agent_role'] = agent_role
+    if retry_count is not None:
+        payload['retry_count'] = retry_count
     _emit(payload)
 
 
@@ -221,6 +242,32 @@ def policy_decision(
     _emit(payload)
 
 
+def backpressure_event(
+    *,
+    lane: Optional[str],
+    group: Optional[str],
+    pending: int,
+    running: int,
+    limit: Optional[int],
+    session_id: Optional[str] = None,
+    flow: Optional[str] = None,
+    duration_ms: Optional[int] = None,
+) -> None:
+    payload = _base_payload("backpressure_event", session_id=session_id, flow=flow)
+    payload.update(
+        {
+            "lane": lane,
+            "group": group,
+            "pending": pending,
+            "running": running,
+            "limit": limit,
+        }
+    )
+    if duration_ms is not None:
+        payload["duration_ms"] = duration_ms
+    _emit(payload)
+
+
 def step_timing(
     *,
     step: str,
@@ -268,20 +315,31 @@ def agent_run(
     flow: Optional[str],
     run_id: Optional[str],
     trace_id: Optional[str],
+    manager_trace_id: Optional[str] = None,
     model: Optional[str],
     tool_attempts: Mapping[str, int],
     retry_counts: Mapping[str, int],
+    parallel_groups: Optional[Mapping[str, Any]] = None,
+    delegation_policy_version: Optional[str] = None,
+    decisions: Optional[Iterable[Mapping[str, Any]]] = None,
 ) -> None:
     payload = _base_payload("agent_run", session_id=session_id, flow=flow)
     payload.update(
         {
             "run_id": run_id,
             "trace_id": trace_id,
+            "manager_trace_id": manager_trace_id,
             "model": model,
             "tool_attempts": dict(tool_attempts or {}),
             "retry_counts": dict(retry_counts or {}),
         }
     )
+    if parallel_groups:
+        payload["parallel_groups"] = dict(parallel_groups)
+    if delegation_policy_version:
+        payload["delegation_policy_version"] = delegation_policy_version
+    if decisions:
+        payload["delegation_decisions"] = [dict(decision) for decision in decisions]
     _emit(payload)
 
 
