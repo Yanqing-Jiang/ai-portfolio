@@ -277,7 +277,16 @@ async def test_revision_rejected_when_artifacts_missing():
 
     follow_up_events = [evt for evt in events if evt.get("event") == "follow_up_route"]
     assert follow_up_events, "Expected follow_up_route event when revisions cannot run"
-    assert follow_up_events[0].get("data", {}).get("route") == "full_pipeline"
+    route_payload = follow_up_events[0].get("data", {})
+    assert route_payload.get("route") == "cannot_revise"
+    banner = route_payload.get("banner") or {}
+    assert banner.get("reason") == "missing_analysis"
+    assert not _has_forbidden_events(events), "Revision rejection should not trigger pipeline lanes"
+
+    stored = await repo.load(session_id)
+    assert stored is not None
+    assert stored.messages, "System message should record the revision skip"
+    assert "Revision skipped" in stored.messages[-1].get("content", "")
 
     await repo.delete(session_id)
     await close_session_state_repository()

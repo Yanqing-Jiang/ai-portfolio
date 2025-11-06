@@ -175,8 +175,8 @@ class UnifiedResponsesClient:
         if not self.api_key:
             raise ValueError("OpenAI API key not found")
 
-        # Initialize async client for Responses API
-        self.client = AsyncOpenAI(api_key=self.api_key)
+        # Initialize async client for Responses API with capped retries
+        self.client = AsyncOpenAI(api_key=self.api_key, max_retries=3)
 
         # Session management
         self.previous_response_id: Optional[str] = None
