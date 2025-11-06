@@ -145,6 +145,59 @@ type ChartGranularity = 'annual' | 'quarterly';
 
 const SLOT_LABEL_CACHE = new Map<string, string>();
 
+const REVISION_ACTION_WORDS = [
+  'revise',
+  'revision',
+  'update',
+  'change',
+  'modify',
+  'tweak',
+  'adjust',
+  'convert',
+  'switch',
+  'turn',
+  'redo',
+  'refresh',
+  'rewrite',
+] as const;
+
+const CHART_REVISION_ANCHORS = ['chart', 'graph', 'visualization', 'visualisation', 'plot'] as const;
+const ANALYSIS_REVISION_ANCHORS = ['analysis', 'summary', 'narrative', 'insight', 'insights', 'writeup'] as const;
+const ANALYSIS_REVISION_MARKERS = [
+  'analysis focus',
+  'analysis:',
+  'analysis ->',
+  'rewrite the analysis',
+  'redo the analysis',
+  'update the analysis',
+  'revise the analysis',
+  'summary:',
+  'summary ->',
+  'follow-up',
+] as const;
+
+const looksLikeRevisionFollowUp = (query: string): boolean => {
+  const normalized = query.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+
+  if (REVISION_ACTION_WORDS.some((word) => normalized.includes(word))) {
+    if (CHART_REVISION_ANCHORS.some((anchor) => normalized.includes(anchor))) {
+      return true;
+    }
+    if (ANALYSIS_REVISION_ANCHORS.some((anchor) => normalized.includes(anchor))) {
+      return true;
+    }
+  }
+
+  if (ANALYSIS_REVISION_MARKERS.some((marker) => normalized.includes(marker))) {
+    return true;
+  }
+
+  return false;
+};
+
 const formatSlotLabel = (slot: string): string => {
   if (!slot) {
     return 'Answer';
@@ -505,7 +558,24 @@ export const useAnalyticsMemoryStream = (
   const hasExplicitResultContentRef = useRef<boolean>(false);
   const finalizationMessageRef = useRef<string | null>(null);
 
-const buildResultMessageFields = () => ({
+  const storageKey = typeof window !== 'undefined' ? `analytics:lastSessionId:${flow}` : null;
+
+  useEffect(() => {
+    if (!storageKey) {
+      return;
+    }
+    try {
+      const stored = window.sessionStorage.getItem(storageKey);
+      if (stored && !sessionId && !lastSessionIdRef.current) {
+        lastSessionIdRef.current = stored;
+        setSessionId(stored);
+      }
+    } catch {
+      // Ignore storage errors (e.g., server-side rendering or private mode).
+    }
+  }, [storageKey, sessionId]);
+
+  const buildResultMessageFields = () => ({
     flowMode: workflowDataRef.current.flowMode ?? flow,
     analysis: workflowDataRef.current.analysis || workflowDataRef.current.streamingText,
     progressiveAnalysis: workflowDataRef.current.progressiveAnalysis,
@@ -2493,6 +2563,19 @@ const workflowDataRef = useRef<{
       await new Promise(resolve => setTimeout(resolve, 100));
     }
 
+    const activeSessionId = sessionId || lastSessionIdRef.current;
+    if (looksLikeRevisionFollowUp(trimmed) && !activeSessionId) {
+      const message =
+        'Revision requests need an existing analysis run to revise. Start a new analysis first, then try the revision.';
+      streamHook.setError(message);
+      streamHook.setCurrentStatus(`Error: ${message}`);
+      addChatMessage({
+        type: 'assistant',
+        content: message,
+      });
+      return;
+    }
+
     const usageResponse = await apiService.countUserInput({ scope: 'next-gen-analytics-agent' });
     if (!usageResponse.success) {
       const errorMessage = usageResponse.error || 'Rate limit exceeded. Please try again later.';
@@ -2511,7 +2594,7 @@ const workflowDataRef = useRef<{
       content: trimmed,
     });
 
-    const activeSessionId = sessionId || lastSessionIdRef.current;
+    
     const hadResult = resultSentRef.current;
     const isFollowUp = Boolean(hadResult && activeSessionId);
     const focusCandidate = extractAnalysisFocus(trimmed);
@@ -2739,6 +2822,13 @@ const workflowDataRef = useRef<{
             if (nextSessionId) {
               lastSessionIdRef.current = nextSessionId;
               setSessionId((prev) => (prev === nextSessionId ? prev : nextSessionId));
+              if (storageKey) {
+                try {
+                  window.sessionStorage.setItem(storageKey, nextSessionId);
+                } catch {
+                  // Ignore storage errors.
+                }
+              }
             }
           }
           break;
@@ -5092,7 +5182,14 @@ const workflowDataRef = useRef<{
     if (!preserveSession) {
       setSessionId('');
       lastSessionIdRef.current = '';
-    revisionContextRef.current = { id: undefined, lanes: [], focus: undefined };
+      if (storageKey) {
+        try {
+          window.sessionStorage.removeItem(storageKey);
+        } catch {
+          // Best-effort cleanup.
+        }
+      }
+      revisionContextRef.current = { id: undefined, lanes: [], focus: undefined };
       revisionModeRef.current = 'none';
     }
     setPendingClarification(null);
