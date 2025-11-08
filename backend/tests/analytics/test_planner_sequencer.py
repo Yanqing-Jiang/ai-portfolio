@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Any, AsyncGenerator, Dict, Iterable, List, Optional, Tuple
 
 import pytest
@@ -182,13 +183,30 @@ async def test_optional_lanes_skipped_when_not_required() -> None:
     assert orchestrator.run_counts["web"] == 0
     assert orchestrator.run_counts["market"] == 0
 
-    status_map = {
-        entry["data"]["lane"]: entry["data"]["status"] for entry in lane_transitions
-    }
-    assert status_map["web"] == LANE_STATUS_SKIPPED
-    assert status_map["market"] == LANE_STATUS_SKIPPED
+    lane_states = sequencer.lane_presentations()
+    assert lane_states.get("web") == "reused"
+    assert lane_states.get("market") == "reused"
     assert orchestrator.reused_map["web"] is True
     assert orchestrator.reused_map["market"] is True
+
+
+@pytest.mark.asyncio
+async def test_lane_reuse_event_emitted_for_skipped_optional_lanes() -> None:
+    orchestrator = FakeOrchestrator(web_events=0, market_events=0)
+    recorded: List[Dict[str, Any]] = []
+    sequencer = PlannerSequencer(
+        orchestrator,
+        lane_refresh_required={"web": False, "market": False},
+        emit=recorded.append,
+    )
+
+    async for _ in sequencer.run():
+        pass
+
+    reuse_events = [event for event in recorded if event.get("event") == "lane_reused"]
+    lanes_reported = {event.get("data", {}).get("lane") for event in reuse_events}
+    assert {"web", "market"}.issubset(lanes_reported)
+    assert all(event.get("data", {}).get("source") == "sequencer" for event in reuse_events)
 
 
 @pytest.mark.asyncio
@@ -238,3 +256,66 @@ def test_retry_callbacks_invoked() -> None:
     assert recorded == [
         ("sql", 2, "tool_retry", "SQL_TIMEOUT", {"tool": "sql_generation"})
     ]
+
+
+def test_abort_pending_lanes_marks_states_skipped() -> None:
+    orchestrator = FakeOrchestrator()
+    sequencer = PlannerSequencer(orchestrator)
+    sequencer.prefill_lane_states({"sql": "pending", "web": "pending"})
+    cancelled = sequencer.abort_pending_lanes(reason="restart")
+    assert {"sql", "web"}.issubset(set(cancelled))
+    assert sequencer._lane_states["sql"].status == LANE_STATUS_SKIPPED  # type: ignore[attr-defined]
+    assert sequencer._lane_states["web"].status == LANE_STATUS_SKIPPED  # type: ignore[attr-defined]
+
+
+def test_restart_aborts_optional_lanes() -> None:
+    orchestrator = FakeOrchestrator()
+    sequencer = PlannerSequencer(orchestrator)
+    # Simulate in-flight optional lanes.
+    sequencer._start_lane("web")  # type: ignore[attr-defined]
+    sequencer._start_lane("market")  # type: ignore[attr-defined]
+
+    cancelled = sequencer.abort_pending_lanes(reason="restart")
+    cancelled_set = set(cancelled)
+    assert {"web", "market"}.issubset(cancelled_set)
+    lane_states = sequencer.lane_presentations()
+    assert lane_states["web"] == "reused"
+    assert lane_states["market"] == "reused"
+    assert orchestrator.reused_map["web"] is True
+    assert orchestrator.reused_map["market"] is True
+
+
+class _SqlReadyOrchestrator(FakeOrchestrator):
+    async def run_sql_stage(self) -> AsyncGenerator[Dict[str, Any], None]:
+        self._register_call("sql")
+        yield {"event": "sql_ready", "data": {"lane": "sql", "reused": True}}
+        # Simulate planner work that would normally follow sql_ready.
+        await asyncio.sleep(1.5)
+        yield {"event": "sql_after", "data": {"lane": "sql"}}
+
+
+@pytest.mark.asyncio
+async def test_parallel_lanes_fast_path_triggers_before_sql_stage_completes() -> None:
+    orchestrator = _SqlReadyOrchestrator(web_events=1, market_events=0)
+    sequencer = PlannerSequencer(orchestrator)
+    events: List[Dict[str, Any]] = []
+    timestamps: List[float] = []
+    lane_reuse_times: List[float] = []
+
+    def _capture_reuse(event: Dict[str, Any]) -> None:
+        if event.get("event") == "lane_reused":
+            lane_reuse_times.append(time.perf_counter())
+
+    sequencer.event_bus.subscribe(_capture_reuse)
+
+    async for event in sequencer.run():
+        events.append(event)
+        timestamps.append(time.perf_counter())
+        if event.get("event") == "sql_ready":
+            sequencer.mark_lane_complete("sql", result=event.get("data"), success=True, reused=True)
+
+    sql_ready_idx = next(idx for idx, evt in enumerate(events) if evt.get("event") == "sql_ready")
+    assert lane_reuse_times, "expected lane_reused telemetry to fire"
+    assert (
+        lane_reuse_times[0] - timestamps[sql_ready_idx] < 0.2
+    ), "lane_reused should emit within 200ms of sql_ready"

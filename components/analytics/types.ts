@@ -31,6 +31,15 @@ export interface ToolCallTelemetry {
   reused?: boolean;
 }
 
+export interface LaneReuseNotice {
+  lane: string;
+  message: string;
+  reason?: string;
+  ts?: string;
+  ageSeconds?: number;
+  source?: string;
+}
+
 export interface AgentTurnTelemetry {
   role: string;
   status: 'start' | 'complete' | string;

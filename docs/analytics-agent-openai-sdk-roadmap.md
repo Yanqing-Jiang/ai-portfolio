@@ -9,7 +9,16 @@ This roadmap tracks the end-to-end migration of the analytics planner to the Ope
 - Follow the manager-as-tool orchestration pattern so one supervisor coordinates specialists without relinquishing control.
 - Apply least-privilege practices to every specialist and run intent classification plus clarification before any fan-out.
 
-## Delivery Status (Complete - November 6, 2025)
+### Telemetry parity examples (Iteration 7)
+- Supervisor `progress` events now emit both `agent_turn_*` and `agent_tool_*` pairs. Example:
+  ```json
+  {"event":"agent_tool_call","data":{"tool":"sql_generator","role":"sql_specialist","lane":"sql","parallel_group":"sql_web","status":"start","tool_call":{"id":"sql_generator-1","name":"sql_generator","lane":"sql","status":"start","sequence_number":1}}}
+  ```
+  and
+  ```json
+  {"event":"agent_tool_complete","data":{"tool":"sql_generator","role":"sql_specialist","lane":"sql","status":"completed","elapsed_ms":420,"tool_call":{"id":"sql_generator-1","name":"sql_generator","lane":"sql","status":"completed","sequence_number":1}}}
+  ```
+- These payloads reuse the single-agent schema so `useAnalyticsMemoryStream` renders identical tool cards regardless of whether a supervisor delegates the work or the single agent runs solo.## Delivery Status (Complete - November 6, 2025)
 ### Iteration 1 (November 4, 2025)
 - Added `backend/config/schemas/agents.yaml` with first-class instruction, retry, and model metadata for `single_agent` and `supervisor` modes.
 - Extended `backend/analytics/core/config.py` and `core/config_store.py#get_agent_mode_config` to hydrate Agents SDK manifests without hardcoded strings.

@@ -6,6 +6,15 @@ import { ProcessStep, FlowVisualTheme } from '../types';
 const MAX_DETAIL_ITEMS = 4;
 const MAX_THOUGHTS = 4;
 
+export interface ToolBadgeMeta {
+  id: string;
+  tool: string;
+  laneLabel?: string;
+  statusLabel?: string;
+  elapsedLabel?: string;
+  reused?: boolean;
+}
+
 const LANE_LABELS: Record<string, string> = {
   overview: 'Overview',
   planner: 'Planner Agent',
@@ -36,7 +45,7 @@ const LANE_BADGE_CLASS: Record<string, string> = {
 
 const defaultLaneBadge = 'bg-gray-900/60 text-gray-200 border border-gray-700/40';
 
-interface ProcessNodeData {
+export interface ProcessNodeData {
   step: ProcessStep;
   phase: 'analysis' | 'planning' | 'execution' | 'synthesis';
   theme: FlowVisualTheme;
@@ -58,6 +67,7 @@ interface ProcessNodeData {
   finalAnswerOnly?: boolean;
   missingComponents?: string[];
   analysisAvailable?: boolean;
+  toolBadges?: ToolBadgeMeta[];
 }
 
 const statusAccent = (status: ProcessStep['status']) => {
@@ -124,6 +134,7 @@ export const ProcessNode = memo<NodeProps<ProcessNodeData>>(({ data, selected })
     finalAnswerOnly,
     missingComponents,
     analysisAvailable,
+    toolBadges,
   } = data;
 
   const laneKey = lane ?? parallelGroup;
@@ -307,6 +318,26 @@ export const ProcessNode = memo<NodeProps<ProcessNodeData>>(({ data, selected })
         {!latestThinking && step.thinking?.length ? (
           <p className="mt-2 text-xs text-gray-300">{step.thinking[0]}</p>
         ) : null}
+
+        {toolBadges && toolBadges.length > 0 && (
+          <div className="mt-3 flex flex-wrap gap-2" data-testid="process-node-tool-badges">
+            {toolBadges.map((badge) => (
+              <span
+                key={badge.id}
+                className={`flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${
+                  badge.reused ? 'border-emerald-400/50 bg-emerald-500/10 text-emerald-100' : 'border-sky-400/40 bg-sky-500/15 text-sky-100'
+                }`}
+                data-lane={badge.laneLabel?.toLowerCase() ?? 'tool'}
+              >
+                <span className="font-semibold text-[10px]">{badge.tool}</span>
+                {badge.laneLabel && <span className="text-gray-200">• {badge.laneLabel}</span>}
+                {badge.statusLabel && <span className="text-gray-300">{badge.statusLabel}</span>}
+                {badge.elapsedLabel && <span className="text-gray-300">({badge.elapsedLabel})</span>}
+                {badge.reused && <span className="text-emerald-200">cached</span>}
+              </span>
+            ))}
+          </div>
+        )}
 
         <div className="mt-3 flex flex-wrap items-center gap-3 text-[11px] text-gray-400">
           {timestampLabel && <span>{timestampLabel}</span>}

@@ -17,6 +17,8 @@ Document the UI contract for streaming analytics runs now that OpenAI Agents pow
 1. **Lane Pill States**
    - Use sequencer presentation states: `queued` (initial for chart/analysis), `running`, `fresh`, `reused`, `error`.
    - When supervisor retries a lane, increment badge using `retry_count`.
+   - When a `lane_reused` event includes `age_seconds` / `fast_path_latency_ms`, render the pill with a tooltip such as “Web lane reused – cached 64 s ago (420 ms fast-path).”
+   - WorkflowCanvas now surfaces those pills in the canvas header via laneReuseNotices and exposes data-screenshot-target="workflow-canvas" so GTM can capture the live state.
 2. **Supervisor Timeline**
    - Display `agent_turn_start` / `agent_turn_end` entries in the modal timeline with specialist name, tool, and elapsed_ms.
    - Highlight retries by comparing consecutive `agent_turn_start` events with the same `lane`.
@@ -37,6 +39,9 @@ Document the UI contract for streaming analytics runs now that OpenAI Agents pow
   1. Retrieve session snapshot via `scripts/dump_agents_stream.py --session <id>`.
   2. Review `agent_run` telemetry for run_id and trace_id correlation.
   3. If supervisor stalled, reset lane states using `/admin/sessions/<id>/reset`.
+
+## Reference Asset
+- `docs/design/workflow-canvas-20251114.svg` documents the new header (agent badge, lane reuse pill, redirect banner) plus the planner ? tool card ? analysis chain so GTM can cross-check screenshots against spec.
 
 ## References
 - `docs/analytics-agent-openai-sdk-roadmap.md`

@@ -117,6 +117,32 @@ class PlannerEventBus:
             data["reason"] = reason
         self.publish(payload)
 
+    def emit_lane_reused(
+        self,
+        *,
+        lane: str,
+        reason: Optional[str] = None,
+        metadata: Optional[Mapping[str, Any]] = None,
+    ) -> None:
+        payload: SequencerEvent = {
+            "event": "lane_reused",
+            "data": {
+                "lane": lane,
+                "reused": True,
+                "status": "reused",
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "source": "sequencer",
+            },
+        }
+        data = payload["data"]
+        if reason:
+            data["reason"] = reason
+        if metadata:
+            for key, value in metadata.items():
+                if value is not None:
+                    data[key] = value
+        self.publish(payload)
+
     def emit_lane_retry(
         self,
         *,
@@ -180,7 +206,7 @@ class PlannerSequencer:
             )
         )
         self._lane_refresh_required: Dict[str, bool] = {
-            lane: bool(flag)
+            str(lane or "").strip().lower(): bool(flag)
             for lane, flag in (lane_refresh_required or {}).items()
         }
         optional = set(getattr(orchestrator, "optional_lanes", DEFAULT_OPTIONAL_LANES))
@@ -194,6 +220,8 @@ class PlannerSequencer:
                 required = bool(self._lane_refresh_required.get(lane, True))
             self._lane_states[lane] = LaneState(name=lane, required=required)
             self._lane_presentations[lane] = "pending"
+            if lane in optional and not required:
+                self._skip_lane(lane, reason="prefill_reuse")
         self._lane_dependencies: Dict[str, Tuple[str, ...]] = {
             "sql": ("intent",),
             "web": ("sql",),
@@ -203,6 +231,10 @@ class PlannerSequencer:
         self._retry_callbacks: List[RetryCallback] = []
         if self._lane_refresh_required:
             self.update_lane_requirements(self._lane_refresh_required, emit=False)
+        self._parallel_lane_queue: Optional[asyncio.Queue[Optional[SequencerEvent]]] = None
+        self._parallel_lane_task: Optional[asyncio.Task[None]] = None
+        self._parallel_lane_started = False
+        self._parallel_fanout_enabled = False
 
     @property
     def event_bus(self) -> PlannerEventBus:
@@ -339,6 +371,31 @@ class PlannerSequencer:
             state.success = bool(success)
         if error is not None:
             state.error = error
+        lane_is_running = state.status == LANE_STATUS_RUNNING
+        fast_path_ready = (
+            lane_is_running
+            and not state.completed
+            and normalized == "sql"
+            and reused is True
+        )
+        should_finalize = (
+            not state.completed
+            and (
+                state.status in {LANE_STATUS_PENDING, LANE_STATUS_SKIPPED}
+                or fast_path_ready
+            )
+            and (reused is True or success is not None or error is not None)
+        )
+        if should_finalize:
+            resolved_success = True if success is None else bool(success)
+            self._finish_lane(
+                normalized,
+                success=resolved_success,
+                error=error,
+                reused=reused if reused is not None else state.reused,
+            )
+            return
+        self._update_presentation(normalized)
 
     def lane_snapshot(self) -> Dict[str, Dict[str, Any]]:
         """
@@ -414,17 +471,25 @@ class PlannerSequencer:
         Execute the sequencer, yielding events emitted by the orchestrator while
         preserving the canonical ordering and lane dependencies.
         """
-        async for event in self._run_intent_stage():
-            yield event
+        self._initialize_parallel_fanout_state()
+        try:
+            async for event in self._run_intent_stage():
+                yield event
 
-        async for event in self._run_sql_stage():
-            yield event
+            # If SQL was reused during prefill, trigger accessory fan-out immediately.
+            self._maybe_start_parallel_fanout("sql")
 
-        async for event in self._kickoff_parallel_lanes():
-            yield event
+            async for event in self._stream_sql_stage_with_parallel():
+                yield event
 
-        async for event in self._await_analysis_stage():
-            yield event
+            async for queued in self._drain_parallel_lane_events(block=True):
+                yield queued
+            await self._wait_for_parallel_lane_task()
+
+            async for event in self._await_analysis_stage():
+                yield event
+        finally:
+            await self._cleanup_parallel_fanout()
 
     async def _run_intent_stage(self) -> AsyncGenerator[SequencerEvent, None]:
         lane = "intent"
@@ -450,6 +515,13 @@ class PlannerSequencer:
         else:
             self._finish_lane(lane, success=True)
 
+    async def _stream_sql_stage_with_parallel(self) -> AsyncGenerator[SequencerEvent, None]:
+        async for event in self._run_sql_stage():
+            yield event
+            await asyncio.sleep(0)
+            async for queued in self._drain_parallel_lane_events(block=False):
+                yield queued
+
     async def _kickoff_parallel_lanes(self) -> AsyncGenerator[SequencerEvent, None]:
         lanes: Tuple[Tuple[str, Callable[[], AsyncGenerator[SequencerEvent, None]]], ...] = (
             ("web", self._orchestrator.run_web_stage),
@@ -466,6 +538,7 @@ class PlannerSequencer:
                 await queue.put(None)
 
         tasks = [asyncio.create_task(_drain_lane(lane, runner)) for lane, runner in lanes]
+        gather_results: List[Any] = []
         finished = 0
         try:
             while finished < len(tasks):
@@ -478,7 +551,10 @@ class PlannerSequencer:
             for task in tasks:
                 if not task.done():
                     task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
+            gather_results = await asyncio.gather(*tasks, return_exceptions=True)
+        for result in gather_results:
+            if isinstance(result, BaseException):
+                raise result
 
     async def _await_analysis_stage(self) -> AsyncGenerator[SequencerEvent, None]:
         lane = "analysis"
@@ -525,6 +601,111 @@ class PlannerSequencer:
         else:
             self._finish_lane(lane, success=True)
 
+    def _initialize_parallel_fanout_state(self) -> None:
+        self._cancel_parallel_lane_task()
+        self._parallel_fanout_enabled = True
+        self._parallel_lane_started = False
+        self._parallel_lane_queue = None
+        self._parallel_lane_task = None
+
+    def _maybe_start_parallel_fanout(self, lane: str) -> None:
+        if lane != "sql":
+            return
+        if not self._parallel_fanout_enabled or self._parallel_lane_started:
+            return
+        state = self._lane_states.get("sql")
+        if state is None or not state.completed:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # Outside an event loop (e.g., during prefill); defer fan-out.
+            return
+        queue: asyncio.Queue[Optional[SequencerEvent]] = asyncio.Queue()
+        self._parallel_lane_queue = queue
+
+        async def _fanout() -> None:
+            try:
+                async for event in self._kickoff_parallel_lanes():
+                    await queue.put(event)
+            finally:
+                if self._parallel_lane_queue is queue:
+                    try:
+                        await queue.put(None)
+                    except asyncio.CancelledError:
+                        pass
+
+        self._parallel_lane_task = loop.create_task(_fanout())
+        self._parallel_lane_started = True
+
+    async def _drain_parallel_lane_events(
+        self,
+        *,
+        block: bool,
+    ) -> AsyncGenerator[SequencerEvent, None]:
+        while True:
+            event = await self._pop_parallel_lane_event(block=block)
+            if event is None:
+                if block and self._parallel_lane_queue is not None:
+                    continue
+                break
+            yield event
+
+    async def _pop_parallel_lane_event(self, *, block: bool) -> Optional[SequencerEvent]:
+        queue = self._parallel_lane_queue
+        if queue is None:
+            return None
+        if block:
+            item = await queue.get()
+        else:
+            try:
+                item = queue.get_nowait()
+            except asyncio.QueueEmpty:
+                return None
+        if item is None:
+            if self._parallel_lane_queue is queue:
+                self._parallel_lane_queue = None
+            return None
+        return item
+
+    async def _wait_for_parallel_lane_task(self) -> None:
+        task = self._parallel_lane_task
+        if task is None:
+            return
+        self._parallel_lane_task = None
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    async def _cleanup_parallel_fanout(self) -> None:
+        task = self._parallel_lane_task
+        self._parallel_lane_task = None
+        self._parallel_lane_queue = None
+        self._parallel_lane_started = False
+        self._parallel_fanout_enabled = False
+        if task is None:
+            return
+        if not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        else:
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    def _cancel_parallel_lane_task(self) -> None:
+        task = self._parallel_lane_task
+        if task and not task.done():
+            task.cancel()
+        self._parallel_lane_task = None
+        self._parallel_lane_queue = None
+        self._parallel_lane_started = False
+        self._parallel_fanout_enabled = False
     async def _decorate_stream(
         self,
         runner: Callable[[], AsyncGenerator[SequencerEvent, None]],
@@ -593,6 +774,12 @@ class PlannerSequencer:
         state = self._lane_states.get(lane)
         if state is None:
             return
+        if state.completed and state.status in {
+            LANE_STATUS_COMPLETED,
+            LANE_STATUS_FAILED,
+            LANE_STATUS_SKIPPED,
+        }:
+            return
         state.completed = True
         state.success = success
         state.error = error
@@ -615,6 +802,14 @@ class PlannerSequencer:
             reused=reused,
         )
         self._update_presentation(lane)
+        presentation = self._lane_presentations.get(lane)
+        if state.reused and success:
+            self._event_bus.emit_lane_reused(
+                lane=lane,
+                reason=error or "cached_reuse",
+                metadata={"presentation": presentation, "lane_status": state.status},
+            )
+        self._maybe_start_parallel_fanout(lane)
 
     def _skip_lane(self, lane: str, *, reason: str = "cached") -> None:
         state = self._lane_states.get(lane)
@@ -643,6 +838,23 @@ class PlannerSequencer:
             reason=reason,
         )
         self._update_presentation(lane)
+        presentation = self._lane_presentations.get(lane)
+        self._event_bus.emit_lane_reused(
+            lane=lane,
+            reason=reason,
+            metadata={"presentation": presentation, "lane_status": state.status},
+        )
+        self._maybe_start_parallel_fanout(lane)
+
+    def abort_pending_lanes(self, reason: str = "cancelled") -> List[str]:
+        cancelled: List[str] = []
+        for lane, state in self._lane_states.items():
+            if state.status in {LANE_STATUS_COMPLETED, LANE_STATUS_FAILED, LANE_STATUS_SKIPPED}:
+                continue
+            cancelled.append(lane)
+            self._skip_lane(lane, reason=reason)
+        self._cancel_parallel_lane_task()
+        return cancelled
 
     def _recompute_presentations(self, *, preserve_queued: bool = False) -> None:
         for lane in self._lane_order:

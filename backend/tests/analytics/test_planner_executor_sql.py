@@ -421,6 +421,64 @@ def test_ingest_tool_event_emits_web_ready_lane():
     assert ctx.tool_parallel_results and ctx.tool_parallel_results[0].get("tool", "").startswith("web_retriever")
 
 
+def test_agent_tool_events_emitted_for_parallel_payload():
+    pipeline = planner_executor.PlannerPipeline(flow_mode=planner_executor.FlowMode.SINGLE_AGENT)
+    ctx = planner_executor.PlannerPhaseContext(
+        query="Agent lanes",
+        session_id="ctx-agent-web",
+        workflow_start=time.time(),
+        timed_emitter=planner_executor.TimedEventEmitter(session_id="ctx-agent-web", flow="test"),
+        flow_mode=planner_executor.FlowMode.SINGLE_AGENT,
+        parallelism_enabled=True,
+    )
+    ctx.agentic_revision_mode = True
+    event = {
+        "event": "tool_parallel_result",
+        "data": {
+            "tool": "web_retriever",
+            "status": "completed",
+            "payload": {"summary": "cached insights", "ready": True},
+            "metadata": {"question_id": "web-q1"},
+            "lane": "web",
+            "parallel_group": "single_agent_web",
+            "attempt": 1,
+            "reused": True,
+        },
+    }
+    start_event = pipeline._build_agent_tool_event_from_payload(ctx, event, status="start")
+    complete_event = pipeline._build_agent_tool_event_from_payload(ctx, event, status="completed")
+    assert start_event is not None
+    assert complete_event is not None
+    assert start_event["event"] == "agent_tool_call"
+    assert complete_event["event"] == "agent_tool_complete"
+    assert complete_event["data"]["result"]["summary"] == "cached insights"
+    assert complete_event["data"]["lane"] == "web"
+
+
+@pytest.mark.asyncio
+async def test_tool_parallel_manifest_emits_agent_calls(monkeypatch: pytest.MonkeyPatch) -> None:
+    flow = _setup_planner_flow(monkeypatch)
+    ctx = await flow.initialize_context("NVDA follow-up", session_id="session-agent-manifest")
+    ctx.agentic_revision_mode = True
+    manifest_event = {
+        "event": "tool_parallel_start",
+        "data": {
+            "parallel_group": "tool_fanout",
+            "tools": [
+                {"name": "web_retriever", "display_name": "Web Search - NVDA", "summary": "Queued NVDA SERP refresh"},
+                {"name": "stock_tracker", "display_name": "Market Watch", "summary": "Refreshing NVDA widget"},
+            ],
+        },
+    }
+    agent_events = flow._build_agent_tool_events_from_manifest(ctx, manifest_event)
+    assert len(agent_events) == 2
+    assert all(evt["event"] == "agent_tool_call" for evt in agent_events)
+    reasoning = ctx.revision_reasoning
+    assert "web_retriever" in reasoning
+    assert reasoning["web_retriever"]["summary"] == "Queued NVDA SERP refresh"
+    assert reasoning["stock_tracker"]["lane"] == "market"
+
+
 def test_concurrent_lanes_emit_before_sql(monkeypatch):
     flow = _setup_planner_flow(monkeypatch)
     flow.flow_mode = planner_executor.FlowMode.SINGLE_AGENT
@@ -1141,3 +1199,15 @@ def test_auto_fill_missing_slots_defaulted_from_suggestions():
     assert ctx.slot_statuses["metric"].value == "Revenue"
     assert any(entry.startswith("Using timeframe: last_5_years") for entry in assumptions)
     assert any(entry.startswith("Using metric") for entry in assumptions)
+
+
+def test_progress_events_include_thought_ids() -> None:
+    flow = planner_executor.PlannerExecutorFlow()
+    first = flow._annotate({"event": "progress", "data": {"step": "classification"}})
+    second = flow._annotate({"event": "progress", "data": {"step": "classification"}})
+    third = flow._annotate({"event": "status", "data": {"step": "classification"}})
+    assert first["data"]["thought_id"] == "classification:1"
+    assert second["data"]["thought_id"] == "classification:2"
+    assert third["data"]["thought_id"] == "classification:3"
+    result_event = flow._annotate({"event": "result", "data": {"step": "analysis_generation"}})
+    assert "thought_id" not in result_event["data"]

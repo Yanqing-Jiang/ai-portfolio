@@ -42,6 +42,18 @@ vi.mock('../../../services/apiService', () => ({
   },
 }));
 
+const { startStreamMock } = vi.hoisted(() => ({
+  startStreamMock: vi.fn(async (endpoint: string, onEvent: (data: any) => void) => {
+    const events = (globalThis as any).__TEST_EVENTS__ as any[] | undefined;
+    if (Array.isArray(events)) {
+      for (const e of events) {
+        onEvent(e);
+      }
+    }
+    return endpoint;
+  }),
+}));
+
 const {
   setCurrentStatusMock,
   setErrorMock,
@@ -64,14 +76,7 @@ vi.mock('./useAnalyticsStream', () => {
       statusTimestamp: null,
       setCurrentStatus: setCurrentStatusMock,
       setError: setErrorMock,
-      startStream: async (_endpoint: string, onEvent: (data: any) => void) => {
-        const events = (globalThis as any).__TEST_EVENTS__ as any[] | undefined;
-        if (Array.isArray(events)) {
-          for (const e of events) {
-            onEvent(e);
-          }
-        }
-      },
+      startStream: startStreamMock,
       stopStream: stopStreamMock,
       resetState: resetStateMock,
     }),
@@ -84,6 +89,7 @@ beforeEach(() => {
   stopStreamMock.mockClear();
   resetStateMock.mockClear();
   countUserInputMock.mockClear();
+  startStreamMock.mockClear();
   (globalThis as any).__TEST_EVENTS__ = undefined;
 });
 
@@ -732,7 +738,6 @@ describe('useAnalyticsMemoryStream clarifications', () => {
 
 describe('useAnalyticsMemoryStream specialist readiness', () => {
   it('keeps completion status after ready events even when later progress arrives', async () => {
-    vi.useFakeTimers();
     const chartSpec = { chart_type: 'line', datasets: [] };
     (globalThis as any).__TEST_EVENTS__ = [
       { event: 'status', step: 'sql_execution', message: 'Running SQL' },
@@ -756,24 +761,19 @@ describe('useAnalyticsMemoryStream specialist readiness', () => {
       { event: 'progress', step: 'sql_execution', message: 'Finalizing' },
     ];
 
-    await act(async () => {
-      render(<HookHarness query="nvda peers" flow="multi-agent" />);
-    });
+    const { result } = renderHook(() => useAnalyticsMemoryStream('multi-agent'));
 
     await act(async () => {
-      vi.runAllTimers();
-      await Promise.resolve();
+      await result.current.handleQuery('nvda peers');
     });
-    vi.useRealTimers();
 
-    const stepItems = Array.from(screen.getByTestId('step-ids').querySelectorAll('li')).map((li) =>
-      li.textContent || '',
-    );
-
-    expect(stepItems).toContain('sql_execution:completed');
-    expect(stepItems).toContain('chart_generation:completed');
-    expect(stepItems).toContain('web_research_agent:completed');
-    expect(stepItems).toContain('analysis_generation:completed');
+    await waitFor(() => {
+      const stepItems = result.current.processSteps.map((step) => `${step.id}:${step.status}`);
+      expect(stepItems).toContain('sql_execution:completed');
+      expect(stepItems).toContain('chart_generation:completed');
+      expect(stepItems).toContain('web_research_agent:completed');
+      expect(stepItems).toContain('analysis_generation:completed');
+    });
   });
 });
 
@@ -956,6 +956,8 @@ describe('useAnalyticsMemoryStream revisions', () => {
 
 describe('useAnalyticsMemoryStream follow-up guidance', () => {
   it('tracks follow-up route stage and banner metadata', async () => {
+    const { result } = renderHook(() => useAnalyticsMemoryStream('planner-executor'));
+
     (globalThis as any).__TEST_EVENTS__ = [
       { event: 'follow_up_route', data: { route: 'reuse_sql', flow: 'planner-executor' } },
       {
@@ -972,11 +974,65 @@ describe('useAnalyticsMemoryStream follow-up guidance', () => {
     ];
 
     await act(async () => {
-      render(<HookHarness query="follow up summary" flow="planner-executor" />);
+      await result.current.handleQuery('follow up summary');
     });
 
-    const stepIds = Array.from(screen.getByTestId('step-ids').querySelectorAll('li')).map((li) => li.textContent || '');
-    expect(stepIds).toContain('follow_up_route:completed');
+    await waitFor(() => {
+      const stepIds = result.current.processSteps.map((step) => `${step.id}:${step.status}`);
+      expect(stepIds).toContain('follow_up_route:completed');
+    });
+  });
+});
+
+describe('useAnalyticsMemoryStream session reuse', () => {
+  it('attaches session_id to every follow-up query regardless of wording', async () => {
+    const { result } = renderHook(() => useAnalyticsMemoryStream('single-agent'));
+
+    (globalThis as any).__TEST_EVENTS__ = [
+      { event: 'session_started', data: { session_id: 'sess-reuse' } },
+      { event: 'analysis_complete', analysis: 'Initial summary' },
+      { event: 'workflow_complete', total_elapsed_ms: 120 },
+    ];
+
+    await act(async () => {
+      await result.current.handleQuery('Show NVDA revenue trend');
+    });
+
+    expect(startStreamMock).toHaveBeenCalledTimes(1);
+    const firstEndpoint = startStreamMock.mock.calls[0][0];
+    const firstUrl = new URL(firstEndpoint, 'http://localhost');
+    expect(firstUrl.searchParams.get('query')).toBe('Show NVDA revenue trend');
+    expect(firstEndpoint).not.toContain('session_id=');
+
+    (globalThis as any).__TEST_EVENTS__ = [
+      { event: 'analysis_complete', analysis: 'Revision applied' },
+      { event: 'workflow_complete', total_elapsed_ms: 90 },
+    ];
+
+    await act(async () => {
+      await result.current.handleQuery('add AMD too');
+    });
+
+    expect(startStreamMock).toHaveBeenCalledTimes(2);
+    const secondEndpoint = startStreamMock.mock.calls[1][0];
+    const secondUrl = new URL(secondEndpoint, 'http://localhost');
+    expect(secondUrl.searchParams.get('query')).toBe('add AMD too');
+    expect(secondUrl.searchParams.get('session_id')).toBe('sess-reuse');
+  });
+
+  it('persists session_id from analysis_ready fallback events when session_started is missing', async () => {
+    const { result } = renderHook(() => useAnalyticsMemoryStream('single-agent'));
+
+    (globalThis as any).__TEST_EVENTS__ = [
+      { event: 'analysis_ready', data: { session_id: 'sess-fallback', lane: 'analysis' } },
+      { event: 'workflow_complete', data: { session_id: 'sess-fallback' } },
+    ];
+
+    await act(async () => {
+      await result.current.handleQuery('Initial run');
+    });
+
+    expect(result.current.sessionId).toBe('sess-fallback');
   });
 });
 
@@ -1068,5 +1124,58 @@ describe('useAnalyticsMemoryStream agent tool events', () => {
     expect(latest?.lane).toBe('sql');
     expect(latest?.tool).toBe('sql_specialist');
     expect(latest?.specialist).toBe('sql_specialist');
+  });
+
+  it('surfaces lane_reused events as reusable notices', async () => {
+    const ts = new Date().toISOString();
+    (globalThis as any).__TEST_EVENTS__ = [
+      {
+        event: 'session_started',
+        data: { session_id: 'session-lane' },
+      },
+      {
+        event: 'lane_reused',
+        data: {
+          lane: 'web',
+          message: 'Web lane reused from cache',
+          age_seconds: 62,
+          ts,
+        },
+      },
+      {
+        event: 'workflow_complete',
+        data: { message: 'done' },
+      },
+      { event: 'done' },
+    ];
+    const { result } = renderHook(() => useAnalyticsMemoryStream('single-agent'));
+    await act(async () => {
+      await result.current.handleQuery('reuse lane please');
+    });
+    await waitFor(() => {
+      expect(result.current.laneReuseNotices.length).toBeGreaterThan(0);
+    });
+    expect(result.current.laneReuseNotices[0].lane).toBe('web');
+  });
+
+  it('stores redirect notice and exposes a dismiss handler', async () => {
+    (globalThis as any).__TEST_EVENTS__ = [
+      {
+        event: 'workflow_redirect',
+        data: { message: 'Agent requested fresh baseline' },
+      },
+      { event: 'done' },
+    ];
+    const { result } = renderHook(() => useAnalyticsMemoryStream('single-agent'));
+    await act(async () => {
+      await result.current.handleQuery('trigger redirect');
+    });
+    await waitFor(() => {
+      expect(result.current.redirectNotice).toContain('Agent requested');
+    });
+    act(() => {
+      result.current.clearRedirectNotice();
+    });
+    expect(result.current.redirectNotice).toBeNull();
   });
 });

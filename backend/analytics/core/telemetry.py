@@ -195,6 +195,28 @@ def agent_handoff(
     _emit(payload)
 
 
+def agent_tool_gap(
+    *,
+    lane: str,
+    outstanding: int,
+    total_calls: int,
+    threshold: float,
+    session_id: Optional[str] = None,
+    flow: Optional[str] = None,
+) -> None:
+    payload = _base_payload("agent_tool_gap", session_id=session_id, flow=flow)
+    payload.update(
+        {
+            "lane": lane,
+            "outstanding": outstanding,
+            "total_calls": total_calls,
+            "threshold": threshold,
+            "outstanding_ratio": outstanding / max(total_calls, 1),
+        }
+    )
+    _emit(payload)
+
+
 def retry_summary(
     *,
     stage: str,

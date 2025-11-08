@@ -5,8 +5,9 @@ import logging
 import time
 import json
 import os
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterable, List, Optional, Tuple, TYPE_CHECKING
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple, TYPE_CHECKING
 from copy import deepcopy
 
 from pydantic import BaseModel, Field, field_validator
@@ -28,6 +29,7 @@ __all__ = [
     "SessionStateRepository",
     "get_session_state_repository",
     "close_session_state_repository",
+    "SnapshotRevisionContext",
 ]
 
 
@@ -35,6 +37,13 @@ DEFAULT_TTL_MINUTES = 10
 MIN_TTL_MINUTES = 1
 MAX_TTL_MINUTES = 60
 MAX_ARTIFACT_HISTORY = 5
+
+TOOL_LANE_HINTS: Dict[str, str] = {
+    "web_retriever": "web",
+    "market_question_a": "market",
+    "market_question_b": "market",
+    "stock_tracker": "market",
+}
 
 
 def _hash_arguments(payload: Any) -> str:
@@ -159,7 +168,119 @@ class SessionStateSnapshot(BaseModel):
                 enhanced["attempts"] = int(enhanced.get("attempt", 0))
             except (TypeError, ValueError):
                 enhanced["attempts"] = 0
+        normalized_tool = _normalize_tool_name(enhanced.get("tool"))
+        lane = (enhanced.get("lane") or "").strip().lower()
+        source_lane = lane
+        if not source_lane and normalized_tool:
+            source_lane = TOOL_LANE_HINTS.get(normalized_tool)
+        if source_lane:
+            enhanced.setdefault("source_lane", source_lane)
+        if lane:
+            reuse_metadata = self._lane_reuse_metadata(lane)
+            if reuse_metadata:
+                enhanced.setdefault("reuse_metadata", reuse_metadata)
+                if enhanced.get("reused_at_ms") is None:
+                    fast_path_latency = reuse_metadata.get("fast_path_latency_ms")
+                    if isinstance(fast_path_latency, (int, float)):
+                        enhanced["reused_at_ms"] = int(fast_path_latency)
+        if enhanced.get("latency_ms") is None:
+            latency_candidate = enhanced.get("elapsed_ms")
+            if latency_candidate is None:
+                latency_candidate = enhanced.get("fast_path_latency_ms")
+            try:
+                if latency_candidate is not None:
+                    enhanced["latency_ms"] = int(latency_candidate)
+            except (TypeError, ValueError):
+                pass
+        if enhanced.get("reused_at_ms") is None:
+            fast_path_latency = enhanced.get("fast_path_latency_ms")
+            try:
+                if fast_path_latency is not None:
+                    enhanced["reused_at_ms"] = int(fast_path_latency)
+            except (TypeError, ValueError):
+                pass
         receipts[tool] = enhanced
+        self.touch()
+
+    def record_lane_reuse(
+        self,
+        lane: str,
+        metadata: Mapping[str, Any],
+    ) -> None:
+        normalized = str(lane or "").strip().lower()
+        if not normalized:
+            return
+        cache = self.tool_cache.setdefault("lane_reuse", {})
+        cache[normalized] = sanitize_for_json(dict(metadata))
+        self.touch_lane(normalized)
+
+    def _lane_reuse_metadata(self, lane: str) -> Optional[Dict[str, Any]]:
+        cache = self.tool_cache.get("lane_reuse") or {}
+        normalized = str(lane or "").strip().lower()
+        if not normalized:
+            return None
+        payload = cache.get(normalized)
+        if isinstance(payload, Mapping):
+            return sanitize_for_json(dict(payload))
+        return None
+
+    def get_lane_reuse_metadata(self, lane: str) -> Optional[Dict[str, Any]]:
+        metadata = self._lane_reuse_metadata(lane)
+        if metadata:
+            return sanitize_for_json(dict(metadata))
+        return None
+
+    def record_lane_fast_path_marker(self, marker: str, *, at: Optional[datetime] = None) -> None:
+        key = str(marker or "").strip()
+        if not key:
+            return
+        cache = self.tool_cache.setdefault("lane_fast_path", {})
+        timestamp = (at or datetime.now(timezone.utc)).astimezone(timezone.utc).isoformat()
+        cache[key] = timestamp
+        self.touch()
+
+    def lane_fast_path_latency_ms(self, marker: str, *, now: Optional[datetime] = None) -> Optional[int]:
+        cache = self.tool_cache.get("lane_fast_path") or {}
+        timestamp = cache.get(str(marker or ""))
+        if not timestamp:
+            return None
+        try:
+            start = datetime.fromisoformat(timestamp)
+        except ValueError:
+            return None
+        end = now or datetime.now(timezone.utc)
+        delta = end - start
+        try:
+            return max(int(delta.total_seconds() * 1000), 0)
+        except Exception:
+            return None
+
+    def record_agent_reasoning(
+        self,
+        key: str,
+        summary: str,
+        *,
+        lane: Optional[str] = None,
+        metadata: Optional[Mapping[str, Any]] = None,
+    ) -> None:
+        normalized_key = str(key or "").strip()
+        normalized_summary = str(summary or "").strip()
+        if not normalized_key or not normalized_summary:
+            return
+        reasoning_cache = self.tool_cache.setdefault("agent_reasoning", {})
+        payload: Dict[str, Any] = {
+            "summary": normalized_summary,
+            "ts": datetime.now(timezone.utc).isoformat(),
+        }
+        normalized_lane = str(lane or "").strip().lower()
+        if normalized_lane:
+            payload["lane"] = normalized_lane
+        if metadata:
+            try:
+                payload["metadata"] = sanitize_for_json(dict(metadata))
+            except Exception:
+                payload["metadata"] = json.loads(json.dumps(metadata, default=str))
+        reasoning_cache[normalized_key] = payload
         self.touch()
 
     def record_agent_run(
@@ -312,6 +433,46 @@ class SessionStateSnapshot(BaseModel):
         receipt = receipts.get(tool)
         return deepcopy(receipt) if receipt is not None else None
 
+    def revision_context(self) -> "SnapshotRevisionContext":
+        receipts_payload: Dict[str, Dict[str, Any]] = {}
+        raw_receipts = (self.tool_cache or {}).get("tool_receipts") or {}
+        if isinstance(raw_receipts, Mapping):
+            for tool_name, payload in raw_receipts.items():
+                if not isinstance(payload, Mapping):
+                    continue
+                receipts_payload[str(tool_name)] = deepcopy(payload)
+        reasoning_cache: Dict[str, Dict[str, Any]] = {}
+        raw_reasoning = (self.tool_cache or {}).get("agent_reasoning") or {}
+        if isinstance(raw_reasoning, Mapping):
+            for key, value in raw_reasoning.items():
+                if isinstance(value, Mapping):
+                    reasoning_cache[str(key)] = deepcopy(value)
+                elif isinstance(value, str):
+                    reasoning_cache[str(key)] = {"summary": value}
+        revision_snapshot: Optional[Dict[str, Any]] = None
+        analytics_cache = (self.tool_cache or {}).get("analytics")
+        if isinstance(analytics_cache, Mapping):
+            snapshot_payload = analytics_cache.get("revision_snapshot")
+            if isinstance(snapshot_payload, Mapping):
+                revision_snapshot = deepcopy(snapshot_payload)
+        lane_timestamps: Dict[str, datetime] = {}
+        for lane_key in (self.lane_timestamps or {}).keys():
+            normalized = str(lane_key or "").strip().lower()
+            if not normalized:
+                continue
+            lane_ts = self.get_lane_timestamp(normalized)
+            if lane_ts:
+                lane_timestamps[normalized] = lane_ts
+        chart_spec = deepcopy(self.last_chart_spec) if isinstance(self.last_chart_spec, dict) else None
+        return SnapshotRevisionContext(
+            session_id=self.session_id,
+            tool_receipts=receipts_payload,
+            agent_reasoning=reasoning_cache,
+            revision_snapshot=revision_snapshot,
+            lane_timestamps=lane_timestamps,
+            last_analysis=self.last_analysis,
+            last_chart_spec=chart_spec,
+        )
     def record_revision_snapshot(self, payload: Dict[str, Any]) -> None:
         analytics_cache = self.tool_cache.setdefault("analytics", {})
         analytics_cache["revision_snapshot"] = payload
@@ -403,6 +564,38 @@ class SessionStateSnapshot(BaseModel):
                 parsed = parsed.replace(tzinfo=timezone.utc)
             return parsed.astimezone(timezone.utc)
         raise ValueError("Invalid datetime payload for SessionStateSnapshot")
+
+
+@dataclass
+class SnapshotRevisionContext:
+    session_id: str
+    tool_receipts: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    agent_reasoning: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    revision_snapshot: Optional[Dict[str, Any]] = None
+    lane_timestamps: Dict[str, datetime] = field(default_factory=dict)
+    last_analysis: Optional[str] = None
+    last_chart_spec: Optional[Dict[str, Any]] = None
+
+    @staticmethod
+    def _normalize_lane(lane: Optional[str]) -> Optional[str]:
+        if lane is None:
+            return None
+        normalized = str(lane).strip().lower()
+        return normalized or None
+
+    def lane_age_seconds(self, lane: str, *, now: Optional[datetime] = None) -> Optional[float]:
+        normalized = self._normalize_lane(lane)
+        if not normalized:
+            return None
+        timestamp = self.lane_timestamps.get(normalized)
+        if timestamp is None:
+            return None
+        now_dt = now or datetime.now(timezone.utc)
+        try:
+            delta = now_dt - timestamp
+            return max(delta.total_seconds(), 0.0)
+        except Exception:
+            return None
 
 
 class SessionStateRepository:
@@ -649,3 +842,10 @@ def _string_similarity(a: str, b: str) -> float:
         return SequenceMatcher(None, a.lower(), b.lower()).ratio()
     except Exception:  # pragma: no cover - extremely rare
         return 0.0
+
+
+def _normalize_tool_name(tool: Optional[str]) -> Optional[str]:
+    if tool is None:
+        return None
+    normalized = str(tool).strip().lower()
+    return normalized or None

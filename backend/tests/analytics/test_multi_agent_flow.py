@@ -19,6 +19,7 @@ sys.modules["google.genai.types"] = genai_types_stub
 
 from analytics.flows.multi_agent import (
     MultiAgentFlow,
+    _MultiAgentHooks,
     _derive_tasks,
     _planner_agent,
     _query_agent,
@@ -41,6 +42,62 @@ def test_multi_agent_plan_dependencies():
         "market_phase",
         "web_research_phase",
     }
+
+
+def test_multi_agent_forward_with_hooks_tags_session_metadata() -> None:
+    flow = MultiAgentFlow()
+    hooks = _MultiAgentHooks(flow, query="NVDA outlook", session_id=None)
+
+    async def _stream():
+        yield {"event": "analysis_ready", "data": {"lane": "analysis"}}
+        yield {"event": "workflow_complete", "data": {}}
+
+    async def _run():
+        results = []
+        async for event in flow._forward_with_hooks(
+            _stream(),
+            hooks,
+            "NVDA outlook",
+            session_id="sess-multi",
+            ensure_session_event=True,
+        ):
+            results.append(event)
+        return results
+
+    events = asyncio.run(_run())
+    assert events[0]["event"] == "session_started"
+    for evt in events:
+        if evt.get("event") in {"analysis_ready", "workflow_complete"}:
+            assert evt["data"]["session_id"] == "sess-multi"
+
+
+def test_multi_agent_emits_agent_tool_events() -> None:
+    flow = MultiAgentFlow()
+    hooks = _MultiAgentHooks(flow, query="NVDA outlook", session_id="sess-multi-tools")
+
+    async def _stream():
+        yield {"event": "progress", "data": {"step": "sql_compilation"}}
+        yield {"event": "sql_generated", "data": {"lane": "sql"}}
+        yield {"event": "workflow_complete", "data": {}}
+
+    async def _run():
+        results = []
+        async for event in flow._forward_with_hooks(
+            _stream(),
+            hooks,
+            "NVDA outlook",
+            session_id="sess-multi-tools",
+        ):
+            results.append(event)
+        return results
+
+    events = asyncio.run(_run())
+    tool_calls = [evt for evt in events if evt.get("event") == "agent_tool_call"]
+    tool_completes = [evt for evt in events if evt.get("event") == "agent_tool_complete"]
+    assert tool_calls
+    assert tool_completes
+    assert tool_calls[0]["data"]["tool"] == "sql_generator"
+    assert tool_completes[0]["data"]["tool"] == "sql_generator"
 
 
 def test_agent_turn_events_include_specialist_tool_metadata():

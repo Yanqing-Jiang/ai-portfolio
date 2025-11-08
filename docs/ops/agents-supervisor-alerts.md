@@ -12,6 +12,11 @@ Checklist for wiring analytics supervisor telemetry into alerting now that load 
 - **Load-test regression (`analytics.supervisor.load_regression`)**
   - Trigger when `reports/load/*.json` artifacts show p95 latency above 4000 ms or failure rate above 2 percent.
   - Evaluated inside CI using `reports/load/agents-supervisor-iteration5.template.json`.
+- **Agent tool completion delta (`analytics.agent_tool_gap`)**
+  - Trigger when `outstanding_ratio` >= 0.10 for at least 5 minutes or `outstanding` >= 3 for a single lane.
+  - Source: telemetry logger; each payload includes `lane`, `outstanding`, `total_calls`, and `threshold`. Wire into Grafana by charting the rolling sum of `outstanding` per lane and alerting on the ratio field.
+  - CI guardrail: `.github/workflows/agentic-smoke.yml` replays the STOCK_ONLY / REUSE_SQL / redirect fixtures on every PR, uploads `agentic-smoke-fixtures` artifacts, and can optionally hit staging via `AGENTIC_SMOKE_BACKEND_URL` plus the `run_live` dispatch flag to generate `agentic-smoke-live` traces.
+  - Response: inspect the latest `lane_reused` / `agent_tool_complete` events via `reports/agentic_smoke/*.json` or `scripts/dump_agents_stream.py`, then restart the stuck accessory worker or rerun the session with `python scripts/agentic_smoke_test.ps1 --scenario stock`.
 
 ## PowerShell Verification Snippets
 ```powershell

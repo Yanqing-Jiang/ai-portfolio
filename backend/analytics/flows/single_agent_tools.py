@@ -45,6 +45,7 @@ from .planner_executor import (
     PlannerExecutorFlow,
     _reset_revision_accessories,
     _INTENT_LANE_HINTS,
+    _apply_revision_context_hints,
 )
 from .orchestrator_adapter import PlannerOrchestratorAdapter, LaneCompleteCallback
 from .pipeline_tools import PlannerToolDefinition, PlannerToolRegistry, get_planner_tool_registry
@@ -81,6 +82,14 @@ LANE_TTL_DEFAULTS: Dict[str, int] = {
     "web": 120,
     "chart": 600,
     "market": 300,
+}
+
+LANE_LABELS: Dict[str, str] = {
+    "sql": "SQL dataset",
+    "chart": "Chart",
+    "analysis": "Analysis",
+    "web": "Web research",
+    "market": "Market data",
 }
 
 
@@ -308,6 +317,13 @@ class _SingleAgentToolHooks(AnalyticsFlowHooks):
         self._chart_revision_missing_session = False
         self._agentic_revision_mode: bool = False
         self._agentic_lane_targets: Set[str] = set()
+        self._multi_phase_runs: Dict[str, Dict[str, Any]] = {}
+        self._multi_phase_details: Dict[str, Dict[str, Any]] = {}
+        self._multi_phase_pending_events: Dict[str, Dict[str, Any]] = {}
+        self._accessory_lane_requirements: Set[str] = set()
+        self._accessory_lane_hits: Set[str] = set()
+        self._agent_tool_counters: Dict[str, int] = {}
+        self._agent_tool_active_ids: Dict[str, str] = {}
         self._sync_agentic_revision_state()
 
     def _sync_agentic_revision_state(self) -> None:
@@ -324,6 +340,133 @@ class _SingleAgentToolHooks(AnalyticsFlowHooks):
         else:
             lane_targets = set()
         self._agentic_lane_targets = lane_targets
+        self._sync_accessory_requirements()
+
+    def _sync_accessory_requirements(self) -> None:
+        route = getattr(self._flow, "follow_up_route", FollowUpRoute.FULL_PIPELINE)
+        required: Set[str] = set()
+        if route == FollowUpRoute.FULL_PIPELINE:
+            required = {"web", "market"}
+        elif route == FollowUpRoute.STOCK_ONLY:
+            required = {"market"}
+        elif route == FollowUpRoute.REUSE_SQL:
+            required = set()
+        self._accessory_lane_requirements = required
+        if required:
+            self._accessory_lane_hits &= required
+        else:
+            self._accessory_lane_hits.clear()
+
+    def _lane_for_tool_alias(self, alias: Optional[str]) -> Optional[str]:
+        if not alias:
+            return None
+        lane = None
+        try:
+            lane = self._flow._lane_for_tool(alias)  # type: ignore[attr-defined]
+        except Exception:
+            lane = None
+        if lane:
+            return lane
+        lookup = getattr(self._flow, "LANE_TOOL_LOOKUP", {}) or {}
+        if isinstance(lookup, Mapping):
+            candidate = lookup.get(str(alias).lower())
+            if candidate:
+                return candidate
+        return None
+
+    def _mark_accessory_lane(self, lane: str) -> None:
+        normalized = lane.strip().lower()
+        if normalized in self._accessory_lane_requirements:
+            self._accessory_lane_hits.add(normalized)
+
+    def _pending_accessory_lanes(self) -> Set[str]:
+        return set(self._accessory_lane_requirements) - set(self._accessory_lane_hits)
+
+    def _should_emit_agent_events(self, tool: Optional[str]) -> bool:
+        if not self._agentic_revision_mode:
+            return False
+        if not tool:
+            return False
+        return True
+
+    def _build_agent_tool_event(
+        self,
+        *,
+        tool: str,
+        lane: Optional[str],
+        status: str,
+        attempt: Optional[int],
+        details: Optional[Mapping[str, Any]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        lane_name = lane or self._lane_for_tool_alias(tool)
+        if not lane_name:
+            return None
+        if status == "start":
+            counter = self._agent_tool_counters.get(tool, 0) + 1
+            self._agent_tool_counters[tool] = counter
+            call_id = f"{tool}-{counter}"
+            self._agent_tool_active_ids[tool] = call_id
+        else:
+            call_id = self._agent_tool_active_ids.get(tool)
+            if not call_id:
+                counter = self._agent_tool_counters.get(tool, 0) + 1
+                self._agent_tool_counters[tool] = counter
+                call_id = f"{tool}-{counter}"
+            if status == "completed":
+                self._agent_tool_active_ids.pop(tool, None)
+        payload: Dict[str, Any] = {
+            "tool_call": {
+                "id": call_id,
+                "name": tool,
+                "lane": lane_name,
+                "status": status,
+                "sequence_number": self._agent_tool_counters.get(tool),
+            },
+            "tool": tool,
+            "lane": lane_name,
+            "status": status,
+            "ts": datetime.utcnow().isoformat(),
+            "follow_up_route": self._flow.follow_up_route.value,
+        }
+        if attempt is not None:
+            payload["attempt"] = attempt
+        if details:
+            payload["details"] = sanitize_for_json(details)
+            payload["tool_call"].update({k: v for k, v in details.items() if isinstance(k, str) and k in {"arguments", "arguments_delta", "status"}})
+        event_name = "agent_tool_call" if status == "start" else "agent_tool_complete"
+        annotated = apply_mode_metadata({"event": event_name, "data": payload}, self._flow.flow_mode)
+        annotated["data"]["follow_up_route"] = self._flow.follow_up_route.value
+        return annotated
+
+    def _multi_phase_config_for_tool(self, alias: Optional[str]) -> Optional[Mapping[str, Any]]:
+        if not alias:
+            return None
+        config = getattr(self._flow, "MULTI_PHASE_TOOL_CONFIG", None)
+        if not isinstance(config, Mapping):
+            return None
+        entry = config.get(alias)
+        if isinstance(entry, Mapping):
+            return entry
+        return None
+
+    def _resolve_aliases_for_event(self, event_name: Optional[str]) -> List[str]:
+        if not event_name:
+            return []
+        mapping = getattr(self._flow, "TOOL_END_EVENTS", None)
+        if not isinstance(mapping, Mapping):
+            return []
+        entry = mapping.get(event_name)
+        if not entry:
+            return []
+        if isinstance(entry, str):
+            return [entry]
+        if isinstance(entry, Iterable) and not isinstance(entry, (str, bytes, Mapping)):
+            aliases: List[str] = []
+            for alias in entry:
+                if isinstance(alias, str) and alias.strip():
+                    aliases.append(alias)
+            return aliases
+        return []
 
     async def on_flow_start(self, ctx: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
         self._emitted_cohesive = False
@@ -332,6 +475,11 @@ class _SingleAgentToolHooks(AnalyticsFlowHooks):
         self._chart_revision_missing_session = False
         self._timers.clear()
         self._tool_active_counts.clear()
+        self._multi_phase_runs.clear()
+        self._multi_phase_details.clear()
+        self._multi_phase_pending_events.clear()
+        self._accessory_lane_hits.clear()
+        self._agent_tool_active_ids.clear()
         self._sync_agentic_revision_state()
         if ctx.get("session_id") and not self._session_id:
             session = ctx.get("session_id")
@@ -356,6 +504,21 @@ class _SingleAgentToolHooks(AnalyticsFlowHooks):
         tool = self._flow.TOOL_START_STEPS.get(step)
         if not tool:
             return
+        multi_phase_config = self._multi_phase_config_for_tool(tool)
+        if multi_phase_config:
+            run_state = self._multi_phase_runs.setdefault(tool, {"active": False})
+            if run_state.get("active"):
+                observed = run_state.setdefault("steps", set())
+                if step:
+                    observed.add(step)
+                return
+            run_state["active"] = True
+            observed = run_state.setdefault("steps", set())
+            observed.clear()
+            if step:
+                observed.add(step)
+            self._multi_phase_details.pop(tool, None)
+            self._multi_phase_pending_events.pop(tool, None)
         timer_queue = self._timers.setdefault(tool, deque())
         timer_queue.append(time.time())
         self._tool_active_counts[tool] = self._tool_active_counts.get(tool, 0) + 1
@@ -387,6 +550,16 @@ class _SingleAgentToolHooks(AnalyticsFlowHooks):
         annotated = apply_mode_metadata({"event": "tool_call", "data": payload}, self._flow.flow_mode)
         annotated["data"]["follow_up_route"] = self._flow.follow_up_route.value
         yield annotated
+        if self._should_emit_agent_events(tool):
+            lane_name = self._lane_for_tool_alias(tool)
+            agent_event = self._build_agent_tool_event(
+                tool=tool,
+                lane=lane_name,
+                status="start",
+                attempt=attempt,
+            )
+            if agent_event:
+                yield agent_event
 
     def _maybe_emit_cohesive_result(self, analysis_payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if self._emitted_cohesive:
@@ -403,6 +576,95 @@ class _SingleAgentToolHooks(AnalyticsFlowHooks):
         annotated = apply_mode_metadata(event, self._flow.flow_mode)
         annotated["data"]["follow_up_route"] = self._flow.follow_up_route.value
         return annotated
+
+    def _accumulate_multi_phase_details(self, tool: str, event: Dict[str, Any]) -> Dict[str, Any]:
+        fragment = self._extract_tool_details(tool, event)
+        bucket = self._multi_phase_details.setdefault(tool, {})
+        if isinstance(fragment, dict):
+            for key, value in fragment.items():
+                if value is not None:
+                    bucket[key] = value
+        return bucket
+
+    def _build_tool_call_event(
+        self,
+        tool: str,
+        event_name: str,
+        event: Dict[str, Any],
+        *,
+        precomputed_details: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        normalized_event = event_name or ""
+        requires_active_run = normalized_event not in self._flow.READY_EVENT_NAMES
+        elapsed: Optional[int] = None
+        start_value: Optional[float] = None
+        if requires_active_run:
+            active_runs = self._tool_active_counts.get(tool, 0)
+            if active_runs <= 0:
+                return None
+            start_queue = self._timers.get(tool)
+            if start_queue:
+                start_value = start_queue.popleft()
+                if not start_queue:
+                    self._timers.pop(tool, None)
+            self._tool_active_counts[tool] = active_runs - 1
+        else:
+            start_queue = self._timers.get(tool)
+            if start_queue:
+                start_value = start_queue.popleft()
+                if not start_queue:
+                    self._timers.pop(tool, None)
+        if start_value is not None:
+            elapsed = int((time.time() - start_value) * 1000)
+        payload: Dict[str, Any] = {
+            "tool": tool,
+            "status": "end",
+            "ts": datetime.utcnow().isoformat(),
+            "details": precomputed_details if precomputed_details is not None else self._extract_tool_details(tool, event),
+        }
+        attempt = self._flow.get_tool_attempt(tool)
+        if attempt:
+            payload["attempt"] = attempt
+            payload["retry"] = attempt > 1
+            payload["retry_count"] = max(attempt - 1, 0)
+        if elapsed is not None:
+            payload["elapsed_ms"] = elapsed
+        metadata = self._flow.get_tool_metadata_for_event(normalized_event)
+        if not metadata:
+            metadata = self._flow.get_tool_metadata_for_alias(tool)
+        if metadata:
+            payload["latency_budget_ms"] = metadata.get("latency_budget_ms")
+            payload["output_artifacts"] = metadata.get("output_artifacts")
+            payload["concurrency_limit"] = metadata.get("concurrency_limit")
+        log_tool_iteration(
+            tool=tool,
+            status="end",
+            step=normalized_event,
+            session_id=self._session_id,
+            flow=self._flow.flow_label,
+            elapsed_ms=elapsed,
+            details=payload.get("details") or payload,
+        )
+        annotated_end = apply_mode_metadata({"event": "tool_call", "data": payload}, self._flow.flow_mode)
+        annotated_end["data"]["follow_up_route"] = self._flow.follow_up_route.value
+        return annotated_end
+
+    async def _drain_pending_multi_phase_events(self) -> AsyncGenerator[Dict[str, Any], None]:
+        for tool, pending_event in list(self._multi_phase_pending_events.items()):
+            normalized_event = pending_event.get("event") or ""
+            precomputed = self._multi_phase_details.pop(tool, None)
+            annotated = self._build_tool_call_event(
+                tool,
+                normalized_event,
+                pending_event,
+                precomputed_details=precomputed,
+            )
+            if annotated:
+                yield annotated
+            self._multi_phase_pending_events.pop(tool, None)
+            run_state = self._multi_phase_runs.get(tool)
+            if run_state:
+                run_state["active"] = False
 
     async def after_event(self, ctx: Dict[str, Any], event: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
         if False:
@@ -421,63 +683,57 @@ class _SingleAgentToolHooks(AnalyticsFlowHooks):
         if event_name == "sql_compiled":
             self._sql_compile_details = event.get("data", {}) or {}
             return
+        if event_name in {"web_ready", "web_revision_ready"}:
+            self._mark_accessory_lane("web")
+        elif event_name in {"stock_ready", "stock_revision_ready"}:
+            self._mark_accessory_lane("market")
 
-        tool = self._flow.TOOL_END_EVENTS.get(event_name)
-        if tool:
-            requires_active_run = event_name not in self.READY_EVENT_NAMES
-            elapsed = None
-            start_value: Optional[float] = None
-            if requires_active_run:
-                active_runs = self._tool_active_counts.get(tool, 0)
-                if active_runs <= 0:
-                    return
-                start_queue = self._timers.get(tool)
-                if start_queue:
-                    start_value = start_queue.popleft()
-                    if not start_queue:
-                        self._timers.pop(tool, None)
-                self._tool_active_counts[tool] = active_runs - 1
-            else:
-                start_queue = self._timers.get(tool)
-                if start_queue:
-                    start_value = start_queue.popleft()
-                    if not start_queue:
-                        self._timers.pop(tool, None)
-            if start_value is not None:
-                elapsed = int((time.time() - start_value) * 1000)
-            payload: Dict[str, Any] = {
-                "tool": tool,
-                "status": "end",
-                "ts": datetime.utcnow().isoformat(),
-                "details": self._extract_tool_details(tool, event),
-            }
-            attempt = self._flow.get_tool_attempt(tool)
-            if attempt:
-                payload["attempt"] = attempt
-                payload["retry"] = attempt > 1
-                payload["retry_count"] = max(attempt - 1, 0)
-            if elapsed is not None:
-                payload["elapsed_ms"] = elapsed
-            metadata = self._flow.get_tool_metadata_for_event(event_name)
-            if not metadata:
-                metadata = self._flow.get_tool_metadata_for_alias(tool)
-            if metadata:
-                payload["latency_budget_ms"] = metadata.get("latency_budget_ms")
-                payload["output_artifacts"] = metadata.get("output_artifacts")
-                payload["concurrency_limit"] = metadata.get("concurrency_limit")
-            log_tool_iteration(
-                tool=tool,
-                status="end",
-                step=event_name,
-                session_id=self._session_id,
-                flow=self._flow.flow_label,
-                elapsed_ms=elapsed,
-                details=payload.get("details") or payload,
-            )
-            annotated_end = apply_mode_metadata({"event": "tool_call", "data": payload}, self._flow.flow_mode)
-            annotated_end["data"]["follow_up_route"] = self._flow.follow_up_route.value
-            yield annotated_end
-            return
+        aliases = self._resolve_aliases_for_event(event_name)
+        if aliases:
+            for tool in aliases:
+                if not tool:
+                    continue
+                multi_phase_config = self._multi_phase_config_for_tool(tool)
+                aggregated_details: Optional[Dict[str, Any]] = None
+                if multi_phase_config:
+                    aggregated_details = self._accumulate_multi_phase_details(tool, event)
+                    terminal_events = {
+                        str(e).strip()
+                        for e in multi_phase_config.get("terminal_events", ())
+                        if isinstance(e, str)
+                    }
+                    event_is_terminal = event_name in terminal_events or not terminal_events
+                    if not event_is_terminal:
+                        self._multi_phase_pending_events[tool] = copy.deepcopy(event)
+                        run_state = self._multi_phase_runs.setdefault(tool, {"active": True})
+                        run_state["active"] = True
+                        continue
+                    self._multi_phase_pending_events.pop(tool, None)
+                    run_state = self._multi_phase_runs.get(tool)
+                    if run_state:
+                        run_state["active"] = False
+                    self._multi_phase_details.pop(tool, None)
+                annotated_end = self._build_tool_call_event(
+                    tool,
+                    event_name or "",
+                    event,
+                    precomputed_details=aggregated_details if multi_phase_config else None,
+                )
+                if annotated_end:
+                    yield annotated_end
+                    if self._should_emit_agent_events(tool):
+                        lane_name = self._lane_for_tool_alias(tool)
+                        agent_event = self._build_agent_tool_event(
+                            tool=tool,
+                            lane=lane_name,
+                            status="completed",
+                            attempt=self._flow.get_tool_attempt(tool),
+                            details=aggregated_details if multi_phase_config else self._extract_tool_details(tool, event),
+                        )
+                        if agent_event:
+                            yield agent_event
+            if event_name != "analysis_complete":
+                return
 
         if event_name == "analysis_complete":
             analysis_payload = copy.deepcopy(event.get("data") or {})
@@ -494,6 +750,27 @@ class _SingleAgentToolHooks(AnalyticsFlowHooks):
                 cohesive_event = self._maybe_emit_cohesive_result(copy.deepcopy(self._last_analysis_payload))
                 if cohesive_event:
                     yield cohesive_event
+            pending = self._pending_accessory_lanes()
+            if pending:
+                warning = EventEmitter.status(
+                    "accessory_lane_warning",
+                    f"Accessory lanes missing fresh data: {', '.join(sorted(pending))}",
+                )
+                warning.setdefault("data", {})
+                warning["data"].update(
+                    {
+                        "missing_lanes": sorted(pending),
+                        "follow_up_route": self._flow.follow_up_route.value,
+                        "ts": datetime.utcnow().isoformat(),
+                        "lane": "accessories",
+                        "level": "warning",
+                    }
+                )
+                if self._session_id:
+                    warning["data"]["session_id"] = self._session_id
+                annotated_warning = apply_mode_metadata(warning, self._flow.flow_mode)
+                annotated_warning["data"]["follow_up_route"] = self._flow.follow_up_route.value
+                yield annotated_warning
             return
 
     def _analysis_text(self) -> Optional[str]:
@@ -657,6 +934,8 @@ class _SingleAgentToolHooks(AnalyticsFlowHooks):
     ) -> AsyncGenerator[Dict[str, Any], None]:
         if False:
             yield {}
+        async for pending in self._drain_pending_multi_phase_events():
+            yield pending
         if error is not None or self._emitted_cohesive or self._final_answer_emitted:
             return
         fallback_payload = self._build_final_answer_payload()
@@ -680,6 +959,7 @@ class _SingleAgentToolHooks(AnalyticsFlowHooks):
 
     def _extract_tool_details(self, tool: str, event: Dict[str, Any]) -> Dict[str, Any]:
         data = event.get("data") or {}
+        event_name = str(event.get("event") or "").strip()
         if tool == "intent_classifier":
             return {
                 "intent_key": data.get("intent_key"),
@@ -687,20 +967,91 @@ class _SingleAgentToolHooks(AnalyticsFlowHooks):
                 "clarifications_needed": data.get("clarifications_needed"),
             }
         if tool == "sql_generator":
-            details = {"llm_used": data.get("llm_used")}
-            if self._sql_compile_details:
-                details["template_used"] = self._sql_compile_details.get("template_used")
-                details["sql_length"] = self._sql_compile_details.get("sql_length")
+            details: Dict[str, Any] = {}
+            llm_used = data.get("llm_used")
+            if llm_used is not None:
+                details["llm_used"] = llm_used
+            attempt = data.get("attempt")
+            if attempt is not None:
+                details["attempt"] = attempt
+            elapsed = data.get("elapsed_ms")
+            if elapsed is not None:
+                details["elapsed_ms"] = elapsed
+            sql_text = data.get("sql")
+            if isinstance(sql_text, str) and sql_text.strip():
+                details["sql_hash"] = _hash_payload(sql_text.strip())
+            compile_details = self._sql_compile_details or {}
+            if compile_details:
+                template_used = compile_details.get("template_used")
+                if template_used:
+                    details["template_used"] = template_used
+                sql_length = compile_details.get("sql_length")
+                if sql_length is not None:
+                    details["sql_length"] = sql_length
+                template_fallback = compile_details.get("template_fallback")
+                if template_fallback is not None:
+                    details["template_fallback"] = template_fallback
+            sql_length_inline = data.get("sql_length")
+            if sql_length_inline is not None:
+                details["sql_length"] = sql_length_inline
+            issues_count = data.get("issues_count")
+            if issues_count is not None:
+                details["issues_count"] = issues_count
+            issues = data.get("issues")
+            if issues:
+                details["issues"] = issues
+            ok_flag = data.get("ok")
+            if ok_flag is not None:
+                details["validated"] = ok_flag
+            if not details and event_name == "sql_generated":
+                details["status"] = "generated"
             self._sql_compile_details = {}
             return details
         if tool == "sql_validator":
-            return {"ok": data.get("ok"), "issues": data.get("issues_count")}
+            return {
+                "ok": data.get("ok"),
+                "issues": data.get("issues_count"),
+                "attempt": data.get("attempt"),
+            }
         if tool == "sql_executor":
             return {"row_count": data.get("row_count")}
         if tool == "chart_designer":
-            return {"chart_type": data.get("chart_type")}
+            details: Dict[str, Any] = {}
+            chart_type = data.get("chart_type")
+            if chart_type:
+                details["chart_type"] = chart_type
+            spec = data.get("chart_spec")
+            if isinstance(spec, Mapping):
+                details["spec_hash"] = _hash_payload(spec)
+                meta = spec.get("meta") or {}
+                design = meta.get("chartDesign") if isinstance(meta, Mapping) else None
+                if isinstance(design, Mapping):
+                    series = design.get("series") or design.get("seriesDescriptors")
+                    if isinstance(series, list):
+                        details["series_count"] = len(series)
+            if event_name == "chart_patch":
+                details["revision_applied"] = True
+            return details or {"chart_type": chart_type}
         if tool == "analysis_writer":
-            return {"analysis_length": data.get("analysis_length")}
+            details: Dict[str, Any] = {}
+            analysis_length = data.get("analysis_length")
+            if analysis_length is not None:
+                details["analysis_length"] = analysis_length
+            analysis_text = data.get("analysis")
+            if isinstance(analysis_text, str) and analysis_text.strip():
+                details["analysis_hash"] = _hash_payload(analysis_text.strip())
+                details.setdefault("analysis_length", len(analysis_text.strip()))
+            refresh_mode = data.get("refresh_mode")
+            if refresh_mode:
+                details["refresh_mode"] = refresh_mode
+            sources = data.get("analysis_sources")
+            if isinstance(sources, list):
+                details["source_count"] = len(sources)
+            elif isinstance(sources, dict):
+                details["source_count"] = len(sources.keys())
+            if event_name == "analysis_revision":
+                details["revision_event"] = True
+            return details
         return data
 
 
@@ -730,7 +1081,7 @@ class SingleAgentController:
         "clarification_skipped": "clarification_manager",
         "clarification_timeout": "clarification_manager",
         "sql_generated": "sql_generator",
-        "sql_validated": "sql_validator",
+        "sql_validated": ("sql_validator", "sql_generator"),
         "execution_stats": "sql_executor",
         "chart_generated": "chart_designer",
         "chart_patch": "chart_designer",
@@ -800,6 +1151,28 @@ class SingleAgentController:
         "stock_tracker": "market_refresh",
     }
 
+    MULTI_PHASE_TOOL_CONFIG: Dict[str, Dict[str, Any]] = {
+        "intent_classifier": {
+            "terminal_events": {"intent_detection_complete"},
+        },
+        "sql_generator": {
+            "terminal_events": {"sql_validated"},
+        },
+        "chart_designer": {
+            "terminal_events": {"chart_generated"},
+        },
+        "analysis_writer": {
+            "terminal_events": {"analysis_complete"},
+        },
+    }
+    SESSION_AWARE_EVENTS: Set[str] = {
+        "follow_up_route",
+        "analysis_ready",
+        "analysis_revision_ready",
+        "analysis_complete",
+        "workflow_complete",
+    }
+
     LANE_CACHE_TTL_SECONDS: int = 600
     LANE_TOOL_MAP: Dict[str, Tuple[str, ...]] = dict(SEQUENCER_LANE_TOOL_MAP)
     LANE_TOOL_MAP.update(
@@ -811,9 +1184,12 @@ class SingleAgentController:
                 "sql_compilation",
                 "sql_execution",
                 "sql_validation",
+                "sql_generator",
+                "sql_validator",
+                "sql_executor",
             ),
-            "chart": ("chart_generation", "chart_revision"),
-            "analysis": ("analysis_generation", "analysis_revision"),
+            "chart": ("chart_generation", "chart_revision", "chart_designer"),
+            "analysis": ("analysis_generation", "analysis_revision", "analysis_writer"),
             "web": (
                 "web_retriever",
                 "web_retriever_cached",
@@ -821,6 +1197,7 @@ class SingleAgentController:
                 "web_refresh",
                 "tool_fanout",
                 "tool_parallel_start",
+                "web_revision",
             ),
         }
     )
@@ -918,6 +1295,13 @@ class SingleAgentController:
         self._sequencer_state: Optional[_SequencerRunState] = None
         self._active_sequencer: Optional[PlannerSequencer] = None
         self._lane_retry_counts: Dict[str, int] = {}
+        self._session_follow_up = False
+        self._lane_warning_events: Deque[Dict[str, Any]] = deque()
+        self._lane_warning_emitted: Set[str] = set()
+
+    def set_session_follow_up(self, follow_up: bool) -> None:
+        self._session_follow_up = bool(follow_up)
+        self._planner.set_session_follow_up(follow_up)
 
     async def _prepare_sequencer_state(
         self,
@@ -942,6 +1326,7 @@ class SingleAgentController:
             is_financial = getattr(classification_artifact, "is_financial", None)
             if is_financial is not None:
                 ctx.is_financial_query = bool(is_financial)
+        session_follow_up = bool(getattr(ctx, "session_follow_up", False) or self._session_follow_up)
         state = _SequencerRunState(
             ctx=ctx,
             registry=registry,
@@ -954,7 +1339,8 @@ class SingleAgentController:
         has_revision_targets = bool(getattr(ctx, "revision_targets", None))
         agentic_revision_mode = bool(getattr(ctx, "agentic_revision_mode", False))
         is_revision_follow_up = (
-            ctx.follow_up_route != FollowUpRoute.FULL_PIPELINE
+            session_follow_up
+            or ctx.follow_up_route != FollowUpRoute.FULL_PIPELINE
             or revision_directive_active
             or has_revision_targets
             or agentic_revision_mode
@@ -1151,6 +1537,7 @@ class SingleAgentController:
         state.derived_targets = set(derived_targets or set())
         revision_plan = build_revision_plan(ctx, targets=state.derived_targets)
         apply_revision_plan(ctx, revision_plan)
+        _apply_revision_context_hints(ctx)
         state.revision_plan = revision_plan
         state.run_sql_lane = revision_plan.run_sql_lane
         state.run_chart_lane = revision_plan.run_chart_lane
@@ -1276,16 +1663,23 @@ class SingleAgentController:
                 banner_event = EventEmitter.progress("follow_up_route", banner_config["message"])
                 banner_event["data"]["route"] = ctx.follow_up_route.value
                 banner_event["data"]["ts"] = datetime.utcnow().isoformat()
+                session_identifier = getattr(ctx, "session_id", None)
+                if session_identifier:
+                    banner_event["data"]["session_id"] = session_identifier
                 yield self._planner._annotate_revision(banner_event, ctx)
                 planner_payload = _build_planner_result_payload(ctx)
                 result_event = EventEmitter.result("planner_result", planner_payload)
                 result_event["event"] = "planner_result"
                 result_event["data"]["ts"] = datetime.utcnow().isoformat()
+                if session_identifier:
+                    result_event["data"]["session_id"] = session_identifier
                 yield self._planner._annotate_revision(result_event, ctx)
                 total_elapsed = int((time.time() - ctx.workflow_start) * 1000)
                 workflow_complete = EventEmitter.result("workflow_complete", {"total_elapsed_ms": total_elapsed})
                 workflow_complete["event"] = "workflow_complete"
                 workflow_complete["data"]["ts"] = datetime.utcnow().isoformat()
+                if session_identifier:
+                    workflow_complete["data"]["session_id"] = session_identifier
                 yield self._planner._annotate_revision(workflow_complete, ctx)
                 return
 
@@ -1876,7 +2270,7 @@ class SingleAgentController:
 
         last_event: Optional[Dict[str, Any]] = None
         try:
-            async for event in self._forward_with_hooks(_stream(), hooks, session_id):
+            async for event in self._forward_with_hooks(_stream(), hooks, session_id, ensure_session_event=True):
                 last_event = event
                 annotated = self._attach_retry_metadata(event, registry_name, attempt)
                 await run_context.queue.put(annotated)
@@ -2496,10 +2890,14 @@ class SingleAgentController:
                 sequencer.mark_lane_complete("analysis", result=data, reused=reused, success=True)
         elif name in {"stock_ready", "stock_revision_ready"}:
             if sequencer:
-                sequencer.mark_lane_complete("market", result=data, reused=reused, success=True)
+                schedule = str(data.get("schedule_stage") or "").strip().lower()
+                reuse_hint = reused or (schedule == "hedged_accessories" and name == "stock_ready")
+                sequencer.mark_lane_complete("market", result=data, reused=reuse_hint, success=True)
         elif name in {"web_ready", "web_revision_ready"}:
             if sequencer:
-                sequencer.mark_lane_complete("web", result=data, reused=reused, success=True)
+                schedule = str(data.get("schedule_stage") or "").strip().lower()
+                reuse_hint = reused or (schedule == "hedged_accessories" and name == "web_ready")
+                sequencer.mark_lane_complete("web", result=data, reused=reuse_hint, success=True)
         elif lane in lane_states and name == "tool_parallel_result":
             status = str(data.get("status") or "").lower()
             if sequencer and lane:
@@ -2508,9 +2906,69 @@ class SingleAgentController:
                     result=data,
                     reused=reused if reused else status in {"cached", "reused"},
                 )
+        elif name == "lane_reused":
+            reused_lane = str(data.get("lane") or "").strip().lower()
+            if reused_lane and reused_lane in lane_states:
+                lane_states[reused_lane] = "reused"
+            if sequencer and reused_lane:
+                sequencer.mark_lane_complete(reused_lane, result=data, reused=True, success=True)
         elif lane in lane_states and schedule_stage in {"hedged_accessories"}:
             if sequencer and lane:
                 sequencer.mark_lane_complete(str(lane), result=data, reused=reused)
+        self._check_for_lane_telemetry_gaps(lane_states, name)
+
+    def _check_for_lane_telemetry_gaps(self, lane_states: Mapping[str, str], event_name: Optional[str]) -> None:
+        if event_name not in {
+            "analysis_ready",
+            "analysis_revision_ready",
+            "analysis_complete",
+            "workflow_complete",
+        }:
+            return
+        missing: List[str] = []
+        for lane, status in lane_states.items():
+            normalized_lane = str(lane or "").strip().lower()
+            if normalized_lane not in {"web", "market"}:
+                continue
+            normalized_status = str(status or "").strip().lower()
+            if normalized_status in {"pending", "queued", "missing"}:
+                missing.append(normalized_lane)
+        if not missing:
+            return
+        new_missing = [lane for lane in missing if lane not in self._lane_warning_emitted]
+        if not new_missing:
+            return
+        self._lane_warning_emitted.update(new_missing)
+        logger.warning(
+            "Required lanes missing telemetry at %s: %s",
+            event_name,
+            ", ".join(sorted(new_missing)),
+        )
+        self._enqueue_lane_warning(new_missing, reason=event_name or "unknown")
+
+    def _enqueue_lane_warning(self, lanes: Iterable[str], *, reason: str) -> None:
+        lane_list = sorted({lane for lane in lanes if lane})
+        if not lane_list:
+            return
+        warning = EventEmitter.status(
+            "missing_lane_telemetry",
+            f"Missing telemetry for lanes: {', '.join(lane_list)}",
+        )
+        data = warning.setdefault("data", {})
+        data.update(
+            {
+                "lanes": lane_list,
+                "level": "warning",
+                "reason": reason,
+                "follow_up_route": self.follow_up_route.value,
+            }
+        )
+        annotated = self._planner._annotate(warning)
+        self._lane_warning_events.append(annotated)
+
+    def _drain_lane_warning_events(self) -> Iterable[Dict[str, Any]]:
+        while self._lane_warning_events:
+            yield self._lane_warning_events.popleft()
 
     def _should_emit_lane_summary_before(self, event: Dict[str, Any]) -> bool:
         name = event.get("event") or ""
@@ -2541,6 +2999,88 @@ class SingleAgentController:
             return FollowUpRoute.STOCK_ONLY
         return FollowUpRoute.REUSE_SQL
 
+    def _needs_lane_refresh(self, ctx: PlannerPhaseContext, lane: str) -> bool:
+        refresh_flags = dict(getattr(ctx, "lane_refresh_required", {}) or {})
+        normalized = lane.strip().lower()
+        if normalized in refresh_flags and refresh_flags[normalized] is False:
+            return False
+        revision_ctx = getattr(ctx, "revision_context", None)
+        if revision_ctx:
+            decision = revision_ctx.should_refresh(normalized)
+            if decision is False:
+                refresh_flags[normalized] = False
+                ctx.lane_refresh_required = refresh_flags
+                return False
+        return True
+
+    def _should_run_accessory_lane(self, state: "_SequencerRunState", lane: str) -> bool:
+        revision_plan = state.revision_plan
+        if revision_plan is None:
+            return False
+        targets = set(revision_plan.targets or set())
+        normalized = lane.strip().lower()
+        key_set: Set[str] = {"market", "stock"} if normalized == "market" else {normalized}
+        if not key_set.intersection(targets):
+            return False
+        return self._needs_lane_refresh(state.ctx, normalized)
+
+    def _build_lane_reuse_event(
+        self,
+        ctx: PlannerPhaseContext,
+        lane: str,
+        *,
+        reason: str,
+    ) -> Optional[Dict[str, Any]]:
+        label = LANE_LABELS.get(lane, lane.title())
+        message = f"{label} lane reused - cached artifacts still valid."
+        event = EventEmitter.status("lane_reused", message)
+        data = event.setdefault("data", {})
+        data.update(
+            {
+                "lane": lane,
+                "reused": True,
+                "ts": datetime.utcnow().isoformat(),
+                "reason": reason,
+                "source": "agentic_revision",
+                "revision": True,
+                "follow_up_route": getattr(ctx, "follow_up_route", FollowUpRoute.FULL_PIPELINE).value,
+            }
+        )
+        session_identifier = getattr(ctx, "session_id", None)
+        if session_identifier:
+            data["session_id"] = session_identifier
+        revision_ctx = getattr(ctx, "revision_context", None)
+        if revision_ctx:
+            age_seconds = revision_ctx.lane_age_seconds(lane)
+            if age_seconds is not None:
+                data["age_seconds"] = age_seconds
+        annotated = apply_mode_metadata(event, self.flow_mode)
+        return self._planner._annotate_revision(annotated, ctx)
+
+    def _handle_lane_reuse(
+        self,
+        ctx: PlannerPhaseContext,
+        *,
+        lane: str,
+        lane_states: Dict[str, str],
+        reason: str,
+    ) -> Optional[Dict[str, Any]]:
+        attribute_map = {
+            "sql": "reused_sql",
+            "chart": "reused_chart",
+            "analysis": "reused_analysis",
+            "web": "reused_web",
+            "market": "reused_stock",
+        }
+        attr = attribute_map.get(lane)
+        if attr:
+            setattr(ctx, attr, True)
+        refresh_flags = dict(getattr(ctx, "lane_refresh_required", {}) or {})
+        refresh_flags[lane] = False
+        ctx.lane_refresh_required = refresh_flags
+        lane_states[lane] = "reused"
+        return self._build_lane_reuse_event(ctx, lane, reason=reason)
+
     def set_follow_up_route(self, route: FollowUpRoute) -> None:
         resolved = self._resolve_agentic_route(route)
         self.follow_up_route = resolved
@@ -2554,27 +3094,134 @@ class SingleAgentController:
         stream: AsyncGenerator[Dict[str, Any], None],
         hooks: _SingleAgentToolHooks,
         session_id: Optional[str],
+        *,
+        ensure_session_event: bool = True,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         hook_ctx: Dict[str, Any] = {"session_id": session_id}
+        session_emitted = False
+
+        async def _maybe_emit_session_event() -> AsyncGenerator[Dict[str, Any], None]:
+            nonlocal session_emitted
+            if session_emitted or not ensure_session_event:
+                if False:
+                    yield {}
+                return
+            session_identifier = hook_ctx.get("session_id")
+            if not session_identifier:
+                if False:
+                    yield {}
+                return
+            synthetic = self._planner._annotate(EventEmitter.session_started(session_identifier))
+            async for pre_event in hooks.before_event(hook_ctx, synthetic):
+                yield pre_event
+            yield synthetic
+            async for post_event in hooks.after_event(hook_ctx, synthetic):
+                yield post_event
+            session_emitted = True
+
+        workflow_complete_seen = False
         try:
             async for start_event in hooks.on_flow_start(hook_ctx):
                 yield start_event
+            async for session_event in _maybe_emit_session_event():
+                yield session_event
             async for event in stream:
                 async for pre_event in hooks.before_event(hook_ctx, event):
-                    yield pre_event
-                yield event
+                    yield self._maybe_tag_session_metadata(pre_event, hook_ctx.get("session_id"))
+                tagged_event = self._maybe_tag_session_metadata(event, hook_ctx.get("session_id"))
+                yield tagged_event
                 if event.get("event") == "session_started":
                     data = event.get("data") or {}
                     hook_ctx["session_id"] = data.get("session_id", hook_ctx.get("session_id"))
+                    session_emitted = True
+                else:
+                    data = tagged_event.get("data") or {}
+                    fallback_session = data.get("session_id")
+                    if fallback_session and not hook_ctx.get("session_id"):
+                        hook_ctx["session_id"] = fallback_session
+                async for session_event in _maybe_emit_session_event():
+                    yield session_event
+                if event.get("event") == "workflow_complete":
+                    workflow_complete_seen = True
                 async for post_event in hooks.after_event(hook_ctx, event):
-                    yield post_event
+                    yield self._maybe_tag_session_metadata(post_event, hook_ctx.get("session_id"))
         except BaseException as exc:
+            if not workflow_complete_seen:
+                workflow_complete_seen = True
+                reason = "client_cancelled" if isinstance(exc, asyncio.CancelledError) else exc.__class__.__name__
+                async for cancel_event in self._emit_cancellation_event(
+                    hooks,
+                    hook_ctx,
+                    reason=reason,
+                ):
+                    yield cancel_event
             async for end_event in hooks.on_flow_end(hook_ctx, error=exc):
                 yield end_event
             raise
         else:
+            if not workflow_complete_seen:
+                workflow_complete_seen = True
+                async for cancel_event in self._emit_cancellation_event(
+                    hooks,
+                    hook_ctx,
+                    reason="stream_disconnected",
+                ):
+                    yield cancel_event
             async for end_event in hooks.on_flow_end(hook_ctx):
                 yield end_event
+
+    async def _emit_cancellation_event(
+        self,
+        hooks: _SingleAgentToolHooks,
+        hook_ctx: Dict[str, Any],
+        *,
+        reason: str,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        sequencer = self._active_sequencer
+        cancelled_lanes: List[str] = []
+        lane_snapshot: Dict[str, Any] = {}
+        if sequencer is not None:
+            try:
+                cancelled_lanes = sequencer.abort_pending_lanes(reason=reason)
+            except Exception:  # pragma: no cover - defensive logging
+                logger.exception("Failed to cancel pending lanes for reason=%s", reason)
+            lane_snapshot = sequencer.lane_presentations()
+        else:
+            state = getattr(self, "_sequencer_state", None)
+            snapshot = getattr(state, "lane_states", None) if state else None
+            if isinstance(snapshot, dict):
+                lane_snapshot = dict(snapshot)
+        payload = {
+            "status": "cancelled",
+            "reason": reason,
+            "pending_lanes": cancelled_lanes,
+            "lane_states": lane_snapshot,
+            "ts": datetime.utcnow().isoformat(),
+        }
+        session_identifier = hook_ctx.get("session_id")
+        if session_identifier:
+            payload["session_id"] = session_identifier
+        event = EventEmitter.result("workflow_complete", payload)
+        event["event"] = "workflow_complete"
+        annotated = self._planner._annotate(event)
+        if sequencer is not None and self._active_sequencer is sequencer:
+            self._active_sequencer = None
+        async for pre_event in hooks.before_event(hook_ctx, annotated):
+            yield pre_event
+        yield annotated
+        async for post_event in hooks.after_event(hook_ctx, annotated):
+            yield post_event
+
+    def _abort_stale_sequencer(self, *, reason: str = "restart") -> None:
+        sequencer = self._active_sequencer
+        if sequencer is None:
+            return
+        try:
+            sequencer.abort_pending_lanes(reason=reason)
+        except Exception:  # pragma: no cover - defensive logging
+            logger.exception("Failed to abort pending lanes for reason=%s", reason)
+        finally:
+            self._active_sequencer = None
 
     async def _resolve_session_query(self, session_id: str) -> str:
         repository = get_session_state_repository()
@@ -2609,7 +3256,7 @@ class SingleAgentController:
                 ctx.revision_search_topics = list(revision_directive.search_topics)
         registry = self._registry
         tool_stream = registry.invoke(tool_name, self._planner._pipeline, ctx, **kwargs)
-        async for event in self._forward_with_hooks(tool_stream, hooks, session_id):
+        async for event in self._forward_with_hooks(tool_stream, hooks, session_id, ensure_session_event=True):
             yield event
 
     async def events(
@@ -2623,6 +3270,7 @@ class SingleAgentController:
         emit_prefill_summary: Optional[bool] = None,
         sequencer_state: Optional[_SequencerRunState] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
+        self._abort_stale_sequencer(reason="restart")
         hooks = _SingleAgentToolHooks(self, session_id=session_id)
         if sequencer is None:
             stream = self._agentic_event_stream(query, session_id=session_id)
@@ -2636,7 +3284,7 @@ class SingleAgentController:
                 emit_prefill_summary=emit_prefill_summary,
                 state=sequencer_state,
             )
-        async for event in self._forward_with_hooks(stream, hooks, session_id):
+        async for event in self._forward_with_hooks(stream, hooks, session_id, ensure_session_event=True):
             yield event
 
     async def sequencer_stream(
@@ -2699,6 +3347,8 @@ class SingleAgentController:
                     event,
                     revision_targets=working_revision_targets,
                 )
+                for warning_event in self._drain_lane_warning_events():
+                    yield warning_event
                 self._sync_lane_states_from_sequencer(working_lane_states, sequencer)
                 if not summary_emitted and self._should_emit_lane_summary_before(event):
                     summary_event = self._emit_lane_summary(working_lane_states)
@@ -2741,22 +3391,96 @@ class SingleAgentController:
         emit_prefill_summary = bool(self._agentic_revision_mode and self._agentic_lane_targets)
 
         state = await self._prepare_sequencer_state(query, session_id=session_id)
-        orchestrator = self.build_planner_orchestrator()
-        sequencer = PlannerSequencer(
-            orchestrator,
-            lane_refresh_required=dict(getattr(state.ctx, "lane_refresh_required", {}) or {}),
-        )
+        self._sequencer_state = state
+        summary_emitted = False
+        try:
+            if emit_prefill_summary:
+                summary_event = self._emit_lane_summary(lane_states)
+                if summary_event:
+                    yield summary_event
+                    summary_emitted = True
 
-        async for event in self.sequencer_stream(
-            query,
-            session_id=session_id,
-            sequencer=sequencer,
-            lane_states=lane_states,
-            revision_targets=revision_targets,
-            emit_prefill_summary=emit_prefill_summary,
-            state=state,
-        ):
+            async for event in self._run_agentic_revision_loop(state, lane_states, revision_targets):
+                if self._should_emit_lane_summary_before(event):
+                    summary_event = self._emit_lane_summary(lane_states)
+                    if summary_event:
+                        yield summary_event
+                        summary_emitted = True
+                yield event
+                self._update_lane_state_from_event(
+                    lane_states,
+                    event,
+                    revision_targets=revision_targets,
+                )
+                for warning_event in self._drain_lane_warning_events():
+                    yield warning_event
+
+            if not summary_emitted:
+                summary_event = self._emit_lane_summary(lane_states)
+                if summary_event:
+                    yield summary_event
+        finally:
+            self._sequencer_state = None
+
+    async def _run_agentic_revision_loop(
+        self,
+        state: "_SequencerRunState",
+        lane_states: Dict[str, str],
+        revision_targets: Set[str],
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        ctx = state.ctx
+        async for event in self._intent_stage():
             yield event
+        if getattr(ctx, "halted", False):
+            return
+
+        try:
+            if state.run_sql_lane:
+                async for event in self._sql_stage():
+                    yield event
+            else:
+                reuse_sql_event = self._handle_lane_reuse(
+                    ctx,
+                    lane="sql",
+                    lane_states=lane_states,
+                    reason="cached_sql_artifacts",
+                )
+                if reuse_sql_event:
+                    yield reuse_sql_event
+
+            if self._should_run_accessory_lane(state, "web"):
+                async for event in self._web_stage():
+                    yield event
+            else:
+                reuse_web_event = self._handle_lane_reuse(
+                    ctx,
+                    lane="web",
+                    lane_states=lane_states,
+                    reason="cached_web_artifacts",
+                )
+                if reuse_web_event:
+                    yield reuse_web_event
+
+            if self._should_run_accessory_lane(state, "market"):
+                async for event in self._market_stage():
+                    yield event
+            else:
+                reuse_market_event = self._handle_lane_reuse(
+                    ctx,
+                    lane="market",
+                    lane_states=lane_states,
+                    reason="cached_market_artifacts",
+                )
+                if reuse_market_event:
+                    yield reuse_market_event
+
+            async for event in self._analysis_stage():
+                yield event
+        finally:
+            runtime = state.tool_runtime
+            if runtime:
+                await runtime.close()
+                state.tool_runtime = None
 
     async def chart_revision(
         self,
@@ -2825,7 +3549,7 @@ class SingleAgentController:
             ):
                 yield event
 
-        async for event in self._forward_with_hooks(_stream(), hooks, session_id):
+        async for event in self._forward_with_hooks(_stream(), hooks, session_id, ensure_session_event=True):
             yield event
 
     async def run_market_refresh(
@@ -2849,7 +3573,7 @@ class SingleAgentController:
             ):
                 yield event
 
-        async for event in self._forward_with_hooks(_stream(), hooks, session_id):
+        async for event in self._forward_with_hooks(_stream(), hooks, session_id, ensure_session_event=True):
             yield event
 
     async def run_analysis_refresh(
@@ -2900,6 +3624,8 @@ class SingleAgentController:
                     "source": source or "fresh_revision",
                 }
             )
+            if session_id:
+                warning_event["data"]["session_id"] = session_id
             annotated_warning = apply_mode_metadata(warning_event, self.flow_mode)
             annotated_warning["data"]["follow_up_route"] = FollowUpRoute.FULL_PIPELINE.value
             yield annotated_warning
@@ -2950,6 +3676,8 @@ class SingleAgentController:
                     "reason": "fresh_revision",
                 }
             )
+            if session_id:
+                confirmation["data"]["session_id"] = session_id
             annotated_confirmation = apply_mode_metadata(confirmation, self.flow_mode)
             annotated_confirmation["data"]["follow_up_route"] = self.follow_up_route.value
             yield annotated_confirmation
@@ -2975,6 +3703,8 @@ class SingleAgentController:
                     },
                 }
             )
+            if session_id:
+                warning_event["data"]["session_id"] = session_id
             annotated_warning = apply_mode_metadata(warning_event, self.flow_mode)
             annotated_warning["data"]["follow_up_route"] = self.follow_up_route.value
             yield annotated_warning
@@ -3068,6 +3798,8 @@ class SingleAgentController:
                 "web_refreshed": web_ready_seen,
             }
         )
+        if session_id:
+            ready_event["data"]["session_id"] = session_id
         annotated_ready = apply_mode_metadata(ready_event, self.flow_mode)
         annotated_ready["data"]["follow_up_route"] = self.follow_up_route.value
         yield annotated_ready
@@ -3098,6 +3830,21 @@ class SingleAgentController:
         if registry_name:
             return self._tool_metadata_by_registry.get(registry_name)
         return None
+
+    def _maybe_tag_session_metadata(
+        self,
+        event: Dict[str, Any],
+        session_id: Optional[str],
+    ) -> Dict[str, Any]:
+        if not session_id:
+            return event
+        name = event.get("event")
+        if name not in self.SESSION_AWARE_EVENTS:
+            return event
+        data = event.setdefault("data", {})
+        if isinstance(data, dict) and not data.get("session_id"):
+            data["session_id"] = session_id
+        return event
 
 
 

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef } from 'react';
+﻿import React, { useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   ReactFlow,
   MiniMap,
@@ -16,8 +16,15 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 
-import { ProcessNode } from './ProcessNode';
-import { ProcessStep, FlowMode, FlowVisualTheme } from '../types';
+import { ProcessNode, type ProcessNodeData as ProcessNodeComponentData, type ToolBadgeMeta } from './ProcessNode';
+import {
+  ProcessStep,
+  FlowMode,
+  FlowVisualTheme,
+  LaneReuseNotice,
+  ToolCallTelemetry,
+  AgentTurnTelemetry,
+} from '../types';
 
 const LANE_ORDER = ['overview', 'coordination', 'planner', 'sql', 'market', 'web', 'chart', 'analysis', 'fanout'] as const;
 type LaneKey = (typeof LANE_ORDER)[number];
@@ -227,6 +234,218 @@ const buildReusedEdgeTooltip = (step: ProcessStep, lane?: string, parallelGroup?
   return `Reused cached output from ${stepName}`;
 };
 
+const TOOL_BADGE_LIMIT = 4;
+const TOOL_STATUS_PRIORITY: Record<string, number> = {
+  completed: 4,
+  complete: 4,
+  end: 4,
+  cached: 3,
+  reuse: 3,
+  running: 3,
+  start: 2,
+  queued: 1,
+  pending: 1,
+};
+
+const normalizeStatusKey = (status?: string) => (typeof status === 'string' ? status.trim().toLowerCase() : '');
+
+const friendlyToolStatus = (status?: string) => {
+  const key = normalizeStatusKey(status);
+  switch (key) {
+    case 'start':
+    case 'running':
+      return 'Running';
+    case 'end':
+    case 'complete':
+    case 'completed':
+      return 'Complete';
+    case 'error':
+      return 'Error';
+    case 'reuse':
+    case 'cached':
+      return 'Cached';
+    case 'queued':
+    case 'pending':
+      return 'Queued';
+    default:
+      return status ? status.replace(/[_-]/g, ' ') : undefined;
+  }
+};
+
+const formatToolDuration = (value?: number) => {
+  if (typeof value !== 'number' || Number.isNaN(value)) {
+    return undefined;
+  }
+  if (value >= 1000) {
+    return `${(value / 1000).toFixed(1)}s`;
+  }
+  return `${Math.round(value)}ms`;
+};
+
+const formatToolLabel = (raw?: string) => {
+  if (!raw) {
+    return 'Tool';
+  }
+  return raw
+    .split(/[_-]/g)
+    .filter(Boolean)
+    .map((token) => token.charAt(0).toUpperCase() + token.slice(1))
+    .join(' ');
+};
+
+type ToolBadgeCandidate = ToolBadgeMeta & {
+  statusKey?: string;
+  ts?: number;
+  seq?: number;
+};
+
+const parseTimestamp = (value?: string) => {
+  if (!value) {
+    return undefined;
+  }
+  const ms = Date.parse(value);
+  return Number.isNaN(ms) ? undefined : ms;
+};
+
+const buildToolBadges = (step: ProcessStep): ToolBadgeMeta[] => {
+  const details = step.details;
+  const toolCalls = Array.isArray(details?.tool_calls) ? (details?.tool_calls as ToolCallTelemetry[]) : [];
+  const agentTurns = Array.isArray(details?.agent_turns) ? (details?.agent_turns as AgentTurnTelemetry[]) : [];
+
+  if (!toolCalls.length && !agentTurns.length) {
+    return [];
+  }
+
+  const candidates: ToolBadgeCandidate[] = [];
+
+  toolCalls.forEach((entry, index) => {
+    const toolName = formatToolLabel(entry.tool || entry.toolGroup || entry.details?.tool_call?.name);
+    const laneLabel = resolveLaneLabel(entry.lane ?? entry.toolGroup ?? '') ?? undefined;
+    candidates.push({
+      id: entry.details?.tool_call?.id ?? `${entry.tool ?? entry.toolGroup ?? 'tool'}:${entry.sequence ?? index}`,
+      tool: toolName,
+      laneLabel,
+      statusLabel: friendlyToolStatus(entry.status),
+      statusKey: normalizeStatusKey(entry.status),
+      elapsedLabel: formatToolDuration(entry.elapsed_ms),
+      reused: entry.reused ?? undefined,
+      ts: parseTimestamp(entry.ts),
+      seq: typeof entry.sequence === 'number' ? entry.sequence : index,
+    });
+  });
+
+  agentTurns.forEach((turn, index) => {
+    const toolName = formatToolLabel(turn.tool || turn.specialist || turn.role);
+    const laneLabel = resolveLaneLabel(turn.lane ?? turn.parallelGroup ?? turn.specialist ?? '') ?? undefined;
+    candidates.push({
+      id: `turn:${turn.role}:${turn.sequence ?? index}`,
+      tool: toolName,
+      laneLabel,
+      statusLabel: friendlyToolStatus(turn.status),
+      statusKey: normalizeStatusKey(turn.status),
+      elapsedLabel: formatToolDuration(turn.elapsed_ms),
+      reused: turn.reused ?? undefined,
+      ts: parseTimestamp(turn.ts),
+      seq: typeof turn.sequence === 'number' ? turn.sequence : index,
+    });
+  });
+
+  const deduped = new Map<string, ToolBadgeCandidate>();
+  candidates.forEach((candidate) => {
+    const existing = deduped.get(candidate.id);
+    if (!existing) {
+      deduped.set(candidate.id, candidate);
+      return;
+    }
+    const existingRank = TOOL_STATUS_PRIORITY[existing.statusKey ?? ''] ?? 0;
+    const candidateRank = TOOL_STATUS_PRIORITY[candidate.statusKey ?? ''] ?? 0;
+    if (candidateRank >= existingRank) {
+      deduped.set(candidate.id, {
+        ...existing,
+        ...candidate,
+        ts: candidate.ts ?? existing.ts,
+        seq: candidate.seq ?? existing.seq,
+      });
+    }
+  });
+
+  return Array.from(deduped.values())
+    .sort((a, b) => {
+      const tsDiff = (a.ts ?? a.seq ?? 0) - (b.ts ?? b.seq ?? 0);
+      if (tsDiff !== 0) {
+        return tsDiff;
+      }
+      return (a.seq ?? 0) - (b.seq ?? 0);
+    })
+    .slice(-TOOL_BADGE_LIMIT)
+    .reverse()
+    .map(({ statusKey: _statusKey, ts: _ts, seq: _seq, ...badge }) => badge);
+};
+
+const dedupeThinking = (thinking?: string[]) => {
+  if (!Array.isArray(thinking) || thinking.length === 0) {
+    return [];
+  }
+  const seen = new Set<string>();
+  const result: string[] = [];
+  thinking.forEach((entry) => {
+    const normalized = typeof entry === 'string' ? entry.trim() : '';
+    if (!normalized) {
+      return;
+    }
+    if (seen.has(normalized)) {
+      return;
+    }
+    seen.add(normalized);
+    result.push(entry);
+  });
+  return result;
+};
+
+const formatAgeSeconds = (value?: number) => {
+  if (typeof value !== 'number' || Number.isNaN(value)) {
+    return undefined;
+  }
+  if (value >= 3600) {
+    const hours = Math.floor(value / 3600);
+    const minutes = Math.round((value % 3600) / 60);
+    return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+  }
+  if (value >= 90) {
+    const minutes = Math.floor(value / 60);
+    const seconds = Math.round(value % 60);
+    return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
+  }
+  if (value >= 60) {
+    return `${(value / 60).toFixed(1)}m`;
+  }
+  if (value >= 1) {
+    return `${Math.round(value)}s`;
+  }
+  return '<1s';
+};
+
+type LaneReusePill = { key: string; text: string; title?: string };
+
+const buildLaneReusePills = (notices?: LaneReuseNotice[] | null): LaneReusePill[] => {
+  if (!Array.isArray(notices) || notices.length === 0) {
+    return [];
+  }
+  return notices
+    .slice(-4)
+    .reverse()
+    .map((notice, index) => {
+      const laneLabel = resolveLaneLabel(notice.lane) ?? (notice.lane ? notice.lane : 'Accessory lane');
+      const ageLabel = formatAgeSeconds(notice.ageSeconds);
+      const text = ageLabel ? `${laneLabel} reused (${ageLabel})` : `${laneLabel} reused`;
+      return {
+        key: `${notice.lane ?? 'lane'}-${notice.ts ?? index}`,
+        text,
+        title: notice.message ?? notice.reason ?? text,
+      };
+    });
+};
+
 interface WorkflowCanvasProps {
   steps: ProcessStep[];
   flowMode: FlowMode;
@@ -237,35 +456,16 @@ interface WorkflowCanvasProps {
   currentTimestamp?: string;
   currentDuration?: string;
   progressPercent?: number;
+  laneReuseNotices?: LaneReuseNotice[] | null;
+  redirectNotice?: string | null;
 }
 
-interface ProcessNodeData {
-  step: ProcessStep;
-  phase: keyof typeof PHASE_COLORS;
-  theme: FlowVisualTheme;
-  isActive: boolean;
-  isCompleted: boolean;
-  hasError: boolean;
-  statusLabel: string;
-  sequenceIndex: number;
-  totalSteps: number;
-  latestThinking?: string;
-  currentStatus?: string;
-  currentDuration?: string;
-  currentTimestamp?: string;
-  progressPercent?: number;
-  parallelGroup?: string;
-  sequence?: number;
-  lane?: string;
+type CanvasProcessNodeData = ProcessNodeComponentData & {
   resolvedLane?: LaneKey;
   laneGroupId?: string;
   bandIndex?: number;
   memberIndex?: number;
-  reused?: boolean;
-  finalAnswerOnly?: boolean;
-  missingComponents?: string[];
-  analysisAvailable?: boolean;
-}
+};
 
 const nodeTypes = {
   processNode: ProcessNode,
@@ -561,7 +761,8 @@ const computeLaneGroupId = (lane: LaneKey, step: ProcessStep): string => {
 };
 
 const extractLatestThinking = (step: ProcessStep): string | undefined => {
-  const trailing = step.thinking?.slice(-1)[0];
+  const sanitized = dedupeThinking(step.thinking);
+  const trailing = sanitized[sanitized.length - 1];
   if (step.id === 'tool_fanout') {
     const results = step.details?.tool_fanout_results;
     if (Array.isArray(results) && results.length > 0) {
@@ -612,9 +813,11 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
   currentTimestamp,
   currentDuration,
   progressPercent,
+  laneReuseNotices,
+  redirectNotice,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
-  const [nodes, setNodes, onNodesChange] = useNodesState([]);
+  const [nodes, setNodes, onNodesChange] = useNodesState<CanvasProcessNodeData>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const flowInstanceRef = useRef<ReactFlowInstance | null>(null);
   const hasInitialFit = useRef(false);
@@ -622,6 +825,7 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
 
   const theme = FLOW_THEMES[flowMode];
   const layout = FLOW_LAYOUT[flowMode];
+  const laneReusePills = useMemo(() => buildLaneReusePills(laneReuseNotices), [laneReuseNotices]);
 
   const processedSteps = useMemo(() => {
     const prioritizedSteps = flowMode === 'multi-agent'
@@ -676,13 +880,14 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
           bandKey: undefined,
           bandIndex: placement.row,
           memberIndex: placement.stepInRow - 1,
-          reused: Boolean(step.reused),
-          finalAnswerOnly: Boolean(step.finalAnswerOnly),
-          missingComponents: step.missingComponents,
-          analysisAvailable: step.analysisAvailable,
-        };
-      });
-    }
+        reused: Boolean(step.reused),
+        finalAnswerOnly: Boolean(step.finalAnswerOnly),
+        missingComponents: step.missingComponents,
+        analysisAvailable: step.analysisAvailable,
+        toolBadges: buildToolBadges(step),
+      };
+    });
+  }
 
     const presentPreSequence = flowMode === 'single-agent'
       ? SINGLE_AGENT_PREPROCESS_SEQUENCE.filter((id) => prioritizedSteps.some((entry) => entry.id === id))
@@ -760,13 +965,14 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
           bandKey,
           bandIndex,
           memberIndex,
-          reused: Boolean(step.reused),
-          finalAnswerOnly: Boolean(step.finalAnswerOnly),
-          missingComponents: step.missingComponents,
-          analysisAvailable: step.analysisAvailable,
-        };
-      });
-    }
+        reused: Boolean(step.reused),
+        finalAnswerOnly: Boolean(step.finalAnswerOnly),
+        missingComponents: step.missingComponents,
+        analysisAvailable: step.analysisAvailable,
+        toolBadges: buildToolBadges(step),
+      };
+    });
+  }
 
     const laneGroupSizes = new Map<string, number>();
     laneMeta.forEach((meta) => {
@@ -844,6 +1050,7 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
         finalAnswerOnly: Boolean(step.finalAnswerOnly),
         missingComponents: step.missingComponents,
         analysisAvailable: step.analysisAvailable,
+        toolBadges: buildToolBadges(step),
       };
     });
   }, [steps, flowMode, layout.columns, layout.horizontalGap, layout.verticalGap]);
@@ -936,6 +1143,7 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
           finalAnswerOnly,
           missingComponents,
           analysisAvailable,
+          toolBadges,
         }) => {
           const priorPosition = previous.get(step.id)?.position ?? position;
           return {
@@ -971,6 +1179,7 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
               finalAnswerOnly,
               missingComponents,
               analysisAvailable,
+              toolBadges,
             },
           } as Node<ProcessNodeData>;
         },
@@ -1023,6 +1232,7 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
             finalAnswerOnly: false,
             missingComponents: undefined,
             analysisAvailable: true,
+            toolBadges: [],
           },
         };
         nodesWithStructure.unshift(startNode);
@@ -1446,22 +1656,48 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
   );
 
   return (
-    <div ref={containerRef} className={`relative flex h-full flex-col overflow-hidden ${decor.wrapperClass} ${className ?? ''}`}>
+    <div
+      ref={containerRef}
+      data-testid="workflow-canvas-root"
+      data-screenshot-target="workflow-canvas"
+      className={`relative flex h-full flex-col overflow-hidden ${decor.wrapperClass} ${className ?? ''}`}
+    >
       <div className={`pointer-events-none absolute inset-0 ${decor.overlayClass}`} />
-      <div className="flex items-center justify-between border-b border-white/5 bg-black/10 px-4 py-2 text-[11px] text-gray-300 backdrop-blur-sm">
-        <div className="flex items-center gap-2">
-          <span className={`rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide ${FLOW_THEMES[flowMode].badgeClass}`}>
-            {flowMode.replace('-', ' ')}
-          </span>
-          {currentStepLabel && <span className="font-medium text-gray-100">{currentStepLabel}</span>}
-          {currentStatus && <span className="text-gray-400">{currentStatus}</span>}
+      <div className="flex flex-col gap-2 border-b border-white/5 bg-black/10 px-4 py-2 text-[11px] text-gray-300 backdrop-blur-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className={`rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide ${FLOW_THEMES[flowMode].badgeClass}`}>
+              {flowMode.replace('-', ' ')}
+            </span>
+            {currentStepLabel && <span className="font-medium text-gray-100">{currentStepLabel}</span>}
+            {currentStatus && <span className="text-gray-400">{currentStatus}</span>}
+          </div>
+          <div className="flex flex-wrap items-center gap-3 text-[10px] text-gray-400">
+            <span>{`Phase ? ${activePhase.toUpperCase()}`}</span>
+            {typeof progressPercent === 'number' && <span>{progressPercent}% complete</span>}
+            {currentTimestamp && <span>{new Date(currentTimestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>}
+            {currentDuration && <span>{currentDuration}</span>}
+          </div>
         </div>
-        <div className="flex items-center gap-3 text-[10px] text-gray-400">
-          <span>{`Phase › ${activePhase.toUpperCase()}`}</span>
-          {typeof progressPercent === 'number' && <span>{progressPercent}% complete</span>}
-          {currentTimestamp && <span>{new Date(currentTimestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>}
-          {currentDuration && <span>{currentDuration}</span>}
-        </div>
+        {laneReusePills.length > 0 && (
+          <div className="flex flex-wrap gap-2 text-[10px] text-sky-100">
+            {laneReusePills.map((pill) => (
+              <span
+                key={pill.key}
+                title={pill.title}
+                className="rounded-full border border-sky-400/40 bg-sky-600/20 px-2 py-0.5 uppercase tracking-wide"
+              >
+                {pill.text}
+              </span>
+            ))}
+          </div>
+        )}
+        {redirectNotice && (
+          <div className="rounded-lg border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-amber-100 shadow-inner" role="status">
+            <span className="text-xs font-semibold uppercase tracking-wide text-amber-200">Redirect</span>
+            <span className="ml-2 text-[11px] text-amber-100">{redirectNotice}</span>
+          </div>
+        )}
       </div>
 
       <div className="relative flex-1">
