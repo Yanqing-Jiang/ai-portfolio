@@ -2,15 +2,17 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, AsyncGenerator, Dict, Mapping, Optional, Set, Tuple
 
+from analytics.core import telemetry
 from analytics.core.session_state import SessionStateSnapshot, get_session_state_repository
 from analytics.artifacts import PipelineArtifacts
 from analytics.core.events import EventEmitter, TimedEventEmitter
 from analytics.validators import sanitize_for_json
 from .planner_executor import PlannerExecutorFlow, run_planner_executor
 from .schedulers import FlowMode, FlowStageIndex, get_stage_index, resolve_stage
+from .sequencer import LANE_TOOL_MAP, LANE_TOOL_LOOKUP
 
 PARALLEL_GROUP_BY_EVENT = {
     "session_started": "session",
@@ -70,6 +72,58 @@ PARALLEL_GROUP_BY_STEP = {
     "web_refresh": "web",
     "market_refresh": "web",
 }
+
+AGENT_TOOL_ALERT_THRESHOLD = 0.10
+AGENT_TOOL_ALERT_MIN_CALLS = 5
+
+
+def _resolve_lane_for_tool(tool_call: Mapping[str, Any]) -> Optional[str]:
+    lane = tool_call.get("lane")
+    if isinstance(lane, str) and lane.strip():
+        return lane.strip().lower()
+    tool_name = tool_call.get("name") or tool_call.get("tool")
+    if isinstance(tool_name, str):
+        normalized = tool_name.strip().lower()
+        if normalized:
+            return LANE_TOOL_LOOKUP.get(normalized)
+    return None
+
+
+def _update_agent_tool_metrics(
+    snapshot: SessionStateSnapshot,
+    lane: str,
+    *,
+    bucket: str,
+    flow_mode: FlowMode,
+    session_id: Optional[str],
+) -> None:
+    metrics = snapshot.tool_cache.setdefault(
+        "agent_tool_metrics",
+        {"call": {}, "complete": {}},
+    )
+    for key in ("call", "complete"):
+        metrics.setdefault(key, {})
+    counters = metrics[bucket]
+    counters[lane] = int(counters.get(lane, 0)) + 1
+    if bucket != "call":
+        return
+    total_calls = int(metrics["call"].get(lane, 0))
+    total_completions = int(metrics["complete"].get(lane, 0))
+    outstanding = max(total_calls - total_completions, 0)
+    if total_calls < AGENT_TOOL_ALERT_MIN_CALLS:
+        return
+    if outstanding <= 0:
+        return
+    ratio = outstanding / max(total_calls, 1)
+    if ratio >= AGENT_TOOL_ALERT_THRESHOLD:
+        telemetry.agent_tool_gap(
+            lane=lane,
+            outstanding=outstanding,
+            total_calls=total_calls,
+            threshold=AGENT_TOOL_ALERT_THRESHOLD,
+            session_id=session_id,
+            flow=flow_mode.value,
+        )
 
 def _resolve_flow_mode(flow: Any) -> FlowMode:
     raw_mode = getattr(flow, "flow_mode", FlowMode.DIRECT)
@@ -203,6 +257,7 @@ def _maybe_update_session_state(
     name = event.get("event")
     data = event.get("data") or {}
     updated = False
+    now_ts = datetime.now(timezone.utc)
     schedule_stage = data.get("schedule_stage")
     parallel_group = data.get("parallel_group")
     if schedule_stage:
@@ -268,7 +323,46 @@ def _maybe_update_session_state(
             cache_payload.setdefault("query", cache_payload.get("query_terms"))
             snapshot.record_tool_result("web_search", cache_payload)
             updated = True
-    elif name in {"tool_call_delta", "tool_call_arguments"}:
+    elif name in {"sql_ready", "sql_revision_ready"}:
+        snapshot.record_lane_fast_path_marker("sql_ready_seen_at", at=now_ts)
+        updated = True
+    elif name == "lane_reused":
+        lane = (data.get("lane") or "").strip().lower()
+        if lane:
+            metadata = {
+                "lane": lane,
+                "reason": data.get("reason"),
+                "source": data.get("source"),
+                "age_seconds": data.get("age_seconds"),
+                "ts": data.get("ts") or now_ts.isoformat(),
+            }
+            latency_ms = snapshot.lane_fast_path_latency_ms("sql_ready_seen_at", now=now_ts)
+            if latency_ms is not None:
+                metadata["fast_path_latency_ms"] = latency_ms
+            snapshot.record_lane_reuse(lane, metadata)
+            snapshot.record_agent_reasoning(
+                f"lane_reuse:{lane}",
+                f"{lane.title()} lane reused",
+                lane=lane,
+                metadata=metadata,
+            )
+            for tool in LANE_TOOL_MAP.get(lane, ()):
+                synthetic_receipt = {
+                    "status": "reused",
+                    "lane": lane,
+                    "reused": True,
+                    "reason": data.get("reason"),
+                    "source": data.get("source"),
+                    "ts": metadata["ts"],
+                }
+                if latency_ms is not None:
+                    synthetic_receipt["fast_path_latency_ms"] = latency_ms
+                age_seconds = data.get("age_seconds")
+                if age_seconds is not None:
+                    synthetic_receipt["age_seconds"] = age_seconds
+                snapshot.record_tool_receipt(tool, synthetic_receipt)
+            updated = True
+    elif name in {"tool_call_delta", "tool_call_arguments", "agent_tool_call"}:
         tool_call = data.get("tool_call")
         if isinstance(tool_call, Mapping):
             tool_name = tool_call.get("name") or tool_call.get("id")
@@ -279,9 +373,20 @@ def _maybe_update_session_state(
                     "arguments_delta": tool_call.get("arguments_delta"),
                     "sequence_number": tool_call.get("sequence_number"),
                     "output_index": tool_call.get("output_index"),
+                    "status": tool_call.get("status"),
+                    "lane": tool_call.get("lane"),
                 }
                 snapshot.record_tool_receipt(str(tool_name), receipt_payload)
                 updated = True
+            lane = _resolve_lane_for_tool(tool_call)
+            if lane:
+                _update_agent_tool_metrics(
+                    snapshot,
+                    lane,
+                    bucket="call",
+                    flow_mode=flow_mode,
+                    session_id=snapshot.session_id,
+                )
     elif name == "agent_tool_complete":
         tool_call = data.get("tool_call")
         if isinstance(tool_call, Mapping):
@@ -300,6 +405,15 @@ def _maybe_update_session_state(
                     receipt_payload = merged
                 snapshot.record_tool_receipt(str(tool_name), receipt_payload)
                 updated = True
+            lane = _resolve_lane_for_tool(tool_call)
+            if lane:
+                _update_agent_tool_metrics(
+                    snapshot,
+                    lane,
+                    bucket="complete",
+                    flow_mode=flow_mode,
+                    session_id=snapshot.session_id,
+                )
 
     return updated
 

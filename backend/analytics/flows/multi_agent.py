@@ -204,6 +204,9 @@ class _MultiAgentHooks(AnalyticsFlowHooks):
         start_event = self._flow._maybe_agent_turn_start(event)
         if start_event:
             yield start_event
+            tool_event = self._flow._agent_tool_event_from_turn(start_event, status="start")
+            if tool_event:
+                yield tool_event
         if name == "analysis_streaming":
             reasoning = self._flow._agent_reasoning(event, self._active_session)
             if reasoning:
@@ -222,6 +225,9 @@ class _MultiAgentHooks(AnalyticsFlowHooks):
         end_event = self._flow._maybe_agent_turn_end(event)
         if end_event:
             yield end_event
+            tool_complete = self._flow._agent_tool_event_from_turn(end_event, status="completed")
+            if tool_complete:
+                yield tool_complete
         if (
             not self._flow._orchestrated
             and event.get("event") == "analysis_complete"
@@ -1234,6 +1240,13 @@ class MultiAgentFlow:
         "schema_clarifier": "2025-10-16",
         "multi_agent.supervisor": "2025-10-16",
     }
+    SESSION_AWARE_EVENTS: Set[str] = {
+        "follow_up_route",
+        "analysis_ready",
+        "analysis_revision_ready",
+        "analysis_complete",
+        "workflow_complete",
+    }
 
     AGENT_START_STEPS = {
         "intent_detection": "intent_analyst",
@@ -1334,6 +1347,19 @@ class MultiAgentFlow:
         "market_agent": "market",
         "web_research_agent": "web",
         "insight_reviewer": "analysis",
+    }
+    ROLE_TOOL_ALIAS: Dict[str, str] = {
+        "planner_agent": "planner",
+        "intent_analyst": "intent_classifier",
+        "user_liaison": "clarification_manager",
+        "sql_specialist": "sql_generator",
+        "risk_controller": "sql_validator",
+        "data_engineer": "sql_executor",
+        "viz_designer": "chart_designer",
+        "insight_reviewer": "analysis_writer",
+        "analyst_agent": "analysis_writer",
+        "market_agent": "stock_tracker",
+        "web_research_agent": "web_retriever",
     }
     ARTIFACT_LANE_MAP: Dict[str, str] = {
         "sql_ready": "sql",
@@ -1485,6 +1511,25 @@ class MultiAgentFlow:
         self._sequencer_state: Optional[_SupervisorSequencerState] = None
         self._active_sequencer: Optional["PlannerSequencer"] = None  # type: ignore[name-defined]
         self._lane_retry_counts: Dict[str, int] = {}
+        self._session_follow_up = False
+        self._agent_tool_counters: Dict[str, int] = {}
+        self._agent_tool_active_ids: Dict[str, str] = {}
+
+    def _abort_stale_sequencer(self, *, reason: str = "restart") -> None:
+        sequencer = self._active_sequencer
+        if sequencer is None:
+            return
+        try:
+            sequencer.abort_pending_lanes(reason=reason)
+        except Exception:  # pragma: no cover - defensive logging
+            logger.exception("Failed to abort pending lanes for reason=%s", reason)
+        finally:
+            if self._active_sequencer is sequencer:
+                self._active_sequencer = None
+
+    def set_session_follow_up(self, follow_up: bool) -> None:
+        self._session_follow_up = bool(follow_up)
+        self._planner.set_session_follow_up(follow_up)
 
     def _hedged_tool_aliases(self) -> List[str]:
         manifest = self._shared_context.get("tool_manifest")
@@ -2451,6 +2496,21 @@ class MultiAgentFlow:
             annotated["data"] = data
         return annotated
 
+    def _maybe_tag_session_metadata(
+        self,
+        event: Dict[str, Any],
+        session_id: Optional[str],
+    ) -> Dict[str, Any]:
+        if not session_id:
+            return event
+        name = event.get("event")
+        if name not in self.SESSION_AWARE_EVENTS:
+            return event
+        data = event.setdefault("data", {})
+        if isinstance(data, dict) and not data.get("session_id"):
+            data["session_id"] = session_id
+        return event
+
     def _emit_lane_transition(
         self,
         lane: Optional[str],
@@ -2525,27 +2585,83 @@ class MultiAgentFlow:
         hooks: _MultiAgentHooks,
         query: str,
         session_id: Optional[str],
+        *,
+        ensure_session_event: bool = True,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         hook_ctx: Dict[str, Any] = {"query": query, "session_id": session_id}
+        session_emitted = False
+
+        async def _maybe_emit_session_event() -> AsyncGenerator[Dict[str, Any], None]:
+            nonlocal session_emitted
+            if session_emitted or not ensure_session_event:
+                if False:
+                    yield {}
+                return
+            session_identifier = hook_ctx.get("session_id")
+            if not session_identifier:
+                if False:
+                    yield {}
+                return
+            raw_event = EventEmitter.session_started(session_identifier)
+            async for pre_event in hooks.before_event(hook_ctx, raw_event):
+                yield self._maybe_tag_session_metadata(
+                    self._annotate(pre_event),
+                    hook_ctx.get("session_id"),
+                )
+            annotated = self._maybe_tag_session_metadata(self._annotate(raw_event), session_identifier)
+            yield annotated
+            async for post_event in hooks.after_event(hook_ctx, raw_event):
+                yield self._maybe_tag_session_metadata(
+                    self._annotate(post_event),
+                    hook_ctx.get("session_id"),
+                )
+            session_emitted = True
+
         try:
             async for start_event in hooks.on_flow_start(hook_ctx):
-                yield self._annotate(start_event)
+                yield self._maybe_tag_session_metadata(self._annotate(start_event), hook_ctx.get("session_id"))
+            async for session_event in _maybe_emit_session_event():
+                yield session_event
             async for event in stream:
                 async for pre_event in hooks.before_event(hook_ctx, event):
-                    yield self._annotate(pre_event)
-                yield self._annotate(event)
+                    yield self._maybe_tag_session_metadata(
+                        self._annotate(pre_event),
+                        hook_ctx.get("session_id"),
+                    )
+                annotated_event = self._maybe_tag_session_metadata(
+                    self._annotate(event),
+                    hook_ctx.get("session_id"),
+                )
+                yield annotated_event
                 if event.get("event") == "session_started":
                     data = event.get("data") or {}
                     hook_ctx["session_id"] = data.get("session_id", hook_ctx.get("session_id"))
+                    session_emitted = True
+                else:
+                    data = annotated_event.get("data") or {}
+                    fallback_session = data.get("session_id")
+                    if fallback_session and not hook_ctx.get("session_id"):
+                        hook_ctx["session_id"] = fallback_session
+                async for session_event in _maybe_emit_session_event():
+                    yield session_event
                 async for post_event in hooks.after_event(hook_ctx, event):
-                    yield self._annotate(post_event)
+                    yield self._maybe_tag_session_metadata(
+                        self._annotate(post_event),
+                        hook_ctx.get("session_id"),
+                    )
         except BaseException as exc:
             async for end_event in hooks.on_flow_end(hook_ctx, error=exc):
-                yield self._annotate(end_event)
+                yield self._maybe_tag_session_metadata(
+                    self._annotate(end_event),
+                    hook_ctx.get("session_id"),
+                )
             raise
         else:
             async for end_event in hooks.on_flow_end(hook_ctx):
-                yield self._annotate(end_event)
+                yield self._maybe_tag_session_metadata(
+                    self._annotate(end_event),
+                    hook_ctx.get("session_id"),
+                )
 
     async def _intent_stage(self) -> AsyncGenerator[Dict[str, Any], None]:
         state = self._sequencer_state
@@ -2793,6 +2909,9 @@ class MultiAgentFlow:
                 banner_event = EventEmitter.progress("follow_up_route", banner_config["message"])
                 banner_event["data"]["route"] = ctx.follow_up_route.value
                 banner_event["data"]["ts"] = datetime.utcnow().isoformat()
+                session_identifier = getattr(ctx, "session_id", None)
+                if session_identifier:
+                    banner_event["data"]["session_id"] = session_identifier
 
                 async def _banner_stream() -> AsyncGenerator[Dict[str, Any], None]:
                     yield banner_event
@@ -2809,6 +2928,8 @@ class MultiAgentFlow:
                 result_event = EventEmitter.result("planner_result", planner_payload)
                 result_event["event"] = "planner_result"
                 result_event["data"]["ts"] = datetime.utcnow().isoformat()
+                if session_identifier:
+                    result_event["data"]["session_id"] = session_identifier
 
                 async def _planner_result_stream() -> AsyncGenerator[Dict[str, Any], None]:
                     yield result_event
@@ -2887,6 +3008,15 @@ class MultiAgentFlow:
         state.lane_states = working_lane_states
         self._latest_lane_states = dict(working_lane_states)
 
+        session_identifier = session_id or getattr(state.ctx, "session_id", None)
+        if session_identifier:
+            synthetic = EventEmitter.session_started(session_identifier)
+            annotated_session = self._maybe_tag_session_metadata(
+                self._annotate(synthetic),
+                session_identifier,
+            )
+            yield annotated_session
+
         def _on_lane_transition(event: Dict[str, Any]) -> None:
             self._sync_lane_states_from_sequencer(working_lane_states, sequencer)
             self._latest_lane_states = dict(working_lane_states)
@@ -2902,7 +3032,10 @@ class MultiAgentFlow:
 
         try:
             async for event in sequencer.run():
-                annotated_event = self._annotate(event)
+                annotated_event = self._maybe_tag_session_metadata(
+                    self._annotate(event),
+                    session_identifier,
+                )
                 yield annotated_event
                 self._sync_lane_states_from_sequencer(working_lane_states, sequencer)
                 self._latest_lane_states = dict(working_lane_states)
@@ -2921,7 +3054,10 @@ class MultiAgentFlow:
         self._latest_lane_states = dict(working_lane_states)
         summary_event = self._emit_lane_summary(working_lane_states)
         if summary_event:
-            yield self._annotate(summary_event)
+            yield self._maybe_tag_session_metadata(
+                self._annotate(summary_event),
+                session_identifier,
+            )
 
     async def events(
         self,
@@ -2931,6 +3067,7 @@ class MultiAgentFlow:
         sequencer: Optional[PlannerSequencer] = None,
         sequencer_state: Optional[_SupervisorSequencerState] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
+        self._abort_stale_sequencer(reason="restart")
         if sequencer is not None:
             async for event in self.sequencer_stream(
                 query,
@@ -2950,12 +3087,24 @@ class MultiAgentFlow:
                 return
             except TypeError:
                 planner_stream = planner_events(query, session_id=session_id)
-                async for event in self._forward_with_hooks(planner_stream, hooks, query, session_id):
+                async for event in self._forward_with_hooks(
+                    planner_stream,
+                    hooks,
+                    query,
+                    session_id,
+                    ensure_session_event=True,
+                ):
                     yield event
                 return
 
         planner_stream = run_planner_executor(query, session_id=session_id)
-        async for event in self._forward_with_hooks(planner_stream, hooks, query, session_id):
+        async for event in self._forward_with_hooks(
+            planner_stream,
+            hooks,
+            query,
+            session_id,
+            ensure_session_event=True,
+        ):
             yield event
 
     async def chart_revision(
@@ -2982,7 +3131,13 @@ class MultiAgentFlow:
             reason=reason,
             source=source,
         )
-        async for event in self._forward_with_hooks(tool_stream, hooks, query, session_id):
+        async for event in self._forward_with_hooks(
+            tool_stream,
+            hooks,
+            query,
+            session_id,
+            ensure_session_event=True,
+        ):
             yield event
 
     async def apply_chart_revision(
@@ -3034,7 +3189,13 @@ class MultiAgentFlow:
             ):
                 yield event
 
-        async for event in self._forward_with_hooks(_stream(), hooks, query, session_id):
+        async for event in self._forward_with_hooks(
+            _stream(),
+            hooks,
+            query,
+            session_id,
+            ensure_session_event=True,
+        ):
             yield self._annotate(event)
 
     async def refresh_market_lane(
@@ -3060,7 +3221,13 @@ class MultiAgentFlow:
             ):
                 yield event
 
-        async for event in self._forward_with_hooks(_stream(), hooks, query, session_id):
+        async for event in self._forward_with_hooks(
+            _stream(),
+            hooks,
+            query,
+            session_id,
+            ensure_session_event=True,
+        ):
             yield self._annotate(event)
 
     async def run_analysis_refresh(
@@ -3158,6 +3325,8 @@ class MultiAgentFlow:
                     "reason": "fresh_revision",
                 }
             )
+            if session_id:
+                ready_event["data"]["session_id"] = session_id
             yield self._annotate(ready_event)
 
         if not web_ready_seen:
@@ -3181,6 +3350,8 @@ class MultiAgentFlow:
                     },
                 }
             )
+            if session_id:
+                warning_event["data"]["session_id"] = session_id
             yield self._annotate(warning_event)
 
         ctx = await self._planner.initialize_context(query, session_id=session_id)
@@ -3268,7 +3439,13 @@ class MultiAgentFlow:
             reason=reason,
             source=source,
         )
-        async for event in self._forward_with_hooks(tool_stream, hooks, query, session_id):
+        async for event in self._forward_with_hooks(
+            tool_stream,
+            hooks,
+            query,
+            session_id,
+            ensure_session_event=True,
+        ):
             yield event
 
     def _prepare_context(self, query: str) -> None:
@@ -3409,6 +3586,7 @@ class MultiAgentFlow:
                     ctx.classification = cached_classification
         elif getattr(ctx, "is_financial_query", None) is None:
             ctx.is_financial_query = True
+        session_follow_up = bool(getattr(ctx, "session_follow_up", False) or self._session_follow_up)
         state = _SupervisorSequencerState(
             ctx=ctx,
             registry=registry,
@@ -3424,7 +3602,8 @@ class MultiAgentFlow:
         has_revision_targets = bool(getattr(ctx, "revision_targets", None))
         agentic_revision_mode = bool(getattr(ctx, "agentic_revision_mode", False) or self._agentic_revision_mode)
         is_revision_follow_up = (
-            ctx.follow_up_route != FollowUpRoute.FULL_PIPELINE
+            session_follow_up
+            or ctx.follow_up_route != FollowUpRoute.FULL_PIPELINE
             or revision_directive_active
             or has_revision_targets
             or agentic_revision_mode
@@ -3457,7 +3636,7 @@ class MultiAgentFlow:
                 hydrated_intent_ready = True
             if not hydrated_plan_ready and cached_plan_ready:
                 hydrated_plan_ready = True
-            skip_reason = "revision_follow_up"
+            skip_reason = "session_follow_up" if session_follow_up else "revision_follow_up"
             if cached_classification is not None and confidence >= REVISION_INTENT_CONFIDENCE_THRESHOLD:
                 skip_reason = "cached_intent"
             elif cached_revision_ready:
@@ -3490,7 +3669,7 @@ class MultiAgentFlow:
                 elif cached_revision_ready:
                     intent_skip_reason = "revision_context"
                 else:
-                    intent_skip_reason = "revision_follow_up"
+                    intent_skip_reason = "session_follow_up" if session_follow_up else "revision_follow_up"
                 log_tool_iteration(
                     tool="intent_classifier",
                     status="skipped",
@@ -4321,6 +4500,64 @@ class MultiAgentFlow:
             payload["output_artifacts"] = metadata.get("output_artifacts")
             payload["concurrency_limit"] = metadata.get("concurrency_limit")
         return self._annotate({"event": "agent_turn_end", "data": payload})
+
+    def _agent_tool_event_from_turn(
+        self,
+        turn_event: Dict[str, Any],
+        *,
+        status: str,
+    ) -> Optional[Dict[str, Any]]:
+        data = dict(turn_event.get("data") or {})
+        role = data.get("role")
+        if not role:
+            return None
+        tool_alias = self.ROLE_TOOL_ALIAS.get(str(role))
+        if not tool_alias:
+            return None
+        lane = data.get("lane") or self.ROLE_LANES.get(role)
+        if status == "start":
+            counter = self._agent_tool_counters.get(tool_alias, 0) + 1
+            self._agent_tool_counters[tool_alias] = counter
+            call_id = f"{tool_alias}-{counter}"
+            self._agent_tool_active_ids[tool_alias] = call_id
+        else:
+            call_id = self._agent_tool_active_ids.get(tool_alias)
+            if not call_id:
+                counter = self._agent_tool_counters.get(tool_alias, 0) + 1
+                self._agent_tool_counters[tool_alias] = counter
+                call_id = f"{tool_alias}-{counter}"
+            if status == "completed":
+                self._agent_tool_active_ids.pop(tool_alias, None)
+        sequence_number = self._agent_tool_counters.get(tool_alias, 1)
+        tool_call = {
+            "id": call_id,
+            "name": tool_alias,
+            "lane": lane,
+            "status": status,
+            "sequence_number": sequence_number,
+            "parallel_group": data.get("parallel_group"),
+            "role": role,
+        }
+        payload: Dict[str, Any] = {
+            "tool_call": {key: value for key, value in tool_call.items() if value is not None},
+            "tool": tool_alias,
+            "lane": lane,
+            "role": role,
+            "status": status,
+            "parallel_group": data.get("parallel_group"),
+            "retry_count": data.get("retry_count"),
+            "ts": datetime.utcnow().isoformat(),
+        }
+        step = data.get("step")
+        if step:
+            payload["step"] = step
+        if status == "completed":
+            if "summary" in data:
+                payload["summary"] = data.get("summary")
+            if "elapsed_ms" in data:
+                payload["elapsed_ms"] = data.get("elapsed_ms")
+        event_name = "agent_tool_call" if status == "start" else "agent_tool_complete"
+        return self._annotate({"event": event_name, "data": payload})
 
     def _agent_retry_event(self, role: str, trace: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
         last = trace[-1] if trace else {}

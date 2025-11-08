@@ -25,6 +25,7 @@ import {
   LatencyGuardrail,
   SlotStatusMap,
   SlotStatusPayload,
+  LaneReuseNotice,
 } from '../types';
 import { apiService } from '../../../services/apiService';
 import { useAnalyticsStream } from './useAnalyticsStream';
@@ -81,6 +82,15 @@ const FOLLOW_UP_BANNER_COPY: Record<string, { title: string; message: string }> 
     title: 'Revision Not Available',
     message: 'Start a new question to rebuild missing results before revising again.',
   },
+};
+
+const formatLaneName = (lane?: string) => {
+  if (!lane) return 'Lane';
+  return lane
+    .split(/[_-]/g)
+    .filter(Boolean)
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+    .join(' ');
 };
 
 const SPECIALIST_LANE_PRIORITY: Record<string, number> = {
@@ -144,59 +154,6 @@ type SnapshotReuseInfo = {
 type ChartGranularity = 'annual' | 'quarterly';
 
 const SLOT_LABEL_CACHE = new Map<string, string>();
-
-const REVISION_ACTION_WORDS = [
-  'revise',
-  'revision',
-  'update',
-  'change',
-  'modify',
-  'tweak',
-  'adjust',
-  'convert',
-  'switch',
-  'turn',
-  'redo',
-  'refresh',
-  'rewrite',
-] as const;
-
-const CHART_REVISION_ANCHORS = ['chart', 'graph', 'visualization', 'visualisation', 'plot'] as const;
-const ANALYSIS_REVISION_ANCHORS = ['analysis', 'summary', 'narrative', 'insight', 'insights', 'writeup'] as const;
-const ANALYSIS_REVISION_MARKERS = [
-  'analysis focus',
-  'analysis:',
-  'analysis ->',
-  'rewrite the analysis',
-  'redo the analysis',
-  'update the analysis',
-  'revise the analysis',
-  'summary:',
-  'summary ->',
-  'follow-up',
-] as const;
-
-const looksLikeRevisionFollowUp = (query: string): boolean => {
-  const normalized = query.trim().toLowerCase();
-  if (!normalized) {
-    return false;
-  }
-
-  if (REVISION_ACTION_WORDS.some((word) => normalized.includes(word))) {
-    if (CHART_REVISION_ANCHORS.some((anchor) => normalized.includes(anchor))) {
-      return true;
-    }
-    if (ANALYSIS_REVISION_ANCHORS.some((anchor) => normalized.includes(anchor))) {
-      return true;
-    }
-  }
-
-  if (ANALYSIS_REVISION_MARKERS.some((marker) => normalized.includes(marker))) {
-    return true;
-  }
-
-  return false;
-};
 
 const formatSlotLabel = (slot: string): string => {
   if (!slot) {
@@ -541,6 +498,8 @@ export const useAnalyticsMemoryStream = (
   const [slotStatuses, setSlotStatuses] = useState<SlotStatusMap>({});
   const [slotFollowups, setSlotFollowups] = useState<ClarifyRequest[]>([]);
   const [snapshotReuse, setSnapshotReuse] = useState<SnapshotReuseInfo | null>(null);
+  const [laneReuseNotices, setLaneReuseNotices] = useState<LaneReuseNotice[]>([]);
+  const [redirectNotice, setRedirectNotice] = useState<string | null>(null);
   const revisionContextRef = useRef<{ id?: string; lanes: string[]; focus?: string }>({
     id: undefined,
     lanes: [],
@@ -557,6 +516,33 @@ export const useAnalyticsMemoryStream = (
   const finalResultMergedRef = useRef<boolean>(false);
   const hasExplicitResultContentRef = useRef<boolean>(false);
   const finalizationMessageRef = useRef<string | null>(null);
+  const thoughtHistoryRef = useRef<Record<string, Set<string>>>({});
+
+  const markThoughtIfNew = (stepId?: string, thoughtId?: string | null) => {
+    if (!stepId || !thoughtId) {
+      return true;
+    }
+    const normalizedStep = stepId.trim();
+    if (!normalizedStep) {
+      return true;
+    }
+    let bucket = thoughtHistoryRef.current[normalizedStep];
+    if (!bucket) {
+      bucket = new Set<string>();
+      thoughtHistoryRef.current[normalizedStep] = bucket;
+    }
+    if (bucket.has(thoughtId)) {
+      return false;
+    }
+    bucket.add(thoughtId);
+    if (bucket.size > 120) {
+      const first = bucket.values().next().value;
+      if (first) {
+        bucket.delete(first);
+      }
+    }
+    return true;
+  };
 
   const storageKey = typeof window !== 'undefined' ? `analytics:lastSessionId:${flow}` : null;
 
@@ -597,6 +583,39 @@ export const useAnalyticsMemoryStream = (
 
   const generateMessageId = () =>
     `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+
+  const persistSessionId = (nextSessionId?: string | null) => {
+    if (!nextSessionId) {
+      return;
+    }
+    if (sessionId === nextSessionId) {
+      return;
+    }
+    lastSessionIdRef.current = nextSessionId;
+    setSessionId(nextSessionId);
+    if (storageKey) {
+      try {
+        window.sessionStorage.setItem(storageKey, nextSessionId);
+      } catch {
+        /* ignore storage errors */
+      }
+    }
+  };
+
+  const clearSessionTracking = () => {
+    if (!sessionId && !lastSessionIdRef.current) {
+      return;
+    }
+    setSessionId('');
+    lastSessionIdRef.current = '';
+    if (storageKey) {
+      try {
+        window.sessionStorage.removeItem(storageKey);
+      } catch {
+        /* ignore */
+      }
+    }
+  };
 
   const emitResultOnce = useCallback((options?: { content?: string }) => {
     if (resultSentRef.current) return;
@@ -2564,18 +2583,6 @@ const workflowDataRef = useRef<{
     }
 
     const activeSessionId = sessionId || lastSessionIdRef.current;
-    if (looksLikeRevisionFollowUp(trimmed) && !activeSessionId) {
-      const message =
-        'Revision requests need an existing analysis run to revise. Start a new analysis first, then try the revision.';
-      streamHook.setError(message);
-      streamHook.setCurrentStatus(`Error: ${message}`);
-      addChatMessage({
-        type: 'assistant',
-        content: message,
-      });
-      return;
-    }
-
     const usageResponse = await apiService.countUserInput({ scope: 'next-gen-analytics-agent' });
     if (!usageResponse.success) {
       const errorMessage = usageResponse.error || 'Rate limit exceeded. Please try again later.';
@@ -2597,6 +2604,17 @@ const workflowDataRef = useRef<{
     
     const hadResult = resultSentRef.current;
     const isFollowUp = Boolean(hadResult && activeSessionId);
+    if (hadResult && !activeSessionId) {
+      const fallbackMessage =
+        'The previous analysis session expired. Please start a new analysis run before requesting revisions.';
+      streamHook.setError(fallbackMessage);
+      streamHook.setCurrentStatus(`Error: ${fallbackMessage}`);
+      addChatMessage({
+        type: 'assistant',
+        content: fallbackMessage,
+      });
+      return;
+    }
     const focusCandidate = extractAnalysisFocus(trimmed);
     if (isFollowUp) {
       revisionModeRef.current = revisionModeRef.current === 'none' ? 'mixed' : revisionModeRef.current;
@@ -2612,6 +2630,7 @@ const workflowDataRef = useRef<{
     setStreamingText('');
     setProgressiveText('');
     setProgressiveAnalysis('');
+    thoughtHistoryRef.current = {};
     workflowDataRef.current.streamingText = '';
     workflowDataRef.current.progressiveText = '';
     workflowDataRef.current.progressiveAnalysis = '';
@@ -2633,6 +2652,8 @@ const workflowDataRef = useRef<{
     } else {
       setRevisionMode((prev) => (prev === 'none' ? 'mixed' : prev));
     }
+    setLaneReuseNotices([]);
+    setRedirectNotice(null);
     setLatencyGuardrail(null);
     workflowDataRef.current.latencyGuardrail = null;
     setPendingClarification(null);
@@ -2675,6 +2696,7 @@ const workflowDataRef = useRef<{
         typeof rawEventType === 'string' ? REVISION_EVENT_ALIASES[rawEventType] ?? rawEventType : rawEventType;
       // Handle both old (heavy) and new (lightweight) event formats
       const eventData = data.data || data;
+      const rawThoughtId = coerceString(eventData.thought_id ?? data.thought_id);
       const eventVisibility =
         typeof data.event_type === 'string' ? data.event_type : 'user';
       const isThinkingEvent = eventVisibility === 'thinking';
@@ -2704,6 +2726,10 @@ const workflowDataRef = useRef<{
       const isRevisionEvent = Boolean(revisionFlag || revisionEventFlag || revisionId);
       const effectiveRevisionId = revisionId ?? revisionContextRef.current.id;
       const effectiveRevisionLanes = revisionContextRef.current.lanes ?? [];
+      const fallbackSessionId = coerceString(eventData.session_id ?? data.session_id);
+      if (fallbackSessionId) {
+        persistSessionId(fallbackSessionId);
+      }
 
       // For lightweight events, extract step and timing info from top level
       const stepInfo = {
@@ -2819,17 +2845,7 @@ const workflowDataRef = useRef<{
         case 'session_started':
           {
             const nextSessionId = coerceString(eventData.session_id);
-            if (nextSessionId) {
-              lastSessionIdRef.current = nextSessionId;
-              setSessionId((prev) => (prev === nextSessionId ? prev : nextSessionId));
-              if (storageKey) {
-                try {
-                  window.sessionStorage.setItem(storageKey, nextSessionId);
-                } catch {
-                  // Ignore storage errors.
-                }
-              }
-            }
+            persistSessionId(nextSessionId);
           }
           break;
         case 'revision_request': {
@@ -2897,7 +2913,14 @@ const workflowDataRef = useRef<{
             setFollowUpBanner(banner);
             workflowDataRef.current.followUpBanner = banner;
             refreshResultMessage();
-            const thinkingLogs = banner.message ? [banner.message] : statusMessage ? [statusMessage] : [];
+            const allowBannerThought = markThoughtIfNew('follow_up_route', rawThoughtId);
+            const thinkingLogs = allowBannerThought
+              ? banner.message
+                ? [banner.message]
+                : statusMessage
+                  ? [statusMessage]
+                  : []
+              : [];
             updateStep(
               'follow_up_route',
               isThinkingEvent ? 'in_progress' : 'completed',
@@ -2917,11 +2940,14 @@ const workflowDataRef = useRef<{
           }
           streamHook.setCurrentStatus(statusMessage);
           if (stepInfo.step) {
+            const normalizedStep =
+              stepInfo.step === 'web_search' ? 'web_research_agent' : stepInfo.step;
+            const allowThoughtLogs = markThoughtIfNew(normalizedStep, rawThoughtId);
             const thinkingLogs: string[] = [];
-            if (isThinkingEvent && statusMessage) {
+            if (allowThoughtLogs && isThinkingEvent && statusMessage) {
               thinkingLogs.push(statusMessage);
             }
-            if (eventData.code) {
+            if (allowThoughtLogs && eventData.code) {
               const codeTag = statusMessage ? `${statusMessage} [${eventData.code}]` : `Code: ${eventData.code}`;
               if (!thinkingLogs.includes(codeTag)) {
                 thinkingLogs.push(codeTag);
@@ -2934,7 +2960,14 @@ const workflowDataRef = useRef<{
                   message: statusMessage,
                 }
               : undefined;
-            updateStep((stepInfo.step === 'web_search' ? 'web_research_agent' : stepInfo.step), 'in_progress', thinkingLogs, detailPayload, stepInfo.elapsed_ms, stepInfo.ts);
+            updateStep(
+              normalizedStep,
+              'in_progress',
+              thinkingLogs,
+              detailPayload,
+              stepInfo.elapsed_ms,
+              stepInfo.ts,
+            );
           }
           break;
 
@@ -4364,6 +4397,7 @@ const workflowDataRef = useRef<{
 
         case 'tool_call_delta':
         case 'tool_call_arguments':
+        case 'agent_tool_call':
         case 'agent_tool_complete': {
           const toolCall = (eventData.tool_call ?? {}) as Record<string, any>;
           const toolName =
@@ -4397,7 +4431,9 @@ const workflowDataRef = useRef<{
             status:
               eventType === 'tool_call_arguments' || eventType === 'agent_tool_complete'
                 ? 'completed'
-                : 'running',
+                : eventType === 'agent_tool_call'
+                  ? 'running'
+                  : 'running',
             ts: eventTimestamp,
             metadata: syntheticMetadata,
             details: {
@@ -4904,6 +4940,50 @@ const workflowDataRef = useRef<{
           break;
         }
 
+        case 'workflow_redirect':
+        case 'workflow_cancelled': {
+          const redirectMessage =
+            coerceString(eventData.message) ??
+            'Agent redirected this session. Start a new analysis run to continue.';
+          clearSessionTracking();
+          revisionContextRef.current = { id: undefined, lanes: [], focus: undefined };
+          revisionModeRef.current = 'none';
+          workflowDataRef.current.revisionFocus = null;
+          setRevisionMode('none');
+          streamHook.setCurrentStatus(redirectMessage);
+          setRedirectNotice(redirectMessage);
+          break;
+        }
+
+        case 'lane_reused': {
+          const laneName = coerceString(eventData.lane);
+          if (laneName) {
+            const ageSeconds =
+              typeof eventData.age_seconds === 'number' && Number.isFinite(eventData.age_seconds)
+                ? eventData.age_seconds
+                : undefined;
+            const baseMessage = coerceString(eventData.message);
+            const friendlyLane = formatLaneName(laneName);
+            const message =
+              baseMessage ??
+              `${friendlyLane} lane reused${ageSeconds !== undefined ? ` (cache age ~${Math.round(ageSeconds)}s)` : ''}`;
+            const notice: LaneReuseNotice = {
+              lane: laneName,
+              message,
+              reason: coerceString(eventData.reason),
+              ts: coerceString(eventData.ts) ?? stepInfo.ts,
+              ageSeconds,
+              source: coerceString(eventData.source),
+            };
+            setLaneReuseNotices((prev) => {
+              const filtered = prev.filter((entry) => entry.lane !== laneName);
+              filtered.push(notice);
+              return filtered.slice(-5);
+            });
+          }
+          break;
+        }
+
         case 'workflow_complete':
           const workflowStatusMessage =
             flow === 'single-agent'
@@ -5235,6 +5315,9 @@ const workflowDataRef = useRef<{
     analysisReadyEmittedRef.current = false;
     finalResultMergedRef.current = false;
     toolFanoutRef.current = { manifest: [], results: [], concurrencyLimit: 0 };
+    thoughtHistoryRef.current = {};
+    setLaneReuseNotices([]);
+    setRedirectNotice(null);
 
     // Reset workflow data ref
     workflowDataRef.current = {
@@ -5274,6 +5357,10 @@ const workflowDataRef = useRef<{
     }
   };
 
+  const clearRedirectNotice = useCallback(() => {
+    setRedirectNotice(null);
+  }, []);
+
   return {
     // State
     sessionId,
@@ -5299,6 +5386,8 @@ const workflowDataRef = useRef<{
 
     latencyGuardrail,
     snapshotReuse,
+    laneReuseNotices,
+    redirectNotice,
 
     // Progressive rendering state
     progressiveAnalysis,
@@ -5322,6 +5411,7 @@ const workflowDataRef = useRef<{
     resetAll,
     addChatMessage,
     updateChatMessage,
+    clearRedirectNotice,
   };
 };
 

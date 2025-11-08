@@ -10,6 +10,7 @@ from typing import Any, AsyncGenerator, Callable, Dict, Iterable, List, Optional
 
 from analytics.core.events import EventEmitter
 from analytics.core.session_state import SessionStateSnapshot, get_session_state_repository
+from analytics.core.lane_refresh import compute_lane_refresh_requirements, resolve_lane_ttls
 from analytics.routing import FollowUpClassifier, FollowUpRoute
 from .planner_executor import PlannerExecutorFlow
 from .single_agent_tools import SingleAgentController
@@ -146,68 +147,8 @@ def _lane_available(snapshot: Optional[SessionStateSnapshot], lane: str) -> bool
         return bool(market_artifact or stock_widget)
     return False
 
-LANE_TTL_DEFAULTS: Dict[str, int] = {
-    "analysis": 300,
-    "web": 120,
-    "chart": 600,
-    "market": 300,
-}
-
-LANE_TTL_ENV_KEYS: Dict[str, str] = {
-    "analysis": "ANALYTICS_ANALYSIS_REFRESH_TTL_SECONDS",
-    "web": "ANALYTICS_WEB_REFRESH_TTL_SECONDS",
-    "chart": "ANALYTICS_CHART_REFRESH_TTL_SECONDS",
-    "market": "ANALYTICS_MARKET_REFRESH_TTL_SECONDS",
-}
-
 SESSION_MESSAGE_LIMIT = 20
 SESSION_MESSAGE_ARCHIVE_LIMIT = 50
-
-
-def _resolve_lane_ttls() -> Dict[str, int]:
-    resolved: Dict[str, int] = {}
-    for lane, default in LANE_TTL_DEFAULTS.items():
-        env_key = LANE_TTL_ENV_KEYS.get(lane)
-        ttl = default
-        if env_key:
-            raw = os.getenv(env_key)
-            if raw:
-                try:
-                    ttl = int(raw)
-                except ValueError:
-                    ttl = default
-        if ttl < 0:
-            ttl = 0
-        resolved[lane] = ttl
-    return resolved
-
-
-def _compute_lane_refresh_requirements(
-    snapshot: Optional[SessionStateSnapshot],
-    lanes: Iterable[str],
-    ttl_map: Mapping[str, int],
-) -> Dict[str, bool]:
-    requirements: Dict[str, bool] = {}
-    now = datetime.now(timezone.utc)
-    for lane in lanes:
-        if lane is None:
-            continue
-        normalized = str(lane).strip().lower()
-        if not normalized:
-            continue
-        ttl = ttl_map.get(normalized, 0)
-        if snapshot is None:
-            requirements[normalized] = True
-            continue
-        age = snapshot.lane_age_seconds(normalized, now=now)
-        if age is None:
-            requirements[normalized] = True
-            continue
-        if ttl <= 0:
-            requirements[normalized] = True
-            continue
-        requirements[normalized] = age > ttl
-    return requirements
 
 
 REVISION_BANNER_COPY: Dict[str, Dict[str, str]] = {
@@ -814,6 +755,7 @@ async def analytics_memory_workflow(
         snapshot = await repository.load(session_id)
 
     baseline_ready = _baseline_ready(snapshot)
+    session_follow_up = bool(session_id and baseline_ready)
 
     classifier = FollowUpClassifier()
     route = classifier.classify(query, snapshot)
@@ -843,6 +785,7 @@ async def analytics_memory_workflow(
                     "session_id": session_id,
                     "lanes": missing_lanes,
                     "lane_refresh_required": {"analysis": True, "web": True},
+                    "session_follow_up": session_follow_up,
                     "banner": banner,
                 },
             }
@@ -859,6 +802,12 @@ async def analytics_memory_workflow(
 
     factory = _get_flow_factory(selected)
     flow_instance = factory()
+
+    if hasattr(flow_instance, "set_session_follow_up"):
+        try:
+            flow_instance.set_session_follow_up(session_follow_up)
+        except Exception:
+            logger.exception("Failed to set session_follow_up on flow %s", selected)
 
     agentic_enabled = _agentic_revision_enabled(selected)
 
@@ -900,7 +849,7 @@ async def analytics_memory_workflow(
 
     lane_refresh_required: Dict[str, bool] = {}
     analysis_refresh_mode = "full"
-    ttl_map = _resolve_lane_ttls()
+    ttl_map = resolve_lane_ttls()
     ttl_lanes: Set[str] = set(revision_lanes)
     if analysis_focus or "analysis" in ttl_lanes:
         ttl_lanes.update({"analysis", "web"})
@@ -909,7 +858,7 @@ async def analytics_memory_workflow(
     if "market" in revision_lanes or route == FollowUpRoute.STOCK_ONLY:
         ttl_lanes.add("market")
     if ttl_lanes:
-        lane_refresh_required = _compute_lane_refresh_requirements(snapshot, ttl_lanes, ttl_map)
+        lane_refresh_required = compute_lane_refresh_requirements(snapshot, ttl_lanes, ttl_map)
         if (
             not analysis_focus
             and ("analysis" in ttl_lanes or analysis_focus)
@@ -947,6 +896,7 @@ async def analytics_memory_workflow(
                 "session_id": session_id,
                 "lanes": revision_lanes,
                 "lane_refresh_required": dict(lane_refresh_required),
+                "session_follow_up": session_follow_up,
                 "banner": banner,
             },
         }
@@ -1259,6 +1209,7 @@ async def analytics_memory_workflow(
             "flow": selected,
             "lanes": list(revision_lanes),
             "lane_refresh_required": dict(lane_refresh_required),
+            "session_follow_up": session_follow_up,
         },
     }
     yield follow_up_event

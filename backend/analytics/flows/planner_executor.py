@@ -24,7 +24,7 @@ import logging
 import time
 import uuid
 import copy
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 from types import SimpleNamespace
 from analytics.core.types import (
     WorkflowState,
@@ -40,7 +40,8 @@ from analytics.core.types import (
 from analytics.core.context import get_configs
 from analytics.core.config_store import get_config_store
 from analytics.core.events import EventEmitter, TimedEventEmitter
-from analytics.core.session_state import SessionStateSnapshot, get_session_state_repository
+from analytics.core.session_state import SnapshotRevisionContext, SessionStateSnapshot, get_session_state_repository
+from analytics.core.lane_refresh import resolve_lane_ttls
 from analytics.core.revision_snapshot import (
     build_intent_signature,
     extract_revision_snapshot,
@@ -306,12 +307,19 @@ class ToolInvocationReceipt:
     status: str
     attempts: int = 0
     elapsed_ms: Optional[int] = None
+    latency_ms: Optional[int] = None
     input_hash: Optional[str] = None
     output_hash: Optional[str] = None
     reused: bool = False
     error: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
     timestamp: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    source_lane: Optional[str] = None
+    reused_at_ms: Optional[int] = None
+
+    def __post_init__(self) -> None:
+        if self.latency_ms is None and self.elapsed_ms is not None:
+            self.latency_ms = self.elapsed_ms
 
     def to_dict(self) -> Dict[str, Any]:
         payload: Dict[str, Any] = {
@@ -319,11 +327,14 @@ class ToolInvocationReceipt:
             "status": self.status,
             "attempts": self.attempts,
             "elapsed_ms": self.elapsed_ms,
+            "latency_ms": self.latency_ms,
             "input_hash": self.input_hash,
             "output_hash": self.output_hash,
             "reused": self.reused,
             "error": self.error,
             "timestamp": self.timestamp,
+            "source_lane": self.source_lane,
+            "reused_at_ms": self.reused_at_ms,
         }
         if self.metadata:
             payload["metadata"] = sanitize_for_json(self.metadata)
@@ -332,18 +343,136 @@ class ToolInvocationReceipt:
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> "ToolInvocationReceipt":
         metadata = payload.get("metadata") or {}
+        latency_candidate = payload.get("latency_ms")
+        if latency_candidate is None:
+            latency_candidate = payload.get("elapsed_ms")
+        latency_ms: Optional[int]
+        try:
+            latency_ms = int(latency_candidate) if latency_candidate is not None else None
+        except (TypeError, ValueError):
+            latency_ms = None
+        reused_at_candidate = payload.get("reused_at_ms")
+        if reused_at_candidate is None:
+            reused_at_candidate = payload.get("fast_path_latency_ms")
+        try:
+            reused_at_ms = int(reused_at_candidate) if reused_at_candidate is not None else None
+        except (TypeError, ValueError):
+            reused_at_ms = None
         return cls(
             tool=str(payload.get("tool") or ""),
             status=str(payload.get("status") or "unknown"),
             attempts=int(payload.get("attempts") or 0),
             elapsed_ms=payload.get("elapsed_ms"),
+            latency_ms=latency_ms,
             input_hash=payload.get("input_hash"),
             output_hash=payload.get("output_hash"),
             reused=bool(payload.get("reused", False)),
             error=payload.get("error"),
             metadata=dict(metadata) if isinstance(metadata, Mapping) else {},
             timestamp=str(payload.get("timestamp") or datetime.utcnow().isoformat()),
+            source_lane=payload.get("source_lane") or payload.get("lane"),
+            reused_at_ms=reused_at_ms,
         )
+
+
+@dataclass
+class PlannerRevisionContext:
+    session_id: str
+    receipts: Dict[str, ToolInvocationReceipt] = field(default_factory=dict)
+    lane_refresh_overrides: Dict[str, bool] = field(default_factory=dict)
+    lane_ttls: Dict[str, int] = field(default_factory=dict)
+    lane_timestamps: Dict[str, datetime] = field(default_factory=dict)
+    reasoning_summaries: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    accessories: Dict[str, Any] = field(default_factory=dict)
+    last_analysis: Optional[str] = None
+    last_chart_spec: Optional[Dict[str, Any]] = None
+
+    @classmethod
+    def from_snapshot(
+        cls,
+        snapshot: Optional[SessionStateSnapshot],
+        *,
+        lane_refresh_overrides: Mapping[str, bool],
+    ) -> Optional["PlannerRevisionContext"]:
+        if snapshot is None:
+            return None
+        snapshot_ctx: SnapshotRevisionContext = snapshot.revision_context()
+        lane_ttls = resolve_lane_ttls()
+        receipts: Dict[str, ToolInvocationReceipt] = {}
+        for tool_name, payload in snapshot_ctx.tool_receipts.items():
+            try:
+                receipts[tool_name] = ToolInvocationReceipt.from_dict(payload)
+            except Exception:
+                continue
+        normalized_overrides: Dict[str, bool] = {}
+        for lane, required in (lane_refresh_overrides or {}).items():
+            key = cls._normalize_lane(lane)
+            if key:
+                normalized_overrides[key] = bool(required)
+        accessories: Dict[str, Any] = {}
+        revision_snapshot = snapshot_ctx.revision_snapshot or {}
+        if isinstance(revision_snapshot, Mapping):
+            web_snapshot = revision_snapshot.get("web_context")
+            if isinstance(web_snapshot, Mapping):
+                accessories["web"] = copy.deepcopy(web_snapshot)
+            stock_snapshot = revision_snapshot.get("stock_widget")
+            if stock_snapshot is not None:
+                accessories["market"] = copy.deepcopy(stock_snapshot)
+        return cls(
+            session_id=snapshot_ctx.session_id,
+            receipts=receipts,
+            lane_refresh_overrides=normalized_overrides,
+            lane_ttls=lane_ttls,
+            lane_timestamps=dict(snapshot_ctx.lane_timestamps),
+            reasoning_summaries=copy.deepcopy(snapshot_ctx.agent_reasoning),
+            accessories=accessories,
+            last_analysis=snapshot_ctx.last_analysis,
+            last_chart_spec=copy.deepcopy(snapshot_ctx.last_chart_spec) if snapshot_ctx.last_chart_spec else None,
+        )
+
+    @staticmethod
+    def _normalize_lane(lane: Optional[str]) -> Optional[str]:
+        if lane is None:
+            return None
+        normalized = str(lane).strip().lower()
+        return normalized or None
+
+    def lane_age_seconds(self, lane: str, *, now: Optional[datetime] = None) -> Optional[float]:
+        normalized = self._normalize_lane(lane)
+        if not normalized:
+            return None
+        timestamp = self.lane_timestamps.get(normalized)
+        if timestamp is None:
+            return None
+        now_dt = now or datetime.now(timezone.utc)
+        try:
+            delta = now_dt - timestamp
+            return max(delta.total_seconds(), 0.0)
+        except Exception:
+            return None
+
+    def should_refresh(self, lane: str) -> bool:
+        normalized = self._normalize_lane(lane)
+        if not normalized:
+            return True
+        if normalized in self.lane_refresh_overrides:
+            return self.lane_refresh_overrides[normalized]
+        ttl = self.lane_ttls.get(normalized)
+        if ttl is None or ttl <= 0:
+            return True
+        age = self.lane_age_seconds(normalized)
+        if age is None:
+            return True
+        return age > ttl
+
+    def accessory_snapshot(self, lane: str) -> Optional[Dict[str, Any]]:
+        normalized = self._normalize_lane(lane)
+        if not normalized:
+            return None
+        payload = self.accessories.get(normalized)
+        if payload is None:
+            return None
+        return copy.deepcopy(payload)
 
 
 def _hash_payload(payload: Any) -> str:
@@ -429,6 +558,9 @@ class PlannerPhaseContext:
     halt_reason: Optional[str] = None
     lane_refresh_required: Dict[str, bool] = field(default_factory=dict)
     analysis_refresh_mode: str = "full"
+    session_follow_up: bool = False
+    revision_context: Optional[PlannerRevisionContext] = None
+    revision_reasoning: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
 AGGREGATE_METRIC_MARKERS = (
     "'r&d expense'",
@@ -1998,14 +2130,23 @@ def _hydrate_context_from_snapshot(
                 row_count = preview_payload.get("row_count")
                 if isinstance(row_count, int):
                     execution_artifact.row_count = row_count
-    receipts_payload = {}
-    if snapshot and isinstance(snapshot.tool_cache, dict):
-        receipts_payload = snapshot.tool_cache.get("tool_receipts") or {}
-    for tool_name, payload in (receipts_payload or {}).items():
-        try:
-            ctx.tool_receipts[tool_name] = ToolInvocationReceipt.from_dict(payload)
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.debug("Unable to hydrate tool receipt for %s: %s", tool_name, exc)
+
+
+def _apply_revision_context_hints(ctx: PlannerPhaseContext) -> None:
+    revision_ctx = getattr(ctx, "revision_context", None)
+    if revision_ctx is None:
+        return
+    refresh_flags = dict(getattr(ctx, "lane_refresh_required", {}) or {})
+    candidate_lanes = ("analysis", "chart", "web", "market")
+    for lane in candidate_lanes:
+        needs_refresh = revision_ctx.should_refresh(lane)
+        if needs_refresh is False:
+            refresh_flags[lane] = False
+        elif lane not in refresh_flags and needs_refresh is True:
+            refresh_flags[lane] = True
+    ctx.lane_refresh_required = refresh_flags
+    if revision_ctx.reasoning_summaries and not ctx.revision_reasoning:
+        ctx.revision_reasoning = copy.deepcopy(revision_ctx.reasoning_summaries)
 
 def _build_schema_clarifier_request(decision: ClarifierDecision, session_id: str) -> Optional[ClarifyRequestModel]:
     if not decision.slot or not decision.question:
@@ -2348,6 +2489,9 @@ class PlannerPipeline:
         self._tool_registry: Optional[Any] = None
         self._lane_refresh_required: Dict[str, bool] = {}
         self._analysis_refresh_mode: str = "full"
+        self.session_follow_up: bool = False
+        self._agent_tool_counters: Dict[str, int] = {}
+        self._agent_tool_active_ids: Dict[str, str] = {}
 
     @property
     def tool_registry(self):
@@ -2446,6 +2590,18 @@ class PlannerPipeline:
                 elif isinstance(receipt, dict):
                     snapshot.record_tool_receipt(tool_name, sanitize_for_json(receipt))
             updated = True
+        reasoning_entries = getattr(ctx, "revision_reasoning", None) or {}
+        if reasoning_entries:
+            for key, details in reasoning_entries.items():
+                if not isinstance(details, Mapping):
+                    continue
+                summary = details.get("summary")
+                if not summary:
+                    continue
+                lane = details.get("lane")
+                metadata = details.get("metadata") if isinstance(details.get("metadata"), Mapping) else None
+                snapshot.record_agent_reasoning(key, summary, lane=lane, metadata=metadata)
+            updated = True
         if updated:
             await repository.save(snapshot)
 
@@ -2463,6 +2619,9 @@ class PlannerPipeline:
 
     def set_follow_up_route(self, route: FollowUpRoute) -> None:
         self.follow_up_route = route
+
+    def set_session_follow_up(self, follow_up: bool) -> None:
+        self.session_follow_up = bool(follow_up)
 
     def set_revision_targets(self, targets: Iterable[str]) -> None:
         normalized = normalize_revision_targets(targets)
@@ -2529,6 +2688,207 @@ class PlannerPipeline:
         if normalized == "stock_tracker" or normalized.startswith("market_question"):
             return "market"
         return None
+
+    def _agent_tool_lane(self, tool_name: str, data: Mapping[str, Any]) -> Optional[str]:
+        lane_value = data.get("lane")
+        if isinstance(lane_value, str) and lane_value.strip():
+            return lane_value.strip().lower()
+        return self._lane_for_tool_name(tool_name)
+
+    def _build_agent_tool_event_from_payload(
+        self,
+        ctx: PlannerPhaseContext,
+        event: Mapping[str, Any],
+        *,
+        status: str,
+    ) -> Optional[Dict[str, Any]]:
+        if not getattr(ctx, "agentic_revision_mode", False):
+            return None
+        if not isinstance(event, Mapping):
+            return None
+        data = event.get("data") or {}
+        raw_tool = data.get("tool") or data.get("name")
+        tool_name = str(raw_tool or "").strip()
+        if not tool_name:
+            return None
+        canonical_tool = tool_name.lower()
+        lane = self._agent_tool_lane(canonical_tool, data)
+        call_id = self._agent_tool_active_ids.get(canonical_tool)
+        if status == "start" or call_id is None:
+            counter = self._agent_tool_counters.get(canonical_tool, 0) + 1
+            self._agent_tool_counters[canonical_tool] = counter
+            call_id = f"{canonical_tool}-{counter}"
+            self._agent_tool_active_ids[canonical_tool] = call_id
+        if status == "completed":
+            self._agent_tool_active_ids.pop(canonical_tool, None)
+        attempt = data.get("attempt")
+        metadata = data.get("metadata")
+        arguments = data.get("arguments")
+        payload = data.get("payload")
+        reused_flag = data.get("reused")
+        parallel_group = data.get("parallel_group")
+        elapsed_ms = data.get("elapsed_ms")
+        summary = data.get("summary")
+        error_detail = data.get("error")
+        event_payload: Dict[str, Any] = {
+            "tool_call": {
+                "id": call_id,
+                "name": tool_name,
+                "lane": lane,
+                "status": status,
+                "sequence_number": self._agent_tool_counters.get(canonical_tool, 0),
+            },
+            "tool": tool_name,
+            "lane": lane,
+            "status": status,
+            "ts": datetime.utcnow().isoformat(),
+            "session_id": ctx.session_id,
+            "follow_up_route": ctx.follow_up_route.value,
+        }
+        if isinstance(parallel_group, str) and parallel_group.strip():
+            event_payload["parallel_group"] = parallel_group.strip()
+        if isinstance(attempt, int):
+            event_payload["attempt"] = attempt
+            event_payload["tool_call"]["attempt"] = attempt
+        if isinstance(elapsed_ms, (int, float)):
+            event_payload["elapsed_ms"] = int(elapsed_ms)
+        if summary:
+            event_payload["summary"] = str(summary)
+        if error_detail:
+            event_payload["error"] = str(error_detail)
+        if arguments:
+            try:
+                sanitized_args = sanitize_for_json(arguments)
+                event_payload["tool_call"]["arguments"] = sanitized_args
+            except Exception:
+                event_payload["tool_call"]["arguments"] = sanitize_for_json(str(arguments))
+        if metadata:
+            try:
+                event_payload["details"] = sanitize_for_json(metadata)
+            except Exception:
+                event_payload["details"] = sanitize_for_json(str(metadata))
+        if payload and status == "completed":
+            try:
+                event_payload["result"] = sanitize_for_json(payload)
+            except Exception:
+                event_payload["result"] = sanitize_for_json(str(payload))
+        if reused_flag is not None:
+            event_payload["reused"] = bool(reused_flag)
+        event_name = "agent_tool_call" if status == "start" else "agent_tool_complete"
+        self._memoize_agent_reasoning(
+            ctx,
+            tool_key=canonical_tool,
+            lane=lane,
+            status=status,
+            event_payload=event_payload,
+        )
+        annotated = apply_mode_metadata({"event": event_name, "data": event_payload}, self.flow_mode)
+        return annotated
+
+    def _build_agent_tool_events_from_manifest(
+        self,
+        ctx: Optional[PlannerPhaseContext],
+        event: Mapping[str, Any],
+    ) -> List[Dict[str, Any]]:
+        if ctx is None or not getattr(ctx, "agentic_revision_mode", False):
+            return []
+        data = event.get("data") or {}
+        manifest_items = data.get("tools") or ()
+        if not isinstance(manifest_items, Iterable):
+            return []
+        default_parallel = str(data.get("parallel_group") or data.get("tool_group") or "tool_fanout")
+        agent_events: List[Dict[str, Any]] = []
+        for manifest in manifest_items:
+            if not isinstance(manifest, Mapping):
+                continue
+            tool_name = manifest.get("name") or manifest.get("tool")
+            if not tool_name:
+                continue
+            manifest_data: Dict[str, Any] = {
+                "tool": tool_name,
+                "lane": manifest.get("lane"),
+                "metadata": dict(manifest),
+                "parallel_group": manifest.get("parallel_group") or default_parallel,
+                "arguments": manifest.get("arguments") or manifest.get("inputs"),
+                "summary": manifest.get("summary") or manifest.get("display_name"),
+            }
+            attempt_value = manifest.get("attempt") or data.get("attempt")
+            if isinstance(attempt_value, int):
+                manifest_data["attempt"] = attempt_value
+            synthetic_event = {"event": "tool_parallel_manifest", "data": manifest_data}
+            agent_event = self._build_agent_tool_event_from_payload(ctx, synthetic_event, status="start")
+            if agent_event:
+                agent_events.append(agent_event)
+        return agent_events
+
+    @staticmethod
+    def _agent_result_preview(result: Any) -> Optional[Any]:
+        if result is None:
+            return None
+        try:
+            sanitized = sanitize_for_json(result)
+        except Exception:
+            sanitized = str(result)
+        if isinstance(sanitized, str):
+            return sanitized[:200]
+        if isinstance(sanitized, (int, float, bool)):
+            return sanitized
+        if isinstance(sanitized, list):
+            if len(sanitized) <= 3:
+                return sanitized
+            return {"items": sanitized[:3], "truncated": len(sanitized) - 3}
+        if isinstance(sanitized, dict):
+            preview: Dict[str, Any] = {}
+            for idx, (key, value) in enumerate(sanitized.items()):
+                if idx >= 3:
+                    preview["__truncated__"] = len(sanitized) - 3
+                    break
+                preview[key] = value
+            return preview
+        return sanitized
+
+    def _memoize_agent_reasoning(
+        self,
+        ctx: Optional[PlannerPhaseContext],
+        *,
+        tool_key: str,
+        lane: Optional[str],
+        status: str,
+        event_payload: Mapping[str, Any],
+    ) -> None:
+        if ctx is None or not getattr(ctx, "agentic_revision_mode", False):
+            return
+        normalized_tool = tool_key.strip().lower()
+        if not normalized_tool:
+            return
+        existing = dict(ctx.revision_reasoning.get(normalized_tool, {}))
+        summary = event_payload.get("summary")
+        if not summary:
+            if status == "start":
+                summary = f"Running {tool_key}"
+            elif not existing.get("summary"):
+                summary = f"{status.title()} {tool_key}"
+            else:
+                summary = existing.get("summary")
+        metadata: Dict[str, Any] = dict(existing.get("metadata") or {})
+        for key in ("status", "parallel_group", "attempt", "reused", "elapsed_ms"):
+            value = event_payload.get(key)
+            if value is not None:
+                metadata[key] = value
+        error_value = event_payload.get("error")
+        if error_value:
+            metadata["error"] = error_value
+        if status == "completed":
+            preview = self._agent_result_preview(event_payload.get("result"))
+            if preview is not None:
+                metadata["result_preview"] = preview
+        entry: Dict[str, Any] = {
+            "summary": str(summary) if summary else existing.get("summary", f"{status.title()} {tool_key}"),
+            "lane": lane or existing.get("lane"),
+        }
+        if metadata:
+            entry["metadata"] = metadata
+        ctx.revision_reasoning[normalized_tool] = entry
 
     def _record_tool_receipt_from_event(
         self,
@@ -2839,6 +3199,13 @@ class PlannerPipeline:
                     continue
 
                 if source == "tool":
+                    event_name = str(payload.get("event") or "").strip().lower()
+                    if event_name == "tool_parallel_start":
+                        start_events = self._build_agent_tool_events_from_manifest(ctx, payload)
+                        for agent_event in start_events:
+                            yield self._annotate_revision(agent_event, ctx)
+                        yield self._mark_delta_event(payload, ctx)
+                        continue
                     try:
                         logger.debug(
                             "planner_executor.tool_delta_emitted",
@@ -2850,7 +3217,17 @@ class PlannerPipeline:
                         )
                     except Exception:
                         pass
+                    agent_start_event = self._build_agent_tool_event_from_payload(ctx, payload, status="start")
+                    if agent_start_event:
+                        yield self._annotate_revision(agent_start_event, ctx)
                     yield self._mark_delta_event(payload, ctx)
+                    agent_complete_event = self._build_agent_tool_event_from_payload(
+                        ctx,
+                        payload,
+                        status="completed",
+                    )
+                    if agent_complete_event:
+                        yield self._annotate_revision(agent_complete_event, ctx)
                     continue
 
                 if source == "sql":
@@ -4411,6 +4788,9 @@ async def _initialize_context(self, query: str, session_id: Optional[str]) -> Pl
         reuse_sql=self.follow_up_route == FollowUpRoute.REUSE_SQL,
         stock_only=self.follow_up_route == FollowUpRoute.STOCK_ONLY,
     )
+    self._agent_tool_counters.clear()
+    self._agent_tool_active_ids.clear()
+    ctx.session_follow_up = bool(getattr(self, "session_follow_up", False))
     snapshot = getattr(self, "_prefetched_snapshot", None)
     snapshot_artifacts = _artifacts_from_snapshot(snapshot)
     revision_snapshot = extract_revision_snapshot(snapshot)
@@ -4448,6 +4828,13 @@ async def _initialize_context(self, query: str, session_id: Optional[str]) -> Pl
         ctx.agentic_revision_mode = bool(getattr(self, "agentic_revision_mode", False))
     ctx.lane_refresh_required = dict(getattr(self, "_lane_refresh_required", {}))
     ctx.analysis_refresh_mode = getattr(self, "_analysis_refresh_mode", "full")
+    ctx.revision_context = PlannerRevisionContext.from_snapshot(
+        snapshot,
+        lane_refresh_overrides=ctx.lane_refresh_required,
+    )
+    if ctx.revision_context and ctx.revision_context.receipts:
+        ctx.tool_receipts.update(ctx.revision_context.receipts)
+    _apply_revision_context_hints(ctx)
     return ctx
 
 
@@ -5338,6 +5725,7 @@ class PlannerExecutorFlow:
         self.flow_mode = flow_mode
         self.follow_up_route = FollowUpRoute.FULL_PIPELINE
         self._prompt_versions = dict(self._PROMPT_VERSIONS)
+        self._thought_counters: Dict[str, int] = {}
 
     def __getattr__(self, name: str):
         try:
@@ -5375,6 +5763,10 @@ class PlannerExecutorFlow:
         self.follow_up_route = route
         self._pipeline.set_follow_up_route(route)
 
+    def set_session_follow_up(self, follow_up: bool) -> None:
+        self.session_follow_up = bool(follow_up)
+        self._pipeline.set_session_follow_up(follow_up)
+
     def set_revision_targets(self, targets: Iterable[str]) -> None:
         self._pipeline.set_revision_targets(targets)
 
@@ -5401,6 +5793,7 @@ class PlannerExecutorFlow:
         repository: Optional[Any] = None,
         hooks: Optional[AnalyticsFlowHooks] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
+        self._thought_counters.clear()
         stream = self._pipeline.emit_chart_patch(
             session_id=session_id,
             patch=patch,
@@ -5422,6 +5815,7 @@ class PlannerExecutorFlow:
         repository: Optional[Any] = None,
         hooks: Optional[AnalyticsFlowHooks] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
+        self._thought_counters.clear()
         stream = self._pipeline.emit_analysis_revision(
             session_id=session_id,
             analysis=analysis,
@@ -5433,12 +5827,27 @@ class PlannerExecutorFlow:
         async for event in stream:
             yield event
 
+    def _attach_thought_metadata(self, event: Dict[str, Any]) -> None:
+        event_name = event.get("event")
+        if event_name not in {"progress", "status"}:
+            return
+        data = event.get("data")
+        if not isinstance(data, dict):
+            return
+        step = data.get("step")
+        if not isinstance(step, str) or not step:
+            return
+        counter = self._thought_counters.get(step, 0) + 1
+        self._thought_counters[step] = counter
+        data.setdefault("thought_id", f"{step}:{counter}")
+
     def _annotate(self, event: Dict[str, Any]) -> Dict[str, Any]:
         annotated = apply_mode_metadata(event, self.flow_mode)
         data = annotated.setdefault("data", {})
         data.setdefault("follow_up_route", self.follow_up_route.value)
         if isinstance(data, dict):
             data.setdefault("prompt_versions", dict(self._prompt_versions))
+        self._attach_thought_metadata(annotated)
         return annotated
 
     async def events(
@@ -5448,6 +5857,7 @@ class PlannerExecutorFlow:
         *,
         hooks: Optional[AnalyticsFlowHooks] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
+        self._thought_counters.clear()
         stream = self._pipeline.events(query, session_id)
         if hooks is None:
             async for event in stream:

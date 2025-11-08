@@ -55,6 +55,38 @@ const REVISION_META: Record<'chart' | 'analysis' | 'market' | 'mixed', { label: 
   },
 };
 
+const formatLaneTitle = (raw?: string) => {
+  if (!raw) return 'Lane';
+  return raw
+    .split(/[_-]/g)
+    .filter(Boolean)
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+    .join(' ');
+};
+
+const formatAgeSeconds = (value?: number) => {
+  if (value === undefined || value === null || Number.isNaN(value)) {
+    return undefined;
+  }
+  if (value >= 3600) {
+    const hours = Math.floor(value / 3600);
+    const minutes = Math.round((value % 3600) / 60);
+    return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+  }
+  if (value >= 90) {
+    const minutes = Math.floor(value / 60);
+    const seconds = Math.round(value % 60);
+    return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
+  }
+  if (value >= 60) {
+    return `${(value / 60).toFixed(1)}m`;
+  }
+  if (value >= 1) {
+    return `${Math.round(value)}s`;
+  }
+  return '<1s';
+};
+
 const MemoryAnalyticsPage: React.FC = () => {
   const [query, setQuery] = useState('');
   const [showProcessPanel, setShowProcessPanel] = useState(false);
@@ -89,8 +121,10 @@ const MemoryAnalyticsPage: React.FC = () => {
     slotStatuses,
     slotFollowups,
     snapshotReuse,
+    laneReuseNotices,
     specialistCards,
     latencyGuardrail,
+    redirectNotice,
     
     // Stream state
     isLoading,
@@ -107,6 +141,7 @@ const MemoryAnalyticsPage: React.FC = () => {
     handleQuery,
     submitClarification,
     stopAnalysis,
+    clearRedirectNotice,
   } = useAnalyticsMemoryStream(selectedFlow);
   const revisionContext = useMemo(
     () =>
@@ -228,6 +263,24 @@ Multi-Agent: workload delegation & orchestration, fastest speed
       className: 'bg-emerald-600/20 text-emerald-200 border-emerald-500/30',
     };
   }, [followUpBanner?.refreshMode]);
+
+  const laneReuseBadges = useMemo(() => {
+    if (!laneReuseNotices || laneReuseNotices.length === 0) {
+      return [] as Array<{ key: string; text: string; title?: string }>;
+    }
+    return laneReuseNotices.map((notice) => {
+      const ageLabel = formatAgeSeconds(notice.ageSeconds);
+      const text =
+        ageLabel && ageLabel !== '<1s'
+          ? `${formatLaneTitle(notice.lane)} reused · cache ${ageLabel}`
+          : `${formatLaneTitle(notice.lane)} reused`;
+      return {
+        key: `${notice.lane}-${notice.ts ?? notice.message}`,
+        text,
+        title: notice.message ?? notice.reason ?? text,
+      };
+    });
+  }, [laneReuseNotices]);
 
   const handleAnalyticsQuery = async () => {
     if (!query.trim() || isLoading) return;
@@ -529,7 +582,34 @@ Multi-Agent: workload delegation & orchestration, fastest speed
                     {analysisRefreshBadge.text}
                   </span>
                 )}
+                {laneReuseBadges.map((badge) => (
+                  <span
+                    key={badge.key}
+                    title={badge.title}
+                    className="px-2 py-1 text-xs rounded-full border border-sky-500/40 bg-sky-600/20 text-sky-100 transition-colors duration-200"
+                  >
+                    {badge.text}
+                  </span>
+                ))}
               </div>
+
+              {redirectNotice && (
+                <div className="mt-3 rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 text-amber-100 shadow-inner">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="text-sm font-medium leading-snug">{redirectNotice}</div>
+                    <button
+                      type="button"
+                      onClick={clearRedirectNotice}
+                      className="rounded-md border border-amber-400/40 px-3 py-1 text-xs uppercase tracking-wide text-amber-100 transition hover:border-amber-300 hover:text-white"
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                  <div className="mt-1 text-xs text-amber-200/80">
+                    Start a fresh analysis run or rerun the previous query to continue.
+                  </div>
+                </div>
+              )}
               
               {/* Input row */}
               <div className="mt-3 sm:mt-4 flex items-center gap-2 sm:gap-3 w-full">
@@ -567,6 +647,8 @@ Multi-Agent: workload delegation & orchestration, fastest speed
         followUpBanner={followUpBanner}
         slotStatuses={slotStatuses}
         slotFollowups={slotFollowups}
+        laneReuseNotices={laneReuseNotices}
+        redirectNotice={redirectNotice}
         show={showProcessPanel}
         showVisualization={true}
         onClose={() => setShowProcessPanel(false)}
