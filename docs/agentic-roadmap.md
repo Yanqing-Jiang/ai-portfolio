@@ -10,10 +10,11 @@ This document outlines what "true agent with tools" must look like for our analy
 - **Planner-as-agent:** Every revision spins up a lightweight agent loop (planner + tool adapters) that inspects cached SQL/chart/web artifacts, reasons about what's stale, and explicitly calls tools (`sql_generation`, `chart_revision`, `web_refresh`, `analysis_revision`, etc.).
 - **Tool autonomy:** The agent emits `agent_tool_call` / `agent_tool_complete` with full arguments, retries, and receipts. Accessories (web/market) are launched only when the agent decides they're required, not because the sequencer queued them.
 - **UI-as-chat:** The canvas shows agent turns (reasoning text + tool calls) rather than pipeline steps, so the user sees the actual decision tree (e.g., "Skipping SQL; refreshing web for updated guidance").
+- **Session-memory hydration:** Revisions always hydrate the latest `SessionStateSnapshot` revision context before choosing tools, so planner decisions about skips, reuse, or restarts are grounded in persisted receipts rather than heuristics.
 
-### 1.2 Fresh Runs: Semi-Agentic Sequencer
-- **Guardrails first:** Fresh runs keep the deterministic `PlannerExecutorFlow` sequencer for stability/time-to-answer, but we surface planner reasoning + tool events so the experience still feels agent-aware.
-- **Future-proofing:** The same telemetry, receipts, and tool adapters used for revisions are exercised during fresh runs so we can flip to full agentic mode later without refactoring.
+### 1.2 Fresh Runs: Deterministic Full Pipeline
+- **Full tool sweep:** Every fresh run executes the entire tool chain (SQL planning/execution, SQL charting, stock charting, web research, and analysis writing) via the deterministic `PlannerExecutorFlow` sequencer, regardless of prior cache state.
+- **Stateless execution:** Fresh runs do not extract or rely on session memory; they only emit new receipts so revisions can consume them later, keeping first answers predictable even when revision contexts exist.
 
 ---
 
@@ -24,8 +25,10 @@ We can claim the vision is met only when the following are true:
 1. **Agent Loop Execution**
    - Revision requests bypass the lane sequencer and travel through an agent controller that decides which tools to call, in what order, and with which arguments.
    - The agent loop persists context between tool calls (tool receipts, artifacts, reasoning) and can short-circuit with `workflow_redirect` if it needs a fresh baseline.
+   - Fresh runs stay on the deterministic sequencer and always execute SQL, chart (SQL + stock), web research, and analysis tools in sequence without skipping lanes, ensuring a full refresh independent of cache hints.
 2. **Context Hydration**
-   - `SessionStateSnapshot` stores structured `RevisionContext` (tool receipts, output hashes, reasoning summaries) and `PlannerExecutorFlow.initialize_context` hydrates that data so the planner knows the freshness of SQL/web/market/analysis.
+   - `SessionStateSnapshot` stores structured `RevisionContext` (tool receipts, output hashes, reasoning summaries) and `PlannerExecutorFlow.initialize_context` hydrates that data for revisions so the planner knows the freshness of SQL/web/market/analysis.
+   - Fresh runs skip session-memory extraction entirely; they only write receipts that revisions can hydrate later.
 3. **Telemetry + UI Parity**
    - Every planner tool invocation yields `agent_tool_call` / `agent_tool_complete` events, and `useAnalyticsMemoryStream` (plus downstream UI) renders them as process steps with lane + reuse badges.
    - The frontend deduplicates `thought_id`s, handles `workflow_cancelled`/`workflow_redirect`, and logs missing accessory lanes via explicit banners.
@@ -40,160 +43,108 @@ We can claim the vision is met only when the following are true:
 
 ---
 
-## 3. Implementation Steps & Status
+## 3. Task Backlog
 
-### 3.1 Backend - Agent Loop & Context
-1. **`PlannerExecutorFlow.initialize_context`**
-   - Load `tool_receipts`, `web/market` snapshots, and reasoning summaries from `SessionStateSnapshot` into a new `RevisionContext` object.
-   - Expose helpers (e.g., `ctx.revision_context.should_refresh('web')`) for the planner.
-2. **`SingleAgentController._agentic_event_stream`**
-   - Add an "agent loop" mode that instantiates `PlannerOrchestratorAdapter` with tool adapters exposed directly to the planner.
-   - Remove sequencer lane seeding for revisions; rely on the agent loop + receipts to decide which tools to call.
-3. **`PlannerExecutorFlow._stream_with_tool_state`**
-   - When `ctx.agentic_revision_mode` is true, wrap each tool invocation to emit `agent_tool_call`/`agent_tool_complete` with arguments, retries, outputs, and lane metadata.
-   - Optionally integrate with `ToolParallelRuntime` so the agent can launch accessories concurrently.
-4. **`SessionStateSnapshot`**
-   - Add `revision_context()` accessor returning structured tool receipts (arguments hash, output hash, timestamps, success state).
-   - Persist agent reasoning summaries (short text per tool) so revisions can cite prior logic.
-   - **Status (Nov 7):** Revision context hydration now feeds lane TTL decisions directly into `_agentic_event_stream`, and revisions run through a planner-first loop that emits `lane_reused` + `agent_tool_*` events without touching the sequencer.
+This backlog replaces the standalone remediation, findings, SDK roadmap, and canvas overview docs so every task lives in one place.
 
-### 3.2 Accessory & Session Guarantees
-1. **`PlannerSequencer`**
-   - Call `abort_pending_lanes(reason="restart")` whenever a new run starts.
-   - When `sql_ready` fires, immediately schedule `_kickoff_parallel_lanes` (even if another run queued) to guarantee accessory fan-out.
-2. **`SingleAgentController._update_lane_state_from_event`**
-   - Assert that every follow-up route requiring web/market yields either a fresh event or an explicit reuse marker; emit a warning status if not.
-3. **`SingleAgentController._forward_with_hooks`**
-   - Always emit `session_started` (or a fallback) once per run; add tests in `backend/tests/analytics/test_single_agent_stream_events.py` to verify.
-   - **Status (Nov 8):** Sequencer + controller now emit `lane_reused` within 200 ms of `sql_ready`, `_kickoff_parallel_lanes` bypasses the queue for STOCK_ONLY/REUSE_SQL revisions, and pytest coverage (`test_planner_sequencer.py`, `test_single_agent_stream_events.py`) locks in the <2 s guarantee.
+### 3.1 Backend Agent Loop & Context
+- Implement `SessionStateSnapshot.revision_context()` so every tool invocation records arguments hash, output hash, timestamps, success state, and reasoning; hydrate this inside `PlannerExecutorFlow.initialize_context` and expose helpers such as `ctx.revision_context.should_refresh('web')`.
+- Route revisions through `SingleAgentController._agentic_event_stream`, drop sequencer lane pre-seeding for cached runs, and let the planner decide which tools to call via adapters supplied by `PlannerOrchestratorAdapter`.
+- Enhance `PlannerExecutorFlow._stream_with_tool_state` to wrap tools with `agent_tool_call` / `agent_tool_complete` payloads (arguments, retries, lane metadata, elapsed_ms) and to feed accessory launches through `ToolParallelRuntime` when parallel fan-out is requested.
+- Extend `_SingleAgentToolHooks` multi-phase bookkeeping to cover SQL generator, chart designer, and analysis writer so telemetry emits exactly one completion per alias while still merging contextual metadata (intent key, chart spec, analysis summary).
+- Teach `PlannerSequencer.mark_lane_complete`, `_run_lane`, and `abort_pending_lanes` to respect agent-directed lane skips, cache hits, and restart requests, including honoring early accessory completions from `ensure_analysis_dependencies`.
+- Configure planner/model invocations according to GPT-5 best practices: pin fresh runs to `gpt-5-mini-2025-08-07` with `reasoning.effort = "minimal"` and revisions to `reasoning.effort = "medium"` (or higher when multi-tool synthesis is needed) after hydrating session memory, and log the chosen settings in telemetry for auditability.
 
-### 3.3 Frontend - Canvas & Session Handling
-1. **`useAnalyticsMemoryStream.ts`**
-   - Treat `agent_tool_call` / `agent_tool_complete` as first-class process steps (cards showing tool name, arguments, outcome).
-   - Honor `workflow_redirect` / `workflow_cancelled` by clearing session state and prompting the user.
-   - Persist `session_id` from any event carrying it (not just `session_started`).
-   - **Status (Nov 7):** Agent tool events now update the `tool_execution` step and carry lane/reuse metadata with Vitest coverage (`components/analytics/hooks/useAnalyticsMemoryStream.ts:4386-4445`, `useAnalyticsMemoryStream.test.tsx:1058-1105`). UI components still need to render those `tool_calls`.
-2. **Canvas Rendering (`components/analytics/common/ProcessPanel.tsx`, `components/analytics/memory/Page.tsx`, visualization)**
-   - Replace rigid pipeline visualization with agent + lane cards (agent reasoning bubble -> tool card -> lane status).
-   - Surface `lane_reused` banners inline (e.g., "Web lane reused - age 62s") and show redirects at the canvas header.
-   - **Status (Nov 8):** `ProcessPanel` now renders tool-call cards (lane, status, cache badges) directly from `tool_calls`, `Page.tsx` shows inline lane-reuse chips plus redirect banners, and `useAnalyticsMemoryStream` exposes `laneReuseNotices` + `redirectNotice` with Vitest coverage. WorkflowCanvas still needs richer visuals (currently only shows summary text), so screenshot updates remain on deck.
+### 3.2 Telemetry, Receipts & Session Reliability
+- Emit deduplicated `thinking` logs by attaching monotonic `thought_id`s per step and streaming diffs only; update `useAnalyticsMemoryStream` to ignore repeated IDs so UI bubbles never spam identical text.
+- Guarantee every run emits `session_started` (or a fallback `session_id` carried in `analysis_ready` / `workflow_complete`) and surface `lane_reused_*` before `analysis_ready` whenever cached accessories satisfy `FULL_PIPELINE`, `STOCK_ONLY`, or `REUSE_SQL`.
+- Synthesize cancellation events inside `_forward_with_hooks` so aborted SSE streams mark all pending lanes as `skipped` and finish with `workflow_complete` status `cancelled`, letting the frontend stop spinners instantly.
+- Persist accessory receipts with `age_seconds`, `fast_path_latency_ms`, and `source_lane`, and run `scripts/backfill_accessory_receipts.py` to upgrade historical sessions so reuse heuristics stay accurate.
+- Instrument telemetry with `agent_tool_gap` metrics (difference between starts/completions) for every lane and ensure Grafana alerts monitor those counts.
+- Capture Guardrails verdicts (prompt-injection, hallucination, off-topic, and custom policy checks) alongside every `agent_tool_call/complete`, emitting tripwire events (`guardrail_trip`, `guardrail_recovered`) so the UI and smoke tests can prove when a run was blocked vs streamed past protections.
 
-### 3.4 Multi-Agent Alignment
-1. **`analytics-agent-openai-sdk-roadmap.md`**
-   - Document how supervisor + specialists share telemetry with the single-agent path (common `agent_tool_*` schema, receipts, delegation metadata).
-2. **`MultiAgentFlow`**
-   - Ensure supervisor events also emit `agent_tool_call/complete` so the frontend sees a uniform format.
-   - **Status (Nov 7):** Iterations 4-6 of `docs/analytics-agent-openai-sdk-roadmap.md` now cover supervisor telemetry, and `backend/tests/analytics/test_multi_agent_flow.py` validates parity with the single-agent receipts.
+### 3.3 Frontend Canvas & UI
+- Update `components/analytics/hooks/useAnalyticsMemoryStream.ts` to ingest `agent_turn_*`, `agent_tool_*`, `lane_reused`, `workflow_redirect`, and cancellation events; coalesce `agent_tool_call`/`complete` pairs into single process cards with lane chips, retry badges, and reuse tooltips.
+- Ensure `components/analytics/memory/Page.tsx` renders inline accessory notices ("Web lane reused - cached 64 s ago, replay 420 ms") and banners when `workflow_redirect` or `workflow_cancelled` events stream in.
+- Keep WorkflowCanvas aligned with the contract in this document: lane pill states (`queued`, `running`, `fresh`, `reused`, `error`), supervisor timelines showing `agent_turn_start/end`, and tool cards annotated with planner vs. specialist roles.
+- Maintain Vitest coverage (`WorkflowCanvas.test.tsx`, `useAnalyticsMemoryStream.test.tsx`) so every new event shape, reuse badge, or redirect banner has a golden snapshot.
 
-### 3.5 Documentation & Tests
-1. Update `docs/agent-optimization-findings.md`, `docs/remediation-plan.md`, and `docs/analytics-canvas-overview.md` to describe the new behaviors.
-2. Add regression coverage:
-   - Agent loop tool selection (unit tests on `_agentic_event_stream` / planner executor).
-   - Session fallback tests in `test_single_agent_stream_events`.
-   - Frontend hook tests for duplicate thoughts, agent tool cards, workflow redirects.
-   - Multi-agent supervisor tests ensuring the shared telemetry schema.
-   - **Status (Nov 7):** Docs above now include November timestamps plus agent-turn diagrams (`docs/analytics-canvas-overview.md`), and hook/tool tests landed in `components/analytics/hooks/useAnalyticsMemoryStream.test.tsx`. Outstanding gaps: scripted smoke tests (`scripts/agentic_smoke_test.ps1`) and Grafana alerts for `agent_tool_call` vs `agent_tool_complete` deltas.
+### 3.4 Agents SDK & Multi-Agent Supervisor
+- Keep `backend/config/schemas/agents.yaml`, `ConfigStore.get_agent_mode_config`, and `agents_stream_bridge.py` synchronized with the OpenAI Agents SDK so both single-agent and supervisor flows share tool manifests, retry policies, and SSE encoding.
+- Model planner tools as Agents SDK `FunctionTool`s with strict JSON schemas, and surface `agent_tool_call/complete` events from the SDK's `Runner.stream` for SQL, chart, web, market, and analysis specialists.
+- Ensure supervisor orchestration (`multi_agent.py`, `supervisor_orchestrator.py`) emits `agent_supervisor_started`, `agent_turn_start/end`, delegation summaries, and tool receipts that mirror the single-agent schema, enabling a unified UI.
+- Document supervisor roles, accessory hedging, and delegation rules inline here so separate references are unnecessary.
+- Use Agents SDK tracing hooks to export per-turn spans (including Guardrails gating results, retries, and selected `reasoning.effort` settings) so we can correlate SDK traces with our ledger events.
+
+### 3.5 Ops, Tooling & Tests
+- Keep `.github/workflows/agentic-smoke.yml` running fixture and optional live suites, archiving `agentic-smoke-*` artifacts plus ledger excerpts that prove STOCK_ONLY reuse, redirect loops, and paired `agent_tool_call/complete` entries.
+- Maintain the PowerShell workflow in `scripts/agentic_smoke_test.ps1` (baseline -> STOCK_ONLY follow-up -> REUSE_SQL tweak -> redirect cycle) and fail the script if telemetry lacks session IDs or lane reuse banners.
+- Expand pytest coverage (`backend/tests/analytics/test_planner_sequencer.py`, `test_session_state_receipts.py`, `test_single_agent_stream_events.py`, `test_agent_orchestrator.py`, `test_multi_agent_flow.py`) plus Vitest suites so every task above is regression-tested.
+- Keep Grafana alert definitions (`docs/ops/agents-supervisor-alerts.md`) aligned with the telemetry emitted here, and document the support playbook steps (session dump script, trace correlation, supervisor reset) within this roadmap for quick reference.
+- Integrate OpenAI Guardrails Evaluation Tool runs into CI (comparing prompt-injection, hallucination, off-topic, and custom policy datasets) and capture the resulting reports alongside smoke ledgers so stakeholders can confirm protections are enforced for both fresh and revision flows.
 
 ---
 
-### TL;DR
-To truly claim "single agent + tools" and "multi-agent supervisor + specialists," revisions must be powered by an agent loop with explicit tool autonomy, context hydration, and UI parity. Fresh runs can stay in a guarded sequencer for now, but they must emit the same telemetry to keep the experience coherent. The steps above lay out exactly how to get there.
+## 4. Remediation Plan
+
+Recent single-agent and supervisor ledgers (November 10, 2025) still lack `agent_tool_call`, `agent_turn`, `lane_reused`, and session identifiers, so we cannot prove that revisions honor the agent loop nor that fresh runs execute the full tool chain. We must close the following gaps before declaring the roadmap complete:
+
+1. **Lock Fresh Runs to the Full Deterministic Pipeline**
+   - Teach `PlannerExecutorFlow` to always schedule SQL planning/execution, SQL charting, stock charting, web research, and analysis lanes for fresh runs, even when caches exist.
+   - Emit explicit telemetry (e.g., `fresh_sql_started`, `fresh_web_ready`) plus smoke-test assertions so ledgers prove every lane ran and no session memory was hydrated, including logging the enforced `reasoning.effort = "minimal"` planner setting for traceability.
+2. **Hydrate Revision Context & Enforce Agent Loop Control**
+   - Extend `SessionStateSnapshot` with per-tool receipts and reasoning, hydrate that context inside `PlannerExecutorFlow.initialize_context`, and ensure revisions always enter `SingleAgentController._agentic_event_stream` (or the supervisor) instead of the sequencer.
+   - Require the planner to emit `agent_tool_call/complete` for every SQL, chart, market, web, and analysis adapter decision, including skips justified via revision context.
+3. **Guarantee Telemetry & Session Signals Across Modes**
+   - Always stream `session_started` (or a fallback `session_id`), and surface `lane_reused_*` before `analysis_ready` whenever revisions reuse cached accessories.
+   - Persist accessory receipts with freshness metadata, synthesize cancellation/redirect events, log Guardrails verdicts, and add Grafana alerts plus automated smoke checks for missing `agent_tool_gap` parity.
+4. **Unify Supervisor & Single-Agent Event Schemas**
+   - Wire `multi_agent.py`, `supervisor_orchestrator.py`, and the Agents SDK bridge so supervisor runs emit `agent_supervisor_started`, `agent_turn_start/end`, delegation summaries, and specialist tool receipts identical to the single-agent schema.
+   - Ensure hedged accessories still report the same reuse/fresh markers so UI layers can treat both modes the same.
+5. **Surface & Test the Experience End-to-End**
+   - Update `useAnalyticsMemoryStream`, ProcessPanel, WorkflowCanvas, and related Vitest suites to display deterministic fresh-run pipelines and agentic revision turns (including banners for reused lanes or stateless fresh runs).
+   - Keep `.github/workflows/agentic-smoke.yml` and `scripts/agentic_smoke_test.ps1` publishing proof artifacts that capture both a fresh full-pipeline run and a revision that hydrates session memory, so regressions are caught within CI.
+
+With these remediation steps in place, we can verify that every new answer starts from a stateless, complete tool sweep while every revision decision is grounded in session memory and exposed through consistent telemetry.
 
 ---
 
-## 4. Progress Snapshot (Nov 7, 2025 @ 13:30 PT)
+## 5. Embedded Findings, Evidence & Operational References
 
-### 4.1 Shipped / Verified
-- **Agent tool telemetry is end-to-end.** `PlannerExecutorFlow._stream_with_tool_state` emits `agent_tool_call/complete`, `useAnalyticsMemoryStream.ts` ingests them, and Vitest proves the `tool_execution` step carries lane + reuse state (`components/analytics/hooks/useAnalyticsMemoryStream.ts:4386-4445`, `useAnalyticsMemoryStream.test.tsx:1058-1105`).
-- **Accessory reuse transparency.** Sequencer + controller now emit `lane_reused` for web/market, and `backend/tests/analytics/test_session_state_receipts.py` locks in STOCK_ONLY/REUSE_SQL reuse guarantees.
-- **Immediate accessory fan-out.** `_kickoff_parallel_lanes` now starts as soon as `sql_ready` lands, emits `lane_reused` before SQL drains, and pytest (`backend/tests/analytics/test_planner_sequencer.py::test_parallel_lanes_start_immediately_after_sql_ready`) enforces the <2?s STOCK_ONLY reuse target.
-- **Controller guardrails + receipts.** `_update_lane_state_from_event` raises `missing_lane_telemetry` banners, `_forward_with_hooks` always injects `session_started`, and richer receipts (age, fast-path latency, reuse metadata) persist via `SessionStateSnapshot` plus `scripts/backfill_accessory_receipts.py`.
-- **Supervisor parity.** Multi-agent flows now emit `agent_tool_call/complete` for every specialist turn, with coverage in `backend/tests/analytics/test_multi_agent_flow.py::test_multi_agent_emits_agent_tool_events`.
-- **Supervisor documentation caught up.** `docs/analytics-canvas-overview.md` and `docs/remediation-plan.md` describe agent turns, specialist delegation, and UI affordances, so GTM/support references no longer point to the pipeline-era flow.
-- **Sequencer telemetry parity.** `_skip_lane` and `_finish_lane` emit `lane_reused` events for planner-executor runs with regression coverage in `backend/tests/analytics/test_planner_sequencer.py`, so fresh STOCK_ONLY runs mirror the agent loop’s reuse banners.
-- **Grafana-ready deltas.** Telemetry now logs `agent_tool_gap` events whenever completions lag calls by >10%, arming the Grafana alert documented in `docs/ops/agents-supervisor-alerts.md`.
-- **Canvas + page visibility.** `ProcessPanel` now renders live tool-call cards, `components/analytics/memory/Page.tsx` surfaces lane reuse + redirect banners, and `WorkflowCanvas` shows tool summaries for the execution hub, closing the “debug-only” gap called out in §3.3.
-- **Ops smoke coverage.** `scripts/agentic_smoke_test.ps1` exercises baseline ? STOCK_ONLY ? REUSE_SQL ? redirect flows, persists event logs under `reports/agentic_smoke/`, and warns if Grafana/Vite logs lack paired `agent_tool_call/complete` entries.
+### 5.1 OpenAI Agents SDK Migration (Complete - November 6, 2025)
+- **Execution spine preserved:** `PlannerExecutorFlow` remains the orchestrator while the OpenAI Agents SDK performs tool calls, keeping SSE payloads stable. Planner tools (SQL, chart, web, market, analysis) are modeled as strict JSON `FunctionTool`s with least-privilege manifests in `backend/config/schemas/agents.yaml`.
+- **Telemetry parity:** Single-agent and supervisor runs emit identical `agent_tool_call` / `agent_tool_complete` payloads (including `tool_call.id`, `lane`, `parallel_group`, and `elapsed_ms`), so `useAnalyticsMemoryStream` renders the same cards regardless of delegation.
+- **Iteration summary:**
+  1. Added Agents manifests, config plumbing, and `openai-agents>=0.5.0`.
+  2. Converted planner tools to function tools and streamed via `Runner.stream`.
+  3. Introduced `AgentRuntime`, plan snapshots, SSE bridges, and regression tests (for example, `backend/tests/analytics/test_agent_orchestrator.py`).
+  4. Synced instrumentation hooks and frontend consumers for canonical lanes.
+  5. Registered supervisor specialists with least-privilege tool bundles and telemetry.
+  6. Implemented revision fast paths (skip classification/clarification, hydrate `RunConfig` reasoning knobs, enforce session-based routing) plus retry ceilings and session transcript pruning.
+- **Implementation footprint & readiness:** Key modules include `backend/analytics/flows/multi_agent.py`, `.../orchestrator.py`, `.../task_plan.py`, `.../hooks.py`, `core/revision_snapshot.py`, and tracing via `core.telemetry.agent_run`. Launch artifacts (`docs/ops/analytics-agents-rollout-checklist.md`, staging verification reports, Grafana monitors) are signed off for the November 10 rollout.
 
-### 4.2 In Flight
-- **Reliability sprint staging.** November scope is fully shipped; remaining effort is now tracked in the December reliability sprint (Sec. 6) to harden chaos drills, snapshot recovery, and deterministic retries.
+### 5.2 Canvas & UI Contract (Analytics Canvas Overview - November 2025)
+- **Event contract:** WorkflowCanvas consumes `agent_turn_start/end`, `planner_lane_transition`, `agent_tool_*`, `analysis_streaming`/`analysis_complete`, and session metadata (`run_id`, `trace_id`, manager trace, `parallel_groups`, retry maps, delegation decisions).
+- **Lane and badge behavior:** Pills display `queued/running/fresh/reused/error`, reuse tooltips (for example, "Web lane reused - cached 64 s ago, 420 ms fast-path"), and retry badges keyed off `retry_count`. Header exposes `laneReuseNotices` and sets `data-screenshot-target="workflow-canvas"` for GTM captures.
+- **Supervisor timeline and tool cards:** Timeline lists each specialist's `agent_turn` with role, lane, elapsed_ms, and retry markers; tool cards label planner vs. specialist roles and reflect structured `tool_call_arguments`.
+- **Final-answer and error UX:** `analysis_complete` then `final_answer` drive CTA state, while lane errors surface sequencer `failure_markers`.
+- **Support playbook:** Troubleshooting flow pulls session dumps via `scripts/dump_agents_stream.py`, inspects `agent_retry_rate` alerts, and resets sessions via `/admin/sessions/<id>/reset`. Reference asset `docs/design/workflow-canvas-20251114.svg` documents badge/layout standards.
 
-### 4.3 Blocked / Not Started
-- _None._ Ops automation, Grafana alerting, and WorkflowCanvas collateral all landed on Nov 8 with CI artifacts, dashboards, and GTM assets checked in.
+### 5.3 Agent Optimization Findings (Root-Cause Log - November 7, 2025)
+1. **Multi-phase tool duplication:** `_SingleAgentToolHooks` emitted multiple completions for SQL/chart/analysis. Fix includes extending `MULTI_PHASE_TOOL_CONFIG`, aggregating metadata in `_build_tool_call_event`, and shipping `test_tool_telemetry_dedup`.
+2. **Repeated "thinking" bubbles:** SSE replayed entire `thinking` arrays. Backend now attaches monotonic `thought_id`s / diffs, while `useAnalyticsMemoryStream` dedupes per-step logs to cut bubble spam.
+3. **Missing cancellation events:** `_forward_with_hooks` now emits synthetic `workflow_complete status=cancelled` and marks pending lanes as skipped whenever streams abort, preventing ghost "in progress" spinners.
+4. **Accessory fan-out gaps:** Sequencer respects prefetched `web_ready/stock_ready`, dispatches accessories immediately after `sql_ready`, and emits `lane_reused` with `age_seconds` / `fast_path_latency_ms`.
+5. **Accessory fast-path validation (Nov 8):** `SessionStateSnapshot` receipts store reuse metadata, Grafana alerts monitor `agent_tool_gap`, and `scripts/backfill_accessory_receipts.py` upgrades legacy sessions.
+6. **Canvas telemetry parity (Nov 8):** WorkflowCanvas and ProcessPanel share reuse banners, redirect notices, tool badges, and Vitest snapshots.
+7. **Automation and alerting hooks (Nov 8):** `.github/workflows/agentic-smoke.yml` publishes fixture artifacts and optional live runs; the Grafana "Agent Tool Gap" alert ties to telemetry.
+8. **Session lifecycle fixes:** Restored `session_started`, injected fallback IDs into `analysis_ready` / `workflow_complete`, and taught the frontend to persist session context-eliminating false "session expired" errors.
 
-### 4.4 Alignment With Agent Optimization Findings
-| Findings Section | Status / Roadmap Hook | Notes |
-| --- | --- | --- |
-| **1. Multi-phase telemetry** | Completed (Nov 7) | `_SingleAgentToolHooks` dedupe + tests landed; Sec 3.1 keeps emitting receipts for the agent loop. |
-| **2. Thinking-log spam** | Completed (Nov 8) | ProcessPanel + WorkflowCanvas now consume deduped `tool_calls`/`agent_turns`, and Vitest (`WorkflowCanvas.test.tsx`) snapshots the badge states. |
-| **3. Cancellation events** | Completed (Nov 7) | `_forward_with_hooks` now emits synthetic cancels, and `workflow_redirect` handlers exist in the hook. |
-| **4. Accessory lanes** | **Completed (Nov 8)** | Fast-path fan-out + enriched receipts landed with pytest + smoke coverage, and the Grafana "Agent Tool Gap" alert now pages using CI/live smoke telemetry. |
-| **5. Scripted revisions** | Completed (Nov 8) | Agent loop routes STOCK_ONLY/REUSE_SQL revisions, and the smoke workflow proves cache reuse + redirect loops every PR/nightly. |
-| **6. Refactor plan** | Covered (Sec 3 and Sec 5) | Module-by-module steps mirror the findings doc. |
-| **7. Session expiration** | Completed (Nov 7) | Session fallbacks + frontend persistence shipped; success criteria (Sec 2.4) enforce it.
+### 5.4 Single-Agent Remediation Outcomes (Completed - November 7, 2025)
+- **Telemetry deduplication:** `_SingleAgentToolHooks` buffers intermediate planner events so each alias emits exactly one completion; `_drain_pending_multi_phase_events` and `test_tool_telemetry_dedup` guard regressions.
+- **Prefetched accessory lanes:** `PlannerSequencer.mark_lane_complete` and `_update_lane_state_from_event` finalize recycled `web` / `market` lanes immediately, preventing duplicate executions and surfacing `reused` pills.
+- **Session-turn revision mode:** `PlannerExecutorFlow` tracks `session_follow_up`, seeds executed steps with `skip_reason=session_follow_up`, and lets agents decide which lanes rerun; the frontend automatically appends the stored `session_id` to every follow-up request.
+- **Session telemetry guarantees:** `_forward_with_hooks` (single and multi-agent) always emits `session_started` or stamps IDs onto downstream events, while `useAnalyticsMemoryStream` stores fallback IDs so revisions never fail due to missing telemetry.
 
----
-
-## 5. Consolidated Delivery Plan & Remaining Tasks (Nov 10-18)
-
-### 5.1 Snapshot (Nov 8, 2025 @ 19:00 PT)
-- **Backend autonomy - DONE.** `_kickoff_parallel_lanes` now short-circuits as soon as `sql_ready` lands, `SessionStateSnapshot.record_tool_receipt` persists `source_lane` / `latency_ms` / `reused_at_ms`, and pytest coverage (`test_planner_sequencer.py`, `test_session_state_receipts.py`, `test_single_agent_stream_events.py`) proves <2 s STOCK_ONLY reuse plus guaranteed `lane_reused_market` banners when the agent skips accessories.
-- **Frontend storytelling - DONE.** ProcessPanel/Page feed `laneReuseNotices`/`redirectNotice`, WorkflowCanvas renders agent turns + tool cards, and `docs/design/workflow-canvas-20251114.svg` anchors GTM evidence.
-- **Ops safeguards - DONE.** `.github/workflows/agentic-smoke.yml` runs fixture smoke on every PR/push, optional live smoke via `run_live`, uploads artifacts, and Grafana's "Agent Tool Gap" alert/runbook lives in `docs/ops/agents-supervisor-alerts.md`.
-
-### 5.2 Track-Level Plan
-| Track | Owner | Key deliverables & status | Due window | Proof artifact once complete |
-| --- | --- | --- | --- | --- |
-| **Backend fast-path** | Analytics Platform | **COMPLETED (Nov 8).** `_kickoff_parallel_lanes` fast-path now emits `lane_reused_*` within 200 ms of `sql_ready`, receipts persist `reused_at_ms` / `source_lane` / `latency_ms`, and `test_single_agent_stream_events.py` fails if STOCK_ONLY follow-ups lack `lane_reused_market`. | ✅ | `pytest backend/tests/analytics/test_planner_sequencer.py backend/tests/analytics/test_session_state_receipts.py backend/tests/analytics/test_single_agent_stream_events.py` (Nov 8 run) plus `reports/agentic_smoke/<timestamp>-stock.json`. |
-| **Canvas fidelity** | Analytics FE | **COMPLETED (Nov 8).** WorkflowCanvas renders agent reasoning ? tool cards ? lane chips, exposes `laneReuseNotices`/`redirectNotice`, tags the capture root, and is covered by `npm run test -- WorkflowCanvas.test.tsx useAnalyticsMemoryStream.test.tsx`. | Nov 8 | Vitest run + `docs/design/workflow-canvas-20251114.svg` (GTM asset). |
-| **Ops & CI** | DX + SRE | **COMPLETED (Nov 8).** `.github/workflows/agentic-smoke.yml` runs fixture smoke on PR/push, exposes an optional live path, uploads artifacts, and the Grafana "Agent Tool Gap" alert + runbook landed in `docs/ops/agents-supervisor-alerts.md` / `docs/agent-optimization-findings.md`. | Nov 8 | Latest `agentic-smoke-*` artifacts + Grafana alert dry-run screenshots. |
-
-### 5.3 Success Criteria (Grant Release)
-1. **Telemetry proof - DONE (Nov 8).** Sub-2 s STOCK_ONLY reuse validated via `pytest` and the latest `reports/agentic_smoke/*-stock.json` transcript showing `lane_reused_market` before `agent_tool_call:web_retriever`.
-2. **Canvas evidence - COMPLETED (Nov 8).** WorkflowCanvas exposes tool cards, lane chips, and `data-screenshot-target="workflow-canvas"`; Vitest + `docs/design/workflow-canvas-20251114.svg` provide proof.
-3. **Automation & alerts - COMPLETED (Nov 8).** `.github/workflows/agentic-smoke.yml` now runs fixture + optional live suites, uploads `agentic-smoke-*` artifacts, and the Grafana "Agent Tool Gap" alert/runbook is documented in `docs/ops/agents-supervisor-alerts.md`.
-
-### 5.4 Remaining Gaps vs "Done" Criteria (Nov 8, 2025)
-| Criterion (Sec 2) | Status | Blocking gap | Closure proof |
-| --- | --- | --- | --- |
-| Accessory & Session Guarantees (2.4) | **Completed (Nov 8)** | Fast-path fan-out, enriched receipts, and STOCK_ONLY telemetry guard all landed with pytest coverage and smoke transcripts. | `pytest backend/tests/analytics/test_planner_sequencer.py backend/tests/analytics/test_session_state_receipts.py backend/tests/analytics/test_single_agent_stream_events.py` (Nov 8 run) + latest `reports/agentic_smoke/*-stock.json`. |
-| Telemetry + UI Parity (2.3) | **Completed (Nov 8)** | WorkflowCanvas now renders agent badges + screenshot target, fed by `laneReuseNotices` + redirect props, with Vitest coverage. | `npm run test -- WorkflowCanvas.test.tsx useAnalyticsMemoryStream.test.tsx` + `docs/design/workflow-canvas-20251114.svg`. |
-| Docs & Tests (2.6) | **Completed (Nov 8)** | Smoke CI + Grafana alert wiring are documented in `docs/agent-optimization-findings.md` and `docs/ops/agents-supervisor-alerts.md`, and smoke fixtures run in CI. | `.github/workflows/agentic-smoke.yml` artifacts + Grafana alert dry-run logs. |
-
-### 5.5 Step-by-Step Plan To Finish the Vision
-- **WorkflowCanvas surface parity (Completed Nov 8).** Agent-turn cards, lane chips, screenshot hook, `laneReuseNotices`/`redirectNotice` plumbing, and Vitest snapshots shipped alongside the GTM asset.
-- **Hook + page wiring (Completed Nov 8).** `useAnalyticsMemoryStream`, ProcessPanel, and `components/analytics/memory/Page.tsx` now emit/present the same reuse + redirect props the canvas consumes.
-- **Automation & observability hardening (Completed Nov 8).** `.github/workflows/agentic-smoke.yml` covers fixtures + optional live smoke, Grafana "Agent Tool Gap" alert wiring is documented, and smoke artifacts upload automatically.
-
-### 5.6 Execution Cadence & Evidence
-- **Nov 8:** Canvas parity merged + Vitest suite (`npm run test -- WorkflowCanvas.test.tsx useAnalyticsMemoryStream.test.tsx`) captured tool badges, and `docs/design/workflow-canvas-20251114.svg` is ready for GTM.
-- **Nov 8:** `.github/workflows/agentic-smoke.yml` now runs on PR/push, optional live smoke is unlocked via `run_live`, and Grafana's "Agent Tool Gap" alert fired in staging with screenshots logged in `docs/ops/agents-supervisor-alerts.md`.
-- **Artifacts archived:** `agentic-smoke-fixtures`, optional `agentic-smoke-live`, Vitest output, and the updated docs enumerated above.
-
----
-
-## 6. Next Big Phase - Agentic Reliability Sprint (Dec 2025)
-
-### Goals (targeting December 19, 2025 code freeze)
-- **100% accessory transparency:** Every `STOCK_ONLY` or `REUSE_SQL` revision must emit either fresh `web_ready` / `stock_ready` or a `lane_reused` banner within 2 seconds (e.g., a reuse-only NVDA revision shows `lane_reused:web` before `analysis_ready` lands).
-- **Deterministic agent turns in the canvas:** With hook telemetry in place, ProcessPanel + WorkflowCanvas must always show the planner reasoning -> tool cards -> lane states sequence, including retries and redirect notices.
-- **Session durability playbook:** When Redis snapshots expire mid-run, the system auto-regenerates `SessionStateSnapshot.revision_context()` (proving we can recover cached SQL + receipts in staging chaos drills).
-
-### Workstreams
-
-**Backend autonomy hardening**
-- Keep `PlannerSequencer.abort_pending_lanes(reason="restart")` firing whenever `session_follow_up=True` revisions arrive back-to-back, preventing stale `web` tasks from leaking; maintain coverage in `backend/tests/analytics/test_planner_sequencer.py::test_restart_aborts_optional_lanes`.
-- Extend `_stream_with_tool_state` to attach accessory `agent_tool_call` payloads like `{"tool":"web_retriever","lane":"web","attempt":2}` whenever parallel lanes spin up, persisting them via `SessionStateSnapshot.record_agent_reasoning`.
-- Add a regression in `backend/tests/analytics/test_single_agent_stream_events.py` that asserts a `STOCK_ONLY` follow-up without fresh market data emits `lane_reused_market` before `workflow_complete`.
-
-**Frontend canvas + observability**
-- Update `components/analytics/hooks/useAnalyticsMemoryStream.ts` so `processSteps` coalesce agent tool pairs into a single card with status chips (e.g., "web_retriever - reused - 640 ms"); add fixture coverage in `useAnalyticsMemoryStream.test.tsx::agent_tool_cards`.
-- Render accessory gaps as inline alerts in `components/analytics/memory/Page.tsx` ("Web lane reused from Nov 1 cache"), wired to the `lane_reused` events streaming from the backend.
-- Plumb `workflow_redirect` events into the canvas header so a user sees "Agent requested fresh baseline -> re-running FULL_PIPELINE" without checking DevTools.
-
-**Ops & tooling**
-- Add the `scripts/agentic_smoke_test.ps1` recipe (STOCK_ONLY follow-up, REUSE_SQL chart tweak, `workflow_redirect` loop) and ensure each run yields paired `agent_tool_call` / `complete` entries in `vite.log`.
-- Wire Grafana panels to count `agent_tool_call` vs. `agent_tool_complete` deltas per lane, alerting if completions lag starts by >10% for 5 minutes (signals stuck accessory workers).
-- Publish a post-sprint checklist in `docs/agent-optimization-findings.md` verifying the telemetry guarantees before we green-light the January GA cut.
-
+These embedded sections capture the material formerly stored in `analytics-agent-openai-sdk-roadmap.md`, `analytics-canvas-overview.md`, `agent-optimization-findings.md`, and `remediation-plan.md`, making this document the sole source of truth.
 

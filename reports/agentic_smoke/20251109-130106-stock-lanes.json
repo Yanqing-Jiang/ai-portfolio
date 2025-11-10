@@ -1,0 +1,28 @@
+﻿{
+    "scenario":  "stock-lanes",
+    "lane":  "market",
+    "session_id":  "fixture-session",
+    "lane_reused":  {
+                        "event":  "lane_reused",
+                        "data":  {
+                                     "reason":  "cache_hit",
+                                     "lane":  "market"
+                                 }
+                    },
+    "accessory_events":  [
+                             {
+                                 "event":  "agent_tool_call",
+                                 "data":  {
+                                              "tool":  "market_fetch",
+                                              "lane":  "market"
+                                          }
+                             },
+                             {
+                                 "event":  "agent_tool_complete",
+                                 "data":  {
+                                              "tool":  "market_fetch",
+                                              "lane":  "market"
+                                          }
+                             }
+                         ]
+}

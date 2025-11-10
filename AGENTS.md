@@ -1,9 +1,9 @@
 ## Agent Ground Rules & Tooling
 Understand the task before editing: read the full function and its direct call sites, and prefer surgical diffs over speculative refactors. 
-Look into the files, generate a plan of changes first, then execute.When generating plan, be more elaborative on concept, use actual examples.
 Do not add fallback code unless requested; 
 Prioritize PowerShell over Bash.  
 List any unresolved questions at the end, if any.
+- For each file, ensure every function has a summary block at the top describing what it does, which modules call it, what it invokes next, and why it exists in the project (e.g., `Function: fetchUserData — called from App.tsx, forwards results to ProfileCard to render user details`).
 - Favor JS/TS-aware scripts (e.g. `node -e`) when editing TSX to avoid PowerShell escaping loops.
 - Always prioritize `gpt-5-mini-2025-08-07` for agent models and see `docs/gpt5-best-practices.md` for GPT-5 configuration guidance.
 

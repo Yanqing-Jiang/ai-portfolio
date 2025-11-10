@@ -284,8 +284,17 @@ def test_sql_pipeline_artifacts(monkeypatch: pytest.MonkeyPatch) -> None:
                 "from_cache": False,
             }
 
-    async def fake_perform_search(query: str, session_id: str, context: Optional[str], search_topic: Optional[str]):
+    async def fake_perform_search(
+        query: str,
+        *,
+        session_id: Optional[str] = None,
+        context: Optional[str] = None,
+        search_topic: Optional[str] = None,
+    ):
         return FakeSearchResult()
+
+    async def fake_generate_topic(query: str, session_id: Optional[str] = None) -> str:
+        return "margin topic"
 
     async def fake_stream_insights_llm(*args, **kwargs):
         for chunk in ["First chunk. ", "Second chunk."]:
@@ -321,7 +330,12 @@ def test_sql_pipeline_artifacts(monkeypatch: pytest.MonkeyPatch) -> None:
         ]
 
     async def _run() -> None:
-        pipeline = planner_executor.PlannerPipeline()
+        response_search = planner_executor.ResponseSearchDependencies(
+            has_api_key=lambda: True,
+            generate_topic=fake_generate_topic,
+            perform_search=fake_perform_search,
+        )
+        pipeline = planner_executor.PlannerPipeline(response_search=response_search)
         pipeline.unified_client = FakeUnifiedClient()
 
         async def fake_classify(query: str, *, session_id: str, model: str, reasoning_effort: str):
@@ -345,9 +359,6 @@ def test_sql_pipeline_artifacts(monkeypatch: pytest.MonkeyPatch) -> None:
             "build_chart_spec",
             fake_build_chart_spec,
         )
-        monkeypatch.setattr(planner_executor, "has_search_api_key", lambda: True)
-        monkeypatch.setattr(planner_executor, "generate_search_topic", lambda query, session_id=None: "margin topic")
-        monkeypatch.setattr(planner_executor, "perform_response_search", fake_perform_search)
         monkeypatch.setattr(planner_executor, "collect_tool_bundle", lambda *args, **kwargs: {"stock_widget": {"symbols": ["NVDA"]}})
         monkeypatch.setattr(planner_executor, "stream_insights_llm", fake_stream_insights_llm)
         monkeypatch.setattr(planner_executor, "classify_query_async", fake_classify)
@@ -421,3 +432,7 @@ def test_sql_pipeline_artifacts(monkeypatch: pytest.MonkeyPatch) -> None:
         assert market_artifact.tickers == ["NVDA"]
 
     asyncio.run(_run())
+
+
+
+

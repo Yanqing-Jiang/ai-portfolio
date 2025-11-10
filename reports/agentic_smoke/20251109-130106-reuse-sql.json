@@ -1,0 +1,29 @@
+﻿[
+    {
+        "event":  "agent_tool_call",
+        "data":  {
+                     "tool":  "web_retriever",
+                     "lane":  "web"
+                 }
+    },
+    {
+        "event":  "lane_reused",
+        "data":  {
+                     "reason":  "cache_hit",
+                     "lane":  "web"
+                 }
+    },
+    {
+        "event":  "agent_tool_complete",
+        "data":  {
+                     "tool":  "web_retriever",
+                     "lane":  "web"
+                 }
+    },
+    {
+        "event":  "workflow_complete",
+        "data":  {
+                     "session_id":  "fixture-session"
+                 }
+    }
+]

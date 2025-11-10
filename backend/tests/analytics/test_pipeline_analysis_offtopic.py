@@ -46,11 +46,22 @@ def test_analysis_runs_with_empty_dataset(monkeypatch: pytest.MonkeyPatch) -> No
             yield  # pragma: no cover
         yield "Finance-only reminder."
 
+    async def fake_generate_topic(*args, **kwargs):
+        return None
+
+    async def fake_perform_search(*args, **kwargs):
+        raise AssertionError("web search should be disabled in this test")
+
+    response_search = planner_executor.ResponseSearchDependencies(
+        has_api_key=lambda: False,
+        generate_topic=fake_generate_topic,
+        perform_search=fake_perform_search,
+    )
+
     monkeypatch.setattr(planner_executor, "stream_insights_llm", fake_stream)
-    monkeypatch.setattr(planner_executor, "has_search_api_key", lambda: False)
 
     async def _exercise():
-        pipeline = planner_executor.PlannerPipeline()
+        pipeline = planner_executor.PlannerPipeline(response_search=response_search)
         ctx = await pipeline.initialize_context("Tell me a story", session_id="sess-offtopic")
         ctx.artifacts = PipelineArtifacts(
             sql_generation=SQLGenerationArtifact(query=ctx.query, sql=""),

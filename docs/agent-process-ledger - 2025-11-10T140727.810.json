@@ -1,0 +1,610 @@
+[
+  {
+    "id": "initializing",
+    "name": "initializing",
+    "status": "completed",
+    "thinking": [],
+    "timestamp": "2025-11-10T19:06:39.460478"
+  },
+  {
+    "id": "schema_validation",
+    "name": "Schema & Criteria Validation",
+    "status": "completed",
+    "thinking": [
+      "SQL criteria ready"
+    ],
+    "details": {
+      "intent_key": "revenue_comparison",
+      "company": "AMD",
+      "comparison": "all",
+      "timeframe": {
+        "granularity": "annual",
+        "years_back": 5,
+        "quarters_back": null,
+        "start_year": null,
+        "end_year": null,
+        "preset": null,
+        "year_to_date": null,
+        "source": "query"
+      },
+      "granularity": "annual",
+      "tickers": [
+        "AMD",
+        "NVDA"
+      ],
+      "metrics": [
+        "Revenue"
+      ],
+      "statistic": null,
+      "ts": "2025-11-10T19:06:46.052722",
+      "flow": "single-agent",
+      "flow_mode": "single_agent",
+      "pending_lanes": [
+        "intent",
+        "sql",
+        "web",
+        "market",
+        "analysis"
+      ],
+      "sequence": 14,
+      "parallel_group": "core_sequential",
+      "schedule_stage": "intent",
+      "stage_allows_parallel": false
+    },
+    "timestamp": "2025-11-10T19:06:46.052722"
+  },
+  {
+    "id": "schema_clarifier",
+    "name": "schema_clarifier",
+    "status": "completed",
+    "thinking": [
+      "Schema clarifier skip"
+    ],
+    "details": {
+      "step": "schema_clarifier",
+      "ts": "2025-11-10T19:07:14.689971",
+      "summary": "Schema clarifier skip",
+      "flow": "single-agent",
+      "flow_mode": "single_agent",
+      "pending_lanes": [],
+      "sequence": 84,
+      "attempt": 1,
+      "message": "Schema clarifier decision: skip",
+      "tool_attempt": 1,
+      "retry_count": 0,
+      "retry": false,
+      "tool_registry": "intent_detection",
+      "lane_status": {
+        "intent": "success",
+        "sql": "success",
+        "web": "success",
+        "market": "success",
+        "analysis": "success"
+      }
+    },
+    "timestamp": "2025-11-10T19:07:14.689971",
+    "sequence": 83
+  },
+  {
+    "id": "accessory_lane_warning",
+    "name": "accessory_lane_warning",
+    "status": "completed",
+    "thinking": [],
+    "details": {
+      "attempt": 1,
+      "message": ""
+    },
+    "timestamp": "2025-11-10T19:07:14.690315",
+    "sequence": 89,
+    "flowMode": "single_agent",
+    "lane": "accessories"
+  },
+  {
+    "id": "clarification",
+    "name": "Requirements Clarification",
+    "status": "completed",
+    "thinking": [
+      "Clarifications resolved",
+      "All required slots satisfied",
+      "Clarifications resolved"
+    ],
+    "details": {
+      "step": "intent_detection",
+      "ts": "2025-11-10T19:07:14.690210",
+      "key": "revenue_comparison",
+      "confidence": 0.75,
+      "clarifications_needed": false,
+      "low_confidence": true,
+      "schema_clarifier_action": "skip",
+      "slot_statuses": {
+        "timeframe": {
+          "status": "defaulted",
+          "value": {
+            "years_back": 5,
+            "granularity": "annual",
+            "source": "query"
+          },
+          "reason": "Using heuristic timeframe default.",
+          "suggestions": [
+            "last 5 years",
+            "last 2 years",
+            "last 8 quarters",
+            "year to date"
+          ],
+          "allow_custom": true
+        },
+        "metric": {
+          "status": "defaulted",
+          "value": "Revenue",
+          "reason": "Using heuristic metric default.",
+          "suggestions": [
+            "Revenue",
+            "Net Income",
+            "Capital Expenditures",
+            "EPS Basic",
+            "Income Before Tax",
+            "Operating Income",
+            "Stockholders' Equity",
+            "R&D Expense",
+            "Gross Profit"
+          ],
+          "allow_custom": true
+        },
+        "comparison": {
+          "status": "defaulted",
+          "value": "all",
+          "reason": "Using heuristic comparison default.",
+          "suggestions": [
+            "single",
+            "all"
+          ],
+          "allow_custom": false
+        },
+        "metrics": {
+          "status": "defaulted",
+          "value": [
+            "Revenue"
+          ],
+          "reason": "Metrics auto-filled from plan defaults.",
+          "suggestions": [
+            "Revenue"
+          ],
+          "allow_custom": true
+        }
+      },
+      "slot_followups": [],
+      "clarification_sources": [],
+      "elapsed_ms": 2,
+      "flow": "single-agent",
+      "flow_mode": "single_agent",
+      "pending_lanes": [],
+      "sequence": 86,
+      "parallel_group": "core_sequential",
+      "schedule_stage": "intent",
+      "stage_allows_parallel": false,
+      "attempt": 1,
+      "tool_attempt": 1,
+      "retry_count": 0,
+      "retry": false,
+      "tool_registry": "intent_detection",
+      "lane_status": {
+        "intent": "success",
+        "sql": "success",
+        "web": "success",
+        "market": "success",
+        "analysis": "success"
+      }
+    },
+    "elapsed_ms": 2,
+    "timestamp": "2025-11-10T19:07:14.690210",
+    "sequence": 86,
+    "parallelGroup": "core_sequential",
+    "scheduleStage": "intent"
+  },
+  {
+    "id": "intent_detection",
+    "name": "Intent Detection",
+    "status": "completed",
+    "thinking": [
+      "Detecting query intent...",
+      "Intent: revenue_comparison (75%)",
+      "Intent and schema finalized",
+      "Detecting query intent...",
+      "Intent: revenue_comparison (75%)"
+    ],
+    "details": {
+      "intent_key": "revenue_comparison",
+      "confidence": 0.75,
+      "slots_detected": {
+        "timeframe": {
+          "years_back": 5,
+          "granularity": "annual",
+          "source": "query"
+        },
+        "metric": "Revenue",
+        "comparison": "all",
+        "metrics": [
+          "Revenue"
+        ],
+        "original_query": "AMD vs NVIDIA revenue comparison in the past 5 years?",
+        "company_candidates": [
+          "AMD",
+          "NVDA"
+        ],
+        "company": "AMD",
+        "tickers": [
+          "AMD",
+          "NVDA"
+        ],
+        "granularity": "annual"
+      },
+      "slot_statuses": {
+        "timeframe": {
+          "status": "defaulted",
+          "value": {
+            "years_back": 5,
+            "granularity": "annual",
+            "source": "query"
+          },
+          "reason": "Using heuristic timeframe default.",
+          "suggestions": [
+            "last 5 years",
+            "last 2 years",
+            "last 8 quarters",
+            "year to date"
+          ],
+          "allow_custom": true
+        },
+        "metric": {
+          "status": "defaulted",
+          "value": "Revenue",
+          "reason": "Using heuristic metric default.",
+          "suggestions": [
+            "Revenue",
+            "Net Income",
+            "Capital Expenditures",
+            "EPS Basic",
+            "Income Before Tax",
+            "Operating Income",
+            "Stockholders' Equity",
+            "R&D Expense",
+            "Gross Profit"
+          ],
+          "allow_custom": true
+        },
+        "comparison": {
+          "status": "defaulted",
+          "value": "all",
+          "reason": "Using heuristic comparison default.",
+          "suggestions": [
+            "single",
+            "all"
+          ],
+          "allow_custom": false
+        },
+        "metrics": {
+          "status": "defaulted",
+          "value": [
+            "Revenue"
+          ],
+          "reason": "Metrics auto-filled from plan defaults.",
+          "suggestions": [
+            "Revenue"
+          ],
+          "allow_custom": true
+        }
+      },
+      "slot_followups": [],
+      "step": "intent_detection",
+      "ts": "2025-11-10T19:07:14.690210",
+      "key": "revenue_comparison",
+      "clarifications_needed": false,
+      "low_confidence": true,
+      "schema_clarifier_action": "skip",
+      "clarification_sources": [],
+      "elapsed_ms": 2,
+      "flow": "single-agent",
+      "flow_mode": "single_agent",
+      "pending_lanes": [],
+      "sequence": 86,
+      "parallel_group": "core_sequential",
+      "schedule_stage": "intent",
+      "stage_allows_parallel": false,
+      "assumptions": [
+        "timeframe defaulted to {'years_back': 5, 'granularity': 'annual', 'source': 'query'}",
+        "metric defaulted to Revenue",
+        "comparison defaulted to all",
+        "metrics defaulted to ['Revenue']"
+      ],
+      "attempt": 1,
+      "message": "Detecting intent...",
+      "tool_attempt": 1,
+      "retry_count": 0,
+      "retry": false,
+      "tool_registry": "intent_detection",
+      "lane_status": {
+        "intent": "success",
+        "sql": "success",
+        "web": "success",
+        "market": "success",
+        "analysis": "success"
+      }
+    },
+    "elapsed_ms": 2,
+    "timestamp": "2025-11-10T19:07:14.690210",
+    "sequence": 86,
+    "parallelGroup": "core_sequential",
+    "scheduleStage": "intent"
+  },
+  {
+    "id": "tool_execution",
+    "name": "Agent Tool Execution",
+    "status": "completed",
+    "thinking": [
+      "Tool rs_0742fec0d40b733900691237c892d081909184006a53d7485f completed",
+      "Tool fc_0742fec0d40b733900691237cbb91081908c680bb96b137eef running",
+      "Tool fc_0742fec0d40b733900691237cbb91081908c680bb96b137eef completed",
+      "Tool classification completed",
+      "Tool rs_0742fec0d40b733900691237d5e8b481909ef43dbc894d2752 completed",
+      "Tool fc_0742fec0d40b733900691237d63b908190b289d60ed2b91574 running",
+      "Tool fc_0742fec0d40b733900691237d63b908190b289d60ed2b91574 completed",
+      "Tool intent_detection completed",
+      "Tool rs_0742fec0d40b733900691237e21c7c8190b0bbb7fa7bcf64a7 completed",
+      "Tool fc_0742fec0d40b733900691237e3eb7c819090482a2fe5fe9d3e running",
+      "Tool fc_0742fec0d40b733900691237e3eb7c819090482a2fe5fe9d3e completed",
+      "Tool plan_generation completed"
+    ],
+    "details": {
+      "tool_calls": [
+        {
+          "tool": "fc_0742fec0d40b733900691237e3eb7c819090482a2fe5fe9d3e",
+          "status": "running",
+          "ts": "2025-11-10T19:07:18.393892",
+          "details": {
+            "arguments_delta": "line"
+          },
+          "sequence": 134,
+          "parallelGroup": "agents",
+          "toolGroup": "fc_0742fec0d40b733900691237e3eb7c819090482a2fe5fe9d3e",
+          "lane": "agents"
+        },
+        {
+          "tool": "fc_0742fec0d40b733900691237e3eb7c819090482a2fe5fe9d3e",
+          "status": "running",
+          "ts": "2025-11-10T19:07:18.397580",
+          "details": {
+            "arguments_delta": " +"
+          },
+          "sequence": 135,
+          "parallelGroup": "agents",
+          "toolGroup": "fc_0742fec0d40b733900691237e3eb7c819090482a2fe5fe9d3e",
+          "lane": "agents"
+        },
+        {
+          "tool": "fc_0742fec0d40b733900691237e3eb7c819090482a2fe5fe9d3e",
+          "status": "running",
+          "ts": "2025-11-10T19:07:18.407452",
+          "details": {
+            "arguments_delta": " bars"
+          },
+          "sequence": 136,
+          "parallelGroup": "agents",
+          "toolGroup": "fc_0742fec0d40b733900691237e3eb7c819090482a2fe5fe9d3e",
+          "lane": "agents"
+        },
+        {
+          "tool": "fc_0742fec0d40b733900691237e3eb7c819090482a2fe5fe9d3e",
+          "status": "running",
+          "ts": "2025-11-10T19:07:18.425831",
+          "details": {
+            "arguments_delta": ")"
+          },
+          "sequence": 137,
+          "parallelGroup": "agents",
+          "toolGroup": "fc_0742fec0d40b733900691237e3eb7c819090482a2fe5fe9d3e",
+          "lane": "agents"
+        },
+        {
+          "tool": "fc_0742fec0d40b733900691237e3eb7c819090482a2fe5fe9d3e",
+          "status": "running",
+          "ts": "2025-11-10T19:07:18.430228",
+          "details": {
+            "arguments_delta": " and"
+          },
+          "sequence": 138,
+          "parallelGroup": "agents",
+          "toolGroup": "fc_0742fec0d40b733900691237e3eb7c819090482a2fe5fe9d3e",
+          "lane": "agents"
+        },
+        {
+          "tool": "fc_0742fec0d40b733900691237e3eb7c819090482a2fe5fe9d3e",
+          "status": "running",
+          "ts": "2025-11-10T19:07:18.437527",
+          "details": {
+            "arguments_delta": " summary"
+          },
+          "sequence": 139,
+          "parallelGroup": "agents",
+          "toolGroup": "fc_0742fec0d40b733900691237e3eb7c819090482a2fe5fe9d3e",
+          "lane": "agents"
+        },
+        {
+          "tool": "fc_0742fec0d40b733900691237e3eb7c819090482a2fe5fe9d3e",
+          "status": "running",
+          "ts": "2025-11-10T19:07:18.456256",
+          "details": {
+            "arguments_delta": " analysis"
+          },
+          "sequence": 140,
+          "parallelGroup": "agents",
+          "toolGroup": "fc_0742fec0d40b733900691237e3eb7c819090482a2fe5fe9d3e",
+          "lane": "agents"
+        },
+        {
+          "tool": "fc_0742fec0d40b733900691237e3eb7c819090482a2fe5fe9d3e",
+          "status": "running",
+          "ts": "2025-11-10T19:07:18.472645",
+          "details": {
+            "arguments_delta": ".\",\""
+          },
+          "sequence": 141,
+          "parallelGroup": "agents",
+          "toolGroup": "fc_0742fec0d40b733900691237e3eb7c819090482a2fe5fe9d3e",
+          "lane": "agents"
+        },
+        {
+          "tool": "fc_0742fec0d40b733900691237e3eb7c819090482a2fe5fe9d3e",
+          "status": "running",
+          "ts": "2025-11-10T19:07:18.473711",
+          "details": {
+            "arguments_delta": "force"
+          },
+          "sequence": 142,
+          "parallelGroup": "agents",
+          "toolGroup": "fc_0742fec0d40b733900691237e3eb7c819090482a2fe5fe9d3e",
+          "lane": "agents"
+        },
+        {
+          "tool": "fc_0742fec0d40b733900691237e3eb7c819090482a2fe5fe9d3e",
+          "status": "running",
+          "ts": "2025-11-10T19:07:18.484367",
+          "details": {
+            "arguments_delta": "_template"
+          },
+          "sequence": 143,
+          "parallelGroup": "agents",
+          "toolGroup": "fc_0742fec0d40b733900691237e3eb7c819090482a2fe5fe9d3e",
+          "lane": "agents"
+        },
+        {
+          "tool": "fc_0742fec0d40b733900691237e3eb7c819090482a2fe5fe9d3e",
+          "status": "running",
+          "ts": "2025-11-10T19:07:18.491954",
+          "details": {
+            "arguments_delta": "\":"
+          },
+          "sequence": 144,
+          "parallelGroup": "agents",
+          "toolGroup": "fc_0742fec0d40b733900691237e3eb7c819090482a2fe5fe9d3e",
+          "lane": "agents"
+        },
+        {
+          "tool": "fc_0742fec0d40b733900691237e3eb7c819090482a2fe5fe9d3e",
+          "status": "running",
+          "ts": "2025-11-10T19:07:18.506564",
+          "details": {
+            "arguments_delta": "\"\""
+          },
+          "sequence": 145,
+          "parallelGroup": "agents",
+          "toolGroup": "fc_0742fec0d40b733900691237e3eb7c819090482a2fe5fe9d3e",
+          "lane": "agents"
+        },
+        {
+          "tool": "fc_0742fec0d40b733900691237e3eb7c819090482a2fe5fe9d3e",
+          "status": "running",
+          "ts": "2025-11-10T19:07:18.513034",
+          "details": {
+            "arguments_delta": "}"
+          },
+          "sequence": 146,
+          "parallelGroup": "agents",
+          "toolGroup": "fc_0742fec0d40b733900691237e3eb7c819090482a2fe5fe9d3e",
+          "lane": "agents"
+        },
+        {
+          "tool": "fc_0742fec0d40b733900691237e3eb7c819090482a2fe5fe9d3e",
+          "status": "completed",
+          "ts": "2025-11-10T19:07:18.709594",
+          "details": {
+            "arguments": "{\"reason\":\"Create a query plan to fetch annual consolidated revenue for AMD (AMD) and NVIDIA (NVDA) for the last 5 years, compute year-over-year growth and CAGR, and prepare chart (line + bars) and summary analysis.\",\"force_template\":\"\"}"
+          },
+          "sequence": 147,
+          "parallelGroup": "agents",
+          "toolGroup": "fc_0742fec0d40b733900691237e3eb7c819090482a2fe5fe9d3e",
+          "lane": "agents"
+        },
+        {
+          "tool": "plan_generation",
+          "status": "completed",
+          "ts": "2025-11-10T19:07:18.710948",
+          "details": {
+            "status": "completed"
+          },
+          "sequence": 148,
+          "parallelGroup": "agents",
+          "toolGroup": "plan_generation",
+          "lane": "sql"
+        }
+      ]
+    },
+    "timestamp": "2025-11-10T19:07:18.710948",
+    "sequence": 148,
+    "parallelGroup": "agents"
+  },
+  {
+    "id": "classification",
+    "name": "Query Classification",
+    "status": "completed",
+    "thinking": [
+      "Starting query classification...",
+      "LLM classified topic 'financial_analytics'",
+      "Query classified as financial analytics",
+      "Starting query classification...",
+      "LLM classified topic 'financial_analytics'",
+      "Query classified as financial analytics",
+      "Starting query classification...",
+      "LLM classified topic 'financial_analytics'",
+      "Query classified as financial analytics",
+      "Starting query classification..."
+    ],
+    "details": {
+      "model": "gpt-5-nano-2025-08-07",
+      "confidence": 0.78,
+      "category": "financial_analytics",
+      "is_financial": true
+    },
+    "elapsed_ms": 9575,
+    "timestamp": "2025-11-10T19:07:18.899646"
+  },
+  {
+    "id": "plan_and_select_template",
+    "name": "Query Planning & Template Selection",
+    "status": "completed",
+    "thinking": [
+      "Plan built",
+      "Selected template: revenue_comparison",
+      "YAML catalogue lookup via lookup"
+    ],
+    "details": {
+      "plan": {
+        "metrics_count": 1,
+        "granularity": "annual",
+        "comparison": "all"
+      },
+      "template": {
+        "id": "revenue_comparison",
+        "name": "Revenue Comparison Across Companies",
+        "description": "Compare revenue totals for the semiconductor peer set over time"
+      },
+      "candidates": [],
+      "metadata": {}
+    },
+    "elapsed_ms": 1021
+  },
+  {
+    "id": "follow_up_route",
+    "name": "Follow-Up Guidance",
+    "status": "completed",
+    "thinking": [
+      "Route selected: full pipeline"
+    ],
+    "details": {
+      "banner": {
+        "title": "Fresh Run Scheduled",
+        "message": "Running SQL, charts, and narrative again to deliver a fully refreshed answer.",
+        "route": "full_pipeline"
+      }
+    }
+  }
+]
