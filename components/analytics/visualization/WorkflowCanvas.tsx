@@ -24,6 +24,7 @@ import {
   LaneReuseNotice,
   ToolCallTelemetry,
   AgentTurnTelemetry,
+  FreshLaneStatus,
 } from '../types';
 
 const LANE_ORDER = ['overview', 'coordination', 'planner', 'sql', 'market', 'web', 'chart', 'analysis', 'fanout'] as const;
@@ -438,10 +439,72 @@ const buildLaneReusePills = (notices?: LaneReuseNotice[] | null): LaneReusePill[
       const laneLabel = resolveLaneLabel(notice.lane) ?? (notice.lane ? notice.lane : 'Accessory lane');
       const ageLabel = formatAgeSeconds(notice.ageSeconds);
       const text = ageLabel ? `${laneLabel} reused (${ageLabel})` : `${laneLabel} reused`;
+      const extraDetails: string[] = [];
+      if (notice.message) {
+        extraDetails.push(notice.message);
+      }
+      if (typeof notice.fastPathLatencyMs === 'number') {
+        extraDetails.push(`Fast-path ${notice.fastPathLatencyMs} ms`);
+      }
+      const guardrailStatus =
+        typeof notice.guardrail?.status === 'string' ? notice.guardrail.status : undefined;
+      if (guardrailStatus) {
+        extraDetails.push(
+          guardrailStatus === 'violation' ? 'Guardrail tripped' : `Guardrail ${guardrailStatus}`,
+        );
+      }
+      const tooltip = extraDetails.length ? extraDetails.join(' • ') : notice.reason ?? text;
       return {
         key: `${notice.lane ?? 'lane'}-${notice.ts ?? index}`,
         text,
-        title: notice.message ?? notice.reason ?? text,
+        title: tooltip ?? text,
+      };
+    });
+};
+
+type FreshLanePill = { key: string; text: string; status: FreshLaneStatus['status']; title?: string };
+
+const FRESH_LANE_ORDER: string[] = ['sql', 'chart', 'market', 'web', 'analysis'];
+
+const FRESH_STATUS_BADGES: Record<FreshLaneStatus['status'], string> = {
+  started: 'border border-blue-400/40 bg-blue-500/15 text-blue-100',
+  completed: 'border border-emerald-400/40 bg-emerald-500/15 text-emerald-100',
+  failed: 'border border-rose-400/40 bg-rose-500/15 text-rose-100',
+};
+
+const buildFreshLanePills = (
+  states?: Record<string, FreshLaneStatus> | null,
+): FreshLanePill[] => {
+  if (!states) {
+    return [];
+  }
+  const entries = Object.values(states);
+  if (!entries.length) {
+    return [];
+  }
+  const sortIndex = (lane: string) => {
+    const idx = FRESH_LANE_ORDER.indexOf(lane);
+    return idx === -1 ? FRESH_LANE_ORDER.length : idx;
+  };
+  return entries
+    .slice()
+    .sort((a, b) => sortIndex(a.lane) - sortIndex(b.lane))
+    .map((entry) => {
+      const laneLabel = resolveLaneLabel(entry.lane) ?? entry.lane;
+      const statusLabel = entry.status.replace('_', ' ');
+      const text = `${laneLabel} ${statusLabel}`;
+      const tooltipParts: string[] = [];
+      if (entry.reason) {
+        tooltipParts.push(entry.reason);
+      }
+      if (entry.reasoningEffort) {
+        tooltipParts.push(`Reasoning: ${entry.reasoningEffort}`);
+      }
+      return {
+        key: `${entry.lane}-${entry.status}-${entry.ts ?? 'latest'}`,
+        text,
+        status: entry.status,
+        title: tooltipParts.length ? tooltipParts.join(' • ') : undefined,
       };
     });
 };
@@ -458,6 +521,8 @@ interface WorkflowCanvasProps {
   progressPercent?: number;
   laneReuseNotices?: LaneReuseNotice[] | null;
   redirectNotice?: string | null;
+  agenticRevision?: boolean;
+  freshLaneStates?: Record<string, FreshLaneStatus> | undefined | null;
 }
 
 type CanvasProcessNodeData = ProcessNodeComponentData & {
@@ -815,6 +880,8 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
   progressPercent,
   laneReuseNotices,
   redirectNotice,
+  agenticRevision = false,
+  freshLaneStates,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [nodes, setNodes, onNodesChange] = useNodesState<CanvasProcessNodeData>([]);
@@ -826,6 +893,7 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
   const theme = FLOW_THEMES[flowMode];
   const layout = FLOW_LAYOUT[flowMode];
   const laneReusePills = useMemo(() => buildLaneReusePills(laneReuseNotices), [laneReuseNotices]);
+  const freshLanePills = useMemo(() => buildFreshLanePills(freshLaneStates), [freshLaneStates]);
 
   const processedSteps = useMemo(() => {
     const prioritizedSteps = flowMode === 'multi-agent'
@@ -1679,6 +1747,24 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
             {currentDuration && <span>{currentDuration}</span>}
           </div>
         </div>
+        {(agenticRevision || freshLanePills.length > 0) && (
+          <div className="flex flex-wrap items-center gap-2 text-[10px] text-purple-100">
+            {agenticRevision && (
+              <span className="rounded-full border border-purple-400/40 bg-purple-500/20 px-2 py-0.5 uppercase tracking-wide text-purple-100">
+                Agentic Revision
+              </span>
+            )}
+            {freshLanePills.map((pill) => (
+              <span
+                key={pill.key}
+                title={pill.title}
+                className={`rounded-full px-2 py-0.5 ${FRESH_STATUS_BADGES[pill.status]}`}
+              >
+                {pill.text}
+              </span>
+            ))}
+          </div>
+        )}
         {laneReusePills.length > 0 && (
           <div className="flex flex-wrap gap-2 text-[10px] text-sky-100">
             {laneReusePills.map((pill) => (

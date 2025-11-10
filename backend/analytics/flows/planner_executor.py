@@ -904,6 +904,7 @@ class PlannerPhaseContext:
     revision_hint_active: bool = False
     revision_directive: Optional["RevisionDirective"] = None
     agentic_revision_mode: bool = False
+    force_full_fresh_pipeline: bool = False
     halted: bool = False
     halt_reason: Optional[str] = None
     lane_refresh_required: Dict[str, bool] = field(default_factory=dict)
@@ -957,6 +958,7 @@ _NUMERIC_HINTS = ("%", "bps", "basis point", "million", "billion", "m$", "bn")
 SNAPSHOT_MAX_AGE_SECONDS = int(os.getenv("ANALYTICS_SNAPSHOT_MAX_AGE_SECONDS", "600"))
 _WEB_TOOL_NAMES = {"web_retriever", "web_retriever_cached", "web_retriever_live"}
 _MARKET_TOOL_NAMES = {"stock_tracker", "market_question_a", "market_question_b"}
+FRESH_RUN_REASONING_EFFORT = "minimal"
 
 FOLLOW_UP_BANNERS: Dict[FollowUpRoute, Dict[str, str]] = {
     FollowUpRoute.FULL_PIPELINE: {
@@ -3321,6 +3323,46 @@ class PlannerPipeline:
         data.setdefault("parallel_group", "accessory_delta")
         return self._annotate_revision(event, ctx)
 
+    def _maybe_emit_fresh_lane_event(
+        self,
+        ctx: PlannerPhaseContext,
+        lane: str,
+        status: str,
+        *,
+        reason: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        if not getattr(ctx, "force_full_fresh_pipeline", False):
+            return None
+        status_map: Dict[str, str] = getattr(ctx, "_fresh_lane_status", {})
+        if not hasattr(ctx, "_fresh_lane_status"):
+            setattr(ctx, "_fresh_lane_status", status_map)
+        previous = status_map.get(lane)
+        if previous == status:
+            return None
+        if status == "started" and previous in {"started", "completed"}:
+            return None
+        if previous == "completed" and status == "failed":
+            return None
+        status_map[lane] = status
+        message = f"{lane.title()} lane {status}"
+        event = EventEmitter.progress(f"fresh_{lane}_{status}", message)
+        data = event.setdefault("data", {})
+        data["lane"] = lane
+        data["status"] = status
+        data["fresh_pipeline"] = True
+        data["reasoning_effort"] = FRESH_RUN_REASONING_EFFORT
+        data["ts"] = datetime.utcnow().isoformat()
+        if reason:
+            data["reason"] = reason
+        telemetry.fresh_pipeline_lane(
+            lane=lane,
+            status=status,
+            session_id=getattr(ctx, "session_id", None),
+            flow=getattr(self, "flow_label", None),
+            reasoning_effort=FRESH_RUN_REASONING_EFFORT,
+        )
+        return event
+
     @staticmethod
     def _apply_revision_metadata(
         event: Dict[str, Any],
@@ -3405,6 +3447,20 @@ class PlannerPipeline:
                 compose_web_ready_payload=compose_web_ready_payload,
             )
         )
+        lane_for_fresh: Optional[str] = None
+        if tool_name.startswith("web_retriever"):
+            lane_for_fresh = "web"
+        elif tool_name == "stock_tracker" or tool_name.startswith("market_question"):
+            lane_for_fresh = "stock"
+        if lane_for_fresh:
+            if status in {"completed", "complete", "success"}:
+                marker = self._maybe_emit_fresh_lane_event(ctx, lane_for_fresh, "completed")
+            elif status in {"failed", "error", "cancelled"}:
+                marker = self._maybe_emit_fresh_lane_event(ctx, lane_for_fresh, "failed")
+            else:
+                marker = None
+            if marker:
+                derived.append(marker)
         cache_entries: List[Dict[str, Any]] = []
         normalized_result = sanitize_for_json(dict(data))
         if isinstance(normalized_result, dict):
@@ -4939,8 +4995,30 @@ class PlannerPipeline:
         mode_config = get_mode_config(self.flow_mode)
         tool_runtime: Optional[ToolParallelRuntime] = None
         tool_state: Optional[Dict[str, Any]] = None
+        is_session_follow_up = bool(getattr(ctx, "session_follow_up", False))
+        fresh_run = not is_session_follow_up
+        if fresh_run and ctx.follow_up_route != FollowUpRoute.FULL_PIPELINE:
+            ctx.follow_up_route = FollowUpRoute.FULL_PIPELINE
+        ctx.force_full_fresh_pipeline = fresh_run
+        if ctx.force_full_fresh_pipeline:
+            ctx.parallelism_enabled = True
+            ctx.revision_targets = set()
+            ctx.revision_hint_active = False
+            ctx.revision_id = None
+            ctx.reuse_sql = False
+            ctx.reused_sql = False
+            ctx.reused_chart = False
+            ctx.reused_analysis = False
+            ctx.reused_web = False
+            ctx.reused_stock = False
+            ctx.reuse_snapshot_active = False
+            forced_refresh = dict(getattr(ctx, "lane_refresh_required", {}) or {})
+            forced_refresh["web"] = True
+            forced_refresh["market"] = True
+            ctx.lane_refresh_required = forced_refresh
         is_revision_follow_up = (
-            ctx.follow_up_route != FollowUpRoute.FULL_PIPELINE
+            is_session_follow_up
+            or ctx.follow_up_route != FollowUpRoute.FULL_PIPELINE
             or bool(getattr(ctx, "revision_targets", None))
         )
         setattr(ctx, "is_revision_follow_up", is_revision_follow_up)
@@ -5009,22 +5087,31 @@ class PlannerPipeline:
                 for tool_event in self._collect_tool_deltas_now(tool_state, ctx):
                     yield tool_event
 
-            derived_targets = derive_revision_targets(ctx, intent_lane_map=_INTENT_LANE_HINTS)
-            revision_plan = build_revision_plan(ctx, targets=derived_targets)
-            apply_revision_plan(ctx, revision_plan)
-            revision_targets: Set[str] = set(revision_plan.targets)
-            run_sql_lane = revision_plan.run_sql_lane
-            run_chart_lane = revision_plan.run_chart_lane
-            run_analysis_lane = revision_plan.run_analysis_lane
+            if ctx.force_full_fresh_pipeline:
+                revision_targets = set()
+                run_sql_lane = True
+                run_chart_lane = True
+                run_analysis_lane = True
+                stock_only_run = False
+                ctx.stock_only = False
+            else:
+                derived_targets = derive_revision_targets(ctx, intent_lane_map=_INTENT_LANE_HINTS)
+                revision_plan = build_revision_plan(ctx, targets=derived_targets)
+                apply_revision_plan(ctx, revision_plan)
+                revision_targets: Set[str] = set(revision_plan.targets)
+                run_sql_lane = revision_plan.run_sql_lane
+                run_chart_lane = revision_plan.run_chart_lane
+                run_analysis_lane = revision_plan.run_analysis_lane
+                stock_only_run = revision_plan.stock_only
             # Telemetry snapshot of the computed revision plan to aid debugging
             telemetry.revision_plan(
                 session_id=ctx.session_id,
                 flow=self.flow_label,
-                targets=sorted(revision_plan.targets),
+                targets=sorted(revision_targets),
                 run_sql_lane=run_sql_lane,
                 run_chart_lane=run_chart_lane,
                 run_analysis_lane=run_analysis_lane,
-                stock_only=revision_plan.stock_only,
+                stock_only=stock_only_run,
                 follow_up_route=(ctx.follow_up_route.value if getattr(ctx, 'follow_up_route', None) else None),
                 revision_id=getattr(ctx, 'revision_id', None),
             )
@@ -5040,24 +5127,51 @@ class PlannerPipeline:
                     ctx,
                 )
                 yield revision_event
-            stock_only_run = revision_plan.stock_only
 
-            async for event in stream_sql_lane(
-                self,
-                ctx=ctx,
-                registry=registry,
-                executed=executed,
-                tool_state=tool_state,
-                run_sql_lane=run_sql_lane,
-            ):
-                yield event
+            start_sql = self._maybe_emit_fresh_lane_event(ctx, "sql", "started")
+            if start_sql:
+                yield start_sql
+            try:
+                async for event in stream_sql_lane(
+                    self,
+                    ctx=ctx,
+                    registry=registry,
+                    executed=executed,
+                    tool_state=tool_state,
+                    run_sql_lane=run_sql_lane,
+                ):
+                    yield event
+            except Exception:
+                fail_sql = self._maybe_emit_fresh_lane_event(ctx, "sql", "failed")
+                if fail_sql:
+                    yield fail_sql
+                raise
+            else:
+                complete_sql = self._maybe_emit_fresh_lane_event(ctx, "sql", "completed")
+                if complete_sql:
+                    yield complete_sql
 
-            async for event in self._stream_with_tool_state(
-                ensure_analysis_dependencies(self, ctx, mode_config=mode_config),
-                tool_state,
-                ctx,
-            ):
-                yield event
+            accessory_lanes: Tuple[str, ...] = ()
+            if ctx.force_full_fresh_pipeline:
+                accessory_lanes = ("web", "stock")
+                for lane in accessory_lanes:
+                    start_lane = self._maybe_emit_fresh_lane_event(ctx, lane, "started")
+                    if start_lane:
+                        yield start_lane
+
+            try:
+                async for event in self._stream_with_tool_state(
+                    ensure_analysis_dependencies(self, ctx, mode_config=mode_config),
+                    tool_state,
+                    ctx,
+                ):
+                    yield event
+            except Exception:
+                for lane in accessory_lanes:
+                    fail_lane = self._maybe_emit_fresh_lane_event(ctx, lane, "failed")
+                    if fail_lane:
+                        yield fail_lane
+                raise
 
             if stock_only_run:
                 ctx.reused_stock = False
@@ -5100,25 +5214,51 @@ class PlannerPipeline:
             if ctx.halted:
                 return
 
-            async for event in stream_chart_lane(
-                self,
-                ctx=ctx,
-                registry=registry,
-                executed=executed,
-                tool_state=tool_state,
-                run_chart_lane=run_chart_lane,
-            ):
-                yield event
+            start_chart = self._maybe_emit_fresh_lane_event(ctx, "chart", "started")
+            if start_chart:
+                yield start_chart
+            try:
+                async for event in stream_chart_lane(
+                    self,
+                    ctx=ctx,
+                    registry=registry,
+                    executed=executed,
+                    tool_state=tool_state,
+                    run_chart_lane=run_chart_lane,
+                ):
+                    yield event
+            except Exception:
+                fail_chart = self._maybe_emit_fresh_lane_event(ctx, "chart", "failed")
+                if fail_chart:
+                    yield fail_chart
+                raise
+            else:
+                complete_chart = self._maybe_emit_fresh_lane_event(ctx, "chart", "completed")
+                if complete_chart:
+                    yield complete_chart
 
-            async for event in stream_analysis_lane(
-                self,
-                ctx=ctx,
-                registry=registry,
-                executed=executed,
-                tool_state=tool_state,
-                mode_config=mode_config,
-            ):
-                yield event
+            start_analysis = self._maybe_emit_fresh_lane_event(ctx, "analysis", "started")
+            if start_analysis:
+                yield start_analysis
+            try:
+                async for event in stream_analysis_lane(
+                    self,
+                    ctx=ctx,
+                    registry=registry,
+                    executed=executed,
+                    tool_state=tool_state,
+                    mode_config=mode_config,
+                ):
+                    yield event
+            except Exception:
+                fail_analysis = self._maybe_emit_fresh_lane_event(ctx, "analysis", "failed")
+                if fail_analysis:
+                    yield fail_analysis
+                raise
+            else:
+                complete_analysis = self._maybe_emit_fresh_lane_event(ctx, "analysis", "completed")
+                if complete_analysis:
+                    yield complete_analysis
         finally:
             if tool_runtime:
                 await tool_runtime.close()
@@ -5143,16 +5283,18 @@ async def _initialize_context(self, query: str, session_id: Optional[str]) -> Pl
     self._agent_tool_counters.clear()
     self._agent_tool_active_ids.clear()
     ctx.session_follow_up = bool(getattr(self, "session_follow_up", False))
-    snapshot = getattr(self, "_prefetched_snapshot", None)
+    hydrate_from_snapshot = bool(ctx.session_follow_up) or self.follow_up_route != FollowUpRoute.FULL_PIPELINE
+    snapshot = getattr(self, "_prefetched_snapshot", None) if hydrate_from_snapshot else None
     snapshot_artifacts = _artifacts_from_snapshot(snapshot)
     revision_snapshot = extract_revision_snapshot(snapshot)
-    if snapshot_artifacts or revision_snapshot:
+    if hydrate_from_snapshot and (snapshot_artifacts or revision_snapshot):
         _hydrate_context_from_snapshot(ctx, snapshot, snapshot_artifacts)
     else:
         ctx.revision_snapshot = None
         ctx.prior_intent_signature = None
     if (
-        not snapshot_artifacts
+        hydrate_from_snapshot
+        and not snapshot_artifacts
         and not revision_snapshot
         and self.follow_up_route == FollowUpRoute.REUSE_SQL
         and self._latest_artifacts is not None
@@ -5180,10 +5322,13 @@ async def _initialize_context(self, query: str, session_id: Optional[str]) -> Pl
         ctx.agentic_revision_mode = bool(getattr(self, "agentic_revision_mode", False))
     ctx.lane_refresh_required = dict(getattr(self, "_lane_refresh_required", {}))
     ctx.analysis_refresh_mode = getattr(self, "_analysis_refresh_mode", "full")
-    ctx.revision_context = PlannerRevisionContext.from_snapshot(
-        snapshot,
-        lane_refresh_overrides=ctx.lane_refresh_required,
-    )
+    if hydrate_from_snapshot and snapshot is not None:
+        ctx.revision_context = PlannerRevisionContext.from_snapshot(
+            snapshot,
+            lane_refresh_overrides=ctx.lane_refresh_required,
+        )
+    else:
+        ctx.revision_context = None
     if ctx.revision_context and ctx.revision_context.receipts:
         ctx.tool_receipts.update(ctx.revision_context.receipts)
     _apply_revision_context_hints(ctx)

@@ -2,7 +2,7 @@ import sys
 from pathlib import Path
 import asyncio
 import copy
-from datetime import datetime
+from datetime import datetime, timezone
 import types
 from typing import Any, Dict
 
@@ -693,6 +693,40 @@ def test_multi_agent_supervisor_reuses_planner_fanout():
     assert web_ctx["status"] == "skip"
     assert market_ctx["status"] == "reuse"
     assert flow._shared_context["tool_results"] == initial_tool_results
+
+
+def test_queue_artifact_event_emits_lane_reuse_metadata():
+    flow = MultiAgentFlow()
+    receipts = flow._shared_context.setdefault("tool_receipts", {})
+    receipts["web_retriever"] = {
+        "status": "completed",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "latency_ms": 420,
+        "latency_guardrail": {"status": "ok"},
+    }
+    ts_value = datetime.now(timezone.utc).isoformat()
+    flow._queue_artifact_event(
+        "web_ready",
+        {
+            "web_context": {"ready": True, "summary": "cached context"},
+            "reused": True,
+            "source": "cached",
+            "ts": ts_value,
+        },
+    )
+    events = flow._drain_artifact_events()
+    assert len(events) == 2
+    lane_event, artifact_event = events
+    assert lane_event["event"] == "lane_reused"
+    lane_data = lane_event["data"]
+    assert lane_data["lane"] == "web"
+    assert lane_data["source"] == "cached"
+    assert lane_data.get("age_seconds") is not None
+    assert lane_data.get("fast_path_latency_ms") == 420
+    assert lane_data.get("guardrail", {}).get("status") == "ok"
+    assert artifact_event["event"] == "web_ready"
+    assert artifact_event["data"].get("age_seconds") == lane_data.get("age_seconds")
+
 
 def test_sequencer_lane_order():
     flow = MultiAgentFlow()

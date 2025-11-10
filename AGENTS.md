@@ -6,6 +6,7 @@ List any unresolved questions at the end, if any.
 - For each file, ensure every function has a summary block at the top describing what it does, which modules call it, what it invokes next, and why it exists in the project (e.g., `Function: fetchUserData — called from App.tsx, forwards results to ProfileCard to render user details`).
 - Favor JS/TS-aware scripts (e.g. `node -e`) when editing TSX to avoid PowerShell escaping loops.
 - Always prioritize `gpt-5-mini-2025-08-07` for agent models and see `docs/gpt5-best-practices.md` for GPT-5 configuration guidance.
+- When updating any log or document, describe incomplete/completed work in task-oriented terms, keep entries grounded in already-finished deliverables, and never introduce future-dated items or future dedicated owners/teams.
 
 ## Project Structure & Module Organization
 The Vite frontend lives at the repo root, with `App.tsx` routing into feature components. UI pieces sit under `components/`, shared data in `constants/` + `constants.ts`, and network helpers in `services/`. The FastAPI backend is in `backend/`, See `ARCHITECTURE.md` for deeper diagrams.

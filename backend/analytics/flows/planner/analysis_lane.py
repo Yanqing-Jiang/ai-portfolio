@@ -53,6 +53,10 @@ async def ensure_analysis_dependencies(
     if not has_cached_stock and getattr(ctx, "stock_widget_seeded", False):
         has_cached_stock = True
     has_cached_web = bool(ctx.artifacts.analysis and ctx.artifacts.analysis.web_context)
+    force_fresh = getattr(ctx, "force_full_fresh_pipeline", False)
+    if force_fresh:
+        has_cached_stock = False
+        has_cached_web = False
 
     if ctx.parallelism_enabled:
         existing = getattr(ctx, "tool_parallel_results", []) or []

@@ -180,6 +180,104 @@ async def test_analysis_revision_routed_fast_path(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_agentic_revision_emits_follow_up_flag(monkeypatch):
+    session_id = "agentic-revision-route"
+    repo = get_session_state_repository()
+    snapshot = SessionStateSnapshot(session_id=session_id)
+    snapshot.record_outputs(
+        chart_spec={
+            "series": [{"type": "line", "name": "Revenue"}],
+            "meta": {"chartDesign": {"chart_type": "line"}},
+        },
+        analysis="Baseline analysis text",
+    )
+    _seed_revision_snapshot(snapshot)
+    await repo.save(snapshot)
+
+    monkeypatch.setenv("AGENTIC_REVISIONS_ENABLED", "1")
+    monkeypatch.setenv("AGENTIC_REVISION_SINGLE_AGENT", "1")
+    monkeypatch.setenv("ANALYTICS_MEMORY_INSTRUMENT", "1")
+    monkeypatch.setattr(FollowUpClassifier, "classify", lambda self, q, snap: FollowUpRoute.FULL_PIPELINE)
+    monkeypatch.setattr(FollowUpClassifier, "detect_revision_targets", lambda self, q, snap: set())
+    monkeypatch.setattr("analytics.flows.chart_revision.is_analysis_revision_query", lambda q: False)
+
+    class _FailingSequencer:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("PlannerSequencer should not initialize for agentic revisions")
+
+    monkeypatch.setattr("analytics.flows.workflow.PlannerSequencer", _FailingSequencer)
+
+    events = []
+    async for event in analytics_memory_workflow(
+        query="Refresh the insights with the latest context",
+        session_id=session_id,
+        flow="single-agent",
+    ):
+        events.append(event)
+
+    follow_up_events = [evt for evt in events if evt.get("event") == "follow_up_route"]
+    assert follow_up_events, "Expected follow_up_route event for agentic revision"
+    assert any(evt.get("data", {}).get("agentic_revision") for evt in follow_up_events), follow_up_events
+
+    await repo.delete(session_id)
+    await close_session_state_repository()
+
+
+@pytest.mark.asyncio
+async def test_multi_agent_agentic_revision_skips_sequencer(monkeypatch):
+    session_id = "multi-agent-agentic-route"
+    repo = get_session_state_repository()
+    snapshot = SessionStateSnapshot(session_id=session_id)
+    snapshot.record_outputs(
+        chart_spec={
+            "series": [{"type": "line", "name": "Revenue"}],
+            "meta": {"chartDesign": {"chart_type": "line"}},
+        },
+        analysis="Baseline analysis text",
+    )
+    _seed_revision_snapshot(snapshot, include_market=True)
+    await repo.save(snapshot)
+
+    monkeypatch.setenv("AGENTIC_REVISIONS_ENABLED", "1")
+    monkeypatch.setenv("AGENTIC_REVISION_MULTI_AGENT", "1")
+    monkeypatch.setenv("ANALYTICS_MEMORY_INSTRUMENT", "1")
+    monkeypatch.setattr(FollowUpClassifier, "classify", lambda self, q, snap: FollowUpRoute.FULL_PIPELINE)
+    monkeypatch.setattr(FollowUpClassifier, "detect_revision_targets", lambda self, q, snap: set())
+
+    class _FailingSequencer:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("PlannerSequencer should not initialize for multi-agent agentic revisions")
+
+    monkeypatch.setattr("analytics.flows.workflow.PlannerSequencer", _FailingSequencer)
+
+    captured: Dict[str, Any] = {}
+
+    async def _fake_events(self, query: str, session_id: Optional[str] = None, *, sequencer=None, sequencer_state=None):
+        captured["sequencer"] = sequencer
+        captured["agentic_revision_mode"] = bool(getattr(self, "_agentic_revision_mode", False))
+        yield {"event": "workflow_complete", "data": {"message": "agentic revision complete"}}
+
+    monkeypatch.setattr("analytics.flows.multi_agent.MultiAgentFlow.events", _fake_events, raising=True)
+
+    events: List[Dict[str, Any]] = []
+    async for event in analytics_memory_workflow(
+        query="Compare AMD vs NVDA revenue",
+        session_id=session_id,
+        flow="multi-agent",
+    ):
+        events.append(event)
+
+    assert captured.get("sequencer") is None, "Agentic multi-agent revisions should skip the sequencer"
+    assert captured.get("agentic_revision_mode") is True
+    follow_up_events = [evt for evt in events if evt.get("event") == "follow_up_route"]
+    assert follow_up_events, "Expected follow_up_route event for multi-agent revision"
+    assert any(evt.get("data", {}).get("agentic_revision") for evt in follow_up_events)
+
+    await repo.delete(session_id)
+    await close_session_state_repository()
+
+
+@pytest.mark.asyncio
 async def test_followup_generates_search_topics_without_explicit_patch(monkeypatch):
     session_id = "analysis-topic-route"
     repo = get_session_state_repository()

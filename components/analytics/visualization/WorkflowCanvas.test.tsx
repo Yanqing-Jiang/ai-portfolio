@@ -73,4 +73,26 @@ describe('WorkflowCanvas', () => {
     const root = screen.getByTestId('workflow-canvas-root');
     expect(root).toHaveAttribute('data-screenshot-target', 'workflow-canvas');
   });
+
+  it('shows agentic badge and fresh lane telemetry pills', async () => {
+    const step = buildStep();
+    render(
+      <WorkflowCanvas
+        steps={[step]}
+        flowMode="single-agent"
+        agenticRevision
+        freshLaneStates={{
+          sql: {
+            lane: 'sql',
+            status: 'completed',
+            ts: new Date().toISOString(),
+            reason: 'Forced fresh run',
+            reasoningEffort: 'minimal',
+          },
+        }}
+      />,
+    );
+    await waitFor(() => expect(screen.getByText(/Agentic Revision/i)).toBeInTheDocument());
+    expect(screen.getByText(/SQL Lane completed/i)).toBeInTheDocument();
+  });
 });

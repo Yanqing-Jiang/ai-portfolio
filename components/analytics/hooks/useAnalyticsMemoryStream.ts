@@ -26,6 +26,7 @@ import {
   SlotStatusMap,
   SlotStatusPayload,
   LaneReuseNotice,
+  FreshLaneStatus,
 } from '../types';
 import { apiService } from '../../../services/apiService';
 import { useAnalyticsStream } from './useAnalyticsStream';
@@ -499,6 +500,8 @@ export const useAnalyticsMemoryStream = (
   const [slotFollowups, setSlotFollowups] = useState<ClarifyRequest[]>([]);
   const [snapshotReuse, setSnapshotReuse] = useState<SnapshotReuseInfo | null>(null);
   const [laneReuseNotices, setLaneReuseNotices] = useState<LaneReuseNotice[]>([]);
+  const [agenticRevisionActive, setAgenticRevisionActive] = useState<boolean>(false);
+  const [freshLaneStates, setFreshLaneStates] = useState<Record<string, FreshLaneStatus>>({});
   const [redirectNotice, setRedirectNotice] = useState<string | null>(null);
   const revisionContextRef = useRef<{ id?: string; lanes: string[]; focus?: string }>({
     id: undefined,
@@ -607,6 +610,8 @@ export const useAnalyticsMemoryStream = (
       return;
     }
     setSessionId('');
+    setAgenticRevisionActive(false);
+    setFreshLaneStates({});
     lastSessionIdRef.current = '';
     if (storageKey) {
       try {
@@ -2653,6 +2658,8 @@ const workflowDataRef = useRef<{
       setRevisionMode((prev) => (prev === 'none' ? 'mixed' : prev));
     }
     setLaneReuseNotices([]);
+    setAgenticRevisionActive(false);
+    setFreshLaneStates({});
     setRedirectNotice(null);
     setLatencyGuardrail(null);
     workflowDataRef.current.latencyGuardrail = null;
@@ -2738,6 +2745,39 @@ const workflowDataRef = useRef<{
         elapsed_ms: data.elapsed_ms || eventData.elapsed_ms,
         event: typeof eventType === 'string' ? eventType : undefined,
       };
+      const normalizedStepName =
+        typeof stepInfo.step === 'string' ? (stepInfo.step as string).toLowerCase() : '';
+      if (normalizedStepName && normalizedStepName.startsWith('fresh_')) {
+        const freshMatch = normalizedStepName.match(/^fresh_([a-z0-9]+)_(started|completed|failed)$/);
+        if (freshMatch) {
+          const [, laneKey, statusKey] = freshMatch;
+          const reasoningEffortValue =
+            coerceString(eventData.reasoning_effort ?? data.reasoning_effort) ?? undefined;
+          const reasonValue = coerceString(eventData.reason ?? data.reason) ?? undefined;
+          setFreshLaneStates((prev) => {
+            const existing = prev[laneKey];
+            const nextState: FreshLaneStatus = {
+              lane: laneKey,
+              status: statusKey as FreshLaneStatus['status'],
+              ts: typeof stepInfo.ts === 'string' ? stepInfo.ts : undefined,
+              reasoningEffort: reasoningEffortValue,
+              reason: reasonValue,
+            };
+            if (
+              existing &&
+              existing.status === nextState.status &&
+              existing.ts === nextState.ts &&
+              existing.reason === nextState.reason
+            ) {
+              return prev;
+            }
+            return {
+              ...prev,
+              [laneKey]: nextState,
+            };
+          });
+        }
+      }
             const sequence: number | undefined =
         typeof data.seq === 'number'
           ? data.seq
@@ -2994,6 +3034,9 @@ const workflowDataRef = useRef<{
 
         case 'follow_up_route': {
           const route = coerceString(eventData.route) ?? 'full_pipeline';
+          const agenticFlag =
+            coerceBoolean(eventData.agentic_revision ?? data.agentic_revision) ?? false;
+          setAgenticRevisionActive(agenticFlag);
           const copy = FOLLOW_UP_BANNER_COPY[route] ?? FOLLOW_UP_BANNER_COPY.full_pipeline;
           const banner: FollowUpBanner = {
             title: copy.title,
@@ -4975,6 +5018,17 @@ const workflowDataRef = useRef<{
               ageSeconds,
               source: coerceString(eventData.source),
             };
+            const fastPathLatency = coerceNumber(
+              eventData.fast_path_latency_ms ?? data.fast_path_latency_ms,
+            );
+            if (fastPathLatency !== undefined) {
+              notice.fastPathLatencyMs = fastPathLatency;
+            }
+            const guardrailPayload =
+              eventData.guardrail ?? eventData.latency_guardrail ?? data.guardrail;
+            if (guardrailPayload) {
+              notice.guardrail = guardrailPayload as Record<string, any>;
+            }
             setLaneReuseNotices((prev) => {
               const filtered = prev.filter((entry) => entry.lane !== laneName);
               filtered.push(notice);
@@ -5317,6 +5371,8 @@ const workflowDataRef = useRef<{
     toolFanoutRef.current = { manifest: [], results: [], concurrencyLimit: 0 };
     thoughtHistoryRef.current = {};
     setLaneReuseNotices([]);
+    setAgenticRevisionActive(false);
+    setFreshLaneStates({});
     setRedirectNotice(null);
 
     // Reset workflow data ref
@@ -5387,6 +5443,8 @@ const workflowDataRef = useRef<{
     latencyGuardrail,
     snapshotReuse,
     laneReuseNotices,
+    agenticRevisionActive,
+    freshLaneStates,
     redirectNotice,
 
     // Progressive rendering state

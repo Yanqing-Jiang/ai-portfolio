@@ -578,6 +578,7 @@ async def _stream_revision_fast_path(
     repository: Optional[Any],
     snapshot: Optional[SessionStateSnapshot],
     lane_refresh_required: Dict[str, bool],
+    agentic_revision: bool = False,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     revision_id = uuid.uuid4().hex
     status_step, status_message = _initial_revision_status(lanes)
@@ -630,6 +631,7 @@ async def _stream_revision_fast_path(
             "revision_id": revision_id,
             "lane_refresh_required": dict(lane_refresh_required),
             "banner": banner,
+            "agentic_revision": agentic_revision,
         },
     }
     yield follow_up_event
@@ -942,6 +944,13 @@ async def analytics_memory_workflow(
             logger.exception("Failed to set session_follow_up on flow %s", selected)
 
     agentic_enabled = _agentic_revision_enabled(selected)
+    prefer_agentic_revision = bool(
+        agentic_enabled
+        and session_follow_up
+        and isinstance(flow_instance, (SingleAgentController, MultiAgentFlow))
+    )
+    if prefer_agentic_revision:
+        setattr(flow_instance, "_agentic_revision_mode", True)
 
     requested_lanes: Set[str] = set()
     explicit_targets: Set[str] = set(detected_targets or set())
@@ -1159,6 +1168,7 @@ async def analytics_memory_workflow(
             repository=repository,
             snapshot=snapshot,
             lane_refresh_required=lane_refresh_required,
+            agentic_revision=prefer_agentic_revision,
         ):
             yield event
         return
@@ -1342,13 +1352,14 @@ async def analytics_memory_workflow(
             "lanes": list(revision_lanes),
             "lane_refresh_required": dict(lane_refresh_required),
             "session_follow_up": session_follow_up,
+            "agentic_revision": prefer_agentic_revision,
         },
     }
     yield follow_up_event
     sequencer: Optional[PlannerSequencer] = None
     sequencer_state: Optional[Any] = None
     emit_prefill_summary: Optional[bool] = None
-    if isinstance(flow_instance, SingleAgentController):
+    if isinstance(flow_instance, SingleAgentController) and not prefer_agentic_revision:
         sequencer_state = await flow_instance._prepare_sequencer_state(
             query,
             session_id=session_id,
@@ -1360,7 +1371,7 @@ async def analytics_memory_workflow(
             lane_refresh_required=lane_refresh_config,
         )
         emit_prefill_summary = None
-    elif isinstance(flow_instance, MultiAgentFlow):
+    elif isinstance(flow_instance, MultiAgentFlow) and not prefer_agentic_revision:
         sequencer_state = await flow_instance._prepare_sequencer_state(
             query,
             session_id=session_id,

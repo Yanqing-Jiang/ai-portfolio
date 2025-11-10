@@ -38,6 +38,18 @@ export interface LaneReuseNotice {
   ts?: string;
   ageSeconds?: number;
   source?: string;
+  fastPathLatencyMs?: number;
+  guardrail?: Record<string, any>;
+}
+
+export type FreshLanePhase = 'started' | 'completed' | 'failed';
+
+export interface FreshLaneStatus {
+  lane: string;
+  status: FreshLanePhase;
+  ts?: string;
+  reason?: string;
+  reasoningEffort?: string;
 }
 
 export interface AgentTurnTelemetry {

@@ -1158,6 +1158,63 @@ describe('useAnalyticsMemoryStream agent tool events', () => {
     expect(result.current.laneReuseNotices[0].lane).toBe('web');
   });
 
+  it('activates agentic revision flag when follow_up_route is agentic', async () => {
+    (globalThis as any).__TEST_EVENTS__ = [
+      {
+        event: 'follow_up_route',
+        data: { route: 'reuse_sql', agentic_revision: true, lanes: ['analysis', 'web'] },
+      },
+      {
+        event: 'workflow_complete',
+        data: { message: 'done' },
+      },
+      { event: 'done' },
+    ];
+    const { result } = renderHook(() => useAnalyticsMemoryStream('multi-agent'));
+    await act(async () => {
+      await result.current.handleQuery('force agentic');
+    });
+    await waitFor(() => {
+      expect(result.current.agenticRevisionActive).toBe(true);
+    });
+  });
+
+  it('tracks fresh lane telemetry events', async () => {
+    const ts = new Date().toISOString();
+    (globalThis as any).__TEST_EVENTS__ = [
+      {
+        event: 'progress',
+        data: {
+          step: 'fresh_sql_started',
+          ts,
+          lane: 'sql',
+          reasoning_effort: 'minimal',
+        },
+      },
+      {
+        event: 'progress',
+        data: {
+          step: 'fresh_sql_completed',
+          ts,
+          lane: 'sql',
+          reasoning_effort: 'minimal',
+        },
+      },
+      {
+        event: 'workflow_complete',
+        data: { message: 'done' },
+      },
+      { event: 'done' },
+    ];
+    const { result } = renderHook(() => useAnalyticsMemoryStream('planner-executor'));
+    await act(async () => {
+      await result.current.handleQuery('fresh lane telemetry');
+    });
+    await waitFor(() => {
+      expect(result.current.freshLaneStates.sql?.status).toBe('completed');
+    });
+  });
+
   it('stores redirect notice and exposes a dismiss handler', async () => {
     (globalThis as any).__TEST_EVENTS__ = [
       {
