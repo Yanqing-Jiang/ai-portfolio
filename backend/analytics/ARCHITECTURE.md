@@ -182,14 +182,66 @@ The `FollowUpClassifier` (`routing/follow_up_classifier.py`) runs ahead of every
 - Environment variables: `REDIS_URL`, `WEB_SEARCH_GUARDRAIL_P50_MS`, `WEB_SEARCH_GUARDRAIL_P95_MS`, `WEB_SEARCH_TIMEOUT_SECONDS`, `WEB_SEARCH_MAX_TOPICS`, `WEB_SEARCH_RETRY_ATTEMPTS`, `GEMINI_SEARCH_MODEL`, `GEMINI_SEARCH_TEMPERATURE`, `ANALYTICS_SESSION_TTL_MINUTES`, lane TTL overrides (`ANALYTICS_ANALYSIS_REFRESH_TTL_SECONDS`, `ANALYTICS_WEB_REFRESH_TTL_SECONDS`, `ANALYTICS_CHART_REFRESH_TTL_SECONDS`, `ANALYTICS_MARKET_REFRESH_TTL_SECONDS`), agent/flow toggles (`AGENTIC_REVISIONS_ENABLED`, `AGENTIC_REVISION_SINGLE_AGENT`, `AGENTIC_REVISION_MULTI_AGENT`, `AGENTIC_REVISION_PLANNER_EXECUTOR`, `ANALYTICS_ENABLE_AGENTS`, `ANALYTICS_FLOW_MODE`, `ANALYTICS_MEMORY_INSTRUMENT`, `ANALYTICS_SUPERVISOR_BETA_ENABLED`, `SUPERVISOR_REASONING_EFFORT`, `AGENTS_DELEGATION_POLICY_VERSION`), plus tool API keys handled in `.env`. The project expects `npm install` + `npm run dev` for the frontend and `py -m uvicorn main:app --reload --port 8000` for the backend.
 
 
+## 11. Consolidated Project Outline
+### Agent Orchestration & Memory
+- `agent_orchestrator/agent_plan.py` defines `PlanNodeStatus`, `PlanNode`, `PlanTemplateNode`, `PlanTemplate`, and `PlanState` so every flow works from the same versioned DAG description, complete with dependency tracking, serialization, and ready-node selection for retries and resumptions.
+- `agent_orchestrator/agent_runtime.py` couples `AgentRuntimeConfig`, `AgentRuntime`, and `AgentRuntimeResult` to drive the plan ? act ? observe loop, execute specialist tools via `ToolParallelRuntime`, and emit structured turn summaries.
+- `agent_orchestrator/event_bus.py` wraps the shared SSE queue with `AgentEventBus`, applying `FlowMode` metadata and `sanitize_for_json` before events reach frontend subscribers.
+- `agent_orchestrator/memory.py` exposes `AgentMemory`, which stores `PlanState` payloads and tool caches inside `SessionStateSnapshot` so successive planner or supervisor passes can resume mid-run.
+
+### Clarification & Intent Intelligence
+- `agents/schema_clarifier.py` uses `ClarifierDecision`, `ClarifierAgentResponse`, and helpers like `decide_schema_clarification`, `_run_agent`, and `_fallback_decision` to decide whether templates need schema questions, blending Gemini/OpenAI prompts with deterministic fallbacks.
+- `core/intent.py` keeps the main entry points (`detect_intent`, `detect_intent_with_clarifications`, `detect_intent_llm`, async variants) that orchestrators call before every run regardless of flow mode.
+- `core/intent_impl/detection.py` and `core/intent_impl/models.py` host `heuristic_intent`, `_build_company_clarification`, `resolve_intent_slots`/`resolve_intent_slots_async`, and typed slot models so low-latency heuristics and LLM paths share the same schema.
+- `core/intent_impl/normalization.py`, `core/slot_catalog.py`, and `core/margins.py` converge on helpers like `normalize_timeframe`, `build_metric_lookup`, `normalize_metrics`, `_collect_company_suggestions`, and `resolve_margin_metric` to standardize slot payloads.
+- `core/clarify.py` combines `SessionStore`, `detect_missing_slots`, `_detect_*` heuristics, and `merge_answers` to coordinate interactive clarifications; `core/companies.py` (`resolve_alias_to_ticker`, `validate_and_resolve_company`) and `routing/follow_up_classifier.py` (`FollowUpClassifier`, `_contains_any`) round out the pre-run intelligence.
+
+### Core Data, Cache & Telemetry
+- `core/cache.py` delivers `CacheService`, `get_cache_service`, `close_cache_service`, and agent metadata helpers so config, template, metric, and session caches share Redis with circuit breakers and JSON fallbacks.
+- `core/config.py` and `core/config_store.py` wrap structured settings (`Configs`, `ConfigStore`) with cached fetch/set semantics; `core/context.py` + `core/state.py` pair `AnalyticsContext` and `AnalyticsState` so flows have immutable request metadata plus mutable run state.
+- `core/session_state.py` (`SessionStateSnapshot`, `SessionStateRepository`, `get_session_state_repository`) and `core/revision_snapshot.py` (`build_intent_signature`, `extract_revision_snapshot`) own durable session storage, hashing, and revision comparison.
+- `core/analysis.py`, `core/charting.py`, and `core/charting_impl.py` contain `_prepare_data_preview`, `_summarize_chart_spec`, `stream_insights_llm`, `plan_chart_rule_based`, `build_chart_spec`, and `generate_descriptive_title`, providing the shared analytics narrative + visualization stack.
+- `core/openai_client.get_openai_client`, `core/events.EventEmitter`, `core/telemetry` (`catalog_trace`, `intent_resolution`, `_emit`) and `core/types.py` form the shared integration, event, and type system used across flows and tests.
+
+### Flow Controllers, Sequencer & Runtime Glue
+- `flows/workflow.py` exposes `get_available_flows`, `_agentic_revision_enabled`, `_lane_available`, `_resolve_lane_ttls`, and the async `analytics_memory_workflow` entry point that FastAPI hits to stream SSE events for any registered flow.
+- `flows/orchestrator.py`, `flows/orchestrator_adapter.py`, and `flows/orchestrator_protocol.py` provide `AgentExecutionOrchestrator`, `PlannerOrchestratorAdapter`, and the `FlowOrchestrator` protocol so deterministic planner lanes, single-agent tools, and supervisors can plug into the same sequencer contract.
+- `flows/planner_executor.py`'s `PlannerExecutorFlow`, `_evaluate_latency_guardrail`, `PlannerExecutorRequest`, and caching helpers drive the deterministic pipeline reused by every mode.
+- `flows/sequencer.py`, `flows/schedulers.py`, `flows/agents_stream_bridge.py`, and `flows/hooks.py` coordinate `PlannerSequencer`, `PlannerEventBus`, `apply_mode_metadata`, `AgentsStreamBridge`, and hook dispatch so instrumentation and retries stay consistent.
+- `flows/pipeline_tools.py`, `flows/task_plan.py`, and `flows/instrumentation.py` round out the glue with `PlannerToolRegistry`, `AgentTaskPlan`, and `instrument_events` to register tool bundles, normalize plan steps, and emit cohesive telemetry.
+
+### Planner Lanes, Tools & Supervisors
+- `flows/planner` modules (`analysis_lane.ensure_analysis_dependencies`, `fanout.MultiTopicFanout`, `sql_lane.SQLPlannerLane`, `revision.RevisionPlannerLane`, `intent_templates`) describe how topics split, SQL lanes hydrate, and revisions reuse cached work.
+- `flows/single_agent_tools.py` and `flows/tool_bundle.py` house `SingleAgentController`, `ToolParallelRuntime`, `ToolInvocationReceipt`, `ToolBundle`, and inventory helpers that execute LLM tools with structured retries and telemetry.
+- `flows/multi_agent.py`, `flows/supervisor_orchestrator.py`, `flows/supervisor_retry_manager.py`, and `flows/revision_directive.py` provide `MultiAgentFlow`, `SupervisorOrchestrator`, `SupervisorRetryManager`, and directive builders so supervisor-led fan-outs can delegate, retry, and summarize specialists.
+- `flows/tooling.py`, `flows/workflow.py` (lane sorting), `flows/planner_executor.py` (prefill caching), and `flows/schedulers.apply_mode_metadata` keep accessories, tool wiring, and metadata in sync across planner, single-agent, and supervisor modes.
+
+### SQL, Artifacts & Semantic Catalog
+- `artifacts/models.py`'s dataclasses (`ClassificationArtifact`, `PlanArtifact`, `SQLGenerationArtifact`, `SQLExecutionArtifact`, `ChartArtifact`, `AnalysisArtifact`, etc.) define the persisted payloads that UI and regressions consume.
+- `sql/compiler.py`, `sql/prompt_builder.py`, `sql/sql_planner.py`, `sql/template_requirements.py`, `sql/templates.py`, `sql/executor.py`, and `sql/validator.py` cover prompt wiring, safety checks, template hydration, execution, and validation so planner lanes and single-agent controllers share the same SQL toolchain.
+- `semantic/catalog.py` maintains topic metadata reused by planner fan-out + accessories, while `core/charting` and `core/analysis` convert SQL outputs into chart specs, insights, and cached artifacts that the frontend replays.
+
+### Services, Validators & Ops Utilities
+- `services/polygon.py` and `services/response_search.py` wrap external data providers (`PolygonService`, `ResponseSearchService`, `search_with_clauses`) so flows request market data and response snippets through typed clients.
+- `tools/registry.py` registers reusable tool bundles, while `streaming/__init__.py` and `flows/instrumentation` prep SSE wiring.
+- `validators/cohesive_result.py` enforces narrative/visual alignment before emitting final answers, and `routing/follow_up_classifier.py` (`FollowUpRoute`, `FollowUpClassifier`) decides whether a request should reuse cached SQL, jump to stock-only lanes, or execute the full planner.
+- `scripts/schedule_replay.py` (`annotate_events`, `summarize_events`, `render_summary`) and backend-ledger tooling replay SSE logs for audits.
+
+
 ---
 
-## 12. Legacy Cleanup (Updated: November 4, 2025)
-- Removed `backend/analytics/artifacts/spike_artifacts.py` along with the `classification_from_event` / `intent_from_event` shims so downstream code relies exclusively on the dataclass artifacts in `analytics.artifacts.models`.
-- Deleted the placeholder `summarize` helper from `backend/analytics/core/analysis.py`, ensuring narrative streaming always flows through `stream_insights_llm`.
-- Dropped compatibility aliases `backend/analytics/sql/db.py` and `backend/analytics/sql/sql_validate.py`, and inlined the unused `execute_sql_with_limit` / `quick_validate_sql_syntax` helpers; callers import directly from `analytics.sql.executor` / `analytics.sql.validator`.
-- Retired unused convenience APIs (`core.events.emit_progress|emit_result|emit_error`, `core.telemetry.timed_metric`, `flows/workflow.run_flow`, `flows/workflow._extract_revision_snapshot`, `flows/planner_executor._env_flag`, `core.config_store.close_config_store`) to tighten the supported surface, while `flows/workflow.get_available_flows()` was reinstated for UI introspection.
-- Trimmed dead artifact utilities (`_clone_dict`, `_clone_list`) and refreshed documentation to note that `analytics_memory_workflow()` now orchestrates flow selection and instrumentation inline.
 
+
+## 12. Legacy Code
+- **Regression-only sequential pipelines.** The legacy deterministic pipeline harness still lives under `backend/tests/analytics/test_pipeline_*` so we can diff JSON ledgers against the new flows. No runtime code calls those modules, but they must stay green until the regression suite is rewritten around `PlannerSequencer`.
+- **Fallback environment switches.** `flows/workflow._env_flag` still honors `ANALYTICS_ENABLE_AGENTS`, `AGENTIC_REVISION_SINGLE_AGENT`, and `AGENTIC_REVISION_PLANNER_EXECUTOR` so dark-launch toggles remain reversible. Once supervisors are the sole path these flags (and their branching) can be removed.
+- **Session/tool cache compatibility.** `core.session_state.SessionStateSnapshot` and `AgentMemory` still store `tool_cache["agent"]` payloads so pre-agent snapshots deserialize cleanly. When all active sessions run on the new schema we can drop the legacy key paths.
+- **Artifact schema bridges.** `artifacts.models.BaseArtifact` retains helper methods used by earlier payloads; UI components still accept the old shape, so remove only after the React canvases switch to the normalized models.
+
+## 13. Optimization Opportunities
+- **Sequencer/Planner DAG dedupe.** `flows.planner.fanout.MultiTopicFanout` and `flows.sequencer.PlannerSequencer` each rebuild dependency graphs; sharing a cached `PlanTemplate` snapshot would cut redundant topological sorts during retries.
+- **Cache + telemetry integration.** `core.cache.CacheService.get_stats` already emits Redis metrics-forward those numbers through `core.telemetry.catalog_trace` so operations can auto-scale Redis or fall back before circuit breakers trip.
+- **Follow-up routing acceleration.** `routing.FollowUpClassifier` still re-tokenizes prompts for every request; memoizing `_contains_any` against normalized intents (or caching results in `CacheService`) would shave milliseconds off planner selection.
+- **Tool bundle warm starts.** `flows.single_agent_tools.ToolParallelRuntime` repeatedly rebuilds `ToolBundle` wiring; pooling tool registries from `flows.tool_bundle` per session would reduce cold-start reasoning time for the single-agent controller.
 
 This architecture reference reflects the current state of the `next-gen-analytics-agent` project and should be updated alongside significant planner, tool, or telemetry changes.
