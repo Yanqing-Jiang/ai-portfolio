@@ -1,0 +1,29 @@
+﻿[
+    {
+        "event":  "agent_tool_call",
+        "data":  {
+                     "tool":  "market_fetch",
+                     "lane":  "market"
+                 }
+    },
+    {
+        "event":  "lane_reused",
+        "data":  {
+                     "reason":  "cache_hit",
+                     "lane":  "market"
+                 }
+    },
+    {
+        "event":  "agent_tool_complete",
+        "data":  {
+                     "tool":  "market_fetch",
+                     "lane":  "market"
+                 }
+    },
+    {
+        "event":  "workflow_complete",
+        "data":  {
+                     "session_id":  "fixture-session"
+                 }
+    }
+]
