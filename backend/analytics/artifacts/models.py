@@ -1,3 +1,75 @@
+# --- Analytics Function/Class Map ---
+# Class: BaseArtifact
+#   Role: Shared helpers for artifact dataclasses.
+#   Called from: Internal to analytics.artifacts.models
+#   Collaborators: dataclasses.fields, copy.deepcopy
+#   Why: Supports downstream analytics workflows that rely on BaseArtifact.
+# Class: ClassificationArtifact
+#   Role: Handles ClassificationArtifact logic for analytics.artifacts.models.
+#   Called from: analytics.artifacts, analytics.flows.planner_executor, tests.analytics.test_artifacts_models
+#   Collaborators: dataclasses.field
+#   Why: Keeps analytics.artifacts.models from duplicating ClassificationArtifact behavior across flows.
+# Class: ClarificationArtifact
+#   Role: Handles ClarificationArtifact logic for analytics.artifacts.models.
+#   Called from: analytics.artifacts, analytics.flows.planner_executor
+#   Collaborators: dataclasses.field
+#   Why: Keeps analytics.artifacts.models from duplicating ClarificationArtifact behavior across flows.
+# Class: IntentArtifact
+#   Role: Handles IntentArtifact logic for analytics.artifacts.models.
+#   Called from: analytics.artifacts, analytics.flows.planner_executor
+#   Collaborators: dataclasses.field
+#   Why: Keeps analytics.artifacts.models from duplicating IntentArtifact behavior across flows.
+# Class: PlanArtifact
+#   Role: Handles PlanArtifact logic for analytics.artifacts.models.
+#   Called from: analytics.artifacts, analytics.flows.planner_executor
+#   Collaborators: dataclasses.field
+#   Why: Keeps analytics.artifacts.models from duplicating PlanArtifact behavior across flows.
+# Class: SQLGenerationArtifact
+#   Role: Handles SQLGenerationArtifact logic for analytics.artifacts.models.
+#   Called from: analytics.artifacts, analytics.flows.planner_executor, tests.analytics.test_artifacts_models, tests.analytics.test_pipeline_analysis_offtopic, +1 more
+#   Collaborators: dataclasses.field
+#   Why: Keeps analytics.artifacts.models from duplicating SQLGenerationArtifact behavior across flows.
+# Class: SQLExecutionArtifact
+#   Role: Handles SQLExecutionArtifact logic for analytics.artifacts.models.
+#   Called from: analytics.artifacts, analytics.flows.planner_executor, tests.analytics.test_artifacts_models, tests.analytics.test_pipeline_analysis_offtopic, +2 more
+#   Collaborators: dataclasses.field
+#   Why: Keeps analytics.artifacts.models from duplicating SQLExecutionArtifact behavior across flows.
+# Class: WebContextArtifact
+#   Role: Handles WebContextArtifact logic for analytics.artifacts.models.
+#   Called from: analytics.artifacts, analytics.flows.planner_executor, tests.analytics.test_session_state_receipts, tests.analytics.test_single_agent_cohesive_payload, +1 more
+#   Collaborators: dataclasses.field
+#   Why: Keeps analytics.artifacts.models from duplicating WebContextArtifact behavior across flows.
+# Class: ChartArtifact
+#   Role: Handles ChartArtifact logic for analytics.artifacts.models.
+#   Called from: analytics.artifacts, analytics.flows.planner_executor, tests.analytics.test_artifacts_models, tests.analytics.test_pipeline_analysis_offtopic, +1 more
+#   Collaborators: dataclasses.field
+#   Why: Keeps analytics.artifacts.models from duplicating ChartArtifact behavior across flows.
+# Class: AnalysisArtifact
+#   Role: Handles AnalysisArtifact logic for analytics.artifacts.models.
+#   Called from: analytics.artifacts, analytics.flows.planner_executor, tests.analytics.test_artifacts_models, tests.analytics.test_planner_accessories, +4 more
+#   Collaborators: dataclasses.field
+#   Why: Keeps analytics.artifacts.models from duplicating AnalysisArtifact behavior across flows.
+# Class: MarketArtifact
+#   Role: Handles MarketArtifact logic for analytics.artifacts.models.
+#   Called from: analytics.artifacts, analytics.flows.planner_executor, tests.analytics.test_session_state_receipts, tests.analytics.test_single_agent_flow
+#   Collaborators: dataclasses.field
+#   Why: Keeps analytics.artifacts.models from duplicating MarketArtifact behavior across flows.
+# Class: RevisionArtifact
+#   Role: Handles RevisionArtifact logic for analytics.artifacts.models.
+#   Called from: analytics.artifacts
+#   Collaborators: dataclasses.field
+#   Why: Keeps analytics.artifacts.models from duplicating RevisionArtifact behavior across flows.
+# Class: PipelineArtifacts
+#   Role: Container aggregating all phase artifacts for a run.
+#   Called from: analytics.artifacts, analytics.flows.instrumentation, analytics.flows.planner_executor, analytics.flows.single_agent_tools, +5 more
+#   Collaborators: analytics.artifacts.models._maybe_from_dict
+#   Why: Supports downstream analytics workflows that rely on PipelineArtifacts.
+# Function: _maybe_from_dict
+#   Role: Handles maybe from dict logic for analytics.artifacts.models.
+#   Called from: Internal to analytics.artifacts.models
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.artifacts.models from duplicating maybe from dict behavior across flows.
+# --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
 import copy

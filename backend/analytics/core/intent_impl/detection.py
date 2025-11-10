@@ -1,3 +1,120 @@
+# --- Analytics Function/Class Map ---
+# Function: _is_ranking_query
+#   Role: Handles is ranking query logic for analytics.core.intent_impl.detection.
+#   Called from: Internal to analytics.core.intent_impl.detection
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.core.intent_impl.detection from duplicating is ranking query behavior across flows.
+# Function: _build_company_clarification
+#   Role: Handles build company clarification logic for analytics.core.intent_impl.detection.
+#   Called from: Internal to analytics.core.intent_impl.detection
+#   Invokes: analytics.core.intent_impl.models.ClarificationSuggestionModel
+#   Why: Keeps analytics.core.intent_impl.detection from duplicating build company clarification behavior across flows.
+# Function: heuristic_intent
+#   Role: Simple keyword-based intent detection used as a lightweight fallback.
+#   Called from: analytics.core.intent, analytics.core.intent_impl, tests.analytics.test_intent_ranking
+#   Invokes: analytics.core.intent_impl.normalization.get_default_tickers, analytics.core.intent_impl.detection.detect_companies_from_query, analytics.core.intent_impl.normalization.normalize_timeframe, analytics.core.intent_impl.detection.post_process_slots, +2 more
+#   Why: Supports downstream analytics workflows that rely on heuristic_intent.
+# Function: _clone_slot_option
+#   Role: Handles clone slot option logic for analytics.core.intent_impl.detection.
+#   Called from: Internal to analytics.core.intent_impl.detection
+#   Invokes: analytics.core.slot_catalog.SlotOption
+#   Why: Keeps analytics.core.intent_impl.detection from duplicating clone slot option behavior across flows.
+# Function: _select_candidate_definitions
+#   Role: Handles select candidate definitions logic for analytics.core.intent_impl.detection.
+#   Called from: Internal to analytics.core.intent_impl.detection
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.core.intent_impl.detection from duplicating select candidate definitions behavior across flows.
+# Function: detect_company_from_query
+#   Role: Detect a company from free-form text using alias and ticker matching.
+#   Called from: analytics.core.intent, analytics.core.intent_impl
+#   Invokes: analytics.core.intent_impl.normalization.get_default_tickers, re.findall
+#   Why: Supports downstream analytics workflows that rely on detect_company_from_query.
+# Function: detect_companies_from_query
+#   Role: Return all distinct company tickers referenced in the query.
+#   Called from: Internal to analytics.core.intent_impl.detection
+#   Invokes: re.findall, analytics.core.intent_impl.normalization.get_default_tickers
+#   Why: Supports downstream analytics workflows that rely on detect_companies_from_query.
+# Function: _normalize_company_candidates
+#   Role: Return upper-cased company symbols ordered by their appearance in the query.
+#   Called from: Internal to analytics.core.intent_impl.detection
+#   Invokes: Internal helpers only
+#   Why: Supports downstream analytics workflows that rely on _normalize_company_candidates.
+# Function: post_process_slots
+#   Role: Normalise detected slots using shared heuristics.
+#   Called from: analytics.core.intent, analytics.core.intent_impl, analytics.flows.planner_executor, tests.analytics.test_intent_post_process
+#   Invokes: analytics.core.intent_impl.detection._normalize_company_candidates, analytics.core.intent_impl.detection.detect_companies_from_query, analytics.core.intent_impl.normalization.normalize_timeframe, analytics.core.intent_impl.normalization.normalize_granularity, +2 more
+#   Why: Supports downstream analytics workflows that rely on post_process_slots.
+# Function: cleanup_clarifications_after_company_detection
+#   Role: Drop redundant clarifications once a company has been inferred.
+#   Called from: analytics.core.intent, analytics.core.intent_impl
+#   Invokes: Internal helpers only
+#   Why: Supports downstream analytics workflows that rely on cleanup_clarifications_after_company_detection.
+# Function: _ensure_required_slots
+#   Role: Handles ensure required slots logic for analytics.core.intent_impl.detection.
+#   Called from: Internal to analytics.core.intent_impl.detection
+#   Invokes: analytics.core.intent_impl.detection._clone_slot_option, analytics.core.intent_impl.models.SlotStatusModel
+#   Why: Keeps analytics.core.intent_impl.detection from duplicating ensure required slots behavior across flows.
+# Function: _append_missing_followups
+#   Role: Handles append missing followups logic for analytics.core.intent_impl.detection.
+#   Called from: Internal to analytics.core.intent_impl.detection
+#   Invokes: analytics.core.intent_impl.detection._slot_has_value, analytics.core.intent_impl.detection._clone_slot_option, analytics.core.intent_impl.models.FollowUpModel
+#   Why: Keeps analytics.core.intent_impl.detection from duplicating append missing followups behavior across flows.
+# Function: _slot_has_value
+#   Role: Handles slot has value logic for analytics.core.intent_impl.detection.
+#   Called from: Internal to analytics.core.intent_impl.detection
+#   Invokes: analytics.core.intent_impl.detection._slot_has_value
+#   Why: Keeps analytics.core.intent_impl.detection from duplicating slot has value behavior across flows.
+# Function: _normalize_metric_slot_statuses
+#   Role: Handles normalize metric slot statuses logic for analytics.core.intent_impl.detection.
+#   Called from: Internal to analytics.core.intent_impl.detection
+#   Invokes: analytics.core.intent_impl.detection._slot_has_value
+#   Why: Keeps analytics.core.intent_impl.detection from duplicating normalize metric slot statuses behavior across flows.
+# Function: _fallback_intent_resolution
+#   Role: Handles fallback intent resolution logic for analytics.core.intent_impl.detection.
+#   Called from: Internal to analytics.core.intent_impl.detection
+#   Invokes: analytics.core.intent_impl.models.IntentSelectionModel, analytics.core.intent_impl.normalization.normalize_metrics, analytics.core.intent_impl.models.IntentResolutionModel, analytics.core.intent_impl.detection.detect_company_from_query, +2 more
+#   Why: Keeps analytics.core.intent_impl.detection from duplicating fallback intent resolution behavior across flows.
+# Function: _llm_resolution_to_runtime
+#   Role: Handles llm resolution to runtime logic for analytics.core.intent_impl.detection.
+#   Called from: Internal to analytics.core.intent_impl.detection
+#   Invokes: analytics.core.intent_impl.models.IntentSelectionModel, analytics.core.intent_impl.detection._ensure_required_slots, analytics.core.intent_impl.detection._normalize_metric_slot_statuses, analytics.core.intent_impl.detection._append_missing_followups, +2 more
+#   Why: Keeps analytics.core.intent_impl.detection from duplicating llm resolution to runtime behavior across flows.
+# Function: resolve_intent_slots_async
+#   Role: Handles resolve intent slots async logic for analytics.core.intent_impl.detection.
+#   Called from: analytics.flows.planner_executor
+#   Invokes: analytics.core.slot_catalog.get_slot_catalog, analytics.core.intent_impl.detection.heuristic_intent, analytics.core.intent_impl.detection._select_candidate_definitions, json.dumps, +2 more
+#   Why: Keeps analytics.core.intent_impl.detection from duplicating resolve intent slots async behavior across flows.
+# Function: resolve_intent_slots
+#   Role: Handles resolve intent slots logic for analytics.core.intent_impl.detection.
+#   Called from: Internal to analytics.core.intent_impl.detection
+#   Invokes: asyncio.get_running_loop, asyncio.run, analytics.core.intent_impl.detection.resolve_intent_slots_async
+#   Why: Keeps analytics.core.intent_impl.detection from duplicating resolve intent slots behavior across flows.
+# Function: _llm_to_runtime_intent
+#   Role: Handles llm to runtime intent logic for analytics.core.intent_impl.detection.
+#   Called from: Internal to analytics.core.intent_impl.detection
+#   Invokes: analytics.core.intent_impl.models.IntentModel, analytics.core.intent_impl.models.ClarificationSuggestionModel
+#   Why: Keeps analytics.core.intent_impl.detection from duplicating llm to runtime intent behavior across flows.
+# Function: classify_query_async
+#   Role: Async helper used by agents that already run inside an event loop.
+#   Called from: analytics.core.intent, analytics.core.intent_impl, analytics.flows.planner_executor
+#   Invokes: unified_responses_client.get_unified_client
+#   Why: Supports downstream analytics workflows that rely on classify_query_async.
+# Function: classify_query
+#   Role: Synchronous wrapper for classification.
+#   Called from: analytics.core.intent, analytics.core.intent_impl
+#   Invokes: asyncio.get_running_loop, asyncio.run, analytics.core.intent_impl.detection.classify_query_async
+#   Why: Supports downstream analytics workflows that rely on classify_query.
+# Function: detect_intent_fast_async
+#   Role: Fast path: heuristic-first, at most one LLM call, low effort by default.
+#   Called from: tests.analytics.test_clarify_comparison
+#   Invokes: analytics.core.intent_impl.detection.heuristic_intent, analytics.core.intent_impl.normalization.get_default_tickers, analytics.core.intent_impl.detection._llm_to_runtime_intent, analytics.core.intent_impl.detection.post_process_slots, +2 more
+#   Why: Supports downstream analytics workflows that rely on detect_intent_fast_async.
+# Function: detect_intent_with_clarifications
+#   Role: Synchronous helper maintained for legacy pipelines.
+#   Called from: analytics.core.intent_impl
+#   Invokes: asyncio.get_running_loop, asyncio.run, analytics.core.intent_impl.detection.detect_intent_fast_async
+#   Why: Supports downstream analytics workflows that rely on detect_intent_with_clarifications.
+# --- End Analytics Function/Class Map ---
 """
 Intent Detection Shared Functions
 
@@ -1350,4 +1467,3 @@ def detect_intent_with_clarifications(
 
 # Backwards-compatible alias
 detect_intent_with_clarifications_async = detect_intent_fast_async
-

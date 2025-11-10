@@ -1,3 +1,10 @@
+# --- Analytics Function/Class Map ---
+# Class: AgentsStreamBridge
+#   Role: Convert OpenAI Agents SDK streaming events into planner-style SSE payloads.
+#   Called from: analytics.agent_orchestrator.agent_runtime, tests.analytics.test_agents_stream_bridge
+#   Collaborators: analytics.flows.schedulers.apply_mode_metadata, logging.getLogger, analytics.validators.sanitize_for_json
+#   Why: Supports downstream analytics workflows that rely on AgentsStreamBridge.
+# --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
 import asyncio

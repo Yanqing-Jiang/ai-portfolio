@@ -1,3 +1,25 @@
+# --- Analytics Function/Class Map ---
+# Function: detect_intent
+#   Role: Lightweight heuristic intent detection used in streamlined flows.
+#   Called from: analytics.flows.planner_executor
+#   Invokes: analytics.core.intent_impl.heuristic_intent
+#   Why: Supports downstream analytics workflows that rely on detect_intent.
+# Function: detect_intent_llm
+#   Role: Backwards-compatible sync helper for LLM-powered intent detection.
+#   Called from: analytics.flows.planner_executor
+#   Invokes: analytics.core.intent_impl.detect_intent_with_clarifications
+#   Why: Supports downstream analytics workflows that rely on detect_intent_llm.
+# Function: detect_intent_with_clarifications
+#   Role: Primary entry point for the analytics flows (sync).
+#   Called from: Internal to analytics.core.intent
+#   Invokes: analytics.core.intent_impl.detect_intent_with_clarifications
+#   Why: Supports downstream analytics workflows that rely on detect_intent_with_clarifications.
+# Function: detect_intent_with_clarifications_async
+#   Role: Async variant retained for event-loop callers.
+#   Called from: analytics.core.intent_impl (plus local)
+#   Invokes: analytics.core.intent_impl.detect_intent_with_clarifications_async
+#   Why: Supports downstream analytics workflows that rely on detect_intent_with_clarifications_async.
+# --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
 from typing import Any, Dict, Optional

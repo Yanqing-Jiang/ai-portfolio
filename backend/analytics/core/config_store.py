@@ -1,3 +1,30 @@
+# --- Analytics Function/Class Map ---
+# Class: ConfigSource
+#   Role: Configuration data sources.
+#   Called from: Internal to analytics.core.config_store
+#   Collaborators: Internal helpers only
+#   Why: Supports downstream analytics workflows that rely on ConfigSource.
+# Class: QueryType
+#   Role: Supported configuration lookups.
+#   Called from: Internal to analytics.core.config_store
+#   Collaborators: Internal helpers only
+#   Why: Supports downstream analytics workflows that rely on QueryType.
+# Class: ConfigResult
+#   Role: Result wrapper for configuration queries.
+#   Called from: Internal to analytics.core.config_store
+#   Collaborators: dataclasses.field
+#   Why: Supports downstream analytics workflows that rely on ConfigResult.
+# Class: ConfigStore
+#   Role: YAML-backed configuration store with optional caching.
+#   Called from: analytics.sql.prompt_builder, analytics.sql.templates
+#   Collaborators: analytics.core.cache.get_cache_service, analytics.core.config_store.ConfigSource, analytics.core.config_store.ConfigResult, time.time, +1 more
+#   Why: Supports downstream analytics workflows that rely on ConfigStore.
+# Function: get_config_store
+#   Role: Handles get config store logic for analytics.core.config_store.
+#   Called from: analytics.flows.multi_agent, analytics.flows.planner_executor, analytics.flows.single_agent_tools, analytics.sql.prompt_builder, +2 more
+#   Invokes: analytics.core.config_store.ConfigStore
+#   Why: Keeps analytics.core.config_store from duplicating get config store behavior across flows.
+# --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
 import os

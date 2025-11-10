@@ -1,3 +1,25 @@
+# --- Analytics Function/Class Map ---
+# Class: LanePolicy
+#   Role: Handles LanePolicy logic for analytics.policies.delegation_policy.
+#   Called from: Internal to analytics.policies.delegation_policy
+#   Collaborators: dataclasses.dataclass, dataclasses.field
+#   Why: Keeps analytics.policies.delegation_policy from duplicating LanePolicy behavior across flows.
+# Class: DelegationContext
+#   Role: Handles DelegationContext logic for analytics.policies.delegation_policy.
+#   Called from: Internal to analytics.policies.delegation_policy
+#   Collaborators: dataclasses.dataclass, dataclasses.field
+#   Why: Keeps analytics.policies.delegation_policy from duplicating DelegationContext behavior across flows.
+# Class: DelegationDecision
+#   Role: Handles DelegationDecision logic for analytics.policies.delegation_policy.
+#   Called from: analytics.flows.supervisor_retry_manager
+#   Collaborators: Internal helpers only
+#   Why: Keeps analytics.policies.delegation_policy from duplicating DelegationDecision behavior across flows.
+# Class: DelegationPolicy
+#   Role: Handles DelegationPolicy logic for analytics.policies.delegation_policy.
+#   Called from: analytics.flows.multi_agent, analytics.flows.supervisor_retry_manager
+#   Collaborators: analytics.policies.delegation_policy.DelegationDecision, analytics.policies.delegation_policy.LanePolicy
+#   Why: Keeps analytics.policies.delegation_policy from duplicating DelegationPolicy behavior across flows.
+# --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
 from dataclasses import dataclass, field

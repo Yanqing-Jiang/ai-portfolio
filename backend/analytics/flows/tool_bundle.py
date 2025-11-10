@@ -1,3 +1,25 @@
+# --- Analytics Function/Class Map ---
+# Function: _merge_web_payloads
+#   Role: Handles merge web payloads logic for analytics.flows.tool_bundle.
+#   Called from: Internal to analytics.flows.tool_bundle
+#   Invokes: json.dumps
+#   Why: Keeps analytics.flows.tool_bundle from duplicating merge web payloads behavior across flows.
+# Function: _extract_stock_widget
+#   Role: Handles extract stock widget logic for analytics.flows.tool_bundle.
+#   Called from: tests.analytics.test_chart_candlestick
+#   Invokes: copy.deepcopy
+#   Why: Keeps analytics.flows.tool_bundle from duplicating extract stock widget behavior across flows.
+# Function: _extract_web_context
+#   Role: Handles extract web context logic for analytics.flows.tool_bundle.
+#   Called from: Internal to analytics.flows.tool_bundle
+#   Invokes: analytics.flows.tool_bundle._merge_web_payloads, copy.deepcopy
+#   Why: Keeps analytics.flows.tool_bundle from duplicating extract web context behavior across flows.
+# Function: collect_tool_bundle
+#   Role: Handles collect tool bundle logic for analytics.flows.tool_bundle.
+#   Called from: analytics.flows.multi_agent, analytics.flows.planner_executor, tests.analytics.test_pipeline_tools
+#   Invokes: analytics.validators.sanitize_for_json, copy.deepcopy, analytics.flows.tool_bundle._extract_stock_widget, analytics.flows.tool_bundle._extract_web_context
+#   Why: Keeps analytics.flows.tool_bundle from duplicating collect tool bundle behavior across flows.
+# --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -300,6 +322,3 @@ def collect_tool_bundle(
     if sources:
         bundle["sources"] = copy.deepcopy(sources)
     return sanitize_for_json(bundle)
-
-
-

@@ -1,3 +1,10 @@
+# --- Analytics Function/Class Map ---
+# Class: SupervisorTools
+#   Role: Thin wrappers around existing deterministic functions + YAML-backed accessors.
+#   Called from: analytics.flows.planner_executor
+#   Collaborators: analytics.core.state.QueryPlanModel, analytics.core.clarify.compute_required_clarifications, analytics.sql.sql_planner.choose_template, analytics.sql.compiler.compile_sql_from_plan, +2 more
+#   Why: These tools are designed to be called by a single LLM agent ("supervisor") to reproduce the current analytics-memory flow with a different UX and thought-process events.
+# --- End Analytics Function/Class Map ---
 from __future__ import annotations
 from typing import Any, Dict, List, Optional, AsyncGenerator
 import asyncio
@@ -664,9 +671,6 @@ class SupervisorTools:
         if slot == "granularity":
             return ["annual", "quarterly"]
         return []
-
-
-
 
 
 

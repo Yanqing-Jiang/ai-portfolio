@@ -1,4 +1,351 @@
-﻿from __future__ import annotations
+# --- Analytics Function/Class Map ---
+# Class: ResponseSearchDependencies
+#   Role: Handles ResponseSearchDependencies logic for analytics.flows.planner_executor.
+#   Called from: tests.analytics.test_pipeline_analysis_offtopic, tests.analytics.test_pipeline_classification_intent
+#   Collaborators: dataclasses.dataclass
+#   Why: Keeps analytics.flows.planner_executor from duplicating ResponseSearchDependencies behavior across flows.
+# Function: _generate_chart_design
+#   Role: Generate smart chart design metadata for frontend optimization.
+#   Called from: Internal to analytics.flows.planner_executor
+#   Invokes: analytics.core.margins.detect_margin_choice_from_plan
+#   Why: Supports downstream analytics workflows that rely on _generate_chart_design.
+# Function: _validate_sql
+#   Role: Handles validate sql logic for analytics.flows.planner_executor.
+#   Called from: Internal to analytics.flows.planner_executor
+#   Invokes: time.time, analytics.sql.validator.validate_sql
+#   Why: Keeps analytics.flows.planner_executor from duplicating validate sql behavior across flows.
+# Class: ToolInvocationReceipt
+#   Role: Handles ToolInvocationReceipt logic for analytics.flows.planner_executor.
+#   Called from: analytics.flows.single_agent_tools, scripts.seed_agentic_staging, tests.analytics.test_session_state_receipts, tests.analytics.test_single_agent_receipts
+#   Collaborators: dataclasses.field, analytics.validators.sanitize_for_json
+#   Why: Keeps analytics.flows.planner_executor from duplicating ToolInvocationReceipt behavior across flows.
+# Class: PlannerRevisionContext
+#   Role: Handles PlannerRevisionContext logic for analytics.flows.planner_executor.
+#   Called from: tests.analytics.test_session_state_receipts
+#   Collaborators: dataclasses.field, analytics.core.lane_refresh.resolve_lane_ttls, copy.deepcopy
+#   Why: Keeps analytics.flows.planner_executor from duplicating PlannerRevisionContext behavior across flows.
+# Function: _hash_payload
+#   Role: Handles hash payload logic for analytics.flows.planner_executor.
+#   Called from: analytics.flows.multi_agent, analytics.flows.single_agent_tools
+#   Invokes: analytics.validators.sanitize_for_json, hashlib.sha1, json.dumps
+#   Why: Keeps analytics.flows.planner_executor from duplicating hash payload behavior across flows.
+# Function: _accessory_tool_adapters
+#   Role: Return tool adapters that supply market and web lanes.
+#   Called from: Internal to analytics.flows.planner_executor
+#   Invokes: analytics.flows.tooling.MarketQuestionAdapter, analytics.flows.tooling.StockTrackerAdapter, analytics.flows.tooling.WebRetrieverAdapter
+#   Why: Supports downstream analytics workflows that rely on _accessory_tool_adapters.
+# Class: PlannerPhaseContext
+#   Role: Handles PlannerPhaseContext logic for analytics.flows.planner_executor.
+#   Called from: analytics.flows.multi_agent, analytics.flows.pipeline_tools, analytics.flows.planner.analysis_lane, analytics.flows.planner.fanout, +9 more
+#   Collaborators: dataclasses.field
+#   Why: Keeps analytics.flows.planner_executor from duplicating PlannerPhaseContext behavior across flows.
+# Function: _normalize_calendar_filters
+#   Role: Handles normalize calendar filters logic for analytics.flows.planner_executor.
+#   Called from: Internal to analytics.flows.planner_executor
+#   Invokes: re.sub
+#   Why: Keeps analytics.flows.planner_executor from duplicating normalize calendar filters behavior across flows.
+# Function: _safe_year
+#   Role: Handles safe year logic for analytics.flows.planner_executor.
+#   Called from: Internal to analytics.flows.planner_executor
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.flows.planner_executor from duplicating safe year behavior across flows.
+# Function: _safe_date
+#   Role: Handles safe date logic for analytics.flows.planner_executor.
+#   Called from: Internal to analytics.flows.planner_executor
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.flows.planner_executor from duplicating safe date behavior across flows.
+# Function: _summarize_sql_rows
+#   Role: Handles summarize sql rows logic for analytics.flows.planner_executor.
+#   Called from: Internal to analytics.flows.planner_executor
+#   Invokes: analytics.flows.planner_executor._safe_year, analytics.flows.planner_executor._safe_date
+#   Why: Keeps analytics.flows.planner_executor from duplicating summarize sql rows behavior across flows.
+# Function: _set_sql_generation_artifact
+#   Role: Handles set sql generation artifact logic for analytics.flows.planner_executor.
+#   Called from: Internal to analytics.flows.planner_executor
+#   Invokes: analytics.artifacts.SQLGenerationArtifact
+#   Why: Keeps analytics.flows.planner_executor from duplicating set sql generation artifact behavior across flows.
+# Function: _set_sql_execution_artifact
+#   Role: Handles set sql execution artifact logic for analytics.flows.planner_executor.
+#   Called from: Internal to analytics.flows.planner_executor
+#   Invokes: analytics.flows.planner_executor._summarize_sql_rows, analytics.artifacts.SQLExecutionArtifact
+#   Why: Keeps analytics.flows.planner_executor from duplicating set sql execution artifact behavior across flows.
+# Function: _summarize_chart_series
+#   Role: Handles summarize chart series logic for analytics.flows.planner_executor.
+#   Called from: Internal to analytics.flows.planner_executor
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.flows.planner_executor from duplicating summarize chart series behavior across flows.
+# Function: _get_sql_dataset
+#   Role: Handles get sql dataset logic for analytics.flows.planner_executor.
+#   Called from: Internal to analytics.flows.planner_executor
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.flows.planner_executor from duplicating get sql dataset behavior across flows.
+# Function: _extract_tldr
+#   Role: Handles extract tldr logic for analytics.flows.planner_executor.
+#   Called from: Internal to analytics.flows.planner_executor
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.flows.planner_executor from duplicating extract tldr behavior across flows.
+# Function: _extract_bullets
+#   Role: Handles extract bullets logic for analytics.flows.planner_executor.
+#   Called from: Internal to analytics.flows.planner_executor
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.flows.planner_executor from duplicating extract bullets behavior across flows.
+# Function: _split_line
+#   Role: Handles split line logic for analytics.flows.planner_executor.
+#   Called from: Internal to analytics.flows.planner_executor
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.flows.planner_executor from duplicating split line behavior across flows.
+# Function: _normalize_sentence
+#   Role: Handles normalize sentence logic for analytics.flows.planner_executor.
+#   Called from: Internal to analytics.flows.planner_executor
+#   Invokes: re.sub
+#   Why: Keeps analytics.flows.planner_executor from duplicating normalize sentence behavior across flows.
+# Function: _collect_sentences
+#   Role: Handles collect sentences logic for analytics.flows.planner_executor.
+#   Called from: Internal to analytics.flows.planner_executor
+#   Invokes: analytics.flows.planner_executor._split_line, analytics.flows.planner_executor._normalize_sentence
+#   Why: Keeps analytics.flows.planner_executor from duplicating collect sentences behavior across flows.
+# Function: _extract_key_numbers
+#   Role: Handles extract key numbers logic for analytics.flows.planner_executor.
+#   Called from: Internal to analytics.flows.planner_executor
+#   Invokes: analytics.flows.planner_executor._collect_sentences
+#   Why: Keeps analytics.flows.planner_executor from duplicating extract key numbers behavior across flows.
+# Function: _extract_risk_watch
+#   Role: Handles extract risk watch logic for analytics.flows.planner_executor.
+#   Called from: Internal to analytics.flows.planner_executor
+#   Invokes: analytics.flows.planner_executor._collect_sentences
+#   Why: Keeps analytics.flows.planner_executor from duplicating extract risk watch behavior across flows.
+# Function: _extract_next_steps
+#   Role: Handles extract next steps logic for analytics.flows.planner_executor.
+#   Called from: Internal to analytics.flows.planner_executor
+#   Invokes: analytics.flows.planner_executor._collect_sentences
+#   Why: Keeps analytics.flows.planner_executor from duplicating extract next steps behavior across flows.
+# Function: _build_evidence_entries
+#   Role: Handles build evidence entries logic for analytics.flows.planner_executor.
+#   Called from: Internal to analytics.flows.planner_executor
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.flows.planner_executor from duplicating build evidence entries behavior across flows.
+# Function: _evaluate_latency_guardrail
+#   Role: Handles evaluate latency guardrail logic for analytics.flows.planner_executor.
+#   Called from: analytics.flows.multi_agent
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.flows.planner_executor from duplicating evaluate latency guardrail behavior across flows.
+# Function: _derive_scope_banner
+#   Role: Handles derive scope banner logic for analytics.flows.planner_executor.
+#   Called from: Internal to analytics.flows.planner_executor
+#   Invokes: analytics.flows.planner_executor._get_sql_dataset
+#   Why: Keeps analytics.flows.planner_executor from duplicating derive scope banner behavior across flows.
+# Function: _set_chart_artifact
+#   Role: Handles set chart artifact logic for analytics.flows.planner_executor.
+#   Called from: Internal to analytics.flows.planner_executor
+#   Invokes: analytics.flows.planner_executor._summarize_chart_series, analytics.flows.planner_executor._derive_scope_banner, analytics.artifacts.ChartArtifact, json.dumps
+#   Why: Keeps analytics.flows.planner_executor from duplicating set chart artifact behavior across flows.
+# Function: _set_market_artifact
+#   Role: Handles set market artifact logic for analytics.flows.planner_executor.
+#   Called from: Internal to analytics.flows.planner_executor
+#   Invokes: analytics.artifacts.MarketArtifact
+#   Why: Keeps analytics.flows.planner_executor from duplicating set market artifact behavior across flows.
+# Function: _set_web_artifact
+#   Role: Handles set web artifact logic for analytics.flows.planner_executor.
+#   Called from: tests.analytics.test_planner_executor_sql
+#   Invokes: analytics.artifacts.WebContextArtifact
+#   Why: Keeps analytics.flows.planner_executor from duplicating set web artifact behavior across flows.
+# Class: _PayloadSearchResultProxy
+#   Role: Minimal wrapper so seeded payloads satisfy the ResponseSearchResult interface.
+#   Called from: Internal to analytics.flows.planner_executor
+#   Collaborators: copy.deepcopy
+#   Why: Supports downstream analytics workflows that rely on _PayloadSearchResultProxy.
+# Function: _seed_web_search_from_payload
+#   Role: Handles seed web search from payload logic for analytics.flows.planner_executor.
+#   Called from: Internal to analytics.flows.planner_executor
+#   Invokes: analytics.validators.sanitize_for_json, analytics.flows.planner_executor._PayloadSearchResultProxy, analytics.flows.planner_executor._set_web_artifact
+#   Why: Keeps analytics.flows.planner_executor from duplicating seed web search from payload behavior across flows.
+# Function: _seed_stock_widget_from_payload
+#   Role: Handles seed stock widget from payload logic for analytics.flows.planner_executor.
+#   Called from: Internal to analytics.flows.planner_executor
+#   Invokes: analytics.validators.sanitize_for_json, analytics.flows.planner_executor._set_market_artifact
+#   Why: Keeps analytics.flows.planner_executor from duplicating seed stock widget from payload behavior across flows.
+# Function: _set_analysis_artifact
+#   Role: Handles set analysis artifact logic for analytics.flows.planner_executor.
+#   Called from: Internal to analytics.flows.planner_executor
+#   Invokes: analytics.flows.planner_executor._build_evidence_entries, analytics.artifacts.AnalysisArtifact
+#   Why: Keeps analytics.flows.planner_executor from duplicating set analysis artifact behavior across flows.
+# Function: _build_planner_result_payload
+#   Role: Handles build planner result payload logic for analytics.flows.planner_executor.
+#   Called from: analytics.flows.multi_agent, analytics.flows.single_agent_tools
+#   Invokes: analytics.core.types.PlannerResultModel, copy.deepcopy, analytics.flows.planner_executor._evaluate_latency_guardrail, analytics.flows.planner_executor._build_evidence_entries, +2 more
+#   Why: Keeps analytics.flows.planner_executor from duplicating build planner result payload behavior across flows.
+# Function: _artifacts_from_snapshot
+#   Role: Handles artifacts from snapshot logic for analytics.flows.planner_executor.
+#   Called from: Internal to analytics.flows.planner_executor
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.flows.planner_executor from duplicating artifacts from snapshot behavior across flows.
+# Function: _dataset_preview_from_snapshot
+#   Role: Handles dataset preview from snapshot logic for analytics.flows.planner_executor.
+#   Called from: Internal to analytics.flows.planner_executor
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.flows.planner_executor from duplicating dataset preview from snapshot behavior across flows.
+# Function: _snapshot_age_seconds_from_snapshot
+#   Role: Handles snapshot age seconds from snapshot logic for analytics.flows.planner_executor.
+#   Called from: Internal to analytics.flows.planner_executor
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.flows.planner_executor from duplicating snapshot age seconds from snapshot behavior across flows.
+# Function: _is_snapshot_fresh
+#   Role: Handles is snapshot fresh logic for analytics.flows.planner_executor.
+#   Called from: Internal to analytics.flows.planner_executor
+#   Invokes: analytics.flows.planner_executor._snapshot_age_seconds_from_snapshot
+#   Why: Keeps analytics.flows.planner_executor from duplicating is snapshot fresh behavior across flows.
+# Function: _clear_tool_state
+#   Role: Handles clear tool state logic for analytics.flows.planner_executor.
+#   Called from: Internal to analytics.flows.planner_executor
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.flows.planner_executor from duplicating clear tool state behavior across flows.
+# Function: _reset_revision_accessories
+#   Role: Handles reset revision accessories logic for analytics.flows.planner_executor.
+#   Called from: analytics.flows.multi_agent, analytics.flows.single_agent_tools
+#   Invokes: analytics.flows.planner_executor._clear_tool_state
+#   Why: Keeps analytics.flows.planner_executor from duplicating reset revision accessories behavior across flows.
+# Function: _build_revision_snapshot_payload
+#   Role: Handles build revision snapshot payload logic for analytics.flows.planner_executor.
+#   Called from: Internal to analytics.flows.planner_executor
+#   Invokes: analytics.validators.sanitize_for_json, analytics.core.revision_snapshot.build_intent_signature, analytics.flows.planner.limit_sample_rows, copy.deepcopy
+#   Why: Keeps analytics.flows.planner_executor from duplicating build revision snapshot payload behavior across flows.
+# Function: _compose_reused_analysis_payload
+#   Role: Handles compose reused analysis payload logic for analytics.flows.planner_executor.
+#   Called from: Internal to analytics.flows.planner_executor
+#   Invokes: analytics.validators.sanitize_for_json
+#   Why: Keeps analytics.flows.planner_executor from duplicating compose reused analysis payload behavior across flows.
+# Function: _build_reused_analysis_event
+#   Role: Handles build reused analysis event logic for analytics.flows.planner_executor.
+#   Called from: analytics.flows.multi_agent, analytics.flows.single_agent_tools, tests.analytics.test_planner_executor_sql
+#   Invokes: analytics.flows.planner_executor._compose_reused_analysis_payload
+#   Why: Keeps analytics.flows.planner_executor from duplicating build reused analysis event behavior across flows.
+# Function: _compose_reused_analysis_payload
+#   Role: Handles compose reused analysis payload logic for analytics.flows.planner_executor.
+#   Called from: Internal to analytics.flows.planner_executor
+#   Invokes: analytics.validators.sanitize_for_json
+#   Why: Keeps analytics.flows.planner_executor from duplicating compose reused analysis payload behavior across flows.
+# Function: _build_reused_analysis_event
+#   Role: Handles build reused analysis event logic for analytics.flows.planner_executor.
+#   Called from: analytics.flows.multi_agent, analytics.flows.single_agent_tools, tests.analytics.test_planner_executor_sql
+#   Invokes: analytics.flows.planner_executor._compose_reused_analysis_payload
+#   Why: Keeps analytics.flows.planner_executor from duplicating build reused analysis event behavior across flows.
+# Function: compose_web_ready_payload
+#   Role: Handles compose web ready payload logic for analytics.flows.planner_executor.
+#   Called from: Internal to analytics.flows.planner_executor
+#   Invokes: copy.deepcopy, analytics.validators.sanitize_for_json
+#   Why: Keeps analytics.flows.planner_executor from duplicating compose web ready payload behavior across flows.
+# Function: _build_analysis_source_summaries
+#   Role: Handles build analysis source summaries logic for analytics.flows.planner_executor.
+#   Called from: analytics.flows.single_agent_tools
+#   Invokes: analytics.validators.sanitize_for_json, analytics.artifacts.PipelineArtifacts
+#   Why: Keeps analytics.flows.planner_executor from duplicating build analysis source summaries behavior across flows.
+# Function: _hydrate_context_from_snapshot
+#   Role: Handles hydrate context from snapshot logic for analytics.flows.planner_executor.
+#   Called from: Internal to analytics.flows.planner_executor
+#   Invokes: analytics.core.revision_snapshot.extract_revision_snapshot, analytics.flows.planner_executor._dataset_preview_from_snapshot, copy.deepcopy, types.SimpleNamespace, +2 more
+#   Why: Keeps analytics.flows.planner_executor from duplicating hydrate context from snapshot behavior across flows.
+# Function: _apply_revision_context_hints
+#   Role: Handles apply revision context hints logic for analytics.flows.planner_executor.
+#   Called from: analytics.flows.single_agent_tools, tests.analytics.test_session_state_receipts
+#   Invokes: copy.deepcopy
+#   Why: Keeps analytics.flows.planner_executor from duplicating apply revision context hints behavior across flows.
+# Function: _build_schema_clarifier_request
+#   Role: Handles build schema clarifier request logic for analytics.flows.planner_executor.
+#   Called from: Internal to analytics.flows.planner_executor
+#   Invokes: analytics.core.types.ClarifyRequestModel, uuid.uuid4
+#   Why: Keeps analytics.flows.planner_executor from duplicating build schema clarifier request behavior across flows.
+# Function: _followup_to_clarify_request
+#   Role: Handles followup to clarify request logic for analytics.flows.planner_executor.
+#   Called from: Internal to analytics.flows.planner_executor
+#   Invokes: analytics.core.types.ClarifyRequestModel, uuid.uuid4
+#   Why: Keeps analytics.flows.planner_executor from duplicating followup to clarify request behavior across flows.
+# Function: _compose_intent_from_resolution
+#   Role: Merge structured slot resolution output with heuristic signals into a runtime IntentModel.
+#   Called from: Internal to analytics.flows.planner_executor
+#   Invokes: analytics.core.intent.detect_intent, analytics.core.intent.post_process_slots, analytics.core.types.IntentModel
+#   Why: Supports downstream analytics workflows that rely on _compose_intent_from_resolution.
+# Function: _normalize_metric_slots
+#   Role: Handles normalize metric slots logic for analytics.flows.planner_executor.
+#   Called from: Internal to analytics.flows.planner_executor
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.flows.planner_executor from duplicating normalize metric slots behavior across flows.
+# Function: _build_slot_assumptions
+#   Role: Handles build slot assumptions logic for analytics.flows.planner_executor.
+#   Called from: Internal to analytics.flows.planner_executor
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.flows.planner_executor from duplicating build slot assumptions behavior across flows.
+# Function: _apply_plan_metric_defaults
+#   Role: Ensure metric slots are populated when the query plan already specifies concrete metrics.
+#   Called from: Internal to analytics.flows.planner_executor
+#   Invokes: analytics.core.intent_impl.normalization.normalize_metrics, analytics.core.margins.detect_margin_choice_from_metrics, analytics.core.intent_impl.models.SlotStatusModel
+#   Why: Returns the normalized metric list that was applied, or an empty list if no updates occurred.
+# Function: _request_allows_custom
+#   Role: Handles request allows custom logic for analytics.flows.planner_executor.
+#   Called from: Internal to analytics.flows.planner_executor
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.flows.planner_executor from duplicating request allows custom behavior across flows.
+# Function: _clarify_request_to_followup
+#   Role: Handles clarify request to followup logic for analytics.flows.planner_executor.
+#   Called from: Internal to analytics.flows.planner_executor
+#   Invokes: analytics.flows.planner_executor._request_allows_custom, analytics.core.intent_impl.models.FollowUpModel
+#   Why: Keeps analytics.flows.planner_executor from duplicating clarify request to followup behavior across flows.
+# Function: _upsert_slot_status
+#   Role: Handles upsert slot status logic for analytics.flows.planner_executor.
+#   Called from: Internal to analytics.flows.planner_executor
+#   Invokes: analytics.core.intent_impl.models.SlotStatusModel, analytics.core.intent_impl.normalization.normalize_timeframe, analytics.core.intent_impl.normalization.normalize_metrics
+#   Why: Keeps analytics.flows.planner_executor from duplicating upsert slot status behavior across flows.
+# Function: _refresh_followups
+#   Role: Handles refresh followups logic for analytics.flows.planner_executor.
+#   Called from: Internal to analytics.flows.planner_executor
+#   Invokes: analytics.flows.planner_executor._clarify_request_to_followup
+#   Why: Keeps analytics.flows.planner_executor from duplicating refresh followups behavior across flows.
+# Class: PlannerPipeline
+#   Role: Phase 2 workflow that emits SSE-friendly events for the memory pipeline.
+#   Called from: analytics.flows.pipeline_tools, analytics.flows.planner.analysis_lane, analytics.flows.planner.sql_lane, tests.analytics.test_pipeline_analysis_offtopic, +3 more
+#   Collaborators: unified_responses_client.get_unified_client, analytics.flows.schedulers.get_mode_config, analytics.flows.hooks.NullFlowHooks, analytics.core.session_state.get_session_state_repository, +2 more
+#   Why: Supports downstream analytics workflows that rely on PlannerPipeline.
+# Function: _initialize_context
+#   Role: Handles initialize context logic for analytics.flows.planner_executor.
+#   Called from: Internal to analytics.flows.planner_executor
+#   Invokes: time.time, analytics.core.events.TimedEventEmitter, analytics.flows.planner_executor.PlannerPhaseContext, analytics.flows.planner_executor._artifacts_from_snapshot, +2 more
+#   Why: Keeps analytics.flows.planner_executor from duplicating initialize context behavior across flows.
+# Function: _classification_phase
+#   Role: Handles classification phase logic for analytics.flows.planner_executor.
+#   Called from: Internal to analytics.flows.planner_executor
+#   Invokes: analytics.artifacts.ClassificationArtifact, analytics.flows.planner_executor._build_planner_result_payload, analytics.core.intent.classify_query_async, time.time
+#   Why: Keeps analytics.flows.planner_executor from duplicating classification phase behavior across flows.
+# Function: _intent_phase
+#   Role: Handles intent phase logic for analytics.flows.planner_executor.
+#   Called from: tests.analytics.test_intent_resolution_telemetry
+#   Invokes: time.time, analytics.flows.planner_executor._normalize_metric_slots, analytics.flows.planner_executor._build_slot_assumptions, analytics.flows.planner_executor._compose_intent_from_resolution, +2 more
+#   Why: Keeps analytics.flows.planner_executor from duplicating intent phase behavior across flows.
+# Function: _clarification_phase
+#   Role: Handles clarification phase logic for analytics.flows.planner_executor.
+#   Called from: Internal to analytics.flows.planner_executor
+#   Invokes: analytics.flows.planner_executor._refresh_followups, analytics.flows.planner_executor._auto_fill_missing_slots, analytics.artifacts.ClarificationArtifact, analytics.core.clarify.validate_clarification_answer, +2 more
+#   Why: Keeps analytics.flows.planner_executor from duplicating clarification phase behavior across flows.
+# Function: _plan_phase
+#   Role: Handles plan phase logic for analytics.flows.planner_executor.
+#   Called from: Internal to analytics.flows.planner_executor
+#   Invokes: analytics.core.revision_snapshot.build_intent_signature, analytics.flows.planner_executor._is_snapshot_fresh, analytics.core.intent.intent_to_sql_criteria, time.time, +2 more
+#   Why: Keeps analytics.flows.planner_executor from duplicating plan phase behavior across flows.
+# Class: PlannerExecutorFlow
+#   Role: Backward-compatible wrapper around :class:`PlannerPipeline`.
+#   Called from: analytics.flows.instrumentation, analytics.flows.multi_agent, analytics.flows.single_agent_tools, analytics.flows.workflow, +8 more
+#   Collaborators: analytics.flows.planner_executor.PlannerPipeline, analytics.flows.schedulers.apply_mode_metadata
+#   Why: Supports downstream analytics workflows that rely on PlannerExecutorFlow.
+# Function: run_planner_executor
+#   Role: Helper to stream planner-executor events without referencing the registry.
+#   Called from: analytics.flows.instrumentation, analytics.flows.multi_agent
+#   Invokes: analytics.flows.planner_executor.PlannerExecutorFlow
+#   Why: Supports downstream analytics workflows that rely on run_planner_executor.
+# Function: _auto_fill_missing_slots
+#   Role: Handles auto fill missing slots logic for analytics.flows.planner_executor.
+#   Called from: tests.analytics.test_clarification_auto_fill, tests.analytics.test_planner_executor_sql
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.flows.planner_executor from duplicating auto fill missing slots behavior across flows.
+# --- End Analytics Function/Class Map ---
+from __future__ import annotations
 import json
 import hashlib
 from typing import (
@@ -12,6 +359,8 @@ from typing import (
     Set,
     Mapping,
     Iterable,
+    Callable,
+    Awaitable,
     TYPE_CHECKING,
 )
 from dataclasses import dataclass, field
@@ -122,25 +471,26 @@ from .planner import (
     stream_chart_lane,
     stream_sql_lane,
 )
-try:
-    from analytics.services.response_search import (
-        ResponseSearchError,
-        perform_response_search,
-        has_search_api_key,
-        generate_search_topic,
-    )
-except (ModuleNotFoundError, ImportError):  # pragma: no cover - optional dependency for tests
-    ResponseSearchError = RuntimeError  # type: ignore[assignment]
-
-    async def perform_response_search(*args, **kwargs):  # type: ignore[no-redef]
-        raise ResponseSearchError("response_search dependency not available")
-
-    def has_search_api_key() -> bool:  # type: ignore[no-redef]
-        return False
-
-    def generate_search_topic(query: str) -> str:  # type: ignore[no-redef]
-        return query
+from analytics.services.response_search import (
+    ResponseSearchError,
+    perform_response_search,
+    has_search_api_key,
+    generate_search_topic,
+)
 from analytics.core.analysis import stream_insights_llm
+
+@dataclass(frozen=True)
+class ResponseSearchDependencies:
+    has_api_key: Callable[[], bool]
+    generate_topic: Callable[..., Awaitable[Optional[str]]]
+    perform_search: Callable[..., Awaitable[Any]]
+
+
+DEFAULT_RESPONSE_SEARCH = ResponseSearchDependencies(
+    has_api_key=has_search_api_key,
+    generate_topic=generate_search_topic,
+    perform_search=perform_response_search,
+)
 from analytics.core.clarify import (
     detect_missing_slots,
     merge_answers,
@@ -2470,11 +2820,13 @@ class PlannerPipeline:
         *,
         flow_mode: FlowMode = FlowMode.DIRECT,
         parallelism_enabled: Optional[bool] = None,
+        response_search: Optional[ResponseSearchDependencies] = None,
     ) -> None:
         self.unified_client = get_unified_client()
         self.config_store = CONFIG_STORE
         self.flow_label = "planner-executor"
         self.flow_mode = flow_mode
+        self.response_search = response_search or DEFAULT_RESPONSE_SEARCH
         self.follow_up_route = FollowUpRoute.FULL_PIPELINE
         self._prefetched_snapshot: Optional[SessionStateSnapshot] = None
         mode_config = get_mode_config(flow_mode)
@@ -4416,7 +4768,7 @@ class PlannerPipeline:
         progress["data"]["ts"] = datetime.utcnow().isoformat()
         yield progress
 
-        if not has_search_api_key():
+        if not self.response_search.has_api_key():
             summary = "Web search disabled until GOOGLE_API_KEY or GEMINI_API_KEY is configured."
             payload = {
                 "ready": False,
@@ -4466,7 +4818,7 @@ class PlannerPipeline:
         try:
             # First, compute and surface the rewritten search topic
             try:
-                topic = await generate_search_topic(ctx.query, session_id=ctx.session_id)
+                topic = await self.response_search.generate_topic(ctx.query, session_id=ctx.session_id)
             except Exception:
                 topic = None
             if topic:
@@ -4475,7 +4827,7 @@ class PlannerPipeline:
                 yield topic_event
 
             # Then, perform the actual web search using that topic
-            search_result = await perform_response_search(
+            search_result = await self.response_search.perform_search(
                 ctx.query,
                 session_id=ctx.session_id,
                 context=context_hint,
@@ -5720,8 +6072,13 @@ class PlannerExecutorFlow:
         *,
         flow_mode: FlowMode = FlowMode.DIRECT,
         parallelism_enabled: Optional[bool] = None,
+        response_search: Optional[ResponseSearchDependencies] = None,
     ) -> None:
-        self._pipeline = PlannerPipeline(flow_mode=flow_mode, parallelism_enabled=parallelism_enabled)
+        self._pipeline = PlannerPipeline(
+            flow_mode=flow_mode,
+            parallelism_enabled=parallelism_enabled,
+            response_search=response_search,
+        )
         self.flow_mode = flow_mode
         self.follow_up_route = FollowUpRoute.FULL_PIPELINE
         self._prompt_versions = dict(self._PROMPT_VERSIONS)
@@ -5967,6 +6324,10 @@ def _auto_fill_missing_slots(ctx: PlannerPhaseContext, assumptions: List[str]) -
 
 
 from analytics.core.intent_impl.normalization import normalize_timeframe, normalize_metrics
+
+
+
+
 
 
 

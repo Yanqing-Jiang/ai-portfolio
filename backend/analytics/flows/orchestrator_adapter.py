@@ -1,3 +1,10 @@
+# --- Analytics Function/Class Map ---
+# Class: PlannerOrchestratorAdapter
+#   Role: Wraps a set of stage runners (intent, sql, web, market, analysis) so the PlannerSequencer can operate without depending on a specific controller implementation.
+#   Called from: analytics.flows.multi_agent, analytics.flows.single_agent_tools, tests.analytics.test_single_agent_stream_events
+#   Collaborators: Internal helpers only
+#   Why: Metadata is merged into every emitted event.
+# --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
 from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, Iterable, Optional

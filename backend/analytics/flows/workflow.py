@@ -1,3 +1,135 @@
+# --- Analytics Function/Class Map ---
+# Function: get_available_flows
+#   Role: Handles get available flows logic for analytics.flows.workflow.
+#   Called from: Internal to analytics.flows.workflow
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.flows.workflow from duplicating get available flows behavior across flows.
+# Function: _get_flow_factory
+#   Role: Handles get flow factory logic for analytics.flows.workflow.
+#   Called from: Internal to analytics.flows.workflow
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.flows.workflow from duplicating get flow factory behavior across flows.
+# Function: _env_flag
+#   Role: Handles env flag logic for analytics.flows.workflow.
+#   Called from: Internal to analytics.flows.workflow
+#   Invokes: os.getenv
+#   Why: Keeps analytics.flows.workflow from duplicating env flag behavior across flows.
+# Function: _agentic_revision_enabled
+#   Role: Handles agentic revision enabled logic for analytics.flows.workflow.
+#   Called from: Internal to analytics.flows.workflow
+#   Invokes: analytics.flows.workflow._env_flag
+#   Why: Keeps analytics.flows.workflow from duplicating agentic revision enabled behavior across flows.
+# Function: _lane_sort_key
+#   Role: Handles lane sort key logic for analytics.flows.workflow.
+#   Called from: Internal to analytics.flows.workflow
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.flows.workflow from duplicating lane sort key behavior across flows.
+# Function: _normalize_revision_lanes
+#   Role: Handles normalize revision lanes logic for analytics.flows.workflow.
+#   Called from: Internal to analytics.flows.workflow
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.flows.workflow from duplicating normalize revision lanes behavior across flows.
+# Function: _baseline_ready
+#   Role: Handles baseline ready logic for analytics.flows.workflow.
+#   Called from: Internal to analytics.flows.workflow
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.flows.workflow from duplicating baseline ready behavior across flows.
+# Function: _lane_available
+#   Role: Handles lane available logic for analytics.flows.workflow.
+#   Called from: Internal to analytics.flows.workflow
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.flows.workflow from duplicating lane available behavior across flows.
+# Function: _revision_route_label
+#   Role: Handles revision route label logic for analytics.flows.workflow.
+#   Called from: Internal to analytics.flows.workflow
+#   Invokes: analytics.flows.workflow._normalize_revision_lanes
+#   Why: Keeps analytics.flows.workflow from duplicating revision route label behavior across flows.
+# Function: _initial_revision_status
+#   Role: Handles initial revision status logic for analytics.flows.workflow.
+#   Called from: Internal to analytics.flows.workflow
+#   Invokes: analytics.flows.workflow._normalize_revision_lanes
+#   Why: Keeps analytics.flows.workflow from duplicating initial revision status behavior across flows.
+# Function: _build_revision_banner
+#   Role: Handles build revision banner logic for analytics.flows.workflow.
+#   Called from: Internal to analytics.flows.workflow
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.flows.workflow from duplicating build revision banner behavior across flows.
+# Function: _build_cannot_revise_banner
+#   Role: Handles build cannot revise banner logic for analytics.flows.workflow.
+#   Called from: Internal to analytics.flows.workflow
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.flows.workflow from duplicating build cannot revise banner behavior across flows.
+# Function: _annotate_revision_event
+#   Role: Handles annotate revision event logic for analytics.flows.workflow.
+#   Called from: Internal to analytics.flows.workflow
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.flows.workflow from duplicating annotate revision event behavior across flows.
+# Function: _annotated_lane_stream
+#   Role: Handles annotated lane stream logic for analytics.flows.workflow.
+#   Called from: Internal to analytics.flows.workflow
+#   Invokes: analytics.flows.workflow._annotate_revision_event
+#   Why: Keeps analytics.flows.workflow from duplicating annotated lane stream behavior across flows.
+# Function: _run_chart_lane
+#   Role: Handles run chart lane logic for analytics.flows.workflow.
+#   Called from: Internal to analytics.flows.workflow
+#   Invokes: analytics.flows.workflow._annotated_lane_stream, analytics.flows.instrumentation.emit_revision_lane
+#   Why: Keeps analytics.flows.workflow from duplicating run chart lane behavior across flows.
+# Function: _run_analysis_lane
+#   Role: Handles run analysis lane logic for analytics.flows.workflow.
+#   Called from: Internal to analytics.flows.workflow
+#   Invokes: analytics.flows.workflow._annotated_lane_stream, analytics.flows.instrumentation.emit_revision_lane
+#   Why: Keeps analytics.flows.workflow from duplicating run analysis lane behavior across flows.
+# Function: _run_market_lane
+#   Role: Handles run market lane logic for analytics.flows.workflow.
+#   Called from: Internal to analytics.flows.workflow
+#   Invokes: analytics.flows.workflow._annotated_lane_stream, analytics.flows.instrumentation.emit_revision_lane
+#   Why: Keeps analytics.flows.workflow from duplicating run market lane behavior across flows.
+# Function: _stream_revision_fast_path
+#   Role: Handles stream revision fast path logic for analytics.flows.workflow.
+#   Called from: Internal to analytics.flows.workflow
+#   Invokes: analytics.flows.workflow._initial_revision_status, analytics.flows.workflow._revision_route_label, analytics.flows.workflow._build_revision_banner, uuid.uuid4, +2 more
+#   Why: Keeps analytics.flows.workflow from duplicating stream revision fast path behavior across flows.
+# Function: _combine_queries
+#   Role: Handles combine queries logic for analytics.flows.workflow.
+#   Called from: Internal to analytics.flows.workflow
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.flows.workflow from duplicating combine queries behavior across flows.
+# Function: _sanitize_topic_value
+#   Role: Handles sanitize topic value logic for analytics.flows.workflow.
+#   Called from: Internal to analytics.flows.workflow
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.flows.workflow from duplicating sanitize topic value behavior across flows.
+# Function: _extract_company_token
+#   Role: Handles extract company token logic for analytics.flows.workflow.
+#   Called from: Internal to analytics.flows.workflow
+#   Invokes: re.findall
+#   Why: Keeps analytics.flows.workflow from duplicating extract company token behavior across flows.
+# Function: _make_topic_entry
+#   Role: Handles make topic entry logic for analytics.flows.workflow.
+#   Called from: Internal to analytics.flows.workflow
+#   Invokes: analytics.flows.workflow._sanitize_topic_value
+#   Why: Keeps analytics.flows.workflow from duplicating make topic entry behavior across flows.
+# Function: _derive_related_queries
+#   Role: Handles derive related queries logic for analytics.flows.workflow.
+#   Called from: Internal to analytics.flows.workflow
+#   Invokes: analytics.flows.workflow._extract_company_token
+#   Why: Keeps analytics.flows.workflow from duplicating derive related queries behavior across flows.
+# Function: _ensure_dual_topics
+#   Role: Handles ensure dual topics logic for analytics.flows.workflow.
+#   Called from: Internal to analytics.flows.workflow
+#   Invokes: analytics.flows.workflow._derive_related_queries, analytics.flows.workflow._sanitize_topic_value, analytics.flows.workflow._extract_company_token, analytics.flows.workflow._make_topic_entry
+#   Why: Keeps analytics.flows.workflow from duplicating ensure dual topics behavior across flows.
+# Function: _append_session_message
+#   Role: Handles append session message logic for analytics.flows.workflow.
+#   Called from: Internal to analytics.flows.workflow
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.flows.workflow from duplicating append session message behavior across flows.
+# Function: analytics_memory_workflow
+#   Role: Handles analytics memory workflow logic for analytics.flows.workflow.
+#   Called from: main, temp_run, tests.analytics.test_revision_routing
+#   Invokes: analytics.flows.workflow._env_flag, analytics.flows.chart_revision.infer_chart_patch_from_query, analytics.flows.workflow._baseline_ready, analytics.routing.FollowUpClassifier, +2 more
+#   Why: Keeps analytics.flows.workflow from duplicating analytics memory workflow behavior across flows.
+# --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
 import os
@@ -1308,4 +1440,3 @@ async def analytics_memory_workflow(
                 gen3 = flow_instance.emit_analysis_revision(session_id=session_id, analysis=analysis_text, **revision_kwargs)
             async for evt in gen3:
                 yield evt
-

@@ -1,3 +1,30 @@
+# --- Analytics Function/Class Map ---
+# Function: _coerce_slots
+#   Role: Handles coerce slots logic for analytics.sql.sql_planner.
+#   Called from: Internal to analytics.sql.sql_planner
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.sql.sql_planner from duplicating coerce slots behavior across flows.
+# Function: _fallback_plan_defaults
+#   Role: Handles fallback plan defaults logic for analytics.sql.sql_planner.
+#   Called from: Internal to analytics.sql.sql_planner
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.sql.sql_planner from duplicating fallback plan defaults behavior across flows.
+# Function: plan_sql_rule_based
+#   Role: Handles plan sql rule based logic for analytics.sql.sql_planner.
+#   Called from: analytics.sql.compiler, analytics.tools.registry, tests.analytics.test_clarify_margin, tests.analytics.test_planner_executor_sql, +1 more
+#   Invokes: analytics.sql.sql_planner._coerce_slots, analytics.sql.sql_planner._fallback_plan_defaults, analytics.core.intent_impl.normalization.normalize_metrics
+#   Why: Keeps analytics.sql.sql_planner from duplicating plan sql rule based behavior across flows.
+# Function: build_query_plan
+#   Role: Handles build query plan logic for analytics.sql.sql_planner.
+#   Called from: analytics.flows.planner_executor, tests.analytics.test_clarify_comparison, tests.analytics.test_timeframe_templates
+#   Invokes: analytics.core.state.QueryPlanModel, analytics.sql.sql_planner.plan_sql_rule_based
+#   Why: Keeps analytics.sql.sql_planner from duplicating build query plan behavior across flows.
+# Function: choose_template
+#   Role: Handles choose template logic for analytics.sql.sql_planner.
+#   Called from: analytics.flows.planner_executor, analytics.tools.registry, tests.analytics.test_clarify_margin, tests.analytics.test_planner_executor_sql
+#   Invokes: copy.deepcopy
+#   Why: Keeps analytics.sql.sql_planner from duplicating choose template behavior across flows.
+# --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
 import copy
@@ -165,4 +192,3 @@ def choose_template(
             if template.get('single_year_description'):
                 template['description'] = template['single_year_description']
     return template
-

@@ -1,3 +1,15 @@
+# --- Analytics Function/Class Map ---
+# Function: _default_allowed_tables
+#   Role: Handles default allowed tables logic for analytics.sql.validator.
+#   Called from: Internal to analytics.sql.validator
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.sql.validator from duplicating default allowed tables behavior across flows.
+# Function: validate_sql
+#   Role: Handles validate sql logic for analytics.sql.validator.
+#   Called from: analytics.flows.planner_executor, analytics.tools.registry
+#   Invokes: sqlglot.parse_one, analytics.sql.validator._default_allowed_tables
+#   Why: Keeps analytics.sql.validator from duplicating validate sql behavior across flows.
+# --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
 from typing import Iterable, List, Optional, Tuple

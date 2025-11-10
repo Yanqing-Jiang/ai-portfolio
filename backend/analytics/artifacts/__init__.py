@@ -1,3 +1,6 @@
+# --- Analytics Function/Class Map ---
+#   (No top-level functions or classes in this module.)
+# --- End Analytics Function/Class Map ---
 """Artifacts package for analytics pipeline refactor."""
 
 from .models import (
@@ -29,4 +32,3 @@ __all__ = [
     "SQLGenerationArtifact",
     "WebContextArtifact",
 ]
-

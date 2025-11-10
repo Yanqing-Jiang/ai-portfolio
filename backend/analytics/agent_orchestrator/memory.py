@@ -1,3 +1,10 @@
+# --- Analytics Function/Class Map ---
+# Class: AgentMemory
+#   Role: Persistence helper that stores agent artifacts inside SessionStateSnapshot.
+#   Called from: analytics.agent_orchestrator, analytics.agent_orchestrator.agent_runtime, analytics.flows.single_agent_tools, tests.analytics.test_agent_orchestrator
+#   Collaborators: copy.deepcopy
+#   Why: Supports downstream analytics workflows that rely on AgentMemory.
+# --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
 from copy import deepcopy

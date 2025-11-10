@@ -1,3 +1,20 @@
+# --- Analytics Function/Class Map ---
+# Class: ToolParallelRuntime
+#   Role: Handles ToolParallelRuntime logic for analytics.flows.planner.fanout.
+#   Called from: analytics.flows.multi_agent, analytics.flows.planner, analytics.flows.planner_executor, analytics.flows.single_agent_tools, +2 more
+#   Collaborators: contextlib.suppress
+#   Why: Keeps analytics.flows.planner.fanout from duplicating ToolParallelRuntime behavior across flows.
+# Function: start_tool_parallelism
+#   Role: Handles start tool parallelism logic for analytics.flows.planner.fanout.
+#   Called from: analytics.flows.planner, analytics.flows.planner_executor, tests.analytics.test_planner_executor_sql
+#   Invokes: asyncio.Queue, asyncio.create_task, analytics.flows.planner.fanout.ToolParallelRuntime, analytics.flows.tooling.run_tool_parallelism
+#   Why: Keeps analytics.flows.planner.fanout from duplicating start tool parallelism behavior across flows.
+# Function: derive_accessory_events
+#   Role: Handles derive accessory events logic for analytics.flows.planner.fanout.
+#   Called from: analytics.flows.planner, analytics.flows.planner_executor
+#   Invokes: analytics.validators.sanitize_for_json
+#   Why: Keeps analytics.flows.planner.fanout from duplicating derive accessory events behavior across flows.
+# --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
 import asyncio

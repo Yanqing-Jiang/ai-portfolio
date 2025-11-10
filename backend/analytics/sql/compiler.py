@@ -1,3 +1,25 @@
+# --- Analytics Function/Class Map ---
+# Function: _resolve_company
+#   Role: Handles resolve company logic for analytics.sql.compiler.
+#   Called from: Internal to analytics.sql.compiler
+#   Invokes: analytics.core.companies.validate_and_resolve_company
+#   Why: Keeps analytics.sql.compiler from duplicating resolve company behavior across flows.
+# Function: compile_sql_from_plan
+#   Role: Handles compile sql from plan logic for analytics.sql.compiler.
+#   Called from: analytics.tools.registry, tests.analytics.test_planner_executor_sql, tests.analytics.test_timeframe_templates
+#   Invokes: analytics.core.companies.get_ticker_list, analytics.sql.compiler._resolve_company, analytics.sql.compiler._generic_sql, analytics.sql.sql_planner.plan_sql_rule_based, +2 more
+#   Why: Keeps analytics.sql.compiler from duplicating compile sql from plan behavior across flows.
+# Function: _granularity_clauses
+#   Role: Handles granularity clauses logic for analytics.sql.compiler.
+#   Called from: Internal to analytics.sql.compiler
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.sql.compiler from duplicating granularity clauses behavior across flows.
+# Function: _generic_sql
+#   Role: Handles generic sql logic for analytics.sql.compiler.
+#   Called from: Internal to analytics.sql.compiler
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.sql.compiler from duplicating generic sql behavior across flows.
+# --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
 import logging

@@ -1,3 +1,45 @@
+# --- Analytics Function/Class Map ---
+# Function: _cached_event
+#   Role: Handles cached event logic for analytics.flows.planner.sql_lane.
+#   Called from: analytics.flows.planner, analytics.flows.planner_executor
+#   Invokes: analytics.validators.sanitize_for_json
+#   Why: Keeps analytics.flows.planner.sql_lane from duplicating cached event behavior across flows.
+# Function: compose_sql_ready_payload
+#   Role: Handles compose sql ready payload logic for analytics.flows.planner.sql_lane.
+#   Called from: analytics.flows.planner, analytics.flows.planner_executor
+#   Invokes: types.SimpleNamespace, analytics.flows.planner.sql_lane.limit_sample_rows
+#   Why: Keeps analytics.flows.planner.sql_lane from duplicating compose sql ready payload behavior across flows.
+# Function: compose_chart_ready_payload
+#   Role: Handles compose chart ready payload logic for analytics.flows.planner.sql_lane.
+#   Called from: analytics.flows.planner, analytics.flows.planner_executor
+#   Invokes: copy.deepcopy
+#   Why: Keeps analytics.flows.planner.sql_lane from duplicating compose chart ready payload behavior across flows.
+# Function: compose_stock_ready_payload
+#   Role: Handles compose stock ready payload logic for analytics.flows.planner.sql_lane.
+#   Called from: analytics.flows.planner, analytics.flows.planner_executor
+#   Invokes: copy.deepcopy
+#   Why: Keeps analytics.flows.planner.sql_lane from duplicating compose stock ready payload behavior across flows.
+# Function: compose_web_ready_payload
+#   Role: Handles compose web ready payload logic for analytics.flows.planner.sql_lane.
+#   Called from: analytics.flows.planner
+#   Invokes: copy.deepcopy, analytics.validators.sanitize_for_json
+#   Why: Keeps analytics.flows.planner.sql_lane from duplicating compose web ready payload behavior across flows.
+# Function: stream_sql_lane
+#   Role: Handles stream sql lane logic for analytics.flows.planner.sql_lane.
+#   Called from: analytics.flows.multi_agent, analytics.flows.planner, analytics.flows.planner_executor, analytics.flows.single_agent_tools
+#   Invokes: analytics.flows.planner.sql_lane.compose_sql_ready_payload, analytics.flows.planner.sql_lane.compose_stock_ready_payload, analytics.flows.planner.sql_lane.compose_web_ready_payload, analytics.flows.planner.sql_lane._cached_event, +2 more
+#   Why: Keeps analytics.flows.planner.sql_lane from duplicating stream sql lane behavior across flows.
+# Function: stream_chart_lane
+#   Role: Handles stream chart lane logic for analytics.flows.planner.sql_lane.
+#   Called from: analytics.flows.multi_agent, analytics.flows.planner, analytics.flows.planner_executor, analytics.flows.single_agent_tools
+#   Invokes: analytics.flows.planner.revision.mark_revision_completion, analytics.flows.planner.sql_lane.compose_chart_ready_payload, analytics.flows.planner.sql_lane._cached_event
+#   Why: Keeps analytics.flows.planner.sql_lane from duplicating stream chart lane behavior across flows.
+# Function: limit_sample_rows
+#   Role: Handles limit sample rows logic for analytics.flows.planner.sql_lane.
+#   Called from: analytics.flows.planner, analytics.flows.planner_executor, tests.analytics.test_planner_executor_sql
+#   Invokes: copy.deepcopy
+#   Why: Keeps analytics.flows.planner.sql_lane from duplicating limit sample rows behavior across flows.
+# --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
 import copy

@@ -1,3 +1,45 @@
+# --- Analytics Function/Class Map ---
+# Function: _get_timeframe_preset_map
+#   Role: Build a lookup table for timeframe presets using slot suggestions.
+#   Called from: Internal to analytics.core.intent_impl.normalization
+#   Invokes: Internal helpers only
+#   Why: Keys include both labels and canonical values (plus aliases).
+# Function: _apply_preset
+#   Role: Populate timeframe settings based on preset metadata.
+#   Called from: Internal to analytics.core.intent_impl.normalization
+#   Invokes: math.ceil
+#   Why: Supports downstream analytics workflows that rely on _apply_preset.
+# Function: normalize_timeframe
+#   Role: Normalize timeframe from various formats to a consistent dict structure.
+#   Called from: analytics.core.clarify, analytics.core.intent, analytics.core.intent_impl, analytics.core.intent_impl.detection, +3 more
+#   Invokes: analytics.core.intent_impl.normalization._get_timeframe_preset_map, re.search, re.findall, analytics.core.intent_impl.normalization._apply_preset, +1 more
+#   Why: Args: tf_raw: Raw timeframe from LLM (could be dict, string, or None) query_text: Original query text for fallback parsing configs: Configuration dict for defaults apply_defaults: Whether to fall back to configuration defaults when no value detected origin: Optional hint describing the source of the timeframe ("query", "clarification", etc.) Returns: Dict with normalized timeframe structure
+# Function: build_metric_lookup
+#   Role: Build a lookup of lowercase metric aliases -> canonical metric names.
+#   Called from: Internal to analytics.core.intent_impl.normalization
+#   Invokes: Internal helpers only
+#   Why: Supports downstream analytics workflows that rely on build_metric_lookup.
+# Function: normalize_metrics
+#   Role: Normalize metric identifiers (single value or list) to canonical names.
+#   Called from: analytics.core.clarify, analytics.core.intent_impl.detection, analytics.flows.planner_executor, analytics.sql.sql_planner
+#   Invokes: analytics.core.intent_impl.normalization.build_metric_lookup
+#   Why: Supports downstream analytics workflows that rely on normalize_metrics.
+# Function: get_default_tickers
+#   Role: Get default ticker list from configuration.
+#   Called from: analytics.core.intent, analytics.core.intent_impl, analytics.core.intent_impl.detection, analytics.core.intent_impl.models
+#   Invokes: Internal helpers only
+#   Why: Args: configs: Configuration dictionary Returns: List of default ticker symbols
+# Function: timeframe_implies_quarterly
+#   Role: Determine whether a provided timeframe should force quarterly granularity.
+#   Called from: analytics.core.clarify, analytics.core.intent_impl, analytics.core.intent_impl.detection, analytics.core.intent_impl.models
+#   Invokes: Internal helpers only
+#   Why: Args: timeframe: A TimeframeModel, dict, or other mapping-like object.
+# Function: normalize_granularity
+#   Role: Normalize granularity from query or use provided value.
+#   Called from: analytics.core.intent, analytics.core.intent_impl, analytics.core.intent_impl.detection, analytics.core.intent_impl.models
+#   Invokes: Internal helpers only
+#   Why: Args: query: Original query text current_granularity: Current granularity value from slots Returns: Normalized granularity ("annual" or "quarterly")
+# --- End Analytics Function/Class Map ---
 """
 Intent Normalization Functions
 

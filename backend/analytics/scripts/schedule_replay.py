@@ -1,3 +1,35 @@
+# --- Analytics Function/Class Map ---
+# Function: _coerce_event
+#   Role: Normalize adhoc ledger rows or SSE payloads into an event dict.
+#   Called from: Internal to analytics.scripts.schedule_replay
+#   Invokes: Internal helpers only
+#   Why: Supports downstream analytics workflows that rely on _coerce_event.
+# Function: _load_json_events
+#   Role: Handles load json events logic for analytics.scripts.schedule_replay.
+#   Called from: Internal to analytics.scripts.schedule_replay
+#   Invokes: json.loads, analytics.scripts.schedule_replay._coerce_event
+#   Why: Keeps analytics.scripts.schedule_replay from duplicating load json events behavior across flows.
+# Function: annotate_events
+#   Role: Handles annotate events logic for analytics.scripts.schedule_replay.
+#   Called from: Internal to analytics.scripts.schedule_replay
+#   Invokes: analytics.flows.schedulers.apply_mode_metadata
+#   Why: Keeps analytics.scripts.schedule_replay from duplicating annotate events behavior across flows.
+# Function: summarize_events
+#   Role: Handles summarize events logic for analytics.scripts.schedule_replay.
+#   Called from: Internal to analytics.scripts.schedule_replay
+#   Invokes: collections.Counter, collections.OrderedDict
+#   Why: Keeps analytics.scripts.schedule_replay from duplicating summarize events behavior across flows.
+# Function: render_summary
+#   Role: Handles render summary logic for analytics.scripts.schedule_replay.
+#   Called from: Internal to analytics.scripts.schedule_replay
+#   Invokes: analytics.flows.schedulers.describe_mode_schedule
+#   Why: Keeps analytics.scripts.schedule_replay from duplicating render summary behavior across flows.
+# Function: main
+#   Role: Handles main logic for analytics.scripts.schedule_replay.
+#   Called from: Internal to analytics.scripts.schedule_replay
+#   Invokes: argparse.ArgumentParser, analytics.flows.schedulers.FlowMode, analytics.scripts.schedule_replay.annotate_events, pathlib.Path, +2 more
+#   Why: Keeps analytics.scripts.schedule_replay from duplicating main behavior across flows.
+# --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
 import argparse

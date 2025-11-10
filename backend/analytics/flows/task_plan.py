@@ -1,3 +1,15 @@
+# --- Analytics Function/Class Map ---
+# Class: AgentTaskStep
+#   Role: Represents a single task decision produced by the planner.
+#   Called from: analytics.flows.multi_agent
+#   Collaborators: dataclasses.field
+#   Why: Supports downstream analytics workflows that rely on AgentTaskStep.
+# Class: AgentTaskPlan
+#   Role: Collection of task steps emitted by the planner.
+#   Called from: analytics.flows.multi_agent
+#   Collaborators: dataclasses.field, analytics.flows.task_plan.AgentTaskStep
+#   Why: Supports downstream analytics workflows that rely on AgentTaskPlan.
+# --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
 from dataclasses import dataclass, field

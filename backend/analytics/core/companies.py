@@ -1,3 +1,30 @@
+# --- Analytics Function/Class Map ---
+# Function: get_ticker_list
+#   Role: Handles get ticker list logic for analytics.core.companies.
+#   Called from: analytics.core.clarify, analytics.sql.compiler, analytics.tools.registry
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.core.companies from duplicating get ticker list behavior across flows.
+# Function: resolve_alias_to_ticker
+#   Role: Handles resolve alias to ticker logic for analytics.core.companies.
+#   Called from: analytics.core.clarify, analytics.core.intent_impl.detection, analytics.sql.compiler
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.core.companies from duplicating resolve alias to ticker behavior across flows.
+# Function: sanitize_ticker
+#   Role: Handles sanitize ticker logic for analytics.core.companies.
+#   Called from: analytics.core.clarify, analytics.core.intent_impl.detection, analytics.sql.compiler
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.core.companies from duplicating sanitize ticker behavior across flows.
+# Function: validate_and_resolve_company
+#   Role: Handles validate and resolve company logic for analytics.core.companies.
+#   Called from: analytics.sql.compiler
+#   Invokes: analytics.core.companies.resolve_alias_to_ticker, analytics.core.companies.get_ticker_list, analytics.core.companies.sanitize_ticker
+#   Why: Keeps analytics.core.companies from duplicating validate and resolve company behavior across flows.
+# Function: format_company_error
+#   Role: Handles format company error logic for analytics.core.companies.
+#   Called from: analytics.sql.compiler
+#   Invokes: analytics.core.companies.get_ticker_list
+#   Why: Keeps analytics.core.companies from duplicating format company error behavior across flows.
+# --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional

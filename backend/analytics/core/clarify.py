@@ -1,3 +1,85 @@
+# --- Analytics Function/Class Map ---
+# Class: SessionStore
+#   Role: Handles SessionStore logic for analytics.core.clarify.
+#   Called from: Internal to analytics.core.clarify
+#   Collaborators: asyncio.Lock, time.time, asyncio.Condition, asyncio.wait_for
+#   Why: Keeps analytics.core.clarify from duplicating SessionStore behavior across flows.
+# Function: detect_missing_slots
+#   Role: Detect slots that need clarification based on intent, plan, and template requirements.
+#   Called from: analytics.flows.planner_executor, tests.analytics.test_clarify_margin, tests.analytics.test_intent_slot_resolution
+#   Invokes: analytics.core.clarify._detect_granularity_slot, analytics.core.clarify._detect_margin_metric_slot, analytics.core.clarify._detect_company_slot, analytics.core.clarify._detect_timeframe_slot, +2 more
+#   Why: Supports downstream analytics workflows that rely on detect_missing_slots.
+# Function: _detect_company_slot
+#   Role: Detect if company slot needs clarification.
+#   Called from: Internal to analytics.core.clarify
+#   Invokes: analytics.core.types.ClarifyRequestModel, analytics.core.companies.resolve_alias_to_ticker, analytics.core.companies.sanitize_ticker, uuid.uuid4
+#   Why: Supports downstream analytics workflows that rely on _detect_company_slot.
+# Function: _detect_timeframe_slot
+#   Role: Detect if timeframe needs clarification.
+#   Called from: Internal to analytics.core.clarify
+#   Invokes: analytics.core.types.ClarifyRequestModel, uuid.uuid4
+#   Why: Supports downstream analytics workflows that rely on _detect_timeframe_slot.
+# Function: _detect_granularity_slot
+#   Role: Detect if granularity needs clarification.
+#   Called from: Internal to analytics.core.clarify
+#   Invokes: analytics.core.types.ClarifyRequestModel, uuid.uuid4
+#   Why: Supports downstream analytics workflows that rely on _detect_granularity_slot.
+# Function: _detect_comparison_slot
+#   Role: Detect if comparison type needs clarification.
+#   Called from: Internal to analytics.core.clarify
+#   Invokes: analytics.core.types.ClarifyRequestModel, uuid.uuid4
+#   Why: Supports downstream analytics workflows that rely on _detect_comparison_slot.
+# Function: _detect_margin_metric_slot
+#   Role: Ensure margin-focused intents capture a specific margin selection.
+#   Called from: Internal to analytics.core.clarify
+#   Invokes: analytics.core.margins.ensure_margin_choice, analytics.core.margins.list_margin_labels, analytics.core.types.ClarifyRequestModel, uuid.uuid4
+#   Why: Supports downstream analytics workflows that rely on _detect_margin_metric_slot.
+# Function: _detect_metrics_slot
+#   Role: Detect if metrics need clarification for generic/ambiguous intents.
+#   Called from: Internal to analytics.core.clarify
+#   Invokes: analytics.core.types.ClarifyRequestModel, uuid.uuid4
+#   Why: Supports downstream analytics workflows that rely on _detect_metrics_slot.
+# Function: merge_answers
+#   Role: Validate and merge clarification answers into intent and plan.
+#   Called from: analytics.flows.planner_executor, tests.analytics.test_clarify_margin, tests.analytics.test_clarify_timeframe
+#   Invokes: analytics.core.companies.get_ticker_list, analytics.core.companies.sanitize_ticker, analytics.core.intent_impl.normalization.normalize_timeframe, analytics.core.intent_impl.normalization.timeframe_implies_quarterly, +2 more
+#   Why: Supports downstream analytics workflows that rely on merge_answers.
+# Function: get_session_store
+#   Role: Get the global session store instance.
+#   Called from: analytics.flows.planner_executor
+#   Invokes: Internal helpers only
+#   Why: Supports downstream analytics workflows that rely on get_session_store.
+# Function: put_answer
+#   Role: Put an answer into the session store.
+#   Called from: main
+#   Invokes: Internal helpers only
+#   Why: Supports downstream analytics workflows that rely on put_answer.
+# Function: wait_for_answer
+#   Role: Wait for an answer with timeout.
+#   Called from: Internal to analytics.core.clarify
+#   Invokes: Internal helpers only
+#   Why: Supports downstream analytics workflows that rely on wait_for_answer.
+# Function: wait_for_answer_blocking
+#   Role: Wait for an answer without any timeout (blocks until answered).
+#   Called from: analytics.flows.planner_executor
+#   Invokes: asyncio.Condition
+#   Why: Used when the UX requires explicit user input with no automatic defaulting.
+# Function: compute_required_clarifications
+#   Role: Wrapper that computes official clarifications deterministically.
+#   Called from: analytics.flows.planner_executor, analytics.tools.registry, tests.analytics.test_clarify_comparison
+#   Invokes: analytics.core.clarify.detect_missing_slots
+#   Why: Applies existing detect_missing_slots logic and enforces deterministic sorting by slot priority.
+# Function: validate_clarification_answer
+#   Role: Validate that a clarification answer is acceptable for the request.
+#   Called from: analytics.flows.planner_executor
+#   Invokes: Internal helpers only
+#   Why: Supports downstream analytics workflows that rely on validate_clarification_answer.
+# Function: get_validation_error_message
+#   Role: Get detailed error message for invalid clarification answers.
+#   Called from: analytics.flows.planner_executor
+#   Invokes: Internal helpers only
+#   Why: Supports downstream analytics workflows that rely on get_validation_error_message.
+# --- End Analytics Function/Class Map ---
 from __future__ import annotations
 import uuid
 import asyncio
@@ -671,9 +753,6 @@ def get_validation_error_message(answer: ClarifyAnswerModel, request: ClarifyReq
             return f"Invalid choices: {', '.join(invalid_values)}. Valid options are: {', '.join(request.options)}"
     
     return None
-
-
-
 
 
 

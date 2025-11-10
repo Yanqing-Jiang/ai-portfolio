@@ -1,3 +1,20 @@
+# --- Analytics Function/Class Map ---
+# Class: FollowUpRoute
+#   Role: Handles FollowUpRoute logic for analytics.routing.follow_up_classifier.
+#   Called from: analytics.flows.multi_agent, analytics.flows.planner.revision, analytics.flows.planner_executor, analytics.flows.single_agent_tools, +16 more
+#   Collaborators: Internal helpers only
+#   Why: Keeps analytics.routing.follow_up_classifier from duplicating FollowUpRoute behavior across flows.
+# Function: _contains_any
+#   Role: Handles contains any logic for analytics.routing.follow_up_classifier.
+#   Called from: Internal to analytics.routing.follow_up_classifier
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.routing.follow_up_classifier from duplicating contains any behavior across flows.
+# Class: FollowUpClassifier
+#   Role: Handles FollowUpClassifier logic for analytics.routing.follow_up_classifier.
+#   Called from: analytics.flows.workflow, analytics.routing, tests.analytics.test_follow_up_classifier, tests.analytics.test_revision_followups, +1 more
+#   Collaborators: analytics.routing.follow_up_classifier._contains_any
+#   Why: Keeps analytics.routing.follow_up_classifier from duplicating FollowUpClassifier behavior across flows.
+# --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -132,4 +149,3 @@ class FollowUpClassifier:
             requested.add("analysis")
             requested.add("web")
         return requested
-

@@ -1,3 +1,85 @@
+# --- Analytics Function/Class Map ---
+# Function: _normalize_topic_key
+#   Role: Handles normalize topic key logic for analytics.flows.tooling.
+#   Called from: Internal to analytics.flows.tooling
+#   Invokes: re.sub
+#   Why: Keeps analytics.flows.tooling from duplicating normalize topic key behavior across flows.
+# Function: _merge_web_payloads
+#   Role: Combine multiple per-topic web payloads into a single context blob.
+#   Called from: Internal to analytics.flows.tooling
+#   Invokes: json.dumps
+#   Why: Supports downstream analytics workflows that rely on _merge_web_payloads.
+# Class: ToolExecutionContext
+#   Role: Context exposed to tool adapters during fan-out.
+#   Called from: tests.analytics.test_web_retriever_adapter
+#   Collaborators: dataclasses.dataclass, dataclasses.field
+#   Why: Supports downstream analytics workflows that rely on ToolExecutionContext.
+# Class: ToolAdapterResult
+#   Role: Normalized result emitted by a tool adapter.
+#   Called from: tests.analytics.test_planner_executor_sql
+#   Collaborators: dataclasses.field
+#   Why: Supports downstream analytics workflows that rely on ToolAdapterResult.
+# Class: BaseToolAdapter
+#   Role: Minimal async interface each adapter must implement.
+#   Called from: tests.analytics.test_planner_executor_sql
+#   Collaborators: Internal helpers only
+#   Why: Supports downstream analytics workflows that rely on BaseToolAdapter.
+# Class: _FatalAdapterException
+#   Role: Signal used to cancel sibling adapters when a fatal error occurs.
+#   Called from: Internal to analytics.flows.tooling
+#   Collaborators: Internal helpers only
+#   Why: Supports downstream analytics workflows that rely on _FatalAdapterException.
+# Class: ToolTaskGroup
+#   Role: Coordinate tool adapters with bounded concurrency.
+#   Called from: Internal to analytics.flows.tooling
+#   Collaborators: asyncio.Semaphore, inspect.isawaitable, asyncio.TaskGroup, analytics.flows.tooling._FatalAdapterException, +1 more
+#   Why: Supports downstream analytics workflows that rely on ToolTaskGroup.
+# Class: SQLPlannerAdapter
+#   Role: Handles SQLPlannerAdapter logic for analytics.flows.tooling.
+#   Called from: Internal to analytics.flows.tooling
+#   Collaborators: analytics.flows.tooling.ToolAdapterResult
+#   Why: Keeps analytics.flows.tooling from duplicating SQLPlannerAdapter behavior across flows.
+# Class: ChartBuilderAdapter
+#   Role: Handles ChartBuilderAdapter logic for analytics.flows.tooling.
+#   Called from: Internal to analytics.flows.tooling
+#   Collaborators: analytics.flows.tooling.ToolAdapterResult
+#   Why: Keeps analytics.flows.tooling from duplicating ChartBuilderAdapter behavior across flows.
+# Class: WebRetrieverAdapter
+#   Role: Handles WebRetrieverAdapter logic for analytics.flows.tooling.
+#   Called from: analytics.flows.planner_executor, tests.analytics.test_web_retriever_adapter
+#   Collaborators: collections.Counter, collections.defaultdict, analytics.core.session_state.get_session_state_repository, analytics.flows.tooling.ToolAdapterResult, +2 more
+#   Why: Keeps analytics.flows.tooling from duplicating WebRetrieverAdapter behavior across flows.
+# Class: StockTrackerAdapter
+#   Role: Handles StockTrackerAdapter logic for analytics.flows.tooling.
+#   Called from: analytics.flows.multi_agent, analytics.flows.planner_executor, analytics.flows.single_agent_tools
+#   Collaborators: analytics.services.polygon.PolygonMarketDataClient, time.perf_counter, analytics.flows.tooling.ToolAdapterResult, re.finditer, +1 more
+#   Why: Keeps analytics.flows.tooling from duplicating StockTrackerAdapter behavior across flows.
+# Class: MarketQuestionAdapter
+#   Role: Stock tracker wrapper that tags outputs for specific market questions.
+#   Called from: analytics.flows.planner_executor
+#   Collaborators: Internal helpers only
+#   Why: Supports downstream analytics workflows that rely on MarketQuestionAdapter.
+# Class: NarrativeSynthesizerAdapter
+#   Role: Handles NarrativeSynthesizerAdapter logic for analytics.flows.tooling.
+#   Called from: Internal to analytics.flows.tooling
+#   Collaborators: analytics.flows.tooling.ToolAdapterResult
+#   Why: Keeps analytics.flows.tooling from duplicating NarrativeSynthesizerAdapter behavior across flows.
+# Function: get_default_tool_adapters
+#   Role: Handles get default tool adapters logic for analytics.flows.tooling.
+#   Called from: analytics.flows.planner.analysis_lane, analytics.flows.planner_executor
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.flows.tooling from duplicating get default tool adapters behavior across flows.
+# Function: _resolve_concurrency_limit
+#   Role: Handles resolve concurrency limit logic for analytics.flows.tooling.
+#   Called from: Internal to analytics.flows.tooling
+#   Invokes: os.getenv
+#   Why: Keeps analytics.flows.tooling from duplicating resolve concurrency limit behavior across flows.
+# Function: run_tool_parallelism
+#   Role: Execute the registered tool adapters and yield telemetry events.
+#   Called from: analytics.flows.planner.analysis_lane, analytics.flows.planner.fanout, analytics.flows.planner_executor, tests.analytics.test_planner_executor_sql
+#   Invokes: analytics.flows.tooling.ToolExecutionContext, analytics.core.telemetry.tool_parallelism, analytics.flows.tooling.ToolTaskGroup, asyncio.Queue, +2 more
+#   Why: Supports downstream analytics workflows that rely on run_tool_parallelism.
+# --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
 import logging
@@ -1356,6 +1438,3 @@ async def run_tool_parallelism(
             "ts": datetime.utcnow().isoformat(),
         },
     }
-
-
-

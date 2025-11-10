@@ -1,3 +1,50 @@
+# --- Analytics Function/Class Map ---
+# Function: _coerce_float
+#   Role: Best-effort numeric coercion used for series detection.
+#   Called from: Internal to analytics.core.charting_impl
+#   Invokes: Internal helpers only
+#   Why: Accepts ints/floats/decimal-like strings with commas.
+# Function: _looks_like_ranking_stat
+#   Role: Handles looks like ranking stat logic for analytics.core.charting_impl.
+#   Called from: Internal to analytics.core.charting_impl
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.core.charting_impl from duplicating looks like ranking stat behavior across flows.
+# Function: generate_descriptive_title
+#   Role: Generate a descriptive chart title based on intent and metrics.
+#   Called from: analytics.core.charting
+#   Invokes: Internal helpers only
+#   Why: Supports downstream analytics workflows that rely on generate_descriptive_title.
+# Function: detect_primary_series
+#   Role: Detect primary series based on intent type using data column slugs.
+#   Called from: analytics.core.charting
+#   Invokes: Internal helpers only
+#   Why: Supports downstream analytics workflows that rely on detect_primary_series.
+# Function: assign_series_axes
+#   Role: Assign series to left (currency) or right (percent) axis.
+#   Called from: analytics.core.charting
+#   Invokes: Internal helpers only
+#   Why: Supports downstream analytics workflows that rely on assign_series_axes.
+# Function: detect_ohlc_columns
+#   Role: Handles detect ohlc columns logic for analytics.core.charting_impl.
+#   Called from: Internal to analytics.core.charting_impl
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.core.charting_impl from duplicating detect ohlc columns behavior across flows.
+# Function: detect_volume_column
+#   Role: Handles detect volume column logic for analytics.core.charting_impl.
+#   Called from: Internal to analytics.core.charting_impl
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.core.charting_impl from duplicating detect volume column behavior across flows.
+# Function: detect_time_axis
+#   Role: Handles detect time axis logic for analytics.core.charting_impl.
+#   Called from: Internal to analytics.core.charting_impl
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.core.charting_impl from duplicating detect time axis behavior across flows.
+# Function: plan_chart_rule_based
+#   Role: Plan chart configuration based on data structure and intent.
+#   Called from: analytics.core.charting
+#   Invokes: analytics.core.charting_impl.detect_ohlc_columns, analytics.core.charting_impl._looks_like_ranking_stat, analytics.core.charting_impl.detect_primary_series, analytics.core.charting_impl.generate_descriptive_title, +2 more
+#   Why: Args: data: Query result data query: Original user query intent_key: Detected intent key Returns: Chart plan dictionary with chart_type, x_axis, title, and series
+# --- End Analytics Function/Class Map ---
 """
 Chart Planning Shared Functions
 

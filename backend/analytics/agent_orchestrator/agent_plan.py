@@ -1,3 +1,30 @@
+# --- Analytics Function/Class Map ---
+# Class: PlanNodeStatus
+#   Role: Lifecycle states tracked for each plan node during an agent run.
+#   Called from: analytics.agent_orchestrator, analytics.agent_orchestrator.agent_runtime
+#   Collaborators: Internal helpers only
+#   Why: Supports downstream analytics workflows that rely on PlanNodeStatus.
+# Class: PlanNode
+#   Role: Runtime representation of a plan step executed by the orchestrator.
+#   Called from: analytics.agent_orchestrator, analytics.agent_orchestrator.agent_runtime
+#   Collaborators: dataclasses.field, analytics.agent_orchestrator.agent_plan.PlanNodeStatus, uuid.uuid4
+#   Why: `name` should remain stable across plan template versions so persisted snapshots can reconcile prior execution state when resuming revisions.
+# Class: PlanTemplateNode
+#   Role: Static definition of a plan node loaded from configuration.
+#   Called from: Internal to analytics.agent_orchestrator.agent_plan
+#   Collaborators: dataclasses.field
+#   Why: Supports downstream analytics workflows that rely on PlanTemplateNode.
+# Class: PlanTemplate
+#   Role: Collection of plan template nodes with versioned metadata.
+#   Called from: analytics.agent_orchestrator, analytics.agent_orchestrator.agent_runtime, analytics.agent_orchestrator.memory, analytics.flows.single_agent_tools, +1 more
+#   Collaborators: dataclasses.field
+#   Why: Supports downstream analytics workflows that rely on PlanTemplate.
+# Class: PlanState
+#   Role: Mutable runtime state for agent plans.
+#   Called from: analytics.agent_orchestrator, analytics.agent_orchestrator.agent_runtime, analytics.agent_orchestrator.memory
+#   Collaborators: analytics.agent_orchestrator.agent_plan.PlanNode
+#   Why: Supports downstream analytics workflows that rely on PlanState.
+# --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -275,4 +302,3 @@ class PlanState:
             "updated_at": self.updated_at,
             "nodes": {name: node.serialize() for name, node in self.nodes.items()},
         }
-

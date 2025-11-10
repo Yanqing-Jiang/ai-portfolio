@@ -1,3 +1,6 @@
+# --- Analytics Function/Class Map ---
+#   (No top-level functions or classes in this module.)
+# --- End Analytics Function/Class Map ---
 """Analytics agent orchestrator package."""
 
 from .agent_plan import PlanNodeStatus, PlanNode, PlanTemplate, PlanState

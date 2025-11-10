@@ -1,3 +1,155 @@
+# --- Analytics Function/Class Map ---
+# Class: ResponseSearchError
+#   Role: Handles ResponseSearchError logic for analytics.services.response_search.
+#   Called from: analytics.flows.multi_agent, analytics.flows.planner_executor, analytics.flows.tooling, tests.analytics.test_web_retriever_adapter
+#   Collaborators: Internal helpers only
+#   Why: Keeps analytics.services.response_search from duplicating ResponseSearchError behavior across flows.
+# Class: SearchSnippet
+#   Role: Structured snippet returned to analytics flows.
+#   Called from: tests.analytics.test_web_research
+#   Collaborators: Internal helpers only
+#   Why: Supports downstream analytics workflows that rely on SearchSnippet.
+# Class: SearchTopicPlan
+#   Role: Handles SearchTopicPlan logic for analytics.services.response_search.
+#   Called from: analytics.flows.revision_directive, analytics.flows.tooling, tests.analytics.test_response_search, tests.analytics.test_revision_routing, +1 more
+#   Collaborators: Internal helpers only
+#   Why: Keeps analytics.services.response_search from duplicating SearchTopicPlan behavior across flows.
+# Class: TopicSearchResult
+#   Role: Handles TopicSearchResult logic for analytics.services.response_search.
+#   Called from: tests.analytics.test_web_research
+#   Collaborators: dataclasses.field
+#   Why: Keeps analytics.services.response_search from duplicating TopicSearchResult behavior across flows.
+# Class: ResponseSearchResult
+#   Role: Handles ResponseSearchResult logic for analytics.services.response_search.
+#   Called from: tests.analytics.test_web_research
+#   Collaborators: dataclasses.field, dataclasses.asdict
+#   Why: Keeps analytics.services.response_search from duplicating ResponseSearchResult behavior across flows.
+# Function: _resolve_search_api_key
+#   Role: Find a configured API key env var without logging secrets.
+#   Called from: Internal to analytics.services.response_search
+#   Invokes: os.getenv
+#   Why: Returns the value but also emits a DEBUG log indicating which env var provided the key (never logs the key itself).
+# Function: has_search_api_key
+#   Role: Handles has search api key logic for analytics.services.response_search.
+#   Called from: analytics.flows.planner_executor, analytics.flows.tooling, analytics.flows.workflow
+#   Invokes: analytics.services.response_search._resolve_search_api_key
+#   Why: Keeps analytics.services.response_search from duplicating has search api key behavior across flows.
+# Function: _ensure_google_genai
+#   Role: Handles ensure google genai logic for analytics.services.response_search.
+#   Called from: Internal to analytics.services.response_search
+#   Invokes: analytics.services.response_search.ResponseSearchError
+#   Why: Keeps analytics.services.response_search from duplicating ensure google genai behavior across flows.
+# Function: _ensure_model
+#   Role: Handles ensure model logic for analytics.services.response_search.
+#   Called from: Internal to analytics.services.response_search
+#   Invokes: analytics.services.response_search._resolve_search_api_key, analytics.services.response_search.ResponseSearchError
+#   Why: Keeps analytics.services.response_search from duplicating ensure model behavior across flows.
+# Function: _first_str
+#   Role: Handles first str logic for analytics.services.response_search.
+#   Called from: Internal to analytics.services.response_search
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.services.response_search from duplicating first str behavior across flows.
+# Function: _as_dict
+#   Role: Handles as dict logic for analytics.services.response_search.
+#   Called from: Internal to analytics.services.response_search
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.services.response_search from duplicating as dict behavior across flows.
+# Function: _collect_candidate_texts
+#   Role: Handles collect candidate texts logic for analytics.services.response_search.
+#   Called from: Internal to analytics.services.response_search
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.services.response_search from duplicating collect candidate texts behavior across flows.
+# Function: _extract_primary_text
+#   Role: Handles extract primary text logic for analytics.services.response_search.
+#   Called from: Internal to analytics.services.response_search
+#   Invokes: analytics.services.response_search._collect_candidate_texts
+#   Why: Keeps analytics.services.response_search from duplicating extract primary text behavior across flows.
+# Function: _sanitize_search_query
+#   Role: Handles sanitize search query logic for analytics.services.response_search.
+#   Called from: Internal to analytics.services.response_search
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.services.response_search from duplicating sanitize search query behavior across flows.
+# Function: _clean_html_text
+#   Role: Handles clean html text logic for analytics.services.response_search.
+#   Called from: Internal to analytics.services.response_search
+#   Invokes: re.sub, html.unescape
+#   Why: Keeps analytics.services.response_search from duplicating clean html text behavior across flows.
+# Function: _ensure_client
+#   Role: Handles ensure client logic for analytics.services.response_search.
+#   Called from: Internal to analytics.services.response_search
+#   Invokes: analytics.services.response_search._ensure_google_genai
+#   Why: Keeps analytics.services.response_search from duplicating ensure client behavior across flows.
+# Function: configure
+#   Role: Handles configure logic for analytics.services.response_search.
+#   Called from: Internal to analytics.services.response_search
+#   Invokes: analytics.services.response_search._ensure_google_genai
+#   Why: Keeps analytics.services.response_search from duplicating configure behavior across flows.
+# Class: GenerativeModel
+#   Role: Handles GenerativeModel logic for analytics.services.response_search.
+#   Called from: Internal to analytics.services.response_search
+#   Collaborators: analytics.services.response_search._ensure_google_genai, analytics.services.response_search._ensure_client
+#   Why: Keeps analytics.services.response_search from duplicating GenerativeModel behavior across flows.
+# Function: _generate_search_topics
+#   Role: Handles generate search topics logic for analytics.services.response_search.
+#   Called from: Internal to analytics.services.response_search
+#   Invokes: analytics.services.response_search._extract_primary_text, analytics.services.response_search._sanitize_search_query, asyncio.to_thread, analytics.services.response_search._as_dict, +2 more
+#   Why: Keeps analytics.services.response_search from duplicating generate search topics behavior across flows.
+# Function: _generate_search_topic
+#   Role: Handles generate search topic logic for analytics.services.response_search.
+#   Called from: Internal to analytics.services.response_search
+#   Invokes: analytics.services.response_search._sanitize_search_query, analytics.services.response_search._generate_search_topics
+#   Why: Keeps analytics.services.response_search from duplicating generate search topic behavior across flows.
+# Function: generate_search_topic
+#   Role: Public helper to compute the search topic without executing search.
+#   Called from: analytics.flows.planner_executor
+#   Invokes: analytics.services.response_search._ensure_model, analytics.services.response_search._generate_search_topic
+#   Why: Used by flows to emit the 'question' step before the web call.
+# Function: generate_search_topics
+#   Role: Return structured topic prompts without issuing live web calls.
+#   Called from: analytics.flows.tooling, analytics.flows.workflow
+#   Invokes: analytics.services.response_search._ensure_model, analytics.services.response_search._generate_search_topics
+#   Why: Supports downstream analytics workflows that rely on generate_search_topics.
+# Function: _extract_support_text
+#   Role: Handles extract support text logic for analytics.services.response_search.
+#   Called from: Internal to analytics.services.response_search
+#   Invokes: analytics.services.response_search._as_dict
+#   Why: Keeps analytics.services.response_search from duplicating extract support text behavior across flows.
+# Function: _extract_web_metadata
+#   Role: Handles extract web metadata logic for analytics.services.response_search.
+#   Called from: Internal to analytics.services.response_search
+#   Invokes: analytics.services.response_search._as_dict, analytics.services.response_search._first_str
+#   Why: Keeps analytics.services.response_search from duplicating extract web metadata behavior across flows.
+# Function: _collect_search_grounding_snippets
+#   Role: Handles collect search grounding snippets logic for analytics.services.response_search.
+#   Called from: Internal to analytics.services.response_search
+#   Invokes: analytics.services.response_search._as_dict, analytics.services.response_search._first_str, analytics.services.response_search._extract_web_metadata, analytics.services.response_search.SearchSnippet
+#   Why: Keeps analytics.services.response_search from duplicating collect search grounding snippets behavior across flows.
+# Function: _collect_grounding_data
+#   Role: Handles collect grounding data logic for analytics.services.response_search.
+#   Called from: Internal to analytics.services.response_search
+#   Invokes: analytics.services.response_search._as_dict, analytics.services.response_search._collect_search_grounding_snippets, analytics.services.response_search._first_str, analytics.services.response_search._extract_support_text, +2 more
+#   Why: Keeps analytics.services.response_search from duplicating collect grounding data behavior across flows.
+# Function: _dedupe_snippets
+#   Role: Handles dedupe snippets logic for analytics.services.response_search.
+#   Called from: Internal to analytics.services.response_search
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.services.response_search from duplicating dedupe snippets behavior across flows.
+# Function: _build_prompt
+#   Role: Handles build prompt logic for analytics.services.response_search.
+#   Called from: Internal to analytics.services.response_search
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.services.response_search from duplicating build prompt behavior across flows.
+# Function: _build_request_args
+#   Role: Handles build request args logic for analytics.services.response_search.
+#   Called from: Internal to analytics.services.response_search
+#   Invokes: analytics.services.response_search._build_prompt
+#   Why: Keeps analytics.services.response_search from duplicating build request args behavior across flows.
+# Function: perform_response_search
+#   Role: Handles perform response search logic for analytics.services.response_search.
+#   Called from: analytics.flows.multi_agent, analytics.flows.planner_executor, analytics.flows.tooling, tests.analytics.test_response_search
+#   Invokes: analytics.services.response_search._ensure_model, analytics.services.response_search._dedupe_snippets, analytics.services.response_search.ResponseSearchResult, analytics.services.response_search._sanitize_search_query, +2 more
+#   Why: Keeps analytics.services.response_search from duplicating perform response search behavior across flows.
+# --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
 import asyncio
@@ -1261,9 +1413,6 @@ async def perform_response_search(
         },
     )
     return result
-
-
-
 
 
 

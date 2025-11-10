@@ -1,4 +1,46 @@
-﻿from __future__ import annotations
+# --- Analytics Function/Class Map ---
+# Class: AgentExecutionError
+#   Role: Raised when the orchestrator encounters an invalid plan or agent failure.
+#   Called from: Internal to analytics.flows.orchestrator
+#   Collaborators: Internal helpers only
+#   Why: Supports downstream analytics workflows that rely on AgentExecutionError.
+# Class: AgentResult
+#   Role: Handles AgentResult logic for analytics.flows.orchestrator.
+#   Called from: analytics.flows.multi_agent, tests.analytics.test_multi_agent_flow
+#   Collaborators: dataclasses.field
+#   Why: Keeps analytics.flows.orchestrator from duplicating AgentResult behavior across flows.
+# Class: AgentRunContext
+#   Role: Handles AgentRunContext logic for analytics.flows.orchestrator.
+#   Called from: analytics.flows.multi_agent, tests.analytics.test_multi_agent_flow, tests.analytics.test_web_research
+#   Collaborators: Internal helpers only
+#   Why: Keeps analytics.flows.orchestrator from duplicating AgentRunContext behavior across flows.
+# Class: AgentSpec
+#   Role: Handles AgentSpec logic for analytics.flows.orchestrator.
+#   Called from: analytics.flows.multi_agent
+#   Collaborators: dataclasses.dataclass
+#   Why: Keeps analytics.flows.orchestrator from duplicating AgentSpec behavior across flows.
+# Class: AgentTask
+#   Role: Handles AgentTask logic for analytics.flows.orchestrator.
+#   Called from: analytics.flows.multi_agent
+#   Collaborators: dataclasses.field
+#   Why: Keeps analytics.flows.orchestrator from duplicating AgentTask behavior across flows.
+# Class: OrchestratorContext
+#   Role: Handles OrchestratorContext logic for analytics.flows.orchestrator.
+#   Called from: analytics.flows.multi_agent
+#   Collaborators: dataclasses.field
+#   Why: Keeps analytics.flows.orchestrator from duplicating OrchestratorContext behavior across flows.
+# Class: AgentExecutionOrchestrator
+#   Role: Executes agent DAGs with shallow depth constraints and TaskGroup fan-out.
+#   Called from: analytics.flows.multi_agent
+#   Collaborators: collections.defaultdict, time.perf_counter, analytics.flows.orchestrator.AgentExecutionError, asyncio.TaskGroup, +2 more
+#   Why: Supports downstream analytics workflows that rely on AgentExecutionOrchestrator.
+# Class: AgentToolRetryableError
+#   Role: Raised by specialist agents to request a retry without aborting the workflow.
+#   Called from: Internal to analytics.flows.orchestrator
+#   Collaborators: Internal helpers only
+#   Why: Supports downstream analytics workflows that rely on AgentToolRetryableError.
+# --- End Analytics Function/Class Map ---
+from __future__ import annotations
 
 import asyncio
 import inspect

@@ -1,3 +1,35 @@
+# --- Analytics Function/Class Map ---
+# Function: _prepare_data_preview
+#   Role: Handles prepare data preview logic for analytics.core.analysis.
+#   Called from: Internal to analytics.core.analysis
+#   Invokes: json.dumps
+#   Why: Keeps analytics.core.analysis from duplicating prepare data preview behavior across flows.
+# Function: _summarize_chart_spec
+#   Role: Handles summarize chart spec logic for analytics.core.analysis.
+#   Called from: Internal to analytics.core.analysis
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.core.analysis from duplicating summarize chart spec behavior across flows.
+# Function: _summarize_search_result
+#   Role: Handles summarize search result logic for analytics.core.analysis.
+#   Called from: Internal to analytics.core.analysis
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.core.analysis from duplicating summarize search result behavior across flows.
+# Function: _normalize_analysis_chunk
+#   Role: Handles normalize analysis chunk logic for analytics.core.analysis.
+#   Called from: Internal to analytics.core.analysis
+#   Invokes: re.sub
+#   Why: Keeps analytics.core.analysis from duplicating normalize analysis chunk behavior across flows.
+# Function: _build_analysis_prompt
+#   Role: Handles build analysis prompt logic for analytics.core.analysis.
+#   Called from: Internal to analytics.core.analysis
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.core.analysis from duplicating build analysis prompt behavior across flows.
+# Function: stream_insights_llm
+#   Role: Handles stream insights llm logic for analytics.core.analysis.
+#   Called from: analytics.flows.planner_executor
+#   Invokes: analytics.core.analysis._prepare_data_preview, analytics.core.analysis._summarize_chart_spec, analytics.core.analysis._summarize_search_result, analytics.core.openai_client.get_openai_client, +2 more
+#   Why: Keeps analytics.core.analysis from duplicating stream insights llm behavior across flows.
+# --- End Analytics Function/Class Map ---
 from __future__ import annotations
 from typing import Dict, Any, List, AsyncGenerator, Optional
 import json

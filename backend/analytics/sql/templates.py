@@ -1,3 +1,15 @@
+# --- Analytics Function/Class Map ---
+# Function: fetch_templates_for_intent
+#   Role: Return YAML-backed template suggestions for the supplied intent.
+#   Called from: analytics.flows.planner_executor, analytics.sql.prompt_builder
+#   Invokes: analytics.core.config_store.get_config_store
+#   Why: Supports downstream analytics workflows that rely on fetch_templates_for_intent.
+# Function: summarize_template
+#   Role: Handles summarize template logic for analytics.sql.templates.
+#   Called from: analytics.sql.prompt_builder
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.sql.templates from duplicating summarize template behavior across flows.
+# --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional

@@ -1,3 +1,20 @@
+# --- Analytics Function/Class Map ---
+# Function: normalize_lane_name
+#   Role: Handles normalize lane name logic for analytics.core.lane_refresh.
+#   Called from: Internal to analytics.core.lane_refresh
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.core.lane_refresh from duplicating normalize lane name behavior across flows.
+# Function: resolve_lane_ttls
+#   Role: Handles resolve lane ttls logic for analytics.core.lane_refresh.
+#   Called from: analytics.flows.planner_executor, analytics.flows.workflow
+#   Invokes: os.getenv
+#   Why: Keeps analytics.core.lane_refresh from duplicating resolve lane ttls behavior across flows.
+# Function: compute_lane_refresh_requirements
+#   Role: Handles compute lane refresh requirements logic for analytics.core.lane_refresh.
+#   Called from: analytics.flows.workflow
+#   Invokes: analytics.core.lane_refresh.normalize_lane_name
+#   Why: Keeps analytics.core.lane_refresh from duplicating compute lane refresh requirements behavior across flows.
+# --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
 import os

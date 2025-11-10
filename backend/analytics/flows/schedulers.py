@@ -1,3 +1,80 @@
+# --- Analytics Function/Class Map ---
+# Class: FlowMode
+#   Role: Handles FlowMode logic for analytics.flows.schedulers.
+#   Called from: analytics.agent_orchestrator.agent_runtime, analytics.agent_orchestrator.event_bus, analytics.flows.agents_stream_bridge, analytics.flows.instrumentation, +15 more
+#   Collaborators: Internal helpers only
+#   Why: Keeps analytics.flows.schedulers from duplicating FlowMode behavior across flows.
+# Class: ModeConfig
+#   Role: Handles ModeConfig logic for analytics.flows.schedulers.
+#   Called from: analytics.flows.planner.analysis_lane
+#   Collaborators: dataclasses.dataclass, dataclasses.field
+#   Why: Keeps analytics.flows.schedulers from duplicating ModeConfig behavior across flows.
+# Class: FlowStage
+#   Role: Describe a logical phase within an analytics flow.
+#   Called from: Internal to analytics.flows.schedulers
+#   Collaborators: dataclasses.dataclass
+#   Why: Supports downstream analytics workflows that rely on FlowStage.
+# Class: FlowSchedule
+#   Role: Container describing the ordered stages for a flow mode.
+#   Called from: Internal to analytics.flows.schedulers
+#   Collaborators: dataclasses.dataclass
+#   Why: Supports downstream analytics workflows that rely on FlowSchedule.
+# Class: FlowStageIndex
+#   Role: Mapping helpers for translating events back to their stages.
+#   Called from: analytics.flows.instrumentation
+#   Collaborators: dataclasses.dataclass
+#   Why: Supports downstream analytics workflows that rely on FlowStageIndex.
+# Function: _core_stages
+#   Role: Handles core stages logic for analytics.flows.schedulers.
+#   Called from: Internal to analytics.flows.schedulers
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.flows.schedulers from duplicating core stages behavior across flows.
+# Function: get_mode_config
+#   Role: Handles get mode config logic for analytics.flows.schedulers.
+#   Called from: analytics.flows.multi_agent, analytics.flows.planner_executor, analytics.flows.single_agent_tools, tests.analytics.test_planner_ledger, +1 more
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.flows.schedulers from duplicating get mode config behavior across flows.
+# Function: get_mode_schedule
+#   Role: Handles get mode schedule logic for analytics.flows.schedulers.
+#   Called from: tests.analytics.test_planner_ledger, tests.analytics.test_planner_schedulers
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.flows.schedulers from duplicating get mode schedule behavior across flows.
+# Function: describe_mode_schedule
+#   Role: Handles describe mode schedule logic for analytics.flows.schedulers.
+#   Called from: analytics.scripts.schedule_replay, tests.analytics.test_planner_schedulers
+#   Invokes: analytics.flows.schedulers.get_mode_schedule
+#   Why: Keeps analytics.flows.schedulers from duplicating describe mode schedule behavior across flows.
+# Function: build_stage_index
+#   Role: Create lookup dictionaries for a mode's schedule.
+#   Called from: Internal to analytics.flows.schedulers
+#   Invokes: analytics.flows.schedulers.get_mode_schedule, analytics.flows.schedulers.FlowStageIndex
+#   Why: Supports downstream analytics workflows that rely on build_stage_index.
+# Function: get_stage_index
+#   Role: Handles get stage index logic for analytics.flows.schedulers.
+#   Called from: analytics.flows.instrumentation, tests.analytics.test_planner_ledger, tests.analytics.test_planner_schedulers
+#   Invokes: functools.lru_cache, analytics.flows.schedulers.build_stage_index
+#   Why: Keeps analytics.flows.schedulers from duplicating get stage index behavior across flows.
+# Function: resolve_stage
+#   Role: Lookup a FlowStage from the cached index.
+#   Called from: analytics.flows.instrumentation, tests.analytics.test_planner_schedulers
+#   Invokes: Internal helpers only
+#   Why: Supports downstream analytics workflows that rely on resolve_stage.
+# Function: _merge_schedule_badges
+#   Role: Handles merge schedule badges logic for analytics.flows.schedulers.
+#   Called from: Internal to analytics.flows.schedulers
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.flows.schedulers from duplicating merge schedule badges behavior across flows.
+# Function: _inject_schedule
+#   Role: Handles inject schedule logic for analytics.flows.schedulers.
+#   Called from: Internal to analytics.flows.schedulers
+#   Invokes: analytics.flows.schedulers._merge_schedule_badges
+#   Why: Keeps analytics.flows.schedulers from duplicating inject schedule behavior across flows.
+# Function: apply_mode_metadata
+#   Role: Annotate an SSE payload with mode metadata.
+#   Called from: analytics.agent_orchestrator.agent_runtime, analytics.agent_orchestrator.event_bus, analytics.flows.agents_stream_bridge, analytics.flows.multi_agent, +5 more
+#   Invokes: analytics.flows.schedulers.get_mode_config, analytics.flows.schedulers.get_mode_schedule, analytics.flows.schedulers._inject_schedule, analytics.flows.schedulers.get_stage_index, +1 more
+#   Why: Supports downstream analytics workflows that rely on apply_mode_metadata.
+# --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
 from dataclasses import dataclass, field
