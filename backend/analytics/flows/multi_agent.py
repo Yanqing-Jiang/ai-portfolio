@@ -129,6 +129,10 @@ from analytics.core.telemetry import (
     tool_iteration as log_tool_iteration,
     policy_decision,
 )
+from analytics.accessory_receipts import (
+    enrich_accessory_payload,
+    build_lane_reuse_event,
+)
 from analytics.core.config_store import get_config_store
 from analytics.policies.delegation_policy import DelegationPolicy
 from analytics.services.polygon import PolygonMarketDataClient, PolygonError, fetch_daily_snapshot
@@ -1851,9 +1855,16 @@ class MultiAgentFlow:
             enriched_payload["reused"] = False
         enriched_payload.setdefault("flow_mode", self.flow_mode.value)
         enriched_payload.setdefault("ts", datetime.utcnow().isoformat())
+        receipts_map = self._shared_context.setdefault("tool_receipts", {})
+        if lane:
+            enrich_accessory_payload(lane, enriched_payload, receipts=receipts_map)
         artifact_meta.setdefault("latest_payloads", {})[event_name] = enriched_payload
         if lane:
             artifact_meta.setdefault("latest_sources", {})[lane] = enriched_payload.get("source")
+            if enriched_payload.get("reused"):
+                reuse_event = build_lane_reuse_event(lane, enriched_payload, receipts=receipts_map)
+                if reuse_event:
+                    self._pending_artifact_events.append(reuse_event)
         event = {"event": event_name, "data": enriched_payload}
         self._pending_artifact_events.append(event)
         self._artifact_flush_pending = True
@@ -2593,6 +2604,8 @@ class MultiAgentFlow:
             mutable = dict(data)
             mutable.setdefault("follow_up_route", self.follow_up_route.value)
             mutable.setdefault("prompt_versions", dict(self._prompt_versions))
+            if self._agentic_revision_mode:
+                mutable.setdefault("agentic_revision", True)
             annotated["data"] = sanitize_for_json(mutable)
         else:
             annotated["data"] = data
@@ -3170,6 +3183,9 @@ class MultiAgentFlow:
         sequencer_state: Optional[_SupervisorSequencerState] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         self._abort_stale_sequencer(reason="restart")
+        if self._agentic_revision_mode:
+            sequencer = None
+            sequencer_state = None
         if sequencer is not None:
             async for event in self.sequencer_stream(
                 query,

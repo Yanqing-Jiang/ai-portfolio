@@ -122,6 +122,8 @@ const MemoryAnalyticsPage: React.FC = () => {
     slotFollowups,
     snapshotReuse,
     laneReuseNotices,
+    agenticRevisionActive,
+    freshLaneStates,
     specialistCards,
     latencyGuardrail,
     redirectNotice,
@@ -648,6 +650,8 @@ Multi-Agent: workload delegation & orchestration, fastest speed
         slotStatuses={slotStatuses}
         slotFollowups={slotFollowups}
         laneReuseNotices={laneReuseNotices}
+        agenticRevision={agenticRevisionActive}
+        freshLaneStates={freshLaneStates}
         redirectNotice={redirectNotice}
         show={showProcessPanel}
         showVisualization={true}

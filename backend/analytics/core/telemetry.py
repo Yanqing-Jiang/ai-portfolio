@@ -74,6 +74,11 @@
 #   Called from: analytics.flows.planner_executor, analytics.flows.single_agent_tools
 #   Invokes: analytics.core.telemetry._base_payload, analytics.core.telemetry._emit
 #   Why: Keeps analytics.core.telemetry from duplicating revision plan behavior across flows.
+# Function: fresh_pipeline_lane
+#   Role: Emits telemetry markers for deterministic fresh pipeline lanes.
+#   Called from: analytics.flows.planner_executor
+#   Invokes: analytics.core.telemetry._base_payload, analytics.core.telemetry._emit
+#   Why: Keeps analytics.flows.planner_executor from duplicating fresh lane telemetry wiring across flows.
 # Function: agent_run
 #   Role: Handles agent run logic for analytics.core.telemetry.
 #   Called from: analytics.flows.multi_agent, analytics.flows.single_agent_tools
@@ -420,6 +425,24 @@ def revision_plan(
         payload["follow_up_route"] = follow_up_route
     if revision_id:
         payload["revision_id"] = revision_id
+    _emit(payload)
+
+
+def fresh_pipeline_lane(
+    *,
+    lane: str,
+    status: str,
+    session_id: Optional[str] = None,
+    flow: Optional[str] = None,
+    reasoning_effort: Optional[str] = None,
+    metadata: Optional[Mapping[str, Any]] = None,
+) -> None:
+    payload = _base_payload("fresh_pipeline_lane", session_id=session_id, flow=flow)
+    payload.update({"lane": lane, "status": status})
+    if reasoning_effort:
+        payload["reasoning_effort"] = reasoning_effort
+    if metadata:
+        payload["metadata"] = dict(metadata)
     _emit(payload)
 
 

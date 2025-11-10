@@ -16,6 +16,7 @@ import {
   SlotStatusPayload,
   ToolCallTelemetry,
   LaneReuseNotice,
+  FreshLaneStatus,
 } from '../types';
 import { isValidChartSpec } from '../utils';
 const ChartCardLazy = React.lazy(() => import('./ChartCard').then((module) => ({ default: module.ChartCard })));
@@ -56,6 +57,10 @@ interface ProcessPanelProps {
   slotFollowups?: ClarifyRequest[] | null;
 
   laneReuseNotices?: LaneReuseNotice[] | null;
+
+  agenticRevision?: boolean;
+
+  freshLaneStates?: Record<string, FreshLaneStatus> | null;
 
   redirectNotice?: string | null;
 
@@ -786,6 +791,10 @@ export const ProcessPanel: React.FC<ProcessPanelProps> = ({
   slotFollowups = null,
 
   laneReuseNotices = null,
+
+  agenticRevision = false,
+
+  freshLaneStates = null,
 
   redirectNotice = null,
 
@@ -2794,6 +2803,10 @@ export const ProcessPanel: React.FC<ProcessPanelProps> = ({
               laneReuseNotices={laneReuseNotices}
               
               redirectNotice={redirectNotice}
+              
+              agenticRevision={agenticRevision}
+              
+              freshLaneStates={freshLaneStates ?? undefined}
 
             />
 
