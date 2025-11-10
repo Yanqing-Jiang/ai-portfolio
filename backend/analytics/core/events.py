@@ -1,3 +1,20 @@
+# --- Analytics Function/Class Map ---
+# Class: StreamEvent
+#   Role: Lightweight event structure for streaming analytics workflows.
+#   Called from: analytics.flows.agents_stream_bridge
+#   Collaborators: analytics.validators.sanitize_for_json
+#   Why: Supports downstream analytics workflows that rely on StreamEvent.
+# Class: EventEmitter
+#   Role: Lightweight event emitter with standardized event types.
+#   Called from: analytics.agent_orchestrator.agent_runtime, analytics.agent_orchestrator.event_bus, analytics.flows.chart_revision, analytics.flows.instrumentation, +7 more
+#   Collaborators: analytics.core.telemetry.catalog_trace, analytics.core.events.StreamEvent
+#   Why: Provides simple factory methods for common event patterns.
+# Class: TimedEventEmitter
+#   Role: Event emitter with built-in timing capabilities.
+#   Called from: analytics.flows.instrumentation, analytics.flows.planner_executor, tests.analytics.test_clarification_auto_fill, tests.analytics.test_intent_resolution_telemetry, +3 more
+#   Collaborators: time.time, analytics.core.telemetry.step_timing
+#   Why: Supports downstream analytics workflows that rely on TimedEventEmitter.
+# --- End Analytics Function/Class Map ---
 """
 Lightweight Event Streaming System
 
@@ -433,5 +450,3 @@ class TimedEventEmitter(EventEmitter):
         """Emit a status with timing information."""
         elapsed = self.end_step(step) if step in self.step_times else None
         return self.status(step, message, elapsed)
-
-

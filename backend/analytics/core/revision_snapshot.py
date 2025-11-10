@@ -1,3 +1,30 @@
+# --- Analytics Function/Class Map ---
+# Function: build_intent_signature
+#   Role: Handles build intent signature logic for analytics.core.revision_snapshot.
+#   Called from: analytics.flows.planner_executor
+#   Invokes: analytics.validators.sanitize_for_json, analytics.core.revision_snapshot._timeframe_to_dict
+#   Why: Keeps analytics.core.revision_snapshot from duplicating build intent signature behavior across flows.
+# Function: extract_revision_snapshot
+#   Role: Handles extract revision snapshot logic for analytics.core.revision_snapshot.
+#   Called from: analytics.flows.multi_agent, analytics.flows.planner_executor
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.core.revision_snapshot from duplicating extract revision snapshot behavior across flows.
+# Function: signatures_equal
+#   Role: Handles signatures equal logic for analytics.core.revision_snapshot.
+#   Called from: analytics.flows.planner_executor
+#   Invokes: analytics.core.revision_snapshot._canonicalize
+#   Why: Keeps analytics.core.revision_snapshot from duplicating signatures equal behavior across flows.
+# Function: _canonicalize
+#   Role: Handles canonicalize logic for analytics.core.revision_snapshot.
+#   Called from: Internal to analytics.core.revision_snapshot
+#   Invokes: analytics.validators.sanitize_for_json, json.dumps
+#   Why: Keeps analytics.core.revision_snapshot from duplicating canonicalize behavior across flows.
+# Function: _timeframe_to_dict
+#   Role: Handles timeframe to dict logic for analytics.core.revision_snapshot.
+#   Called from: Internal to analytics.core.revision_snapshot
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.core.revision_snapshot from duplicating timeframe to dict behavior across flows.
+# --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
 import json

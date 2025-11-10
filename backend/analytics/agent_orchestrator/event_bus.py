@@ -1,3 +1,10 @@
+# --- Analytics Function/Class Map ---
+# Class: AgentEventBus
+#   Role: Thin abstraction over the shared SSE queue used by analytics workflows.
+#   Called from: analytics.agent_orchestrator, analytics.agent_orchestrator.agent_runtime
+#   Collaborators: logging.getLogger, analytics.validators.sanitize_for_json, analytics.flows.schedulers.apply_mode_metadata
+#   Why: Ensures all orchestrator events are sanitized and annotated with flow metadata before they are consumed by the existing frontend subscribers.
+# --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
 import asyncio

@@ -1,3 +1,30 @@
+# --- Analytics Function/Class Map ---
+# Class: TimeGrainSpec
+#   Role: Handles TimeGrainSpec logic for analytics.semantic.catalog.
+#   Called from: Internal to analytics.semantic.catalog
+#   Collaborators: dataclasses.dataclass
+#   Why: Keeps analytics.semantic.catalog from duplicating TimeGrainSpec behavior across flows.
+# Class: MetricSpec
+#   Role: Handles MetricSpec logic for analytics.semantic.catalog.
+#   Called from: Internal to analytics.semantic.catalog
+#   Collaborators: dataclasses.dataclass
+#   Why: Keeps analytics.semantic.catalog from duplicating MetricSpec behavior across flows.
+# Class: IntentSpec
+#   Role: Handles IntentSpec logic for analytics.semantic.catalog.
+#   Called from: Internal to analytics.semantic.catalog
+#   Collaborators: dataclasses.dataclass
+#   Why: Keeps analytics.semantic.catalog from duplicating IntentSpec behavior across flows.
+# Class: SemanticCatalog
+#   Role: In-memory view over metrics.yaml semantic section.
+#   Called from: Internal to analytics.semantic.catalog
+#   Collaborators: analytics.semantic.catalog.TimeGrainSpec, analytics.semantic.catalog.IntentSpec, analytics.semantic.catalog.MetricSpec
+#   Why: Supports downstream analytics workflows that rely on SemanticCatalog.
+# Function: get_semantic_catalog
+#   Role: Handles get semantic catalog logic for analytics.semantic.catalog.
+#   Called from: analytics.sql.compiler, analytics.sql.prompt_builder, analytics.sql.sql_planner, analytics.sql.validator, +2 more
+#   Invokes: functools.lru_cache, analytics.core.context.get_configs, analytics.semantic.catalog.SemanticCatalog
+#   Why: Keeps analytics.semantic.catalog from duplicating get semantic catalog behavior across flows.
+# --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
 from dataclasses import dataclass

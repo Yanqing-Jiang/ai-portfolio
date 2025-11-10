@@ -1,3 +1,25 @@
+# --- Analytics Function/Class Map ---
+# Class: SupervisorSpecialistConfig
+#   Role: Configuration for a specialist that will be exposed as a supervisor tool.
+#   Called from: analytics.flows.multi_agent, tests.analytics.test_supervisor_orchestrator
+#   Collaborators: dataclasses.dataclass
+#   Why: Supports downstream analytics workflows that rely on SupervisorSpecialistConfig.
+# Class: SupervisorToolBinding
+#   Role: Handles SupervisorToolBinding logic for analytics.flows.supervisor_orchestrator.
+#   Called from: Internal to analytics.flows.supervisor_orchestrator
+#   Collaborators: Internal helpers only
+#   Why: Keeps analytics.flows.supervisor_orchestrator from duplicating SupervisorToolBinding behavior across flows.
+# Class: SupervisorBundle
+#   Role: Handles SupervisorBundle logic for analytics.flows.supervisor_orchestrator.
+#   Called from: tests.analytics.test_supervisor_orchestrator
+#   Collaborators: Internal helpers only
+#   Why: Keeps analytics.flows.supervisor_orchestrator from duplicating SupervisorBundle behavior across flows.
+# Function: build_supervisor_bundle
+#   Role: Build the supervisor Agent and expose specialists as callable tools.
+#   Called from: analytics.flows.multi_agent, tests.analytics.test_supervisor_orchestrator
+#   Invokes: agents.Agent, analytics.flows.supervisor_orchestrator.SupervisorBundle, analytics.flows.supervisor_orchestrator.SupervisorToolBinding
+#   Why: Supports downstream analytics workflows that rely on build_supervisor_bundle.
+# --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
 from dataclasses import dataclass

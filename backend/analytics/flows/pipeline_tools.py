@@ -1,3 +1,25 @@
+# --- Analytics Function/Class Map ---
+# Class: PlannerToolDefinition
+#   Role: Handles PlannerToolDefinition logic for analytics.flows.pipeline_tools.
+#   Called from: analytics.flows.single_agent_tools
+#   Collaborators: dataclasses.field
+#   Why: Keeps analytics.flows.pipeline_tools from duplicating PlannerToolDefinition behavior across flows.
+# Class: PlannerToolRegistry
+#   Role: Handles PlannerToolRegistry logic for analytics.flows.pipeline_tools.
+#   Called from: analytics.flows.multi_agent, analytics.flows.planner.analysis_lane, analytics.flows.planner.sql_lane, analytics.flows.single_agent_tools
+#   Collaborators: Internal helpers only
+#   Why: Keeps analytics.flows.pipeline_tools from duplicating PlannerToolRegistry behavior across flows.
+# Function: get_planner_tool_registry
+#   Role: Handles get planner tool registry logic for analytics.flows.pipeline_tools.
+#   Called from: analytics.flows.multi_agent, analytics.flows.planner_executor, analytics.flows.single_agent_tools, tests.analytics.test_pipeline_tools
+#   Invokes: analytics.flows.pipeline_tools.PlannerToolRegistry, analytics.flows.pipeline_tools._bootstrap_registry
+#   Why: Keeps analytics.flows.pipeline_tools from duplicating get planner tool registry behavior across flows.
+# Function: _bootstrap_registry
+#   Role: Handles bootstrap registry logic for analytics.flows.pipeline_tools.
+#   Called from: Internal to analytics.flows.pipeline_tools
+#   Invokes: analytics.flows.pipeline_tools.PlannerToolDefinition
+#   Why: Keeps analytics.flows.pipeline_tools from duplicating bootstrap registry behavior across flows.
+# --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -584,4 +606,3 @@ def _bootstrap_registry(registry: PlannerToolRegistry) -> None:
             retryable_errors=retryable_default,
         )
     )
-

@@ -1,3 +1,15 @@
+# --- Analytics Function/Class Map ---
+# Class: OpenAIClient
+#   Role: Adapter for analytics_memory to use UnifiedResponsesClient with Responses API only
+#   Called from: Internal to analytics.core.openai_client
+#   Collaborators: openai.AsyncOpenAI, os.getenv, concurrent.futures.futures.ThreadPoolExecutor
+#   Why: Supports downstream analytics workflows that rely on OpenAIClient.
+# Function: get_openai_client
+#   Role: Get or create global OpenAI client instance
+#   Called from: analytics.core.analysis
+#   Invokes: analytics.core.openai_client.OpenAIClient
+#   Why: Supports downstream analytics workflows that rely on get_openai_client.
+# --- End Analytics Function/Class Map ---
 from __future__ import annotations
 import os
 import json

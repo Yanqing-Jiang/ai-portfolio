@@ -1,3 +1,105 @@
+# --- Analytics Function/Class Map ---
+# Function: _build_tool_metadata
+#   Role: Handles build tool metadata logic for analytics.flows.multi_agent.
+#   Called from: Internal to analytics.flows.multi_agent
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.flows.multi_agent from duplicating build tool metadata behavior across flows.
+# Class: _MultiAgentHooks
+#   Role: Handles MultiAgentHooks logic for analytics.flows.multi_agent.
+#   Called from: tests.analytics.test_multi_agent_flow
+#   Collaborators: Internal helpers only
+#   Why: Keeps analytics.flows.multi_agent from duplicating MultiAgentHooks behavior across flows.
+# Function: _make_identifier
+#   Role: Handles make identifier logic for analytics.flows.multi_agent.
+#   Called from: Internal to analytics.flows.multi_agent
+#   Invokes: hashlib.sha1
+#   Why: Keeps analytics.flows.multi_agent from duplicating make identifier behavior across flows.
+# Function: _canonical_tool_name
+#   Role: Handles canonical tool name logic for analytics.flows.multi_agent.
+#   Called from: Internal to analytics.flows.multi_agent
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.flows.multi_agent from duplicating canonical tool name behavior across flows.
+# Function: _infer_tickers
+#   Role: Handles infer tickers logic for analytics.flows.multi_agent.
+#   Called from: Internal to analytics.flows.multi_agent
+#   Invokes: re.findall
+#   Why: Keeps analytics.flows.multi_agent from duplicating infer tickers behavior across flows.
+# Function: _normalize_chart_spec_payload
+#   Role: Unwrap common chart payload wrappers down to the ECharts option dict.
+#   Called from: Internal to analytics.flows.multi_agent
+#   Invokes: analytics.flows.multi_agent._normalize_chart_spec_payload
+#   Why: Supports downstream analytics workflows that rely on _normalize_chart_spec_payload.
+# Function: _needs_web_refresh
+#   Role: Handles needs web refresh logic for analytics.flows.multi_agent.
+#   Called from: Internal to analytics.flows.multi_agent
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.flows.multi_agent from duplicating needs web refresh behavior across flows.
+# Function: _derive_tasks
+#   Role: Handles derive tasks logic for analytics.flows.multi_agent.
+#   Called from: tests.analytics.test_multi_agent_flow, tests.analytics.test_revision_followups
+#   Invokes: analytics.flows.task_plan.AgentTaskPlan, analytics.flows.chart_revision.is_chart_revision_query, analytics.flows.chart_revision.infer_chart_patch_from_query, analytics.flows.multi_agent._needs_web_refresh
+#   Why: Keeps analytics.flows.multi_agent from duplicating derive tasks behavior across flows.
+# Function: _task_status
+#   Role: Return the status for a task by name regardless of container type.
+#   Called from: Internal to analytics.flows.multi_agent
+#   Invokes: Internal helpers only
+#   Why: Supports downstream analytics workflows that rely on _task_status.
+# Function: _create_planner_bundle
+#   Role: Handles create planner bundle logic for analytics.flows.multi_agent.
+#   Called from: tests.analytics.test_multi_agent_bundle
+#   Invokes: analytics.validators.sanitize_for_json, json.dumps, analytics.flows.multi_agent._make_identifier, copy.deepcopy
+#   Why: Keeps analytics.flows.multi_agent from duplicating create planner bundle behavior across flows.
+# Function: _planner_agent
+#   Role: Handles planner agent logic for analytics.flows.multi_agent.
+#   Called from: tests.analytics.test_multi_agent_flow
+#   Invokes: analytics.flows.multi_agent._derive_tasks, analytics.flows.multi_agent._create_planner_bundle, analytics.core.telemetry.agent_handoff, analytics.flows.orchestrator.AgentResult
+#   Why: Keeps analytics.flows.multi_agent from duplicating planner agent behavior across flows.
+# Function: _query_agent
+#   Role: Handles query agent logic for analytics.flows.multi_agent.
+#   Called from: tests.analytics.test_multi_agent_flow
+#   Invokes: analytics.flows.multi_agent._task_status, analytics.flows.orchestrator.AgentResult
+#   Why: Keeps analytics.flows.multi_agent from duplicating query agent behavior across flows.
+# Function: _analyst_agent
+#   Role: Handles analyst agent logic for analytics.flows.multi_agent.
+#   Called from: Internal to analytics.flows.multi_agent
+#   Invokes: analytics.flows.multi_agent._task_status, analytics.flows.orchestrator.AgentResult
+#   Why: Keeps analytics.flows.multi_agent from duplicating analyst agent behavior across flows.
+# Function: _chart_agent
+#   Role: Handles chart agent logic for analytics.flows.multi_agent.
+#   Called from: Internal to analytics.flows.multi_agent
+#   Invokes: analytics.flows.multi_agent._task_status, analytics.flows.orchestrator.AgentResult
+#   Why: Keeps analytics.flows.multi_agent from duplicating chart agent behavior across flows.
+# Function: _market_agent
+#   Role: Handles market agent logic for analytics.flows.multi_agent.
+#   Called from: tests.analytics.test_multi_agent_flow
+#   Invokes: analytics.flows.multi_agent._task_status, analytics.flows.orchestrator.AgentResult, analytics.core.telemetry.policy_decision, asyncio.wait_for
+#   Why: Keeps analytics.flows.multi_agent from duplicating market agent behavior across flows.
+# Function: _web_research_agent
+#   Role: Handles web research agent logic for analytics.flows.multi_agent.
+#   Called from: tests.analytics.test_multi_agent_flow, tests.analytics.test_web_research
+#   Invokes: analytics.flows.multi_agent._task_status, analytics.core.session_state.get_session_state_repository, analytics.flows.orchestrator.AgentResult, analytics.flows.planner_executor._evaluate_latency_guardrail, +2 more
+#   Why: Keeps analytics.flows.multi_agent from duplicating web research agent behavior across flows.
+# Function: _build_default_agent_registry
+#   Role: Handles build default agent registry logic for analytics.flows.multi_agent.
+#   Called from: Internal to analytics.flows.multi_agent
+#   Invokes: analytics.flows.orchestrator.AgentSpec
+#   Why: Keeps analytics.flows.multi_agent from duplicating build default agent registry behavior across flows.
+# Function: _build_default_plan
+#   Role: Handles build default plan logic for analytics.flows.multi_agent.
+#   Called from: Internal to analytics.flows.multi_agent
+#   Invokes: analytics.flows.orchestrator.AgentTask
+#   Why: Keeps analytics.flows.multi_agent from duplicating build default plan behavior across flows.
+# Class: _SupervisorSequencerState
+#   Role: Handles SupervisorSequencerState logic for analytics.flows.multi_agent.
+#   Called from: Internal to analytics.flows.multi_agent
+#   Collaborators: Internal helpers only
+#   Why: Keeps analytics.flows.multi_agent from duplicating SupervisorSequencerState behavior across flows.
+# Class: MultiAgentFlow
+#   Role: Coordinates specialist agents while reusing the planner-executor core.
+#   Called from: analytics.flows.workflow, tests.analytics.test_multi_agent_flow, tests.analytics.test_multi_agent_rerun_policy, tests.analytics.test_prompt_contracts, +3 more
+#   Collaborators: analytics.core.config_store.get_config_store, os.getenv, analytics.flows.supervisor_retry_manager.SupervisorRetryManager, analytics.flows.planner_executor.PlannerExecutorFlow, +2 more
+#   Why: Supports downstream analytics workflows that rely on MultiAgentFlow.
+# --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
 import hashlib
@@ -4835,7 +4937,4 @@ class MultiAgentFlow:
 
 
 __all__ = ["MultiAgentFlow"]
-
-
-
 

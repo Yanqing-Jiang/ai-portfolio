@@ -1,4 +1,41 @@
-﻿from __future__ import annotations
+# --- Analytics Function/Class Map ---
+# Function: get_required_slots
+#   Role: Return the list of required slots for a given intent.
+#   Called from: analytics.agents.schema_clarifier, tests.analytics.test_template_requirements
+#   Invokes: Internal helpers only
+#   Why: Supports downstream analytics workflows that rely on get_required_slots.
+# Function: requirements_satisfied
+#   Role: Check whether the required slots are satisfied for the given intent/plan.
+#   Called from: analytics.agents.schema_clarifier, tests.analytics.test_template_requirements
+#   Invokes: analytics.sql.template_requirements.get_required_slots, analytics.core.state.QueryPlanModel, analytics.sql.template_requirements._is_slot_filled
+#   Why: Supports downstream analytics workflows that rely on requirements_satisfied.
+# Function: _is_slot_filled
+#   Role: Return True if the slot identified by ``slot_key`` is satisfied.
+#   Called from: Internal to analytics.sql.template_requirements
+#   Invokes: analytics.sql.template_requirements._get_slot_status, analytics.sql.template_requirements._has_company, analytics.sql.template_requirements._get_timeframe_field
+#   Why: Supports downstream analytics workflows that rely on _is_slot_filled.
+# Function: _has_company
+#   Role: Return True when we have a single, concrete company selection.
+#   Called from: Internal to analytics.sql.template_requirements
+#   Invokes: analytics.sql.template_requirements._get_slot_status, analytics.sql.template_requirements._company_from_slots
+#   Why: Supports downstream analytics workflows that rely on _has_company.
+# Function: _company_from_slots
+#   Role: Handles company from slots logic for analytics.sql.template_requirements.
+#   Called from: Internal to analytics.sql.template_requirements
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.sql.template_requirements from duplicating company from slots behavior across flows.
+# Function: _get_slot_status
+#   Role: Handles get slot status logic for analytics.sql.template_requirements.
+#   Called from: Internal to analytics.sql.template_requirements
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.sql.template_requirements from duplicating get slot status behavior across flows.
+# Function: _get_timeframe_field
+#   Role: Handles get timeframe field logic for analytics.sql.template_requirements.
+#   Called from: Internal to analytics.sql.template_requirements
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.sql.template_requirements from duplicating get timeframe field behavior across flows.
+# --- End Analytics Function/Class Map ---
+from __future__ import annotations
 
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 

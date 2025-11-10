@@ -1,3 +1,55 @@
+# --- Analytics Function/Class Map ---
+# Function: _normalize_text
+#   Role: Handles normalize text logic for analytics.core.margins.
+#   Called from: Internal to analytics.core.margins
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.core.margins from duplicating normalize text behavior across flows.
+# Class: MarginChoice
+#   Role: Handles MarginChoice logic for analytics.core.margins.
+#   Called from: analytics_agent
+#   Collaborators: dataclasses.dataclass, analytics.core.margins._normalize_text
+#   Why: Keeps analytics.core.margins from duplicating MarginChoice behavior across flows.
+# Function: list_margin_labels
+#   Role: Handles list margin labels logic for analytics.core.margins.
+#   Called from: analytics.core.clarify
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.core.margins from duplicating list margin labels behavior across flows.
+# Function: normalize_margin_value
+#   Role: Handles normalize margin value logic for analytics.core.margins.
+#   Called from: analytics_agent
+#   Invokes: analytics.core.margins._normalize_text
+#   Why: Keeps analytics.core.margins from duplicating normalize margin value behavior across flows.
+# Function: detect_margin_choice_from_metrics
+#   Role: Handles detect margin choice from metrics logic for analytics.core.margins.
+#   Called from: analytics.core.clarify, analytics.flows.planner_executor
+#   Invokes: analytics.core.margins.normalize_margin_value
+#   Why: Keeps analytics.core.margins from duplicating detect margin choice from metrics behavior across flows.
+# Function: detect_margin_choice_from_slots
+#   Role: Handles detect margin choice from slots logic for analytics.core.margins.
+#   Called from: analytics.sql.compiler
+#   Invokes: analytics.core.margins.normalize_margin_value, analytics.core.margins.detect_margin_choice_from_metrics
+#   Why: Keeps analytics.core.margins from duplicating detect margin choice from slots behavior across flows.
+# Function: detect_margin_choice_from_plan
+#   Role: Handles detect margin choice from plan logic for analytics.core.margins.
+#   Called from: analytics.flows.planner_executor, analytics.sql.compiler
+#   Invokes: analytics.core.margins.detect_margin_choice_from_metrics, analytics.core.margins.normalize_margin_value
+#   Why: Keeps analytics.core.margins from duplicating detect margin choice from plan behavior across flows.
+# Function: infer_margin_from_query
+#   Role: Handles infer margin from query logic for analytics.core.margins.
+#   Called from: analytics_agent
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.core.margins from duplicating infer margin from query behavior across flows.
+# Function: apply_margin_choice
+#   Role: Handles apply margin choice logic for analytics.core.margins.
+#   Called from: analytics.core.clarify
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.core.margins from duplicating apply margin choice behavior across flows.
+# Function: ensure_margin_choice
+#   Role: Handles ensure margin choice logic for analytics.core.margins.
+#   Called from: analytics.core.clarify
+#   Invokes: analytics.core.margins.detect_margin_choice_from_plan, analytics.core.margins.detect_margin_choice_from_slots, analytics.core.margins.infer_margin_from_query, analytics.core.margins.apply_margin_choice
+#   Why: Keeps analytics.core.margins from duplicating ensure margin choice behavior across flows.
+# --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
 from dataclasses import dataclass

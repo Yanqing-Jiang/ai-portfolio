@@ -1,4 +1,31 @@
-﻿from __future__ import annotations
+# --- Analytics Function/Class Map ---
+# Class: PolygonError
+#   Role: Raised when the Polygon API returns an error payload or bad status.
+#   Called from: analytics.flows.multi_agent, analytics.flows.tooling
+#   Collaborators: Internal helpers only
+#   Why: Supports downstream analytics workflows that rely on PolygonError.
+# Class: DailyBar
+#   Role: Handles DailyBar logic for analytics.services.polygon.
+#   Called from: tests.analytics.test_revision_routing
+#   Collaborators: Internal helpers only
+#   Why: Keeps analytics.services.polygon from duplicating DailyBar behavior across flows.
+# Class: MarketSnapshot
+#   Role: Handles MarketSnapshot logic for analytics.services.polygon.
+#   Called from: tests.analytics.test_revision_routing
+#   Collaborators: Internal helpers only
+#   Why: Keeps analytics.services.polygon from duplicating MarketSnapshot behavior across flows.
+# Class: PolygonMarketDataClient
+#   Role: Fetches daily OHLC data from Polygon.io using minimal configuration.
+#   Called from: analytics.flows.multi_agent, analytics.flows.tooling
+#   Collaborators: analytics.services.polygon.MarketSnapshot, os.getenv, requests.Session, analytics.services.polygon.PolygonError, +2 more
+#   Why: Supports downstream analytics workflows that rely on PolygonMarketDataClient.
+# Function: fetch_daily_snapshot
+#   Role: Handles fetch daily snapshot logic for analytics.services.polygon.
+#   Called from: analytics.flows.multi_agent, analytics.flows.tooling
+#   Invokes: analytics.services.polygon.PolygonMarketDataClient
+#   Why: Keeps analytics.services.polygon from duplicating fetch daily snapshot behavior across flows.
+# --- End Analytics Function/Class Map ---
+from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass

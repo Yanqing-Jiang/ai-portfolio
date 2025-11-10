@@ -1,3 +1,50 @@
+# --- Analytics Function/Class Map ---
+# Function: _hash_arguments
+#   Role: Handles hash arguments logic for analytics.core.session_state.
+#   Called from: Internal to analytics.core.session_state
+#   Invokes: json.dumps, hashlib.sha256
+#   Why: Keeps analytics.core.session_state from duplicating hash arguments behavior across flows.
+# Class: SessionStateSnapshot
+#   Role: Representation of analytics session state persisted in Redis.
+#   Called from: analytics.agent_orchestrator.memory, analytics.core.lane_refresh, analytics.core.revision_snapshot, analytics.flows.chart_revision, +23 more
+#   Collaborators: pydantic.Field, pydantic.field_validator, copy.deepcopy, analytics.core.session_state._normalize_tool_name, +2 more
+#   Why: Supports downstream analytics workflows that rely on SessionStateSnapshot.
+# Class: SnapshotRevisionContext
+#   Role: Handles SnapshotRevisionContext logic for analytics.core.session_state.
+#   Called from: analytics.flows.planner_executor
+#   Collaborators: dataclasses.field
+#   Why: Keeps analytics.core.session_state from duplicating SnapshotRevisionContext behavior across flows.
+# Class: SessionStateRepository
+#   Role: Session state storage with Redis and in-memory fallback.
+#   Called from: analytics.flows.chart_revision, tests.analytics.conftest, tests.analytics.test_instrumentation_schedule, tests.analytics.test_session_state_fallback
+#   Collaborators: json.dumps, time.time, os.getenv, analytics.core.session_state._read_ttl_from_env, +2 more
+#   Why: Supports downstream analytics workflows that rely on SessionStateRepository.
+# Function: get_session_state_repository
+#   Role: Handles get session state repository logic for analytics.core.session_state.
+#   Called from: _inspect_session, analytics.flows.chart_revision, analytics.flows.instrumentation, analytics.flows.multi_agent, +12 more
+#   Invokes: analytics.core.session_state.SessionStateRepository
+#   Why: Keeps analytics.core.session_state from duplicating get session state repository behavior across flows.
+# Function: close_session_state_repository
+#   Role: Handles close session state repository logic for analytics.core.session_state.
+#   Called from: scripts.seed_agentic_staging, temp_run, tests.analytics.test_analysis_revision, tests.analytics.test_revision_routing
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.core.session_state from duplicating close session state repository behavior across flows.
+# Function: _read_ttl_from_env
+#   Role: Handles read ttl from env logic for analytics.core.session_state.
+#   Called from: Internal to analytics.core.session_state
+#   Invokes: os.getenv
+#   Why: Keeps analytics.core.session_state from duplicating read ttl from env behavior across flows.
+# Function: _string_similarity
+#   Role: Handles string similarity logic for analytics.core.session_state.
+#   Called from: Internal to analytics.core.session_state
+#   Invokes: difflib.SequenceMatcher
+#   Why: Keeps analytics.core.session_state from duplicating string similarity behavior across flows.
+# Function: _normalize_tool_name
+#   Role: Handles normalize tool name logic for analytics.core.session_state.
+#   Called from: Internal to analytics.core.session_state
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.core.session_state from duplicating normalize tool name behavior across flows.
+# --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
 import hashlib

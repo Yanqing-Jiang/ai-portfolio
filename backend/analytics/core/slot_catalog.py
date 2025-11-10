@@ -1,3 +1,50 @@
+# --- Analytics Function/Class Map ---
+# Class: SlotOption
+#   Role: Suggested values and presets for a particular slot.
+#   Called from: analytics.core.intent_impl.detection
+#   Collaborators: dataclasses.dataclass, dataclasses.field
+#   Why: Supports downstream analytics workflows that rely on SlotOption.
+# Class: IntentSlotDefinition
+#   Role: Slot requirements and advisory options for a specific intent.
+#   Called from: analytics.core.intent_impl.detection
+#   Collaborators: dataclasses.dataclass, dataclasses.field
+#   Why: Supports downstream analytics workflows that rely on IntentSlotDefinition.
+# Function: _normalize_slot_name
+#   Role: Collapse dotted slots such as timeframe.start_year -> timeframe.
+#   Called from: Internal to analytics.core.slot_catalog
+#   Invokes: Internal helpers only
+#   Why: Supports downstream analytics workflows that rely on _normalize_slot_name.
+# Function: _collect_company_suggestions
+#   Role: Handles collect company suggestions logic for analytics.core.slot_catalog.
+#   Called from: Internal to analytics.core.slot_catalog
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.core.slot_catalog from duplicating collect company suggestions behavior across flows.
+# Function: _collect_metric_suggestions
+#   Role: Handles collect metric suggestions logic for analytics.core.slot_catalog.
+#   Called from: Internal to analytics.core.slot_catalog
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.core.slot_catalog from duplicating collect metric suggestions behavior across flows.
+# Function: _collect_timeframe_presets
+#   Role: Handles collect timeframe presets logic for analytics.core.slot_catalog.
+#   Called from: Internal to analytics.core.slot_catalog
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.core.slot_catalog from duplicating collect timeframe presets behavior across flows.
+# Function: _build_global_slot_options
+#   Role: Handles build global slot options logic for analytics.core.slot_catalog.
+#   Called from: Internal to analytics.core.slot_catalog
+#   Invokes: analytics.core.slot_catalog.SlotOption, analytics.core.slot_catalog._collect_company_suggestions, analytics.core.slot_catalog._collect_metric_suggestions, analytics.core.slot_catalog._collect_timeframe_presets
+#   Why: Keeps analytics.core.slot_catalog from duplicating build global slot options behavior across flows.
+# Class: SlotCatalog
+#   Role: Materialised view of intent slots derived from YAML configs.
+#   Called from: Internal to analytics.core.slot_catalog
+#   Collaborators: analytics.core.slot_catalog._build_global_slot_options, analytics.core.slot_catalog.SlotOption, analytics.core.slot_catalog.IntentSlotDefinition, analytics.core.slot_catalog._normalize_slot_name
+#   Why: Supports downstream analytics workflows that rely on SlotCatalog.
+# Function: get_slot_catalog
+#   Role: Return a memoised SlotCatalog built from CONFIGS.
+#   Called from: analytics.core.clarify, analytics.core.intent_impl.detection, tests.analytics.test_intent_slot_resolution, tests.analytics.test_slot_catalog
+#   Invokes: analytics.core.slot_catalog.SlotCatalog
+#   Why: Passing refresh=True rebuilds the catalog – useful in tests that mutate the underlying configuration.
+# --- End Analytics Function/Class Map ---
 """
 Slot catalog utilities for unified intent clarification.
 

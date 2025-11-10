@@ -1,3 +1,50 @@
+# --- Analytics Function/Class Map ---
+# Class: ClarifierDecision
+#   Role: Handles ClarifierDecision logic for analytics.agents.schema_clarifier.
+#   Called from: analytics.flows.planner_executor, tests.analytics.test_pipeline_classification_intent
+#   Collaborators: dataclasses.field
+#   Why: Keeps analytics.agents.schema_clarifier from duplicating ClarifierDecision behavior across flows.
+# Class: ClarifierAgentResponse
+#   Role: Handles ClarifierAgentResponse logic for analytics.agents.schema_clarifier.
+#   Called from: tests.analytics.test_schema_clarifier_agent
+#   Collaborators: pydantic.Field
+#   Why: Keeps analytics.agents.schema_clarifier from duplicating ClarifierAgentResponse behavior across flows.
+# Function: decide_schema_clarification
+#   Role: Handles decide schema clarification logic for analytics.agents.schema_clarifier.
+#   Called from: analytics.flows.planner_executor, tests.analytics.test_schema_clarifier_agent
+#   Invokes: analytics.sql.template_requirements.get_required_slots, analytics.sql.template_requirements.requirements_satisfied, analytics.agents.schema_clarifier._run_agent, analytics.agents.schema_clarifier._map_slot_spec_to_request, +2 more
+#   Why: Keeps analytics.agents.schema_clarifier from duplicating decide schema clarification behavior across flows.
+# Function: _run_agent
+#   Role: Handles run agent logic for analytics.agents.schema_clarifier.
+#   Called from: Internal to analytics.agents.schema_clarifier
+#   Invokes: unified_responses_client.get_unified_client, asyncio.run, json.dumps, asyncio.new_event_loop
+#   Why: Keeps analytics.agents.schema_clarifier from duplicating run agent behavior across flows.
+# Function: _fallback_decision
+#   Role: Handles fallback decision logic for analytics.agents.schema_clarifier.
+#   Called from: Internal to analytics.agents.schema_clarifier
+#   Invokes: analytics.agents.schema_clarifier.ClarifierDecision, analytics.agents.schema_clarifier._map_slot_spec_to_request, analytics.agents.schema_clarifier._default_question, analytics.agents.schema_clarifier._default_reason, +1 more
+#   Why: Keeps analytics.agents.schema_clarifier from duplicating fallback decision behavior across flows.
+# Function: _default_question
+#   Role: Handles default question logic for analytics.agents.schema_clarifier.
+#   Called from: Internal to analytics.agents.schema_clarifier
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.agents.schema_clarifier from duplicating default question behavior across flows.
+# Function: _default_reason
+#   Role: Handles default reason logic for analytics.agents.schema_clarifier.
+#   Called from: Internal to analytics.agents.schema_clarifier
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.agents.schema_clarifier from duplicating default reason behavior across flows.
+# Function: _default_options
+#   Role: Handles default options logic for analytics.agents.schema_clarifier.
+#   Called from: Internal to analytics.agents.schema_clarifier
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.agents.schema_clarifier from duplicating default options behavior across flows.
+# Function: _map_slot_spec_to_request
+#   Role: Handles map slot spec to request logic for analytics.agents.schema_clarifier.
+#   Called from: Internal to analytics.agents.schema_clarifier
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.agents.schema_clarifier from duplicating map slot spec to request behavior across flows.
+# --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
 import json

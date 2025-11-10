@@ -1,3 +1,95 @@
+# --- Analytics Function/Class Map ---
+# Function: _serialize
+#   Role: Handles serialize logic for analytics.core.telemetry.
+#   Called from: Internal to analytics.core.telemetry
+#   Invokes: json.dumps
+#   Why: Keeps analytics.core.telemetry from duplicating serialize behavior across flows.
+# Function: _emit
+#   Role: Handles emit logic for analytics.core.telemetry.
+#   Called from: Internal to analytics.core.telemetry
+#   Invokes: analytics.core.telemetry._serialize
+#   Why: Keeps analytics.core.telemetry from duplicating emit behavior across flows.
+# Function: _base_payload
+#   Role: Handles base payload logic for analytics.core.telemetry.
+#   Called from: Internal to analytics.core.telemetry
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.core.telemetry from duplicating base payload behavior across flows.
+# Function: catalog_trace
+#   Role: Handles catalog trace logic for analytics.core.telemetry.
+#   Called from: analytics.core.events
+#   Invokes: analytics.core.telemetry._base_payload, analytics.core.telemetry._emit
+#   Why: Keeps analytics.core.telemetry from duplicating catalog trace behavior across flows.
+# Function: intent_resolution
+#   Role: Handles intent resolution logic for analytics.core.telemetry.
+#   Called from: analytics.flows.planner_executor
+#   Invokes: analytics.core.telemetry._base_payload, analytics.core.telemetry._emit
+#   Why: Keeps analytics.core.telemetry from duplicating intent resolution behavior across flows.
+# Function: tool_iteration
+#   Role: Handles tool iteration logic for analytics.core.telemetry.
+#   Called from: analytics.agent_orchestrator.agent_runtime, analytics.flows.multi_agent, analytics.flows.single_agent_tools
+#   Invokes: analytics.core.telemetry._base_payload, analytics.core.telemetry._emit
+#   Why: Keeps analytics.core.telemetry from duplicating tool iteration behavior across flows.
+# Function: tool_parallelism
+#   Role: Handles tool parallelism logic for analytics.core.telemetry.
+#   Called from: analytics.flows.planner.analysis_lane, analytics.flows.tooling
+#   Invokes: analytics.core.telemetry._base_payload, analytics.core.telemetry._emit
+#   Why: Keeps analytics.core.telemetry from duplicating tool parallelism behavior across flows.
+# Function: analysis_chunk
+#   Role: Handles analysis chunk logic for analytics.core.telemetry.
+#   Called from: analytics.flows.multi_agent, analytics.flows.planner_executor
+#   Invokes: analytics.core.telemetry._base_payload, analytics.core.telemetry._emit
+#   Why: Keeps analytics.core.telemetry from duplicating analysis chunk behavior across flows.
+# Function: agent_handoff
+#   Role: Handles agent handoff logic for analytics.core.telemetry.
+#   Called from: analytics.flows.multi_agent
+#   Invokes: analytics.core.telemetry._base_payload, analytics.core.telemetry._emit
+#   Why: Keeps analytics.core.telemetry from duplicating agent handoff behavior across flows.
+# Function: agent_tool_gap
+#   Role: Handles agent tool gap logic for analytics.core.telemetry.
+#   Called from: analytics.flows.instrumentation
+#   Invokes: analytics.core.telemetry._base_payload, analytics.core.telemetry._emit
+#   Why: Keeps analytics.core.telemetry from duplicating agent tool gap behavior across flows.
+# Function: retry_summary
+#   Role: Handles retry summary logic for analytics.core.telemetry.
+#   Called from: Internal to analytics.core.telemetry
+#   Invokes: analytics.core.telemetry._base_payload, analytics.core.telemetry._emit
+#   Why: Keeps analytics.core.telemetry from duplicating retry summary behavior across flows.
+# Function: policy_decision
+#   Role: Handles policy decision logic for analytics.core.telemetry.
+#   Called from: analytics.flows.multi_agent
+#   Invokes: analytics.core.telemetry._base_payload, analytics.core.telemetry._emit
+#   Why: Keeps analytics.core.telemetry from duplicating policy decision behavior across flows.
+# Function: backpressure_event
+#   Role: Handles backpressure event logic for analytics.core.telemetry.
+#   Called from: analytics.flows.multi_agent
+#   Invokes: analytics.core.telemetry._base_payload, analytics.core.telemetry._emit
+#   Why: Keeps analytics.core.telemetry from duplicating backpressure event behavior across flows.
+# Function: step_timing
+#   Role: Handles step timing logic for analytics.core.telemetry.
+#   Called from: analytics.core.events
+#   Invokes: analytics.core.telemetry._base_payload, analytics.core.telemetry._emit
+#   Why: Keeps analytics.core.telemetry from duplicating step timing behavior across flows.
+# Function: revision_plan
+#   Role: Handles revision plan logic for analytics.core.telemetry.
+#   Called from: analytics.flows.planner_executor, analytics.flows.single_agent_tools
+#   Invokes: analytics.core.telemetry._base_payload, analytics.core.telemetry._emit
+#   Why: Keeps analytics.core.telemetry from duplicating revision plan behavior across flows.
+# Function: agent_run
+#   Role: Handles agent run logic for analytics.core.telemetry.
+#   Called from: analytics.flows.multi_agent, analytics.flows.single_agent_tools
+#   Invokes: analytics.core.telemetry._base_payload, analytics.core.telemetry._emit
+#   Why: Keeps analytics.core.telemetry from duplicating agent run behavior across flows.
+# Function: responses_call
+#   Role: Handles responses call logic for analytics.core.telemetry.
+#   Called from: unified_responses_client
+#   Invokes: analytics.core.telemetry._base_payload, analytics.core.telemetry._emit
+#   Why: Keeps analytics.core.telemetry from duplicating responses call behavior across flows.
+# Function: gemini_call
+#   Role: Handles gemini call logic for analytics.core.telemetry.
+#   Called from: analytics.services.response_search
+#   Invokes: analytics.core.telemetry._base_payload, analytics.core.telemetry._emit
+#   Why: Keeps analytics.core.telemetry from duplicating gemini call behavior across flows.
+# --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
 import json
@@ -418,4 +510,3 @@ def gemini_call(
     if metadata:
         payload["metadata"] = metadata
     _emit(payload)
-

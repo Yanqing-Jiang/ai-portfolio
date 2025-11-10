@@ -1,3 +1,45 @@
+# --- Analytics Function/Class Map ---
+# Function: normalize_revision_targets
+#   Role: Handles normalize revision targets logic for analytics.flows.planner.revision.
+#   Called from: analytics.flows.planner, analytics.flows.planner_executor
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.flows.planner.revision from duplicating normalize revision targets behavior across flows.
+# Function: annotate_revision_event
+#   Role: Handles annotate revision event logic for analytics.flows.planner.revision.
+#   Called from: analytics.flows.multi_agent, analytics.flows.planner, analytics.flows.planner_executor, analytics.flows.single_agent_tools
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.flows.planner.revision from duplicating annotate revision event behavior across flows.
+# Function: build_revision_request_event
+#   Role: Handles build revision request event logic for analytics.flows.planner.revision.
+#   Called from: analytics.flows.multi_agent, analytics.flows.planner, analytics.flows.planner_executor, analytics.flows.single_agent_tools
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.flows.planner.revision from duplicating build revision request event behavior across flows.
+# Function: derive_revision_targets
+#   Role: Handles derive revision targets logic for analytics.flows.planner.revision.
+#   Called from: analytics.flows.multi_agent, analytics.flows.planner, analytics.flows.planner_executor, analytics.flows.single_agent_tools, +1 more
+#   Invokes: analytics.flows.planner.revision.normalize_revision_targets
+#   Why: Keeps analytics.flows.planner.revision from duplicating derive revision targets behavior across flows.
+# Function: mark_revision_completion
+#   Role: Handles mark revision completion logic for analytics.flows.planner.revision.
+#   Called from: analytics.flows.planner, analytics.flows.planner.analysis_lane, analytics.flows.planner.sql_lane
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.flows.planner.revision from duplicating mark revision completion behavior across flows.
+# Class: RevisionPlan
+#   Role: Handles RevisionPlan logic for analytics.flows.planner.revision.
+#   Called from: Internal to analytics.flows.planner.revision
+#   Collaborators: dataclasses.dataclass
+#   Why: Keeps analytics.flows.planner.revision from duplicating RevisionPlan behavior across flows.
+# Function: build_revision_plan
+#   Role: Handles build revision plan logic for analytics.flows.planner.revision.
+#   Called from: analytics.flows.multi_agent, analytics.flows.planner, analytics.flows.planner_executor, analytics.flows.single_agent_tools, +1 more
+#   Invokes: analytics.flows.planner.revision.normalize_revision_targets, analytics.flows.planner.revision.RevisionPlan, analytics.flows.planner.revision.derive_revision_targets
+#   Why: Keeps analytics.flows.planner.revision from duplicating build revision plan behavior across flows.
+# Function: apply_revision_plan
+#   Role: Handles apply revision plan logic for analytics.flows.planner.revision.
+#   Called from: analytics.flows.multi_agent, analytics.flows.planner, analytics.flows.planner_executor, analytics.flows.single_agent_tools, +1 more
+#   Invokes: uuid.uuid4
+#   Why: Keeps analytics.flows.planner.revision from duplicating apply revision plan behavior across flows.
+# --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
 from datetime import datetime

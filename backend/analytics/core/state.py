@@ -1,3 +1,125 @@
+# --- Analytics Function/Class Map ---
+# Class: PlannerResultModel
+#   Role: Aggregated outputs from PlannerExecutorFlow.
+#   Called from: analytics.flows.planner_executor
+#   Collaborators: pydantic.Field
+#   Why: Supports downstream analytics workflows that rely on PlannerResultModel.
+# Class: WorkflowState
+#   Role: Shared lightweight workflow state passed between analytics agents.
+#   Called from: analytics.flows.planner_executor
+#   Collaborators: Internal helpers only
+#   Why: Supports downstream analytics workflows that rely on WorkflowState.
+# Class: SQLResultModel
+#   Role: Handles SQLResultModel logic for analytics.core.state.
+#   Called from: analytics.flows.planner_executor
+#   Collaborators: pydantic.Field
+#   Why: Keeps analytics.core.state from duplicating SQLResultModel behavior across flows.
+# Class: ChartSpecModel
+#   Role: Handles ChartSpecModel logic for analytics.core.state.
+#   Called from: analytics.flows.planner_executor
+#   Collaborators: pydantic.Field
+#   Why: Keeps analytics.core.state from duplicating ChartSpecModel behavior across flows.
+# Class: QueryPlanModel
+#   Role: Handles QueryPlanModel logic for analytics.core.state.
+#   Called from: analytics.agents.schema_clarifier, analytics.core.clarify, analytics.core.margins, analytics.core.revision_snapshot, +16 more
+#   Collaborators: pydantic.Field
+#   Why: Keeps analytics.core.state from duplicating QueryPlanModel behavior across flows.
+# Class: SQLPlanModel
+#   Role: Handles SQLPlanModel logic for analytics.core.state.
+#   Called from: Internal to analytics.core.state
+#   Collaborators: pydantic.Field
+#   Why: Keeps analytics.core.state from duplicating SQLPlanModel behavior across flows.
+# Class: ChartSeriesModel
+#   Role: Handles ChartSeriesModel logic for analytics.core.state.
+#   Called from: Internal to analytics.core.state
+#   Collaborators: pydantic.ConfigDict
+#   Why: Keeps analytics.core.state from duplicating ChartSeriesModel behavior across flows.
+# Class: ChartAxisModel
+#   Role: Handles ChartAxisModel logic for analytics.core.state.
+#   Called from: Internal to analytics.core.state
+#   Collaborators: Internal helpers only
+#   Why: Keeps analytics.core.state from duplicating ChartAxisModel behavior across flows.
+# Class: ChartPlanModel
+#   Role: Handles ChartPlanModel logic for analytics.core.state.
+#   Called from: analytics.core.charting
+#   Collaborators: pydantic.Field, pydantic.ConfigDict
+#   Why: Keeps analytics.core.state from duplicating ChartPlanModel behavior across flows.
+# Class: ClarifyErrorModel
+#   Role: Handles ClarifyErrorModel logic for analytics.core.state.
+#   Called from: Internal to analytics.core.state
+#   Collaborators: pydantic.Field
+#   Why: Keeps analytics.core.state from duplicating ClarifyErrorModel behavior across flows.
+# Class: QuestionAnalysisModel
+#   Role: Handles QuestionAnalysisModel logic for analytics.core.state.
+#   Called from: Internal to analytics.core.state
+#   Collaborators: pydantic.Field
+#   Why: Keeps analytics.core.state from duplicating QuestionAnalysisModel behavior across flows.
+# Class: ClarificationArtifactModel
+#   Role: Handles ClarificationArtifactModel logic for analytics.core.state.
+#   Called from: Internal to analytics.core.state
+#   Collaborators: pydantic.Field
+#   Why: Keeps analytics.core.state from duplicating ClarificationArtifactModel behavior across flows.
+# Class: SupervisorToolInputs
+#   Role: Tool inputs - flexible schema for various tool parameters.
+#   Called from: Internal to analytics.core.state
+#   Collaborators: pydantic.ConfigDict
+#   Why: Supports downstream analytics workflows that rely on SupervisorToolInputs.
+# Class: SupervisorToolStep
+#   Role: A single step in a supervisor-managed execution plan.
+#   Called from: Internal to analytics.core.state
+#   Collaborators: pydantic.Field, pydantic.ConfigDict
+#   Why: Supports downstream analytics workflows that rely on SupervisorToolStep.
+# Class: SupervisorPlanSchema
+#   Role: Planning schema for Claude Code-style single agent supervision.
+#   Called from: Internal to analytics.core.state
+#   Collaborators: pydantic.Field, pydantic.ConfigDict
+#   Why: Supports downstream analytics workflows that rely on SupervisorPlanSchema.
+# Class: FinalSummarySchema
+#   Role: Final summary schema for workflow completion.
+#   Called from: Internal to analytics.core.state
+#   Collaborators: pydantic.Field, pydantic.ConfigDict
+#   Why: Supports downstream analytics workflows that rely on FinalSummarySchema.
+# Class: SupervisorToolExecution
+#   Role: Schema for tool execution events.
+#   Called from: Internal to analytics.core.state
+#   Collaborators: pydantic.Field, pydantic.ConfigDict
+#   Why: Supports downstream analytics workflows that rely on SupervisorToolExecution.
+# Class: SupervisorExecutionStep
+#   Role: Enhanced execution tracking for individual tool calls.
+#   Called from: Internal to analytics.core.state
+#   Collaborators: pydantic.Field, pydantic.ConfigDict
+#   Why: Supports downstream analytics workflows that rely on SupervisorExecutionStep.
+# Class: SupervisorWorkflowState
+#   Role: Enhanced internal state tracking for supervisor-driven workflows.
+#   Called from: Internal to analytics.core.state
+#   Collaborators: pydantic.Field, pydantic.ConfigDict
+#   Why: Supports downstream analytics workflows that rely on SupervisorWorkflowState.
+# Class: ClarificationOption
+#   Role: Individual option for clarification choices.
+#   Called from: Internal to analytics.core.state
+#   Collaborators: pydantic.Field, pydantic.ConfigDict
+#   Why: Supports downstream analytics workflows that rely on ClarificationOption.
+# Class: ClarificationField
+#   Role: Enhanced clarification field with modern UX features.
+#   Called from: Internal to analytics.core.state
+#   Collaborators: pydantic.Field, pydantic.ConfigDict
+#   Why: Supports downstream analytics workflows that rely on ClarificationField.
+# Class: ModernClarificationRequest
+#   Role: Modern clarification request with enhanced UX.
+#   Called from: Internal to analytics.core.state
+#   Collaborators: pydantic.Field, pydantic.ConfigDict
+#   Why: Supports downstream analytics workflows that rely on ModernClarificationRequest.
+# Class: ClarificationResponse
+#   Role: User response to clarification request.
+#   Called from: Internal to analytics.core.state
+#   Collaborators: pydantic.Field, pydantic.ConfigDict
+#   Why: Supports downstream analytics workflows that rely on ClarificationResponse.
+# Class: StructuredQueryArtifact
+#   Role: Structured query artifact used as single source of truth for SQL generation.
+#   Called from: Internal to analytics.core.state
+#   Collaborators: pydantic.Field, pydantic.ConfigDict
+#   Why: Supports downstream analytics workflows that rely on StructuredQueryArtifact.
+# --- End Analytics Function/Class Map ---
 from __future__ import annotations
 from typing import Any, Dict, List, Literal, Optional, TypedDict, Union
 from pydantic import BaseModel, Field, ValidationError, ConfigDict

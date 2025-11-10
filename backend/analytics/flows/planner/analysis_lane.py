@@ -1,3 +1,15 @@
+# --- Analytics Function/Class Map ---
+# Function: ensure_analysis_dependencies
+#   Role: Handles ensure analysis dependencies logic for analytics.flows.planner.analysis_lane.
+#   Called from: analytics.flows.multi_agent, analytics.flows.planner, analytics.flows.planner_executor, analytics.flows.single_agent_tools
+#   Invokes: analytics.core.telemetry.tool_parallelism, analytics.flows.tooling.run_tool_parallelism, analytics.flows.tooling.get_default_tool_adapters
+#   Why: Keeps analytics.flows.planner.analysis_lane from duplicating ensure analysis dependencies behavior across flows.
+# Function: stream_analysis_lane
+#   Role: Handles stream analysis lane logic for analytics.flows.planner.analysis_lane.
+#   Called from: analytics.flows.multi_agent, analytics.flows.planner, analytics.flows.planner_executor, analytics.flows.single_agent_tools
+#   Invokes: analytics.flows.planner.revision.mark_revision_completion
+#   Why: Keeps analytics.flows.planner.analysis_lane from duplicating stream analysis lane behavior across flows.
+# --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
 from datetime import datetime

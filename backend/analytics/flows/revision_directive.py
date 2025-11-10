@@ -1,3 +1,15 @@
+# --- Analytics Function/Class Map ---
+# Function: _normalize_targets
+#   Role: Handles normalize targets logic for analytics.flows.revision_directive.
+#   Called from: Internal to analytics.flows.revision_directive
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.flows.revision_directive from duplicating normalize targets behavior across flows.
+# Class: RevisionDirective
+#   Role: Lightweight container for agentic revision metadata.
+#   Called from: analytics.core.session_state, analytics.flows.multi_agent, analytics.flows.planner_executor, analytics.flows.single_agent_tools, +3 more
+#   Collaborators: dataclasses.field, analytics.flows.revision_directive._normalize_targets
+#   Why: Supports downstream analytics workflows that rely on RevisionDirective.
+# --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -105,4 +117,3 @@ class RevisionDirective:
         if self.search_topics:
             event["data"]["search_topics"] = [item.get("query") for item in self.search_topics if item.get("query")]
         return event
-

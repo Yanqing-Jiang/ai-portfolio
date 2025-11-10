@@ -1,3 +1,20 @@
+# --- Analytics Function/Class Map ---
+# Class: CacheService
+#   Role: Redis backed cache service with resilient in-memory fallback.
+#   Called from: Internal to analytics.core.cache
+#   Collaborators: time.time, json.dumps, redis.asyncio.from_url, contextlib.suppress, +2 more
+#   Why: Supports downstream analytics workflows that rely on CacheService.
+# Function: get_cache_service
+#   Role: Handles get cache service logic for analytics.core.cache.
+#   Called from: analytics.core.config_store, analytics.flows.multi_agent, analytics.flows.single_agent_tools
+#   Invokes: analytics.core.cache.CacheService
+#   Why: Keeps analytics.core.cache from duplicating get cache service behavior across flows.
+# Function: close_cache_service
+#   Role: Handles close cache service logic for analytics.core.cache.
+#   Called from: Internal to analytics.core.cache
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.core.cache from duplicating close cache service behavior across flows.
+# --- End Analytics Function/Class Map ---
 """Centralized cache utilities for analytics flows and supervisors."""
 
 from __future__ import annotations

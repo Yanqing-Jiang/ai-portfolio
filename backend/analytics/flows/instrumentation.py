@@ -1,3 +1,65 @@
+# --- Analytics Function/Class Map ---
+# Function: _resolve_lane_for_tool
+#   Role: Handles resolve lane for tool logic for analytics.flows.instrumentation.
+#   Called from: Internal to analytics.flows.instrumentation
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.flows.instrumentation from duplicating resolve lane for tool behavior across flows.
+# Function: _update_agent_tool_metrics
+#   Role: Handles update agent tool metrics logic for analytics.flows.instrumentation.
+#   Called from: Internal to analytics.flows.instrumentation
+#   Invokes: analytics.core.telemetry.agent_tool_gap
+#   Why: Keeps analytics.flows.instrumentation from duplicating update agent tool metrics behavior across flows.
+# Function: _resolve_flow_mode
+#   Role: Handles resolve flow mode logic for analytics.flows.instrumentation.
+#   Called from: Internal to analytics.flows.instrumentation
+#   Invokes: analytics.flows.schedulers.FlowMode
+#   Why: Keeps analytics.flows.instrumentation from duplicating resolve flow mode behavior across flows.
+# Function: _resolve_parallel_group
+#   Role: Handles resolve parallel group logic for analytics.flows.instrumentation.
+#   Called from: Internal to analytics.flows.instrumentation
+#   Invokes: analytics.flows.schedulers.resolve_stage
+#   Why: Keeps analytics.flows.instrumentation from duplicating resolve parallel group behavior across flows.
+# Function: _resolve_tool_group
+#   Role: Handles resolve tool group logic for analytics.flows.instrumentation.
+#   Called from: Internal to analytics.flows.instrumentation
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.flows.instrumentation from duplicating resolve tool group behavior across flows.
+# Function: _extract_latest_artifacts
+#   Role: Handles extract latest artifacts logic for analytics.flows.instrumentation.
+#   Called from: Internal to analytics.flows.instrumentation
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.flows.instrumentation from duplicating extract latest artifacts behavior across flows.
+# Function: _attach_agent_metadata
+#   Role: Handles attach agent metadata logic for analytics.flows.instrumentation.
+#   Called from: Internal to analytics.flows.instrumentation
+#   Invokes: analytics.validators.sanitize_for_json
+#   Why: Keeps analytics.flows.instrumentation from duplicating attach agent metadata behavior across flows.
+# Function: _enrich_event
+#   Role: Handles enrich event logic for analytics.flows.instrumentation.
+#   Called from: Internal to analytics.flows.instrumentation
+#   Invokes: analytics.validators.sanitize_for_json
+#   Why: Keeps analytics.flows.instrumentation from duplicating enrich event behavior across flows.
+# Function: _ensure_session_id
+#   Role: Handles ensure session id logic for analytics.flows.instrumentation.
+#   Called from: Internal to analytics.flows.instrumentation
+#   Invokes: uuid.uuid4
+#   Why: Keeps analytics.flows.instrumentation from duplicating ensure session id behavior across flows.
+# Function: _maybe_update_session_state
+#   Role: Handles maybe update session state logic for analytics.flows.instrumentation.
+#   Called from: tests.analytics.test_single_agent_stream_events
+#   Invokes: json.dumps, analytics.flows.instrumentation._resolve_lane_for_tool, analytics.flows.instrumentation._update_agent_tool_metrics
+#   Why: Keeps analytics.flows.instrumentation from duplicating maybe update session state behavior across flows.
+# Function: emit_revision_lane
+#   Role: Wrap a revision lane generator with start/complete telemetry events.
+#   Called from: analytics.flows.workflow
+#   Invokes: analytics.core.events.TimedEventEmitter
+#   Why: Supports downstream analytics workflows that rely on emit_revision_lane.
+# Function: instrument_events
+#   Role: Handles instrument events logic for analytics.flows.instrumentation.
+#   Called from: analytics.flows.workflow, tests.analytics.test_instrumentation_schedule
+#   Invokes: analytics.core.session_state.get_session_state_repository, analytics.flows.instrumentation._ensure_session_id, analytics.flows.instrumentation._resolve_flow_mode, analytics.flows.schedulers.get_stage_index, +2 more
+#   Why: Keeps analytics.flows.instrumentation from duplicating instrument events behavior across flows.
+# --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
 import json
@@ -525,9 +587,6 @@ async def instrument_events(
             snapshot.record_artifacts(payload)
 
     await repository.save(snapshot)
-
-
-
 
 
 

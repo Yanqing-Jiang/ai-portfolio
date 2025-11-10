@@ -1,3 +1,30 @@
+# --- Analytics Function/Class Map ---
+# Class: CohesiveResultValidationError
+#   Role: Raised when a cohesive_result payload is incomplete.
+#   Called from: analytics.flows.multi_agent, analytics.validators, tests.analytics.test_cohesive_result_validator
+#   Collaborators: Internal helpers only
+#   Why: Supports downstream analytics workflows that rely on CohesiveResultValidationError.
+# Function: _encode_slice
+#   Role: Handles encode slice logic for analytics.validators.cohesive_result.
+#   Called from: Internal to analytics.validators.cohesive_result
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.validators.cohesive_result from duplicating encode slice behavior across flows.
+# Function: sanitize_for_json
+#   Role: Convert arbitrary objects into JSON-safe structures.
+#   Called from: analytics.agent_orchestrator.agent_runtime, analytics.agent_orchestrator.event_bus, analytics.core.events, analytics.core.revision_snapshot, +13 more
+#   Invokes: analytics.validators.cohesive_result._encode_slice, json.dumps, analytics.validators.cohesive_result.sanitize_for_json
+#   Why: Supports downstream analytics workflows that rely on sanitize_for_json.
+# Function: _value_missing
+#   Role: Handles value missing logic for analytics.validators.cohesive_result.
+#   Called from: Internal to analytics.validators.cohesive_result
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.validators.cohesive_result from duplicating value missing behavior across flows.
+# Class: CohesiveResultValidator
+#   Role: Handles CohesiveResultValidator logic for analytics.validators.cohesive_result.
+#   Called from: analytics.flows.multi_agent, analytics.validators, tests.analytics.test_cohesive_result_validator
+#   Collaborators: analytics.validators.cohesive_result.sanitize_for_json, analytics.validators.cohesive_result.CohesiveResultValidationError, analytics.validators.cohesive_result._value_missing
+#   Why: Keeps analytics.validators.cohesive_result from duplicating CohesiveResultValidator behavior across flows.
+# --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
 import json

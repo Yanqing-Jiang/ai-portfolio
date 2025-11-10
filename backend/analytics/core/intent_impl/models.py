@@ -1,3 +1,105 @@
+# --- Analytics Function/Class Map ---
+# Class: TimeframeModel
+#   Role: Normalized timeframe information shared across analytics flows.
+#   Called from: analytics.core.intent, analytics.core.intent_impl, analytics.core.revision_snapshot, analytics.core.state, +5 more
+#   Collaborators: pydantic.ConfigDict, pydantic.Field
+#   Why: Supports downstream analytics workflows that rely on TimeframeModel.
+# Class: SlotsModel
+#   Role: Detected slots for analytics intents.
+#   Called from: analytics.core.intent, analytics.core.intent_impl, analytics.core.state
+#   Collaborators: pydantic.ConfigDict
+#   Why: Supports downstream analytics workflows that rely on SlotsModel.
+# Class: ClarificationSuggestionModel
+#   Role: Advisory clarification suggested by the LLM.
+#   Called from: analytics.core.intent, analytics.core.intent_impl, analytics.core.intent_impl.detection, analytics.core.state
+#   Collaborators: pydantic.ConfigDict, pydantic.Field
+#   Why: Supports downstream analytics workflows that rely on ClarificationSuggestionModel.
+# Class: PossibleIntentModel
+#   Role: Alternative intent interpretation with confidence.
+#   Called from: analytics.core.intent, analytics.core.intent_impl, analytics.core.state
+#   Collaborators: pydantic.ConfigDict, pydantic.Field
+#   Why: Supports downstream analytics workflows that rely on PossibleIntentModel.
+# Class: IntentModel
+#   Role: Runtime intent payload shared between supervisor and memory flows.
+#   Called from: analytics.agents.schema_clarifier, analytics.core.clarify, analytics.core.intent, analytics.core.intent_impl, +23 more
+#   Collaborators: pydantic.ConfigDict, pydantic.Field
+#   Why: Supports downstream analytics workflows that rely on IntentModel.
+# Class: IntentSelectionModel
+#   Role: Compact intent selection payload for the unified resolver.
+#   Called from: analytics.core.intent_impl.detection, tests.analytics.test_intent_resolution_telemetry, tests.analytics.test_intent_slot_resolution, tests.analytics.test_unified_responses_client
+#   Collaborators: pydantic.ConfigDict, pydantic.Field
+#   Why: Supports downstream analytics workflows that rely on IntentSelectionModel.
+# Class: SlotStatusModel
+#   Role: Status metadata for an individual slot.
+#   Called from: analytics.agents.schema_clarifier, analytics.core.intent_impl.detection, analytics.flows.planner.intent_templates, analytics.flows.planner_executor, +6 more
+#   Collaborators: pydantic.ConfigDict, pydantic.Field
+#   Why: Supports downstream analytics workflows that rely on SlotStatusModel.
+# Class: FollowUpModel
+#   Role: Clarification prompt emitted by the resolver.
+#   Called from: analytics.core.intent_impl.detection, analytics.flows.planner.intent_templates, analytics.flows.planner_executor, tests.analytics.test_clarification_template_descriptor, +1 more
+#   Collaborators: pydantic.ConfigDict, pydantic.Field
+#   Why: Supports downstream analytics workflows that rely on FollowUpModel.
+# Class: IntentResolutionModel
+#   Role: Unified runtime payload describing the resolved intent and slots.
+#   Called from: analytics.core.intent_impl.detection, analytics.flows.planner_executor, tests.analytics.test_intent_resolution_telemetry
+#   Collaborators: pydantic.ConfigDict, pydantic.Field
+#   Why: Supports downstream analytics workflows that rely on IntentResolutionModel.
+# Class: SqlCriteriaModel
+#   Role: Final structured criteria needed to compile & run SQL deterministically.
+#   Called from: analytics.core.intent, analytics.core.intent_impl
+#   Collaborators: pydantic.ConfigDict, pydantic.Field
+#   Why: Supports downstream analytics workflows that rely on SqlCriteriaModel.
+# Class: LLMClarificationSuggestionModel
+#   Role: Strict clarification suggestion schema for Responses API outputs.
+#   Called from: analytics.core.intent, analytics.core.intent_impl, analytics.core.state
+#   Collaborators: pydantic.ConfigDict, pydantic.Field
+#   Why: Supports downstream analytics workflows that rely on LLMClarificationSuggestionModel.
+# Class: LLMIntentModel
+#   Role: Structured model used when parsing Responses API intent calls.
+#   Called from: analytics.core.intent, analytics.core.intent_impl, analytics.core.intent_impl.detection, analytics.core.state
+#   Collaborators: pydantic.ConfigDict, pydantic.Field
+#   Why: Supports downstream analytics workflows that rely on LLMIntentModel.
+# Class: TimeframeSlotValue
+#   Role: Structured timeframe payload returned by the slot resolver.
+#   Called from: tests.analytics.test_intent_slot_resolution
+#   Collaborators: pydantic.Field
+#   Why: Supports downstream analytics workflows that rely on TimeframeSlotValue.
+# Class: LLMSlotStatusModel
+#   Role: Strict slot status schema for the unified resolver Responses output.
+#   Called from: tests.analytics.test_intent_slot_resolution
+#   Collaborators: pydantic.ConfigDict, pydantic.Field
+#   Why: Supports downstream analytics workflows that rely on LLMSlotStatusModel.
+# Class: LLMFollowUpModel
+#   Role: Strict follow-up schema for the unified resolver Responses output.
+#   Called from: tests.analytics.test_intent_slot_resolution
+#   Collaborators: pydantic.ConfigDict, pydantic.Field
+#   Why: Supports downstream analytics workflows that rely on LLMFollowUpModel.
+# Class: LLMIntentResolutionModel
+#   Role: Structured model returned by the unified slot resolver prompt.
+#   Called from: analytics.core.intent_impl.detection, tests.analytics.test_intent_slot_resolution, tests.analytics.test_unified_responses_client
+#   Collaborators: pydantic.ConfigDict, pydantic.Field
+#   Why: Supports downstream analytics workflows that rely on LLMIntentResolutionModel.
+# Class: ClarifyRequestModel
+#   Role: Clarification request surfaced to the frontend.
+#   Called from: analytics.core.clarify, analytics.core.intent, analytics.core.intent_impl, analytics.core.intent_impl.detection, +4 more
+#   Collaborators: pydantic.Field
+#   Why: Supports downstream analytics workflows that rely on ClarifyRequestModel.
+# Class: ClarifyAnswerModel
+#   Role: Clarification answer payload returned from the UI.
+#   Called from: analytics.core.clarify, analytics.core.intent, analytics.core.intent_impl, analytics.core.state, +4 more
+#   Collaborators: pydantic.Field
+#   Why: Supports downstream analytics workflows that rely on ClarifyAnswerModel.
+# Class: OffTopicClassifierSchema
+#   Role: Structured output for financial topic classification.
+#   Called from: analytics.core.intent, analytics.core.intent_impl, analytics.core.intent_impl.detection, analytics.core.state, +3 more
+#   Collaborators: pydantic.ConfigDict, pydantic.Field
+#   Why: Supports downstream analytics workflows that rely on OffTopicClassifierSchema.
+# Function: intent_to_sql_criteria
+#   Role: Convert an IntentModel into normalized SQL criteria.
+#   Called from: analytics.core.intent, analytics.core.intent_impl, analytics.flows.planner_executor, tests.analytics.test_intent_ranking
+#   Invokes: analytics.core.intent_impl.normalization.normalize_granularity, analytics.core.intent_impl.normalization.timeframe_implies_quarterly, analytics.core.intent_impl.models.SqlCriteriaModel, analytics.core.intent_impl.normalization.normalize_timeframe, +2 more
+#   Why: Ensures downstream SQL compilation receives deterministic slots.
+# --- End Analytics Function/Class Map ---
 from __future__ import annotations
 from typing import Any, Dict, List, Literal, Optional, Union
 from pydantic import BaseModel, Field, ConfigDict
@@ -374,4 +476,3 @@ def intent_to_sql_criteria(intent: IntentModel, configs: Dict[str, Any]) -> SqlC
         metrics=metrics,
         statistic=statistic,
     )
-

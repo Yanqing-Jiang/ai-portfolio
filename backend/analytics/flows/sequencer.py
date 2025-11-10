@@ -1,3 +1,30 @@
+# --- Analytics Function/Class Map ---
+# Class: LaneState
+#   Role: Handles LaneState logic for analytics.flows.sequencer.
+#   Called from: Internal to analytics.flows.sequencer
+#   Collaborators: Internal helpers only
+#   Why: Keeps analytics.flows.sequencer from duplicating LaneState behavior across flows.
+# Class: SequencerConfig
+#   Role: Handles SequencerConfig logic for analytics.flows.sequencer.
+#   Called from: Internal to analytics.flows.sequencer
+#   Collaborators: Internal helpers only
+#   Why: Keeps analytics.flows.sequencer from duplicating SequencerConfig behavior across flows.
+# Class: PlannerEventBus
+#   Role: Fan out sequencer lifecycle events to registered subscribers.
+#   Called from: analytics.flows.multi_agent, analytics.flows.workflow
+#   Collaborators: Internal helpers only
+#   Why: Supports downstream analytics workflows that rely on PlannerEventBus.
+# Class: PlannerSequencer
+#   Role: Enforces the canonical planner lane ordering while delegating execution to a FlowOrchestrator implementation.
+#   Called from: analytics.flows.multi_agent, analytics.flows.single_agent_tools, analytics.flows.workflow, tests.analytics.test_multi_agent_flow, +3 more
+#   Collaborators: analytics.flows.sequencer.PlannerEventBus, asyncio.Queue, analytics.flows.sequencer._iter_async_generator, analytics.flows.sequencer.LaneState, +2 more
+#   Why: Stages: 1.
+# Function: _iter_async_generator
+#   Role: Handles iter async generator logic for analytics.flows.sequencer.
+#   Called from: Internal to analytics.flows.sequencer
+#   Invokes: inspect.isawaitable, analytics.flows.sequencer._iter_async_generator
+#   Why: Keeps analytics.flows.sequencer from duplicating iter async generator behavior across flows.
+# --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
 import asyncio

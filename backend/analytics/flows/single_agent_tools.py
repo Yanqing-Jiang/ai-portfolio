@@ -1,3 +1,35 @@
+# --- Analytics Function/Class Map ---
+# Function: _build_tool_metadata
+#   Role: Handles build tool metadata logic for analytics.flows.single_agent_tools.
+#   Called from: Internal to analytics.flows.single_agent_tools
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.flows.single_agent_tools from duplicating build tool metadata behavior across flows.
+# Class: _SingleAgentRunContext
+#   Role: Handles SingleAgentRunContext logic for analytics.flows.single_agent_tools.
+#   Called from: tests.analytics.test_single_agent_controller_agents
+#   Collaborators: dataclasses.field
+#   Why: Keeps analytics.flows.single_agent_tools from duplicating SingleAgentRunContext behavior across flows.
+# Class: _SequencerRunState
+#   Role: Handles SequencerRunState logic for analytics.flows.single_agent_tools.
+#   Called from: tests.analytics.test_single_agent_flow
+#   Collaborators: Internal helpers only
+#   Why: Keeps analytics.flows.single_agent_tools from duplicating SequencerRunState behavior across flows.
+# Function: _build_single_agent_cohesive_payload
+#   Role: Handles build single agent cohesive payload logic for analytics.flows.single_agent_tools.
+#   Called from: tests.analytics.test_single_agent_cohesive_payload, tests.analytics.test_single_agent_flow
+#   Invokes: analytics.validators.sanitize_for_json, copy.deepcopy, analytics.flows.planner_executor._build_analysis_source_summaries
+#   Why: Keeps analytics.flows.single_agent_tools from duplicating build single agent cohesive payload behavior across flows.
+# Class: _SingleAgentToolHooks
+#   Role: Handles SingleAgentToolHooks logic for analytics.flows.single_agent_tools.
+#   Called from: tests.analytics.test_single_agent_final_answer, tests.analytics.test_single_agent_stream_events
+#   Collaborators: analytics.flows.schedulers.apply_mode_metadata, analytics.core.telemetry.tool_iteration, analytics.flows.single_agent_tools._build_single_agent_cohesive_payload, analytics.validators.sanitize_for_json, +2 more
+#   Why: Keeps analytics.flows.single_agent_tools from duplicating SingleAgentToolHooks behavior across flows.
+# Class: SingleAgentController
+#   Role: Augments the planner-executor flow with explicit tool-call telemetry.
+#   Called from: analytics.flows.workflow, tests.analytics.test_chart_revision, tests.analytics.test_session_state_receipts, tests.analytics.test_single_agent_controller_agents, +5 more
+#   Collaborators: analytics.flows.planner_executor.PlannerExecutorFlow, analytics.core.config_store.get_config_store, analytics.agent_orchestrator.AgentRuntimeConfig, analytics.flows.pipeline_tools.get_planner_tool_registry, +2 more
+#   Why: Supports downstream analytics workflows that rely on SingleAgentController.
+# --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
 import asyncio
@@ -3878,6 +3910,3 @@ class SingleAgentController:
 
     def latest_artifacts(self):
         return self._planner.latest_artifacts()
-
-
-

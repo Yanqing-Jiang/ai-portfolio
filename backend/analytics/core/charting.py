@@ -1,3 +1,55 @@
+# --- Analytics Function/Class Map ---
+# Function: _compose_series_column
+#   Role: Handles compose series column logic for analytics.core.charting.
+#   Called from: Internal to analytics.core.charting
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.core.charting from duplicating compose series column behavior across flows.
+# Function: _derive_metric_label
+#   Role: Handles derive metric label logic for analytics.core.charting.
+#   Called from: Internal to analytics.core.charting
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.core.charting from duplicating derive metric label behavior across flows.
+# Function: _sort_axis_values
+#   Role: Return axis labels sorted ascending using date/quarter heuristics.
+#   Called from: Internal to analytics.core.charting
+#   Invokes: Internal helpers only
+#   Why: Supports downstream analytics workflows that rely on _sort_axis_values.
+# Function: _coerce_float
+#   Role: Handles coerce float logic for analytics.core.charting.
+#   Called from: Internal to analytics.core.charting
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.core.charting from duplicating coerce float behavior across flows.
+# Function: _build_candlestick_spec
+#   Role: Handles build candlestick spec logic for analytics.core.charting.
+#   Called from: Internal to analytics.core.charting
+#   Invokes: analytics.core.charting._sort_axis_values, analytics.core.charting._coerce_float
+#   Why: Keeps analytics.core.charting from duplicating build candlestick spec behavior across flows.
+# Function: _attach_comparison_meta
+#   Role: Attach comparison metadata to the chart spec and design.
+#   Called from: Internal to analytics.core.charting
+#   Invokes: Internal helpers only
+#   Why: Supports downstream analytics workflows that rely on _attach_comparison_meta.
+# Function: _format_scope_banner
+#   Role: Handles format scope banner logic for analytics.core.charting.
+#   Called from: Internal to analytics.core.charting
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.core.charting from duplicating format scope banner behavior across flows.
+# Function: _build_ranking_bar_spec
+#   Role: Handles build ranking bar spec logic for analytics.core.charting.
+#   Called from: Internal to analytics.core.charting
+#   Invokes: analytics.core.charting._format_scope_banner
+#   Why: Keeps analytics.core.charting from duplicating build ranking bar spec behavior across flows.
+# Function: plan_chart_rule_based
+#   Role: Wrapper around the shared chart planning logic that returns ChartPlanModel.
+#   Called from: analytics.flows.planner_executor, analytics.tools.registry, tests.analytics.test_chart_candlestick, tests.analytics.test_chart_comparison, +2 more
+#   Invokes: analytics.core.charting_impl.plan_chart_rule_based, analytics.core.types.ChartPlanModel
+#   Why: Supports downstream analytics workflows that rely on plan_chart_rule_based.
+# Function: build_chart_spec
+#   Role: Enhanced chart spec builder with dual axes and primary series detection.
+#   Called from: analytics.flows.planner_executor, analytics.tools.registry, tests.analytics.test_chart_candlestick, tests.analytics.test_chart_comparison, +2 more
+#   Invokes: analytics.core.charting._sort_axis_values, analytics.core.charting_impl.detect_primary_series, analytics.core.charting_impl.assign_series_axes, analytics.core.charting._attach_comparison_meta, +2 more
+#   Why: Supports downstream analytics workflows that rely on build_chart_spec.
+# --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
 import re
@@ -872,5 +924,3 @@ def build_chart_spec(
         }
     }
     return _attach_comparison_meta(spec, comparison)
-
-

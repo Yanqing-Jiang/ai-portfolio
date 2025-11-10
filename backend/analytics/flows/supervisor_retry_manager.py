@@ -1,3 +1,10 @@
+# --- Analytics Function/Class Map ---
+# Class: SupervisorRetryManager
+#   Role: Applies delegation policy guardrails to supervisor retries and records audit payloads for downstream telemetry / SSE consumers.
+#   Called from: analytics.flows.multi_agent
+#   Collaborators: collections.defaultdict, analytics.policies.delegation_policy.DelegationDecision, datetime.timedelta
+#   Why: Supports downstream analytics workflows that rely on SupervisorRetryManager.
+# --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
 from collections import defaultdict, deque

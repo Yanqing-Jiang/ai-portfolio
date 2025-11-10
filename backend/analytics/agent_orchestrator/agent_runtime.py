@@ -1,3 +1,20 @@
+# --- Analytics Function/Class Map ---
+# Class: AgentRuntimeConfig
+#   Role: Runtime knobs shared across orchestrated agent runs.
+#   Called from: analytics.agent_orchestrator, analytics.flows.single_agent_tools, tests.analytics.test_agent_orchestrator
+#   Collaborators: dataclasses.field
+#   Why: Supports downstream analytics workflows that rely on AgentRuntimeConfig.
+# Class: AgentRuntimeResult
+#   Role: Structured response emitted after an orchestrated agent run completes.
+#   Called from: analytics.agent_orchestrator, analytics.flows.single_agent_tools
+#   Collaborators: Internal helpers only
+#   Why: Supports downstream analytics workflows that rely on AgentRuntimeResult.
+# Class: AgentRuntime
+#   Role: Drives the plan -> act -> observe loop for single-agent analytics runs.
+#   Called from: analytics.agent_orchestrator, analytics.flows.single_agent_tools, tests.analytics.test_agent_orchestrator
+#   Collaborators: analytics.agent_orchestrator.event_bus.AgentEventBus, time.time, analytics.core.telemetry.tool_iteration, analytics.agent_orchestrator.agent_runtime.AgentRuntimeResult, +2 more
+#   Why: Supports downstream analytics workflows that rely on AgentRuntime.
+# --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
 import asyncio

@@ -1,3 +1,30 @@
+# --- Analytics Function/Class Map ---
+# Function: _render_metrics_summary
+#   Role: Handles render metrics summary logic for analytics.sql.prompt_builder.
+#   Called from: Internal to analytics.sql.prompt_builder
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.sql.prompt_builder from duplicating render metrics summary behavior across flows.
+# Function: _render_constraints
+#   Role: Handles render constraints logic for analytics.sql.prompt_builder.
+#   Called from: tests.analytics.test_planner_executor_sql
+#   Invokes: textwrap.dedent
+#   Why: Keeps analytics.sql.prompt_builder from duplicating render constraints behavior across flows.
+# Function: build_sql_messages
+#   Role: Construct system/user messages guiding an LLM to draft SQL.
+#   Called from: analytics.flows.planner_executor
+#   Invokes: analytics.sql.prompt_builder._render_metrics_summary, analytics.sql.prompt_builder._render_constraints, analytics.core.config_store.get_config_store, analytics.sql.templates.summarize_template, +2 more
+#   Why: Supports downstream analytics workflows that rely on build_sql_messages.
+# Function: build_sql_retry_messages
+#   Role: Construct retry-oriented messages for the SQL query agent.
+#   Called from: analytics.flows.planner_executor
+#   Invokes: analytics.sql.prompt_builder._render_metrics_summary, analytics.sql.prompt_builder._render_constraints, analytics.core.config_store.get_config_store, analytics.sql.templates.summarize_template, +2 more
+#   Why: Supports downstream analytics workflows that rely on build_sql_retry_messages.
+# Function: extract_sql_from_response
+#   Role: Extract SQL from an LLM response that may include formatting.
+#   Called from: analytics.flows.planner_executor
+#   Invokes: Internal helpers only
+#   Why: Supports downstream analytics workflows that rely on extract_sql_from_response.
+# --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
 from textwrap import dedent

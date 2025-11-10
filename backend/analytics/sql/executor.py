@@ -1,3 +1,20 @@
+# --- Analytics Function/Class Map ---
+# Function: _ensure_env_loaded
+#   Role: Handles ensure env loaded logic for analytics.sql.executor.
+#   Called from: Internal to analytics.sql.executor
+#   Invokes: os.getenv, dotenv.load_dotenv, pathlib.Path
+#   Why: Keeps analytics.sql.executor from duplicating ensure env loaded behavior across flows.
+# Function: _coerce_round_numeric
+#   Role: Ensure ROUND() receives a NUMERIC argument for PostgreSQL compatibility.
+#   Called from: Internal to analytics.sql.executor
+#   Invokes: Internal helpers only
+#   Why: Supports downstream analytics workflows that rely on _coerce_round_numeric.
+# Function: execute_sql
+#   Role: Handles execute sql logic for analytics.sql.executor.
+#   Called from: analytics.flows.planner_executor, analytics.tools.registry
+#   Invokes: analytics.sql.executor._coerce_round_numeric, os.getenv, asyncpg.connect
+#   Why: Keeps analytics.sql.executor from duplicating execute sql behavior across flows.
+# --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
 import asyncio

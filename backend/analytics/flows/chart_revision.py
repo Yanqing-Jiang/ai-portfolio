@@ -1,4 +1,96 @@
-﻿from __future__ import annotations
+# --- Analytics Function/Class Map ---
+# Class: RevisionContextError
+#   Role: Base error for revision workflow failures.
+#   Called from: Internal to analytics.flows.chart_revision
+#   Collaborators: Internal helpers only
+#   Why: Supports downstream analytics workflows that rely on RevisionContextError.
+# Class: MissingRevisionSnapshot
+#   Role: Handles MissingRevisionSnapshot logic for analytics.flows.chart_revision.
+#   Called from: analytics.flows.workflow
+#   Collaborators: Internal helpers only
+#   Why: Keeps analytics.flows.chart_revision from duplicating MissingRevisionSnapshot behavior across flows.
+# Class: MissingChartSpec
+#   Role: Handles MissingChartSpec logic for analytics.flows.chart_revision.
+#   Called from: Internal to analytics.flows.chart_revision
+#   Collaborators: Internal helpers only
+#   Why: Keeps analytics.flows.chart_revision from duplicating MissingChartSpec behavior across flows.
+# Class: MissingAnalysis
+#   Role: Handles MissingAnalysis logic for analytics.flows.chart_revision.
+#   Called from: analytics.flows.workflow
+#   Collaborators: Internal helpers only
+#   Why: Keeps analytics.flows.chart_revision from duplicating MissingAnalysis behavior across flows.
+# Class: RevisionContext
+#   Role: Handles RevisionContext logic for analytics.flows.chart_revision.
+#   Called from: analytics.flows.workflow
+#   Collaborators: dataclasses.field, copy.deepcopy, analytics.core.session_state.get_session_state_repository, analytics.flows.chart_revision.MissingRevisionSnapshot, +2 more
+#   Why: Keeps analytics.flows.chart_revision from duplicating RevisionContext behavior across flows.
+# Function: _normalize_chart_patch
+#   Role: Ensure downstream consumers receive a consistent chart patch payload.
+#   Called from: Internal to analytics.flows.chart_revision
+#   Invokes: Internal helpers only
+#   Why: Supports downstream analytics workflows that rely on _normalize_chart_patch.
+# Function: _ensure_legend
+#   Role: Handles ensure legend logic for analytics.flows.chart_revision.
+#   Called from: Internal to analytics.flows.chart_revision
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.flows.chart_revision from duplicating ensure legend behavior across flows.
+# Function: _axis_as_list
+#   Role: Handles axis as list logic for analytics.flows.chart_revision.
+#   Called from: Internal to analytics.flows.chart_revision
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.flows.chart_revision from duplicating axis as list behavior across flows.
+# Function: _apply_chart_patch_to_spec
+#   Role: Handles apply chart patch to spec logic for analytics.flows.chart_revision.
+#   Called from: Internal to analytics.flows.chart_revision
+#   Invokes: copy.deepcopy, analytics.flows.chart_revision._ensure_legend, analytics.flows.chart_revision._axis_as_list
+#   Why: Keeps analytics.flows.chart_revision from duplicating apply chart patch to spec behavior across flows.
+# Function: _build_analysis_event
+#   Role: Handles build analysis event logic for analytics.flows.chart_revision.
+#   Called from: Internal to analytics.flows.chart_revision
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.flows.chart_revision from duplicating build analysis event behavior across flows.
+# Function: _build_patch_event
+#   Role: Handles build patch event logic for analytics.flows.chart_revision.
+#   Called from: Internal to analytics.flows.chart_revision
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.flows.chart_revision from duplicating build patch event behavior across flows.
+# Function: _clean_revision_snippet
+#   Role: Handles clean revision snippet logic for analytics.flows.chart_revision.
+#   Called from: Internal to analytics.flows.chart_revision
+#   Invokes: re.split
+#   Why: Keeps analytics.flows.chart_revision from duplicating clean revision snippet behavior across flows.
+# Function: is_analysis_revision_query
+#   Role: Handles is analysis revision query logic for analytics.flows.chart_revision.
+#   Called from: analytics.flows.multi_agent, analytics.flows.workflow, main, tests.analytics.test_revision_classifiers
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.flows.chart_revision from duplicating is analysis revision query behavior across flows.
+# Function: infer_analysis_revision_from_query
+#   Role: Handles infer analysis revision from query logic for analytics.flows.chart_revision.
+#   Called from: analytics.flows.multi_agent, analytics.flows.workflow
+#   Invokes: analytics.flows.chart_revision._clean_revision_snippet
+#   Why: Keeps analytics.flows.chart_revision from duplicating infer analysis revision from query behavior across flows.
+# Function: is_chart_revision_query
+#   Role: Handles is chart revision query logic for analytics.flows.chart_revision.
+#   Called from: analytics.flows.multi_agent, analytics.flows.workflow
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.flows.chart_revision from duplicating is chart revision query behavior across flows.
+# Function: infer_chart_patch_from_query
+#   Role: Handles infer chart patch from query logic for analytics.flows.chart_revision.
+#   Called from: analytics.flows.multi_agent, analytics.flows.workflow, main
+#   Invokes: Internal helpers only
+#   Why: Keeps analytics.flows.chart_revision from duplicating infer chart patch from query behavior across flows.
+# Function: emit_chart_patch
+#   Role: Apply a chart patch and emit progress + patch events.
+#   Called from: analytics.flows.planner_executor
+#   Invokes: analytics.flows.chart_revision._normalize_chart_patch, analytics.flows.chart_revision._apply_chart_patch_to_spec, analytics.core.session_state.get_session_state_repository, analytics.flows.chart_revision._build_patch_event
+#   Why: Supports downstream analytics workflows that rely on emit_chart_patch.
+# Function: emit_analysis_revision
+#   Role: Handles emit analysis revision logic for analytics.flows.chart_revision.
+#   Called from: analytics.flows.planner_executor
+#   Invokes: analytics.core.session_state.get_session_state_repository, analytics.flows.chart_revision._build_analysis_event
+#   Why: Keeps analytics.flows.chart_revision from duplicating emit analysis revision behavior across flows.
+# --- End Analytics Function/Class Map ---
+from __future__ import annotations
 
 import copy
 from dataclasses import dataclass, field
@@ -732,9 +824,6 @@ __all__ = [
     "is_analysis_revision_query",
     "infer_analysis_revision_from_query",
 ]
-
-
-
 
 
 

@@ -1,3 +1,10 @@
+# --- Analytics Function/Class Map ---
+# Class: Configs
+#   Role: Handles Configs logic for analytics.core.config.
+#   Called from: analytics.core.context, analytics.core.slot_catalog
+#   Collaborators: yaml.safe_load
+#   Why: Keeps analytics.core.config from duplicating Configs behavior across flows.
+# --- End Analytics Function/Class Map ---
 from __future__ import annotations
 from pathlib import Path
 from typing import Dict, Any

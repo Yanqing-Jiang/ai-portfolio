@@ -1,3 +1,10 @@
+# --- Analytics Function/Class Map ---
+# Class: FlowOrchestrator
+#   Role: Defines the contract between the planner sequencer and concrete flow controllers.
+#   Called from: analytics.flows.orchestrator_adapter, analytics.flows.sequencer, tests.analytics.test_planner_sequencer
+#   Collaborators: Internal helpers only
+#   Why: Implementations (single-agent or supervisor-led multi-agent) supply the actual execution strategy for each lane while the sequencer enforces ordering.
+# --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
 import abc
