@@ -1,16 +1,84 @@
-﻿[CmdletBinding()]
+﻿# --- Agentic Smoke Function Map ---
+# Function: New-StreamUri
+#   Role: Builds the analytics memory SSE endpoint URI for a query/session pair.
+#   Called from: Invoke-AgenticStream.
+#   Invokes: System.UriBuilder, System.Web.HttpUtility.ParseQueryString.
+#   Why: Ensures fixture and live smoke runs reuse identical URL construction logic.
+# Function: Get-FixtureEvents
+#   Role: Loads prerecorded SSE fixture payloads from reports/agentic_smoke/fixtures.
+#   Called from: Invoke-AgenticStream.
+#   Invokes: Get-Content, ConvertFrom-Json.
+#   Why: Lets CI validate telemetry without hitting a live backend.
+# Function: Invoke-AgenticStream
+#   Role: Executes (or replays) a baseline/revision SSE run and returns all events.
+#   Called from: Main execution block at the bottom of this script.
+#   Invokes: New-StreamUri, Get-FixtureEvents, System.Net.Http.HttpClient.
+#   Why: Provides a single entry point for both fixture and live smoke scenarios.
+# Function: Get-GuardrailEvents
+#   Role: Filters an event set down to entries that mention guardrail verdict metadata.
+#   Called from: Save-SmokeEvents, Test-GuardrailTelemetry.
+#   Invokes: None (operates on in-memory events).
+#   Why: Guarantees we archive and assert on guardrail telemetry every run.
+# Function: Save-SmokeEvents
+#   Role: Persists per-scenario SSE transcripts (plus guardrail subsets) under reports/.
+#   Called from: Main execution block that iterates over each scenario.
+#   Invokes: Get-GuardrailEvents, ConvertTo-Json.
+#   Why: Produces artifact evidence for support and CI triage.
+# Function: Test-ToolEvents
+#   Role: Verifies that agent_tool_call/complete telemetry shows up in a scenario.
+#   Called from: Summary table builder near the bottom of this script.
+#   Invokes: None (pure PowerShell filtering).
+#   Why: Ensures the planner emits the canonical agent_tool telemetry pairs.
+# Function: Test-SessionTelemetry
+#   Role: Confirms that either session_started or fallback session_id events stream.
+#   Called from: Summary table builder.
+#   Invokes: None.
+#   Why: Detects regressions where the backend stops emitting session identifiers.
+# Function: Test-FreshFullPipeline
+#   Role: Validates baseline runs emit every fresh_* lane marker with no reuse/session leaks.
+#   Called from: Baseline summary row builder.
+#   Invokes: None (scans events array).
+#   Why: Proves fresh runs stay deterministic and never hydrate revision context.
+# Function: Test-GuardrailTelemetry
+#   Role: Ensures guardrail verdicts are present when required.
+#   Called from: Summary rows for each scenario.
+#   Invokes: Get-GuardrailEvents.
+#   Why: Keeps smoke coverage aligned with Guardrails enforcement guarantees.
+# Function: Test-ReasoningSettings
+#   Role: Checks that reasoning_effort telemetry matches the expected level per scenario.
+#   Called from: Summary rows.
+#   Invokes: None.
+#   Why: Prevents model setting regressions when toggling fresh vs revision prompts.
+# Function: Test-LaneReuse
+#   Role: Confirms specific revision flows emit lane_reused markers for requested lanes.
+#   Called from: STOCK_ONLY and REUSE_SQL summary rows.
+#   Invokes: None.
+#   Why: Validates revision fast paths before we ship transcripts to support.
+# Function: Test-AgentToolParity
+#   Role: Asserts that every agent_tool_call has a matching agent_tool_complete event.
+#   Called from: All scenario summaries.
+#   Invokes: None.
+#   Why: Detects telemetry drops between call/complete pairs.
+# Function: Tail-ViteLog
+#   Role: Surfaces whether the frontend dev server mentions agent_tool telemetry.
+#   Called from: Final logging step when not running in fixture mode.
+#   Invokes: Get-Content.
+#   Why: Provides a lightweight sanity check that the Vite dev server saw the stream.
+# --- End Agentic Smoke Function Map ---
+[CmdletBinding()]
 param(
   [string]$BackendUrl = $(if ($env:BACKEND_URL) { $env:BACKEND_URL } else { 'http://localhost:8000' }),
   [string]$Flow = 'single-agent',
   [string]$ViteLogPath = 'vite.log',
   [int]$TimeoutSeconds = 90,
   [string]$BaselineQuery = 'Summarize NVDA''s latest earnings using SQL, chart, and web context.',
-  [string]$StockOnlyQuery = 'Only refresh the market snapshot for NVDA — keep SQL and analysis reused.',
+  [string]$StockOnlyQuery = 'Only refresh the market snapshot for NVDA -- keep SQL and analysis reused.',
   [string]$ReuseSqlQuery = 'Reuse the SQL dataset but redraw the revenue chart grouped by quarter.',
   [string]$RedirectQuery = 'This feels stale - restart with a fresh FULL_PIPELINE run.',
   [string]$FixtureDirectory = $null,
   [string]$FreshReasoningEffort = 'minimal',
   [string]$RevisionReasoningEffort = 'medium',
+  [string]$SupervisorFlow = 'multi-agent',
   [switch]$DryRun
 )
 
@@ -36,13 +104,18 @@ if (-not $UsingFixtures) {
 function New-StreamUri {
   param(
     [string]$Query,
-    [string]$SessionId
+    [string]$SessionId,
+    [string]$FlowOverride = $null
   )
   $builder = [System.UriBuilder]::new($BackendUrl)
   $builder.Path = ($builder.Path.TrimEnd('/') + '/api/analytics/memory/stream')
   $queryParams = [System.Web.HttpUtility]::ParseQueryString('')
   $queryParams['query'] = $Query
-  $queryParams['flow'] = $Flow
+  if ($FlowOverride) {
+    $queryParams['flow'] = $FlowOverride
+  } else {
+    $queryParams['flow'] = $Flow
+  }
   if ($SessionId) {
     $queryParams['session_id'] = $SessionId
   }
@@ -65,7 +138,8 @@ function Invoke-AgenticStream {
   param(
     [string]$Label,
     [string]$Query,
-    [string]$SessionId
+    [string]$SessionId,
+    [string]$FlowOverride = $null
   )
   if ($UsingFixtures) {
     $events = Get-FixtureEvents -Label $Label
@@ -84,7 +158,7 @@ function Invoke-AgenticStream {
   }
 
 
-  $uri = New-StreamUri -Query $Query -SessionId $SessionId
+  $uri = New-StreamUri -Query $Query -SessionId $SessionId -FlowOverride $FlowOverride
   $request = [System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::Get, $uri)
   $request.Headers.Accept.ParseAdd('text/event-stream')
   $cts = [System.Threading.CancellationTokenSource]::new()
@@ -230,21 +304,78 @@ function Test-FreshFullPipeline {
     [pscustomobject]$Result,
     [string]$Scenario
   )
-  $requiredEvents = @('sql_ready', 'chart_ready', 'market_ready', 'web_ready', 'analysis_ready')
-  $missing = @()
-  foreach ($name in $requiredEvents) {
-    if (-not ($Result.Events | Where-Object { $_.event -eq $name })) {
-      $missing += $name
+  $lanes = @('sql', 'web', 'stock', 'chart', 'analysis')
+  $statuses = @('started', 'completed')
+  $missingMarkers = @()
+  foreach ($lane in $lanes) {
+    foreach ($status in $statuses) {
+      $eventName = "fresh_{0}_{1}" -f $lane, $status
+      if (-not ($Result.Events | Where-Object { $_.event -eq $eventName })) {
+        $missingMarkers += $eventName
+      }
     }
   }
-  $reuseEvent = $Result.Events | Where-Object { $_.event -eq 'lane_reused' } | Select-Object -First 1
-  if ($missing.Count -gt 0) {
-    Write-Warning "[$Scenario] Missing fresh-lane completions: $($missing -join ', ')"
+  if ($missingMarkers.Count -gt 0) {
+    Write-Warning "[$Scenario] Missing deterministic fresh lane markers: $($missingMarkers -join ', ')"
   }
+
+  $sessionLeak = @()
+  foreach ($evt in $Result.Events) {
+    if (-not $evt.data) { continue }
+    $rawValue = $evt.data.session_follow_up
+    if ($null -eq $rawValue) { continue }
+    $isFollowUp = $false
+    if ($rawValue -is [bool]) {
+      $isFollowUp = $rawValue
+    } elseif ($rawValue -is [string]) {
+      $normalized = $rawValue.Trim().ToLowerInvariant()
+      $isFollowUp = @('true', '1', 'yes') -contains $normalized
+    } else {
+      try {
+        $isFollowUp = [bool]$rawValue
+      } catch {
+        $isFollowUp = $false
+      }
+    }
+    if ($isFollowUp) {
+      $sessionLeak += $evt
+    }
+  }
+  if ($sessionLeak.Count -gt 0) {
+    $leakEvents = ($sessionLeak | ForEach-Object { $_.event } | Sort-Object -Unique) -join ', '
+    Write-Warning "[$Scenario] Session context detected during fresh run (session_follow_up=true on: $leakEvents)."
+  }
+
+  $reuseEvent = $Result.Events | Where-Object { $_.event -eq 'lane_reused' } | Select-Object -First 1
   if ($reuseEvent) {
     Write-Warning "[$Scenario] Unexpected lane_reused telemetry during fresh run."
   }
-  return ($missing.Count -eq 0 -and -not $reuseEvent)
+
+  return (
+    $missingMarkers.Count -eq 0 -and
+    -not $reuseEvent -and
+    $sessionLeak.Count -eq 0
+  )
+}
+
+function Test-ClarificationTelemetry {
+  param(
+    [pscustomobject]$Result,
+    [string]$Scenario
+  )
+  if (-not $Result.Events) { return $true }
+  $starts = $Result.Events | Where-Object {
+    $_.event -eq 'agent_tool_call' -and $_.data -and $_.data.tool -eq 'clarification_manager'
+  }
+  if (-not $starts) { return $true }
+  $completions = $Result.Events | Where-Object {
+    $_.event -eq 'agent_tool_complete' -and $_.data -and $_.data.tool -eq 'clarification_manager'
+  }
+  if ($starts.Count -gt $completions.Count) {
+    Write-Warning "[$Scenario] clarification_manager emitted $($starts.Count) starts but only $($completions.Count) completions."
+    return $false
+  }
+  return $true
 }
 
 function Test-GuardrailTelemetry {
@@ -346,6 +477,27 @@ function Test-AgentToolParity {
   return $true
 }
 
+function Test-SupervisorLanes {
+  param(
+    [pscustomobject]$Result,
+    [string]$Scenario
+  )
+  $required = @('sql', 'web', 'analysis')
+  $missing = @()
+  foreach ($lane in $required) {
+    $readyEvent = $Result.Events | Where-Object { $_.event -eq "${lane}_ready" } | Select-Object -First 1
+    $reusedEvent = $Result.Events | Where-Object { $_.event -eq 'lane_reused' -and $_.data -and $_.data.lane -eq $lane } | Select-Object -First 1
+    if (-not $readyEvent -and -not $reusedEvent) {
+      $missing += $lane
+    }
+  }
+  if ($missing.Count -gt 0) {
+    Write-Warning "[$Scenario] Supervisor run missing lanes: $($missing -join ', ')"
+    return $false
+  }
+  return $true
+}
+
 function Tail-ViteLog {
   param(
     [string]$Scenario
@@ -378,6 +530,8 @@ $summary += [pscustomobject]@{
   FreshPipelineOk = (Test-FreshFullPipeline -Result $baseline -Scenario 'Baseline')
   LaneReuseOk = $false
   RedirectSeen = $false
+  ClarificationOk = (Test-ClarificationTelemetry -Result $baseline -Scenario 'Baseline')
+  SupervisorLanesOk = $null
   ParityOk = (Test-AgentToolParity -Result $baseline -Scenario 'Baseline')
   GuardrailOk = (Test-GuardrailTelemetry -Result $baseline -Scenario 'Baseline')
   ReasoningOk = (Test-ReasoningSettings -Result $baseline -Scenario 'Baseline' -ExpectedEffort $FreshReasoningEffort)
@@ -396,6 +550,8 @@ $summary += [pscustomobject]@{
   FreshPipelineOk = $null
   LaneReuseOk = (Test-LaneReuse -Result $stock -Lane 'market')
   RedirectSeen = $stock.HasRedirect
+  ClarificationOk = $null
+  SupervisorLanesOk = $null
   ParityOk = (Test-AgentToolParity -Result $stock -Scenario 'stock')
   GuardrailOk = (Test-GuardrailTelemetry -Result $stock -Scenario 'stock')
   ReasoningOk = (Test-ReasoningSettings -Result $stock -Scenario 'stock' -ExpectedEffort $RevisionReasoningEffort)
@@ -412,6 +568,8 @@ $summary += [pscustomobject]@{
   FreshPipelineOk = $null
   LaneReuseOk = (Test-LaneReuse -Result $reuseSql -Lane 'web')
   RedirectSeen = $reuseSql.HasRedirect
+  ClarificationOk = $null
+  SupervisorLanesOk = $null
   ParityOk = (Test-AgentToolParity -Result $reuseSql -Scenario 'reuse-sql')
   GuardrailOk = (Test-GuardrailTelemetry -Result $reuseSql -Scenario 'reuse-sql')
   ReasoningOk = (Test-ReasoningSettings -Result $reuseSql -Scenario 'reuse-sql' -ExpectedEffort $RevisionReasoningEffort)
@@ -428,10 +586,34 @@ $summary += [pscustomobject]@{
   FreshPipelineOk = $null
   LaneReuseOk = $false
   RedirectSeen = $redirectRun.HasRedirect
+  ClarificationOk = $null
+  SupervisorLanesOk = $null
   ParityOk = (Test-AgentToolParity -Result $redirectRun -Scenario 'REDIRECT')
   GuardrailOk = (Test-GuardrailTelemetry -Result $redirectRun -Scenario 'REDIRECT')
   ReasoningOk = (Test-ReasoningSettings -Result $redirectRun -Scenario 'REDIRECT' -ExpectedEffort $RevisionReasoningEffort)
   Artifact = Save-SmokeEvents -Result $redirectRun -Suffix 'redirect'
+}
+
+if (-not $UsingFixtures -and $SupervisorFlow) {
+  $supervisorRun = Invoke-AgenticStream -Label 'supervisor' -Query $BaselineQuery -SessionId $null -FlowOverride $SupervisorFlow
+  $results += $supervisorRun
+  $summary += [pscustomobject]@{
+    Scenario = 'SUPERVISOR'
+    SessionId = $supervisorRun.SessionId
+    ToolsOk = (Test-ToolEvents -Result $supervisorRun -Scenario 'SUPERVISOR')
+    SessionOk = (Test-SessionTelemetry -Result $supervisorRun -Scenario 'SUPERVISOR')
+    FreshPipelineOk = $null
+    LaneReuseOk = $null
+    ClarificationOk = $null
+    SupervisorLanesOk = (Test-SupervisorLanes -Result $supervisorRun -Scenario 'SUPERVISOR')
+    RedirectSeen = $false
+    ParityOk = (Test-AgentToolParity -Result $supervisorRun -Scenario 'SUPERVISOR')
+    GuardrailOk = (Test-GuardrailTelemetry -Result $supervisorRun -Scenario 'SUPERVISOR')
+    ReasoningOk = (Test-ReasoningSettings -Result $supervisorRun -Scenario 'SUPERVISOR' -ExpectedEffort $FreshReasoningEffort)
+    Artifact = Save-SmokeEvents -Result $supervisorRun -Suffix 'supervisor'
+  }
+} elseif ($UsingFixtures) {
+  Write-Host '[agentic-smoke] Fixture mode - skipping supervisor fresh-run validation.'
 }
 
 if (-not $UsingFixtures) {
@@ -467,6 +649,12 @@ foreach ($row in $summary) {
   }
   if ($row.Scenario -eq 'REDIRECT' -and -not $row.RedirectSeen) {
     $failureNotes += '[REDIRECT] workflow_redirect not observed'
+  }
+  if ($row.ClarificationOk -eq $false) {
+    $failureNotes += "[$($row.Scenario)] clarification_manager telemetry missing completion"
+  }
+  if ($row.SupervisorLanesOk -eq $false) {
+    $failureNotes += "[$($row.Scenario)] supervisor lanes missing required events"
   }
   if (-not $row.ParityOk) {
     $failureNotes += "[$($row.Scenario)] agent_tool_call events missing matching completions"

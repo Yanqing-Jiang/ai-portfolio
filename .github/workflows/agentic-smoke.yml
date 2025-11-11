@@ -18,6 +18,7 @@ on:
 env:
   SMOKE_BACKEND_URL: ${{ secrets.AGENTIC_SMOKE_BACKEND_URL }}
   SMOKE_FLOW: ${{ vars.AGENTIC_SMOKE_FLOW || 'single-agent' }}
+  SMOKE_SUPERVISOR_FLOW: ${{ vars.AGENTIC_SUPERVISOR_FLOW || 'multi-agent' }}
 
 jobs:
   fixtures:
@@ -33,7 +34,7 @@ jobs:
             Get-ChildItem reports/agentic_smoke -Recurse -File | Where-Object { $_.FullName -notlike '*\fixtures\*' } | Remove-Item -Force -ErrorAction SilentlyContinue
             Get-ChildItem reports/agentic_smoke -Recurse -Directory | Where-Object { $_.FullName -notmatch '\\fixtures$' } | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
           }
-          ./scripts/agentic_smoke_test.ps1 -Flow $env:SMOKE_FLOW -FixtureDirectory reports/agentic_smoke/fixtures
+          ./scripts/agentic_smoke_test.ps1 -Flow $env:SMOKE_FLOW -FixtureDirectory reports/agentic_smoke/fixtures -SupervisorFlow $env:SMOKE_SUPERVISOR_FLOW
 
       - name: Upload smoke artifacts (fixtures)
         if: always()
@@ -66,7 +67,7 @@ jobs:
             Get-ChildItem reports/agentic_smoke -Recurse -File | Where-Object { $_.FullName -notlike '*\fixtures\*' } | Remove-Item -Force -ErrorAction SilentlyContinue
             Get-ChildItem reports/agentic_smoke -Recurse -Directory | Where-Object { $_.FullName -notmatch '\\fixtures$' } | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
           }
-          ./scripts/agentic_smoke_test.ps1 -Flow $env:FLOW_MODE -BackendUrl $env:BACKEND_URL
+          ./scripts/agentic_smoke_test.ps1 -Flow $env:FLOW_MODE -BackendUrl $env:BACKEND_URL -SupervisorFlow $env:SMOKE_SUPERVISOR_FLOW
 
       - name: Upload smoke artifacts (live)
         if: always()

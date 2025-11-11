@@ -1127,7 +1127,11 @@ def _build_classifier_fallback(reason: str) -> OffTopicClassifierSchema:
     )
 
 
-async def _run_classifier_with_timeout(ctx: "PlannerPhaseContext", model_name: str) -> OffTopicClassifierSchema:
+async def _run_classifier_with_timeout(
+    ctx: "PlannerPhaseContext",
+    model_name: str,
+    provider: Optional[str],
+) -> OffTopicClassifierSchema:
     try:
         return await asyncio.wait_for(
             classify_query_async(
@@ -1135,6 +1139,7 @@ async def _run_classifier_with_timeout(ctx: "PlannerPhaseContext", model_name: s
                 session_id=ctx.session_id,
                 model=model_name,
                 reasoning_effort="low",
+                provider=provider,
             ),
             timeout=CLASSIFIER_TIMEOUT_SECONDS,
         )
@@ -5450,12 +5455,20 @@ async def _classification_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerato
     timed_emitter = ctx.timed_emitter
     timed_emitter.start_step("classification")
     classification_started_ts = datetime.utcnow().isoformat()
-    model_name = "gpt-5-nano-2025-08-07"
+    classifier_provider = (os.getenv("ANALYTICS_CLASSIFIER_PROVIDER") or "gemini").strip().lower()
+    if classifier_provider not in {"gemini", "openai"}:
+        classifier_provider = "gemini"
+    if classifier_provider == "gemini":
+        model_name = os.getenv("GEMINI_CLASSIFIER_MODEL", "gemini-2.5-flash-lite")
+    else:
+        model_name = os.getenv("OPENAI_CLASSIFIER_MODEL", "gpt-5-nano-2025-08-07")
     yield {
         "event": "classification_started",
         "data": {
             "message": "Starting query classification...",
             "model": model_name,
+            "provider": classifier_provider,
+            "step": "classification",
             "ts": classification_started_ts,
         },
     }
@@ -5477,7 +5490,7 @@ async def _classification_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerato
         name=f"intent-slots::{ctx.session_id}",
     )
     classifier_task = asyncio.create_task(
-        _run_classifier_with_timeout(ctx, model_name),
+        _run_classifier_with_timeout(ctx, model_name, classifier_provider),
         name=f"classifier::{ctx.session_id}",
     )
     try:
@@ -5509,6 +5522,7 @@ async def _classification_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerato
             "thinking": reasoning_message,
             "confidence": classification.confidence,
             "category": classification.topic_category,
+            "step": "classification",
             "ts": datetime.utcnow().isoformat(),
         },
     }
@@ -6048,10 +6062,14 @@ async def _clarification_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator
         if clarification_elapsed:
             resolved_event["data"]["elapsed_ms"] = clarification_elapsed
         yield resolved_event
+        pending_slots = sorted(
+            {req.slot for req in official_clarifications if getattr(req, "slot", None)}
+        )
         yield {
             "event": "clarification_complete",
             "data": {
                 "rounds": rounds,
+                "missing_slots": pending_slots,
                 "ts": datetime.utcnow().isoformat(),
             },
         }
@@ -6135,6 +6153,7 @@ async def _clarification_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator
         yield {
             "event": "clarification_failed",
             "data": {
+                "rounds": rounds,
                 "missing_slots": remaining_missing,
                 "ts": datetime.utcnow().isoformat(),
             },
@@ -6346,6 +6365,27 @@ class PlannerExecutorFlow:
         "schema_clarifier": "2025-10-16",
         "multi_agent.supervisor": "2025-10-16",
     }
+    _THOUGHT_EVENT_NAMES = frozenset(
+        {
+            "progress",
+            "status",
+            "classification_started",
+            "classification_reasoning",
+        }
+    )
+    _THOUGHT_EVENT_STEP_OVERRIDES: Dict[str, str] = {
+        "classification_started": "classification",
+        "classification_reasoning": "classification",
+    }
+    _THOUGHT_COMPLETION_EVENTS: Dict[str, str] = {
+        "classification_complete": "classification",
+        "classification_declined": "classification",
+        "final_answer": "classification",
+        "clarification_complete": "clarification",
+        "clarification_failed": "clarification",
+        "clarification_skipped": "clarification",
+        "clarification_timeout": "clarification",
+    }
 
     @classmethod
     def get_prompt_versions(cls) -> Dict[str, str]:
@@ -6367,6 +6407,7 @@ class PlannerExecutorFlow:
         self.follow_up_route = FollowUpRoute.FULL_PIPELINE
         self._prompt_versions = dict(self._PROMPT_VERSIONS)
         self._thought_counters: Dict[str, int] = {}
+        self._last_thoughts: Dict[str, str] = {}
 
     def __getattr__(self, name: str):
         try:
@@ -6435,6 +6476,7 @@ class PlannerExecutorFlow:
         hooks: Optional[AnalyticsFlowHooks] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         self._thought_counters.clear()
+        self._last_thoughts.clear()
         stream = self._pipeline.emit_chart_patch(
             session_id=session_id,
             patch=patch,
@@ -6457,6 +6499,7 @@ class PlannerExecutorFlow:
         hooks: Optional[AnalyticsFlowHooks] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         self._thought_counters.clear()
+        self._last_thoughts.clear()
         stream = self._pipeline.emit_analysis_revision(
             session_id=session_id,
             analysis=analysis,
@@ -6470,17 +6513,63 @@ class PlannerExecutorFlow:
 
     def _attach_thought_metadata(self, event: Dict[str, Any]) -> None:
         event_name = event.get("event")
-        if event_name not in {"progress", "status"}:
+        if event_name not in self._THOUGHT_EVENT_NAMES:
             return
         data = event.get("data")
         if not isinstance(data, dict):
             return
         step = data.get("step")
         if not isinstance(step, str) or not step:
-            return
+            override_step = self._THOUGHT_EVENT_STEP_OVERRIDES.get(event_name)
+            if not override_step:
+                return
+            data["step"] = override_step
+            step = override_step
         counter = self._thought_counters.get(step, 0) + 1
         self._thought_counters[step] = counter
         data.setdefault("thought_id", f"{step}:{counter}")
+        text_key: Optional[str] = None
+        text_value: Optional[str] = None
+        for candidate in ("message", "thinking"):
+            value = data.get(candidate)
+            if isinstance(value, str):
+                text_key = candidate
+                text_value = value
+                break
+        if text_key:
+            previous_value = self._last_thoughts.get(step, "")
+            delta_text = text_value or ""
+            if previous_value and delta_text.startswith(previous_value):
+                delta_text = delta_text[len(previous_value) :]
+            if delta_text and delta_text.startswith("\n"):
+                delta_text = delta_text.lstrip("\n")
+            if not previous_value and not delta_text and text_value:
+                delta_text = text_value
+            if delta_text:
+                data[text_key] = delta_text
+            else:
+                data.pop(text_key, None)
+            data["delta_text"] = delta_text or ""
+            if text_value:
+                self._last_thoughts[step] = text_value
+            elif step in self._last_thoughts:
+                self._last_thoughts.pop(step, None)
+        else:
+            self._last_thoughts.pop(step, None)
+
+    def _maybe_reset_thought_cache(self, event: Dict[str, Any]) -> None:
+        event_name = event.get("event")
+        step: Optional[str] = None
+        if event_name == "complete":
+            data = event.get("data")
+            if isinstance(data, dict):
+                candidate = data.get("step")
+                if isinstance(candidate, str) and candidate:
+                    step = candidate
+        else:
+            step = self._THOUGHT_COMPLETION_EVENTS.get(event_name)
+        if isinstance(step, str) and step:
+            self._last_thoughts.pop(step, None)
 
     def _annotate(self, event: Dict[str, Any]) -> Dict[str, Any]:
         annotated = apply_mode_metadata(event, self.flow_mode)
@@ -6489,6 +6578,7 @@ class PlannerExecutorFlow:
         if isinstance(data, dict):
             data.setdefault("prompt_versions", dict(self._prompt_versions))
         self._attach_thought_metadata(annotated)
+        self._maybe_reset_thought_cache(annotated)
         return annotated
 
     async def events(
@@ -6499,6 +6589,7 @@ class PlannerExecutorFlow:
         hooks: Optional[AnalyticsFlowHooks] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         self._thought_counters.clear()
+        self._last_thoughts.clear()
         stream = self._pipeline.events(query, session_id)
         if hooks is None:
             async for event in stream:

@@ -2964,7 +2964,8 @@ const workflowDataRef = useRef<{
         case 'status':
         case 'progress':
           // Handle both old 'status' and new 'progress' event types
-          const statusMessage = eventData.message || data.message || '';
+          const deltaSnippet = coerceString((eventData as any)?.delta_text ?? (data as any)?.delta_text);
+          const statusMessage = deltaSnippet ?? eventData.message ?? data.message ?? '';
           const bannerPayload = eventData.banner || data.banner;
           if (stepInfo.step === 'follow_up_route' || bannerPayload) {
             const route = coerceString(bannerPayload?.route) ?? 'full_pipeline';
@@ -4825,7 +4826,7 @@ const workflowDataRef = useRef<{
           break;
 
         case 'classification_reasoning':
-          stepsHook.updateStepStatus('classification', 'in_progress', [eventData.thinking || 'Analyzing query type...'], {
+          stepsHook.updateStepStatus('classification', 'in_progress', [eventData.delta_text || eventData.thinking || 'Analyzing query type...'], {
             confidence: eventData.confidence,
             category: eventData.category
           }, undefined, eventData.ts);

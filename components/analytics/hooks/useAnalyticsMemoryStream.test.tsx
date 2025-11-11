@@ -1274,6 +1274,50 @@ describe('useAnalyticsMemoryStream agent tool events', () => {
     });
   });
 
+  it('uses delta_text when provided for progress thinking logs', async () => {
+    (globalThis as any).__TEST_EVENTS__ = [
+      { event: 'session_started', data: { session_id: 'delta-text' } },
+      {
+        event: 'progress',
+        event_type: 'thinking',
+        data: {
+          step: 'classification',
+          thought_id: 'classification:1',
+          message: 'Starting query classification...',
+          delta_text: 'Starting query classification...',
+        },
+      },
+      {
+        event: 'progress',
+        event_type: 'thinking',
+        data: {
+          step: 'classification',
+          thought_id: 'classification:2',
+          message: "Starting query classification...LLM classified topic 'financial_analytics'",
+          delta_text: "LLM classified topic 'financial_analytics'",
+        },
+      },
+      {
+        event: 'classification_complete',
+        data: { is_financial: true, category: 'financial_analytics', confidence: 0.91 },
+      },
+      { event: 'workflow_complete', data: {} },
+      { event: 'done' },
+    ];
+    const { result } = renderHook(() => useAnalyticsMemoryStream('single-agent'));
+    await act(async () => {
+      await result.current.handleQuery('delta thinking events');
+    });
+    await waitFor(() => {
+      const classificationStep = result.current.processSteps.find((step) => step.id === 'classification');
+      expect(classificationStep?.thinking).toEqual([
+        'Starting query classification...',
+        "LLM classified topic 'financial_analytics'",
+        'Query classified as financial analytics',
+      ]);
+    });
+  });
+
   it('stores redirect notice and exposes a dismiss handler', async () => {
     (globalThis as any).__TEST_EVENTS__ = [
       {

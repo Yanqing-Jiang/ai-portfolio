@@ -2,7 +2,7 @@ import sys
 from pathlib import Path
 import asyncio
 import copy
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import types
 from typing import Any, Dict
 
@@ -107,6 +107,30 @@ def test_agent_turn_events_include_specialist_tool_metadata():
     assert payload.get("lane") == "sql"
     assert payload.get("tool") or payload.get("specialist")
     assert "agent_turn_start" == event.get("event")
+
+
+def test_receipt_is_fresh_handles_offset_timestamps() -> None:
+    now = datetime.now(timezone.utc)
+    fresh_receipt = {
+        "status": "completed",
+        "timestamp": (now - timedelta(seconds=5)).isoformat(),
+    }
+    assert MultiAgentFlow._receipt_is_fresh(fresh_receipt, ttl_seconds=60)
+
+    stale_receipt = {
+        "status": "completed",
+        "timestamp": (now - timedelta(seconds=120)).isoformat(),
+    }
+    assert MultiAgentFlow._receipt_is_fresh(stale_receipt, ttl_seconds=60) is False
+
+    naive_timestamp_receipt = {
+        "status": "reused",
+        "timestamp": datetime.utcnow().replace(microsecond=0).isoformat(),
+    }
+    assert MultiAgentFlow._receipt_is_fresh(naive_timestamp_receipt, ttl_seconds=60)
+
+    invalid_receipt = {"status": "completed", "timestamp": "not-a-timestamp"}
+    assert MultiAgentFlow._receipt_is_fresh(invalid_receipt, ttl_seconds=60) is False
 
 
 def test_derive_tasks_respects_lane_refresh_requests():

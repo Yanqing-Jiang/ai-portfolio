@@ -232,7 +232,7 @@ async def test_clarification_multi_phase_emits_single_completion() -> None:
     async def _stream():
         yield {"event": "progress", "data": {"step": "clarification", "message": "Missing timeframe"}}
         yield {"event": "progress", "data": {"step": "clarification", "message": "Missing metric"}}
-        yield {"event": "clarification_complete", "data": {"rounds": 2}}
+        yield {"event": "clarification_complete", "data": {"rounds": 2, "missing_slots": []}}
         yield {"event": "workflow_complete", "data": {}}
 
     tool_events: List[Dict[str, Any]] = []

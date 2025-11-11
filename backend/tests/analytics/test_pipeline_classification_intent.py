@@ -61,7 +61,7 @@ def test_classification_phase_populates_artifact(monkeypatch: pytest.MonkeyPatch
 
 @pytest.mark.asyncio
 async def test_classification_runs_parallel_slot_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
-    pipeline = planner_executor.PlannerPipeline()
+    flow = planner_executor.PlannerExecutorFlow(flow_mode=planner_executor.FlowMode.SINGLE_AGENT)
     classifier_started = asyncio.Event()
     resolver_started = asyncio.Event()
 
@@ -90,13 +90,64 @@ async def test_classification_runs_parallel_slot_resolution(monkeypatch: pytest.
     monkeypatch.setattr(planner_executor, "classify_query_async", fake_classify)
     monkeypatch.setattr(planner_executor, "resolve_intent_slots_async", fake_resolve)
 
-    ctx = await pipeline.initialize_context("Compare NVDA operating margin vs peers", session_id="concurrency-session")
+    ctx = await flow.initialize_context("Compare NVDA operating margin vs peers", session_id="concurrency-session")
 
-    async for _ in pipeline.run_classification(ctx):
+    async for _ in flow.run_classification(ctx):
         pass
 
     assert ctx.intent_resolution is not None
     assert ctx.intent_resolution.slots["metric"].value == "Operating Margin"
+
+
+@pytest.mark.asyncio
+async def test_classification_emits_single_reasoning(monkeypatch: pytest.MonkeyPatch) -> None:
+    flow = planner_executor.PlannerExecutorFlow(flow_mode=planner_executor.FlowMode.SINGLE_AGENT)
+
+    async def fake_classify(query: str, *, session_id: str, model: str, reasoning_effort: str) -> OffTopicClassifierSchema:
+        return OffTopicClassifierSchema(
+            is_financial_query=True,
+            confidence=0.88,
+            topic_category="financial_analytics",
+            polite_decline_message=None,
+            suggested_rephrase=None,
+        )
+
+    async def fake_resolve(
+        query: str,
+        configs: Dict[str, Any],
+        *,
+        mode: str,
+        context_slots: Optional[Dict[str, Any]],
+        session_id: str,
+    ) -> IntentResolutionModel:
+        return IntentResolutionModel(
+            slots={
+                "metric": SlotStatusModel(
+                    status="filled",
+                    value="Revenue",
+                    reason=None,
+                    suggestions=[],
+                    allow_custom=True,
+                )
+            },
+            followups=[],
+            notes="structured",
+        )
+
+    monkeypatch.setattr(planner_executor, "classify_query_async", fake_classify)
+    monkeypatch.setattr(planner_executor, "resolve_intent_slots_async", fake_resolve)
+
+    ctx = await flow.initialize_context("Show NVDA revenue trend", session_id="reasoning-session")
+    events = []
+    async for event in flow.run_classification(ctx):
+        events.append(flow._annotate(event))
+
+    reasoning_events = [evt for evt in events if evt.get("event") == "classification_reasoning"]
+    assert len(reasoning_events) == 1
+    reasoning_payload = reasoning_events[0].get("data") or {}
+    assert reasoning_payload.get("step") == "classification"
+    assert reasoning_payload.get("delta_text") == reasoning_payload.get("thinking")
+    assert str(reasoning_payload.get("thought_id", "")).startswith("classification:")
 
 
 def test_pipeline_events_runs_tools_in_order(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -116,7 +167,7 @@ def test_pipeline_events_runs_tools_in_order(monkeypatch: pytest.MonkeyPatch) ->
 
         async def fake_run_clarification(ctx):
             order.append("clarification")
-            yield {"event": "clarification_complete"}
+            yield {"event": "clarification_complete", "data": {"rounds": 0, "missing_slots": []}}
 
         async def fake_run_plan(ctx):
             order.append("plan_generation")

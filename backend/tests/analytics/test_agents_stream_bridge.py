@@ -8,7 +8,7 @@ import pytest
 
 from analytics.flows.agents_stream_bridge import AgentsStreamBridge
 from analytics.flows.schedulers import FlowMode
-from agents.stream_events import RawResponsesStreamEvent, RunItemStreamEvent
+from agents.stream_events import AgentUpdatedStreamEvent, RawResponsesStreamEvent, RunItemStreamEvent
 
 
 class _ToolCallRawItem:
@@ -43,6 +43,20 @@ class _DonePayload:
         self.arguments = entry["arguments"]
         self.sequence_number = entry["sequence_number"]
         self.output_index = entry["output_index"]
+
+
+class _ToolCompletionPayload:
+    type = "response.output_item.done"
+
+    def __init__(self, tool_id: str, name: str) -> None:
+        self.item = SimpleNamespace(
+            id=tool_id,
+            name=name,
+            status="completed",
+            call_id=tool_id,
+        )
+        self.output_index = 0
+        self.sequence_number = 1
 
 
 @pytest.mark.asyncio
@@ -135,3 +149,41 @@ async def test_bridge_emits_analysis_events() -> None:
     tool_call = tool_event["data"]["tool_call"]
     assert tool_call["name"] == "analysis_revision"
     assert tool_call["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_bridge_emits_supervisor_events() -> None:
+    queue: "asyncio.Queue[Dict[str, Any]]" = asyncio.Queue()
+    bridge = AgentsStreamBridge(flow_mode=FlowMode.MULTI_AGENT, queue=queue)
+
+    supervisor_agent = SimpleNamespace(name="analytics_supervisor", model="gpt-4o-mini")
+    specialist_agent = SimpleNamespace(name="sql_specialist", model="gpt-4o-mini")
+
+    await bridge._handle_stream_event(AgentUpdatedStreamEvent(new_agent=supervisor_agent))
+    start_event = await queue.get()
+    assert start_event["event"] == "agent_supervisor_started"
+    assert start_event["data"]["agent"] == "analytics_supervisor"
+    assert start_event["data"]["mode"] == "multi_agent"
+
+    await bridge._handle_stream_event(AgentUpdatedStreamEvent(new_agent=specialist_agent))
+    await bridge._emit_supervisor_summary()
+    summary_event = await queue.get()
+    assert summary_event["event"] == "agent_supervisor_summary"
+    assert summary_event["data"]["specialists"] == ["sql_specialist"]
+
+
+@pytest.mark.asyncio
+async def test_bridge_emits_lane_completions_for_supervisor_tools() -> None:
+    queue: "asyncio.Queue[Dict[str, Any]]" = asyncio.Queue()
+    bridge = AgentsStreamBridge(flow_mode=FlowMode.MULTI_AGENT, queue=queue)
+
+    lane_tools = ("sql_generator", "web_retriever", "analysis_writer")
+    for index, tool in enumerate(lane_tools):
+        tool_entry = {"id": f"{tool}_id_{index}", "name": tool}
+        await bridge._handle_stream_event(RunItemStreamEvent(name="tool_called", item=_ToolCallRunItem(tool_entry)))
+        completion_payload = _ToolCompletionPayload(tool_entry["id"], tool)
+        await bridge._handle_raw_response_event(completion_payload)  # type: ignore[arg-type]
+        completion_event = await queue.get()
+        assert completion_event["event"] == "agent_tool_complete"
+        tool_call = completion_event["data"]["tool_call"]
+        assert tool_call["name"] == tool

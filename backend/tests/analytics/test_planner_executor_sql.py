@@ -202,7 +202,7 @@ async def fake_intent_phase(self, ctx):
 
 async def fake_clarification_phase(self, ctx):
 
-    yield {"event": "clarification_complete", "data": {}}
+    yield {"event": "clarification_complete", "data": {"rounds": 0, "missing_slots": []}}
 
 
 

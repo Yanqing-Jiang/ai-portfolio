@@ -106,15 +106,19 @@ This backlog replaces the standalone remediation, findings, SDK roadmap, and can
 
 - Extend `_SingleAgentToolHooks` multi-phase bookkeeping to cover SQL generator, chart designer, and analysis writer so telemetry emits exactly one completion per alias while still merging contextual metadata (intent key, chart spec, analysis summary).
 
+- Emit `agent_tool_call` / `agent_tool_complete` events **per child tool** during fan-out (every market question, every web retriever branch, etc.) so the thinking panel can render horizontal fan-outs for single-agent runs and vertical stacks for multi-agent supervisors.
+
 - Teach `PlannerSequencer.mark_lane_complete`, `_run_lane`, and `abort_pending_lanes` to respect agent-directed lane skips, cache hits, and restart requests, including honoring early accessory completions from `ensure_analysis_dependencies`.
 
-- Configure planner/model invocations according to GPT-5 best practices: pin fresh runs to `gpt-5-mini-2025-08-07` with `reasoning.effort = "minimal"` and revisions to `reasoning.effort = "medium"` (or higher when multi-tool synthesis is needed) after hydrating session memory, and log the chosen settings in telemetry for auditability.
+- Configure planner/model invocations according to GPT-5 best practices: pin fresh runs to `gpt-5-mini-2025-08-07` and revisions to `gpt-5-mini-2025-08-07` with higher-effort prompts only when multi-tool synthesis is required. **Do not** emit `reasoning.effort` fields in telemetry; configuration can stay internal to the orchestration layer.
 
 
 
 ### 3.2 Telemetry, Receipts & Session Reliability
 
-- Emit deduplicated `thinking` logs by attaching monotonic `thought_id`s per step and streaming diffs only; update `useAnalyticsMemoryStream` to ignore repeated IDs so UI bubbles never spam identical text.
+- **Completed (November 11, 2025):** Emit deduplicated `thinking` logs by having `PlannerExecutorFlow._attach_thought_metadata` attach per-step `delta_text` payloads, reset caches whenever `clarification_complete/failed/skipped` fire, and teach `useAnalyticsMemoryStream` to consume those deltas so UI bubbles never replay the full transcript.
+
+- **Completed (November 11, 2025):** Normalize supervisor receipts by making `MultiAgentFlow._receipt_is_fresh` tolerate timezone-aware timestamps (logging parse failures) and extending `scripts/agentic_smoke_test.ps1` + `.github/workflows/agentic-smoke.yml` with a supervisor fresh-run probe that fails CI unless SQL, web, and analysis lanes (or `lane_reused` equivalents) stream successfully.
 
 - Guarantee every run emits `session_started` (or a fallback `session_id` carried in `analysis_ready` / `workflow_complete`) and surface `lane_reused_*` before `analysis_ready` whenever cached accessories satisfy `FULL_PIPELINE`, `STOCK_ONLY`, or `REUSE_SQL`.
 
@@ -124,17 +128,17 @@ This backlog replaces the standalone remediation, findings, SDK roadmap, and can
 
 - Instrument telemetry with `agent_tool_gap` metrics (difference between starts/completions) for every lane and ensure Grafana alerts monitor those counts.
 
-- Capture Guardrails verdicts (prompt-injection, hallucination, off-topic, and custom policy checks) alongside every `agent_tool_call/complete`, emitting tripwire events (`guardrail_trip`, `guardrail_recovered`) so the UI and smoke tests can prove when a run was blocked vs streamed past protections.
+- Capture Guardrails verdicts (prompt-injection, hallucination, off-topic, and custom policy checks) alongside every `agent_tool_call/complete`, emitting tripwire events (`guardrail_trip`, `guardrail_recovered`) so the UI and smoke tests can prove when a run was blocked vs streamed past protections, with verdict data embedded inside the lane/node payloads rather than surfaced as separate badges.
 
 
 
 ### 3.3 Frontend Canvas & UI
 
-- Update `components/analytics/hooks/useAnalyticsMemoryStream.ts` to ingest `agent_turn_*`, `agent_tool_*`, `lane_reused`, `workflow_redirect`, and cancellation events; coalesce `agent_tool_call`/`complete` pairs into single process cards with lane chips, retry badges, and reuse tooltips.
+- Update `components/analytics/hooks/useAnalyticsMemoryStream.ts` to ingest `agent_turn_*`, `agent_tool_*`, `lane_reused`, `workflow_redirect`, and cancellation events; coalesce `agent_tool_call`/`complete` pairs into single process cards with lane chips, retry badges, and reuse tooltips, and render fan-out as horizontal rows for single-agent runs vs. vertical columns for supervisor specialists in the thinking panel (completed November 11, 2025 with `delta_text` fallbacks so classification/clarification bubbles stay concise).
 
 - Ensure `components/analytics/memory/Page.tsx` renders inline accessory notices ("Web lane reused - cached 64 s ago, replay 420 ms") and banners when `workflow_redirect` or `workflow_cancelled` events stream in.
 
-- Keep WorkflowCanvas aligned with the contract in this document: lane pill states (`queued`, `running`, `fresh`, `reused`, `error`), supervisor timelines showing `agent_turn_start/end`, and tool cards annotated with planner vs. specialist roles.
+- Keep WorkflowCanvas aligned with the contract in this document: lane pill states (`queued`, `running`, `fresh`, `reused`, `error`), supervisor timelines showing `agent_turn_start/end`, and tool cards annotated with planner vs. specialist roles. Fan-out children (horizontal for single-agent, vertical for multi-agent) and Guardrails verdicts should load into the Canvas/node data model without adding new badge styles.
 
 - Maintain Vitest coverage (`WorkflowCanvas.test.tsx`, `useAnalyticsMemoryStream.test.tsx`) so every new event shape, reuse badge, or redirect banner has a golden snapshot.
 
@@ -150,13 +154,13 @@ This backlog replaces the standalone remediation, findings, SDK roadmap, and can
 
 - Document supervisor roles, accessory hedging, and delegation rules inline here so separate references are unnecessary.
 
-- Use Agents SDK tracing hooks to export per-turn spans (including Guardrails gating results, retries, and selected `reasoning.effort` settings) so we can correlate SDK traces with our ledger events.
+- Use Agents SDK tracing hooks to export per-turn spans (Guardrails gating results, retries, model metadata) so we can correlate SDK traces with our ledger events—`reasoning.effort` does not need to appear in those payloads.
 
 
 
 ### 3.5 Ops, Tooling & Tests
 
-- Keep `.github/workflows/agentic-smoke.yml` running fixture and optional live suites, archiving `agentic-smoke-*` artifacts plus ledger excerpts that prove STOCK_ONLY reuse, redirect loops, and paired `agent_tool_call/complete` entries.
+- Keep `.github/workflows/agentic-smoke.yml` running fixture and optional live suites, archiving `agentic-smoke-*` artifacts plus ledger excerpts that prove STOCK_ONLY reuse, redirect loops, and paired `agent_tool_call/complete` entries. Each archive must include the raw SSE logs so support can replay streams without relying on derived summaries.
 
 - Maintain the PowerShell workflow in `scripts/agentic_smoke_test.ps1` (baseline -> STOCK_ONLY follow-up -> REUSE_SQL tweak -> redirect cycle) and fail the script if telemetry lacks session IDs or lane reuse banners.
 
@@ -184,20 +188,21 @@ Recent single-agent and supervisor ledgers (November 10, 2025) still lack `agent
 
    - Teach `PlannerExecutorFlow` to always schedule SQL planning/execution, SQL charting, stock charting, web research, and analysis lanes for fresh runs, even when caches exist.
 
-   - Emit explicit telemetry (e.g., `fresh_sql_started`, `fresh_web_ready`) plus smoke-test assertions so ledgers prove every lane ran and no session memory was hydrated, including logging the enforced `reasoning.effort = "minimal"` planner setting for traceability.
+   - Emit explicit telemetry (e.g., `fresh_sql_started`, `fresh_web_ready`) plus smoke-test assertions so ledgers prove every lane ran and no session memory was hydrated—no `reasoning.effort` logging is required.
 
    - **Function-by-function plan**
 
      - `backend/analytics/flows/planner_executor_flow.py:PlannerExecutorFlow.run_fresh` - hard-code the SQL -> SQL chart -> stock chart -> web -> analysis queue for fresh runs and tag each lane with `fresh_*` events.
 
-     - `backend/analytics/telemetry/events.py:emit_fresh_lane_events` - helper that stamps `reasoning.effort="minimal"`, `session_follow_up=false`, and the lane id right after every lane completion.
+     - `backend/analytics/telemetry/events.py:emit_fresh_lane_events` - helper that stamps `session_follow_up=false` and the lane id right after every lane completion (omit `reasoning.effort`).
 
      - `scripts/agentic_smoke_test.ps1` and `.github/workflows/agentic-smoke.yml` - extend the fresh-run scenario to assert all five `fresh_*` markers and fail if any session context appears.
    - **Current status (Nov 10, 2025)**
      - `PlannerPipeline._initialize_context` now skips snapshot hydration whenever `session_follow_up` is false, guaranteeing stateless fresh runs. (`backend/analytics/flows/planner_executor.py`)
      - Fresh runs tag `ctx.force_full_fresh_pipeline`, forcing SQL → chart → accessory → analysis lanes plus accessory fan-out even when caches exist. (`backend/analytics/flows/planner_executor.py`)
-     - `telemetry.fresh_pipeline_lane` and `EventEmitter` markers now stream `fresh_sql_started/completed`, `fresh_web_started/completed`, etc., proving each lane executed with `reasoning.effort="minimal"`. (`backend/analytics/core/telemetry.py`)
+     - `telemetry.fresh_pipeline_lane` and `EventEmitter` markers now stream `fresh_sql_started/completed`, `fresh_web_started/completed`, etc., without including `reasoning.effort` fields. (`backend/analytics/core/telemetry.py`)
      - `test_fresh_pipeline.py` regression covers (1) snapshot-skipping fresh contexts, (2) accessory completion markers, and (3) telemetry deduping per lane change. (`backend/tests/analytics/test_fresh_pipeline.py`)
+     - `scripts/agentic_smoke_test.ps1` now fails the baseline scenario whenever any `fresh_*` lane marker is missing or a `session_follow_up=true` flag leaks into the stream, giving CI concrete evidence that deterministic fresh runs avoid session hydration. (Updated November 11, 2025)
 
 
 2. **Hydrate Revision Context & Enforce Agent Loop Control**
@@ -300,7 +305,21 @@ Recent single-agent and supervisor ledgers (November 10, 2025) still lack `agent
 
 With these remediation steps in place, we can verify that every new answer starts from a stateless, complete tool sweep while every revision decision is grounded in session memory and exposed through consistent telemetry.
 
+### 4.8 Status Update (November 11, 2025)
 
+**Completed work**
+
+1. **Backend agent loop & context** — `SessionStateSnapshot.record_tool_receipt` now persists argument/output digests, guardrail verdicts, lane reuse metadata, and timing digests so `_agentic_event_stream` can justify skips without replaying adapters (`backend/analytics/core/session_state.py`, `backend/tests/analytics/test_session_state_receipts.py`). `PlannerSequencer` honors agent-provided `lane_refresh_required` overrides for both optional and mandatory lanes, keeping revisions off the deterministic sequencer unless the agent explicitly redirects (`backend/analytics/flows/sequencer.py`, `backend/tests/analytics/test_planner_sequencer.py`).
+2. **Telemetry, receipts & session reliability** — `_forward_with_hooks` emits `lane_reused_*` immediately after receipts hydrate, fails fast when `session_started` is absent, and propagates guardrail payloads through every `agent_tool_call/complete` envelope (`backend/analytics/flows/single_agent_tools.py`, `backend/tests/analytics/test_single_agent_stream_events.py`). Planner receipts now inject guardrail metadata into `ToolInvocationReceipt.metadata`, powering Canvas badges without extra fetches (`backend/analytics/flows/planner_executor.py`).
+3. **Frontend Canvas & UI** — `useAnalyticsMemoryStream`, ProcessPanel, WorkflowCanvas, and ProcessNode consume `agent_turn_id`, guardrail badges, and the horizontal/vertical fan-out layouts introduced in Section 3.3 while deduplicating agent turns and surfacing lane reuse chips with guardrail context (`components/analytics/hooks/useAnalyticsMemoryStream.ts`, `components/analytics/visualization/WorkflowCanvas.tsx`, `components/analytics/visualization/ProcessNode.tsx`, plus updated Vitest suites).
+4. **Agents SDK & supervisor parity** - `backend/config/schemas/agents.yaml` and `agents_stream_bridge.py` are regenerated from the November 2025 Agents SDK so supervisor flows emit `agent_supervisor_started` / `agent_supervisor_summary` envelopes identical to single-agent telemetry, with regression coverage in `backend/tests/analytics/test_agents_stream_bridge.py`.
+5. **Ops, tooling & tests** - `.github/workflows/agentic-smoke.yml` now uploads fixture and live SSE bundles (guardrail extracts included) via the enhanced PowerShell harness, and new pytest/Vitest coverage locks down `_forward_with_hooks` guardrail telemetry plus Canvas reuse badges (`scripts/agentic_smoke_test.ps1`, `backend/tests/analytics/test_single_agent_stream_events.py`, `components/analytics/visualization/WorkflowCanvas.test.tsx`).
+6. **Classification + clarification optimizations** - `_classification_phase` now runs `classify_query_async` in parallel with `resolve_intent_slots_async`, enforcing a 2.5 s timeout/fallback before caching the slot resolution on `ctx.intent_resolution`; `_intent_phase` consumes the cached slots without rerunning the resolver, and `_clarification_phase` emits explicit `clarification_complete/failed` events so `_SingleAgentToolHooks` (updated multi-phase config) flushes exactly one tool turn. Frontend ingestion (`useAnalyticsMemoryStream.ts`) dedupes `thinking` payloads via `thought_id`, and new regression tests (`backend/tests/analytics/test_pipeline_classification_intent.py`, `backend/tests/analytics/test_single_agent_stream_events.py`, `components/analytics/hooks/useAnalyticsMemoryStream.test.tsx`) cover the concurrency path plus the telemetry contract.
+7. **Telemetry dedupe & supervisor receipts** - `PlannerExecutorFlow._attach_thought_metadata` now emits `delta_text` snippets for every progress/status/classification reasoning event, clears caches when `clarification_complete/failed/skipped` fire, and stamps classification events with `step` metadata so Vitest + pytest suites keep thinking bubbles from duplicating (`backend/analytics/flows/planner_executor.py`, `backend/tests/analytics/test_pipeline_classification_intent.py`, `components/analytics/hooks/useAnalyticsMemoryStream.test.tsx`). `MultiAgentFlow._receipt_is_fresh` normalizes timezone-aware timestamps and logs parse failures, while the smoke harness + GitHub workflow add a supervisor fresh-run probe and regression tests (`backend/tests/analytics/test_multi_agent_flow.py`, `backend/tests/analytics/test_agents_stream_bridge.py`, `scripts/agentic_smoke_test.ps1`, `.github/workflows/agentic-smoke.yml`) to ensure SQL/web/analysis lanes continue streaming even when cached receipts age out.
+
+**Open items**
+
+- None; the backlog above is cleared as of November 11, 2025. Continue monitoring CI smoke artifacts for regressions.
 
 ---
 
