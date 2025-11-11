@@ -241,13 +241,19 @@ class PlannerSequencer:
         self._lane_states: Dict[str, LaneState] = {}
         self._lane_presentations: Dict[str, str] = {}
         self._revision_targets: Set[str] = set()
+        self._parallel_lane_queue: Optional[asyncio.Queue[Optional[SequencerEvent]]] = None
+        self._parallel_lane_task: Optional[asyncio.Task[None]] = None
+        self._parallel_lane_started = False
+        self._parallel_fanout_enabled = False
         for lane in self._lane_order:
-            required = lane not in optional
-            if lane in optional:
-                required = bool(self._lane_refresh_required.get(lane, True))
+            required_override = self._lane_refresh_required.get(lane)
+            if required_override is not None:
+                required = bool(required_override)
+            else:
+                required = True
             self._lane_states[lane] = LaneState(name=lane, required=required)
             self._lane_presentations[lane] = "pending"
-            if lane in optional and not required:
+            if not required:
                 self._skip_lane(lane, reason="prefill_reuse")
         self._lane_dependencies: Dict[str, Tuple[str, ...]] = {
             "sql": ("intent",),
@@ -258,10 +264,6 @@ class PlannerSequencer:
         self._retry_callbacks: List[RetryCallback] = []
         if self._lane_refresh_required:
             self.update_lane_requirements(self._lane_refresh_required, emit=False)
-        self._parallel_lane_queue: Optional[asyncio.Queue[Optional[SequencerEvent]]] = None
-        self._parallel_lane_task: Optional[asyncio.Task[None]] = None
-        self._parallel_lane_started = False
-        self._parallel_fanout_enabled = False
 
     @property
     def event_bus(self) -> PlannerEventBus:
@@ -310,32 +312,12 @@ class PlannerSequencer:
             normalized = bool(flag)
             previous_required = state.required
             self._lane_refresh_required[lane] = normalized
-            if lane not in self._optional_lanes:
-                state.required = True
-                if previous_required is False:
-                    state.status = LANE_STATUS_PENDING
-                    state.completed = False
-                    state.success = False
-                    state.reused = None
-                    state.error = None
-                continue
-            state.required = normalized
             if not normalized:
-                if state.status != LANE_STATUS_SKIPPED or not state.completed or not state.reused:
-                    state.completed = True
-                    state.success = True
-                    state.error = None
-                    state.status = LANE_STATUS_SKIPPED
-                    state.reused = True
-                    if emit:
-                        self._event_bus.emit_lane_transition(
-                            lane=lane,
-                            status=LANE_STATUS_SKIPPED,
-                            success=True,
-                            reused=True,
-                            reason="prefill_reuse",
-                        )
+                already_skipped = state.status == LANE_STATUS_SKIPPED and state.completed and state.reused
+                if not already_skipped:
+                    self._skip_lane(lane, reason="agent_skip")
                 continue
+            state.required = True
             if previous_required is False or state.status == LANE_STATUS_SKIPPED:
                 state.completed = False
                 state.success = False
@@ -532,6 +514,9 @@ class PlannerSequencer:
 
     async def _run_sql_stage(self) -> AsyncGenerator[SequencerEvent, None]:
         lane = "sql"
+        if not self._should_run_lane(lane):
+            self._skip_lane(lane, reason="agent_skip")
+            return
         self._start_lane(lane)
         try:
             async for event in self._decorate_stream(self._orchestrator.run_sql_stage):
@@ -585,6 +570,9 @@ class PlannerSequencer:
 
     async def _await_analysis_stage(self) -> AsyncGenerator[SequencerEvent, None]:
         lane = "analysis"
+        if not self._should_run_lane(lane):
+            self._skip_lane(lane, reason="agent_skip")
+            return
         if not self._dependencies_met(lane):
             pending = tuple(self._pending_lanes())
             logger.debug("Delaying analysis lane until dependencies complete: pending=%s", pending)
@@ -609,8 +597,8 @@ class PlannerSequencer:
         if state.completed:
             logger.debug("Lane '%s' already settled (status=%s); skipping runner.", lane, state.status)
             return
-        if not state.required and lane in self._optional_lanes and not self._should_run_lane(lane):
-            self._skip_lane(lane, reason="cached_reuse")
+        if not self._should_run_lane(lane):
+            self._skip_lane(lane, reason="agent_skip")
             return
         if not self._dependencies_met(lane):
             logger.debug(
@@ -765,10 +753,11 @@ class PlannerSequencer:
         state = self._lane_states.get(lane)
         if state is None:
             return False
+        override = self._lane_refresh_required.get(lane)
+        if override is not None:
+            return bool(override)
         if lane not in self._optional_lanes:
             return True
-        if lane in self._lane_refresh_required:
-            return bool(self._lane_refresh_required[lane])
         try:
             pending_iterable = self._orchestrator.pending_lanes()
         except Exception:  # pragma: no cover - defensive logging

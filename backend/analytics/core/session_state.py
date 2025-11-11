@@ -101,6 +101,21 @@ def _hash_arguments(payload: Any) -> str:
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()[:16]
 
 
+def digest_tool_payload(payload: Any, *, limit: int = 512) -> Optional[str]:
+    if payload is None:
+        return None
+    try:
+        serialized = json.dumps(payload, sort_keys=True, default=str, ensure_ascii=True)
+    except TypeError:
+        serialized = repr(payload)
+    digest = serialized.strip()
+    if not digest:
+        return None
+    if len(digest) > limit:
+        digest = digest[:limit]
+    return digest
+
+
 class SessionStateSnapshot(BaseModel):
     """Representation of analytics session state persisted in Redis."""
 
@@ -208,13 +223,41 @@ class SessionStateSnapshot(BaseModel):
         enhanced = deepcopy(payload)
         enhanced.setdefault("tool", tool)
         enhanced.setdefault("recorded_at", datetime.now(timezone.utc).isoformat())
-        if "arguments_hash" not in enhanced and "arguments" in enhanced:
-            enhanced["arguments_hash"] = _hash_arguments(enhanced.get("arguments"))
+        tool_call_meta = enhanced.get("tool_call")
+        arguments_payload = enhanced.get("arguments")
+        if arguments_payload is None and isinstance(tool_call_meta, Mapping):
+            arguments_payload = tool_call_meta.get("arguments") or tool_call_meta.get("arguments_delta")
+        if "arguments_hash" not in enhanced and arguments_payload is not None:
+            enhanced["arguments_hash"] = _hash_arguments(arguments_payload)
+        argument_digest = digest_tool_payload(arguments_payload)
+        if argument_digest and not enhanced.get("arguments_digest"):
+            enhanced["arguments_digest"] = argument_digest
         if "attempts" not in enhanced and "attempt" in enhanced:
             try:
                 enhanced["attempts"] = int(enhanced.get("attempt", 0))
             except (TypeError, ValueError):
                 enhanced["attempts"] = 0
+        output_payload = enhanced.get("payload") or enhanced.get("result")
+        if output_payload is None and isinstance(tool_call_meta, Mapping):
+            output_payload = tool_call_meta.get("result")
+        output_digest = digest_tool_payload(output_payload)
+        if output_digest and not enhanced.get("output_digest"):
+            enhanced["output_digest"] = output_digest
+        metadata_payload = enhanced.get("metadata") if isinstance(enhanced.get("metadata"), Mapping) else None
+        guardrail_payload = (
+            enhanced.get("latency_guardrail")
+            or enhanced.get("guardrail")
+            or (metadata_payload.get("guardrail") if metadata_payload else None)
+            or (metadata_payload.get("latency_guardrail") if metadata_payload else None)
+        )
+        if guardrail_payload:
+            sanitized_guardrail = sanitize_for_json(guardrail_payload)
+            enhanced.setdefault("latency_guardrail", sanitized_guardrail)
+            enhanced.setdefault("guardrail", sanitized_guardrail)
+            if metadata_payload is not None:
+                merged_metadata = dict(metadata_payload)
+                merged_metadata.setdefault("guardrail", sanitized_guardrail)
+                enhanced["metadata"] = merged_metadata
         normalized_tool = _normalize_tool_name(enhanced.get("tool"))
         lane = (enhanced.get("lane") or "").strip().lower()
         source_lane = lane
@@ -510,6 +553,17 @@ class SessionStateSnapshot(BaseModel):
             lane_ts = self.get_lane_timestamp(normalized)
             if lane_ts:
                 lane_timestamps[normalized] = lane_ts
+        lane_ttls: Dict[str, int] = {}
+        try:
+            from analytics.core import lane_refresh as _lane_refresh_mod  # type: ignore
+        except Exception:  # pragma: no cover - defensive import
+            _lane_refresh_mod = None
+        resolver = getattr(_lane_refresh_mod, "resolve_lane_ttls", None)
+        if callable(resolver):
+            try:
+                lane_ttls = dict(resolver())
+            except Exception:  # pragma: no cover - defensive fallback
+                lane_ttls = {}
         chart_spec = deepcopy(self.last_chart_spec) if isinstance(self.last_chart_spec, dict) else None
         return SnapshotRevisionContext(
             session_id=self.session_id,
@@ -517,9 +571,11 @@ class SessionStateSnapshot(BaseModel):
             agent_reasoning=reasoning_cache,
             revision_snapshot=revision_snapshot,
             lane_timestamps=lane_timestamps,
+            lane_ttls=lane_ttls,
             last_analysis=self.last_analysis,
             last_chart_spec=chart_spec,
         )
+
     def record_revision_snapshot(self, payload: Dict[str, Any]) -> None:
         analytics_cache = self.tool_cache.setdefault("analytics", {})
         analytics_cache["revision_snapshot"] = payload
@@ -620,6 +676,7 @@ class SnapshotRevisionContext:
     agent_reasoning: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     revision_snapshot: Optional[Dict[str, Any]] = None
     lane_timestamps: Dict[str, datetime] = field(default_factory=dict)
+    lane_ttls: Dict[str, int] = field(default_factory=dict)
     last_analysis: Optional[str] = None
     last_chart_spec: Optional[Dict[str, Any]] = None
 
@@ -643,6 +700,18 @@ class SnapshotRevisionContext:
             return max(delta.total_seconds(), 0.0)
         except Exception:
             return None
+
+    def should_refresh(self, lane: str, *, now: Optional[datetime] = None) -> bool:
+        normalized = self._normalize_lane(lane)
+        if not normalized:
+            return True
+        ttl = int(self.lane_ttls.get(normalized, 0))
+        if ttl <= 0:
+            return True
+        age = self.lane_age_seconds(normalized, now=now)
+        if age is None:
+            return True
+        return age > ttl
 
 
 class SessionStateRepository:

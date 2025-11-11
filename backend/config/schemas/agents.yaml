@@ -53,6 +53,10 @@ agents:
       retryable_error_codes:
         - rate_limited
         - schema_validation_failed
+    telemetry:
+      supervisor_events:
+        - agent_supervisor_started
+        - agent_supervisor_summary
   single_agent:
     model: gpt-5-mini-2025-08-07
     reasoning_effort: medium
@@ -68,6 +72,8 @@ agents:
     model: gpt-5-mini-2025-08-07
     reasoning_effort: high
     max_tool_retries: 2
+    telemetry:
+      emit_supervisor_events: true
     instructions: |
       You are the Analytics Supervisor. Plan the workload, fan out to specialists when needed, and enforce the contract that SQL, web, and market lanes finish before analysis.
       Use specialist tools only once per turn, observe cache directives, and record retry rationales in `retry_trace`.
