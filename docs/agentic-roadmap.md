@@ -98,6 +98,7 @@ This backlog replaces the standalone remediation, findings, SDK roadmap, and can
 
 ### 3.1 Backend Agent Loop & Context
 
+- Default classification now runs through **Gemini Flash 2.5 Lite** with automatic OpenAI fallback, so `_classification_phase` emits the new provider/model metadata without adding extra tool steps (completed November 11, 2025).
 - Implement `SessionStateSnapshot.revision_context()` so every tool invocation records arguments hash, output hash, timestamps, success state, and reasoning; hydrate this inside `PlannerExecutorFlow.initialize_context` and expose helpers such as `ctx.revision_context.should_refresh('web')`.
 
 - Route revisions through `SingleAgentController._agentic_event_stream`, drop sequencer lane pre-seeding for cached runs, and let the planner decide which tools to call via adapters supplied by `PlannerOrchestratorAdapter`.

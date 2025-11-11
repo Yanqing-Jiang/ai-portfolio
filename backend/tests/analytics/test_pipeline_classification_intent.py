@@ -33,7 +33,14 @@ def test_classification_phase_populates_artifact(monkeypatch: pytest.MonkeyPatch
     async def _run() -> None:
         pipeline = planner_executor.PlannerPipeline()
 
-        async def fake_classify(query: str, *, session_id: str, model: str, reasoning_effort: str):
+        async def fake_classify(
+            query: str,
+            *,
+            session_id: str,
+            model: str,
+            reasoning_effort: str,
+            provider: Optional[str] = None,
+        ):
             return OffTopicClassifierSchema(
                 is_financial_query=True,
                 confidence=0.92,
@@ -53,7 +60,7 @@ def test_classification_phase_populates_artifact(monkeypatch: pytest.MonkeyPatch
         assert artifact is not None
         assert artifact.category == "financial_analytics"
         assert artifact.is_financial is True
-        assert artifact.model == "gpt-5-nano-2025-08-07"
+        assert artifact.model == "gemini-2.5-flash-lite"
         assert artifact.raw.get("topic_category") == "financial_analytics"
 
     asyncio.run(_run())
@@ -65,7 +72,14 @@ async def test_classification_runs_parallel_slot_resolution(monkeypatch: pytest.
     classifier_started = asyncio.Event()
     resolver_started = asyncio.Event()
 
-    async def fake_classify(query: str, *, session_id: str, model: str, reasoning_effort: str) -> OffTopicClassifierSchema:
+    async def fake_classify(
+        query: str,
+        *,
+        session_id: str,
+        model: str,
+        reasoning_effort: str,
+        provider: Optional[str] = None,
+    ) -> OffTopicClassifierSchema:
         classifier_started.set()
         await asyncio.wait_for(resolver_started.wait(), timeout=1.0)
         return OffTopicClassifierSchema(
@@ -103,7 +117,14 @@ async def test_classification_runs_parallel_slot_resolution(monkeypatch: pytest.
 async def test_classification_emits_single_reasoning(monkeypatch: pytest.MonkeyPatch) -> None:
     flow = planner_executor.PlannerExecutorFlow(flow_mode=planner_executor.FlowMode.SINGLE_AGENT)
 
-    async def fake_classify(query: str, *, session_id: str, model: str, reasoning_effort: str) -> OffTopicClassifierSchema:
+    async def fake_classify(
+        query: str,
+        *,
+        session_id: str,
+        model: str,
+        reasoning_effort: str,
+        provider: Optional[str] = None,
+    ) -> OffTopicClassifierSchema:
         return OffTopicClassifierSchema(
             is_financial_query=True,
             confidence=0.88,
@@ -223,7 +244,14 @@ def test_intent_phase_populates_artifact(monkeypatch: pytest.MonkeyPatch) -> Non
     async def _run() -> None:
         pipeline = planner_executor.PlannerPipeline()
 
-        async def fake_classify(query: str, *, session_id: str, model: str, reasoning_effort: str):
+        async def fake_classify(
+            query: str,
+            *,
+            session_id: str,
+            model: str,
+            reasoning_effort: str,
+            provider: Optional[str] = None,
+        ):
             return OffTopicClassifierSchema(
                 is_financial_query=True,
                 confidence=0.9,
@@ -430,7 +458,14 @@ def test_sql_pipeline_artifacts(monkeypatch: pytest.MonkeyPatch) -> None:
         pipeline = planner_executor.PlannerPipeline(response_search=response_search)
         pipeline.unified_client = FakeUnifiedClient()
 
-        async def fake_classify(query: str, *, session_id: str, model: str, reasoning_effort: str):
+        async def fake_classify(
+            query: str,
+            *,
+            session_id: str,
+            model: str,
+            reasoning_effort: str,
+            provider: Optional[str] = None,
+        ):
             return OffTopicClassifierSchema(
                 is_financial_query=True,
                 confidence=0.91,
