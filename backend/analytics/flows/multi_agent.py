@@ -113,7 +113,7 @@ import contextlib
 import statistics
 import logging
 import uuid
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 from dataclasses import dataclass, field
 from typing import Any, AsyncGenerator, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple, TYPE_CHECKING
 
@@ -1507,8 +1507,13 @@ class MultiAgentFlow:
         try:
             recorded = datetime.fromisoformat(str(timestamp))
         except ValueError:
+            logger.warning("[SUPERVISOR] invalid receipt timestamp: %s", timestamp)
             return False
-        age_seconds = (datetime.utcnow() - recorded).total_seconds()
+        if recorded.tzinfo is None:
+            recorded = recorded.replace(tzinfo=timezone.utc)
+        else:
+            recorded = recorded.astimezone(timezone.utc)
+        age_seconds = (datetime.now(timezone.utc) - recorded).total_seconds()
         return age_seconds <= ttl_seconds
 
     def __init__(self) -> None:
@@ -2777,6 +2782,9 @@ class MultiAgentFlow:
                     self._annotate(end_event),
                     hook_ctx.get("session_id"),
                 )
+        if ensure_session_event and not session_emitted:
+            session_identifier = hook_ctx.get("session_id") or "unknown_session"
+            raise RuntimeError(f"session_started event missing for {session_identifier}")
 
     async def _intent_stage(self) -> AsyncGenerator[Dict[str, Any], None]:
         state = self._sequencer_state
