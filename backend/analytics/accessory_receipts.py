@@ -23,10 +23,13 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import logging
 from typing import Any, Dict, Mapping, Optional, Sequence
 
 from analytics.flows.sequencer import LANE_TOOL_MAP
 from analytics.validators import sanitize_for_json
+
+logger = logging.getLogger(__name__)
 
 
 def _normalize_timestamp(value: Optional[str]) -> Optional[datetime]:
@@ -38,9 +41,14 @@ def _normalize_timestamp(value: Optional[str]) -> Optional[datetime]:
     if text.endswith("Z"):
         text = f"{text[:-1]}+00:00"
     try:
-        return datetime.fromisoformat(text)
+        parsed = datetime.fromisoformat(text)
     except ValueError:
         return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    else:
+        parsed = parsed.astimezone(timezone.utc)
+    return parsed
 
 
 def _candidate_tools(lane: str) -> Sequence[str]:
@@ -85,10 +93,11 @@ def _compute_age_seconds(receipt: Mapping[str, Any]) -> Optional[int]:
     parsed = _normalize_timestamp(timestamp)
     if parsed is None:
         return None
-    delta = datetime.now(timezone.utc) - parsed
     try:
+        delta = datetime.now(timezone.utc) - parsed
         return max(int(delta.total_seconds()), 0)
-    except OverflowError:
+    except (OverflowError, TypeError) as exc:
+        logger.debug("Failed to compute receipt age: %s", exc)
         return None
 
 

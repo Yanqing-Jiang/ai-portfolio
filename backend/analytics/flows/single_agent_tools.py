@@ -1288,6 +1288,12 @@ class SingleAgentController:
             plan_template=self._agent_plan_template,
             retry_policy=dict(self._agent_settings.get("retry_policy") or {}),
         )
+        runtime_flag = self._agent_settings.get("enable_runtime")
+        runtime_allowed = True if runtime_flag is None else bool(runtime_flag)
+        runtime_env = os.getenv("ANALYTICS_AGENT_RUNTIME_ENABLED")
+        if runtime_env:
+            runtime_allowed = runtime_env.strip().lower() in {"1", "true", "yes", "on"}
+        self._agent_runtime_allowed = runtime_allowed
         self._agent_snapshot: Optional[SessionStateSnapshot] = None
         self._agent_memory: Optional[AgentMemory] = None
 
@@ -1488,7 +1494,7 @@ class SingleAgentController:
         use_agent = (
             use_agent_override
             if use_agent_override is not None
-            else (self._agents_enabled and self._agent is not None)
+            else self._should_use_agent_runtime()
         )
         intent_runner = self._intent_stage
         if use_agent:
@@ -1518,6 +1524,12 @@ class SingleAgentController:
             optional_lanes=("web", "market"),
             lane_complete_callback=callback,
         )
+
+    def _should_use_agent_runtime(self) -> bool:
+        if not (self._agent_runtime_allowed and self._agents_enabled and self._agent is not None):
+            return False
+        prefer_agentic = bool(self._agentic_revision_mode or self._session_follow_up)
+        return prefer_agentic
 
     async def _intent_stage(self) -> AsyncGenerator[Dict[str, Any], None]:
         state = self._sequencer_state
@@ -1829,6 +1841,98 @@ class SingleAgentController:
 
         async for evt in _drain_queue():
             yield evt
+        await self._planner._persist_session_state(ctx, record_artifacts=True)
+        if self._agent_runtime_needs_fallback(ctx):
+            async for event in self._run_agent_runtime_fallback(state):
+                yield event
+
+    def _agent_runtime_needs_fallback(self, ctx: PlannerPhaseContext) -> bool:
+        return any(
+            [
+                self._is_sql_missing(ctx),
+                self._is_web_missing(ctx),
+                self._is_market_missing(ctx),
+                self._is_analysis_missing(ctx),
+            ]
+        )
+
+    async def _run_agent_runtime_fallback(
+        self,
+        state: "_SequencerRunState",
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        ctx = state.ctx
+        if getattr(ctx, "halted", False):
+            return
+        missing_sql = self._is_sql_missing(ctx)
+        missing_web = self._is_web_missing(ctx)
+        missing_market = self._is_market_missing(ctx)
+        missing_analysis = self._is_analysis_missing(ctx) or missing_sql
+        if missing_sql:
+            async for event in self._sql_stage():
+                yield event
+        if missing_web:
+            async for event in self._web_stage():
+                yield event
+        if missing_market:
+            async for event in self._market_stage():
+                yield event
+        if missing_analysis:
+            async for event in self._analysis_stage():
+                yield event
+
+    @staticmethod
+    def _is_sql_missing(ctx: PlannerPhaseContext) -> bool:
+        artifacts = getattr(ctx, "artifacts", None)
+        if artifacts is None:
+            return True
+        if getattr(ctx, "reused_sql", False):
+            return False
+        sql_art = getattr(artifacts, "sql_generation", None)
+        if sql_art and getattr(sql_art, "sql", None):
+            return False
+        return True
+
+    @staticmethod
+    def _is_web_missing(ctx: PlannerPhaseContext) -> bool:
+        artifacts = getattr(ctx, "artifacts", None)
+        if artifacts is None:
+            return True
+        if getattr(ctx, "reused_web", False):
+            return False
+        web_art = getattr(artifacts, "web", None)
+        if web_art is None:
+            return True
+        has_summary = isinstance(getattr(web_art, "summary", None), str) and bool(web_art.summary.strip())
+        has_snippets = bool(getattr(web_art, "snippets", None))
+        return not (has_summary or has_snippets)
+
+    @staticmethod
+    def _is_market_missing(ctx: PlannerPhaseContext) -> bool:
+        artifacts = getattr(ctx, "artifacts", None)
+        if artifacts is None:
+            return True
+        if getattr(ctx, "reused_market", False) or getattr(ctx, "reused_stock", False):
+            return False
+        market_art = getattr(artifacts, "market", None)
+        if market_art is None:
+            return True
+        snapshot = getattr(market_art, "snapshot", None)
+        return not bool(snapshot)
+
+    @staticmethod
+    def _is_analysis_missing(ctx: PlannerPhaseContext) -> bool:
+        artifacts = getattr(ctx, "artifacts", None)
+        if artifacts is None:
+            return True
+        if getattr(ctx, "reused_analysis", False):
+            return False
+        analysis_art = getattr(artifacts, "analysis", None)
+        if analysis_art is None:
+            return True
+        analysis_text = getattr(analysis_art, "analysis_text", None) or getattr(analysis_art, "analysis", None)
+        chart_art = getattr(artifacts, "chart", None)
+        has_chart = bool(chart_art and getattr(chart_art, "spec", None))
+        return not (bool(analysis_text) and has_chart)
 
     async def _persist_runtime_metadata(
         self,
@@ -2000,6 +2104,13 @@ class SingleAgentController:
         if not tool_name:
             return None
         return cls.LANE_TOOL_LOOKUP.get(str(tool_name).strip().lower())
+
+    @staticmethod
+    def _clarification_required(ctx: PlannerPhaseContext) -> bool:
+        intent = getattr(ctx, "intent", None)
+        if intent is None:
+            return True
+        return bool(getattr(intent, "clarifications_needed", False))
 
     @staticmethod
     def _normalize_tool_key(name: Optional[str]) -> Optional[str]:
@@ -2204,6 +2315,31 @@ class SingleAgentController:
         normalized_key = self._normalize_tool_key(registry_name or definition.name) or definition.name
         tool_label = registry_name or definition.name
         lane = self._lane_for_tool(registry_name) or self._lane_for_tool(definition.name)
+        if registry_name == "clarification" and not self._clarification_required(ctx):
+            summary = "Clarification skipped - slots already satisfied."
+            await self._emit_tool_event(
+                run_context,
+                event_name="tool_result",
+                tool=tool_label,
+                lane=lane,
+                status="skipped",
+                session_id=session_id,
+                attempt=0,
+                retry_count=0,
+                summary=summary,
+                extra={"reason": "slots_already_resolved", "from_cache": True},
+            )
+            telemetry.tool_iteration(
+                tool=tool_label,
+                status="skipped",
+                step=lane,
+                session_id=session_id,
+                flow=self.flow_label,
+                agents_run_id=run_context.run_id,
+                agent_role="single_agent",
+                details={"reason": "slots_already_resolved"},
+            )
+            return {"status": "skipped", "summary": summary, "reused": True}
         current_attempt = self._tool_attempts.get(normalized_key, 0)
         if self._tool_retry_limit and current_attempt >= self._tool_retry_limit:
             retry_count_value = max(current_attempt - 1, 0)
