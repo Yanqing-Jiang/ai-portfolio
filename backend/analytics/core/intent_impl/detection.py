@@ -94,10 +94,30 @@
 #   Called from: Internal to analytics.core.intent_impl.detection
 #   Invokes: analytics.core.intent_impl.models.IntentModel, analytics.core.intent_impl.models.ClarificationSuggestionModel
 #   Why: Keeps analytics.core.intent_impl.detection from duplicating llm to runtime intent behavior across flows.
+# Function: _resolve_classifier_provider
+#   Role: Decides which classifier backend (Gemini or OpenAI) should run.
+#   Called from: analytics.core.intent_impl.detection.classify_query_async
+#   Invokes: None
+#   Why: Keeps provider resolution logic centralized so flows do not reimplement env parsing.
+# Function: _resolve_classifier_model
+#   Role: Normalizes which model string we should pass to a classifier backend.
+#   Called from: analytics.core.intent_impl.detection.classify_query_async
+#   Invokes: None
+#   Why: Ensures analytics.core.intent_impl.detection consistently maps providers to model names.
+# Function: _classify_with_openai
+#   Role: Executes the legacy OpenAI classifier call returning OffTopicClassifierSchema data.
+#   Called from: analytics.core.intent_impl.detection.classify_query_async
+#   Invokes: unified_responses_client.get_unified_client
+#   Why: Keeps OpenAI-specific logic decoupled from provider routing.
+# Function: _classify_with_gemini
+#   Role: Invokes Gemini Flash to classify queries into OffTopicClassifierSchema format.
+#   Called from: analytics.core.intent_impl.detection.classify_query_async
+#   Invokes: gemini_service._GenerativeModel, asyncio.to_thread
+#   Why: Provides the new faster classification backend without touching downstream flows.
 # Function: classify_query_async
 #   Role: Async helper used by agents that already run inside an event loop.
 #   Called from: analytics.core.intent, analytics.core.intent_impl, analytics.flows.planner_executor
-#   Invokes: unified_responses_client.get_unified_client
+#   Invokes: analytics.core.intent_impl.detection._classify_with_openai, analytics.core.intent_impl.detection._classify_with_gemini
 #   Why: Supports downstream analytics workflows that rely on classify_query_async.
 # Function: classify_query
 #   Role: Synchronous wrapper for classification.
@@ -128,8 +148,22 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 from typing import Any, Dict, List, Mapping, Optional, Sequence
+
+try:  # pragma: no cover - optional dependency wiring
+    from gemini_service import (  # type: ignore
+        GEMINI_API_KEY as _GEMINI_API_KEY,
+        _GenerativeModel as _GeminiGenerativeModel,
+        _genai_configure as _gemini_configure,
+        google_genai as _google_genai,
+    )
+except Exception:  # pragma: no cover - optional dependency wiring
+    _GEMINI_API_KEY = None
+    _GeminiGenerativeModel = None
+    _gemini_configure = None
+    _google_genai = None
 
 from unified_responses_client import get_unified_client
 
@@ -156,6 +190,10 @@ from ..companies import resolve_alias_to_ticker, sanitize_ticker
 from ..slot_catalog import get_slot_catalog, IntentSlotDefinition, SlotOption
 
 logger = logging.getLogger(__name__)
+
+_CLASSIFIER_PROVIDER_ENV = (os.getenv("ANALYTICS_CLASSIFIER_PROVIDER") or "gemini").strip().lower()
+_DEFAULT_OPENAI_CLASSIFIER_MODEL = os.getenv("OPENAI_CLASSIFIER_MODEL", "gpt-5-nano-2025-08-07")
+_DEFAULT_GEMINI_CLASSIFIER_MODEL = os.getenv("GEMINI_CLASSIFIER_MODEL", "gemini-2.5-flash-lite")
 
 
 # ---------------------------------------------------------------------------
@@ -1272,16 +1310,32 @@ def _llm_to_runtime_intent(llm_res: LLMIntentModel) -> IntentModel:
     )
 
 
-async def classify_query_async(
+def _resolve_classifier_provider(provider: Optional[str]) -> str:
+    candidate = (provider or _CLASSIFIER_PROVIDER_ENV or "gemini").strip().lower()
+    if candidate not in {"gemini", "openai"}:
+        candidate = "gemini"
+    return candidate
+
+
+def _resolve_classifier_model(provider: str, override: Optional[str]) -> str:
+    if override:
+        return override
+    if provider == "gemini":
+        return _DEFAULT_GEMINI_CLASSIFIER_MODEL
+    return _DEFAULT_OPENAI_CLASSIFIER_MODEL
+
+
+async def _classify_with_openai(
     query: str,
     *,
-    session_id: Optional[str] = None,
-    model: str = "gpt-5-nano-2025-08-07",
-    reasoning_effort: str = "low",
+    session_id: Optional[str],
+    model: str,
+    reasoning_effort: str,
 ) -> OffTopicClassifierSchema:
-    """Async helper used by agents that already run inside an event loop."""
-
     client = get_unified_client()
+    if client is None:
+        raise RuntimeError("OpenAI client unavailable")
+
     messages = [
         {
             "role": "system",
@@ -1306,12 +1360,126 @@ async def classify_query_async(
     return result
 
 
+async def _classify_with_gemini(
+    query: str,
+    *,
+    session_id: Optional[str],
+    model: str,
+    reasoning_effort: str,
+) -> OffTopicClassifierSchema:
+    if _GeminiGenerativeModel is None or _gemini_configure is None or _google_genai is None:
+        raise RuntimeError("Gemini SDK unavailable")
+
+    api_key = os.getenv("GEMINI_API_KEY") or _GEMINI_API_KEY
+    if not api_key:
+        raise RuntimeError("Gemini API key not configured")
+
+    _ = reasoning_effort  # Gemini Flash Lite does not expose this knob.
+    _gemini_configure(api_key=api_key)
+
+    prompt = (
+        "You classify analytics queries for a financial insights copilot. "
+        "Return only JSON with keys is_financial_query (bool), confidence (0-1 float), "
+        "topic_category (string), polite_decline_message (string or null), "
+        "suggested_rephrase (string or null).\n"
+        f"Session: {session_id or 'n/a'}\n"
+        f"Query: {query}"
+    )
+    generation_config = {
+        "temperature": 0.1,
+        "top_p": 0.8,
+        "max_output_tokens": 512,
+        "response_mime_type": "application/json",
+    }
+    generator = _GeminiGenerativeModel(model, generation_config)
+
+    try:
+        response = await asyncio.to_thread(generator.generate_content, contents=prompt)
+    except Exception as exc:  # pragma: no cover - network call
+        raise RuntimeError(f"Gemini classifier call failed: {exc}") from exc
+
+    raw_payload: Optional[str]
+    if isinstance(response, dict):
+        raw_payload = response.get("text")  # type: ignore[arg-type]
+        if not raw_payload:
+            raw_payload = json.dumps(response)
+    else:
+        raw_payload = str(response)
+
+    try:
+        parsed = json.loads(raw_payload or "{}")
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("Gemini classifier returned invalid JSON") from exc
+
+    if not isinstance(parsed, dict):
+        raise RuntimeError("Gemini classifier payload must be an object")
+
+    def _coerce_conf(value: Any) -> float:
+        try:
+            conf = float(value)
+        except (TypeError, ValueError):
+            conf = 0.0
+        return max(0.0, min(1.0, conf))
+
+    is_financial = bool(parsed.get("is_financial_query"))
+    topic_category = parsed.get("topic_category")
+    if not isinstance(topic_category, str) or not topic_category.strip():
+        topic_category = "financial_analytics" if is_financial else "other"
+
+    return OffTopicClassifierSchema(
+        is_financial_query=is_financial,
+        confidence=_coerce_conf(parsed.get("confidence")),
+        topic_category=topic_category,
+        polite_decline_message=parsed.get("polite_decline_message"),
+        suggested_rephrase=parsed.get("suggested_rephrase"),
+    )
+
+
+async def classify_query_async(
+    query: str,
+    *,
+    session_id: Optional[str] = None,
+    model: Optional[str] = None,
+    reasoning_effort: str = "low",
+    provider: Optional[str] = None,
+) -> OffTopicClassifierSchema:
+    """Async helper that routes between Gemini (default) and OpenAI classifiers."""
+
+    resolved_provider = _resolve_classifier_provider(provider)
+    target_model = _resolve_classifier_model(resolved_provider, model)
+
+    if resolved_provider == "gemini":
+        try:
+            return await _classify_with_gemini(
+                query,
+                session_id=session_id,
+                model=target_model,
+                reasoning_effort=reasoning_effort,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Gemini classifier failed (%s); falling back to OpenAI for session %s",
+                exc,
+                session_id,
+            )
+            resolved_provider = "openai"
+            target_model = _resolve_classifier_model(resolved_provider, None)
+
+    return await _classify_with_openai(
+        query,
+        session_id=session_id,
+        model=target_model,
+        reasoning_effort=reasoning_effort,
+    )
+
+
 def classify_query(
     query: str,
     *,
     session_id: Optional[str] = None,
-    model: str = "gpt-5-nano-2025-08-07",
+    model: Optional[str] = None,
     reasoning_effort: str = "low",
+    provider: Optional[str] = None,
 ) -> OffTopicClassifierSchema:
     """Synchronous wrapper for classification."""
 
@@ -1323,6 +1491,7 @@ def classify_query(
             session_id=session_id,
             model=model,
             reasoning_effort=reasoning_effort,
+            provider=provider,
         ))
     else:
         return loop.run_until_complete(classify_query_async(
@@ -1330,6 +1499,7 @@ def classify_query(
             session_id=session_id,
             model=model,
             reasoning_effort=reasoning_effort,
+            provider=provider,
         ))
 
 
