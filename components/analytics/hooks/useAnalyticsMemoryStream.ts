@@ -1543,6 +1543,7 @@ export const useAnalyticsMemoryStream = (
   const toolTelemetryRef = useRef<ToolCallTelemetry[]>([]);
   const agentTurnsRef = useRef<AgentTurnTelemetry[]>([]);
   const agentReasoningRef = useRef<AgentReasoningTelemetry[]>([]);
+  const seenThoughtIdsRef = useRef<Set<string>>(new Set());
   const toolFanoutRef = useRef<{ manifest: ToolFanoutManifest[]; results: ToolFanoutResult[]; concurrencyLimit: number }>({ manifest: [], results: [], concurrencyLimit: 0 });
 
   const refreshFanoutState = useCallback(() => {
@@ -2160,6 +2161,9 @@ const workflowDataRef = useRef<{
       parallelGroup: meta?.parallel_group ?? payload.parallel_group,
       toolGroup: meta?.tool_group ?? payload.tool_group,
     };
+    if (!entry.toolGroup && typeof payload.tool_group === 'string') {
+      entry.toolGroup = payload.tool_group;
+    }
     const lane = resolveLane(payload, payload.metadata, { lane: meta?.parallel_group });
     if (lane) {
       entry.lane = lane;
@@ -2181,6 +2185,14 @@ const workflowDataRef = useRef<{
     }
     if (outputArtifacts && outputArtifacts.length) {
       entry.outputArtifacts = outputArtifacts;
+    }
+    const guardrailPayload =
+      payload.guardrail ??
+      payload.latency_guardrail ??
+      payload.metadata?.guardrail ??
+      payload.metadata?.latency_guardrail;
+    if (guardrailPayload) {
+      entry.guardrail = guardrailPayload as Record<string, any>;
     }
 
     toolTelemetryRef.current = [...toolTelemetryRef.current, entry].slice(-15);
@@ -2273,7 +2285,25 @@ const workflowDataRef = useRef<{
     if (outputArtifacts && outputArtifacts.length) {
       entry.outputArtifacts = outputArtifacts;
     }
-    agentTurnsRef.current = [...agentTurnsRef.current, entry].slice(-15);
+    const turnId = coerceString(payload.agent_turn_id ?? payload.turn_id ?? payload.tool_call?.id);
+    if (turnId) {
+      entry.id = turnId;
+    }
+    if (entry.id) {
+      const existingIndex = agentTurnsRef.current.findIndex((turn) => turn.id === entry.id);
+      if (existingIndex >= 0) {
+        const merged = { ...agentTurnsRef.current[existingIndex], ...entry };
+        agentTurnsRef.current = [
+          ...agentTurnsRef.current.slice(0, existingIndex),
+          merged,
+          ...agentTurnsRef.current.slice(existingIndex + 1),
+        ];
+      } else {
+        agentTurnsRef.current = [...agentTurnsRef.current, entry].slice(-15);
+      }
+    } else {
+      agentTurnsRef.current = [...agentTurnsRef.current, entry].slice(-15);
+    }
 
     const status: ProcessStep['status'] = payload.status === 'complete'
       ? 'completed'
@@ -2677,6 +2707,7 @@ const workflowDataRef = useRef<{
     toolTelemetryRef.current = [];
     agentTurnsRef.current = [];
     agentReasoningRef.current = [];
+    seenThoughtIdsRef.current = new Set();
     resultSentRef.current = false;
     summarySentRef.current = false;
     resultMessageIdRef.current = null;
@@ -2736,6 +2767,12 @@ const workflowDataRef = useRef<{
       const fallbackSessionId = coerceString(eventData.session_id ?? data.session_id);
       if (fallbackSessionId) {
         persistSessionId(fallbackSessionId);
+      }
+      if (rawThoughtId && isThinkingEvent) {
+        if (seenThoughtIdsRef.current.has(rawThoughtId)) {
+          return;
+        }
+        seenThoughtIdsRef.current.add(rawThoughtId);
       }
 
       // For lightweight events, extract step and timing info from top level
@@ -5361,6 +5398,7 @@ const workflowDataRef = useRef<{
     toolTelemetryRef.current = [];
     agentTurnsRef.current = [];
     agentReasoningRef.current = [];
+    seenThoughtIdsRef.current = new Set();
     sqlAttemptsRef.current = [];
     agentLaneStateRef.current = {};
     resultSentRef.current = false;

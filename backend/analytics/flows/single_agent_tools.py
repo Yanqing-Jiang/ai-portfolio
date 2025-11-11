@@ -62,6 +62,7 @@ from analytics.core import telemetry
 from analytics.core.telemetry import tool_iteration as log_tool_iteration
 from analytics.core.intent import OffTopicClassifierSchema
 from analytics.core.session_state import SessionStateSnapshot, get_session_state_repository
+from analytics.accessory_receipts import build_lane_reuse_event
 from analytics.core.cache import get_cache_service
 from analytics.validators import sanitize_for_json
 from analytics.routing import FollowUpRoute
@@ -1109,6 +1110,8 @@ class SingleAgentController:
     TOOL_END_EVENTS = {
         "classification_complete": "intent_classifier",
         "intent_detection_complete": "intent_classifier",
+        "clarification_complete": "clarification_manager",
+        "clarification_failed": "clarification_manager",
         "clarification_resolved": "clarification_manager",
         "clarification_skipped": "clarification_manager",
         "clarification_timeout": "clarification_manager",
@@ -1155,6 +1158,8 @@ class SingleAgentController:
     TOOL_METADATA_EVENT_MAP = {
         "classification_complete": "classification",
         "intent_detection_complete": "intent_detection",
+        "clarification_complete": "clarification",
+        "clarification_failed": "clarification",
         "clarification_resolved": "clarification",
         "clarification_skipped": "clarification",
         "clarification_timeout": "clarification",
@@ -1186,6 +1191,14 @@ class SingleAgentController:
     MULTI_PHASE_TOOL_CONFIG: Dict[str, Dict[str, Any]] = {
         "intent_classifier": {
             "terminal_events": {"intent_detection_complete"},
+        },
+        "clarification_manager": {
+            "terminal_events": {
+                "clarification_complete",
+                "clarification_failed",
+                "clarification_skipped",
+                "clarification_timeout",
+            },
         },
         "sql_generator": {
             "terminal_events": {"sql_validated"},
@@ -1330,6 +1343,7 @@ class SingleAgentController:
         self._session_follow_up = False
         self._lane_warning_events: Deque[Dict[str, Any]] = deque()
         self._lane_warning_emitted: Set[str] = set()
+        self._pending_lane_reuse_events: Deque[Dict[str, Any]] = deque()
 
     def set_session_follow_up(self, follow_up: bool) -> None:
         self._session_follow_up = bool(follow_up)
@@ -1380,6 +1394,7 @@ class SingleAgentController:
         state.is_revision_follow_up = is_revision_follow_up
         setattr(ctx, "is_revision_follow_up", is_revision_follow_up)
         state.session_id = ctx.session_id
+        reuse_intent = False
         if is_revision_follow_up:
             confidence = (
                 float(getattr(cached_classification, "confidence", 0.0) or 0.0)
@@ -1422,39 +1437,40 @@ class SingleAgentController:
             else:
                 if classification_artifact is None:
                     ctx.is_financial_query = True
-            if reuse_intent:
-                executed.update({"intent_detection", "clarification", "plan_generation"})
-                intent_skip_reason = "cached_intent" if cached_classification is not None else "revision_context"
-                log_tool_iteration(
-                    tool="intent_classifier",
-                    status="skipped",
-                    step="intent_detection",
-                    session_id=ctx.session_id,
-                    flow=self.flow_label,
-                    details={
-                        "reason": intent_skip_reason,
-                        "confidence": confidence,
-                    },
-                )
-                log_tool_iteration(
-                    tool="clarification_manager",
-                    status="skipped",
-                    step="clarification",
-                    session_id=ctx.session_id,
-                    flow=self.flow_label,
-                    details={"reason": intent_skip_reason},
-                )
-                log_tool_iteration(
-                    tool="planner",
-                    status="skipped",
-                    step="plan_generation",
-                    session_id=ctx.session_id,
-                    flow=self.flow_label,
-                    details={"reason": intent_skip_reason},
-                )
+        if reuse_intent:
+            executed.update({"intent_detection", "clarification", "plan_generation"})
+            intent_skip_reason = "cached_intent" if cached_classification is not None else "revision_context"
+            log_tool_iteration(
+                tool="intent_classifier",
+                status="skipped",
+                step="intent_detection",
+                session_id=ctx.session_id,
+                flow=self.flow_label,
+                details={
+                    "reason": intent_skip_reason,
+                    "confidence": confidence,
+                },
+            )
+            log_tool_iteration(
+                tool="clarification_manager",
+                status="skipped",
+                step="clarification",
+                session_id=ctx.session_id,
+                flow=self.flow_label,
+                details={"reason": intent_skip_reason},
+            )
+            log_tool_iteration(
+                tool="planner",
+                status="skipped",
+                step="plan_generation",
+                session_id=ctx.session_id,
+                flow=self.flow_label,
+                details={"reason": intent_skip_reason},
+            )
             ctx.intent_reused = reuse_intent
             await self._planner._persist_session_state(ctx, record_artifacts=True)
         self._sequencer_state = state
+        self._prime_lane_reuse_events(ctx)
         return state
 
     def build_planner_orchestrator(
@@ -3065,19 +3081,30 @@ class SingleAgentController:
     ) -> Optional[Dict[str, Any]]:
         label = LANE_LABELS.get(lane, lane.title())
         message = f"{label} lane reused - cached artifacts still valid."
-        event = EventEmitter.status("lane_reused", message)
+        receipts_payload: Dict[str, Dict[str, Any]] = {}
+        tool_receipts = getattr(ctx, "tool_receipts", {}) or {}
+        for tool_name, receipt in tool_receipts.items():
+            if isinstance(receipt, ToolInvocationReceipt):
+                receipts_payload[tool_name] = receipt.to_dict()
+        base_payload = {
+            "lane": lane,
+            "reused": True,
+            "ts": datetime.utcnow().isoformat(),
+            "reason": reason,
+            "source": "agentic_revision",
+            "revision": True,
+        }
+        event = None
+        if receipts_payload:
+            event = build_lane_reuse_event(lane, base_payload, receipts=receipts_payload)
+        if event is None:
+            event = EventEmitter.status("lane_reused", message)
+            data = event.setdefault("data", {})
+            data.update(base_payload)
+        else:
+            event.setdefault("data", {}).setdefault("message", message)
         data = event.setdefault("data", {})
-        data.update(
-            {
-                "lane": lane,
-                "reused": True,
-                "ts": datetime.utcnow().isoformat(),
-                "reason": reason,
-                "source": "agentic_revision",
-                "revision": True,
-                "follow_up_route": getattr(ctx, "follow_up_route", FollowUpRoute.FULL_PIPELINE).value,
-            }
-        )
+        data["follow_up_route"] = getattr(ctx, "follow_up_route", FollowUpRoute.FULL_PIPELINE).value
         session_identifier = getattr(ctx, "session_id", None)
         if session_identifier:
             data["session_id"] = session_identifier
@@ -3113,6 +3140,34 @@ class SingleAgentController:
         lane_states[lane] = "reused"
         return self._build_lane_reuse_event(ctx, lane, reason=reason)
 
+    def _prime_lane_reuse_events(self, ctx: PlannerPhaseContext) -> None:
+        candidate_reasons: Dict[str, str] = {
+            "sql": "cached_sql_artifacts",
+            "chart": "cached_chart_artifacts",
+            "analysis": "cached_analysis_artifacts",
+            "web": "cached_web_artifacts",
+            "market": "cached_market_artifacts",
+        }
+        revision_ctx = getattr(ctx, "revision_context", None)
+        lane_overrides = dict(getattr(ctx, "lane_refresh_required", {}) or {})
+        pending: Deque[Dict[str, Any]] = deque()
+        seen: Set[str] = set()
+        for lane, reason in candidate_reasons.items():
+            override = lane_overrides.get(lane)
+            should_refresh = revision_ctx.should_refresh(lane) if revision_ctx else True
+            wants_reuse = False
+            if override is False:
+                wants_reuse = True
+            elif override is None and should_refresh is False:
+                wants_reuse = True
+            if not wants_reuse or lane in seen:
+                continue
+            event = self._build_lane_reuse_event(ctx, lane, reason=reason)
+            if event:
+                pending.append(event)
+                seen.add(lane)
+        self._pending_lane_reuse_events = pending
+
     def set_follow_up_route(self, route: FollowUpRoute) -> None:
         resolved = self._resolve_agentic_route(route)
         self.follow_up_route = resolved
@@ -3120,6 +3175,15 @@ class SingleAgentController:
 
     def set_revision_targets(self, targets: Iterable[str]) -> None:
         self._planner.set_revision_targets(targets)
+
+    def _drain_lane_reuse_events(
+        self,
+        hook_ctx: Dict[str, Any],
+    ) -> Iterable[Dict[str, Any]]:
+        session_identifier = hook_ctx.get("session_id")
+        while self._pending_lane_reuse_events:
+            event = self._pending_lane_reuse_events.popleft()
+            yield self._maybe_tag_session_metadata(copy.deepcopy(event), session_identifier)
 
     async def _forward_with_hooks(
         self,
@@ -3157,6 +3221,8 @@ class SingleAgentController:
                 yield start_event
             async for session_event in _maybe_emit_session_event():
                 yield session_event
+            for reuse_event in self._drain_lane_reuse_events(hook_ctx):
+                yield reuse_event
             async for event in stream:
                 async for pre_event in hooks.before_event(hook_ctx, event):
                     yield self._maybe_tag_session_metadata(pre_event, hook_ctx.get("session_id"))
@@ -3201,6 +3267,11 @@ class SingleAgentController:
                     yield cancel_event
             async for end_event in hooks.on_flow_end(hook_ctx):
                 yield end_event
+        finally:
+            self._pending_lane_reuse_events.clear()
+        if ensure_session_event and not session_emitted:
+            session_identifier = hook_ctx.get("session_id") or "unknown_session"
+            raise RuntimeError(f"session_started event missing for {session_identifier}")
 
     async def _emit_cancellation_event(
         self,
@@ -3287,6 +3358,7 @@ class SingleAgentController:
             if getattr(revision_directive, "search_topics", None):
                 ctx.revision_search_topics = list(revision_directive.search_topics)
         registry = self._registry
+        self._prime_lane_reuse_events(ctx)
         tool_stream = registry.invoke(tool_name, self._planner._pipeline, ctx, **kwargs)
         async for event in self._forward_with_hooks(tool_stream, hooks, session_id, ensure_session_event=True):
             yield event
@@ -3571,6 +3643,7 @@ class SingleAgentController:
         if directive and getattr(directive, "search_topics", None):
             ctx.revision_search_topics = list(directive.search_topics)
         _reset_revision_accessories(ctx, {"web"})
+        self._prime_lane_reuse_events(ctx)
 
         async def _stream() -> AsyncGenerator[Dict[str, Any], None]:
             async for event in self._planner.invoke_tool(
@@ -3595,6 +3668,7 @@ class SingleAgentController:
         hooks = _SingleAgentToolHooks(self, session_id=session_id)
         ctx = await self._planner.initialize_context(query or "", session_id=session_id)
         _reset_revision_accessories(ctx, {"market"})
+        self._prime_lane_reuse_events(ctx)
 
         async def _stream() -> AsyncGenerator[Dict[str, Any], None]:
             async for event in self._planner.invoke_tool(
@@ -3636,6 +3710,7 @@ class SingleAgentController:
         ctx.reused_analysis = False
         ctx.web_ready_emitted = False
         _reset_revision_accessories(ctx, {"web", "market"})
+        self._prime_lane_reuse_events(ctx)
         sql_artifact = getattr(ctx.artifacts, "sql_generation", None)
         analysis_artifact = getattr(ctx.artifacts, "analysis", None)
         missing_analysis = analysis_artifact is None or not getattr(analysis_artifact, "analysis_text", None)
