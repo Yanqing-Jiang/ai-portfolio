@@ -24,6 +24,7 @@ sys.modules["google.genai.types"] = genai_types_stub
 
 from analytics.agents.schema_clarifier import ClarifierDecision  # noqa: E402
 from analytics.core.intent import IntentModel, OffTopicClassifierSchema  # noqa: E402
+from analytics.core.intent_impl.models import IntentResolutionModel, SlotStatusModel  # noqa: E402
 from analytics.core.state import QueryPlanModel  # noqa: E402
 from analytics.flows import planner_executor  # noqa: E402
 
@@ -56,6 +57,46 @@ def test_classification_phase_populates_artifact(monkeypatch: pytest.MonkeyPatch
         assert artifact.raw.get("topic_category") == "financial_analytics"
 
     asyncio.run(_run())
+
+
+@pytest.mark.asyncio
+async def test_classification_runs_parallel_slot_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
+    pipeline = planner_executor.PlannerPipeline()
+    classifier_started = asyncio.Event()
+    resolver_started = asyncio.Event()
+
+    async def fake_classify(query: str, *, session_id: str, model: str, reasoning_effort: str) -> OffTopicClassifierSchema:
+        classifier_started.set()
+        await asyncio.wait_for(resolver_started.wait(), timeout=1.0)
+        return OffTopicClassifierSchema(
+            is_financial_query=True,
+            confidence=0.9,
+            topic_category="financial_analytics",
+            polite_decline_message=None,
+            suggested_rephrase=None,
+        )
+
+    async def fake_resolve(query: str, configs: Dict[str, Any], *, mode: str, context_slots: Optional[Dict[str, Any]], session_id: str):
+        await asyncio.wait_for(classifier_started.wait(), timeout=1.0)
+        resolver_started.set()
+        return IntentResolutionModel(
+            slots={
+                "metric": SlotStatusModel(status="filled", value="Operating Margin", reason=None, suggestions=[], allow_custom=True)
+            },
+            followups=[],
+            notes="structured",
+        )
+
+    monkeypatch.setattr(planner_executor, "classify_query_async", fake_classify)
+    monkeypatch.setattr(planner_executor, "resolve_intent_slots_async", fake_resolve)
+
+    ctx = await pipeline.initialize_context("Compare NVDA operating margin vs peers", session_id="concurrency-session")
+
+    async for _ in pipeline.run_classification(ctx):
+        pass
+
+    assert ctx.intent_resolution is not None
+    assert ctx.intent_resolution.slots["metric"].value == "Operating Margin"
 
 
 def test_pipeline_events_runs_tools_in_order(monkeypatch: pytest.MonkeyPatch) -> None:

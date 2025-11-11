@@ -1094,14 +1094,27 @@ describe('useAnalyticsMemoryStream agent tool events', () => {
     });
   });
 
-  it('captures supervisor agent turn metadata including specialist tool', async () => {
+  it('captures supervisor agent turn metadata including specialist tool and deduplicates by agent_turn_id', async () => {
     const ts = new Date().toISOString();
     (globalThis as any).__TEST_EVENTS__ = [
       {
         event: 'agent_turn',
         data: {
+          agent_turn_id: 'turn-001',
           role: 'sql_specialist',
           status: 'start',
+          lane: 'sql',
+          tool: 'sql_specialist',
+          specialist: 'sql_specialist',
+          ts,
+        },
+      },
+      {
+        event: 'agent_turn',
+        data: {
+          agent_turn_id: 'turn-001',
+          role: 'sql_specialist',
+          status: 'complete',
           lane: 'sql',
           tool: 'sql_specialist',
           specialist: 'sql_specialist',
@@ -1119,11 +1132,12 @@ describe('useAnalyticsMemoryStream agent tool events', () => {
     const coordinationStep = result.current.processSteps.find((step) => step.id === 'agent_coordination');
     expect(coordinationStep).toBeDefined();
     const agentTurns = (coordinationStep?.details as any)?.agent_turns as any[] | undefined;
-    expect(agentTurns?.length).toBeGreaterThan(0);
-    const latest = agentTurns?.[agentTurns.length - 1];
+    expect(agentTurns?.length).toBe(1);
+    const latest = agentTurns?.[0];
     expect(latest?.lane).toBe('sql');
     expect(latest?.tool).toBe('sql_specialist');
     expect(latest?.specialist).toBe('sql_specialist');
+    expect(latest?.status).toBe('complete');
   });
 
   it('surfaces lane_reused events as reusable notices', async () => {
@@ -1140,6 +1154,7 @@ describe('useAnalyticsMemoryStream agent tool events', () => {
           message: 'Web lane reused from cache',
           age_seconds: 62,
           ts,
+          guardrail: { status: 'ok' },
         },
       },
       {
@@ -1156,6 +1171,7 @@ describe('useAnalyticsMemoryStream agent tool events', () => {
       expect(result.current.laneReuseNotices.length).toBeGreaterThan(0);
     });
     expect(result.current.laneReuseNotices[0].lane).toBe('web');
+    expect(result.current.laneReuseNotices[0].guardrail?.status).toBe('ok');
   });
 
   it('activates agentic revision flag when follow_up_route is agentic', async () => {
@@ -1212,6 +1228,49 @@ describe('useAnalyticsMemoryStream agent tool events', () => {
     });
     await waitFor(() => {
       expect(result.current.freshLaneStates.sql?.status).toBe('completed');
+    });
+  });
+
+  it('dedupes thinking events by thought_id', async () => {
+    (globalThis as any).__TEST_EVENTS__ = [
+      { event: 'session_started', data: { session_id: 'thought-dedupe' } },
+      {
+        event: 'progress',
+        event_type: 'thinking',
+        data: {
+          step: 'classification',
+          thought_id: 'classification:1',
+          thinking: 'Starting query classification...',
+          message: 'Starting query classification...',
+        },
+      },
+      {
+        event: 'progress',
+        event_type: 'thinking',
+        data: {
+          step: 'classification',
+          thought_id: 'classification:1',
+          thinking: 'Starting query classification...',
+          message: 'Starting query classification...',
+        },
+      },
+      {
+        event: 'classification_complete',
+        data: { is_financial: true, category: 'financial_analytics', confidence: 0.91 },
+      },
+      { event: 'workflow_complete', data: {} },
+      { event: 'done' },
+    ];
+    const { result } = renderHook(() => useAnalyticsMemoryStream('single-agent'));
+    await act(async () => {
+      await result.current.handleQuery('dedupe thinking events');
+    });
+    await waitFor(() => {
+      const classificationStep = result.current.processSteps.find((step) => step.id === 'classification');
+      const startingMessages = classificationStep?.thinking.filter((msg) =>
+        typeof msg === 'string' ? msg.includes('Starting query classification') : false,
+      );
+      expect(startingMessages?.length).toBe(1);
     });
   });
 

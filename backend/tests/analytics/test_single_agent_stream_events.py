@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import Any, Dict, List
 
 import pytest
 
@@ -190,3 +191,56 @@ async def test_stock_only_followups_emit_market_lane_reuse_event() -> None:
     assert data.get("lane") == "market"
     assert data.get("follow_up_route") == FollowUpRoute.STOCK_ONLY.value
     assert lane_states["market"] == "reused"
+
+
+@pytest.mark.asyncio
+async def test_forward_with_hooks_emits_prefetched_lane_reuse_events() -> None:
+    controller = _make_controller()
+    hooks = _SingleAgentToolHooks(controller, session_id="session-prefetch")
+    controller._pending_lane_reuse_events.append(
+        {"event": "lane_reused", "data": {"lane": "web", "reused": True}}
+    )
+
+    async def _stream():
+        yield {"event": "workflow_complete", "data": {}}
+
+    events: List[Dict[str, Any]] = []
+    async for event in controller._forward_with_hooks(_stream(), hooks, session_id="session-prefetch"):
+        events.append(event)
+
+    assert any(evt.get("event") == "lane_reused" and evt.get("data", {}).get("lane") == "web" for evt in events)
+
+
+@pytest.mark.asyncio
+async def test_forward_with_hooks_raises_when_session_missing() -> None:
+    controller = _make_controller()
+    hooks = _SingleAgentToolHooks(controller)
+
+    async def _stream():
+        yield {"event": "workflow_complete", "data": {}}
+
+    with pytest.raises(RuntimeError, match="session_started"):
+        async for _ in controller._forward_with_hooks(_stream(), hooks, session_id=None):
+            pass
+
+
+@pytest.mark.asyncio
+async def test_clarification_multi_phase_emits_single_completion() -> None:
+    controller = _make_controller()
+    hooks = _SingleAgentToolHooks(controller, session_id="clarification-multi-phase")
+
+    async def _stream():
+        yield {"event": "progress", "data": {"step": "clarification", "message": "Missing timeframe"}}
+        yield {"event": "progress", "data": {"step": "clarification", "message": "Missing metric"}}
+        yield {"event": "clarification_complete", "data": {"rounds": 2}}
+        yield {"event": "workflow_complete", "data": {}}
+
+    tool_events: List[Dict[str, Any]] = []
+    async for event in controller._forward_with_hooks(_stream(), hooks, session_id="clarification-multi-phase"):
+        if event.get("event") == "tool_call" and event.get("data", {}).get("tool") == "clarification_manager":
+            tool_events.append(event)
+
+    starts = [evt for evt in tool_events if evt["data"].get("status") == "start"]
+    completes = [evt for evt in tool_events if evt["data"].get("status") == "end"]
+    assert len(starts) == 1
+    assert len(completes) == 1

@@ -389,7 +389,12 @@ from analytics.core.types import (
 from analytics.core.context import get_configs
 from analytics.core.config_store import get_config_store
 from analytics.core.events import EventEmitter, TimedEventEmitter
-from analytics.core.session_state import SnapshotRevisionContext, SessionStateSnapshot, get_session_state_repository
+from analytics.core.session_state import (
+    SnapshotRevisionContext,
+    SessionStateSnapshot,
+    digest_tool_payload,
+    get_session_state_repository,
+)
 from analytics.core.lane_refresh import resolve_lane_ttls
 from analytics.core.revision_snapshot import (
     build_intent_signature,
@@ -666,6 +671,10 @@ class ToolInvocationReceipt:
     timestamp: str = field(default_factory=lambda: datetime.utcnow().isoformat())
     source_lane: Optional[str] = None
     reused_at_ms: Optional[int] = None
+    arguments_digest: Optional[str] = None
+    output_digest: Optional[str] = None
+    latency_guardrail: Optional[Dict[str, Any]] = None
+    guardrail: Optional[Dict[str, Any]] = None
 
     def __post_init__(self) -> None:
         if self.latency_ms is None and self.elapsed_ms is not None:
@@ -688,6 +697,14 @@ class ToolInvocationReceipt:
         }
         if self.metadata:
             payload["metadata"] = sanitize_for_json(self.metadata)
+        if self.arguments_digest:
+            payload["arguments_digest"] = self.arguments_digest
+        if self.output_digest:
+            payload["output_digest"] = self.output_digest
+        if self.latency_guardrail:
+            payload["latency_guardrail"] = sanitize_for_json(self.latency_guardrail)
+        if self.guardrail:
+            payload["guardrail"] = sanitize_for_json(self.guardrail)
         return {key: value for key, value in payload.items() if value is not None}
 
     @classmethod
@@ -708,6 +725,22 @@ class ToolInvocationReceipt:
             reused_at_ms = int(reused_at_candidate) if reused_at_candidate is not None else None
         except (TypeError, ValueError):
             reused_at_ms = None
+        arguments_digest = payload.get("arguments_digest")
+        if arguments_digest is not None:
+            arguments_digest = str(arguments_digest)
+        output_digest = payload.get("output_digest")
+        if output_digest is not None:
+            output_digest = str(output_digest)
+        latency_guardrail = payload.get("latency_guardrail")
+        if isinstance(latency_guardrail, Mapping):
+            latency_guardrail = sanitize_for_json(latency_guardrail)
+        else:
+            latency_guardrail = None
+        guardrail_payload = payload.get("guardrail")
+        if isinstance(guardrail_payload, Mapping):
+            guardrail_payload = sanitize_for_json(guardrail_payload)
+        else:
+            guardrail_payload = None
         return cls(
             tool=str(payload.get("tool") or ""),
             status=str(payload.get("status") or "unknown"),
@@ -722,6 +755,10 @@ class ToolInvocationReceipt:
             timestamp=str(payload.get("timestamp") or datetime.utcnow().isoformat()),
             source_lane=payload.get("source_lane") or payload.get("lane"),
             reused_at_ms=reused_at_ms,
+            arguments_digest=arguments_digest,
+            output_digest=output_digest,
+            latency_guardrail=latency_guardrail,
+            guardrail=guardrail_payload,
         )
 
 
@@ -747,7 +784,7 @@ class PlannerRevisionContext:
         if snapshot is None:
             return None
         snapshot_ctx: SnapshotRevisionContext = snapshot.revision_context()
-        lane_ttls = resolve_lane_ttls()
+        lane_ttls = dict(snapshot_ctx.lane_ttls) if snapshot_ctx.lane_ttls else resolve_lane_ttls()
         receipts: Dict[str, ToolInvocationReceipt] = {}
         for tool_name, payload in snapshot_ctx.tool_receipts.items():
             try:
@@ -959,6 +996,7 @@ SNAPSHOT_MAX_AGE_SECONDS = int(os.getenv("ANALYTICS_SNAPSHOT_MAX_AGE_SECONDS", "
 _WEB_TOOL_NAMES = {"web_retriever", "web_retriever_cached", "web_retriever_live"}
 _MARKET_TOOL_NAMES = {"stock_tracker", "market_question_a", "market_question_b"}
 FRESH_RUN_REASONING_EFFORT = "minimal"
+CLASSIFIER_TIMEOUT_SECONDS = float(os.getenv("ANALYTICS_CLASSIFIER_TIMEOUT_SECONDS", "2.5"))
 
 FOLLOW_UP_BANNERS: Dict[FollowUpRoute, Dict[str, str]] = {
     FollowUpRoute.FULL_PIPELINE: {
@@ -1073,6 +1111,43 @@ def _summarize_sql_rows(data: Optional[List[Dict[str, Any]]]) -> Dict[str, Any]:
         "metrics": metrics,
         "timeframe": timeframe,
     }
+
+
+def _build_classifier_fallback(reason: str) -> OffTopicClassifierSchema:
+    logger.warning("Classifier fallback engaged: %s", reason)
+    polite_message = (
+        "I'm focused on financial analytics questions. Please include a company, ticker, or metric if you need help."
+    )
+    return OffTopicClassifierSchema(
+        is_financial_query=True,
+        confidence=0.55,
+        topic_category="financial_analytics",
+        polite_decline_message=None,
+        suggested_rephrase=polite_message,
+    )
+
+
+async def _run_classifier_with_timeout(ctx: "PlannerPhaseContext", model_name: str) -> OffTopicClassifierSchema:
+    try:
+        return await asyncio.wait_for(
+            classify_query_async(
+                ctx.query,
+                session_id=ctx.session_id,
+                model=model_name,
+                reasoning_effort="low",
+            ),
+            timeout=CLASSIFIER_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "[CLASSIFICATION] Model timeout after %.2fs (session=%s)",
+            CLASSIFIER_TIMEOUT_SECONDS,
+            ctx.session_id,
+        )
+        return _build_classifier_fallback("timeout")
+    except Exception as exc:
+        logger.exception("[CLASSIFICATION] Model error; using fallback: %s", exc)
+        return _build_classifier_fallback(str(exc))
 
 
 def _set_sql_generation_artifact(
@@ -3084,6 +3159,12 @@ class PlannerPipeline:
         elapsed_ms = data.get("elapsed_ms")
         summary = data.get("summary")
         error_detail = data.get("error")
+        guardrail_metadata = (
+            data.get("latency_guardrail")
+            or data.get("guardrail")
+            or (metadata.get("latency_guardrail") if isinstance(metadata, Mapping) else None)
+            or (metadata.get("guardrail") if isinstance(metadata, Mapping) else None)
+        )
         event_payload: Dict[str, Any] = {
             "tool_call": {
                 "id": call_id,
@@ -3128,6 +3209,10 @@ class PlannerPipeline:
                 event_payload["result"] = sanitize_for_json(str(payload))
         if reused_flag is not None:
             event_payload["reused"] = bool(reused_flag)
+        if guardrail_metadata:
+            sanitized_guardrail = sanitize_for_json(guardrail_metadata)
+            event_payload["latency_guardrail"] = sanitized_guardrail
+            event_payload["guardrail"] = sanitized_guardrail
         event_name = "agent_tool_call" if status == "start" else "agent_tool_complete"
         self._memoize_agent_reasoning(
             ctx,
@@ -3269,6 +3354,10 @@ class PlannerPipeline:
             question_id = payload.get("question_id")
             if question_id and "question_id" not in metadata:
                 metadata["question_id"] = question_id
+        arguments_payload = data.get("arguments")
+        if arguments_payload is None and isinstance(metadata.get("arguments"), Mapping):
+            arguments_payload = metadata.get("arguments")
+        argument_digest = digest_tool_payload(arguments_payload)
         normalized_status = status or "unknown"
         if normalized_status in {"complete", "completed", "success"}:
             normalized_status = "completed"
@@ -3307,6 +3396,23 @@ class PlannerPipeline:
         output_payload = payload if isinstance(payload, Mapping) else None
         if output_payload:
             receipt.output_hash = _hash_payload(output_payload)
+        if argument_digest and not receipt.arguments_digest:
+            receipt.arguments_digest = argument_digest
+        output_digest = digest_tool_payload(output_payload)
+        if output_digest and not receipt.output_digest:
+            receipt.output_digest = output_digest
+        guardrail_payload = (
+            data.get("latency_guardrail")
+            or data.get("guardrail")
+            or metadata.get("latency_guardrail")
+            or metadata.get("guardrail")
+        )
+        if isinstance(guardrail_payload, Mapping):
+            sanitized_guardrail = sanitize_for_json(guardrail_payload)
+            metadata.setdefault("guardrail", sanitized_guardrail)
+            metadata.setdefault("latency_guardrail", sanitized_guardrail)
+            receipt.latency_guardrail = sanitized_guardrail
+            receipt.guardrail = sanitized_guardrail
         completed_at = data.get("completed_at") or data.get("ts")
         if completed_at:
             receipt.timestamp = str(completed_at)
@@ -5283,8 +5389,13 @@ async def _initialize_context(self, query: str, session_id: Optional[str]) -> Pl
     self._agent_tool_counters.clear()
     self._agent_tool_active_ids.clear()
     ctx.session_follow_up = bool(getattr(self, "session_follow_up", False))
-    hydrate_from_snapshot = bool(ctx.session_follow_up) or self.follow_up_route != FollowUpRoute.FULL_PIPELINE
-    snapshot = getattr(self, "_prefetched_snapshot", None) if hydrate_from_snapshot else None
+    prefetched_snapshot = getattr(self, "_prefetched_snapshot", None)
+    hydrate_from_snapshot = (
+        bool(ctx.session_follow_up)
+        or self.follow_up_route != FollowUpRoute.FULL_PIPELINE
+        or prefetched_snapshot is not None
+    )
+    snapshot = prefetched_snapshot if hydrate_from_snapshot else None
     snapshot_artifacts = _artifacts_from_snapshot(snapshot)
     revision_snapshot = extract_revision_snapshot(snapshot)
     if hydrate_from_snapshot and (snapshot_artifacts or revision_snapshot):
@@ -5348,27 +5459,38 @@ async def _classification_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerato
             "ts": classification_started_ts,
         },
     }
-    classification: Optional[OffTopicClassifierSchema] = None
-    try:
-        classification = await classify_query_async(
+
+    resolver_mode = _FLOW_MODE_TO_RESOLVER_MODE.get(ctx.flow_mode, "single_agent")
+    prior_slot_values = {
+        slot: status.value
+        for slot, status in (ctx.slot_statuses or {}).items()
+        if isinstance(status, SlotStatusModel) and status.value is not None
+    }
+    slot_task = asyncio.create_task(
+        resolve_intent_slots_async(
             ctx.query,
+            CONFIGS.__dict__,
+            mode=resolver_mode,
+            context_slots=prior_slot_values or None,
             session_id=ctx.session_id,
-            model=model_name,
-            reasoning_effort="low",
-        )
-    except Exception as exc:
-        logger.exception("[CLASSIFICATION] LLM classification failed: %s", exc)
-        error_event = EventEmitter.error(
-            "classification",
-            "Classification model unavailable",
-            details={"error": str(exc)},
-            code="CLASSIFIER_ERROR",
-        )
-        error_event["data"]["ts"] = datetime.utcnow().isoformat()
-        yield error_event
+        ),
+        name=f"intent-slots::{ctx.session_id}",
+    )
+    classifier_task = asyncio.create_task(
+        _run_classifier_with_timeout(ctx, model_name),
+        name=f"classifier::{ctx.session_id}",
+    )
+    try:
+        classification, slot_resolution = await asyncio.gather(classifier_task, slot_task)
+    except Exception:
+        classifier_task.cancel()
+        slot_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await classifier_task
+            await slot_task
         raise
-    if classification is None:
-        raise RuntimeError("Classifier returned no response")
+
+    ctx.intent_resolution = slot_resolution
     ctx.classification = classification
     ctx.is_financial_query = bool(getattr(classification, "is_financial_query", False))
     ctx.artifacts.classification = ClassificationArtifactModel(
@@ -5461,19 +5583,22 @@ async def _intent_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[s
         },
     }
     intent_start = time.time()
-    resolver_mode = _FLOW_MODE_TO_RESOLVER_MODE.get(ctx.flow_mode, "single_agent")
-    prior_slot_values = {
-        slot: status.value
-        for slot, status in (ctx.slot_statuses or {}).items()
-        if isinstance(status, SlotStatusModel) and status.value is not None
-    }
-    slot_resolution = await resolve_intent_slots_async(
-        ctx.query,
-        CONFIGS.__dict__,
-        mode=resolver_mode,
-        context_slots=prior_slot_values or None,
-        session_id=ctx.session_id,
-    )
+    slot_resolution = ctx.intent_resolution
+    if slot_resolution is None:
+        resolver_mode = _FLOW_MODE_TO_RESOLVER_MODE.get(ctx.flow_mode, "single_agent")
+        prior_slot_values = {
+            slot: status.value
+            for slot, status in (ctx.slot_statuses or {}).items()
+            if isinstance(status, SlotStatusModel) and status.value is not None
+        }
+        slot_resolution = await resolve_intent_slots_async(
+            ctx.query,
+            CONFIGS.__dict__,
+            mode=resolver_mode,
+            context_slots=prior_slot_values or None,
+            session_id=ctx.session_id,
+        )
+    ctx.intent_resolution = slot_resolution
     _normalize_metric_slots(slot_resolution)
     ctx.intent_resolution = slot_resolution
     ctx.slot_statuses = slot_resolution.slots
@@ -5923,6 +6048,13 @@ async def _clarification_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator
         if clarification_elapsed:
             resolved_event["data"]["elapsed_ms"] = clarification_elapsed
         yield resolved_event
+        yield {
+            "event": "clarification_complete",
+            "data": {
+                "rounds": rounds,
+                "ts": datetime.utcnow().isoformat(),
+            },
+        }
     else:
         yield {
             "event": "clarification_skipped",
@@ -6000,6 +6132,13 @@ async def _clarification_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator
         workflow_complete["event"] = "workflow_complete"
         workflow_complete["data"]["ts"] = datetime.utcnow().isoformat()
         yield workflow_complete
+        yield {
+            "event": "clarification_failed",
+            "data": {
+                "missing_slots": remaining_missing,
+                "ts": datetime.utcnow().isoformat(),
+            },
+        }
         decision = ctx.schema_clarifier_decision
         clarifier_action = None
         clarifier_missing = []
