@@ -1,0 +1,647 @@
+[
+  {
+    "id": "initializing",
+    "name": "initializing",
+    "status": "completed",
+    "thinking": [],
+    "timestamp": "2025-11-11T04:57:19.285101"
+  },
+  {
+    "id": "schema_validation",
+    "name": "Schema & Criteria Validation",
+    "status": "completed",
+    "thinking": [
+      "SQL criteria ready"
+    ],
+    "details": {
+      "intent_key": "margin_growth_vs_peers",
+      "company": "NVDA",
+      "comparison": "vs_avg",
+      "timeframe": {
+        "granularity": "quarterly",
+        "years_back": 2,
+        "quarters_back": 8,
+        "start_year": null,
+        "end_year": null,
+        "preset": "last_8_quarters",
+        "year_to_date": null,
+        "source": "clarification"
+      },
+      "granularity": "quarterly",
+      "tickers": [
+        "NVDA"
+      ],
+      "metrics": [
+        "Operating Margin"
+      ],
+      "statistic": null,
+      "ts": "2025-11-11T04:57:35.085661",
+      "flow": "single-agent",
+      "flow_mode": "single_agent",
+      "pending_lanes": [
+        "intent",
+        "sql",
+        "web",
+        "market",
+        "analysis"
+      ],
+      "sequence": 23,
+      "parallel_group": "core_sequential",
+      "schedule_stage": "intent",
+      "stage_allows_parallel": false
+    },
+    "timestamp": "2025-11-11T04:57:35.085661"
+  },
+  {
+    "id": "accessory_lane_warning",
+    "name": "accessory_lane_warning",
+    "status": "completed",
+    "thinking": [],
+    "details": {
+      "attempt": 1,
+      "message": ""
+    },
+    "timestamp": "2025-11-11T04:57:46.332607",
+    "sequence": 101,
+    "flowMode": "single_agent",
+    "lane": "accessories"
+  },
+  {
+    "id": "classification",
+    "name": "Query Classification",
+    "status": "completed",
+    "thinking": [
+      "Starting query classification...",
+      "LLM classified topic 'financial_analytics'",
+      "Query classified as financial analytics",
+      "Starting query classification...",
+      "LLM classified topic 'financial_analytics'",
+      "Query classified as financial analytics",
+      "Starting query classification...",
+      "LLM classified topic 'financial_analytics'",
+      "Query classified as financial analytics",
+      "Starting query classification...",
+      "LLM classified topic 'financial_analytics'",
+      "Query classified as financial analytics"
+    ],
+    "details": {
+      "model": "gpt-5-nano-2025-08-07",
+      "confidence": 0.55,
+      "category": "financial_analytics",
+      "is_financial": true
+    },
+    "elapsed_ms": 2519,
+    "timestamp": "2025-11-11T04:57:53.141761"
+  },
+  {
+    "id": "schema_clarifier",
+    "name": "schema_clarifier",
+    "status": "completed",
+    "thinking": [
+      "Schema clarifier fallback"
+    ],
+    "details": {
+      "attempt": 1,
+      "message": "Schema clarifier decision: fallback",
+      "step": "schema_clarifier",
+      "ts": "2025-11-11T04:57:53.143330",
+      "summary": "Schema clarifier fallback",
+      "tool_attempt": 1,
+      "retry_count": 0,
+      "retry": false,
+      "tool_registry": "clarification",
+      "flow": "single-agent",
+      "flow_mode": "single_agent",
+      "lane_status": {
+        "intent": "success",
+        "sql": "success",
+        "web": "success",
+        "market": "success",
+        "analysis": "success"
+      },
+      "pending_lanes": [],
+      "sequence": 144,
+      "tool": "clarification_manager"
+    },
+    "timestamp": "2025-11-11T04:57:53.143330",
+    "sequence": 143
+  },
+  {
+    "id": "clarification",
+    "name": "Requirements Clarification",
+    "status": "completed",
+    "thinking": [
+      "Missing fields: timeframe, metric",
+      "Select a value for timeframe",
+      "Processing your answer...",
+      "Which margin would you like to analyze?",
+      "Processing your answer...",
+      "Clarifications resolved",
+      "Missing fields: timeframe, metric",
+      "Select a value for timeframe"
+    ],
+    "details": {
+      "missing_fields": [
+        "timeframe",
+        "metric"
+      ],
+      "request": {
+        "step": "clarification",
+        "ts": "2025-11-11T04:57:53.143918",
+        "session_id": "1ad50a83-c6f1-4493-9f56-59a8ee049a19",
+        "request_id": "b5e55ddd-9ba9-4cd1-8e71-a3ecfc3bbe94",
+        "slot": "timeframe",
+        "question": "Select a value for timeframe",
+        "type": "single",
+        "options": [
+          "last 5 years",
+          "last 2 years",
+          "last 8 quarters",
+          "year to date"
+        ],
+        "default": null,
+        "proposed": "last 5 years",
+        "proposed_confidence": null,
+        "reason": "Heuristic fallback requires this slot.",
+        "required": true,
+        "round": 1,
+        "remaining": 2,
+        "attempt": 1,
+        "tool_attempt": 1,
+        "retry_count": 0,
+        "retry": false,
+        "tool_registry": "clarification",
+        "tool": "clarification_manager",
+        "flow": "single-agent",
+        "flow_mode": "single_agent",
+        "lane_status": {
+          "intent": "success",
+          "sql": "success",
+          "web": "success",
+          "market": "success",
+          "analysis": "success"
+        },
+        "pending_lanes": [],
+        "sequence": 152,
+        "parallel_group": "core_sequential",
+        "schedule_stage": "intent",
+        "stage_allows_parallel": false
+      },
+      "slot": "metric",
+      "answer": "Operating Margin",
+      "step": "intent_detection",
+      "ts": "2025-11-11T04:57:35.082194",
+      "key": "margin_growth_vs_peers",
+      "confidence": 0.75,
+      "rounds": 2,
+      "assumptions": [
+        "comparison defaulted to vs_avg",
+        "Using quarterly granularity based on requested timeframe",
+        "Using timeframe: last_8_quarters",
+        "Using metrics: Operating Margin",
+        "Focusing on operating margin"
+      ],
+      "elapsed_ms": 6914,
+      "flow": "single-agent",
+      "flow_mode": "single_agent",
+      "pending_lanes": [
+        "intent",
+        "sql",
+        "web",
+        "market",
+        "analysis"
+      ],
+      "sequence": 19,
+      "parallel_group": "core_sequential",
+      "schedule_stage": "intent",
+      "stage_allows_parallel": false,
+      "attempt": 1,
+      "message": "Clarifying requirements..."
+    },
+    "elapsed_ms": 6914,
+    "timestamp": "2025-11-11T04:57:53.143721",
+    "sequence": 152,
+    "parallelGroup": "core_sequential",
+    "scheduleStage": "intent"
+  },
+  {
+    "id": "intent_detection",
+    "name": "Intent Detection",
+    "status": "completed",
+    "thinking": [
+      "Detecting query intent...",
+      "Intent: margin_growth_vs_peers (75%)",
+      "Intent detected; needs clarification",
+      "Intent and schema finalized",
+      "Detecting query intent...",
+      "Intent: margin_growth_vs_peers (75%)",
+      "Intent detected; needs clarification",
+      "Detecting query intent...",
+      "Intent: margin_growth_vs_peers (75%)",
+      "Intent detected; needs clarification"
+    ],
+    "details": {
+      "intent_key": "margin_growth_vs_peers",
+      "confidence": 0.75,
+      "slots_detected": {
+        "company": "NVDA",
+        "comparison": "vs_avg",
+        "original_query": "How's Nvidia margin growth compare to industry average?",
+        "company_candidates": [
+          "NVDA"
+        ],
+        "tickers": [
+          "NVDA"
+        ],
+        "granularity": "annual"
+      },
+      "slot_statuses": {
+        "company": {
+          "status": "filled",
+          "value": "NVDA",
+          "reason": null,
+          "suggestions": [
+            "NVDA",
+            "AMD",
+            "INTC",
+            "MU",
+            "QCOM",
+            "AVGO",
+            "TXN",
+            "ALL"
+          ],
+          "allow_custom": true
+        },
+        "timeframe": {
+          "status": "missing",
+          "value": null,
+          "reason": "Required slot missing",
+          "suggestions": [
+            "last 5 years",
+            "last 2 years",
+            "last 8 quarters",
+            "year to date"
+          ],
+          "allow_custom": true
+        },
+        "metric": {
+          "status": "missing",
+          "value": null,
+          "reason": "Required slot missing",
+          "suggestions": [
+            "Revenue",
+            "Net Income",
+            "Capital Expenditures",
+            "EPS Basic",
+            "Income Before Tax",
+            "Operating Income",
+            "Stockholders' Equity",
+            "R&D Expense",
+            "Gross Profit"
+          ],
+          "allow_custom": true
+        },
+        "comparison": {
+          "status": "defaulted",
+          "value": "vs_avg",
+          "reason": "Using heuristic comparison default.",
+          "suggestions": [
+            "single",
+            "all"
+          ],
+          "allow_custom": false
+        }
+      },
+      "slot_followups": [
+        {
+          "slot": "timeframe",
+          "prompt": "Select a value for timeframe",
+          "suggestions": [
+            "last 5 years",
+            "last 2 years",
+            "last 8 quarters",
+            "year to date"
+          ],
+          "allow_custom": true,
+          "reason": "Heuristic fallback requires this slot."
+        },
+        {
+          "slot": "metric",
+          "prompt": "Select a value for metric",
+          "suggestions": [
+            "Revenue",
+            "Net Income",
+            "Capital Expenditures",
+            "EPS Basic",
+            "Income Before Tax",
+            "Operating Income",
+            "Stockholders' Equity",
+            "R&D Expense",
+            "Gross Profit"
+          ],
+          "allow_custom": true,
+          "reason": "Heuristic fallback requires this slot."
+        }
+      ],
+      "step": "intent_detection",
+      "ts": "2025-11-11T04:57:53.143648",
+      "clarifications_needed": true,
+      "clarifications_count": 2,
+      "clarification_sources": [
+        "heuristic_fallback",
+        "structured_resolver"
+      ],
+      "flow": "single-agent",
+      "flow_mode": "single_agent",
+      "pending_lanes": [],
+      "sequence": 146,
+      "parallel_group": "core_sequential",
+      "schedule_stage": "intent",
+      "stage_allows_parallel": false,
+      "key": "margin_growth_vs_peers",
+      "rounds": 2,
+      "assumptions": [
+        "comparison defaulted to vs_avg",
+        "Using quarterly granularity based on requested timeframe",
+        "Using timeframe: last_8_quarters",
+        "Using metrics: Operating Margin",
+        "Focusing on operating margin"
+      ],
+      "elapsed_ms": 6914,
+      "clarification_rounds": 2,
+      "attempt": 1,
+      "message": "Detecting intent...",
+      "tool_attempt": 1,
+      "retry_count": 0,
+      "retry": false,
+      "tool_registry": "clarification",
+      "lane_status": {
+        "intent": "success",
+        "sql": "success",
+        "web": "success",
+        "market": "success",
+        "analysis": "success"
+      },
+      "tool": "clarification_manager"
+    },
+    "elapsed_ms": 6914,
+    "timestamp": "2025-11-11T04:57:53.143591",
+    "sequence": 146,
+    "parallelGroup": "core_sequential",
+    "scheduleStage": "intent"
+  },
+  {
+    "id": "tool_execution",
+    "name": "Agent Tool Execution",
+    "status": "completed",
+    "thinking": [
+      "Tool clarification_manager started [budget 2000ms  concurrency 1  outputs clarification]",
+      "Tool clarification_manager completed (6915ms) [budget 2000ms  concurrency 1  outputs clarification]",
+      "Tool rs_0a77ce0e1e66fc9c006912c242064081939620beae4b014d7c completed",
+      "Tool fc_0a77ce0e1e66fc9c006912c24308e88193b0cea70558703473 running",
+      "Tool fc_0a77ce0e1e66fc9c006912c24308e88193b0cea70558703473 completed",
+      "Tool classification completed",
+      "Tool rs_0a77ce0e1e66fc9c006912c247215c819393d297e0e01c249a completed",
+      "Tool fc_0a77ce0e1e66fc9c006912c24750488193944cfddb6d5064a3 running",
+      "Tool fc_0a77ce0e1e66fc9c006912c24750488193944cfddb6d5064a3 completed",
+      "Tool intent_detection completed",
+      "Tool rs_0a77ce0e1e66fc9c006912c24b6f9c8193b18c808e25f31893 completed",
+      "Tool fc_0a77ce0e1e66fc9c006912c24de7488193bc6e9dddedf91d90 running",
+      "Tool fc_0a77ce0e1e66fc9c006912c24de7488193bc6e9dddedf91d90 completed",
+      "Tool clarification completed",
+      "Tool clarification_manager started [budget 2000ms  concurrency 1  outputs clarification]"
+    ],
+    "details": {
+      "tool_calls": [
+        {
+          "tool": "fc_0a77ce0e1e66fc9c006912c24de7488193bc6e9dddedf91d90",
+          "status": "running",
+          "ts": "2025-11-11T04:57:50.595461",
+          "details": {
+            "arguments_delta": "oper"
+          },
+          "sequence": 123,
+          "parallelGroup": "agents",
+          "toolGroup": "fc_0a77ce0e1e66fc9c006912c24de7488193bc6e9dddedf91d90",
+          "lane": "agents"
+        },
+        {
+          "tool": "fc_0a77ce0e1e66fc9c006912c24de7488193bc6e9dddedf91d90",
+          "status": "running",
+          "ts": "2025-11-11T04:57:50.596172",
+          "details": {
+            "arguments_delta": "ating"
+          },
+          "sequence": 124,
+          "parallelGroup": "agents",
+          "toolGroup": "fc_0a77ce0e1e66fc9c006912c24de7488193bc6e9dddedf91d90",
+          "lane": "agents"
+        },
+        {
+          "tool": "fc_0a77ce0e1e66fc9c006912c24de7488193bc6e9dddedf91d90",
+          "status": "running",
+          "ts": "2025-11-11T04:57:50.596880",
+          "details": {
+            "arguments_delta": "/net"
+          },
+          "sequence": 125,
+          "parallelGroup": "agents",
+          "toolGroup": "fc_0a77ce0e1e66fc9c006912c24de7488193bc6e9dddedf91d90",
+          "lane": "agents"
+        },
+        {
+          "tool": "fc_0a77ce0e1e66fc9c006912c24de7488193bc6e9dddedf91d90",
+          "status": "running",
+          "ts": "2025-11-11T04:57:50.597577",
+          "details": {
+            "arguments_delta": ")"
+          },
+          "sequence": 126,
+          "parallelGroup": "agents",
+          "toolGroup": "fc_0a77ce0e1e66fc9c006912c24de7488193bc6e9dddedf91d90",
+          "lane": "agents"
+        },
+        {
+          "tool": "fc_0a77ce0e1e66fc9c006912c24de7488193bc6e9dddedf91d90",
+          "status": "running",
+          "ts": "2025-11-11T04:57:50.598267",
+          "details": {
+            "arguments_delta": " before"
+          },
+          "sequence": 127,
+          "parallelGroup": "agents",
+          "toolGroup": "fc_0a77ce0e1e66fc9c006912c24de7488193bc6e9dddedf91d90",
+          "lane": "agents"
+        },
+        {
+          "tool": "fc_0a77ce0e1e66fc9c006912c24de7488193bc6e9dddedf91d90",
+          "status": "running",
+          "ts": "2025-11-11T04:57:50.598963",
+          "details": {
+            "arguments_delta": " planning"
+          },
+          "sequence": 128,
+          "parallelGroup": "agents",
+          "toolGroup": "fc_0a77ce0e1e66fc9c006912c24de7488193bc6e9dddedf91d90",
+          "lane": "agents"
+        },
+        {
+          "tool": "fc_0a77ce0e1e66fc9c006912c24de7488193bc6e9dddedf91d90",
+          "status": "running",
+          "ts": "2025-11-11T04:57:50.599706",
+          "details": {
+            "arguments_delta": " SQL"
+          },
+          "sequence": 129,
+          "parallelGroup": "agents",
+          "toolGroup": "fc_0a77ce0e1e66fc9c006912c24de7488193bc6e9dddedf91d90",
+          "lane": "agents"
+        },
+        {
+          "tool": "fc_0a77ce0e1e66fc9c006912c24de7488193bc6e9dddedf91d90",
+          "status": "running",
+          "ts": "2025-11-11T04:57:50.600404",
+          "details": {
+            "arguments_delta": " and"
+          },
+          "sequence": 130,
+          "parallelGroup": "agents",
+          "toolGroup": "fc_0a77ce0e1e66fc9c006912c24de7488193bc6e9dddedf91d90",
+          "lane": "agents"
+        },
+        {
+          "tool": "fc_0a77ce0e1e66fc9c006912c24de7488193bc6e9dddedf91d90",
+          "status": "running",
+          "ts": "2025-11-11T04:57:50.601105",
+          "details": {
+            "arguments_delta": " analysis"
+          },
+          "sequence": 131,
+          "parallelGroup": "agents",
+          "toolGroup": "fc_0a77ce0e1e66fc9c006912c24de7488193bc6e9dddedf91d90",
+          "lane": "agents"
+        },
+        {
+          "tool": "fc_0a77ce0e1e66fc9c006912c24de7488193bc6e9dddedf91d90",
+          "status": "running",
+          "ts": "2025-11-11T04:57:50.601780",
+          "details": {
+            "arguments_delta": ".\""
+          },
+          "sequence": 132,
+          "parallelGroup": "agents",
+          "toolGroup": "fc_0a77ce0e1e66fc9c006912c24de7488193bc6e9dddedf91d90",
+          "lane": "agents"
+        },
+        {
+          "tool": "fc_0a77ce0e1e66fc9c006912c24de7488193bc6e9dddedf91d90",
+          "status": "running",
+          "ts": "2025-11-11T04:57:50.602482",
+          "details": {
+            "arguments_delta": "}"
+          },
+          "sequence": 133,
+          "parallelGroup": "agents",
+          "toolGroup": "fc_0a77ce0e1e66fc9c006912c24de7488193bc6e9dddedf91d90",
+          "lane": "agents"
+        },
+        {
+          "tool": "fc_0a77ce0e1e66fc9c006912c24de7488193bc6e9dddedf91d90",
+          "status": "completed",
+          "ts": "2025-11-11T04:57:50.603184",
+          "details": {
+            "arguments": "{\"clarification_budget\":2,\"reason\":\"Need to confirm timeframe and margin metric (gross/operating/net) before planning SQL and analysis.\"}"
+          },
+          "sequence": 134,
+          "parallelGroup": "agents",
+          "toolGroup": "fc_0a77ce0e1e66fc9c006912c24de7488193bc6e9dddedf91d90",
+          "lane": "agents"
+        },
+        {
+          "tool": "clarification",
+          "status": "completed",
+          "ts": "2025-11-11T04:57:50.603882",
+          "details": {
+            "status": "completed"
+          },
+          "sequence": 135,
+          "parallelGroup": "agents",
+          "toolGroup": "clarification",
+          "lane": "intent"
+        },
+        {
+          "tool": "clarification_manager",
+          "status": "start",
+          "ts": "2025-11-11T04:57:53.143808",
+          "sequence": 148,
+          "parallelGroup": "core_sequential",
+          "toolGroup": "clarification_manager",
+          "lane": "core_sequential",
+          "latencyBudgetMs": 2000,
+          "concurrencyLimit": 1,
+          "outputArtifacts": [
+            "clarification"
+          ]
+        },
+        {
+          "tool": "clarification_manager",
+          "status": "start",
+          "ts": "2025-11-11T04:57:53.146999",
+          "sequence": 149,
+          "parallelGroup": "core_sequential",
+          "toolGroup": "clarification_manager",
+          "lane": "core_sequential",
+          "latencyBudgetMs": 2000,
+          "concurrencyLimit": 1,
+          "outputArtifacts": [
+            "clarification"
+          ]
+        }
+      ]
+    },
+    "elapsed_ms": 6915,
+    "timestamp": "2025-11-11T04:57:53.146999",
+    "sequence": 149,
+    "parallelGroup": "core_sequential"
+  },
+  {
+    "id": "plan_and_select_template",
+    "name": "Query Planning & Template Selection",
+    "status": "completed",
+    "thinking": [
+      "Plan built",
+      "Selected template: margin_growth_vs_peers",
+      "YAML catalogue lookup via lookup"
+    ],
+    "details": {
+      "plan": {
+        "metrics_count": 1,
+        "granularity": "quarterly",
+        "comparison": "vs_avg"
+      },
+      "template": {
+        "id": "margin_growth_vs_peers",
+        "name": "Margin Growth (pp) vs Industry Average",
+        "description": "Year-over-year change in margins (percentage points) compared to industry average"
+      },
+      "candidates": [],
+      "metadata": {}
+    },
+    "elapsed_ms": 1002
+  },
+  {
+    "id": "follow_up_route",
+    "name": "Follow-Up Guidance",
+    "status": "completed",
+    "thinking": [
+      "Route selected: full pipeline"
+    ],
+    "details": {
+      "banner": {
+        "title": "Fresh Run Scheduled",
+        "message": "Running SQL, charts, and narrative again to deliver a fully refreshed answer.",
+        "route": "full_pipeline"
+      }
+    }
+  }
+]

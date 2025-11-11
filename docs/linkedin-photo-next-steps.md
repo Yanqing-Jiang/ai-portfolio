@@ -2,10 +2,14 @@
 
 ## 1. Goals & User Experience
 - Share a single daily prompt budget for chats and LinkedIn photo generations so usage feels consistent across workflows.
+- Require users to sign in before awarding the single daily LinkedIn photo token so anonymous guests cannot trigger photo runs without identity.
+- Grant exactly one complimentary LinkedIn photo token per logged-in user per day; there are no additional "free" generations once that allowance is spent before the nightly reset.
 - Each LinkedIn photo run consumes 10 prompt units (˜1 generation/day for guests, 2/day for members) while retaining the existing chat weights.
 - Reset free quota nightly at 00:00 UTC regardless of server restarts, and message that timing in product copy.
 - Persist purchased prompt tokens (100 units per $1) in Supabase so balances survive across devices and anonymous sessions.
 - Let guests purchase without signing in but remind them that anonymous tokens stay with the browser profile and free quota still resets nightly.
+- Sell extra picture capacity as $1 (100 tokens) or $3 (300 tokens) packs through Stripe Checkout or PayPal so users can top up beyond the daily login allowance.
+- Free users without available tokens cannot trigger LinkedIn photo generations; they must wait for the next login reset or purchase an additional pack.
 - Support “buy more” flows via Stripe Checkout (Apple Pay, Google Pay, Link) and PayPal one-offs.
 
 ## 2. Supabase Schema & Access
@@ -89,3 +93,5 @@ create table public.prompt_token_ledger (
 - [ ] Update README/onboarding docs with environment variables, midnight reset behavior, and purchase flow details.
 - [ ] Deploy Stripe/PayPal integrations to staging, document success URLs, and monitor logs for the first 48 hours post-launch.
 - [ ] Once stable, remove the feature flag and announce the new credit system within the LinkedIn photo project page.
+
+
