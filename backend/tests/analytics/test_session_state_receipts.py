@@ -136,6 +136,24 @@ async def test_market_and_web_receipts_persist_in_snapshot(monkeypatch: pytest.M
     assert receipt_web.reused_at_ms is None
 
 
+def test_record_tool_receipt_persists_digests_and_guardrail() -> None:
+    snapshot = SessionStateSnapshot(session_id="sess-digests")
+    snapshot.record_tool_receipt(
+        "web_retriever",
+        {
+            "arguments": {"query": "NVDA earnings"},
+            "payload": {"stock_widget": {"symbol": "NVDA"}},
+            "latency_guardrail": {"status": "ok", "threshold_ms": 2500},
+        },
+    )
+    receipt = snapshot.get_tool_receipt("web_retriever")
+    assert receipt is not None
+    assert receipt.get("arguments_digest", "").startswith('{"query"')
+    assert receipt.get("output_digest")
+    guardrail = receipt.get("latency_guardrail") or {}
+    assert guardrail.get("status") == "ok"
+
+
 def test_market_receipts_expire_when_stale() -> None:
     ttl_seconds = SingleAgentController.LANE_CACHE_TTL_SECONDS
     stale_a = ToolInvocationReceipt(tool="market_question_a", status="completed")
@@ -241,6 +259,20 @@ def test_revision_context_includes_reasoning_and_lane_metadata() -> None:
     age_seconds = revision_ctx.lane_age_seconds("web")
     assert age_seconds is not None and age_seconds < 90
     assert revision_ctx.revision_snapshot["web_context"]["summary"] == "cached web"
+
+
+def test_snapshot_revision_context_should_refresh_respects_ttl() -> None:
+    now = datetime.now(timezone.utc)
+    snapshot = SessionStateSnapshot(session_id="refresh-ctx")
+    snapshot.touch_lane("web", at=now - timedelta(seconds=30))
+    revision_ctx = snapshot.revision_context()
+    revision_ctx.lane_ttls["web"] = 120
+
+    assert revision_ctx.should_refresh("web", now=now) is False
+
+    revision_ctx.lane_ttls["web"] = 10
+    assert revision_ctx.should_refresh("web", now=now) is True
+    assert revision_ctx.should_refresh("market", now=now) is True
 
 
 def test_record_tool_receipt_merges_lane_reuse_metadata() -> None:

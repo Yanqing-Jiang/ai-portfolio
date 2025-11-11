@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from agents.result import RunResultStreaming
 from agents.stream_events import (
@@ -54,11 +54,16 @@ class AgentsStreamBridge:
         self._logger = logger or logging.getLogger(__name__)
         self._tool_names: Dict[str, str] = {}
         self._output_buffers: Dict[str, str] = {}
+        self._supervisor_seen = False
+        self._supervisor_specialists: List[str] = []
 
     async def forward(self, result: RunResultStreaming) -> RunResultStreaming:
         """Translate streaming events into SSE payloads."""
-        async for event in result.stream_events():
-            await self._handle_stream_event(event)
+        try:
+            async for event in result.stream_events():
+                await self._handle_stream_event(event)
+        finally:
+            await self._emit_supervisor_summary()
         return result
 
     async def _handle_stream_event(self, event: StreamEvent) -> None:
@@ -69,10 +74,46 @@ class AgentsStreamBridge:
             await self._handle_raw_response_event(event.data)
             return
         if isinstance(event, AgentUpdatedStreamEvent):
-            # No UI payload yet for agent swaps; remember for future supervisor work.
+            await self._handle_agent_updated_event(event)
             return
         # Unknown event type - surface for diagnostics but do not fail the stream.
         self._logger.debug("Unhandled agent stream event: %s", type(event).__name__)
+
+    async def _handle_agent_updated_event(self, event: AgentUpdatedStreamEvent) -> None:
+        agent = event.new_agent
+        agent_name = str(getattr(agent, "name", "") or getattr(agent, "id", "") or "").strip()
+        agent_role = str(getattr(agent, "role", "") or "").strip().lower()
+        if self._is_supervisor_agent(agent_name, agent_role):
+            if not self._supervisor_seen:
+                self._supervisor_seen = True
+                payload = {
+                    "agent": agent_name or "supervisor",
+                    "model": getattr(getattr(agent, "model", None), "name", None) or getattr(agent, "model", None),
+                    "ts": datetime.utcnow().isoformat(),
+                    "mode": self._flow_mode.value,
+                }
+                await self._enqueue_event("agent_supervisor_started", payload)
+        else:
+            identifier = agent_name or agent_role or getattr(agent, "instructions", None)
+            if identifier:
+                if identifier not in self._supervisor_specialists:
+                    self._supervisor_specialists.append(identifier)
+
+    def _is_supervisor_agent(self, name: str, role: str) -> bool:
+        lowered = (name or role or "").lower()
+        return "supervisor" in lowered
+
+    async def _emit_supervisor_summary(self) -> None:
+        if not self._supervisor_seen:
+            return
+        payload = {
+            "ts": datetime.utcnow().isoformat(),
+            "specialists": list(self._supervisor_specialists),
+            "mode": self._flow_mode.value,
+        }
+        await self._enqueue_event("agent_supervisor_summary", payload)
+        self._supervisor_seen = False
+        self._supervisor_specialists.clear()
 
     def _remember_tool_metadata(self, event: RunItemStreamEvent) -> None:
         if event.name != "tool_called":

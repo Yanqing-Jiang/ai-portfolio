@@ -47,10 +47,24 @@ const buildStep = (overrides?: Partial<ProcessStep>): ProcessStep => ({
 
 describe('WorkflowCanvas', () => {
   it('renders tool badges when tool telemetry is present', async () => {
-    const step = buildStep();
+    const step = buildStep({
+      details: {
+        tool_calls: [
+          {
+            tool: 'web_retriever',
+            status: 'end',
+            lane: 'web',
+            elapsed_ms: 620,
+            ts: new Date().toISOString(),
+            guardrail: { status: 'ok' },
+          },
+        ],
+      },
+    });
     render(<WorkflowCanvas steps={[step]} flowMode="single-agent" isVisible />);
     await waitFor(() => expect(screen.getByTestId('process-node-tool-badges')).toBeInTheDocument());
     expect(screen.getAllByText(/Web Retriever/i).length).toBeGreaterThan(0);
+    expect(screen.getByText(/Guardrail/i)).toBeInTheDocument();
   });
 
   it('surfaces lane reuse pills and redirect notice in the header', async () => {

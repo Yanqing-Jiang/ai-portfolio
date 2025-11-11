@@ -93,6 +93,12 @@ The `FollowUpClassifier` (`routing/follow_up_classifier.py`) runs ahead of every
 - Concrete flows implement `flows.orchestrator_protocol.FlowOrchestrator`; the shared `PlannerOrchestratorAdapter` decorates stage generators with flow metadata, tracks `pending_lanes`, and delegates completion callbacks back to controllers or supervisors.
 - Tool-to-lane mappings (`LANE_TOOL_MAP`, `LANE_TOOL_LOOKUP`) ensure receipts, retries, and cache hits stay aligned with sequencer state, while helper callbacks such as `_skip_lane()` and `lane_complete()` short-circuit cached lanes without rerunning adapters.
 
+### 4.7 File-Level Function Maps
+- Every analytics `.py` module now opens with a `Function Map` header that lists each function, which module calls it, what it invokes next, and why it exists (e.g., `Function: derive_revision_targets — called from flows/workflow.analytics_memory_workflow, forwards to flows/planner/revision.mark_revision_completion to bound reruns`). This mirrors the repo-wide guideline from `AGENTS.md`.
+- Use these headers as the first stop when tracing behavior: the map points to upstream call sites (FastAPI endpoints, flows, or services) and downstream effects (sequencer lanes, telemetry, cache writes) so contributors can orient before reading implementations.
+- Function entries flag runtime expectations such as `legacy-only`, `cache-hit`, or `agents-bridge` to keep disconnected helpers obvious; when pruning code, confirm that its function map no longer lists active inbound modules.
+- The maps intentionally duplicate the high-level story in this architecture file—`ARCHITECTURE.md` explains lane orchestration, while the per-file maps document the micro call graph so reviewers can see how a change propagates without cross-referencing tooling.
+
 ## 5. Flow Implementations
 ### 5.1 Planner-Executor (Deterministic Mode)
 - `PlannerExecutorFlow.events()` boots `PlannerPipeline` with the shared `PlannerToolRegistry`, invoking registered tools like `classification`, `intent_detection`, and `plan_generation` so the stage order stays declarative while `apply_mode_metadata` annotates every delta.
@@ -232,16 +238,16 @@ The `FollowUpClassifier` (`routing/follow_up_classifier.py`) runs ahead of every
 
 
 
-## 12. Legacy Code
-- **Regression-only sequential pipelines.** The legacy deterministic pipeline harness still lives under `backend/tests/analytics/test_pipeline_*` so we can diff JSON ledgers against the new flows. No runtime code calls those modules, but they must stay green until the regression suite is rewritten around `PlannerSequencer`.
-- **Fallback environment switches.** `flows/workflow._env_flag` still honors `ANALYTICS_ENABLE_AGENTS`, `AGENTIC_REVISION_SINGLE_AGENT`, and `AGENTIC_REVISION_PLANNER_EXECUTOR` so dark-launch toggles remain reversible. Once supervisors are the sole path these flags (and their branching) can be removed.
-- **Session/tool cache compatibility.** `core.session_state.SessionStateSnapshot` and `AgentMemory` still store `tool_cache["agent"]` payloads so pre-agent snapshots deserialize cleanly. When all active sessions run on the new schema we can drop the legacy key paths.
-- **Artifact schema bridges.** `artifacts.models.BaseArtifact` retains helper methods used by earlier payloads; UI components still accept the old shape, so remove only after the React canvases switch to the normalized models.
+## 12. Legacy Code (Disconnected Paths)
+- **Regression-only sequential pipelines.** The deterministic harness under `backend/tests/analytics/test_pipeline_*` exists solely for JSON diffing; no runtime flow imports it, and the new per-file function maps mark these modules as `legacy-only` so future clean-up is low-risk once the regression suite moves to `PlannerSequencer`.
+- **Fallback environment switches.** `flows/workflow._env_flag` still honors `ANALYTICS_ENABLE_AGENTS`, `AGENTIC_REVISION_SINGLE_AGENT`, and `AGENTIC_REVISION_PLANNER_EXECUTOR` for rollback control, but these flags branch into code paths that do not connect to active deployments. The call maps flag each helper as rollback-only to avoid accidental reuse.
+- **Session/tool cache compatibility layers.** `core.session_state.SessionStateSnapshot`, `AgentMemory`, and the `tool_cache["agent"]` shims merely deserialize historic payloads. Once every cached session migrates, the function maps will show no inbound callers and we can delete the compatibility layer.
+- **Artifact schema bridges.** `artifacts.models.BaseArtifact` still exposes pre-normalized accessors so the React canvases accept both schemas; their function map entries remind reviewers that these helpers exist only until the UI drops the older props.
 
 ## 13. Optimization Opportunities
-- **Sequencer/Planner DAG dedupe.** `flows.planner.fanout.MultiTopicFanout` and `flows.sequencer.PlannerSequencer` each rebuild dependency graphs; sharing a cached `PlanTemplate` snapshot would cut redundant topological sorts during retries.
-- **Cache + telemetry integration.** `core.cache.CacheService.get_stats` already emits Redis metrics-forward those numbers through `core.telemetry.catalog_trace` so operations can auto-scale Redis or fall back before circuit breakers trip.
-- **Follow-up routing acceleration.** `routing.FollowUpClassifier` still re-tokenizes prompts for every request; memoizing `_contains_any` against normalized intents (or caching results in `CacheService`) would shave milliseconds off planner selection.
-- **Tool bundle warm starts.** `flows.single_agent_tools.ToolParallelRuntime` repeatedly rebuilds `ToolBundle` wiring; pooling tool registries from `flows.tool_bundle` per session would reduce cold-start reasoning time for the single-agent controller.
+- **Concurrent runs.** Although `ModeConfig.parallelism_enabled` exists, we still rebuild planner fan-out DAGs in both `flows.planner.fanout.MultiTopicFanout` and `flows.sequencer.PlannerSequencer`. Sharing a cached `PlanTemplate` snapshot would let retries skip duplicate topological sorts and enable higher concurrency without starving the event loop.
+- **Shorter pipelines (no timeout hacks).** `routing.FollowUpClassifier` re-tokenizes prompts on every call, and revision detection still recomputes accessory needs even when cached receipts cover the request. Memoizing `_contains_any`, persisting normalized intents, and short-circuiting revision planning when snapshots have fresh lanes would remove seconds of wall-clock time without touching timeout thresholds.
+- **Shared components & telemetry.** `core.cache.CacheService.get_stats` produces Redis health data, `flows.single_agent_tools.ToolParallelRuntime` rebuilds identical `ToolBundle` wiring, and `core.telemetry.catalog_trace` already transports structured metrics. Pooling tool registries per session and piping cache stats directly into telemetry would promote reuse across flows, shrink cold starts, and let supervisors auto-tune cache expirations via shared dashboards.
+- **Reusable accessory bundles.** Accessory adapters still serialize bespoke payloads before `collect_tool_bundle` merges them. Extracting a shared response schema (web + market) would allow downstream lanes and frontend canvases to hydrate one component, shrinking duplication and simplifying shared-component maintenance.
 
 This architecture reference reflects the current state of the `next-gen-analytics-agent` project and should be updated alongside significant planner, tool, or telemetry changes.

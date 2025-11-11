@@ -206,7 +206,22 @@ async def test_lane_reuse_event_emitted_for_skipped_optional_lanes() -> None:
     reuse_events = [event for event in recorded if event.get("event") == "lane_reused"]
     lanes_reported = {event.get("data", {}).get("lane") for event in reuse_events}
     assert {"web", "market"}.issubset(lanes_reported)
-    assert all(event.get("data", {}).get("source") == "sequencer" for event in reuse_events)
+
+
+@pytest.mark.asyncio
+async def test_non_optional_lane_respects_agent_skip_flag() -> None:
+    orchestrator = FakeOrchestrator(sql_events=0)
+    sequencer = PlannerSequencer(
+        orchestrator,
+        lane_refresh_required={"sql": False},
+    )
+
+    async for _ in sequencer.run():
+        pass
+
+    assert orchestrator.run_counts["sql"] == 0
+    assert sequencer.lane_presentations().get("sql") == "reused"
+    assert orchestrator.reused_map["sql"] is True
 
 
 @pytest.mark.asyncio

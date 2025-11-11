@@ -322,6 +322,13 @@ const buildToolBadges = (step: ProcessStep): ToolBadgeMeta[] => {
   toolCalls.forEach((entry, index) => {
     const toolName = formatToolLabel(entry.tool || entry.toolGroup || entry.details?.tool_call?.name);
     const laneLabel = resolveLaneLabel(entry.lane ?? entry.toolGroup ?? '') ?? undefined;
+    const guardrailPayload =
+      entry.guardrail ??
+      entry.details?.guardrail ??
+      entry.details?.latency_guardrail ??
+      entry.details?.metadata?.guardrail;
+    const guardrailStatus =
+      typeof guardrailPayload?.status === 'string' ? guardrailPayload.status.toLowerCase() : undefined;
     candidates.push({
       id: entry.details?.tool_call?.id ?? `${entry.tool ?? entry.toolGroup ?? 'tool'}:${entry.sequence ?? index}`,
       tool: toolName,
@@ -330,6 +337,7 @@ const buildToolBadges = (step: ProcessStep): ToolBadgeMeta[] => {
       statusKey: normalizeStatusKey(entry.status),
       elapsedLabel: formatToolDuration(entry.elapsed_ms),
       reused: entry.reused ?? undefined,
+      guardrailStatus,
       ts: parseTimestamp(entry.ts),
       seq: typeof entry.sequence === 'number' ? entry.sequence : index,
     });

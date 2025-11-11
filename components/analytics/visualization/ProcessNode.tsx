@@ -13,6 +13,7 @@ export interface ToolBadgeMeta {
   statusLabel?: string;
   elapsedLabel?: string;
   reused?: boolean;
+  guardrailStatus?: string;
 }
 
 const LANE_LABELS: Record<string, string> = {
@@ -334,6 +335,20 @@ export const ProcessNode = memo<NodeProps<ProcessNodeData>>(({ data, selected })
                 {badge.statusLabel && <span className="text-gray-300">{badge.statusLabel}</span>}
                 {badge.elapsedLabel && <span className="text-gray-300">({badge.elapsedLabel})</span>}
                 {badge.reused && <span className="text-emerald-200">cached</span>}
+                {badge.guardrailStatus && (
+                  <span
+                    className={
+                      badge.guardrailStatus === 'violation'
+                        ? 'text-amber-200'
+                        : 'text-emerald-200'
+                    }
+                  >
+                    Guardrail:{' '}
+                    {badge.guardrailStatus === 'violation'
+                      ? 'trip'
+                      : badge.guardrailStatus}
+                  </span>
+                )}
               </span>
             ))}
           </div>

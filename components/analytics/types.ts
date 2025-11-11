@@ -29,6 +29,7 @@ export interface ToolCallTelemetry {
   outputArtifacts?: string[];
   lane?: string;
   reused?: boolean;
+  guardrail?: Record<string, any>;
 }
 
 export interface LaneReuseNotice {
@@ -53,6 +54,7 @@ export interface FreshLaneStatus {
 }
 
 export interface AgentTurnTelemetry {
+  id?: string;
   role: string;
   status: 'start' | 'complete' | string;
   ts?: string;
