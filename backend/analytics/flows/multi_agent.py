@@ -2509,6 +2509,7 @@ class MultiAgentFlow:
 
     def prime_with_snapshot(self, snapshot: Optional[SessionStateSnapshot]) -> None:
         self._prefetched_snapshot = snapshot
+        self._session_snapshot = snapshot
         self._planner.prime_with_snapshot(snapshot)
 
     def set_revision_directive(self, directive: Optional["RevisionDirective"]) -> None:
@@ -3388,23 +3389,22 @@ class MultiAgentFlow:
         _reset_revision_accessories(ctx, {"web", "market"})
         sql_artifact = getattr(ctx.artifacts, "sql_generation", None)
         analysis_artifact = getattr(ctx.artifacts, "analysis", None)
-        if not sql_artifact or not getattr(sql_artifact, "sql", None) or analysis_artifact is None:
+        missing_sql = not sql_artifact or not getattr(sql_artifact, "sql", None)
+        missing_analysis = analysis_artifact is None or not getattr(analysis_artifact, "analysis_text", None)
+        if missing_sql or missing_analysis:
+            logger.warning(
+                "snapshot_missing",
+                extra={
+                    "lane": "analysis",
+                    "session_id": session_id,
+                    "reason": "missing_sql_snapshot" if missing_sql else "missing_analysis_snapshot",
+                },
+            )
             ctx.analysis_refresh_mode = "full"
             refresh_flags = dict(getattr(ctx, "lane_refresh_required", {}) or {})
             refresh_flags["analysis"] = True
             refresh_flags["web"] = True
             ctx.lane_refresh_required = refresh_flags
-            async for event in self.analysis_revision(
-                query,
-                session_id=session_id,
-                analysis=requested_focus or (analysis_artifact.analysis_text if analysis_artifact else None),
-                reason=reason,
-                source=source,
-                revision_directive=revision_directive,
-                refresh_web=True,
-            ):
-                yield event
-            return
 
         web_ready_seen = False
         web_failure_reason: Optional[str] = None
@@ -3850,7 +3850,18 @@ class MultiAgentFlow:
         if name == "session_started":
             session_identifier = data.get("session_id")
             if session_identifier:
-                self._session_snapshot = SessionStateSnapshot(session_id=session_identifier)
+                if (
+                    self._session_snapshot is not None
+                    and self._session_snapshot.session_id == session_identifier
+                ):
+                    pass
+                elif (
+                    self._prefetched_snapshot is not None
+                    and self._prefetched_snapshot.session_id == session_identifier
+                ):
+                    self._session_snapshot = self._prefetched_snapshot
+                else:
+                    self._session_snapshot = SessionStateSnapshot(session_id=session_identifier)
             return
 
         if isinstance(data, Mapping) and data.get("revision"):

@@ -533,6 +533,7 @@ async def instrument_events(
     revision_targets: Optional[Set[str]] = None,
     emit_prefill_summary: Optional[bool] = None,
     sequencer_state: Optional[Any] = None,
+    revision_requested: bool = False,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     repository = get_session_state_repository()
     resolved_session = _ensure_session_id(session_id)
@@ -557,9 +558,15 @@ async def instrument_events(
                 event_kwargs["emit_prefill_summary"] = emit_prefill_summary
             if sequencer_state is not None:
                 event_kwargs["sequencer_state"] = sequencer_state
+        if revision_requested and isinstance(flow, PlannerExecutorFlow):
+            event_kwargs["revision_requested"] = True
         event_stream = flow.events(query, **event_kwargs)
     elif isinstance(flow, PlannerExecutorFlow):
-        event_stream = run_planner_executor(query, session_id=resolved_session)
+        event_stream = run_planner_executor(
+            query,
+            session_id=resolved_session,
+            revision_requested=revision_requested,
+        )
     else:
         raise AttributeError("Flow object does not expose an events() coroutine")
 

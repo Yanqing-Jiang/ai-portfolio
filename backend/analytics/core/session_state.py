@@ -44,6 +44,11 @@
 #   Called from: Internal to analytics.core.session_state
 #   Invokes: Internal helpers only
 #   Why: Keeps analytics.core.session_state from duplicating normalize tool name behavior across flows.
+# Function: chart_spec_has_numeric_payload
+#   Role: Detects whether a chart spec payload contains at least one numeric data point.
+#   Called from: analytics.core.session_state.SessionStateSnapshot.record_outputs, analytics.flows.workflow
+#   Invokes: collections.deque
+#   Why: Prevents empty chart specs from marking the chart lane ready across workflows.
 # --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
@@ -56,10 +61,17 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple, TYPE_CHECKING
 from copy import deepcopy
+from collections import deque
+import uuid
 
 from pydantic import BaseModel, Field, field_validator
 
 from analytics.validators import sanitize_for_json
+from analytics.core.telemetry import (
+    analysis_inputs_manifest_sealed,
+    analysis_inputs_missing,
+    analysis_lane_missing_artifact,
+)
 
 try:
     import redis.asyncio as redis  # type: ignore
@@ -77,6 +89,7 @@ __all__ = [
     "get_session_state_repository",
     "close_session_state_repository",
     "SnapshotRevisionContext",
+    "chart_spec_has_numeric_payload",
 ]
 
 
@@ -90,6 +103,26 @@ TOOL_LANE_HINTS: Dict[str, str] = {
     "market_question_a": "market",
     "market_question_b": "market",
     "stock_tracker": "market",
+}
+
+ANALYSIS_INPUT_COMPONENTS: Tuple[str, ...] = ("sql", "dataset_preview", "market", "web")
+ANALYSIS_INPUT_BLOCKING: Tuple[str, ...] = ("sql", "dataset_preview")
+ANALYSIS_INPUT_SOURCES: Dict[str, str] = {
+    "sql": "snapshot.last_sql",
+    "dataset_preview": "tool_cache.planner_dataset_preview",
+    "market": "tool_cache.planner_stock_widget",
+    "web": "tool_cache.web_search",
+}
+ANALYSIS_INPUT_LANES: Dict[str, str] = {
+    "sql": "sql",
+    "dataset_preview": "sql",
+    "market": "market",
+    "web": "web",
+}
+ANALYSIS_INPUT_TOOL_COMPONENT: Dict[str, str] = {
+    "planner_dataset_preview": "dataset_preview",
+    "planner_stock_widget": "market",
+    "web_search": "web",
 }
 
 
@@ -114,6 +147,32 @@ def digest_tool_payload(payload: Any, *, limit: int = 512) -> Optional[str]:
     if len(digest) > limit:
         digest = digest[:limit]
     return digest
+
+
+def chart_spec_has_numeric_payload(chart_spec: Optional[Any], *, max_nodes: int = 4096) -> bool:
+    """Return True when a chart spec contains at least one numeric data point."""
+    if not isinstance(chart_spec, Mapping):
+        return False
+    queue = deque([chart_spec])
+    inspected = 0
+    while queue and inspected < max_nodes:
+        inspected += 1
+        current = queue.popleft()
+        if current is None or isinstance(current, bool):
+            continue
+        if isinstance(current, (int, float)):
+            return True
+        if isinstance(current, Mapping):
+            for value in current.values():
+                if isinstance(value, (str, bytes)):
+                    continue
+                queue.append(value)
+        elif isinstance(current, (list, tuple, set)):
+            for value in current:
+                if isinstance(value, (str, bytes)):
+                    continue
+                queue.append(value)
+    return False
 
 
 class SessionStateSnapshot(BaseModel):
@@ -144,6 +203,7 @@ class SessionStateSnapshot(BaseModel):
     agents_parallel_groups: Dict[str, Any] = Field(default_factory=dict)
     agents_delegation_policy_version: Optional[str] = None
     agents_delegation_decisions: List[Dict[str, Any]] = Field(default_factory=list)
+    analysis_inputs_manifest: Dict[str, Any] = Field(default_factory=dict)
 
     model_config = {
         "extra": "allow",
@@ -215,7 +275,22 @@ class SessionStateSnapshot(BaseModel):
         self.touch()
 
     def record_tool_result(self, tool: str, payload: Dict[str, Any]) -> None:
+        if not isinstance(self.tool_cache, dict):
+            self.tool_cache = {}
         self.tool_cache[tool] = payload
+        normalized_tool = _normalize_tool_name(tool)
+        component = ANALYSIS_INPUT_TOOL_COMPONENT.get(normalized_tool)
+        if component:
+            lane_hint = ANALYSIS_INPUT_LANES.get(component)
+            if lane_hint:
+                self.touch_lane(lane_hint)
+            self._persist_analysis_lane_receipt(
+                component,
+                payload,
+                source="record_tool_result",
+                tool=normalized_tool,
+            )
+            self.refresh_analysis_inputs_manifest(persist=False)
         self.touch()
 
     def record_tool_receipt(self, tool: str, payload: Dict[str, Any]) -> None:
@@ -565,6 +640,7 @@ class SessionStateSnapshot(BaseModel):
             except Exception:  # pragma: no cover - defensive fallback
                 lane_ttls = {}
         chart_spec = deepcopy(self.last_chart_spec) if isinstance(self.last_chart_spec, dict) else None
+        manifest = deepcopy(self.analysis_inputs_manifest) if isinstance(self.analysis_inputs_manifest, dict) else {}
         return SnapshotRevisionContext(
             session_id=self.session_id,
             tool_receipts=receipts_payload,
@@ -574,6 +650,7 @@ class SessionStateSnapshot(BaseModel):
             lane_ttls=lane_ttls,
             last_analysis=self.last_analysis,
             last_chart_spec=chart_spec,
+            analysis_inputs_manifest=manifest,
         )
 
     def record_revision_snapshot(self, payload: Dict[str, Any]) -> None:
@@ -605,16 +682,303 @@ class SessionStateSnapshot(BaseModel):
         chart_spec: Optional[Dict[str, Any]] = None,
         analysis: Optional[str] = None,
     ) -> None:
+        analysis_inputs_changed = False
         if sql is not None:
             self.last_sql = sql
             self.touch_lane("sql")
+            self._persist_analysis_lane_receipt(
+                "sql",
+                sql,
+                source="record_outputs",
+                tool="sql_generation",
+            )
+            analysis_inputs_changed = True
         if chart_spec is not None:
             self.last_chart_spec = chart_spec
-            self.touch_lane("chart")
+            if chart_spec_has_numeric_payload(chart_spec):
+                self.touch_lane("chart")
         if analysis is not None:
             self.last_analysis = analysis
             self.touch_lane("analysis")
+        if analysis_inputs_changed:
+            self.refresh_analysis_inputs_manifest(persist=False)
         self.touch()
+
+    def refresh_analysis_inputs_manifest(self, *, persist: bool = True) -> None:
+        timestamp_hint = None if persist else self._manifest_timestamp_hint()
+        previous_manifest = self.analysis_inputs_manifest if isinstance(self.analysis_inputs_manifest, dict) else {}
+        manifest, changed = self._build_analysis_inputs_manifest(timestamp_hint)
+        self.analysis_inputs_manifest = manifest
+        if changed:
+            self._emit_manifest_metrics(previous_manifest, manifest)
+        if changed and persist:
+            self.touch()
+
+    def _emit_manifest_metrics(self, previous_manifest: Mapping[str, Any], manifest: Mapping[str, Any]) -> None:
+        new_missing = manifest.get("missing_components") or []
+        prev_missing = previous_manifest.get("missing_components") or []
+        if new_missing and new_missing != prev_missing:
+            analysis_inputs_missing(
+                session_id=getattr(self, "session_id", None),
+                missing_components=new_missing,
+                metadata={"source": "manifest_builder"},
+            )
+        prev_status = previous_manifest.get("status")
+        if prev_status is None and previous_manifest.get("complete"):
+            prev_status = "sealed"
+        new_status = manifest.get("status")
+        if new_status == "sealed" and prev_status != "sealed":
+            analysis_inputs_manifest_sealed(
+                session_id=getattr(self, "session_id", None),
+                version=manifest.get("version"),
+                ready_components=manifest.get("ready_components") or [],
+                captured_at=manifest.get("sealed_at"),
+                receipts=manifest.get("receipts"),
+                metadata={"source": "manifest_builder"},
+            )
+
+    def ensure_analysis_inputs_manifest(self) -> None:
+        timestamp_hint = self._manifest_timestamp_hint()
+        manifest, _ = self._build_analysis_inputs_manifest(timestamp_hint)
+        self.analysis_inputs_manifest = manifest
+
+    def _manifest_timestamp_hint(self) -> str:
+        existing = self.analysis_inputs_manifest if isinstance(self.analysis_inputs_manifest, dict) else {}
+        updated = existing.get("updated_at") if isinstance(existing, dict) else None
+        if isinstance(updated, str):
+            return updated
+        baseline = self.updated_at if isinstance(self.updated_at, datetime) else datetime.now(timezone.utc)
+        return baseline.astimezone(timezone.utc).isoformat()
+
+    def _analysis_input_payloads(self) -> Dict[str, Any]:
+        tool_cache = self.tool_cache if isinstance(self.tool_cache, dict) else {}
+        dataset_preview = tool_cache.get("planner_dataset_preview")
+        if not isinstance(dataset_preview, Mapping):
+            dataset_preview = None
+        market_payload = tool_cache.get("planner_stock_widget")
+        if not isinstance(market_payload, Mapping):
+            market_payload = None
+        web_payload = tool_cache.get("web_search")
+        if not isinstance(web_payload, Mapping):
+            web_payload = None
+        return {
+            "sql": self.last_sql if isinstance(self.last_sql, str) else None,
+            "dataset_preview": dataset_preview,
+            "market": market_payload,
+            "web": web_payload,
+        }
+
+    def _analysis_component_ready(self, component: str, payload: Any) -> bool:
+        if component == "sql":
+            return isinstance(payload, str) and bool(payload.strip())
+        if component == "dataset_preview":
+            if not isinstance(payload, Mapping):
+                return False
+            rows = payload.get("rows")
+            row_count = payload.get("row_count")
+            return bool(rows) or isinstance(row_count, int)
+        if component == "market":
+            if isinstance(payload, Mapping):
+                if payload.get("snapshot") or payload.get("widget") or payload.get("series"):
+                    return True
+                return bool(payload)
+            return False
+        if component == "web":
+            if isinstance(payload, Mapping):
+                summary = payload.get("summary")
+                if isinstance(summary, str) and summary.strip():
+                    return True
+                snippets = payload.get("snippets") or payload.get("documents") or payload.get("articles")
+                if isinstance(snippets, Mapping):
+                    snippets = list(snippets.values())
+                if isinstance(snippets, (list, tuple)) and any(snippets):
+                    return True
+            return False
+        return False
+
+    def _lane_receipts_cache(self) -> Dict[str, Dict[str, Any]]:
+        if not isinstance(self.tool_cache, dict):
+            self.tool_cache = {}
+        cache = self.tool_cache.get("analysis_lane_receipts")
+        if not isinstance(cache, dict):
+            cache = {}
+            self.tool_cache["analysis_lane_receipts"] = cache
+        return cache
+
+    def _next_lane_receipt_version(self) -> int:
+        if not isinstance(self.tool_cache, dict):
+            self.tool_cache = {}
+        meta = self.tool_cache.get("analysis_lane_receipts_meta")
+        if not isinstance(meta, dict):
+            meta = {}
+            self.tool_cache["analysis_lane_receipts_meta"] = meta
+        version = int(meta.get("version") or 0) + 1
+        meta["version"] = version
+        return version
+
+    def _persist_analysis_lane_receipt(
+        self,
+        component: str,
+        payload: Any,
+        *,
+        source: str,
+        tool: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        normalized_component = str(component or "").strip().lower()
+        if normalized_component not in ANALYSIS_INPUT_COMPONENTS:
+            return None
+        lane = ANALYSIS_INPUT_LANES.get(normalized_component, normalized_component)
+        if not self._analysis_component_ready(normalized_component, payload):
+            analysis_lane_missing_artifact(
+                session_id=getattr(self, "session_id", None),
+                lane=lane,
+                component=normalized_component,
+                reason="payload_incomplete",
+                metadata={"source": source, "tool": tool},
+            )
+            return None
+        cache = self._lane_receipts_cache()
+        version = self._next_lane_receipt_version()
+        receipt_id = f"{normalized_component}-{version}-{uuid.uuid4().hex[:6]}"
+        entry = {
+            "component": normalized_component,
+            "lane": lane,
+            "receipt_id": receipt_id,
+            "capture_version": version,
+            "captured_at": datetime.now(timezone.utc).isoformat(),
+            "source": source,
+        }
+        if tool:
+            entry["tool"] = tool
+        digest = digest_tool_payload(payload)
+        if digest:
+            entry["digest"] = digest
+        cache[normalized_component] = entry
+        return entry
+
+    def ensure_analysis_lane_receipts(self) -> None:
+        payloads = self._analysis_input_payloads()
+        receipts = self._lane_receipts_cache()
+        updated = False
+        for component in ANALYSIS_INPUT_COMPONENTS:
+            if receipts.get(component):
+                continue
+            payload = payloads.get(component)
+            if not self._analysis_component_ready(component, payload):
+                continue
+            entry = self._persist_analysis_lane_receipt(
+                component,
+                payload,
+                source="backfill",
+                tool=ANALYSIS_INPUT_SOURCES.get(component),
+            )
+            updated = updated or bool(entry)
+        if updated:
+            self.touch()
+
+    def _build_analysis_inputs_manifest(self, timestamp_override: Optional[str]) -> Tuple[Dict[str, Any], bool]:
+        payloads = self._analysis_input_payloads()
+        previous_manifest = self.analysis_inputs_manifest if isinstance(self.analysis_inputs_manifest, dict) else {}
+        previous_components = previous_manifest.get("components")
+        if not isinstance(previous_components, dict):
+            previous_components = {}
+        timestamp_value = timestamp_override or datetime.now(timezone.utc).isoformat()
+
+        receipts_cache = self.tool_cache.get("analysis_lane_receipts") if isinstance(self.tool_cache, dict) else {}
+        if not isinstance(receipts_cache, dict):
+            receipts_cache = {}
+
+        components: Dict[str, Dict[str, Any]] = {}
+        ready_components: List[str] = []
+        missing_components: List[str] = []
+
+        for component in ANALYSIS_INPUT_COMPONENTS:
+            lane = ANALYSIS_INPUT_LANES.get(component)
+            payload = payloads.get(component)
+            previous_entry = previous_components.get(component, {})
+            entry: Dict[str, Any] = {
+                "lane": lane,
+                "source": ANALYSIS_INPUT_SOURCES[component],
+            }
+            if self._analysis_component_ready(component, payload):
+                state = "ready"
+                ready_components.append(component)
+            else:
+                lane_timestamp = self.get_lane_timestamp(lane) if lane else None
+                if lane_timestamp:
+                    state = "missing"
+                    missing_components.append(component)
+                else:
+                    state = "pending"
+            entry["state"] = state
+            payload_digest = digest_tool_payload(payload)
+            if payload_digest:
+                entry["digest"] = payload_digest
+            receipt_entry = receipts_cache.get(component)
+            if isinstance(receipt_entry, Mapping):
+                entry["receipt_id"] = receipt_entry.get("receipt_id")
+                entry["captured_at"] = receipt_entry.get("captured_at")
+                entry["capture_version"] = receipt_entry.get("capture_version")
+            component_changed = (
+                previous_entry.get("state") != state
+                or previous_entry.get("digest") != entry.get("digest")
+                or previous_entry.get("receipt_id") != entry.get("receipt_id")
+            )
+            entry["updated_at"] = (
+                previous_entry.get("updated_at")
+                if not component_changed and previous_entry.get("updated_at")
+                else timestamp_value
+            )
+            components[component] = entry
+
+        blocking_components = [
+            name for name in ANALYSIS_INPUT_BLOCKING if components.get(name, {}).get("state") != "ready"
+        ]
+        complete = not blocking_components
+
+        prev_ready = previous_manifest.get("ready_components") or []
+        prev_missing = previous_manifest.get("missing_components") or []
+        prev_blocking = previous_manifest.get("blocking_components") or []
+        prev_complete = previous_manifest.get("complete")
+        prev_version = int(previous_manifest.get("version") or 0)
+
+        structure_changed = (
+            components != previous_components
+            or ready_components != prev_ready
+            or missing_components != prev_missing
+            or blocking_components != prev_blocking
+            or complete != prev_complete
+            or prev_version == 0
+        )
+
+        if prev_version <= 0:
+            version = 1
+        else:
+            version = prev_version + 1 if structure_changed else prev_version
+
+        manifest_updated_at = (
+            timestamp_value
+            if structure_changed or not isinstance(previous_manifest.get("updated_at"), str)
+            else previous_manifest["updated_at"]
+        )
+
+        manifest_payload = {
+            "components": components,
+            "ready_components": ready_components,
+            "missing_components": missing_components,
+            "blocking_components": blocking_components,
+            "complete": complete,
+            "version": version,
+            "updated_at": manifest_updated_at,
+            "status": "sealed" if complete else "pending",
+            "receipts": {
+                component: (receipts_cache.get(component) or {}).get("receipt_id")
+                for component in ANALYSIS_INPUT_COMPONENTS
+            },
+        }
+        if complete:
+            manifest_payload["sealed_at"] = manifest_updated_at
+        return manifest_payload, structure_changed
 
     def record_schedule_stage(
         self,
@@ -679,6 +1043,7 @@ class SnapshotRevisionContext:
     lane_ttls: Dict[str, int] = field(default_factory=dict)
     last_analysis: Optional[str] = None
     last_chart_spec: Optional[Dict[str, Any]] = None
+    analysis_inputs_manifest: Dict[str, Any] = field(default_factory=dict)
 
     @staticmethod
     def _normalize_lane(lane: Optional[str]) -> Optional[str]:
@@ -765,6 +1130,7 @@ class SessionStateRepository:
         try:
             data = json.loads(payload)
             snapshot = SessionStateSnapshot(**data)
+            snapshot.ensure_analysis_inputs_manifest()
         except Exception as exc:  # pragma: no cover - defensive logging
             logger.warning("Failed to deserialize session state for %s: %s", session_id, exc)
             return None

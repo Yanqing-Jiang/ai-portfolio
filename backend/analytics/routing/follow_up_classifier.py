@@ -19,9 +19,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Iterable, Optional
+from typing import Iterable, Mapping, Optional
 
-from analytics.core.session_state import SessionStateSnapshot
+from analytics.core.session_state import SessionStateSnapshot, chart_spec_has_numeric_payload
 
 
 class FollowUpRoute(str, Enum):
@@ -92,12 +92,21 @@ class FollowUpClassifier:
         history = getattr(snapshot, "schedule_history", []) or []
         return any((entry.get("stage") == stage) for entry in history)
 
-    def classify(self, query: str, snapshot: Optional[SessionStateSnapshot]) -> FollowUpRoute:
+    def classify(
+        self,
+        query: str,
+        snapshot: Optional[SessionStateSnapshot],
+        lane_readiness: Optional[Mapping[str, bool]] = None,
+    ) -> FollowUpRoute:
         normalized_query = (query or "").strip().lower()
         if not normalized_query:
             return FollowUpRoute.FULL_PIPELINE
-        has_sql = bool(snapshot and snapshot.last_sql) or self._stage_seen(snapshot, "sql")
-        has_chart = bool(snapshot and snapshot.last_chart_spec) or self._stage_seen(snapshot, "chart")
+        if lane_readiness is not None:
+            has_sql = bool(lane_readiness.get("sql"))
+            has_chart = bool(lane_readiness.get("chart"))
+        else:
+            has_sql = bool(snapshot and snapshot.last_sql) or self._stage_seen(snapshot, "sql")
+            has_chart = bool(snapshot and snapshot.last_chart_spec) or self._stage_seen(snapshot, "chart")
         if has_sql and _contains_any(normalized_query, self.stock_keywords):
             return FollowUpRoute.STOCK_ONLY
         if has_chart and has_sql and _contains_any(normalized_query, self.chart_keywords):
@@ -112,7 +121,12 @@ class FollowUpClassifier:
 
         if snapshot.last_sql or artifacts.get("sql_generation") or self._stage_seen(snapshot, "sql"):
             lanes.add("sql")
-        if snapshot.last_chart_spec or artifacts.get("chart") or self._stage_seen(snapshot, "chart"):
+        chart_artifact = artifacts.get("chart")
+        chart_ready = chart_spec_has_numeric_payload(snapshot.last_chart_spec)
+        if not chart_ready and isinstance(chart_artifact, dict):
+            candidate = chart_artifact.get("chart_spec") or chart_artifact.get("spec") or chart_artifact
+            chart_ready = chart_spec_has_numeric_payload(candidate)
+        if chart_ready or self._stage_seen(snapshot, "chart"):
             lanes.add("chart")
         if snapshot.last_analysis or artifacts.get("analysis") or self._stage_seen(snapshot, "analysis"):
             lanes.add("analysis")
@@ -126,6 +140,7 @@ class FollowUpClassifier:
         self,
         query: str,
         snapshot: Optional[SessionStateSnapshot] = None,
+        lane_readiness: Optional[Mapping[str, bool]] = None,
     ) -> set[str]:
         normalized_query = (query or "").strip().lower()
         if not normalized_query or snapshot is None:
@@ -143,7 +158,10 @@ class FollowUpClassifier:
             lanes.add("sql")
         if _contains_any(normalized_query, self.analysis_keywords):
             lanes.add("analysis")
-        available = self._lanes_available(snapshot)
+        if lane_readiness is not None:
+            available = {lane for lane, ready in lane_readiness.items() if ready}
+        else:
+            available = self._lanes_available(snapshot)
         requested = {lane for lane in lanes if lane in available}
         if "analysis" in lanes:
             requested.add("analysis")

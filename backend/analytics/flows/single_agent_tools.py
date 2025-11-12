@@ -1295,6 +1295,7 @@ class SingleAgentController:
             runtime_allowed = runtime_env.strip().lower() in {"1", "true", "yes", "on"}
         self._agent_runtime_allowed = runtime_allowed
         self._agent_snapshot: Optional[SessionStateSnapshot] = None
+        self._session_snapshot: Optional[SessionStateSnapshot] = None
         self._agent_memory: Optional[AgentMemory] = None
 
         self._registry = get_planner_tool_registry()
@@ -1945,10 +1946,12 @@ class SingleAgentController:
         session_id = run_context.session_id or ctx.session_id
         if session_id is None:
             return
-        snapshot = self._agent_memory.snapshot if self._agent_memory else None
+        snapshot = self._session_snapshot or (self._agent_memory.snapshot if self._agent_memory else None)
         if snapshot is None:
             snapshot = SessionStateSnapshot(session_id=session_id)
-            self._agent_snapshot = snapshot
+        self._session_snapshot = snapshot
+        self._agent_snapshot = snapshot
+        if self._agent_memory is None or self._agent_memory.snapshot is not snapshot:
             self._agent_memory = AgentMemory(snapshot)
         # Persist plan state updates that may have occurred during the run.
         try:
@@ -1966,6 +1969,7 @@ class SingleAgentController:
             )
         except Exception:  # pragma: no cover - defensive logging
             logger.debug("Failed to record agent run snapshot", exc_info=True)
+        self._record_lane_outputs(snapshot, ctx)
         if repository is not None:
             await repository.save(snapshot)
         telemetry.agent_run(
@@ -2051,8 +2055,9 @@ class SingleAgentController:
 
     def prime_with_snapshot(self, snapshot: Optional[SessionStateSnapshot]) -> None:
         self._planner.prime_with_snapshot(snapshot)
+        self._session_snapshot = snapshot
         self._agent_snapshot = snapshot
-        self._agent_memory = AgentMemory(snapshot) if snapshot is not None else AgentMemory(None)
+        self._agent_memory = AgentMemory(snapshot) if snapshot is not None else None
 
     def _build_agent_runtime(
         self,
@@ -2917,6 +2922,9 @@ class SingleAgentController:
         snapshot = await repository.load(session_id)
         if snapshot is None:
             snapshot = SessionStateSnapshot(session_id=session_id)
+        self._session_snapshot = snapshot
+        self._agent_snapshot = snapshot
+        self._agent_memory = AgentMemory(snapshot)
         run_id = (
             getattr(run_result, "id", None)
             or getattr(run_result, "run_id", None)
@@ -2935,6 +2943,7 @@ class SingleAgentController:
             retry_counts=run_context.tool_retry_counts,
             receipts=run_context.tool_receipts,
         )
+        self._record_lane_outputs(snapshot, ctx)
         await repository.save(snapshot)
         telemetry.agent_run(
             session_id=session_id,
@@ -2965,6 +2974,30 @@ class SingleAgentController:
                 )
         except Exception:  # pragma: no cover - defensive logging
             logger.exception("Failed to cache agent metadata for session %s", session_id)
+
+    def _record_lane_outputs(
+        self,
+        snapshot: SessionStateSnapshot,
+        ctx: PlannerPhaseContext,
+    ) -> None:
+        if snapshot is None or ctx is None:
+            return
+        artifacts = getattr(ctx, "artifacts", None)
+        if artifacts is None:
+            return
+        chart_spec_payload: Optional[Dict[str, Any]] = None
+        chart_art = getattr(artifacts, "chart", None)
+        if chart_art and getattr(chart_art, "spec", None):
+            chart_spec_payload = copy.deepcopy(chart_art.spec)
+        analysis_text: Optional[str] = None
+        analysis_art = getattr(artifacts, "analysis", None)
+        if analysis_art:
+            text_value = getattr(analysis_art, "analysis_text", None)
+            if isinstance(text_value, str) and text_value.strip():
+                analysis_text = text_value
+        if chart_spec_payload is None and analysis_text is None:
+            return
+        snapshot.record_outputs(chart_spec=chart_spec_payload, analysis=analysis_text)
 
     def _emit_lane_summary(self, lane_states: Dict[str, str]) -> Dict[str, Any]:
         normalized_states = dict(lane_states)
@@ -3852,9 +3885,17 @@ class SingleAgentController:
         missing_analysis = analysis_artifact is None or not getattr(analysis_artifact, "analysis_text", None)
         missing_sql = not sql_artifact or not getattr(sql_artifact, "sql", None)
         if missing_sql or missing_analysis:
+            logger.warning(
+                "snapshot_missing",
+                extra={
+                    "lane": "analysis",
+                    "session_id": session_id,
+                    "reason": "missing_analysis_snapshot" if missing_analysis else "missing_sql_snapshot",
+                },
+            )
             warning_event = EventEmitter.status(
                 "analysis_revision_blocked",
-                "No saved analysis available to revise. Run a full workflow to create a baseline first.",
+                "No cached analysis detected; rebuilding analysis lane.",
             )
             warning_event.setdefault("data", {})
             warning_event["data"].update(
@@ -3862,8 +3903,8 @@ class SingleAgentController:
                     "lane": "analysis",
                     "level": "warning",
                     "revision": True,
-                    "reason": "missing_baseline",
-                    "required_action": "full_rerun",
+                    "reason": "snapshot_missing",
+                    "required_action": "lane_rebuild",
                     "source": source or "fresh_revision",
                 }
             )
@@ -3872,7 +3913,6 @@ class SingleAgentController:
             annotated_warning = apply_mode_metadata(warning_event, self.flow_mode)
             annotated_warning["data"]["follow_up_route"] = FollowUpRoute.FULL_PIPELINE.value
             yield annotated_warning
-            return
 
         web_ready_seen = False
         web_failure_reason: Optional[str] = None

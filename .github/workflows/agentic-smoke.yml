@@ -36,6 +36,16 @@ jobs:
           }
           ./scripts/agentic_smoke_test.ps1 -Flow $env:SMOKE_FLOW -FixtureDirectory reports/agentic_smoke/fixtures -SupervisorFlow $env:SMOKE_SUPERVISOR_FLOW
 
+      - name: Show snapshot archives (fixtures)
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path reports/agentic_smoke) {
+            Get-ChildItem reports/agentic_smoke -Filter '*snapshot.json' -Recurse | Select-Object -ExpandProperty FullName
+          } else {
+            Write-Host 'No snapshot artifacts produced.'
+          }
+
       - name: Upload smoke artifacts (fixtures)
         if: always()
         uses: actions/upload-artifact@v4
@@ -68,6 +78,16 @@ jobs:
             Get-ChildItem reports/agentic_smoke -Recurse -Directory | Where-Object { $_.FullName -notmatch '\\fixtures$' } | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
           }
           ./scripts/agentic_smoke_test.ps1 -Flow $env:FLOW_MODE -BackendUrl $env:BACKEND_URL -SupervisorFlow $env:SMOKE_SUPERVISOR_FLOW
+
+      - name: Show snapshot archives (live)
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path reports/agentic_smoke) {
+            Get-ChildItem reports/agentic_smoke -Filter '*snapshot.json' -Recurse | Select-Object -ExpandProperty FullName
+          } else {
+            Write-Host 'No snapshot artifacts produced.'
+          }
 
       - name: Upload smoke artifacts (live)
         if: always()
