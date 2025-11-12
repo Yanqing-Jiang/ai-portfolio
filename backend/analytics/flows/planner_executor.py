@@ -3071,6 +3071,7 @@ class PlannerPipeline:
         record_sql: bool = False,
         record_chart: bool = False,
         record_analysis: bool = False,
+        record_web: bool = False,
         tool_bundle: Optional[Dict[str, Any]] = None,
         record_artifacts: bool = True,
     ) -> None:
@@ -3108,6 +3109,14 @@ class PlannerPipeline:
             )
             snapshot.touch_lane("market")
             updated = True
+        web_artifact = ctx.artifacts.web if record_web else None
+        if web_artifact:
+            web_payload = web_artifact.to_dict()
+            summary = web_payload.get("summary")
+            snippets = web_payload.get("snippets")
+            if (isinstance(summary, str) and summary.strip()) or (isinstance(snippets, list) and any(snippets)):
+                snapshot.record_tool_result("web_search", sanitize_for_json(web_payload))
+                updated = True
         analysis_artifact = ctx.artifacts.analysis if record_analysis else None
         if analysis_artifact and analysis_artifact.analysis_text:
             snapshot.record_outputs(analysis=analysis_artifact.analysis_text)
@@ -3126,6 +3135,21 @@ class PlannerPipeline:
             if artifacts_payload:
                 snapshot.record_artifacts(artifacts_payload)
                 if isinstance(artifacts_payload, Mapping):
+                    web_payload = artifacts_payload.get("web")
+                    if (
+                        web_payload
+                        and not record_web
+                        and isinstance(web_payload, Mapping)
+                        and (
+                            (isinstance(web_payload.get("summary"), str) and web_payload.get("summary").strip())
+                            or (
+                                isinstance(web_payload.get("snippets"), list)
+                                and any(web_payload.get("snippets"))
+                            )
+                        )
+                    ):
+                        snapshot.record_tool_result("web_search", sanitize_for_json(web_payload))
+                        updated = True
                     if artifacts_payload.get("web"):
                         snapshot.touch_lane("web")
                     analysis_payload = artifacts_payload.get("analysis")
@@ -3989,7 +4013,11 @@ class PlannerPipeline:
         if web_refresh_required and ctx.web_search is None and not getattr(ctx, "web_search_seeded", False):
             async for event in self._web_search_phase(ctx):
                 yield self._mark_delta_event(event)
-        await self._persist_session_state(ctx, record_artifacts=True)
+        await self._persist_session_state(
+            ctx,
+            record_artifacts=True,
+            record_web=bool(getattr(ctx.artifacts, "web", None)),
+        )
 
     async def refresh_web_lane(
         self,
@@ -4028,7 +4056,7 @@ class PlannerPipeline:
                         source=source,
                     )
         finally:
-            await self._persist_session_state(ctx, record_artifacts=True)
+            await self._persist_session_state(ctx, record_artifacts=True, record_web=True)
 
     async def refresh_market_lane(
         self,
@@ -5154,6 +5182,7 @@ class PlannerPipeline:
         payload["ts"] = datetime.utcnow().isoformat()
         _set_web_artifact(ctx, payload=payload, topic=topic, search_result=search_result)
         self._capture_artifacts(ctx)
+        await self._persist_session_state(ctx, record_web=True, record_artifacts=False)
         card = {
             "type": "web_context",
             "state": "ready",
