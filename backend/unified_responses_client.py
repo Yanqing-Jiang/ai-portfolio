@@ -29,16 +29,54 @@ Usage:
     embeddings = await client.create_embeddings(["text to embed"])
 """
 
+# --- Function/Class Map ---
+# Function: _should_require_property
+#   Role: Decide whether a schema property must be marked as required for Responses payloads.
+#   Called from: unified_responses_client._normalize_schema_for_responses
+#   Invokes: None (pure helper)
+#   Why: Prevents dictionary-only JSON schema fields from forcing invalid required lists.
+# Function: _normalize_schema_for_responses
+#   Role: Clean Pydantic-generated schemas for Responses API compatibility.
+#   Called from: unified_responses_client._wrap_response_model
+#   Invokes: unified_responses_client._should_require_property
+#   Why: Guarantees structured calls use schemas accepted by the Responses API.
+# Function: _wrap_response_model
+#   Role: Build a wrapper BaseModel that Responses API can parse directly.
+#   Called from: UnifiedResponsesClient.create_structured, tests.analytics.test_unified_responses_client
+#   Invokes: pydantic.BaseModel.model_json_schema
+#   Why: Centralizes schema-wrapping logic for structured Responses calls.
+# Class: ResponseDelta
+#   Role: Lightweight container for streaming response chunks.
+#   Called from: UnifiedResponsesClient._extract_tool_calls
+#   Invokes: None
+#   Why: Normalizes streaming output for downstream event consumers.
+# Class: ResponseMessage
+#   Role: Container for full response payloads from the Responses API.
+#   Called from: UnifiedResponsesClient.tool_calling_turn
+#   Invokes: None
+#   Why: Provides a stable shape for callers expecting textual responses.
+# Class: UnifiedResponsesClient
+#   Role: Primary OpenAI Responses API facade (session + reasoning + parsing).
+#   Called from: analytics.core.intent_impl, analytics.flows.*, tests.analytics.test_unified_responses_client
+#   Invokes: openai.AsyncOpenAI, analytics.core.telemetry.responses_call
+#   Why: Centralizes Responses access, telemetry, and schema handling for the app.
+# Function: get_unified_client
+#   Role: Expose a singleton UnifiedResponsesClient instance for reuse.
+#   Called from: Modules needing OpenAI access (e.g., analytics.core.intent_impl)
+#   Invokes: UnifiedResponsesClient constructor
+#   Why: Avoids recreating clients per call while keeping initialization consistent.
+# --- End Function/Class Map ---
+
 from __future__ import annotations
 import copy
 import os
 import logging
 import time
-from typing import Any, Dict, List, Optional, AsyncGenerator, TypeVar, Type, Tuple
+from typing import Any, Dict, List, Optional, AsyncGenerator, TypeVar, Type, Tuple, Mapping
 from types import SimpleNamespace
 from pydantic import BaseModel
 from openai import AsyncOpenAI
-from analytics.core.telemetry import responses_call
+from analytics.core.telemetry import responses_call, intent_resolution_schema_error
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +118,49 @@ def _normalize_schema_for_responses(schema: Dict[str, Any]) -> Dict[str, Any]:
                     _visit(prop_schema)
                 cleaned_props[prop_name] = prop_schema
             node["properties"] = cleaned_props
-            node["required"] = list(cleaned_props.keys())
+
+            explicit_required: Optional[List[str]] = None
+            schema_extra = node.get("json_schema_extra")
+            if isinstance(schema_extra, dict):
+                raw_required = schema_extra.get("required")
+                if isinstance(raw_required, (list, tuple, set)):
+                    explicit_required = [
+                        str(value).strip()
+                        for value in raw_required
+                        if isinstance(value, str) and value.strip()
+                    ]
+            if explicit_required is None:
+                existing_required = node.get("required")
+                if isinstance(existing_required, (list, tuple)):
+                    explicit_required = [
+                        str(value).strip()
+                        for value in existing_required
+                        if isinstance(value, str) and value.strip()
+                    ]
+
+            if explicit_required is not None:
+                filtered_required = [
+                    prop_name
+                    for prop_name in explicit_required
+                    if prop_name in cleaned_props and _should_require_property(cleaned_props[prop_name])
+                ]
+                if filtered_required:
+                    node["required"] = filtered_required
+                else:
+                    node.pop("required", None)
+            else:
+                computed_required = [
+                    prop_name
+                    for prop_name, prop_schema in cleaned_props.items()
+                    if _should_require_property(prop_schema)
+                ]
+                if computed_required:
+                    node["required"] = computed_required
+                else:
+                    node.pop("required", None)
+
+            node.setdefault("additionalProperties", False)
+        else:
             node.setdefault("additionalProperties", False)
 
         for key in ("$defs", "definitions"):
@@ -147,6 +227,8 @@ if _SUPERVISOR_REASONING_ENV not in _ALLOWED_REASONING:
     logger.warning('Invalid SUPERVISOR_REASONING_EFFORT=%s, falling back to low', _SUPERVISOR_REASONING_ENV)
     _SUPERVISOR_REASONING_ENV = 'low'
 SUPERVISOR_REASONING_EFFORT = _SUPERVISOR_REASONING_ENV
+
+SCHEMA_ERROR_CODES = {"text.format.schema", "invalid_json_schema"}
 
 
 class ResponseDelta:
@@ -372,6 +454,36 @@ class UnifiedResponsesClient:
 
         return calls
 
+    @staticmethod
+    def _extract_schema_error_code(exc: Exception) -> Optional[str]:
+        def _coerce(value: Any) -> Optional[str]:
+            if isinstance(value, str):
+                candidate = value.strip()
+                if candidate in SCHEMA_ERROR_CODES:
+                    return candidate
+            return None
+
+        error_code = _coerce(getattr(exc, "code", None))
+        if error_code:
+            return error_code
+        error_payload = getattr(exc, "error", None)
+        if isinstance(error_payload, Mapping):
+            nested = _coerce(error_payload.get("code"))
+            if nested:
+                return nested
+            nested_message = error_payload.get("message")
+            if isinstance(nested_message, str):
+                lowered = nested_message.lower()
+                for token in SCHEMA_ERROR_CODES:
+                    if token in lowered:
+                        return token
+        message = str(exc)
+        lowered_msg = message.lower()
+        for token in SCHEMA_ERROR_CODES:
+            if token in lowered_msg:
+                return token
+        return None
+
     def _extract_parsed_model(self, response: Any) -> Any:
         if response is None:
             return None
@@ -433,6 +545,7 @@ class UnifiedResponsesClient:
         model: Optional[str] = None
     ) -> Tuple[T, Optional[str]]:
         wrapped_model = _wrap_response_model(response_model)
+        response_model_name = getattr(response_model, "__name__", str(response_model))
         # Force schema build so any validation issues surface before the request.
         _ = wrapped_model.model_json_schema()
         model_name = self._get_model_name(model)
@@ -462,7 +575,7 @@ class UnifiedResponsesClient:
                 duration_ms=elapsed_ms,
                 status="success",
                 session_id=session_id,
-                metadata={"response_id": response_id, "response_model": getattr(response_model, '__name__', str(response_model))},
+                metadata={"response_id": response_id, "response_model": response_model_name},
             )
             return parsed_model, response_id
         except Exception as exc:
@@ -476,6 +589,14 @@ class UnifiedResponsesClient:
                 session_id=session_id,
                 error=str(exc),
             )
+            schema_error_code = self._extract_schema_error_code(exc)
+            if schema_error_code:
+                intent_resolution_schema_error(
+                    session_id=session_id,
+                    response_model=response_model_name,
+                    error=schema_error_code,
+                    metadata={"details": str(exc)},
+                )
             logger.error("Responses API structured request failed: %s", exc)
             raise
 

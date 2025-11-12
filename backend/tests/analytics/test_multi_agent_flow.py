@@ -26,6 +26,7 @@ from analytics.flows.multi_agent import (
     _market_agent,
     _web_research_agent,
 )
+from analytics.core.session_state import SessionStateSnapshot
 from analytics.flows.sequencer import PlannerSequencer
 from analytics.flows.orchestrator import AgentResult, AgentRunContext
 from analytics.routing import FollowUpRoute
@@ -42,6 +43,19 @@ def test_multi_agent_plan_dependencies():
         "market_phase",
         "web_research_phase",
     }
+
+
+def test_multi_agent_reuses_prefetched_snapshot():
+    flow = MultiAgentFlow()
+    snapshot = SessionStateSnapshot(session_id="multi-reuse")
+    snapshot.record_outputs(
+        analysis="Stored analysis",
+        chart_spec={"series": [{"data": [{"label": "AMD", "value": 5}]}]},
+    )
+    flow.prime_with_snapshot(snapshot)
+    flow._capture_event({"event": "session_started", "data": {"session_id": "multi-reuse"}})
+    assert flow._session_snapshot is snapshot
+    assert flow._session_snapshot.last_analysis == "Stored analysis"
 
 
 def test_multi_agent_forward_with_hooks_tags_session_metadata() -> None:

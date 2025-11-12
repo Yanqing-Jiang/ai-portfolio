@@ -249,6 +249,11 @@
 #   Called from: analytics.flows.single_agent_tools, tests.analytics.test_session_state_receipts
 #   Invokes: copy.deepcopy
 #   Why: Keeps analytics.flows.planner_executor from duplicating apply revision context hints behavior across flows.
+# Function: _hydrate_revision_payload
+#   Role: Rehydrates planner context inputs from cached revision snapshot payloads.
+#   Called from: analytics.flows.planner_executor._apply_revision_context_hints, analytics.flows.planner_executor.PlannerPipeline.events
+#   Invokes: analytics.core.types.IntentModel, analytics.core.intent_impl.models.IntentResolutionModel, analytics.core.types.ClarifyRequestModel
+#   Why: Keeps analytics.flows.planner_executor from duplicating revision payload hydration behavior across flows.
 # Function: _build_schema_clarifier_request
 #   Role: Handles build schema clarifier request logic for analytics.flows.planner_executor.
 #   Called from: Internal to analytics.flows.planner_executor
@@ -773,6 +778,7 @@ class PlannerRevisionContext:
     accessories: Dict[str, Any] = field(default_factory=dict)
     last_analysis: Optional[str] = None
     last_chart_spec: Optional[Dict[str, Any]] = None
+    snapshot_payload: Dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_snapshot(
@@ -797,8 +803,10 @@ class PlannerRevisionContext:
             if key:
                 normalized_overrides[key] = bool(required)
         accessories: Dict[str, Any] = {}
+        snapshot_payload: Dict[str, Any] = {}
         revision_snapshot = snapshot_ctx.revision_snapshot or {}
         if isinstance(revision_snapshot, Mapping):
+            snapshot_payload = copy.deepcopy(revision_snapshot)
             web_snapshot = revision_snapshot.get("web_context")
             if isinstance(web_snapshot, Mapping):
                 accessories["web"] = copy.deepcopy(web_snapshot)
@@ -815,6 +823,7 @@ class PlannerRevisionContext:
             accessories=accessories,
             last_analysis=snapshot_ctx.last_analysis,
             last_chart_spec=copy.deepcopy(snapshot_ctx.last_chart_spec) if snapshot_ctx.last_chart_spec else None,
+            snapshot_payload=snapshot_payload,
         )
 
     @staticmethod
@@ -1927,6 +1936,13 @@ def _build_revision_snapshot_payload(ctx: PlannerPhaseContext) -> Optional[Dict[
 
     payload: Dict[str, Any] = {"intent_signature": signature}
 
+    classification_model = getattr(ctx, "classification", None)
+    if classification_model is not None:
+        try:
+            payload["classification"] = classification_model.model_dump()
+        except Exception:
+            payload["classification"] = sanitize_for_json(classification_model)
+
     sql_generation = ctx.artifacts.sql_generation
     if sql_generation and sql_generation.sql:
         payload["sql"] = sql_generation.sql
@@ -2579,6 +2595,120 @@ def _apply_revision_context_hints(ctx: PlannerPhaseContext) -> None:
     ctx.lane_refresh_required = refresh_flags
     if revision_ctx.reasoning_summaries and not ctx.revision_reasoning:
         ctx.revision_reasoning = copy.deepcopy(revision_ctx.reasoning_summaries)
+    payload = getattr(revision_ctx, "snapshot_payload", None)
+    if isinstance(payload, Mapping):
+        if getattr(ctx, "revision_snapshot", None) is None:
+            ctx.revision_snapshot = copy.deepcopy(payload)
+        _hydrate_revision_payload(ctx, payload)
+
+
+def _hydrate_revision_payload(ctx: PlannerPhaseContext, payload: Mapping[str, Any]) -> None:
+    if not isinstance(payload, Mapping) or not payload:
+        return
+
+    def _coerce_model(model_cls, raw_payload):
+        if not isinstance(raw_payload, Mapping):
+            return None
+        try:
+            if hasattr(model_cls, "model_validate"):
+                return model_cls.model_validate(raw_payload)  # type: ignore[attr-defined]
+            if hasattr(model_cls, "parse_obj"):
+                return model_cls.parse_obj(raw_payload)  # type: ignore[attr-defined]
+            return model_cls(**raw_payload)
+        except Exception:
+            return None
+
+    classification_payload = payload.get("classification")
+    if classification_payload and getattr(ctx, "classification", None) is None:
+        classification_model = _coerce_model(OffTopicClassifierSchema, classification_payload)
+        if classification_model:
+            ctx.classification = classification_model
+            is_financial = getattr(classification_model, "is_financial_query", None)
+            if is_financial is not None:
+                ctx.is_financial_query = bool(is_financial)
+
+    if getattr(ctx, "intent_signature", None) is None:
+        signature = payload.get("intent_signature")
+        if isinstance(signature, Mapping):
+            ctx.intent_signature = copy.deepcopy(signature)
+
+    hydrated_intent: Optional[IntentModel] = None
+    if getattr(ctx, "intent", None) is None:
+        intent_payload = payload.get("intent")
+        if intent_payload:
+            intent_model = _coerce_model(IntentModel, intent_payload)
+            if intent_model:
+                ctx.intent = intent_model
+                hydrated_intent = intent_model
+    plan_payload = payload.get("plan")
+    if plan_payload and getattr(ctx, "plan", None) is None:
+        plan_model = _coerce_model(QueryPlanModel, plan_payload)
+        if plan_model:
+            ctx.plan = plan_model
+            ctx.provisional_plan = plan_model
+
+    slot_status_models: Dict[str, SlotStatusModel] = {}
+    followup_models: List[FollowUpModel] = []
+    resolution_payload = payload.get("intent_resolution")
+    if resolution_payload and getattr(ctx, "intent_resolution", None) is None:
+        resolution_model = _coerce_model(IntentResolutionModel, resolution_payload)
+        if resolution_model:
+            ctx.intent_resolution = resolution_model
+            slot_status_models = dict(resolution_model.slots or {})
+            followup_models = list(resolution_model.followups or [])
+
+    slot_status_payload = payload.get("slot_statuses")
+    if isinstance(slot_status_payload, Mapping):
+        for slot_name, raw in slot_status_payload.items():
+            if slot_name in slot_status_models:
+                continue
+            status_model = _coerce_model(SlotStatusModel, raw)
+            if status_model:
+                slot_status_models[str(slot_name)] = status_model
+    if slot_status_models:
+        ctx.slot_statuses = slot_status_models
+
+    followup_payload = payload.get("slot_followups")
+    if isinstance(followup_payload, Sequence):
+        for raw in followup_payload:
+            followup_model = _coerce_model(FollowUpModel, raw)
+            if followup_model:
+                followup_models.append(followup_model)
+    if followup_models:
+        ctx.slot_followups = followup_models
+
+    if getattr(ctx, "intent_resolution", None) is None and (slot_status_models or followup_models):
+        ctx.intent_resolution = IntentResolutionModel(
+            slots=slot_status_models or {},
+            followups=followup_models or [],
+        )
+    elif getattr(ctx, "intent_resolution", None) is not None and slot_status_models:
+        ctx.intent_resolution = ctx.intent_resolution.model_copy(  # type: ignore[assignment]
+            update={
+                "slots": slot_status_models or dict(ctx.intent_resolution.slots or {}),
+                "followups": followup_models or list(ctx.intent_resolution.followups or []),
+            }
+        )
+
+    clarifications_payload = payload.get("clarifications")
+    if isinstance(clarifications_payload, Sequence) and not getattr(ctx, "clarifications", None):
+        clarifications: List[ClarifyRequestModel] = []
+        for raw in clarifications_payload:
+            clarification_model = _coerce_model(ClarifyRequestModel, raw)
+            if clarification_model:
+                clarifications.append(clarification_model)
+        if clarifications:
+            ctx.clarifications = clarifications
+
+    rounds_value = payload.get("clarification_rounds")
+    if isinstance(rounds_value, int) and rounds_value > 0:
+        ctx.clarification_rounds = max(ctx.clarification_rounds, rounds_value)
+
+    assumptions_payload = payload.get("assumptions")
+    if isinstance(assumptions_payload, Sequence) and assumptions_payload:
+        ctx.assumptions = [str(item) for item in assumptions_payload if item not in (None, "")]
+    elif hydrated_intent and getattr(hydrated_intent, "assumptions", None) and not ctx.assumptions:
+        ctx.assumptions = list(hydrated_intent.assumptions or [])
 
 def _build_schema_clarifier_request(decision: ClarifierDecision, session_id: str) -> Optional[ClarifyRequestModel]:
     if not decision.slot or not decision.question:
@@ -5092,7 +5222,13 @@ class PlannerPipeline:
             async for end_event in hooks.on_flow_end(hook_ctx):
                 yield end_event
 
-    async def events(self, query: str, session_id: Optional[str] = None) -> AsyncGenerator[Dict[str, Any], None]:
+    async def events(
+        self,
+        query: str,
+        session_id: Optional[str] = None,
+        *,
+        revision_requested: bool = False,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
         "Enhanced workflow with structured decision events and timing."
         ctx = await _initialize_context(self, query, session_id)
         session_id = ctx.session_id
@@ -5127,15 +5263,30 @@ class PlannerPipeline:
             forced_refresh["web"] = True
             forced_refresh["market"] = True
             ctx.lane_refresh_required = forced_refresh
+        skip_deterministic = bool(revision_requested)
+        ctx.revision_requested = skip_deterministic
         is_revision_follow_up = (
-            is_session_follow_up
+            skip_deterministic
+            or is_session_follow_up
             or ctx.follow_up_route != FollowUpRoute.FULL_PIPELINE
             or bool(getattr(ctx, "revision_targets", None))
         )
         setattr(ctx, "is_revision_follow_up", is_revision_follow_up)
+        lane_rebuild_notice_emitted = False
 
         try:
-            if is_revision_follow_up:
+            if skip_deterministic:
+                executed.update({"classification", "intent_detection", "clarification", "plan_generation"})
+                revision_ctx = getattr(ctx, "revision_context", None)
+                payload = getattr(revision_ctx, "snapshot_payload", None) if revision_ctx else None
+                if isinstance(payload, Mapping):
+                    _hydrate_revision_payload(ctx, payload)
+                if ctx.classification is None:
+                    ctx.is_financial_query = True
+                elif getattr(ctx.classification, "is_financial_query", None) is not None:
+                    ctx.is_financial_query = bool(ctx.classification.is_financial_query)
+                await self._persist_session_state(ctx, record_artifacts=True)
+            elif is_revision_follow_up:
                 executed.add("classification")
                 executed.add("clarification")
                 classification_artifact = getattr(ctx.artifacts, "classification", None)
@@ -5161,7 +5312,9 @@ class PlannerPipeline:
                     return
 
             tool_sequence: Tuple[str, ...]
-            if is_revision_follow_up:
+            if skip_deterministic:
+                tool_sequence = ()
+            elif is_revision_follow_up:
                 needs_intent = ctx.intent is None
                 needs_plan = (ctx.plan or ctx.provisional_plan) is None
                 if needs_intent:
@@ -5238,6 +5391,31 @@ class PlannerPipeline:
                     ctx,
                 )
                 yield revision_event
+            if revision_requested and not lane_rebuild_notice_emitted:
+                lanes_for_notice = sorted(revision_targets) if revision_targets else []
+                if not lanes_for_notice:
+                    refresh_flags = getattr(ctx, "lane_refresh_required", {}) or {}
+                    lanes_for_notice = sorted(
+                        lane for lane, required in refresh_flags.items() if required
+                    )
+                if not lanes_for_notice:
+                    lanes_for_notice = ["analysis", "chart", "web", "market"]
+                rebuild_event = EventEmitter.status(
+                    "lane_rebuild_notice",
+                    "Rebuilding requested revision lanes.",
+                )
+                rebuild_event.setdefault("data", {})
+                rebuild_event["data"].update(
+                    {
+                        "lanes": lanes_for_notice,
+                        "revision": True,
+                        "session_id": ctx.session_id,
+                        "reason": "revision_requested",
+                        "follow_up_route": ctx.follow_up_route.value,
+                    }
+                )
+                yield rebuild_event
+                lane_rebuild_notice_emitted = True
 
             start_sql = self._maybe_emit_fresh_lane_event(ctx, "sql", "started")
             if start_sql:
@@ -6587,10 +6765,11 @@ class PlannerExecutorFlow:
         session_id: Optional[str] = None,
         *,
         hooks: Optional[AnalyticsFlowHooks] = None,
+        revision_requested: bool = False,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         self._thought_counters.clear()
         self._last_thoughts.clear()
-        stream = self._pipeline.events(query, session_id)
+        stream = self._pipeline.events(query, session_id, revision_requested=revision_requested)
         if hooks is None:
             async for event in stream:
                 yield self._annotate(event)
@@ -6618,10 +6797,15 @@ class PlannerExecutorFlow:
             async for end_event in hooks.on_flow_end(hook_ctx):
                 yield self._annotate(end_event)
 # Standalone wrapper function for main.py
-async def run_planner_executor(query: str, session_id: Optional[str] = None) -> AsyncGenerator[Dict[str, Any], None]:
+async def run_planner_executor(
+    query: str,
+    session_id: Optional[str] = None,
+    *,
+    revision_requested: bool = False,
+) -> AsyncGenerator[Dict[str, Any], None]:
     """Helper to stream planner-executor events without referencing the registry."""
     workflow_instance = PlannerExecutorFlow()
-    async for event in workflow_instance.events(query, session_id):
+    async for event in workflow_instance.events(query, session_id, revision_requested=revision_requested):
         yield event
 
 

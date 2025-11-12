@@ -39,6 +39,16 @@
 #   Called from: Internal to analytics.flows.workflow
 #   Invokes: Internal helpers only
 #   Why: Keeps analytics.flows.workflow from duplicating lane available behavior across flows.
+# Function: _lane_readiness
+#   Role: Builds a per-lane readiness map for chart, analysis, web, market, and sql artifacts.
+#   Called from: analytics.flows.workflow
+#   Invokes: analytics.core.session_state.chart_spec_has_numeric_payload
+#   Why: Prevents revision routing from depending on a single coarse baseline flag.
+# Function: _lanes_for_missing_inputs
+#   Role: Maps missing analysis input components to the revision lanes they block.
+#   Called from: analytics.flows.workflow
+#   Invokes: None (pure helper)
+#   Why: Keeps banner + telemetry logic consistent when analysis inputs manifest is incomplete.
 # Function: _revision_route_label
 #   Role: Handles revision route label logic for analytics.flows.workflow.
 #   Called from: Internal to analytics.flows.workflow
@@ -141,8 +151,13 @@ from dataclasses import asdict
 from typing import Any, AsyncGenerator, Callable, Dict, Iterable, List, Optional, Set, Mapping
 
 from analytics.core.events import EventEmitter
-from analytics.core.session_state import SessionStateSnapshot, get_session_state_repository
+from analytics.core.session_state import (
+    SessionStateSnapshot,
+    chart_spec_has_numeric_payload,
+    get_session_state_repository,
+)
 from analytics.core.lane_refresh import compute_lane_refresh_requirements, resolve_lane_ttls
+from analytics.core.telemetry import analysis_inputs_missing
 from analytics.routing import FollowUpClassifier, FollowUpRoute
 from .planner_executor import PlannerExecutorFlow
 from .single_agent_tools import SingleAgentController
@@ -252,32 +267,138 @@ def _normalize_revision_lanes(lanes: Iterable[str]) -> List[str]:
     return sorted(normalized, key=_lane_sort_key)
 
 
-def _baseline_ready(snapshot: Optional[SessionStateSnapshot]) -> bool:
+def _baseline_ready(
+    snapshot: Optional[SessionStateSnapshot],
+    *,
+    lanes: Optional[Iterable[str]] = None,
+    lane_readiness: Optional[Mapping[str, bool]] = None,
+) -> bool:
     if snapshot is None:
         return False
-    return bool(snapshot.last_chart_spec and snapshot.last_analysis)
+    readiness_map = dict(lane_readiness or _lane_readiness(snapshot))
+    if lanes:
+        normalized = {
+            str(lane).strip().lower()
+            for lane in lanes
+            if isinstance(lane, str) and lane.strip()
+        }
+        if not normalized:
+            return any(readiness_map.values())
+        return all(readiness_map.get(lane, False) for lane in normalized)
+    return any(readiness_map.values())
 
 
-def _lane_available(snapshot: Optional[SessionStateSnapshot], lane: str) -> bool:
+def _lane_available(
+    snapshot: Optional[SessionStateSnapshot],
+    lane: str,
+    lane_readiness: Optional[Mapping[str, bool]] = None,
+) -> bool:
     if snapshot is None:
         return False
-    analytics_cache = {}
+    readiness_map = lane_readiness or _lane_readiness(snapshot)
+    normalized = str(lane or "").strip().lower()
+    if not normalized:
+        return False
+    if normalized == "stock":
+        normalized = "market"
+    return bool(readiness_map.get(normalized, False))
+
+
+def _lane_readiness(snapshot: Optional[SessionStateSnapshot]) -> Dict[str, bool]:
+    readiness = {"sql": False, "chart": False, "analysis": False, "web": False, "market": False}
+    if snapshot is None:
+        return readiness
+    analytics_cache: Mapping[str, Any] = {}
+    artifacts: Mapping[str, Any] = {}
+    revision_snapshot: Mapping[str, Any] = {}
     if isinstance(snapshot.tool_cache, dict):
         analytics_cache = snapshot.tool_cache.get("analytics") or {}
-    artifacts = analytics_cache.get("artifacts") or {}
-    revision_snapshot = analytics_cache.get("revision_snapshot") or {}
-    lane = lane.strip().lower()
-    if lane == "chart":
-        return bool(snapshot.last_chart_spec or artifacts.get("chart"))
-    if lane == "analysis":
-        return bool(snapshot.last_analysis or artifacts.get("analysis"))
-    if lane == "web":
-        return bool(artifacts.get("web") or revision_snapshot.get("web_context"))
-    if lane == "market":
-        market_artifact = artifacts.get("market")
-        stock_widget = revision_snapshot.get("stock_widget")
-        return bool(market_artifact or stock_widget)
-    return False
+    if isinstance(analytics_cache, Mapping):
+        artifacts = analytics_cache.get("artifacts") or {}
+        revision_snapshot = analytics_cache.get("revision_snapshot") or {}
+        if not isinstance(artifacts, Mapping):
+            artifacts = {}
+        if not isinstance(revision_snapshot, Mapping):
+            revision_snapshot = {}
+
+    def _analysis_ready(payload: Any) -> bool:
+        if isinstance(payload, Mapping):
+            for key in ("analysis_text", "analysis"):
+                text_value = payload.get(key)
+                if isinstance(text_value, str) and text_value.strip():
+                    return True
+        if isinstance(payload, str) and payload.strip():
+            return True
+        return False
+
+    def _web_ready(payload: Any) -> bool:
+        if isinstance(payload, Mapping):
+            summary = payload.get("summary") or payload.get("analysis")
+            if isinstance(summary, str) and summary.strip():
+                return True
+            snippets = payload.get("snippets") or payload.get("documents") or payload.get("articles")
+            if isinstance(snippets, Mapping):
+                snippets = list(snippets.values())
+            if isinstance(snippets, (list, tuple)) and any(snippets):
+                return True
+        return False
+
+    def _market_ready(payload: Any) -> bool:
+        if isinstance(payload, Mapping):
+            if payload.get("snapshot") or payload.get("stocks") or payload.get("series"):
+                return True
+        return False
+
+    analysis_payload = snapshot.last_analysis
+    readiness["analysis"] = bool(
+        _analysis_ready(analysis_payload)
+        or _analysis_ready(artifacts.get("analysis"))
+        or _analysis_ready(revision_snapshot.get("analysis"))
+    )
+    chart_candidates: List[Mapping[str, Any]] = []
+    if isinstance(snapshot.last_chart_spec, Mapping):
+        chart_candidates.append(snapshot.last_chart_spec)
+    chart_artifact = artifacts.get("chart")
+    if isinstance(chart_artifact, Mapping):
+        if isinstance(chart_artifact.get("chart_spec"), Mapping):
+            chart_candidates.append(chart_artifact["chart_spec"])
+        if isinstance(chart_artifact.get("spec"), Mapping):
+            chart_candidates.append(chart_artifact["spec"])
+        if not chart_candidates:
+            chart_candidates.append(chart_artifact)
+    revision_chart = revision_snapshot.get("chart_spec")
+    if isinstance(revision_chart, Mapping):
+        chart_candidates.append(revision_chart)
+    readiness["chart"] = any(chart_spec_has_numeric_payload(candidate) for candidate in chart_candidates)
+    sql_artifact = artifacts.get("sql_generation") if isinstance(artifacts, Mapping) else None
+    readiness["sql"] = bool(
+        snapshot.last_sql
+        or (isinstance(sql_artifact, Mapping) and sql_artifact.get("sql"))
+    )
+    readiness["web"] = bool(
+        _web_ready(artifacts.get("web"))
+        or _web_ready(revision_snapshot.get("web_context"))
+    )
+    readiness["market"] = bool(
+        _market_ready(artifacts.get("market"))
+        or revision_snapshot.get("stock_widget")
+    )
+    return readiness
+
+
+def _lanes_for_missing_inputs(missing_components: Iterable[str]) -> List[str]:
+    mapping = {
+        "sql": ["analysis", "web"],
+        "dataset_preview": ["analysis", "web"],
+        "market": ["market"],
+        "web": ["web"],
+    }
+    lanes: List[str] = []
+    for component in missing_components or []:
+        for lane in mapping.get(component, []):
+            if lane not in lanes:
+                lanes.append(lane)
+    return lanes
 
 SESSION_MESSAGE_LIMIT = 20
 SESSION_MESSAGE_ARCHIVE_LIMIT = 50
@@ -385,7 +506,34 @@ async def _run_chart_lane(
     patch: Optional[Dict[str, Any]],
     revision_id: str,
     revision_kwargs: Dict[str, Any],
+    snapshot: Optional[SessionStateSnapshot],
 ) -> AsyncGenerator[Dict[str, Any], None]:
+    missing_chart_cache = not (
+        snapshot
+        and isinstance(getattr(snapshot, "last_chart_spec", None), dict)
+        and snapshot.last_chart_spec
+    )
+    if missing_chart_cache:
+        logger.warning(
+            "snapshot_missing",
+            extra={"lane": "chart", "session_id": session_id, "reason": "missing_chart_spec"},
+        )
+    if missing_chart_cache:
+        warning_event = EventEmitter.status(
+            "snapshot_missing",
+            "Chart snapshot unavailable; rebuilding lane.",
+        )
+        warning_event.setdefault("data", {})
+        warning_event["data"].update(
+            {
+                "lane": "chart",
+                "revision": True,
+                "revision_id": revision_id,
+                "session_id": session_id,
+            }
+        )
+        yield warning_event
+
     if not patch:
         skip_event = EventEmitter.status("chart_revision", "No chart update detected")
         skip_event.setdefault("data", {})
@@ -395,6 +543,7 @@ async def _run_chart_lane(
                 "revision_id": revision_id,
                 "lane": "chart",
                 "phase": "skipped",
+                "reason": "snapshot_missing" if missing_chart_cache else "no_patch",
             }
         )
         yield skip_event
@@ -461,6 +610,26 @@ async def _run_analysis_lane(
     if not analysis_payload and snapshot:
         analysis_payload = snapshot.last_analysis
 
+    if not analysis_payload:
+        logger.warning(
+            "snapshot_missing",
+            extra={"lane": "analysis", "session_id": session_id, "reason": "missing_analysis_snapshot"},
+        )
+        warning_event = EventEmitter.status(
+            "snapshot_missing",
+            "Analysis snapshot unavailable; rebuilding lane.",
+        )
+        warning_event.setdefault("data", {})
+        warning_event["data"].update(
+            {
+                "lane": "analysis",
+                "revision": True,
+                "revision_id": revision_id,
+                "session_id": session_id,
+            }
+        )
+        yield warning_event
+
     try:
         if hasattr(flow_instance, "run_analysis_refresh"):
             generator = flow_instance.run_analysis_refresh(  # type: ignore[attr-defined]
@@ -515,7 +684,36 @@ async def _run_market_lane(
     session_id: str,
     revision_id: str,
     revision_kwargs: Dict[str, Any],
+    snapshot: Optional[SessionStateSnapshot],
 ) -> AsyncGenerator[Dict[str, Any], None]:
+    missing_market_cache = True
+    if snapshot is not None:
+        analytics_cache = (snapshot.tool_cache or {}).get("analytics") or {}
+        market_cache = analytics_cache.get("market")
+        if isinstance(market_cache, Mapping):
+            payload = market_cache.get("snapshot") or market_cache.get("payload")
+            missing_market_cache = not bool(payload)
+        else:
+            missing_market_cache = True
+    if missing_market_cache:
+        logger.warning(
+            "snapshot_missing",
+            extra={"lane": "market", "session_id": session_id, "reason": "missing_market_snapshot"},
+        )
+        warning_event = EventEmitter.status(
+            "snapshot_missing",
+            "Market snapshot unavailable; rebuilding lane.",
+        )
+        warning_event.setdefault("data", {})
+        warning_event["data"].update(
+            {
+                "lane": "market",
+                "revision": True,
+                "revision_id": revision_id,
+                "session_id": session_id,
+            }
+        )
+        yield warning_event
     try:
         if hasattr(flow_instance, "refresh_market_lane"):
             generator = flow_instance.refresh_market_lane(
@@ -538,6 +736,7 @@ async def _run_market_lane(
                     "revision": True,
                     "revision_id": revision_id,
                     "phase": "skipped",
+                    "reason": "snapshot_missing" if missing_market_cache else "not_supported",
                 }
             )
             yield status_event
@@ -654,6 +853,7 @@ async def _stream_revision_fast_path(
             patch=chart_patch,
             revision_id=revision_id,
             revision_kwargs=revision_kwargs,
+            snapshot=snapshot,
         ):
             yield event
 
@@ -677,6 +877,7 @@ async def _stream_revision_fast_path(
             session_id=session_id,
             revision_id=revision_id,
             revision_kwargs=revision_kwargs,
+            snapshot=snapshot,
         ):
             yield event
 
@@ -882,35 +1083,47 @@ async def analytics_memory_workflow(
     analysis_revision_requested = bool(
         session_id and not chart_revision_requested and is_analysis_revision_query(query)
     )
+    revision_requested = bool(chart_revision_requested or analysis_revision_requested)
 
     repository = get_session_state_repository() if session_id else None
     snapshot: Optional[SessionStateSnapshot] = None
     if repository and session_id:
         snapshot = await repository.load(session_id)
 
-    baseline_ready = _baseline_ready(snapshot)
+    lane_readiness = _lane_readiness(snapshot)
+    baseline_ready = _baseline_ready(snapshot, lane_readiness=lane_readiness)
     session_follow_up = bool(session_id and baseline_ready)
 
     classifier = FollowUpClassifier()
-    route = classifier.classify(query, snapshot)
-    detected_targets = classifier.detect_revision_targets(query, snapshot)
+    route = classifier.classify(query, snapshot, lane_readiness=lane_readiness)
+    detected_targets = classifier.detect_revision_targets(query, snapshot, lane_readiness=lane_readiness)
 
     chart_patch = patch_probe if chart_revision_requested else None
     analysis_text = (
         infer_analysis_revision_from_query(query) if analysis_revision_requested else None
     )
+    manifest_missing_components: List[str] = []
+    manifest_inputs_ready = False
     if analysis_revision_requested and session_id:
         revision_snapshot_ready = True
         try:
             revision_ctx = await RevisionContext.load(session_id, repository=repository)
-            if not isinstance(revision_ctx.last_analysis, str) or not revision_ctx.last_analysis.strip():
+            manifest_inputs_ready = revision_ctx.analysis_inputs_ready()
+            manifest_missing_components = revision_ctx.analysis_inputs_missing()
+            if not revision_ctx.has_analysis_text() and not manifest_inputs_ready:
                 revision_snapshot_ready = False
-        except (MissingRevisionSnapshot, MissingAnalysis):
+        except MissingRevisionSnapshot:
             revision_snapshot_ready = False
+        except MissingAnalysis:
+            revision_snapshot_ready = bool(manifest_inputs_ready)
         if not revision_snapshot_ready:
-            missing_lanes = ["analysis", "web"]
+            missing_lanes = _lanes_for_missing_inputs(manifest_missing_components) or ["analysis", "web"]
+            lane_refresh_required = {lane: True for lane in missing_lanes}
             banner = _build_cannot_revise_banner(missing_lanes, ["analysis"])
-            banner["reason"] = "missing_analysis"
+            reason = "missing_analysis_inputs" if manifest_missing_components else "missing_analysis"
+            banner["reason"] = reason
+            if manifest_missing_components:
+                banner["missing_components"] = manifest_missing_components
             follow_up_event = {
                 "event": "follow_up_route",
                 "data": {
@@ -918,7 +1131,7 @@ async def analytics_memory_workflow(
                     "flow": selected,
                     "session_id": session_id,
                     "lanes": missing_lanes,
-                    "lane_refresh_required": {"analysis": True, "web": True},
+                    "lane_refresh_required": lane_refresh_required,
                     "session_follow_up": session_follow_up,
                     "banner": banner,
                 },
@@ -927,8 +1140,16 @@ async def analytics_memory_workflow(
             _append_session_message(
                 snapshot,
                 role="system",
-                content="Revision skipped because no prior analysis was cached for this session. Start a new question to rebuild the results.",
+                content="Revision skipped because required analysis inputs are still streaming. Start a new question if you need a fresh run.",
             )
+            if session_id:
+                analysis_inputs_missing(
+                    session_id=session_id,
+                    missing_components=manifest_missing_components or missing_lanes,
+                    lane_readiness=lane_readiness,
+                    route="cannot_revise",
+                    metadata={"analysis_revision_requested": True, "flow": selected},
+                )
             if repository and snapshot is not None:
                 await repository.save(snapshot)
             return
@@ -1012,8 +1233,21 @@ async def analytics_memory_workflow(
         lane_refresh_required.setdefault("web", True)
         lane_refresh_required["analysis"] = True
         lane_refresh_required["web"] = True
-        if "market" not in revision_lanes:
+        if "market" not in revision_lanes and "market" not in lane_refresh_required:
             lane_refresh_required["market"] = False
+
+    missing_revision_lanes = [
+        lane for lane in revision_lanes if not _lane_available(snapshot, lane, lane_readiness)
+    ]
+    for lane in missing_revision_lanes:
+        normalized = str(lane or "").strip().lower()
+        if not normalized:
+            continue
+        lane_refresh_required[normalized] = True
+        if normalized == "analysis":
+            lane_refresh_required["web"] = True
+    if lane_refresh_required.get("analysis"):
+        analysis_refresh_mode = "full"
 
     if hasattr(flow_instance, "set_lane_refresh_requirements"):
         try:
@@ -1025,24 +1259,6 @@ async def analytics_memory_workflow(
             flow_instance.set_analysis_refresh_mode(analysis_refresh_mode)
         except Exception:
             logger.exception("Failed to set analysis refresh mode on flow %s", selected)
-
-    missing_lanes = [lane for lane in revision_lanes if not _lane_available(snapshot, lane)]
-    if should_take_revision and missing_lanes:
-        banner = _build_cannot_revise_banner(revision_lanes, missing_lanes)
-        follow_up_event = {
-            "event": "follow_up_route",
-            "data": {
-                "route": "cannot_revise",
-                "flow": selected,
-                "session_id": session_id,
-                "lanes": revision_lanes,
-                "lane_refresh_required": dict(lane_refresh_required),
-                "session_follow_up": session_follow_up,
-                "banner": banner,
-            },
-        }
-        yield follow_up_event
-        return
 
     if should_take_revision and session_id:
         directive_targets: Set[str] = set(requested_lanes)
@@ -1355,6 +1571,8 @@ async def analytics_memory_workflow(
             "agentic_revision": prefer_agentic_revision,
         },
     }
+    if missing_revision_lanes:
+        follow_up_event["data"]["missing_lanes"] = list(missing_revision_lanes)
     yield follow_up_event
     sequencer: Optional[PlannerSequencer] = None
     sequencer_state: Optional[Any] = None
@@ -1394,6 +1612,7 @@ async def analytics_memory_workflow(
             sequencer=sequencer,
             emit_prefill_summary=emit_prefill_summary,
             sequencer_state=sequencer_state,
+            revision_requested=revision_requested,
         ):
             yield event
         # Deferred revisions after initial build
@@ -1418,16 +1637,18 @@ async def analytics_memory_workflow(
             async for evt in gen3:
                 yield evt
     else:
+        event_kwargs: Dict[str, Any] = {"session_id": session_id}
         if sequencer is not None:
-            stream = flow_instance.events(
-                query,
-                session_id=session_id,
-                sequencer=sequencer,
-                emit_prefill_summary=emit_prefill_summary,
-                sequencer_state=sequencer_state,
+            event_kwargs.update(
+                {
+                    "sequencer": sequencer,
+                    "emit_prefill_summary": emit_prefill_summary,
+                    "sequencer_state": sequencer_state,
+                }
             )
-        else:
-            stream = flow_instance.events(query, session_id=session_id)
+        if revision_requested and isinstance(flow_instance, PlannerExecutorFlow):
+            event_kwargs["revision_requested"] = True
+        stream = flow_instance.events(query, **event_kwargs)
         async for event in stream:
             yield event
         # Deferred revisions after initial build

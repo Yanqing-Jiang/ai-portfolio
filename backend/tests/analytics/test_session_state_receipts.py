@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import pytest
 
@@ -15,7 +15,7 @@ from analytics.flows.planner_executor import (
 )
 from analytics.flows.single_agent_tools import SingleAgentController
 from analytics.flows.schedulers import FlowMode
-from analytics.core.session_state import SessionStateSnapshot
+from analytics.core.session_state import ANALYSIS_INPUT_BLOCKING, SessionStateSnapshot
 
 
 class _InMemorySessionStateRepository:
@@ -39,6 +39,89 @@ def _is_receipt_fresh(receipt: ToolInvocationReceipt, ttl_seconds: int) -> bool:
         timestamp = datetime.fromisoformat(receipt.timestamp.rstrip("Z"))
     delta = datetime.utcnow() - timestamp
     return delta.total_seconds() <= ttl_seconds
+
+
+def test_analysis_inputs_manifest_tracks_component_states() -> None:
+    snapshot = SessionStateSnapshot(session_id="manifest-trace")
+    snapshot.record_outputs(sql="SELECT 42")
+
+    manifest = snapshot.analysis_inputs_manifest
+    assert manifest["components"]["sql"]["state"] == "ready"
+    assert manifest["components"]["dataset_preview"]["state"] in {"pending", "missing"}
+    assert manifest["complete"] is False
+
+    snapshot.record_tool_result(
+        "planner_dataset_preview",
+        {"rows": [{"label": "Q1"}], "row_count": 1},
+    )
+    manifest = snapshot.analysis_inputs_manifest
+    assert manifest["components"]["dataset_preview"]["state"] == "ready"
+    assert manifest["complete"] is True
+
+    snapshot.record_tool_result("planner_stock_widget", {"snapshot": {"ACME": {"price": 100}}})
+    manifest = snapshot.analysis_inputs_manifest
+    assert manifest["components"]["market"]["state"] == "ready"
+
+    snapshot.record_tool_result("web_search", {"summary": "Updated context", "snippets": [{"title": "result"}]})
+    manifest = snapshot.analysis_inputs_manifest
+    assert manifest["components"]["web"]["state"] == "ready"
+    assert set(manifest["ready_components"]) >= {"sql", "dataset_preview", "market", "web"}
+
+
+def test_lane_receipts_emit_manifest_metrics(monkeypatch: pytest.MonkeyPatch) -> None:
+    sealed_metrics: List[Dict[str, Any]] = []
+    missing_metrics: List[Dict[str, Any]] = []
+    monkeypatch.setattr(
+        "analytics.core.session_state.analysis_inputs_manifest_sealed",
+        lambda **kwargs: sealed_metrics.append(kwargs),
+    )
+    monkeypatch.setattr(
+        "analytics.core.session_state.analysis_inputs_missing",
+        lambda **kwargs: missing_metrics.append(kwargs),
+    )
+
+    snapshot = SessionStateSnapshot(session_id="lane-manifest")
+    snapshot.record_outputs(sql="SELECT 1")
+    snapshot.record_tool_result("planner_dataset_preview", {"rows": [{"label": "Q1"}], "row_count": 1})
+    snapshot.record_tool_result("planner_stock_widget", {"snapshot": {"ACME": {"price": 100}}})
+    snapshot.record_tool_result("web_search", {"summary": "cached context", "snippets": [{"title": "news"}]})
+
+    manifest = snapshot.analysis_inputs_manifest
+    assert manifest.get("status") == "sealed"
+    receipts = manifest.get("receipts") or {}
+    for component in ("sql", "dataset_preview", "market", "web"):
+        assert receipts.get(component), f"expected receipt for {component}"
+    assert sealed_metrics, "sealed metric should emit once manifest completes"
+    sealed_payload = sealed_metrics[0]
+    assert set(sealed_payload.get("ready_components") or []).issuperset(ANALYSIS_INPUT_BLOCKING)
+    sealed_receipts = sealed_payload.get("receipts") or {}
+    assert sealed_receipts.get("sql"), "sealed metric should include sql receipt id"
+    assert missing_metrics, "missing metrics should emit while manifest is incomplete"
+    assert "dataset_preview" in missing_metrics[0]["missing_components"]
+
+
+def test_lane_missing_artifact_metric_emitted_for_incomplete_payload(monkeypatch: pytest.MonkeyPatch) -> None:
+    missing_artifact_calls: List[Dict[str, Any]] = []
+    missing_manifest_calls: List[Dict[str, Any]] = []
+    monkeypatch.setattr(
+        "analytics.core.session_state.analysis_lane_missing_artifact",
+        lambda **kwargs: missing_artifact_calls.append(kwargs),
+    )
+    monkeypatch.setattr(
+        "analytics.core.session_state.analysis_inputs_missing",
+        lambda **kwargs: missing_manifest_calls.append(kwargs),
+    )
+
+    snapshot = SessionStateSnapshot(session_id="lane-missing")
+    snapshot.record_tool_result("planner_dataset_preview", {"rows": []})
+
+    assert missing_artifact_calls, "expected lane missing artifact metric to fire"
+    event = missing_artifact_calls[0]
+    assert event["component"] == "dataset_preview"
+    assert event["lane"] == "sql"
+    assert event["reason"] == "payload_incomplete"
+    assert missing_manifest_calls, "manifest missing metric should emit after failure"
+    assert "dataset_preview" in missing_manifest_calls[0]["missing_components"]
 
 
 @pytest.mark.asyncio

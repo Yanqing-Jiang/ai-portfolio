@@ -36,7 +36,7 @@ async def test_create_structured_uses_wrapped_model(monkeypatch):
             return _DummyParsedResponse(payload)
 
     class _StubClient:
-        def __init__(self, api_key=None):
+        def __init__(self, api_key=None, **kwargs):
             self.responses = _StubResponses()
 
     monkeypatch.setattr("unified_responses_client.AsyncOpenAI", _StubClient)
@@ -64,8 +64,47 @@ def test_wrap_response_model_schema_normalisation():
 
     schema = wrapped.model_json_schema()
     required_fields = schema.get("required") or []
+    assert required_fields == ["intent", "followups"]
     # slots is emitted as a map and should stay optional for Responses compatibility
     assert "slots" not in required_fields
     slots_schema = schema["properties"]["slots"]
     assert slots_schema.get("type") == "object"
-    assert slots_schema.get("additionalProperties") == {"$ref": "#/$defs/LLMSlotStatusModel"}
+    slot_additional = slots_schema.get("additionalProperties") or {}
+    assert slot_additional.get("$ref") == "#/$defs/LLMSlotStatusModel"
+    assert slot_additional.get("additionalProperties") is False
+
+
+@pytest.mark.asyncio
+async def test_create_structured_emits_schema_metric_on_schema_error(monkeypatch):
+    os.environ.setdefault("OPENAI_API_KEY", "test-key")
+
+    class _StubResponses:
+        async def parse(self, **kwargs):
+            raise RuntimeError("text.format.schema violation in test harness")
+
+    class _StubClient:
+        def __init__(self, api_key=None, **kwargs):
+            self.responses = _StubResponses()
+
+    monkeypatch.setattr("unified_responses_client.AsyncOpenAI", _StubClient)
+    monkeypatch.setattr("unified_responses_client.responses_call", lambda **kwargs: None)
+
+    captured = {}
+
+    def _capture_metric(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr("unified_responses_client.intent_resolution_schema_error", _capture_metric)
+
+    client = UnifiedResponsesClient("test-key")
+    with pytest.raises(RuntimeError):
+        await client.create_structured(
+            response_model=LLMIntentResolutionModel,
+            messages=[{"role": "user", "content": "force schema error"}],
+            reasoning_effort="medium",
+            session_id="schema-metric",
+        )
+
+    assert captured["error"] == "text.format.schema"
+    assert captured["response_model"] == "LLMIntentResolutionModel"
+    assert captured["session_id"] == "schema-metric"

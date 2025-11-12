@@ -89,6 +89,20 @@ if ($UsingFixtures) {
   $FixtureDirectory = (Resolve-Path $FixtureDirectory).Path
 }
 
+$ForbiddenRevisionEvents = @(
+  'classification_started',
+  'classification_complete',
+  'classification_reasoning',
+  'classification_declined',
+  'intent_detection_started',
+  'intent_detection_complete',
+  'clarification_request',
+  'clarification_progress',
+  'clarification_resolved',
+  'clarification_complete',
+  'clarification_timeout'
+)
+
 if ($DryRun) {
   Write-Host '[agentic-smoke] Dry run only. No network calls executed.'
   return
@@ -434,6 +448,86 @@ function Test-LaneReuse {
   return $true
 }
 
+function Test-RevisionGating {
+  param(
+    [pscustomobject]$Result,
+    [string]$Scenario
+  )
+  if (-not $Result.Events) { return $true }
+  $violations = $Result.Events | Where-Object { $ForbiddenRevisionEvents -contains $_.event }
+  if ($violations.Count -gt 0) {
+    $names = ($violations | ForEach-Object { $_.event } | Sort-Object -Unique) -join ', '
+    Write-Warning "[$Scenario] Unexpected deterministic pipeline events: $names"
+    return $false
+  }
+  return $true
+}
+
+function Test-SnapshotWarnings {
+  param(
+    [pscustomobject]$Result,
+    [string]$Scenario
+  )
+  if (-not $Result.Events) { return $false }
+  $warningEvent = $Result.Events | Where-Object { $_.event -eq 'snapshot_missing' } | Select-Object -First 1
+  if ($warningEvent) { return $true }
+  Write-Warning "[$Scenario] snapshot_missing warning not emitted."
+  return $false
+}
+
+function Get-SessionSnapshot {
+  param(
+    [string]$SessionId,
+    [string]$Label
+  )
+  if ($UsingFixtures -or -not $SessionId -or -not $BackendUrl) {
+    return $null
+  }
+  $baseUri = $BackendUrl.TrimEnd('/')
+  $uri = "$baseUri/api/debug/session/$SessionId"
+  try {
+    $snapshot = Invoke-RestMethod -Uri $uri -Method Get -TimeoutSec 10
+  } catch {
+    Write-Warning "[agentic-smoke] Snapshot fetch failed for $Label ($SessionId): $_"
+    return $null
+  }
+  $targetDir = Join-Path -Path 'reports' -ChildPath 'agentic_smoke'
+  if (-not (Test-Path $targetDir)) {
+    New-Item -ItemType Directory -Path $targetDir | Out-Null
+  }
+  $stamp = (Get-Date).ToString('yyyyMMdd-HHmmss')
+  $filePath = Join-Path $targetDir "$stamp-$Label-snapshot.json"
+  $snapshot | ConvertTo-Json -Depth 8 | Set-Content -Encoding UTF8 $filePath
+  return [pscustomobject]@{
+    Snapshot = $snapshot
+    SnapshotPath = $filePath
+  }
+}
+
+function Test-SnapshotParity {
+  param(
+    [object]$BaselineSnapshot,
+    [object]$SupervisorSnapshot
+  )
+  if (-not $BaselineSnapshot -or -not $SupervisorSnapshot) {
+    return $true
+  }
+  $fields = @('last_sql', 'last_chart_spec', 'last_analysis')
+  $mismatches = @()
+  foreach ($field in $fields) {
+    $baselineSerialized = ($BaselineSnapshot.$field | ConvertTo-Json -Depth 8)
+    $supervisorSerialized = ($SupervisorSnapshot.$field | ConvertTo-Json -Depth 8)
+    if ($baselineSerialized -ne $supervisorSerialized) {
+      $mismatches += $field
+    }
+  }
+  if ($mismatches.Count -gt 0) {
+    Write-Warning "[SUPERVISOR] Snapshot mismatch detected for fields: $($mismatches -join ', ')"
+    return $false
+  }
+  return $true
+}
+
 function Test-AgentToolParity {
   param(
     [pscustomobject]$Result,
@@ -535,7 +629,14 @@ $summary += [pscustomobject]@{
   ParityOk = (Test-AgentToolParity -Result $baseline -Scenario 'Baseline')
   GuardrailOk = (Test-GuardrailTelemetry -Result $baseline -Scenario 'Baseline')
   ReasoningOk = (Test-ReasoningSettings -Result $baseline -Scenario 'Baseline' -ExpectedEffort $FreshReasoningEffort)
+  RevisionGatingOk = $true
+  SnapshotWarningOk = $true
   Artifact = Save-SmokeEvents -Result $baseline -Suffix 'baseline'
+}
+$baselineSnapshotInfo = Get-SessionSnapshot -SessionId $baseline.SessionId -Label 'baseline-after'
+if ($baselineSnapshotInfo) {
+  $baseline | Add-Member -NotePropertyName Snapshot -NotePropertyValue $baselineSnapshotInfo.Snapshot -Force
+  $baseline | Add-Member -NotePropertyName SnapshotPath -NotePropertyValue $baselineSnapshotInfo.SnapshotPath -Force
 }
 
 $sessionId = $baseline.SessionId
@@ -555,7 +656,14 @@ $summary += [pscustomobject]@{
   ParityOk = (Test-AgentToolParity -Result $stock -Scenario 'stock')
   GuardrailOk = (Test-GuardrailTelemetry -Result $stock -Scenario 'stock')
   ReasoningOk = (Test-ReasoningSettings -Result $stock -Scenario 'stock' -ExpectedEffort $RevisionReasoningEffort)
+  RevisionGatingOk = (Test-RevisionGating -Result $stock -Scenario 'stock')
+  SnapshotWarningOk = (Test-SnapshotWarnings -Result $stock -Scenario 'stock')
   Artifact = Save-SmokeEvents -Result $stock -Suffix 'stock'
+}
+$stockSnapshotInfo = Get-SessionSnapshot -SessionId $sessionId -Label 'stock-after'
+if ($stockSnapshotInfo) {
+  $stock | Add-Member -NotePropertyName Snapshot -NotePropertyValue $stockSnapshotInfo.Snapshot -Force
+  $stock | Add-Member -NotePropertyName SnapshotPath -NotePropertyValue $stockSnapshotInfo.SnapshotPath -Force
 }
 
 $reuseSql = Invoke-AgenticStream -Label 'reuse-sql' -Query $ReuseSqlQuery -SessionId $sessionId
@@ -573,7 +681,14 @@ $summary += [pscustomobject]@{
   ParityOk = (Test-AgentToolParity -Result $reuseSql -Scenario 'reuse-sql')
   GuardrailOk = (Test-GuardrailTelemetry -Result $reuseSql -Scenario 'reuse-sql')
   ReasoningOk = (Test-ReasoningSettings -Result $reuseSql -Scenario 'reuse-sql' -ExpectedEffort $RevisionReasoningEffort)
+  RevisionGatingOk = (Test-RevisionGating -Result $reuseSql -Scenario 'reuse-sql')
+  SnapshotWarningOk = (Test-SnapshotWarnings -Result $reuseSql -Scenario 'reuse-sql')
   Artifact = Save-SmokeEvents -Result $reuseSql -Suffix 'reuse-sql'
+}
+$reuseSnapshotInfo = Get-SessionSnapshot -SessionId $sessionId -Label 'reuse-sql-after'
+if ($reuseSnapshotInfo) {
+  $reuseSql | Add-Member -NotePropertyName Snapshot -NotePropertyValue $reuseSnapshotInfo.Snapshot -Force
+  $reuseSql | Add-Member -NotePropertyName SnapshotPath -NotePropertyValue $reuseSnapshotInfo.SnapshotPath -Force
 }
 
 $redirectRun = Invoke-AgenticStream -Label 'redirect' -Query $RedirectQuery -SessionId $sessionId
@@ -591,9 +706,17 @@ $summary += [pscustomobject]@{
   ParityOk = (Test-AgentToolParity -Result $redirectRun -Scenario 'REDIRECT')
   GuardrailOk = (Test-GuardrailTelemetry -Result $redirectRun -Scenario 'REDIRECT')
   ReasoningOk = (Test-ReasoningSettings -Result $redirectRun -Scenario 'REDIRECT' -ExpectedEffort $RevisionReasoningEffort)
+  RevisionGatingOk = (Test-RevisionGating -Result $redirectRun -Scenario 'REDIRECT')
+  SnapshotWarningOk = $null
   Artifact = Save-SmokeEvents -Result $redirectRun -Suffix 'redirect'
 }
+$redirectSnapshotInfo = Get-SessionSnapshot -SessionId $sessionId -Label 'redirect-after'
+if ($redirectSnapshotInfo) {
+  $redirectRun | Add-Member -NotePropertyName Snapshot -NotePropertyValue $redirectSnapshotInfo.Snapshot -Force
+  $redirectRun | Add-Member -NotePropertyName SnapshotPath -NotePropertyValue $redirectSnapshotInfo.SnapshotPath -Force
+}
 
+$supervisorRun = $null
 if (-not $UsingFixtures -and $SupervisorFlow) {
   $supervisorRun = Invoke-AgenticStream -Label 'supervisor' -Query $BaselineQuery -SessionId $null -FlowOverride $SupervisorFlow
   $results += $supervisorRun
@@ -610,10 +733,22 @@ if (-not $UsingFixtures -and $SupervisorFlow) {
     ParityOk = (Test-AgentToolParity -Result $supervisorRun -Scenario 'SUPERVISOR')
     GuardrailOk = (Test-GuardrailTelemetry -Result $supervisorRun -Scenario 'SUPERVISOR')
     ReasoningOk = (Test-ReasoningSettings -Result $supervisorRun -Scenario 'SUPERVISOR' -ExpectedEffort $FreshReasoningEffort)
+    RevisionGatingOk = $null
+    SnapshotWarningOk = $null
     Artifact = Save-SmokeEvents -Result $supervisorRun -Suffix 'supervisor'
+  }
+  $supervisorSnapshotInfo = Get-SessionSnapshot -SessionId $supervisorRun.SessionId -Label 'supervisor-after'
+  if ($supervisorSnapshotInfo) {
+    $supervisorRun | Add-Member -NotePropertyName Snapshot -NotePropertyValue $supervisorSnapshotInfo.Snapshot -Force
+    $supervisorRun | Add-Member -NotePropertyName SnapshotPath -NotePropertyValue $supervisorSnapshotInfo.SnapshotPath -Force
   }
 } elseif ($UsingFixtures) {
   Write-Host '[agentic-smoke] Fixture mode - skipping supervisor fresh-run validation.'
+}
+
+$snapshotParityOk = $true
+if ($supervisorRun -and $baseline.Snapshot -and $supervisorRun.Snapshot) {
+  $snapshotParityOk = Test-SnapshotParity -BaselineSnapshot $baseline.Snapshot -SupervisorSnapshot $supervisorRun.Snapshot
 }
 
 if (-not $UsingFixtures) {
@@ -650,6 +785,12 @@ foreach ($row in $summary) {
   if ($row.Scenario -eq 'REDIRECT' -and -not $row.RedirectSeen) {
     $failureNotes += '[REDIRECT] workflow_redirect not observed'
   }
+  if ($row.RevisionGatingOk -eq $false) {
+    $failureNotes += "[$($row.Scenario)] revision gating leaked deterministic events"
+  }
+  if ($row.SnapshotWarningOk -eq $false) {
+    $failureNotes += "[$($row.Scenario)] snapshot_missing warning missing"
+  }
   if ($row.ClarificationOk -eq $false) {
     $failureNotes += "[$($row.Scenario)] clarification_manager telemetry missing completion"
   }
@@ -665,6 +806,9 @@ foreach ($row in $summary) {
   if (-not $row.ReasoningOk) {
     $failureNotes += "[$($row.Scenario)] reasoning_effort telemetry mismatch"
   }
+}
+if (-not $snapshotParityOk) {
+  $failureNotes += '[SUPERVISOR] Single-/multi-agent snapshots diverged'
 }
 if ($failureNotes.Count -gt 0) {
   $failureNotes | ForEach-Object { Write-Error $_ }

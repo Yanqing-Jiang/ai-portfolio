@@ -96,3 +96,30 @@ def test_revision_targets_filter_by_snapshot_lanes():
     snapshot.tool_cache["analytics"] = analytics_cache
     lanes = classifier.detect_revision_targets("market share analysis", snapshot)
     assert lanes == {"analysis", "market"}
+
+
+def test_classifier_respects_lane_readiness_over_snapshot_data():
+    classifier = FollowUpClassifier()
+    snapshot = SessionStateSnapshot(session_id="chart-only")
+    snapshot.record_outputs(
+        sql="SELECT 1",
+        chart_spec={
+            "series": [{"type": "line", "data": [{"x": "2023", "y": 10}]}],
+        },
+    )
+    lane_readiness = {"sql": True, "chart": False, "analysis": False, "web": False, "market": False}
+    route = classifier.classify("Please update the chart layout", snapshot, lane_readiness=lane_readiness)
+    assert route == FollowUpRoute.FULL_PIPELINE
+
+
+def test_revision_targets_use_lane_readiness_map():
+    classifier = FollowUpClassifier()
+    snapshot = SessionStateSnapshot(session_id="market-lane")
+    snapshot.record_outputs(sql="SELECT 1")
+    lane_readiness = {"sql": True, "chart": False, "analysis": False, "web": False, "market": False}
+    targets = classifier.detect_revision_targets(
+        "Refresh the market snapshot for AMD competitors",
+        snapshot,
+        lane_readiness=lane_readiness,
+    )
+    assert targets == set()

@@ -341,7 +341,7 @@ class LLMIntentResolutionModel(BaseModel):
     model_config = ConfigDict(
         extra='forbid',
         json_schema_extra={
-            "required": ["intent", "slots", "followups", "notes"],
+            "required": ["intent", "followups"],
         },
     )
 

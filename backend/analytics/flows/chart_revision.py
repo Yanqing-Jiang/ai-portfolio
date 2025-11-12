@@ -140,6 +140,7 @@ class RevisionContext:
     sql_attempts: List[Dict[str, Any]]
     analysis_history: List[Dict[str, Any]]
     dataset_preview: List[Dict[str, Any]] = field(default_factory=list)
+    analysis_inputs_manifest: Dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     async def load(
@@ -175,6 +176,9 @@ class RevisionContext:
             sql_attempts=copy.deepcopy(attempts),
             analysis_history=copy.deepcopy(analysis_history),
             dataset_preview=preview_rows,
+            analysis_inputs_manifest=copy.deepcopy(snapshot.analysis_inputs_manifest)
+            if isinstance(snapshot.analysis_inputs_manifest, dict)
+            else {},
         )
 
     def require_chart_spec(self) -> Dict[str, Any]:
@@ -186,6 +190,25 @@ class RevisionContext:
         if not isinstance(self.last_analysis, str) or not self.last_analysis.strip():
             raise MissingAnalysis(self.session_id)
         return self.last_analysis
+
+    def has_analysis_text(self) -> bool:
+        return isinstance(self.last_analysis, str) and bool(self.last_analysis.strip())
+
+    def analysis_inputs_ready(self) -> bool:
+        manifest = self.analysis_inputs_manifest if isinstance(self.analysis_inputs_manifest, dict) else {}
+        if manifest.get("status") == "sealed":
+            return True
+        return bool(manifest.get("complete"))
+
+    def analysis_inputs_missing(self) -> List[str]:
+        manifest = self.analysis_inputs_manifest if isinstance(self.analysis_inputs_manifest, dict) else {}
+        blocking = manifest.get("blocking_components")
+        if isinstance(blocking, list) and blocking:
+            return [str(component) for component in blocking if component]
+        missing = manifest.get("missing_components")
+        if isinstance(missing, list):
+            return [str(component) for component in missing if component]
+        return []
 
     def record_chart_spec(self, updated_spec: Dict[str, Any], *, patch: Dict[str, Any]) -> None:
         self.snapshot.record_outputs(chart_spec=updated_spec)

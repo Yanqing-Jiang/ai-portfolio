@@ -89,6 +89,26 @@
 #   Called from: unified_responses_client
 #   Invokes: analytics.core.telemetry._base_payload, analytics.core.telemetry._emit
 #   Why: Keeps analytics.core.telemetry from duplicating responses call behavior across flows.
+# Function: intent_resolution_schema_error
+#   Role: Emits telemetry when Responses rejects structured intent schemas.
+#   Called from: unified_responses_client
+#   Invokes: analytics.core.telemetry._base_payload, analytics.core.telemetry._emit
+#   Why: Surfaces schema regressions before they impact users.
+# Function: analysis_inputs_missing
+#   Role: Emits telemetry when revision prerequisites (sql, dataset preview, market, web) are unavailable.
+#   Called from: analytics.flows.workflow, analytics.core.session_state
+#   Invokes: analytics.core.telemetry._base_payload, analytics.core.telemetry._emit
+#   Why: Alerts operators when manifest invariants block revisions.
+# Function: analysis_lane_missing_artifact
+#   Role: Emits telemetry when a planner lane finishes without persisting its required artifacts.
+#   Called from: analytics.core.session_state
+#   Invokes: analytics.core.telemetry._base_payload, analytics.core.telemetry._emit
+#   Why: Highlights gaps between lane completion and persisted receipts for operators.
+# Function: analysis_inputs_manifest_sealed
+#   Role: Emits telemetry when the analysis inputs manifest transitions to a sealed state.
+#   Called from: analytics.core.session_state
+#   Invokes: analytics.core.telemetry._base_payload, analytics.core.telemetry._emit
+#   Why: Provides observability around revision-ready snapshots.
 # Function: gemini_call
 #   Role: Handles gemini call logic for analytics.core.telemetry.
 #   Called from: analytics.services.response_search
@@ -505,6 +525,90 @@ def responses_call(
         payload["error"] = error
     if metadata:
         payload["metadata"] = metadata
+    _emit(payload)
+
+
+def intent_resolution_schema_error(
+    *,
+    session_id: Optional[str],
+    response_model: str,
+    error: str,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> None:
+    payload = _base_payload("intent_resolution_schema_error", session_id=session_id)
+    payload.update(
+        {
+            "response_model": response_model,
+            "error": error,
+        }
+    )
+    if metadata:
+        payload["metadata"] = dict(metadata)
+    _emit(payload)
+
+
+def analysis_inputs_missing(
+    *,
+    session_id: Optional[str],
+    missing_components: Iterable[str],
+    lane_readiness: Optional[Mapping[str, Any]] = None,
+    route: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> None:
+    payload = _base_payload("analysis_inputs_missing", session_id=session_id)
+    payload["missing_components"] = [component for component in missing_components or []]
+    if lane_readiness is not None:
+        payload["lane_readiness"] = dict(lane_readiness)
+    if route:
+        payload["route"] = route
+    if metadata:
+        payload["metadata"] = dict(metadata)
+    _emit(payload)
+
+
+def analysis_lane_missing_artifact(
+    *,
+    session_id: Optional[str],
+    lane: str,
+    component: str,
+    reason: str,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> None:
+    payload = _base_payload("analysis_lane_missing_artifact", session_id=session_id)
+    payload.update(
+        {
+            "lane": lane,
+            "component": component,
+            "reason": reason,
+        }
+    )
+    if metadata:
+        payload["metadata"] = dict(metadata)
+    _emit(payload)
+
+
+def analysis_inputs_manifest_sealed(
+    *,
+    session_id: Optional[str],
+    version: Optional[int],
+    ready_components: Iterable[str],
+    captured_at: Optional[str] = None,
+    receipts: Optional[Mapping[str, Any]] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> None:
+    payload = _base_payload("analysis_inputs_manifest_sealed", session_id=session_id)
+    payload.update(
+        {
+            "version": version,
+            "ready_components": list(ready_components or []),
+        }
+    )
+    if captured_at:
+        payload["sealed_at"] = captured_at
+    if receipts:
+        payload["receipts"] = dict(receipts)
+    if metadata:
+        payload["metadata"] = dict(metadata)
     _emit(payload)
 
 

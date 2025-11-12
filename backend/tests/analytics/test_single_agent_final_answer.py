@@ -16,10 +16,14 @@ setattr(google_stub, "genai", genai_stub)
 sys.modules["google.genai"] = genai_stub
 sys.modules["google.genai.types"] = genai_types_stub
 
-from analytics.artifacts import AnalysisArtifact, PipelineArtifacts
+from analytics.artifacts import AnalysisArtifact, ChartArtifact, PipelineArtifacts
 from analytics.flows.single_agent_tools import SingleAgentController, _SingleAgentToolHooks
 from analytics.flows.revision_directive import RevisionDirective
 from analytics.routing import FollowUpRoute
+from analytics.core.session_state import (
+    SessionStateSnapshot,
+    get_session_state_repository,
+)
 
 
 async def _collect_async(gen):
@@ -616,3 +620,64 @@ def test_session_metadata_attached_to_analysis_ready() -> None:
     analysis_events = [evt for evt in events if evt.get("event") == "analysis_ready"]
     assert analysis_events
     assert analysis_events[0]["data"]["session_id"] == "sess-analysis"
+
+
+def test_single_agent_persists_snapshot_outputs_between_runs() -> None:
+    controller = SingleAgentController()
+    session_id = "single-agent-snapshot"
+    snapshot = SessionStateSnapshot(session_id=session_id)
+    snapshot.record_outputs(analysis="Baseline narrative.")
+    repo = get_session_state_repository()
+
+    class _FakePlanState:
+        def to_dict(self) -> Dict[str, Any]:
+            return {"steps": []}
+
+    runtime_result = types.SimpleNamespace(
+        run_id="agent-run-1",
+        trace_id="trace-1",
+        plan_state=_FakePlanState(),
+    )
+    run_context = types.SimpleNamespace(
+        session_id=session_id,
+        tool_attempts={},
+        tool_retry_counts={},
+        tool_receipts={},
+        run_id=None,
+        trace_id="trace-1",
+    )
+    artifacts = PipelineArtifacts(
+        analysis=AnalysisArtifact(
+            query="Compare NVDA and AMD revenue trends",
+            analysis_text="Updated narrative with margin commentary.",
+        ),
+        chart=ChartArtifact(
+            query="Compare NVDA and AMD revenue trends",
+            spec={
+                "series": [
+                    {
+                        "type": "bar",
+                        "data": [{"label": "AMD", "value": 12}, {"label": "NVDA", "value": 18}],
+                    }
+                ]
+            },
+        ),
+    )
+    ctx = types.SimpleNamespace(session_id=session_id, artifacts=artifacts)
+
+    async def _run() -> SessionStateSnapshot:
+        await repo.save(snapshot)
+        controller.prime_with_snapshot(snapshot)
+        await controller._persist_runtime_metadata(
+            runtime_result=runtime_result,
+            run_context=run_context,
+            ctx=ctx,
+        )
+        stored = await repo.load(session_id)
+        await repo.delete(session_id)
+        return stored  # type: ignore[return-value]
+
+    stored_snapshot = asyncio.run(_run())
+    assert stored_snapshot.last_analysis == "Updated narrative with margin commentary."
+    assert stored_snapshot.last_chart_spec is not None
+    assert stored_snapshot.last_chart_spec["series"][0]["data"][0]["value"] == 12

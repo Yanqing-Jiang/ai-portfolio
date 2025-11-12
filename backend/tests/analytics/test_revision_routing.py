@@ -4,9 +4,10 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 
 import pytest
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 from datetime import datetime, timezone
 
+import analytics.flows.workflow as workflow_module
 from analytics.flows.workflow import analytics_memory_workflow
 from analytics.routing import FollowUpRoute
 from analytics.routing.follow_up_classifier import FollowUpClassifier
@@ -18,8 +19,15 @@ from analytics.core.session_state import SessionStateSnapshot, get_session_state
 FORBIDDEN_PIPELINE_EVENTS = {
     "classification_started",
     "classification_complete",
+    "classification_reasoning",
+    "classification_declined",
     "intent_detection_complete",
     "intent_detection_started",
+    "clarification_request",
+    "clarification_progress",
+    "clarification_resolved",
+    "clarification_complete",
+    "clarification_timeout",
     "sql_generated",
     "sql_ready",
     "sql_compiled",
@@ -62,6 +70,45 @@ async def test_chart_revision_routed_fast_path():
     ops = patch_event.get("data", {}).get("ops", [])
     assert ops and ops[0].get("op") == "set_chart_type" and ops[0].get("value") == "bar"
     assert not _has_forbidden_events(events), "Chart revision should avoid full pipeline events"
+
+    await repo.delete(session_id)
+    await close_session_state_repository()
+
+
+@pytest.mark.asyncio
+async def test_chart_revision_allows_missing_analysis():
+    session_id = "chart-lane-missing-analysis"
+    repo = get_session_state_repository()
+    snapshot = SessionStateSnapshot(session_id=session_id)
+    snapshot.record_outputs(
+        chart_spec={
+            "series": [
+                {
+                    "type": "bar",
+                    "name": "Revenue",
+                    "data": [
+                        {"label": "AMD", "value": 120},
+                        {"label": "NVDA", "value": 150},
+                    ],
+                }
+            ],
+        }
+    )
+    _seed_revision_snapshot(snapshot)
+    await repo.save(snapshot)
+
+    events = []
+    async for event in analytics_memory_workflow(
+        query="Update the chart to a stacked bar view",
+        session_id=session_id,
+        flow="single-agent",
+    ):
+        events.append(event)
+
+    follow_up_events = [evt for evt in events if evt.get("event") == "follow_up_route"]
+    assert follow_up_events, "Expected follow_up_route event for chart-only snapshot"
+    assert all(evt.get("data", {}).get("route") != "cannot_revise" for evt in follow_up_events)
+    assert any(evt.get("event") == "revision_request" for evt in events), "Revision request should stream"
 
     await repo.delete(session_id)
     await close_session_state_repository()
@@ -117,8 +164,16 @@ async def test_analysis_revision_routed_fast_path(monkeypatch):
     _seed_revision_snapshot(snapshot)
     async def _fake_topics(query: str, *, session_id: Optional[str] = None, min_topics: int = 2):
         return [SearchTopicPlan(label="Risk", query="amd margin risks", reason="test")]
-    monkeypatch.setattr(FollowUpClassifier, "classify", lambda self, q, snap: FollowUpRoute.REUSE_SQL)
-    monkeypatch.setattr(FollowUpClassifier, "detect_revision_targets", lambda self, q, snap: {"analysis"})
+    monkeypatch.setattr(
+        FollowUpClassifier,
+        "classify",
+        lambda self, q, snap, lane_readiness=None: FollowUpRoute.REUSE_SQL,
+    )
+    monkeypatch.setattr(
+        FollowUpClassifier,
+        "detect_revision_targets",
+        lambda self, q, snap, lane_readiness=None: {"analysis"},
+    )
     monkeypatch.setattr("analytics.services.response_search.generate_search_topics", _fake_topics)
     monkeypatch.setattr("analytics.services.response_search.has_search_api_key", lambda: True)
     await repo.save(snapshot)
@@ -180,6 +235,32 @@ async def test_analysis_revision_routed_fast_path(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_analysis_revision_runs_without_chart_lane():
+    session_id = "analysis-lane-no-chart"
+    repo = get_session_state_repository()
+    snapshot = SessionStateSnapshot(session_id=session_id)
+    snapshot.record_outputs(analysis="Original summary for comparison.")
+    _seed_revision_snapshot(snapshot)
+    await repo.save(snapshot)
+
+    events = []
+    async for event in analytics_memory_workflow(
+        query="Revise the analysis to highlight cash flow strength",
+        session_id=session_id,
+        flow="single-agent",
+    ):
+        events.append(event)
+
+    follow_up_events = [evt for evt in events if evt.get("event") == "follow_up_route"]
+    assert follow_up_events, "Expected follow_up_route event for analysis-only revision"
+    assert all(evt.get("data", {}).get("route") != "cannot_revise" for evt in follow_up_events)
+    assert any(evt.get("event") == "revision_request" for evt in events), "Analysis revision should proceed"
+
+    await repo.delete(session_id)
+    await close_session_state_repository()
+
+
+@pytest.mark.asyncio
 async def test_agentic_revision_emits_follow_up_flag(monkeypatch):
     session_id = "agentic-revision-route"
     repo = get_session_state_repository()
@@ -197,8 +278,16 @@ async def test_agentic_revision_emits_follow_up_flag(monkeypatch):
     monkeypatch.setenv("AGENTIC_REVISIONS_ENABLED", "1")
     monkeypatch.setenv("AGENTIC_REVISION_SINGLE_AGENT", "1")
     monkeypatch.setenv("ANALYTICS_MEMORY_INSTRUMENT", "1")
-    monkeypatch.setattr(FollowUpClassifier, "classify", lambda self, q, snap: FollowUpRoute.FULL_PIPELINE)
-    monkeypatch.setattr(FollowUpClassifier, "detect_revision_targets", lambda self, q, snap: set())
+    monkeypatch.setattr(
+        FollowUpClassifier,
+        "classify",
+        lambda self, q, snap, lane_readiness=None: FollowUpRoute.FULL_PIPELINE,
+    )
+    monkeypatch.setattr(
+        FollowUpClassifier,
+        "detect_revision_targets",
+        lambda self, q, snap, lane_readiness=None: set(),
+    )
     monkeypatch.setattr("analytics.flows.chart_revision.is_analysis_revision_query", lambda q: False)
 
     class _FailingSequencer:
@@ -241,8 +330,16 @@ async def test_multi_agent_agentic_revision_skips_sequencer(monkeypatch):
     monkeypatch.setenv("AGENTIC_REVISIONS_ENABLED", "1")
     monkeypatch.setenv("AGENTIC_REVISION_MULTI_AGENT", "1")
     monkeypatch.setenv("ANALYTICS_MEMORY_INSTRUMENT", "1")
-    monkeypatch.setattr(FollowUpClassifier, "classify", lambda self, q, snap: FollowUpRoute.FULL_PIPELINE)
-    monkeypatch.setattr(FollowUpClassifier, "detect_revision_targets", lambda self, q, snap: set())
+    monkeypatch.setattr(
+        FollowUpClassifier,
+        "classify",
+        lambda self, q, snap, lane_readiness=None: FollowUpRoute.FULL_PIPELINE,
+    )
+    monkeypatch.setattr(
+        FollowUpClassifier,
+        "detect_revision_targets",
+        lambda self, q, snap, lane_readiness=None: set(),
+    )
 
     class _FailingSequencer:
         def __init__(self, *args, **kwargs):
@@ -278,6 +375,34 @@ async def test_multi_agent_agentic_revision_skips_sequencer(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_market_revision_runs_without_chart_or_analysis():
+    session_id = "market-lane-only"
+    repo = get_session_state_repository()
+    snapshot = SessionStateSnapshot(session_id=session_id)
+    snapshot.record_outputs(sql="SELECT 1")
+    snapshot.tool_cache.setdefault("analytics", {}).setdefault("artifacts", {})["market"] = {
+        "snapshot": {"tickers": ["AMD"], "ready": True}
+    }
+    await repo.save(snapshot)
+
+    events = []
+    async for event in analytics_memory_workflow(
+        query="How did AMD stock move versus peers?",
+        session_id=session_id,
+        flow="single-agent",
+    ):
+        events.append(event)
+
+    follow_up_events = [evt for evt in events if evt.get("event") == "follow_up_route"]
+    assert follow_up_events, "Expected follow_up_route for market-only revision"
+    assert all(evt.get("data", {}).get("route") != "cannot_revise" for evt in follow_up_events)
+    assert any(evt.get("event") == "revision_request" for evt in events), "Market revision should stream"
+
+    await repo.delete(session_id)
+    await close_session_state_repository()
+
+
+@pytest.mark.asyncio
 async def test_followup_generates_search_topics_without_explicit_patch(monkeypatch):
     session_id = "analysis-topic-route"
     repo = get_session_state_repository()
@@ -292,8 +417,16 @@ async def test_followup_generates_search_topics_without_explicit_patch(monkeypat
     _seed_revision_snapshot(snapshot)
     async def _fake_topics(query: str, *, session_id: Optional[str] = None, min_topics: int = 2):
         return [SearchTopicPlan(label="Focus", query="amd focus", reason="test")]
-    monkeypatch.setattr(FollowUpClassifier, "classify", lambda self, q, snap: FollowUpRoute.REUSE_SQL)
-    monkeypatch.setattr(FollowUpClassifier, "detect_revision_targets", lambda self, q, snap: {"analysis"})
+    monkeypatch.setattr(
+        FollowUpClassifier,
+        "classify",
+        lambda self, q, snap, lane_readiness=None: FollowUpRoute.REUSE_SQL,
+    )
+    monkeypatch.setattr(
+        FollowUpClassifier,
+        "detect_revision_targets",
+        lambda self, q, snap, lane_readiness=None: {"analysis"},
+    )
     monkeypatch.setattr("analytics.services.response_search.generate_search_topics", _fake_topics)
     monkeypatch.setattr("analytics.services.response_search.has_search_api_key", lambda: True)
     await repo.save(snapshot)
@@ -336,8 +469,16 @@ async def test_market_revision_uses_market_lane(monkeypatch):
     analytics_cache = snapshot.tool_cache.setdefault("analytics", {})
     analytics_cache["artifacts"] = {"market": {"tickers": ["AMD"]}}
     _seed_revision_snapshot(snapshot, include_market=True)
-    monkeypatch.setattr(FollowUpClassifier, "classify", lambda self, q, snap: FollowUpRoute.STOCK_ONLY)
-    monkeypatch.setattr(FollowUpClassifier, "detect_revision_targets", lambda self, q, snap: {"market"})
+    monkeypatch.setattr(
+        FollowUpClassifier,
+        "classify",
+        lambda self, q, snap, lane_readiness=None: FollowUpRoute.STOCK_ONLY,
+    )
+    monkeypatch.setattr(
+        FollowUpClassifier,
+        "detect_revision_targets",
+        lambda self, q, snap, lane_readiness=None: {"market"},
+    )
     await repo.save(snapshot)
 
     query = "Refresh the market data for the tickers we discussed"
@@ -361,12 +502,18 @@ async def test_market_revision_uses_market_lane(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_revision_rejected_when_artifacts_missing():
+async def test_revision_rejected_when_artifacts_missing(monkeypatch: pytest.MonkeyPatch):
     session_id = "missing-artifacts"
     repo = get_session_state_repository()
     snapshot = SessionStateSnapshot(session_id=session_id)
     snapshot.record_outputs(chart_spec={"meta": {"chartDesign": {"chart_type": "area"}}})
     await repo.save(snapshot)
+
+    telemetry_calls: List[Dict[str, Any]] = []
+    monkeypatch.setattr(
+        "analytics.flows.workflow.analysis_inputs_missing",
+        lambda **kwargs: telemetry_calls.append(kwargs),
+    )
 
     query = "analysis: Rewrite the summary with new highlights"
     events = []
@@ -378,8 +525,11 @@ async def test_revision_rejected_when_artifacts_missing():
     route_payload = follow_up_events[0].get("data", {})
     assert route_payload.get("route") == "cannot_revise"
     banner = route_payload.get("banner") or {}
-    assert banner.get("reason") == "missing_analysis"
+    assert banner.get("reason") == "missing_analysis_inputs"
+    assert set(banner.get("missing_components") or []) >= {"sql", "dataset_preview"}
     assert not _has_forbidden_events(events), "Revision rejection should not trigger pipeline lanes"
+    assert telemetry_calls, "analysis_inputs_missing telemetry expected"
+    assert set(telemetry_calls[0]["missing_components"]) >= {"sql", "dataset_preview"}
 
     stored = await repo.load(session_id)
     assert stored is not None
@@ -405,6 +555,150 @@ async def test_revision_hint_ignored_without_snapshot():
     assert follow_up_events[0].get("data", {}).get("route") == "full_pipeline"
 
     repo = get_session_state_repository()
+    await repo.delete(session_id)
+    await close_session_state_repository()
+
+
+@pytest.mark.asyncio
+async def test_analysis_revision_runs_when_manifest_ready():
+    session_id = "analysis-manifest-ready"
+    repo = get_session_state_repository()
+    snapshot = SessionStateSnapshot(session_id=session_id)
+    snapshot.record_outputs(sql="SELECT 1")
+    snapshot.record_tool_result("planner_dataset_preview", {"rows": [{"label": "Q1"}], "row_count": 1})
+    snapshot.record_tool_result("planner_stock_widget", {"snapshot": {"ACME": {"price": 100}}})
+    snapshot.record_tool_result("web_search", {"summary": "cached context", "snippets": [{"title": "news"}]})
+    assert snapshot.last_analysis is None, "Baseline should not persist analysis text"
+    await repo.save(snapshot)
+
+    events = []
+    async for event in analytics_memory_workflow(
+        query="analysis: tighten the summary language",
+        session_id=session_id,
+        flow="single-agent",
+    ):
+        events.append(event)
+
+    follow_up_events = [evt for evt in events if evt.get("event") == "follow_up_route"]
+    assert follow_up_events, "Expected follow_up_route event for analysis revision"
+    assert follow_up_events[0].get("data", {}).get("route") != "cannot_revise"
+    assert any(evt.get("event") == "revision_request" for evt in events), "Revision directive should emit"
+    assert any(evt.get("event") not in {"follow_up_route"} for evt in events if evt.get("event")), "Pipeline should execute"
+
+    await repo.delete(session_id)
+    await close_session_state_repository()
+
+
+@pytest.mark.asyncio
+async def test_planner_revision_reuses_manifest_without_analysis(monkeypatch):
+    session_id = "planner-manifest-ready"
+    repo = get_session_state_repository()
+    snapshot = SessionStateSnapshot(session_id=session_id)
+    snapshot.record_outputs(sql="SELECT 42")
+    snapshot.record_tool_result("planner_dataset_preview", {"rows": [{"label": "Q1"}], "row_count": 1})
+    snapshot.record_tool_result("planner_stock_widget", {"snapshot": {"ACME": {"price": 111}}})
+    snapshot.record_tool_result("web_search", {"summary": "cached context", "snippets": [{"title": "delta"}]})
+    await repo.save(snapshot)
+
+    created = []
+
+    class _PlannerStub:
+        flow_label = "planner-stub"
+
+        def __init__(self) -> None:
+            self.session_follow_up = None
+            self.lane_refresh_requirements: Dict[str, bool] = {}
+            self.analysis_refresh_mode: Optional[str] = None
+            self.revision_directive = None
+            self.snapshot: Optional[SessionStateSnapshot] = None
+            self.revision_targets: Set[str] = set()
+            self.follow_up_route = None
+            self.ran_analysis_refresh = False
+            self.requested_focus: Optional[str] = None
+            created.append(self)
+
+        def set_session_follow_up(self, value: bool) -> None:
+            self.session_follow_up = value
+
+        def set_lane_refresh_requirements(self, requirements: Dict[str, bool]) -> None:
+            self.lane_refresh_requirements = dict(requirements)
+
+        def set_analysis_refresh_mode(self, mode: str) -> None:
+            self.analysis_refresh_mode = mode
+
+        def set_revision_directive(self, directive) -> None:
+            self.revision_directive = directive
+
+        def prime_with_snapshot(self, snapshot: SessionStateSnapshot) -> None:
+            self.snapshot = snapshot
+
+        def set_revision_targets(self, targets) -> None:
+            self.revision_targets = set(targets)
+
+        def set_follow_up_route(self, route) -> None:
+            self.follow_up_route = route
+
+        async def run_analysis_refresh(
+            self,
+            *,
+            session_id: str,
+            query: str,
+            requested_focus: Optional[str],
+            revision_directive,
+            reason: Optional[str] = None,
+            source: Optional[str] = None,
+        ):
+            self.ran_analysis_refresh = True
+            self.requested_focus = requested_focus
+            yield {
+                "event": "analysis_revision",
+                "data": {
+                    "lane": "analysis",
+                    "revision": True,
+                    "session_id": session_id,
+                    "source": source or "analytics_memory_workflow",
+                    "requested_focus": requested_focus,
+                },
+            }
+
+    def _factory():
+        return _PlannerStub()
+
+    monkeypatch.setitem(workflow_module.FLOW_FACTORIES, "planner-executor", _factory)
+    monkeypatch.setattr(
+        FollowUpClassifier,
+        "classify",
+        lambda self, q, snap, lane_readiness=None: FollowUpRoute.REUSE_SQL,
+    )
+    monkeypatch.setattr(
+        FollowUpClassifier,
+        "detect_revision_targets",
+        lambda self, q, snap, lane_readiness=None: {"analysis"},
+    )
+    monkeypatch.setattr("analytics.services.response_search.generate_search_topics", lambda *args, **kwargs: [])
+    monkeypatch.setattr("analytics.services.response_search.has_search_api_key", lambda: False)
+
+    query = "analysis: re-run with updated macro commentary"
+    events = []
+    async for event in analytics_memory_workflow(
+        query=query,
+        session_id=session_id,
+        flow="planner-executor",
+    ):
+        events.append(event)
+
+    follow_up_events = [evt for evt in events if evt.get("event") == "follow_up_route"]
+    assert follow_up_events, "Expected follow_up_route event for planner manifest revision"
+    route_value = follow_up_events[0].get("data", {}).get("route")
+    assert route_value in {"analysis_only", "mixed_revision"}
+    assert any(evt.get("event") == "analysis_revision" for evt in events), "Analysis lane should execute"
+    assert created, "Planner stub was not instantiated"
+    stub = created[-1]
+    assert stub.ran_analysis_refresh is True
+    assert stub.requested_focus is not None
+    assert stub.snapshot is not None and stub.snapshot.last_analysis is None
+    assert stub.revision_targets == {"analysis", "web"}, f"Expected analysis/web targets, got {stub.revision_targets}"
+
     await repo.delete(session_id)
     await close_session_state_repository()
 

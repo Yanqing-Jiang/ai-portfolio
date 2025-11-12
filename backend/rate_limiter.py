@@ -55,7 +55,7 @@ if not SUPABASE_JWT_SECRET or SUPABASE_JWT_SECRET == "your-jwt-secret-here":
     SUPABASE_JWT_SECRET = "fallback-secret-key"
 
 # Rate limiting constants (prompt units)
-GUEST_LIMIT = 10  # 1 LinkedIn photo (10 units) or 10 chats per day
+GUEST_LIMIT = 100  # temporary bump per request; revert when quotas normalize
 MEMBER_LIMIT = 20  # 2 LinkedIn photos or 20 chats per day
 LIMIT_WINDOW = 86400  # legacy fallback; real TTL is until midnight UTC
 
