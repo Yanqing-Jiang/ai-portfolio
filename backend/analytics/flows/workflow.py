@@ -1089,6 +1089,11 @@ async def analytics_memory_workflow(
     snapshot: Optional[SessionStateSnapshot] = None
     if repository and session_id:
         snapshot = await repository.load(session_id)
+        if snapshot is not None:
+            try:
+                snapshot.refresh_analysis_inputs_manifest(persist=False)
+            except Exception:  # pragma: no cover - defensive guard
+                logger.debug("Failed to refresh manifest before workflow start", exc_info=True)
 
     lane_readiness = _lane_readiness(snapshot)
     baseline_ready = _baseline_ready(snapshot, lane_readiness=lane_readiness)
@@ -1103,6 +1108,7 @@ async def analytics_memory_workflow(
         infer_analysis_revision_from_query(query) if analysis_revision_requested else None
     )
     manifest_missing_components: List[str] = []
+    manifest_pending_components: List[str] = []
     manifest_inputs_ready = False
     if analysis_revision_requested and session_id:
         revision_snapshot_ready = True
@@ -1110,12 +1116,58 @@ async def analytics_memory_workflow(
             revision_ctx = await RevisionContext.load(session_id, repository=repository)
             manifest_inputs_ready = revision_ctx.analysis_inputs_ready()
             manifest_missing_components = revision_ctx.analysis_inputs_missing()
+            manifest_payload = (
+                revision_ctx.analysis_inputs_manifest
+                if isinstance(revision_ctx.analysis_inputs_manifest, dict)
+                else {}
+            )
+            manifest_components = manifest_payload.get("components")
+            if isinstance(manifest_components, Mapping):
+                manifest_pending_components = [
+                    component
+                    for component, entry in manifest_components.items()
+                    if isinstance(entry, Mapping) and str(entry.get("state") or "").strip().lower() == "pending"
+                ]
             if not revision_ctx.has_analysis_text() and not manifest_inputs_ready:
                 revision_snapshot_ready = False
         except MissingRevisionSnapshot:
             revision_snapshot_ready = False
         except MissingAnalysis:
             revision_snapshot_ready = bool(manifest_inputs_ready)
+        pending_set = set(manifest_pending_components)
+        missing_subset_of_pending = bool(pending_set) and all(
+            component in pending_set for component in manifest_missing_components
+        )
+        baseline_pending = session_follow_up and (not manifest_inputs_ready) and missing_subset_of_pending
+        if baseline_pending:
+            pending_lanes = _lanes_for_missing_inputs(manifest_pending_components) or ["analysis", "web"]
+            lane_refresh_required = {lane: True for lane in pending_lanes}
+            banner = {
+                "title": "Baseline Still Running",
+                "message": "Hold tight while the current run seals analysis inputs before revisions can start.",
+                "pending_components": manifest_pending_components,
+            }
+            streaming_event = {
+                "event": "baseline_still_streaming",
+                "data": {
+                    "flow": selected,
+                    "session_id": session_id,
+                    "lanes": pending_lanes,
+                    "pending_components": manifest_pending_components,
+                    "lane_refresh_required": lane_refresh_required,
+                    "session_follow_up": session_follow_up,
+                    "banner": banner,
+                },
+            }
+            yield streaming_event
+            _append_session_message(
+                snapshot,
+                role="system",
+                content="Revision delayed until the current analysis run finishes sealing web and dataset inputs.",
+            )
+            if repository and snapshot is not None:
+                await repository.save(snapshot)
+            return
         if not revision_snapshot_ready:
             missing_lanes = _lanes_for_missing_inputs(manifest_missing_components) or ["analysis", "web"]
             lane_refresh_required = {lane: True for lane in missing_lanes}

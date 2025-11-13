@@ -423,9 +423,29 @@ RECENCY_KEYWORDS = (
 
 WEB_SEARCH_MAX_ATTEMPTS = 2
 WEB_SEARCH_BACKOFF_SECONDS = 0.6
+WEB_REFRESH_TTL_SECONDS = 600
 
 
-def _needs_web_refresh(query: str, web_ctx: Dict[str, Any]) -> bool:
+def _needs_web_refresh(
+    query: str,
+    web_ctx: Dict[str, Any],
+    *,
+    manifest: Optional[Mapping[str, Any]] = None,
+    lane_age_seconds: Optional[float] = None,
+) -> bool:
+    if manifest:
+        components = manifest.get("components")
+        if isinstance(components, Mapping):
+            web_component = components.get("web")
+            if isinstance(web_component, Mapping):
+                state = str(web_component.get("state") or "").strip().lower()
+                if state in {"missing", "pending"}:
+                    return True
+        manifest_status = manifest.get("status")
+        if isinstance(manifest_status, str) and manifest_status.strip().lower() != "sealed":
+            return True
+    if lane_age_seconds is not None and lane_age_seconds > WEB_REFRESH_TTL_SECONDS:
+        return True
     normalized = (query or "").strip().lower()
     if any(keyword in normalized for keyword in RECENCY_KEYWORDS):
         return True
@@ -1053,13 +1073,63 @@ async def _web_research_agent(context: AgentRunContext) -> AgentResult:
     web_ctx = context.shared.setdefault('web', {})
     query = context.shared.get('query', context.query)
     session_id = context.session_id
+    lane_flags: Dict[str, bool] = {}
+    shared_flags = context.shared.get('lane_refresh_required')
+    if isinstance(shared_flags, Mapping):
+        lane_flags.update({str(k).strip().lower(): bool(v) for k, v in shared_flags.items() if k})
+    ctx_flags = getattr(context, 'lane_refresh_required', None)
+    if isinstance(ctx_flags, Mapping):
+        lane_flags.update({str(k).strip().lower(): bool(v) for k, v in ctx_flags.items() if k})
+    force_refresh = lane_flags.get('web') is True
+    force_skip = lane_flags.get('web') is False
 
     planner_output = context.dependencies.get('planner_phase')
     tasks = planner_output.output.get('tasks', []) if planner_output else []
     status_hint = _task_status(tasks, 'web_research')
     receipts = context.shared.get('tool_receipts') or {}
     receipt = receipts.get('web_retriever')
-    if status_hint == 'skip':
+    attempts_meta: List[Dict[str, Any]] = []
+
+    repository = get_session_state_repository()
+    snapshot = await repository.load(session_id) if session_id else None
+    cached_payload: Optional[Dict[str, Any]] = None
+    manifest: Optional[Dict[str, Any]] = None
+    lane_age_seconds: Optional[float] = None
+    if snapshot:
+        try:
+            snapshot.refresh_analysis_inputs_manifest(persist=False)
+        except Exception:
+            pass
+        manifest_candidate = snapshot.analysis_inputs_manifest if isinstance(snapshot.analysis_inputs_manifest, dict) else None
+        if manifest_candidate:
+            manifest = manifest_candidate
+        lane_age_seconds = snapshot.lane_age_seconds("web")
+        cache = snapshot.tool_cache.get('web_search')
+        if cache and str(cache.get('query') or '').strip().lower() == query.strip().lower():
+            cached_payload = cache
+
+    receipt_fresh = MultiAgentFlow._receipt_is_fresh(receipt, MultiAgentFlow.RECEIPT_TTL_SECONDS)
+    heuristic_refresh = _needs_web_refresh(
+        query,
+        web_ctx,
+        manifest=manifest,
+        lane_age_seconds=lane_age_seconds,
+    )
+    if force_refresh and not heuristic_refresh:
+        logger.info(
+            "multi_agent.web_refresh_skipped",
+            extra={
+                "session_id": session_id,
+                "reason": "heuristic_declined_refresh",
+                "lane_age_seconds": lane_age_seconds,
+                "status_hint": status_hint,
+            },
+        )
+        heuristic_refresh = True
+    if force_skip:
+        heuristic_refresh = False
+
+    if force_skip or (status_hint == 'skip' and not heuristic_refresh and not force_refresh):
         web_ctx['status'] = 'skip'
         web_ctx.pop('error', None)
         web_ctx['attempts'] = []
@@ -1073,20 +1143,9 @@ async def _web_research_agent(context: AgentRunContext) -> AgentResult:
             },
         )
 
-    attempts_meta: List[Dict[str, Any]] = []
-
-    repository = get_session_state_repository()
-    snapshot = await repository.load(session_id) if session_id else None
-    cached_payload = None
-    if snapshot:
-        cache = snapshot.tool_cache.get('web_search')
-        if cache and str(cache.get('query') or '').strip().lower() == query.strip().lower():
-            cached_payload = cache
-
-    receipt_fresh = MultiAgentFlow._receipt_is_fresh(receipt, MultiAgentFlow.RECEIPT_TTL_SECONDS)
-    should_reuse = status_hint != 'run' or receipt_fresh
-    if cached_payload and not _needs_web_refresh(query, web_ctx):
-        should_reuse = True
+    should_reuse = False
+    if not heuristic_refresh and not force_refresh:
+        should_reuse = (status_hint != 'run') or receipt_fresh or bool(cached_payload)
 
     if should_reuse:
         reuse_source: Dict[str, Any] = {}
@@ -3306,6 +3365,30 @@ class MultiAgentFlow:
         if directive_topics:
             ctx.revision_search_topics = list(directive_topics)
         _reset_revision_accessories(ctx, {"web"})
+        refresh_flags = dict(getattr(ctx, "lane_refresh_required", {}) or {})
+        repository = get_session_state_repository()
+        snapshot = await repository.load(session_id)
+        manifest_payload: Optional[Dict[str, Any]] = None
+        if snapshot:
+            try:
+                snapshot.refresh_analysis_inputs_manifest(persist=False)
+            except Exception:
+                pass
+            if isinstance(snapshot.analysis_inputs_manifest, dict):
+                manifest_payload = snapshot.analysis_inputs_manifest
+            lane_age = snapshot.lane_age_seconds("web")
+            if lane_age is not None and lane_age > WEB_REFRESH_TTL_SECONDS:
+                refresh_flags["web"] = True
+        if manifest_payload:
+            components = manifest_payload.get("components")
+            if isinstance(components, Mapping):
+                web_component = components.get("web")
+                if isinstance(web_component, Mapping):
+                    state = str(web_component.get("state") or "").strip().lower()
+                    if state in {"missing", "pending"}:
+                        refresh_flags["web"] = True
+        if refresh_flags:
+            ctx.lane_refresh_required = refresh_flags
 
         async def _stream() -> AsyncGenerator[Dict[str, Any], None]:
             async for event in self._planner.invoke_tool(

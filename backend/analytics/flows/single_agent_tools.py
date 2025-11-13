@@ -1475,7 +1475,11 @@ class SingleAgentController:
                 details={"reason": intent_skip_reason},
             )
             ctx.intent_reused = reuse_intent
-            await self._planner._persist_session_state(ctx, record_artifacts=True)
+            await self._planner._persist_session_state(
+                ctx,
+                record_artifacts=True,
+                **self._lane_persistence_flags(ctx),
+            )
         self._sequencer_state = state
         self._prime_lane_reuse_events(ctx)
         return state
@@ -1532,6 +1536,70 @@ class SingleAgentController:
         prefer_agentic = bool(self._agentic_revision_mode or self._session_follow_up)
         return prefer_agentic
 
+    def _lane_persistence_flags(self, ctx: PlannerPhaseContext) -> Dict[str, bool]:
+        artifacts = getattr(ctx, "artifacts", None)
+        if artifacts is None:
+            return {
+                "record_sql": False,
+                "record_chart": False,
+                "record_analysis": False,
+                "record_web": False,
+                "record_dataset_preview": False,
+            }
+
+        sql_ready = False
+        dataset_ready = False
+        chart_ready = False
+        analysis_ready = False
+        web_ready = False
+
+        sql_artifact = getattr(artifacts, "sql_generation", None)
+        if sql_artifact and getattr(sql_artifact, "sql", None):
+            sql_ready = True
+
+        sql_execution = getattr(artifacts, "sql_execution", None)
+        if sql_execution:
+            preview_rows = getattr(sql_execution, "dataset_preview", None) or getattr(sql_execution, "sample_rows", None)
+            has_rows = bool(preview_rows and any(preview_rows))
+            row_count = getattr(sql_execution, "row_count", None)
+            has_row_count = isinstance(row_count, int)
+            dataset_ready = bool(has_rows or has_row_count)
+
+        chart_artifact = getattr(artifacts, "chart", None)
+        if chart_artifact and getattr(chart_artifact, "spec", None):
+            chart_ready = True
+
+        analysis_artifact = getattr(artifacts, "analysis", None)
+        if analysis_artifact:
+            analysis_text = getattr(analysis_artifact, "analysis_text", None) or getattr(
+                analysis_artifact, "analysis", None
+            )
+            if isinstance(analysis_text, str) and analysis_text.strip():
+                analysis_ready = True
+
+        web_artifact = getattr(artifacts, "web", None)
+        if web_artifact:
+            summary = getattr(web_artifact, "summary", None)
+            snippets = getattr(web_artifact, "snippets", None)
+            has_summary = isinstance(summary, str) and summary.strip()
+            has_snippets = False
+            if isinstance(snippets, (list, tuple)):
+                has_snippets = any(snippets)
+            elif snippets:
+                try:
+                    has_snippets = any(snippets)  # type: ignore[arg-type]
+                except TypeError:
+                    has_snippets = False
+            web_ready = bool(has_summary or has_snippets)
+
+        return {
+            "record_sql": sql_ready,
+            "record_chart": chart_ready,
+            "record_analysis": analysis_ready,
+            "record_web": web_ready,
+            "record_dataset_preview": dataset_ready,
+        }
+
     async def _intent_stage(self) -> AsyncGenerator[Dict[str, Any], None]:
         state = self._sequencer_state
         if state is None:
@@ -1544,13 +1612,21 @@ class SingleAgentController:
         if (not is_revision_follow_up) or ("classification" not in executed):
             async for event in registry.invoke("classification", self._planner, ctx, executed=executed):
                 yield event
-            await self._planner._persist_session_state(ctx, record_artifacts=True)
+            await self._planner._persist_session_state(
+                ctx,
+                record_artifacts=True,
+                **self._lane_persistence_flags(ctx),
+            )
             if not ctx.is_financial_query:
                 ctx.halted = True
                 return
         elif is_revision_follow_up and "classification" in executed:
             # Ensure cached state is persisted so downstream lanes have the latest receipts
-            await self._planner._persist_session_state(ctx, record_artifacts=True)
+            await self._planner._persist_session_state(
+                ctx,
+                record_artifacts=True,
+                **self._lane_persistence_flags(ctx),
+            )
 
         tool_sequence: Tuple[str, ...]
         if is_revision_follow_up:
@@ -1571,7 +1647,11 @@ class SingleAgentController:
         for tool_name in tool_sequence:
             async for event in registry.invoke(tool_name, self._planner, ctx, executed=executed):
                 yield event
-            await self._planner._persist_session_state(ctx, record_artifacts=True)
+            await self._planner._persist_session_state(
+                ctx,
+                record_artifacts=True,
+                **self._lane_persistence_flags(ctx),
+            )
             executed.add(tool_name)
 
         if ctx.intent is None or (ctx.plan or ctx.provisional_plan) is None:
@@ -1716,7 +1796,11 @@ class SingleAgentController:
                             yield tool_event
                     finally:
                         await ad_hoc_runtime.close()
-                await self._planner._persist_session_state(ctx, record_artifacts=True)
+                await self._planner._persist_session_state(
+                    ctx,
+                    record_artifacts=True,
+                    **self._lane_persistence_flags(ctx),
+                )
                 analysis_event = _build_reused_analysis_event(self.flow_mode, ctx)
                 if analysis_event:
                     yield self._planner._annotate_revision(analysis_event, ctx)
@@ -1771,6 +1855,11 @@ class SingleAgentController:
                 await state.tool_runtime.close()
                 state.tool_runtime = None
 
+    # Function: _agent_run_stage
+    #   Role: Streams the agent runtime lane when PlannerOrchestratorAdapter selects the agent path so emitted events stay in sync with planner telemetry.
+    #   Called from: PlannerOrchestratorAdapter.sql_runner when build_planner_orchestrator(use_agent=True) routes execution through AgentRuntime.
+    #   Invokes: AgentRuntime.run via _build_agent_runtime, _persist_runtime_metadata, and _run_agent_runtime_fallback so SQL/web/analysis receipts stay sealed for revisions.
+    #   Why: Keeps the agent-based execution path aligned with planner/executor persistence semantics and manifest expectations.
     async def _agent_run_stage(self) -> AsyncGenerator[Dict[str, Any], None]:
         state = self._sequencer_state
         if state is None:
@@ -1842,7 +1931,12 @@ class SingleAgentController:
 
         async for evt in _drain_queue():
             yield evt
-        await self._planner._persist_session_state(ctx, record_artifacts=True)
+
+        await self._planner._persist_session_state(
+            ctx,
+            record_artifacts=True,
+            **self._lane_persistence_flags(ctx),
+        )
         if self._agent_runtime_needs_fallback(ctx):
             async for event in self._run_agent_runtime_fallback(state):
                 yield event
@@ -2985,19 +3079,65 @@ class SingleAgentController:
         artifacts = getattr(ctx, "artifacts", None)
         if artifacts is None:
             return
+
+        sql_text: Optional[str] = None
+        sql_art = getattr(artifacts, "sql_generation", None)
+        if sql_art and getattr(sql_art, "sql", None):
+            sql_text = str(sql_art.sql)
+
+        dataset_preview_payload: Optional[Dict[str, Any]] = None
+        sql_exec = getattr(artifacts, "sql_execution", None)
+        if sql_exec:
+            preview_rows = getattr(sql_exec, "dataset_preview", None) or getattr(sql_exec, "sample_rows", None)
+            if preview_rows:
+                dataset_preview_payload = sanitize_for_json(
+                    {
+                        "rows": preview_rows,
+                        "row_count": getattr(sql_exec, "row_count", None),
+                    }
+                )
+
         chart_spec_payload: Optional[Dict[str, Any]] = None
         chart_art = getattr(artifacts, "chart", None)
         if chart_art and getattr(chart_art, "spec", None):
             chart_spec_payload = copy.deepcopy(chart_art.spec)
+
         analysis_text: Optional[str] = None
         analysis_art = getattr(artifacts, "analysis", None)
         if analysis_art:
             text_value = getattr(analysis_art, "analysis_text", None)
             if isinstance(text_value, str) and text_value.strip():
                 analysis_text = text_value
-        if chart_spec_payload is None and analysis_text is None:
+
+        market_payload: Optional[Dict[str, Any]] = None
+        market_art = getattr(artifacts, "market", None)
+        if market_art and getattr(market_art, "snapshot", None):
+            market_payload = sanitize_for_json(market_art.snapshot)
+
+        web_payload: Optional[Dict[str, Any]] = None
+        web_art = getattr(artifacts, "web", None)
+        if web_art:
+            try:
+                raw_web_payload = web_art.to_dict()
+            except Exception:
+                raw_web_payload = None
+            if isinstance(raw_web_payload, Mapping):
+                summary = raw_web_payload.get("summary")
+                snippets = raw_web_payload.get("snippets")
+                if (isinstance(summary, str) and summary.strip()) or (isinstance(snippets, list) and any(snippets)):
+                    web_payload = sanitize_for_json(raw_web_payload)
+
+        if not any([sql_text, chart_spec_payload, analysis_text, dataset_preview_payload, market_payload, web_payload]):
             return
-        snapshot.record_outputs(chart_spec=chart_spec_payload, analysis=analysis_text)
+
+        if any([sql_text, chart_spec_payload, analysis_text]):
+            snapshot.record_outputs(sql=sql_text, chart_spec=chart_spec_payload, analysis=analysis_text)
+        if dataset_preview_payload:
+            snapshot.record_tool_result("planner_dataset_preview", dataset_preview_payload)
+        if market_payload:
+            snapshot.record_tool_result("planner_stock_widget", market_payload)
+        if web_payload:
+            snapshot.record_tool_result("web_search", web_payload)
 
     def _emit_lane_summary(self, lane_states: Dict[str, str]) -> Dict[str, Any]:
         normalized_states = dict(lane_states)
@@ -4007,10 +4147,12 @@ class SingleAgentController:
             pass
         async for _ in self._planner._pipeline._emit_post_analysis_accessories(ctx):  # type: ignore[attr-defined]
             pass
+        persistence_flags = self._lane_persistence_flags(ctx)
+        persistence_flags["record_analysis"] = True
         await self._planner._pipeline._persist_session_state(  # type: ignore[attr-defined]
             ctx,
-            record_analysis=True,
             record_artifacts=True,
+            **persistence_flags,
         )
 
         refreshed_analysis = getattr(ctx.artifacts, "analysis", None)

@@ -3072,6 +3072,7 @@ class PlannerPipeline:
         record_chart: bool = False,
         record_analysis: bool = False,
         record_web: bool = False,
+        record_dataset_preview: bool = False,
         tool_bundle: Optional[Dict[str, Any]] = None,
         record_artifacts: bool = True,
     ) -> None:
@@ -3087,15 +3088,28 @@ class PlannerPipeline:
         if sql_artifact and sql_artifact.sql:
             snapshot.record_outputs(sql=sql_artifact.sql)
             updated = True
-            execution_artifact = ctx.artifacts.sql_execution
-            if execution_artifact and execution_artifact.dataset_preview:
+        execution_artifact = ctx.artifacts.sql_execution if hasattr(ctx.artifacts, "sql_execution") else None
+        row_count_value: Optional[int] = None
+        dataset_receipt_expected = False
+        dataset_receipt_written = False
+        if execution_artifact:
+            preview_rows = getattr(execution_artifact, "dataset_preview", None) or getattr(
+                execution_artifact, "sample_rows", None
+            )
+            row_count_value = getattr(execution_artifact, "row_count", None)
+            has_preview_rows = bool(preview_rows and any(preview_rows))
+            has_row_count = isinstance(row_count_value, int)
+            dataset_receipt_expected = has_preview_rows or has_row_count
+            should_persist_preview = (record_dataset_preview or record_artifacts or record_sql) and dataset_receipt_expected
+            if should_persist_preview:
                 sanitized_preview = sanitize_for_json(
                     {
-                        "rows": execution_artifact.dataset_preview,
-                        "row_count": execution_artifact.row_count,
+                        "rows": preview_rows or [],
+                        "row_count": row_count_value,
                     }
                 )
                 snapshot.record_tool_result("planner_dataset_preview", sanitized_preview)
+                dataset_receipt_written = True
                 updated = True
         chart_artifact = ctx.artifacts.chart if record_chart else None
         if chart_artifact and chart_artifact.spec:
@@ -3192,6 +3206,25 @@ class PlannerPipeline:
             updated = True
         if updated:
             await repository.save(snapshot)
+        lane_receipts_cache = {}
+        if isinstance(snapshot.tool_cache, dict):
+            lane_receipts_cache = snapshot.tool_cache.get("analysis_lane_receipts") or {}
+        dataset_receipt_present = (
+            isinstance(lane_receipts_cache, dict) and lane_receipts_cache.get("dataset_preview") is not None
+        )
+        if dataset_receipt_expected and not (dataset_receipt_written or dataset_receipt_present):
+            telemetry.analysis_lane_missing_artifact(
+                session_id=session_id,
+                lane="sql",
+                component="dataset_preview",
+                reason="receipt_missing",
+                metadata={
+                    "row_count": row_count_value,
+                    "record_dataset_preview": record_dataset_preview,
+                    "record_sql": record_sql,
+                    "record_artifacts": record_artifacts,
+                },
+            )
 
     async def initialize_context(self, query: str, session_id: Optional[str] = None) -> PlannerPhaseContext:
         return await _initialize_context(self, query, session_id)
@@ -4579,6 +4612,11 @@ class PlannerPipeline:
                 status="success",
             )
             self._capture_artifacts(ctx)
+            await self._persist_session_state(
+                ctx,
+                record_dataset_preview=True,
+                record_artifacts=True,
+            )
 
             execution_artifact = getattr(ctx.artifacts, "sql_execution", None)
             row_count = getattr(execution_artifact, "row_count", None) if execution_artifact else None

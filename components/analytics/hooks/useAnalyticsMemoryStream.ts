@@ -1508,6 +1508,10 @@ export const useAnalyticsMemoryStream = (
     if (reusedFlag !== undefined) {
       card.reused = reusedFlag;
     }
+    const sessionToken = coerceString(raw.session_id ?? raw.sessionId ?? raw.meta?.session_id);
+    if (sessionToken) {
+      card.sessionId = sessionToken;
+    }
     const revisionId = coerceString(raw.revision_id ?? raw.revisionId ?? raw.meta?.revision_id);
     if (revisionId) {
       card.revisionId = revisionId;
@@ -1929,6 +1933,9 @@ const workflowDataRef = useRef<{
         ...card,
         lane: normalizedLane,
       };
+      if (!candidate.sessionId && sessionId) {
+        candidate.sessionId = sessionId;
+      }
       candidate.payloadHash = candidate.payloadHash ?? computeCardPayloadHash(candidate);
       const keyFor = (entry: SpecialistCard) => {
         const meta = entry.meta ?? {};
@@ -1938,7 +1945,22 @@ const workflowDataRef = useRef<{
             : typeof meta.questionId === 'string'
               ? meta.questionId
               : entry.topic ?? '';
-        return [entry.type ?? 'accessory', entry.lane ?? '', questionKey, entry.parallelGroup ?? ''].join('::');
+        const metaSession =
+          typeof meta.session_id === 'string'
+            ? meta.session_id
+            : typeof meta.sessionId === 'string'
+              ? meta.sessionId
+              : undefined;
+        const sessionToken = entry.sessionId ?? metaSession ?? sessionId ?? '';
+        const revisionToken = entry.revisionId ?? 'baseline';
+        return [
+          sessionToken,
+          revisionToken,
+          entry.type ?? 'accessory',
+          entry.lane ?? '',
+          questionKey,
+          entry.parallelGroup ?? '',
+        ].join('::');
       };
       const targetKey = keyFor(candidate);
       const existingIndex = prev.findIndex((item) => keyFor(item) === targetKey);
@@ -2005,7 +2027,7 @@ const workflowDataRef = useRef<{
       return next;
     });
     refreshResultMessage();
-  }, [refreshResultMessage]);
+  }, [refreshResultMessage, sessionId]);
 
   const streamHook = useAnalyticsStream();
   const stepsHook = useProcessSteps();
@@ -3069,6 +3091,50 @@ const workflowDataRef = useRef<{
           updateStep('clarification', 'completed', ['Clarifications resolved'], intentData, stepInfo.elapsed_ms, stepInfo.ts);
           setPendingClarification(null);
           break;
+
+        case 'baseline_still_streaming': {
+          const bannerPayload = eventData.banner || data.banner || {};
+          const pendingComponents = Array.isArray(eventData.pending_components)
+            ? (eventData.pending_components as unknown[])
+                .map((component) => coerceString(component))
+                .filter((component): component is string => Boolean(component))
+            : Array.isArray(bannerPayload?.pending_components)
+              ? (bannerPayload.pending_components as unknown[])
+                  .map((component) => coerceString(component))
+                  .filter((component): component is string => Boolean(component))
+              : undefined;
+          const route = 'baseline_still_streaming';
+          const banner: FollowUpBanner = {
+            title: coerceString(bannerPayload?.title) ?? 'Baseline Still Running',
+            message:
+              coerceString(bannerPayload?.message) ??
+              'Waiting for the current analysis run to seal required inputs before revisions can start.',
+            route,
+            flowMode: flowModeValue ?? flow,
+            missingComponents: pendingComponents,
+          };
+          setFollowUpBanner(banner);
+          workflowDataRef.current.followUpBanner = banner;
+          streamHook.setCurrentStatus(banner.message);
+          const thinkingLogs = banner.message ? [banner.message] : [];
+          stepsHook.updateStepStatus(
+            'follow_up_route',
+            'in_progress',
+            thinkingLogs,
+            { banner },
+            stepInfo.elapsed_ms,
+            stepInfo.ts,
+            undefined,
+            undefined,
+            undefined,
+            flowModeValue ?? flow,
+            {
+              followUpRoute: route,
+              missingComponents: pendingComponents,
+            },
+          );
+          break;
+        }
 
         case 'follow_up_route': {
           const route = coerceString(eventData.route) ?? 'full_pipeline';
