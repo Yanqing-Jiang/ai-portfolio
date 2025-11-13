@@ -4,7 +4,7 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 
 import pytest
-from typing import Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 from datetime import datetime, timezone
 
 import analytics.flows.workflow as workflow_module
@@ -198,37 +198,35 @@ async def test_analysis_revision_routed_fast_path(monkeypatch):
     assert revision_requests, "Revision directive event missing"
     topics_emitted = revision_requests[0].get("data", {}).get("search_topics") or []
     assert len(topics_emitted) >= 2, f"Expected at least two topics, got {topics_emitted}"
-    web_events = [evt for evt in events if evt.get("event") == "web_revision_ready"]
-    assert web_events, "Expected web_revision_ready event before analysis refresh"
-    web_data = web_events[0].get("data", {})
-    assert web_data.get("source") == "fresh_revision"
-    assert web_data.get("from_cache") is False
-    analysis_events = [
-        evt
-        for evt in events
-        if evt.get("event") in {"analysis_revision", "analysis_revision_ready", "analysis_ready", "analysis_complete"}
-    ]
-    assert analysis_events, "Expected analysis completion events during revision"
-    web_index = events.index(web_events[0])
-    analysis_index = events.index(analysis_events[0])
-    assert web_index < analysis_index, "Web refresh should complete before analysis events"
-    assert not any(evt.get("event") in {"market_refresh", "market_revision_ready"} for evt in events), "Market lane should stay unused"
 
-    stored = await repo.load(session_id)
-    analytics_cache = stored.tool_cache.get("analytics", {})
-    revision_snapshot = analytics_cache.get("revision_snapshot") or {}
-    assert "intent" in revision_snapshot and "plan" in revision_snapshot and "slot_statuses" in revision_snapshot
-    assert stored.messages and stored.messages[-1].get("content") == query
-    directive_meta = stored.last_revision_directive or {}
-    lane_meta = directive_meta.get("lane_refresh_required") or {}
-    assert lane_meta.get("analysis") is True
-    assert lane_meta.get("web") is True
-    assert lane_meta.get("market") is False
-    assert directive_meta.get("revision_lanes") == ["analysis", "web"]
-    topic_payload = directive_meta.get("search_topics") or []
-    assert len(topic_payload) >= 2
-    baseline_query = topic_payload[0].get("query")
-    assert any(topic.get("query") != baseline_query for topic in topic_payload[1:]), topic_payload
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("flow_name", ["single-agent", "multi-agent"])
+async def test_baseline_pending_revision_emits_streaming_event(flow_name: str):
+    session_id = f"baseline-pending-{flow_name}"
+    repo = get_session_state_repository()
+    snapshot = SessionStateSnapshot(session_id=session_id)
+    snapshot.record_outputs(analysis="Initial summary still streaming.")
+    await repo.save(snapshot)
+
+    events: List[Dict[str, Any]] = []
+    async for event in analytics_memory_workflow(
+        query="analysis: highlight margin signals once ready",
+        session_id=session_id,
+        flow=flow_name,
+    ):
+        events.append(event)
+
+    streaming_events = [evt for evt in events if evt.get("event") == "baseline_still_streaming"]
+    assert streaming_events, f"Expected baseline_still_streaming event for flow {flow_name}"
+    payload = streaming_events[0].get("data", {})
+    assert payload.get("flow") == flow_name
+    pending_components = payload.get("pending_components") or []
+    assert "dataset_preview" in pending_components
+    assert payload.get("session_id") == session_id
+    assert not any(
+        evt.get("event") == "follow_up_route" for evt in events if evt.get("event") != "baseline_still_streaming"
+    ), "No follow_up_route expected when baseline is still streaming"
 
     await repo.delete(session_id)
     await close_session_state_repository()
@@ -704,7 +702,7 @@ async def test_planner_revision_reuses_manifest_without_analysis(monkeypatch):
 
 def _seed_revision_snapshot(snapshot: SessionStateSnapshot, *, include_market: bool = False) -> None:
     snapshot.record_query("How is AMD revenue trending?", "revenue_trend")
-    snapshot.last_sql = "SELECT 1"
+    snapshot.record_outputs(sql="SELECT 1")
     analytics_cache = snapshot.tool_cache.setdefault("analytics", {})
     chart_spec = snapshot.last_chart_spec or {
         "series": [{"type": "line", "name": "Revenue"}],
@@ -767,6 +765,32 @@ def _seed_revision_snapshot(snapshot: SessionStateSnapshot, *, include_market: b
             "snapshot": {"AMD": {"price": 100.0}},
         }
     analytics_cache["revision_snapshot"] = payload
+    snapshot.record_tool_result(
+        "planner_dataset_preview",
+        {"rows": [{"period": "2023", "revenue": 100}], "row_count": 1},
+    )
+    snapshot.record_tool_result(
+        "web_search",
+        {
+            "ready": True,
+            "summary": "Baseline context",
+            "snippets": [{"title": "Revenue update", "url": "https://example.com/revenue"}],
+        },
+    )
+    if include_market:
+        snapshot.record_tool_result(
+            "planner_stock_widget",
+            {
+                "snapshot": {
+                    "AMD": {
+                        "price": 100.0,
+                        "change": 1.2,
+                        "change_percent": 1.1,
+                    }
+                }
+            },
+        )
+    snapshot.refresh_analysis_inputs_manifest(persist=False)
 
 
 

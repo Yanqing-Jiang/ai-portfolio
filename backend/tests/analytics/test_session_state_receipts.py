@@ -1,19 +1,28 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
-from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 
 import pytest
 
-from analytics.artifacts.models import MarketArtifact, WebContextArtifact
+from analytics.agent_orchestrator.agent_plan import PlanState, PlanTemplate
+from analytics.artifacts.models import (
+    AnalysisArtifact,
+    ChartArtifact,
+    MarketArtifact,
+    SQLExecutionArtifact,
+    SQLGenerationArtifact,
+    WebContextArtifact,
+)
+from analytics.flows.chart_revision import RevisionContext
 from analytics.flows.planner_executor import (
     PlannerExecutorFlow,
     PlannerRevisionContext,
     ToolInvocationReceipt,
     _apply_revision_context_hints,
 )
-from analytics.flows.single_agent_tools import SingleAgentController
+from analytics.flows.single_agent_tools import SingleAgentController, _SingleAgentRunContext
 from analytics.flows.schedulers import FlowMode
 from analytics.core.session_state import ANALYSIS_INPUT_BLOCKING, SessionStateSnapshot
 
@@ -441,3 +450,137 @@ async def test_revision_context_hints_override_existing_flags() -> None:
     _apply_revision_context_hints(ctx)
 
     assert ctx.lane_refresh_required["web"] is False
+
+
+@pytest.mark.asyncio
+async def test_single_agent_seals_manifest_when_inputs_available(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Function: test_single_agent_seals_manifest_when_inputs_available -- validates planner-only single-agent runs persist SQL,
+    # dataset, and web receipts once controller._planner._persist_session_state runs so RevisionContext.load sees a sealed manifest.
+    # Invokes: SingleAgentController._planner._persist_session_state to mirror planner-mode sealing before agent runtime metadata writes.
+    repo = _InMemorySessionStateRepository()
+    monkeypatch.setattr("analytics.core.session_state.get_session_state_repository", lambda: repo)
+    monkeypatch.setattr("analytics.flows.planner_executor.get_session_state_repository", lambda: repo)
+    monkeypatch.setattr("analytics.flows.single_agent_tools.get_session_state_repository", lambda: repo)
+
+    session_id = "single-agent-manifest"
+    seed_snapshot = SessionStateSnapshot(session_id=session_id)
+    seed_snapshot.record_outputs(sql="SELECT 1")
+    await repo.save(seed_snapshot)
+
+    controller = SingleAgentController()
+    ctx = await controller._planner.initialize_context(
+        "Highlight NVDA adoption signals",
+        session_id=session_id,
+    )
+
+    ctx.artifacts.sql_execution = SQLExecutionArtifact(
+        query=ctx.query,
+        row_count=4,
+        dataset_preview=[{"period": "Q1-2025", "value": 1.23}],
+    )
+    ctx.artifacts.web = WebContextArtifact(
+        query=ctx.query,
+        summary="Customers continue to scale orders.",
+        snippets=[{"title": "Customer signal", "url": "https://example.com"}],
+    )
+    ctx.artifacts.market = MarketArtifact(
+        query=ctx.query,
+        tickers=["NVDA"],
+        snapshot={"quote": {"NVDA": 123.45}},
+    )
+    ctx.artifacts.analysis = AnalysisArtifact(
+        query=ctx.query,
+        analysis_text="Multi-quarter adoption remains strong.",
+    )
+    ctx.artifacts.chart = ChartArtifact(
+        query=ctx.query,
+        spec={
+            "mark": "line",
+            "encoding": {
+                "x": {"field": "period", "type": "ordinal"},
+                "y": {"field": "value", "type": "quantitative"},
+            },
+        },
+    )
+
+    await controller._planner._persist_session_state(
+        ctx,
+        record_artifacts=True,
+    )
+
+    snapshot = await repo.load(ctx.session_id)
+    assert snapshot is not None
+    manifest = snapshot.analysis_inputs_manifest
+    assert manifest.get("status") == "sealed"
+    assert not manifest.get("missing_components")
+    receipts = manifest.get("receipts") or {}
+    for component in ("sql", "dataset_preview", "web"):
+        assert receipts.get(component), f"Expected receipt for {component}"
+
+    revision_ctx = await RevisionContext.load(session_id, repository=repo)
+    assert revision_ctx.analysis_inputs_ready() is True
+    assert revision_ctx.analysis_inputs_missing() == []
+
+
+@pytest.mark.asyncio
+async def test_planner_executor_dataset_preview_persists_without_sql_overwrite(monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = _InMemorySessionStateRepository()
+    monkeypatch.setattr("analytics.core.session_state.get_session_state_repository", lambda: repo)
+    monkeypatch.setattr("analytics.flows.planner_executor.get_session_state_repository", lambda: repo)
+
+    session_id = "planner-dataset-preview"
+    seed_snapshot = SessionStateSnapshot(session_id=session_id)
+    seed_snapshot.record_outputs(sql="SELECT baseline_sql")
+    await repo.save(seed_snapshot)
+
+    flow = PlannerExecutorFlow(flow_mode=FlowMode.SINGLE_AGENT)
+    ctx = await flow.initialize_context("Show AMD revenue trend", session_id=session_id)
+    ctx.artifacts.sql_execution = SQLExecutionArtifact(
+        query=ctx.query,
+        row_count=2,
+        dataset_preview=[{"period": "FY24", "value": 42.0}],
+    )
+
+    await flow._persist_session_state(ctx, record_dataset_preview=True)
+
+    snapshot = await repo.load(session_id)
+    assert snapshot is not None
+    assert snapshot.last_sql == "SELECT baseline_sql"
+    manifest = snapshot.analysis_inputs_manifest
+    assert manifest.get("components", {}).get("dataset_preview", {}).get("state") == "ready"
+    receipts = manifest.get("receipts") or {}
+    assert receipts.get("dataset_preview"), "Expected dataset preview receipt id"
+    cached_preview = snapshot.tool_cache.get("planner_dataset_preview") if isinstance(snapshot.tool_cache, dict) else None
+    assert cached_preview and cached_preview.get("rows"), "Dataset preview payload should be cached"
+
+
+@pytest.mark.asyncio
+async def test_persist_session_state_emits_lane_warning_when_dataset_receipt_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = _InMemorySessionStateRepository()
+    monkeypatch.setattr("analytics.core.session_state.get_session_state_repository", lambda: repo)
+    monkeypatch.setattr("analytics.flows.planner_executor.get_session_state_repository", lambda: repo)
+
+    telemetry_calls: List[Dict[str, Any]] = []
+    monkeypatch.setattr(
+        "analytics.core.telemetry.analysis_lane_missing_artifact",
+        lambda **kwargs: telemetry_calls.append(kwargs),
+    )
+
+    flow = PlannerExecutorFlow(flow_mode=FlowMode.SINGLE_AGENT)
+    ctx = await flow.initialize_context("Highlight manifest issues", session_id="planner-missing-preview")
+    ctx.artifacts.sql_execution = SQLExecutionArtifact(
+        query=ctx.query,
+        row_count=5,
+        dataset_preview=[{"period": "FY25", "value": 100}],
+    )
+
+    await flow._persist_session_state(ctx, record_dataset_preview=False, record_artifacts=False, record_sql=False)
+
+    assert telemetry_calls, "Expected dataset receipt warning telemetry to fire"
+    warning = telemetry_calls[0]
+    assert warning["component"] == "dataset_preview"
+    assert warning["lane"] == "sql"
+    snapshot = await repo.load(ctx.session_id)
+    assert snapshot is not None
+    cached_preview = snapshot.tool_cache.get("planner_dataset_preview") if isinstance(snapshot.tool_cache, dict) else None
+    assert cached_preview is None, "Dataset preview should not be cached when persistence is skipped"

@@ -266,6 +266,7 @@ export interface SpecialistCard {
   source?: string;
   parallelGroup?: string;
   reused?: boolean;
+  sessionId?: string;
   revisionId?: string;
   revision?: boolean;
   revisionEvent?: boolean;

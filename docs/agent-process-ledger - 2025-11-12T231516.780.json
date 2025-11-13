@@ -1,0 +1,18 @@
+[
+  {
+    "id": "follow_up_route",
+    "name": "Follow-Up Guidance",
+    "status": "in_progress",
+    "thinking": [
+      "Route selected: cannot revise",
+      "Revision lanes: analysis, web"
+    ],
+    "details": {
+      "banner": {
+        "title": "Revision Not Available",
+        "message": "Start a new question to rebuild missing results before revising again.",
+        "route": "cannot_revise"
+      }
+    }
+  }
+]
