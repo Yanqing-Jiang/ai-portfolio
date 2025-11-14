@@ -912,6 +912,19 @@ class SessionStateSnapshot(BaseModel):
         if updated:
             self.touch()
 
+    def reset_agent_session(self) -> None:
+        """
+        Function: reset_agent_session -- clears cached agent metadata, manifest receipts, and manifest state
+        so fresh chats do not inherit stale planner context. Called from analytics.flows.workflow.
+        """
+        cache = self.tool_cache
+        if isinstance(cache, dict):
+            cache.pop("agent", None)
+            cache.pop("analysis_lane_receipts", None)
+            cache.pop("analysis_lane_receipts_meta", None)
+        self.analysis_inputs_manifest = {}
+        self.touch()
+
     def _build_analysis_inputs_manifest(self, timestamp_override: Optional[str]) -> Tuple[Dict[str, Any], bool]:
         payloads = self._analysis_input_payloads()
         previous_manifest = self.analysis_inputs_manifest if isinstance(self.analysis_inputs_manifest, dict) else {}

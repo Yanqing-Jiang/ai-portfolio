@@ -3114,10 +3114,18 @@ class PlannerPipeline:
                     row_count_provided = True
             has_preview_rows = bool(preview_rows and any(preview_rows))
             dataset_receipt_expected = has_preview_rows or row_count_value is not None or row_count_provided
-            should_persist_preview = (
-                (record_dataset_preview or record_artifacts or record_sql)
-                and (has_preview_rows or row_count_value is not None)
+            persist_preview_requested = any(
+                [
+                    record_dataset_preview,
+                    record_artifacts,
+                    record_sql,
+                    record_web,
+                    record_chart,
+                    record_analysis,
+                    bool(tool_bundle),
+                ]
             )
+            should_persist_preview = persist_preview_requested and (has_preview_rows or row_count_value is not None)
             if should_persist_preview:
                 sanitized_preview = sanitize_for_json(
                     {

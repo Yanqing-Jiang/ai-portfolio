@@ -261,6 +261,7 @@ async def stream_sql_lane(
     await pipeline._persist_session_state(
         ctx,
         record_sql=(not reuse_sql) and bool(ctx.artifacts.sql_generation and ctx.artifacts.sql_generation.sql),
+        record_dataset_preview=True,
         record_artifacts=True,
     )
     if not reuse_sql:

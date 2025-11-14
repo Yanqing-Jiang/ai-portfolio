@@ -134,6 +134,21 @@
 #   Called from: Internal to analytics.flows.workflow
 #   Invokes: Internal helpers only
 #   Why: Keeps analytics.flows.workflow from duplicating append session message behavior across flows.
+# Function: _parse_snapshot_timestamp
+#   Role: Normalizes ISO8601 timestamps from session snapshots into timezone-aware datetime objects.
+#   Called from: analytics.flows.workflow
+#   Invokes: datetime.fromisoformat
+#   Why: Prevents idle timeout logic from duplicating timestamp parsing across workflows.
+# Function: _session_idle_expired
+#   Role: Determines whether a session snapshot has exceeded the 30-minute idle timeout for agent reuse.
+#   Called from: analytics.flows.workflow
+#   Invokes: analytics.flows.workflow._parse_snapshot_timestamp, datetime.now
+#   Why: Keeps analytics.flows.workflow from duplicating idle timeout logic when aligning agent sessions.
+# Function: _hydrate_inputs_manifest
+#   Role: Rebuilds and persists the analysis inputs manifest plus receipts before revision routing begins.
+#   Called from: analytics.flows.workflow
+#   Invokes: analytics.core.session_state.SessionStateSnapshot.ensure_analysis_lane_receipts, analytics.core.session_state.SessionStateSnapshot.refresh_analysis_inputs_manifest
+#   Why: Prevents revision routing from acting on stale manifest data when receipts already exist.
 # Function: analytics_memory_workflow
 #   Role: Handles analytics memory workflow logic for analytics.flows.workflow.
 #   Called from: main, temp_run, tests.analytics.test_revision_routing
@@ -152,6 +167,7 @@ from typing import Any, AsyncGenerator, Callable, Dict, Iterable, List, Optional
 
 from analytics.core.events import EventEmitter
 from analytics.core.session_state import (
+    SessionStateRepository,
     SessionStateSnapshot,
     chart_spec_has_numeric_payload,
     get_session_state_repository,
@@ -840,7 +856,7 @@ async def _stream_revision_fast_path(
         flow_instance.set_revision_targets(lanes)
     if hasattr(flow_instance, "set_follow_up_route"):
         flow_instance.set_follow_up_route(follow_up_route)
-    if hasattr(flow_instance, "prime_with_snapshot") and snapshot is not None:
+    if hasattr(flow_instance, "prime_with_snapshot"):
         flow_instance.prime_with_snapshot(snapshot)
 
     revision_kwargs: Dict[str, Any] = {"reason": "revision_request", "source": "analytics_memory_workflow"}
@@ -1067,10 +1083,61 @@ def _append_session_message(
         agent_cache["message_backlog"] = backlog
     snapshot.touch()
 
+
+def _parse_snapshot_timestamp(value: Optional[str]) -> Optional[datetime]:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    if not normalized:
+        return None
+    if normalized.endswith("Z"):
+        normalized = normalized[:-1] + "+00:00"
+    try:
+        return datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+
+
+def _session_idle_expired(
+    snapshot: SessionStateSnapshot,
+    *,
+    idle_timeout_seconds: int = 30 * 60,
+) -> bool:
+    cache = snapshot.tool_cache if isinstance(snapshot.tool_cache, dict) else {}
+    agent_cache = cache.get("agent") if isinstance(cache, Mapping) else {}
+    recorded_at_value = agent_cache.get("recorded_at") if isinstance(agent_cache, Mapping) else None
+    recorded_at = _parse_snapshot_timestamp(recorded_at_value)
+    reference_ts = recorded_at or getattr(snapshot, "updated_at", None)
+    if not isinstance(reference_ts, datetime):
+        return False
+    delta = datetime.now(timezone.utc) - reference_ts
+    return delta.total_seconds() >= idle_timeout_seconds
+
+
+async def _hydrate_inputs_manifest(
+    session_id: str,
+    repository: SessionStateRepository,
+    *,
+    snapshot: Optional[SessionStateSnapshot] = None,
+) -> Optional[SessionStateSnapshot]:
+    working_snapshot = snapshot or await repository.load(session_id)
+    if working_snapshot is None:
+        return None
+    try:
+        working_snapshot.ensure_analysis_lane_receipts()
+        working_snapshot.refresh_analysis_inputs_manifest(persist=True)
+    except Exception:
+        logger.debug("Failed to hydrate analysis manifest for session %s", session_id, exc_info=True)
+        return working_snapshot
+    await repository.save(working_snapshot)
+    return working_snapshot
+
 async def analytics_memory_workflow(
     query: str,
     session_id: Optional[str] = None,
     flow: Optional[str] = None,
+    *,
+    reset_session: bool = False,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     selected = flow or os.getenv("ANALYTICS_FLOW_MODE") or DEFAULT_FLOW
     should_instrument = _env_flag("ANALYTICS_MEMORY_INSTRUMENT", default=True)
@@ -1090,10 +1157,33 @@ async def analytics_memory_workflow(
     if repository and session_id:
         snapshot = await repository.load(session_id)
         if snapshot is not None:
+            snapshot_reset = False
+            if reset_session:
+                snapshot.reset_agent_session()
+                snapshot_reset = True
+            elif _session_idle_expired(snapshot):
+                snapshot.reset_agent_session()
+                snapshot_reset = True
             try:
                 snapshot.refresh_analysis_inputs_manifest(persist=False)
             except Exception:  # pragma: no cover - defensive guard
                 logger.debug("Failed to refresh manifest before workflow start", exc_info=True)
+            if snapshot_reset:
+                try:
+                    await repository.save(snapshot)
+                except Exception:  # pragma: no cover - defensive guard
+                    logger.debug("Failed to persist reset snapshot state", exc_info=True)
+    if (
+        repository
+        and session_id
+        and snapshot is not None
+        and isinstance(snapshot.analysis_inputs_manifest, dict)
+        and snapshot.analysis_inputs_manifest.get("status") != "sealed"
+        and analysis_revision_requested
+    ):
+        hydrated = await _hydrate_inputs_manifest(session_id, repository, snapshot=snapshot)
+        if hydrated is not None:
+            snapshot = hydrated
 
     lane_readiness = _lane_readiness(snapshot)
     baseline_ready = _baseline_ready(snapshot, lane_readiness=lane_readiness)
