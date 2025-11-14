@@ -61,7 +61,7 @@ from analytics.core.events import EventEmitter
 from analytics.core import telemetry
 from analytics.core.telemetry import tool_iteration as log_tool_iteration
 from analytics.core.intent import OffTopicClassifierSchema
-from analytics.core.session_state import SessionStateSnapshot, get_session_state_repository
+from analytics.core.session_state import SessionStateSnapshot, get_session_state_repository, normalize_row_count
 from analytics.accessory_receipts import build_lane_reuse_event
 from analytics.core.cache import get_cache_service
 from analytics.validators import sanitize_for_json
@@ -1561,8 +1561,13 @@ class SingleAgentController:
         if sql_execution:
             preview_rows = getattr(sql_execution, "dataset_preview", None) or getattr(sql_execution, "sample_rows", None)
             has_rows = bool(preview_rows and any(preview_rows))
-            row_count = getattr(sql_execution, "row_count", None)
-            has_row_count = isinstance(row_count, int)
+            normalized_row_count = normalize_row_count(getattr(sql_execution, "row_count", None))
+            has_row_count = normalized_row_count is not None
+            if has_row_count:
+                try:
+                    sql_execution.row_count = normalized_row_count
+                except Exception:
+                    pass
             dataset_ready = bool(has_rows or has_row_count)
 
         chart_artifact = getattr(artifacts, "chart", None)
@@ -1882,7 +1887,7 @@ class SingleAgentController:
             queue=queue,
             revision_directive=self._revision_directive if self._agentic_revision_mode else None,
         )
-        runtime = self._build_agent_runtime(queue)
+        runtime = self._build_agent_runtime(queue, session_id)
         runtime_task = asyncio.create_task(
             runtime.run(
                 query,
@@ -1932,6 +1937,7 @@ class SingleAgentController:
         async for evt in _drain_queue():
             yield evt
 
+        await self._persist_agent_dataset_preview(ctx)
         await self._planner._persist_session_state(
             ctx,
             record_artifacts=True,
@@ -1950,6 +1956,47 @@ class SingleAgentController:
                 self._is_analysis_missing(ctx),
             ]
         )
+
+    # Function: _agent_dataset_ready
+    #   Role: Detects whether the agent runtime or cached snapshot surfaced a usable SQLExecutionArtifact payload.
+    #   Called from: _persist_agent_dataset_preview
+    #   Invokes: analytics.core.session_state.normalize_row_count
+    #   Why: Avoids redundant dataset receipt writes when agent SQL never emitted preview rows.
+    def _agent_dataset_ready(self, ctx: PlannerPhaseContext) -> bool:
+        sql_execution = getattr(ctx.artifacts, "sql_execution", None)
+        if sql_execution is None:
+            return False
+        preview_rows = getattr(sql_execution, "dataset_preview", None) or getattr(sql_execution, "sample_rows", None)
+        if isinstance(preview_rows, Iterable):
+            for candidate in preview_rows:
+                if isinstance(candidate, Mapping) and candidate:
+                    return True
+        row_count_value = normalize_row_count(getattr(sql_execution, "row_count", None))
+        if row_count_value is not None:
+            try:
+                sql_execution.row_count = row_count_value
+            except Exception:
+                pass
+            return True
+        return False
+
+    # Function: _persist_agent_dataset_preview
+    #   Role: Persists dataset preview receipts whenever the agent runtime provides SQL results outside the planner SQL lane.
+    #   Called from: _agent_run_stage
+    #   Invokes: PlannerExecutorFlow._persist_session_state
+    #   Why: Ensures single-agent flows always capture planner_dataset_preview receipts even when SQL executes via AgentRuntime.
+    async def _persist_agent_dataset_preview(self, ctx: PlannerPhaseContext) -> None:
+        if getattr(ctx, "_agent_dataset_persisted", False):
+            return
+        if not self._agent_dataset_ready(ctx):
+            return
+        await self._planner._persist_session_state(
+            ctx,
+            record_dataset_preview=True,
+            record_artifacts=False,
+            record_sql=False,
+        )
+        setattr(ctx, "_agent_dataset_persisted", True)
 
     async def _run_agent_runtime_fallback(
         self,
@@ -2040,7 +2087,9 @@ class SingleAgentController:
         session_id = run_context.session_id or ctx.session_id
         if session_id is None:
             return
-        snapshot = self._session_snapshot or (self._agent_memory.snapshot if self._agent_memory else None)
+        snapshot = None
+        if repository is not None:
+            snapshot = await repository.load(session_id)
         if snapshot is None:
             snapshot = SessionStateSnapshot(session_id=session_id)
         self._session_snapshot = snapshot
@@ -2156,10 +2205,25 @@ class SingleAgentController:
     def _build_agent_runtime(
         self,
         queue: "asyncio.Queue[Optional[Dict[str, Any]]]",
+        session_id: Optional[str],
     ) -> AgentRuntime:
         if self._agent is None:
             raise RuntimeError("Agents runtime requested but analytics agent is disabled")
-        memory = self._agent_memory or AgentMemory(self._agent_snapshot)
+        snapshot = self._session_snapshot
+        if snapshot is None or (session_id and snapshot.session_id != session_id):
+            cached_agent_snapshot = self._agent_snapshot
+            if cached_agent_snapshot and session_id and cached_agent_snapshot.session_id == session_id:
+                snapshot = cached_agent_snapshot
+            elif cached_agent_snapshot and not session_id:
+                snapshot = cached_agent_snapshot
+            elif session_id:
+                snapshot = SessionStateSnapshot(session_id=session_id)
+            else:
+                snapshot = None
+        if snapshot is None and self._agent_snapshot is not None and session_id is None:
+            snapshot = self._agent_snapshot
+        memory = self._agent_memory if self._agent_memory and self._agent_memory.snapshot is snapshot else AgentMemory(snapshot)
+        self._agent_snapshot = snapshot
         self._agent_memory = memory
         return AgentRuntime(
             agent=self._agent,

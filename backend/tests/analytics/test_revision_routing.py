@@ -233,6 +233,59 @@ async def test_baseline_pending_revision_emits_streaming_event(flow_name: str):
 
 
 @pytest.mark.asyncio
+async def test_manifest_pending_revision_never_cannot_revise() -> None:
+    session_id = "manifest-pending-baseline"
+    repo = get_session_state_repository()
+    snapshot = SessionStateSnapshot(session_id=session_id)
+    snapshot.record_outputs(
+        sql="SELECT series FROM facts",
+        analysis="Baseline narrative ready for revision.",
+    )
+    snapshot.record_tool_result(
+        "planner_dataset_preview",
+        {"rows": [{"period": "FY24", "series": 1.0}], "row_count": 1},
+    )
+    snapshot.record_tool_result(
+        "web_search",
+        {"summary": "Web context ready", "snippets": [{"title": "Update", "url": "https://example.com"}]},
+    )
+    snapshot.record_tool_result(
+        "planner_stock_widget",
+        {"snapshot": {"NVDA": {"price": 100.0}}},
+    )
+    snapshot.refresh_analysis_inputs_manifest(persist=False)
+    snapshot.analysis_inputs_manifest = {
+        "status": "pending",
+        "complete": False,
+        "blocking_components": [],
+        "components": {
+            "sql": {"lane": "sql", "state": "ready", "source": "snapshot.last_sql"},
+            "dataset_preview": {"lane": "sql", "state": "ready", "source": "tool_cache.planner_dataset_preview"},
+            "web": {"lane": "web", "state": "ready", "source": "tool_cache.web_search"},
+            "market": {"lane": "market", "state": "ready", "source": "tool_cache.planner_stock_widget"},
+        },
+    }
+    await repo.save(snapshot)
+
+    events: List[Dict[str, Any]] = []
+    async for event in analytics_memory_workflow(
+        query="analysis: highlight the latest datapoints",
+        session_id=session_id,
+        flow="single-agent",
+    ):
+        events.append(event)
+
+    follow_up_events = [evt for evt in events if evt.get("event") == "follow_up_route"]
+    assert follow_up_events, "Expected follow_up_route for pending manifest revision"
+    assert all(
+        evt.get("data", {}).get("route") != "cannot_revise" for evt in follow_up_events
+    ), "Pending manifests should not emit cannot_revise banners"
+
+    await repo.delete(session_id)
+    await close_session_state_repository()
+
+
+@pytest.mark.asyncio
 async def test_analysis_revision_runs_without_chart_lane():
     session_id = "analysis-lane-no-chart"
     repo = get_session_state_repository()

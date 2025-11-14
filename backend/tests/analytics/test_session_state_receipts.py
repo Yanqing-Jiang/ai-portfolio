@@ -24,6 +24,7 @@ from analytics.flows.planner_executor import (
 )
 from analytics.flows.single_agent_tools import SingleAgentController, _SingleAgentRunContext
 from analytics.flows.schedulers import FlowMode
+from analytics.flows.workflow import _hydrate_inputs_manifest
 from analytics.core.session_state import ANALYSIS_INPUT_BLOCKING, SessionStateSnapshot
 
 
@@ -660,3 +661,42 @@ async def test_dataset_preview_warning_for_non_numeric_row_count(monkeypatch: py
     metadata = telemetry_calls[0].get("metadata") or {}
     assert metadata.get("row_count") is None
     assert metadata.get("raw_row_count") == "unknown"
+
+
+@pytest.mark.asyncio
+async def test_manifest_hydration_seals_pending_dataset_receipts(monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = _InMemorySessionStateRepository()
+    monkeypatch.setattr("analytics.core.session_state.get_session_state_repository", lambda: repo)
+    monkeypatch.setattr("analytics.flows.planner_executor.get_session_state_repository", lambda: repo)
+
+    session_id = "manifest-hydration-pending"
+    flow = PlannerExecutorFlow(flow_mode=FlowMode.SINGLE_AGENT)
+    ctx = await flow.initialize_context("Seal manifest receipts", session_id=session_id)
+    ctx.artifacts.sql_generation = SQLGenerationArtifact(query=ctx.query, sql="SELECT series FROM facts")
+    ctx.artifacts.sql_execution = SQLExecutionArtifact(
+        query=ctx.query,
+        row_count=3,
+        dataset_preview=[
+            {"period": "FY24", "series": 1.0},
+            {"period": "FY23", "series": 0.8},
+        ],
+    )
+    await flow._persist_session_state(ctx, record_dataset_preview=True, record_artifacts=True, record_sql=True)
+
+    snapshot = await repo.load(session_id)
+    assert snapshot is not None
+    manifest = snapshot.analysis_inputs_manifest or {}
+    manifest["status"] = "pending"
+    manifest["complete"] = False
+    manifest["blocking_components"] = ["dataset_preview"]
+    snapshot.analysis_inputs_manifest = manifest
+    await repo.save(snapshot)
+
+    hydrated = await _hydrate_inputs_manifest(session_id, repo, snapshot=snapshot)
+    assert hydrated is not None
+    reloaded = await repo.load(session_id)
+    assert reloaded is not None
+    manifest = reloaded.analysis_inputs_manifest or {}
+    assert manifest.get("status") == "sealed"
+    receipts = manifest.get("receipts") or {}
+    assert receipts.get("dataset_preview"), "Dataset preview receipt should survive manifest hydration"

@@ -1407,6 +1407,7 @@ async def analytics_memory_stream_endpoint(
     request: Request,
     session_id: Optional[str] = None,
     flow: Optional[str] = Query(default=None, description="Flow name (planner-executor | single-agent | multi-agent | single-agent-legacy | multi-agent-legacy)"),
+    reset_session: bool = Query(default=False, description="Set true to clear cached agent state before running the workflow."),
     _: None = Depends(analytics_agent_rate_limit),
 ):
     """Stream analytics memory results with conversational clarifications"""
@@ -1434,6 +1435,7 @@ async def analytics_memory_stream_endpoint(
                 query=query,
                 session_id=session_id,
                 flow=selected_flow,
+                reset_session=reset_session,
             ):
                 # Convert the event to SSE format
                 event_data = json.dumps(event, default=str)
