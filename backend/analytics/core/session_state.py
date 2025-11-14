@@ -49,6 +49,11 @@
 #   Called from: analytics.core.session_state.SessionStateSnapshot.record_outputs, analytics.flows.workflow
 #   Invokes: collections.deque
 #   Why: Prevents empty chart specs from marking the chart lane ready across workflows.
+# Function: normalize_row_count
+#   Role: Convert loosely-typed row_count payloads into canonical integers.
+#   Called from: analytics.core.session_state.SessionStateSnapshot, analytics.flows.planner_executor
+#   Invokes: Built-in int parsing helpers only
+#   Why: Keeps downstream manifest logic tolerant of serialized row_count strings without duplicating coercion.
 # --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
@@ -63,6 +68,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple, TYPE_CHE
 from copy import deepcopy
 from collections import deque
 import uuid
+from decimal import Decimal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -90,6 +96,7 @@ __all__ = [
     "close_session_state_repository",
     "SnapshotRevisionContext",
     "chart_spec_has_numeric_payload",
+    "normalize_row_count",
 ]
 
 
@@ -173,6 +180,34 @@ def chart_spec_has_numeric_payload(chart_spec: Optional[Any], *, max_nodes: int 
                     continue
                 queue.append(value)
     return False
+
+
+def normalize_row_count(value: Any) -> Optional[int]:
+    """Return canonical integer row counts when the payload is numeric-like."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        if value.is_integer():
+            return int(value)
+        return None
+    if isinstance(value, Decimal):
+        try:
+            int_value = int(value)
+        except (ValueError, OverflowError):
+            return None
+        return int_value
+    if isinstance(value, str):
+        candidate = value.strip()
+        if not candidate:
+            return None
+        candidate = candidate.replace(",", "")
+        try:
+            return int(candidate)
+        except ValueError:
+            return None
+    return None
 
 
 class SessionStateSnapshot(BaseModel):
@@ -776,7 +811,8 @@ class SessionStateSnapshot(BaseModel):
                 return False
             rows = payload.get("rows")
             row_count = payload.get("row_count")
-            return bool(rows) or isinstance(row_count, int)
+            normalized_row_count = normalize_row_count(row_count)
+            return bool(rows) or normalized_row_count is not None
         if component == "market":
             if isinstance(payload, Mapping):
                 if payload.get("snapshot") or payload.get("widget") or payload.get("series"):
