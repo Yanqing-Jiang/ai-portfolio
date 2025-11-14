@@ -555,6 +555,42 @@ async def test_planner_executor_dataset_preview_persists_without_sql_overwrite(m
 
 
 @pytest.mark.asyncio
+async def test_dataset_preview_receipt_written_for_string_row_count(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    Function: test_dataset_preview_receipt_written_for_string_row_count - called from pytest runner, forwards
+    assertions to ensure PlannerExecutorFlow persists dataset receipts when SQL execution only reports row_count
+    as a string; verifies manifest sealing logic in analytics.memory revisions.
+    """
+    repo = _InMemorySessionStateRepository()
+    monkeypatch.setattr("analytics.core.session_state.get_session_state_repository", lambda: repo)
+    monkeypatch.setattr("analytics.flows.planner_executor.get_session_state_repository", lambda: repo)
+
+    session_id = "planner-dataset-preview-string-row-count"
+    flow = PlannerExecutorFlow(flow_mode=FlowMode.SINGLE_AGENT)
+    ctx = await flow.initialize_context("Capture dataset receipt edge cases", session_id=session_id)
+    ctx.artifacts.sql_generation = SQLGenerationArtifact(query=ctx.query, sql="SELECT new_metric FROM table")
+    ctx.artifacts.sql_execution = SQLExecutionArtifact(
+        query=ctx.query,
+        row_count="12",  # planner SQL lane occasionally serializes this as a string
+        dataset_preview=[],  # executor skipped preview rows due to payload size
+    )
+
+    await flow._persist_session_state(ctx, record_dataset_preview=True, record_sql=True)
+
+    snapshot = await repo.load(session_id)
+    assert snapshot is not None
+    snapshot.ensure_analysis_inputs_manifest()
+    manifest = snapshot.analysis_inputs_manifest or {}
+    dataset_state = manifest.get("components", {}).get("dataset_preview", {}).get("state")
+    assert dataset_state == "ready", "String row_count should still seal dataset preview"
+    receipts = manifest.get("receipts") or {}
+    assert receipts.get("dataset_preview"), "Expected dataset preview receipt id even without preview rows"
+    cached_preview = snapshot.tool_cache.get("planner_dataset_preview") if isinstance(snapshot.tool_cache, dict) else None
+    assert cached_preview is not None, "Dataset preview payload should be cached for manifest hydration"
+    assert cached_preview.get("row_count") == 12, "Row count should be normalized to an int in the cached preview"
+
+
+@pytest.mark.asyncio
 async def test_persist_session_state_emits_lane_warning_when_dataset_receipt_missing(monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _InMemorySessionStateRepository()
     monkeypatch.setattr("analytics.core.session_state.get_session_state_repository", lambda: repo)
@@ -584,3 +620,43 @@ async def test_persist_session_state_emits_lane_warning_when_dataset_receipt_mis
     assert snapshot is not None
     cached_preview = snapshot.tool_cache.get("planner_dataset_preview") if isinstance(snapshot.tool_cache, dict) else None
     assert cached_preview is None, "Dataset preview should not be cached when persistence is skipped"
+
+
+@pytest.mark.asyncio
+async def test_dataset_preview_warning_for_non_numeric_row_count(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    Function: test_dataset_preview_warning_for_non_numeric_row_count - called from pytest runner, forwards
+    assertions to ensure PlannerExecutorFlow emits lane warnings when SQL execution reports an unparseable
+    row_count string so manifests remain in sync with telemetry.
+    """
+    repo = _InMemorySessionStateRepository()
+    monkeypatch.setattr("analytics.core.session_state.get_session_state_repository", lambda: repo)
+    monkeypatch.setattr("analytics.flows.planner_executor.get_session_state_repository", lambda: repo)
+
+    telemetry_calls: List[Dict[str, Any]] = []
+    monkeypatch.setattr(
+        "analytics.core.telemetry.analysis_lane_missing_artifact",
+        lambda **kwargs: telemetry_calls.append(kwargs),
+    )
+
+    session_id = "planner-dataset-preview-numeric-string-warning"
+    flow = PlannerExecutorFlow(flow_mode=FlowMode.SINGLE_AGENT)
+    ctx = await flow.initialize_context("Handle malformed row counts", session_id=session_id)
+    ctx.artifacts.sql_execution = SQLExecutionArtifact(
+        query=ctx.query,
+        row_count="unknown",
+        dataset_preview=[],
+    )
+
+    await flow._persist_session_state(ctx, record_dataset_preview=True)
+
+    snapshot = await repo.load(session_id)
+    assert snapshot is not None
+    snapshot.ensure_analysis_inputs_manifest()
+    manifest = snapshot.analysis_inputs_manifest or {}
+    dataset_state = manifest.get("components", {}).get("dataset_preview", {}).get("state")
+    assert dataset_state in {"pending", "missing"}, "Manifest should stay unsealed for invalid row counts"
+    assert telemetry_calls, "Expected telemetry warning for missing dataset receipt"
+    metadata = telemetry_calls[0].get("metadata") or {}
+    assert metadata.get("row_count") is None
+    assert metadata.get("raw_row_count") == "unknown"

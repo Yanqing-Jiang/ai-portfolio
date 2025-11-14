@@ -399,6 +399,7 @@ from analytics.core.session_state import (
     SessionStateSnapshot,
     digest_tool_payload,
     get_session_state_repository,
+    normalize_row_count,
 )
 from analytics.core.lane_refresh import resolve_lane_ttls
 from analytics.core.revision_snapshot import (
@@ -2576,8 +2577,9 @@ def _hydrate_context_from_snapshot(
                 execution_artifact.dataset = list(rows)
             if execution_artifact.row_count is None:
                 row_count = preview_payload.get("row_count")
-                if isinstance(row_count, int):
-                    execution_artifact.row_count = row_count
+                normalized_row_count = normalize_row_count(row_count)
+                if normalized_row_count is not None:
+                    execution_artifact.row_count = normalized_row_count
 
 
 def _apply_revision_context_hints(ctx: PlannerPhaseContext) -> None:
@@ -3090,17 +3092,32 @@ class PlannerPipeline:
             updated = True
         execution_artifact = ctx.artifacts.sql_execution if hasattr(ctx.artifacts, "sql_execution") else None
         row_count_value: Optional[int] = None
+        raw_row_count: Any = None
         dataset_receipt_expected = False
         dataset_receipt_written = False
         if execution_artifact:
             preview_rows = getattr(execution_artifact, "dataset_preview", None) or getattr(
                 execution_artifact, "sample_rows", None
             )
-            row_count_value = getattr(execution_artifact, "row_count", None)
+            raw_row_count = getattr(execution_artifact, "row_count", None)
+            row_count_value = normalize_row_count(raw_row_count)
+            if row_count_value is not None and row_count_value != raw_row_count:
+                try:
+                    execution_artifact.row_count = row_count_value
+                except Exception:
+                    pass
+            row_count_provided = False
+            if raw_row_count is not None:
+                if isinstance(raw_row_count, str):
+                    row_count_provided = bool(raw_row_count.strip())
+                else:
+                    row_count_provided = True
             has_preview_rows = bool(preview_rows and any(preview_rows))
-            has_row_count = isinstance(row_count_value, int)
-            dataset_receipt_expected = has_preview_rows or has_row_count
-            should_persist_preview = (record_dataset_preview or record_artifacts or record_sql) and dataset_receipt_expected
+            dataset_receipt_expected = has_preview_rows or row_count_value is not None or row_count_provided
+            should_persist_preview = (
+                (record_dataset_preview or record_artifacts or record_sql)
+                and (has_preview_rows or row_count_value is not None)
+            )
             if should_persist_preview:
                 sanitized_preview = sanitize_for_json(
                     {
@@ -3220,6 +3237,7 @@ class PlannerPipeline:
                 reason="receipt_missing",
                 metadata={
                     "row_count": row_count_value,
+                    "raw_row_count": raw_row_count,
                     "record_dataset_preview": record_dataset_preview,
                     "record_sql": record_sql,
                     "record_artifacts": record_artifacts,
