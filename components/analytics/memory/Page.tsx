@@ -266,8 +266,9 @@ Multi-Agent: workload delegation & orchestration, fastest speed
     };
   }, [followUpBanner?.refreshMode]);
 
+  const showLaneReuseUi = false;
   const laneReuseBadges = useMemo(() => {
-    if (!laneReuseNotices || laneReuseNotices.length === 0) {
+    if (!showLaneReuseUi || !laneReuseNotices || laneReuseNotices.length === 0) {
       return [] as Array<{ key: string; text: string; title?: string }>;
     }
     return laneReuseNotices.map((notice) => {
@@ -282,7 +283,7 @@ Multi-Agent: workload delegation & orchestration, fastest speed
         title: notice.message ?? notice.reason ?? text,
       };
     });
-  }, [laneReuseNotices]);
+  }, [showLaneReuseUi, laneReuseNotices]);
 
   const handleAnalyticsQuery = async () => {
     if (!query.trim() || isLoading) return;
@@ -649,7 +650,7 @@ Multi-Agent: workload delegation & orchestration, fastest speed
         followUpBanner={followUpBanner}
         slotStatuses={slotStatuses}
         slotFollowups={slotFollowups}
-        laneReuseNotices={laneReuseNotices}
+        laneReuseNotices={showLaneReuseUi ? laneReuseNotices : null}
         agenticRevision={agenticRevisionActive}
         freshLaneStates={freshLaneStates}
         redirectNotice={redirectNotice}
