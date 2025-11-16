@@ -5,10 +5,10 @@
 #   Invokes: Internal helpers only
 #   Why: Keeps analytics.flows.revision_directive from duplicating normalize targets behavior across flows.
 # Class: RevisionDirective
-#   Role: Lightweight container for agentic revision metadata.
+#   Role: Lightweight container for agentic revision metadata plus Gemini keyword hints.
 #   Called from: analytics.core.session_state, analytics.flows.multi_agent, analytics.flows.planner_executor, analytics.flows.single_agent_tools, +3 more
 #   Collaborators: dataclasses.field, analytics.flows.revision_directive._normalize_targets
-#   Why: Supports downstream analytics workflows that rely on RevisionDirective.
+#   Why: Keeps revision routing, SSE, and ledgers aligned on a single directive schema.
 # --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
@@ -39,6 +39,9 @@ class RevisionDirective:
     mode: str = "manual"
     agentic: bool = False
     search_topics: List[Dict[str, Any]] = field(default_factory=list)
+    keyword_focus: Optional[str] = None
+    user_question: Optional[str] = None
+    industry_question: Optional[str] = None
 
     @classmethod
     def from_payload(
@@ -51,6 +54,9 @@ class RevisionDirective:
         agentic: bool = False,
         mode: Optional[str] = None,
         search_topics: Optional[Iterable[Any]] = None,
+        keyword_focus: Optional[str] = None,
+        user_question: Optional[str] = None,
+        industry_question: Optional[str] = None,
     ) -> "RevisionDirective":
         normalized_targets = _normalize_targets(targets)
         resolved_mode = mode or ("agentic_revision" if agentic else "manual")
@@ -75,14 +81,21 @@ class RevisionDirective:
                 if query_value:
                     topic_entries.append({"label": query_value, "query": query_value})
 
+        focus_text = str(requested_focus).strip() if requested_focus else None
+        if not focus_text and user_question:
+            focus_text = str(user_question).strip() or None
+
         return cls(
             raw_text=str(raw_text or ""),
             targets=normalized_targets,
-            requested_focus=str(requested_focus).strip() or None if requested_focus else None,
+            requested_focus=focus_text,
             chart_patch=chart_patch if chart_patch else None,
             mode=resolved_mode,
             agentic=agentic,
             search_topics=topic_entries,
+            keyword_focus=str(keyword_focus).strip() or None if keyword_focus else None,
+            user_question=str(user_question).strip() or None if user_question else None,
+            industry_question=str(industry_question).strip() or None if industry_question else None,
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -98,6 +111,12 @@ class RevisionDirective:
             payload["chart_patch"] = self.chart_patch
         if self.search_topics:
             payload["search_topics"] = [dict(item) for item in self.search_topics]
+        if self.keyword_focus:
+            payload["keyword_focus"] = self.keyword_focus
+        if self.user_question:
+            payload["user_question"] = self.user_question
+        if self.industry_question:
+            payload["industry_question"] = self.industry_question
         return payload
 
     def to_event(self, *, session_id: Optional[str] = None) -> Dict[str, Any]:
@@ -116,4 +135,10 @@ class RevisionDirective:
             event["data"]["focus"] = self.requested_focus
         if self.search_topics:
             event["data"]["search_topics"] = [item.get("query") for item in self.search_topics if item.get("query")]
+        if self.keyword_focus:
+            event["data"]["keyword_focus"] = self.keyword_focus
+        if self.user_question:
+            event["data"]["user_question"] = self.user_question
+        if self.industry_question:
+            event["data"]["industry_question"] = self.industry_question
         return event

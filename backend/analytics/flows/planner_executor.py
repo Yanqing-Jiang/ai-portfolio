@@ -1931,9 +1931,19 @@ def _reset_revision_accessories(ctx: PlannerPhaseContext, lanes: Iterable[str]) 
 
 
 def _build_revision_snapshot_payload(ctx: PlannerPhaseContext) -> Optional[Dict[str, Any]]:
-    signature = ctx.intent_signature or build_intent_signature(ctx.intent, ctx.plan or ctx.provisional_plan)
+    plan_model: Optional[QueryPlanModel] = getattr(ctx, "plan", None) or getattr(ctx, "provisional_plan", None)
+    if plan_model is None:
+        plan_model = QueryPlanModel()
+        ctx.plan = plan_model
+        ctx.provisional_plan = plan_model
+
+    signature = ctx.intent_signature or build_intent_signature(ctx.intent, plan_model)
     if signature is None:
-        return None
+        signature = {
+            "query": (ctx.query or "")[:256],
+            "generated_at": datetime.utcnow().isoformat(),
+            "reason": "missing_intent_signature",
+        }
 
     payload: Dict[str, Any] = {"intent_signature": signature}
 
@@ -1993,7 +2003,6 @@ def _build_revision_snapshot_payload(ctx: PlannerPhaseContext) -> Optional[Dict[
         except Exception:
             payload["intent"] = sanitize_for_json(intent_model)
 
-    plan_model = getattr(ctx, "plan", None) or getattr(ctx, "provisional_plan", None)
     if plan_model is not None:
         try:
             payload["plan"] = plan_model.model_dump()

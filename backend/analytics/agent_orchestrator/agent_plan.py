@@ -302,3 +302,23 @@ class PlanState:
             "updated_at": self.updated_at,
             "nodes": {name: node.serialize() for name, node in self.nodes.items()},
         }
+
+
+AGENTIC_REVISION_PLAN = PlanTemplate(
+    name="agentic_revision",
+    version="v1",
+    description="Collect keyword evidence before applying the revision lane decision.",
+    nodes=(
+        PlanTemplateNode(
+            name="collect_keyword_evidence",
+            kind="tool",
+            metadata={"description": "Gather evidence tied to the Gemini keyword bundle."},
+        ),
+        PlanTemplateNode(
+            name="apply_revision_lane",
+            kind="decision",
+            depends_on=("collect_keyword_evidence",),
+            metadata={"description": "Commit to either the chart or narrative lane based on gathered context."},
+        ),
+    ),
+)

@@ -110,7 +110,9 @@ import inspect
 
 from analytics.core import telemetry
 from analytics.core.events import EventEmitter
+from analytics.core.intent_impl.models import IntentModel
 from analytics.core.session_state import SessionStateSnapshot, get_session_state_repository
+from analytics.core.state import QueryPlanModel
 from analytics.services.response_search import (
     ResponseSearchError,
     SearchTopicPlan,
@@ -677,7 +679,7 @@ class WebRetrieverAdapter(BaseToolAdapter):
 
         force_revision_refresh = bool(getattr(context, "revision_directive", None)) or bool(
             getattr(context, "revision_search_topics", ())
-        )
+        ) or bool(getattr(context, "force_revision_refresh", False))
 
         repository = get_session_state_repository()
         snapshot = await repository.load(context.session_id)
@@ -1236,6 +1238,25 @@ async def run_tool_parallelism(
 
     intent = getattr(ctx, "intent", None)
     plan = getattr(ctx, "plan", None) or getattr(ctx, "provisional_plan", None)
+    force_revision_refresh = bool(getattr(ctx, "force_revision_refresh", False))
+    forced_refresh_context = force_revision_refresh or bool(getattr(ctx, "revision_search_topics", ()))
+    if forced_refresh_context and (intent is None or plan is None):
+        query_text = str(getattr(ctx, "query", "") or "").strip()
+        if intent is None:
+            slots = {"original_query": query_text} if query_text else {}
+            intent = IntentModel(intent_key="revision_refresh", slots_detected=slots)
+            ctx.intent = intent
+        if plan is None:
+            plan = QueryPlanModel()
+            ctx.plan = plan
+            ctx.provisional_plan = plan
+        logger.warning(
+            "tool_parallelism.forced_refresh_missing_planner_state",
+            extra={
+                "session_id": getattr(ctx, "session_id", None),
+                "reason": "fallback_intent_plan_injected",
+            },
+        )
     if not intent or not plan:
         return
 
