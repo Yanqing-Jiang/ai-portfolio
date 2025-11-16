@@ -265,7 +265,7 @@ async def test_follow_up_route_includes_revision_plan(monkeypatch):
             self.plan = dict(plan or {})
 
         def get_revision_inputs_outcome(self) -> Optional[Dict[str, str]]:
-            return {"sql": "reuse", "web": "refresh"}
+            return {"lane": "narrative", "web": "refresh"}
 
         async def run_analysis_refresh(
             self,
@@ -313,12 +313,14 @@ async def test_follow_up_route_includes_revision_plan(monkeypatch):
 
     follow_up_events = [evt for evt in events if evt.get("event") == "follow_up_route"]
     assert follow_up_events, "expected follow_up_route events"
-    assert follow_up_events[0]["data"]["revision_inputs_plan"] == {"sql": "reuse", "web": "refresh"}
+    plan_payload = follow_up_events[0]["data"]["revision_inputs_plan"]
+    assert plan_payload["lane"] == "narrative"
+    assert plan_payload["web"] == "refresh"
     outcome_events = [
         evt for evt in follow_up_events if evt.get("data", {}).get("phase") == "refresh_outcome"
     ]
     assert outcome_events, "refresh outcome follow_up_route should be emitted"
-    assert outcome_events[0]["data"]["revision_inputs_outcome"] == {"sql": "reuse", "web": "refresh"}
+    assert outcome_events[0]["data"]["revision_inputs_outcome"] == {"lane": "narrative", "web": "refresh"}
 
     await repo.delete(session_id)
     await close_session_state_repository()

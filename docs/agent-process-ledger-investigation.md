@@ -1,4 +1,9 @@
-ï»¿# Agent Process Ledger Investigation (November 14, 2025)
+# Agent Process Ledger Investigation (November 14, 2025)
+
+## Vision
+- Keep the November 7, 2025 Agentic Analytics Roadmap goals front and center by documenting how each ledger fix or test keeps revisions fully agent-driven while fresh runs stay deterministic.
+- Ensure telemetry, receipts, and manifests stay provably in sync by replaying real sessions, capturing gaps, and logging which remediation tasks are complete so Ops and UI teams can audit evidence without rereading raw ledgers.
+- Maintain a single queue for the remaining True Agentic Revision Plan deliverables (controller, UI, telemetry, and tooling updates) so engineering, product, and support execute against one authoritative source.
 
 ## Completed Work
 ### Ledger + Telemetry Stabilization
@@ -12,6 +17,8 @@
 - **Snapshot hydration for missing receipts (Nov 14 @ 22:45Z):** Ledger `docs/agent-process-ledger - 2025-11-14T174323.545.json` still surfaced `cannot_revise` because Redis held SQL/web artifacts but no `planner_dataset_preview`/`planner_stock_widget`. `SessionStateSnapshot.ensure_dataset_preview_from_revision()` now backfills both receipts from either `analytics.revision_snapshot` *or* the cached `analytics.artifacts.sql_execution`/`market.snapshot`, and new tests (`test_dataset_preview_backfilled_from_artifacts`, `test_market_receipt_backfilled_from_artifacts`) prove manifests seal automatically once artifacts exist.
 - **Forced web refresh for analysis revisions:** `_stream_revision_fast_path` (plus the fallback workflow branch) now synthesizes a minimal `RevisionDirective` whenever analysis/web lanes refresh, both SingleAgentController and MultiAgentFlow propagate `revision_inputs_plan={"sql": "reuse", "web": "refresh"}` into `ctx.force_revision_refresh`, and `WebRetrieverAdapter.execute` treats that flag the same as `revision_search_topics` so cached payloads are bypassed. After web_refresh completes, `_planner._persist_session_state(..., record_web=True)` seals the new snippets before `analysis_revision` streams. Regression coverage now includes `python -m pytest backend/tests/analytics/test_web_retriever_adapter.py -k busts_cache` and `python -m pytest backend/tests/analytics/test_revision_routing.py backend/tests/analytics/test_single_agent_flow.py`.
 - **Web refresh fallback for missing planner state (Nov 15, 2025):** `run_tool_parallelism` now injects a minimal `IntentModel` + `QueryPlanModel` whenever revisions force a web refresh but cached planner state is missing, `_build_revision_snapshot_payload` persists a deterministic fallback signature (and placeholder plan) so subsequent hydrations keep working, and `test_tool_parallelism_forced_refresh_without_planner_state` proves `web_retriever` executes instead of emitting the \"Web research unavailable\" banner.
+
+- **Agentic lane decision enforcement + plan schema normalization (Nov 16, 2025 @ 23:20Z):** `agent_orchestrator.agent_plan` now ships the `agentic_revision` template, SingleAgentController registers a strict `lane_decision` tool, and the controller executes that plan before chart/narrative refreshes so Gemini bundles, lane choices, and `revision_inputs_plan` stay aligned. `AgentRuntime.run()` automatically loads the template whenever `revision_directive.agentic` is true, raises an `analysis_revision_blocked` SSE when the agent skips the decision, and only marks `apply_revision_lane` finished after `AgentMemory` records the structured decision. Both SingleAgentController and MultiAgentFlow now default `revision_inputs_plan` to `{lane, web}`, persist the latest lane choice in session state, and `backend/tests/analytics/test_revision_routing.py::test_follow_up_route_includes_revision_plan` covers the new schema + outcomes.
 
 ### Immediate Remediation Plan (dataset receipts + OpenAI Agents-aware follow-up routing)
 - **Guaranteed dataset receipts at SQL completion:** Planner SQL lanes keep `_persist_session_state(..., record_dataset_preview=True, record_artifacts=True)` and now follow up with `_planner._persist_session_state(..., record_dataset_preview=True, record_artifacts=False, record_sql=False)` whenever OpenAI Agents surfaces fresh `SQLExecutionArtifact` data, so every single-agent SQL execution emits `planner_dataset_preview` receipts.
@@ -27,65 +34,55 @@
 - **Graceful degradation:** When targeted refreshes fail (for example, web timeout) the controllers fall back to cached artifacts, emit `web_refresh_unavailable`, and continue streaming analysis instead of raising `cannot_revise`.
 - **Regression coverage:** Planner + workflow tests confirm single-lane refreshes avoid `analysis_inputs_missing` and that ledgers explicitly document which lane refreshed versus reused.
 
-### True Agentic Revision Plan â€” Gemini + Manifest Wiring (November 16, 2025)
+### True Agentic Revision Plan - Gemini + Manifest Wiring (November 16, 2025)
 - **Gemini question service + caching:** Added `backend/analytics/services/revision_focus.py` with `RevisionQuestionBundle`, prompt builder aligned to `docs/gpt5-best-practices.md`, Gemini Flash calls with retries/telemetry, and `_fallback_revision_questions` so ledger capture no longer depends on Responses search topics. `cache_revision_questions` now persists bundles under `snapshot.tool_cache["agent"]["revision_questions"]` for both controllers.
 - **State + telemetry plumbing:** `RevisionDirective`, `SessionStateSnapshot`, and `AgentMemory` now record `keyword_focus/user_question/industry_question`, expose `record_revision_questions()` / `record_revision_lane_decision()`, and emit `agent_lane_decision` + `lane_decision_mismatch` telemetry so ledger JSON, SSEs, and Ops dashboards all surface the true Gemini hints and agent choices.
 - **Workflow routing + plan schema:** `analytics_memory_workflow` derives the Gemini bundle before streaming revisions, stores it on the snapshot, and rewrites `_build_revision_inputs_plan` / `_stream_revision_fast_path` to emit the `{lane: "chart"|"narrative", web: "refresh"|"reuse"}` schema plus the question payload. `FollowUpRoute` now includes `CHART_ONLY` / `NARRATIVE_ONLY`, and the SSE banner + plan payloads reflect which lane and web action were actually scheduled.
-- **Still outstanding:** Controllers, agent runtime/templates, frontend hooks, and ledger exports have not yet been migrated to the `{lane, web}` contractâ€”see Remaining Work for the detailed follow-ups.
+- **Status:** Items 1–3 of the True Agentic Revision Plan are complete; remaining controller, UI, and ledger deliverables are tracked below.
+
+### Agentic Revision Decision Notes (November 16, 2025)
+- **Lane-decision schema:** The new `lane_decision` tool in the `agentic_revision` plan template will emit `{"lane_decision": "chart"|"narrative", "questions": {...}}`. `AgentsStreamBridge` will recognize that tool receipt and forward it to `AgentMemory.record_lane_decision`, while `AgentRuntime.run` blocks `PlanState.mark_finished("apply_revision_lane")` and raises `analysis_revision_blocked` if no decision arrives.
+- **Agent invocation flow:** `_agent_run_stage` remains the unified runtime entry point. `run_analysis_refresh()` now executes the `agentic_revision` plan first, waits for `AgentMemory.get_lane_decision()`, persists the outcome, and only then branches into targeted chart/narrative + `run_web_refresh` paths so SSEs, telemetry, and manifests stay aligned.
+- **Gemini questions for fresh + revision web paths:** `services/response_search.py` grows a helper that always returns two prompts (user focus + industry context). Both `WebRetrieverAdapter.execute` and `_web_search_phase` emit the bundle, persist it via `SessionStateSnapshot.record_web_research_questions`, and include the questions in every `web_ready`/`web_revision_ready` SSE so revisions reuse the same hints.
+- **Frontend data model:** `WebSearchResult` / `normalizeWebContext` absorb the new question pair, and `WebSearchCard` surfaces them so the inspector + web research widget display "User question" vs "Industry context" without new streams. Because `webSearch` already powers revision prompts, no extra state slices are required.
+
 
 
 ## Remaining Work
-- **Controller + agent runtime integration:** Single- and multi-agent controllers still need to consume the `{lane, web}` schema, drive OpenAI Agents with an `agentic_revision` plan template, enforce structured lane decisions, and persist the `revision_inputs_outcome`/Gemini bundle on SSE.
-- **Frontend + SSE updates:** `useAnalyticsMemoryStream`, banner copy, and inspector panels must surface `CHART_ONLY` vs `NARRATIVE_ONLY` routes plus the Gemini questions; tests should cover the new payloads.
-- **Ledger + validation capture:** Refresh the `docs/agent-process-ledger-*.json` snapshots once controller + UI work land so ops can see the Gemini bundle, lane decisions, and `{lane, web}` plans inside the ledger exports.
+All outstanding deliverables live here so controller, UI, and ops stakeholders can work from a single queue.
 
-### True Agentic Revision Plan (Gemini-driven keyword follow-ups)
-1. **backend/analytics/services/revision_focus.py**
-   - `RevisionQuestionBundle` dataclass + `derive_revision_questions(query, revision_directive, snapshot, session_id)` stream Gemini (via `gemini_service._GenerativeModel`) to return `{keyword_focus, user_question, industry_question}` plus latency metadata logged through `analytics.core.telemetry.gemini_call(operation="revision_keywords")`. Include retries, guardrails, and `_ensure_dual_topics` fallback when Gemini is down.
-   - `_build_question_prompt(snapshot, follow_up_query)` injects `SessionStateSnapshot.last_query`, the previous analysis summary, and safety instructions before hitting Gemini. Keep the prompt knobs aligned with `docs/gpt5-best-practices.md` (Flash family, reasoning_effort="medium", temperature 0.2).
-   - `cache_revision_questions(snapshot, bundle)` persists the Gemini payload under `snapshot.tool_cache["agent"]["revision_questions"]` for reuse by both controllers and returns the cached copy so repeated revisions do not re-hit Gemini.
+### True Agentic Revision Plan (Gemini-driven keyword follow-ups — Remaining Tasks)
+1. **backend/analytics/agent_orchestrator/** — Completed Nov 16, 2025 (see Completed Work entry above); keep monitoring telemetry but no additional engineering is queued here.
 
-2. **backend/analytics/flows/revision_directive.py + backend/analytics/core/session_state.py**
-   - Extend `RevisionDirective` (`from_payload`, `to_dict`, `to_event`) with `keyword_focus`, `user_question`, `industry_question`, and make `requested_focus` default to the Gemini user-question. Ensure ledger SSE now shows these fields.
-   - Add `SessionStateSnapshot.record_revision_questions(bundle)` and `record_revision_lane_decision(lane: Literal["chart","narrative"], rationale: str, bundle: RevisionQuestionBundle)` so we can hydrate `/docs/agent-process-ledger - *.json` with the exact Gemini output plus the OpenAI agent"s decision history.
+2. **backend/analytics/flows/single_agent_tools.py**
+   - `run_analysis_refresh()` should fetch `AgentMemory.get_revision_questions()`, launch the OpenAI agent with the `agentic_revision` plan, block until `agent_memory.get_lane_decision()` completes, then branch into chart vs narrative execution while persisting `revision_inputs_outcome={"lane": lane_choice, "web": action}`.
+   - `analysis_revision()` needs to honor the Gemini bundle for telemetry/UI: only call `run_web_refresh` when the plan demands it, stream the questions through SSE (`selected_lane`, `questions`), and record `SessionStateSnapshot.record_revision_lane_decision`.
 
-3. **backend/analytics/flows/workflow.py**
-   - Rewrite `_build_revision_inputs_plan` to emit `{"lane": "chart"|"narrative", "web": "refresh"|"reuse"}` by defaulting to the Gemini hint (industry question => chart lane) and backing off to lane readiness when Gemini data is missing. Remove any SQL-specific keys.
-   - `_stream_revision_fast_path` now calls `derive_revision_questions` up front, stores the bundle via `cache_revision_questions`, passes it through `revision_inputs_plan`, and records `follow_up_route=FollowUpRoute.CHART_ONLY|NARRATIVE_ONLY`. The emitted `revision_inputs_outcome` should echo the final agent lane and web action so telemetry can compare intent vs outcome.
-   - `analytics_memory_workflow` must stop the fast path if the bundle is missing; once available, inject it into `SingleAgentController.set_revision_inputs_plan` / `MultiAgentFlow.set_revision_inputs_plan` so every flow sees the same context.
+3. **backend/analytics/flows/multi_agent.py**
+   - Finish `_normalize_revision_inputs_plan` / `set_revision_inputs_plan` so `{lane, web}` plus the Gemini bundle propagate through `_stream_sql_refresh` bypass logic while reusing cached SQL receipts.
+   - `run_analysis_refresh()` must feed the Gemini questions into the right specialists (`chart_designer` vs `analysis_writer`), persist each `lane_outcome`, and ensure SSE events document which specialist satisfied which hint.
+   - `analysis_revision()` needs to forward the Gemini questions to the chosen specialist and tag SSEs so inspectors can see who answered the user vs industry prompt.
 
-4. **backend/analytics/agent_orchestrator/**
-   - `agent_plan.py`: add an `agentic_revision` `PlanTemplate` with nodes `collect_keyword_evidence` (runs tooling prompted by Gemini questions) and `apply_revision_lane` (finalizes lane choice).
-   - `agent_runtime.py:AgentRuntime.run` loads that template when `revision_directive.agentic` is true, blocks `PlanState.mark_finished("apply_revision_lane")` until the OpenAI agent emits a structured `lane_decision` event, and surfaces a blocking SSE (`analysis_revision_blocked`, `required_action="agent_lane_decision"`) if the agent tries to skip the step.
-   - `agent_orchestrator/memory.py` stores `revision_questions` and `lane_decision` in the agent cache, exposes `get_lane_decision()` and `get_revision_questions()`, and rehydrates them for follow-up revisions so enforcement survives restarts.
+4. **backend/analytics/routing/follow_up_classifier.py + frontend banners**
+   - Teach `FollowUpClassifier.classify()` to consult the Gemini bundle (e.g., trend/visual keywords drive `CHART_ONLY`) and fall back to readiness heuristics when the bundle is absent.
+   - Update `components/analytics/hooks/useAnalyticsMemoryStream.ts` plus `FOLLOW_UP_BANNER_COPY` so the UI surfaces "Chart Revision" vs "Narrative Revision" banners and renders the Gemini questions inside inspector panes.
+   - Extend associated unit tests to cover both the routing logic and the new UI payloads.
 
-5. **backend/analytics/flows/single_agent_tools.py**
-   - `_normalize_revision_inputs_plan` / `set_revision_inputs_plan` accept the `{lane, web}` schema and seed it with the Gemini bundle when provided. Remove SQL refresh bookkeeping entirely so revisions never trigger `_stream_sql_refresh`.
-   - `SingleAgentController.run_analysis_refresh()` pulls `AgentMemory.get_revision_questions()`, launches the OpenAI agent with `agentic_revision` plan template, waits for `agent_memory.get_lane_decision()`, then dispatches either `stream_chart_lane` (chart lane, SQL cached) or `analysis_revision` (narrative lane). Persist `revision_inputs_outcome={"lane": lane_choice, "web": action}` and record `SessionStateSnapshot.record_revision_lane_decision`.
-   - `SingleAgentController.analysis_revision()` takes `selected_lane` and the Gemini bundle, only calls `run_web_refresh` when the plan demanded a refresh, and emits SSE data fields (`selected_lane`, `questions`) so frontend inspectors surface true agent behavior.
+5. **State, telemetry, and ledger plumbing**
+   - Keep growing `SessionStateSnapshot.agent_revision_questions` / `agent_lane_decisions`, hydrate them into `/docs/agent-process-ledger-*.json`, and ensure chart-only revisions still mark SQL receipts as reused in the `analysis_inputs_manifest`.
+   - Tag `analytics/core/telemetry.gemini_call` with `operation="revision_keywords"`, emit `agent_lane_decision` vs `lane_decision_mismatch` counters, and refresh ledger snapshots once controllers/UI emit the richer payloads.
 
-6. **backend/analytics/flows/multi_agent.py**
-   - Mirror the schema in `_normalize_revision_inputs_plan` and `set_revision_inputs_plan`. `run_analysis_refresh()` now bypasses `_stream_sql_refresh`, respects the Gemini bundle to decide chart vs narrative execution, and records which specialist answered which question inside `lane_outcomes`.
-   - `analysis_revision()` must forward the Gemini questions to the correct specialist (`chart_designer` vs `analysis_writer`) and emit SSE receipts linking each agent to the question they answered.
+6. **Regression + instrumentation coverage**
+   - `backend/tests/analytics/test_revision_routing.py` should assert `_build_revision_inputs_plan` emits `{lane, web}` only and carries the Gemini bundle on the directive.
+   - `backend/tests/analytics/test_single_agent_flow.py`, `test_multi_agent_flow.py`, and `backend/tests/analytics/test_session_state_receipts.py` need mocks/assertions for `derive_revision_questions`, agent lane decisions, and persistence of `revision_inputs_outcome`.
+   - `components/analytics/hooks/useAnalyticsMemoryStream.test.tsx` must cover the new SSE fields, banners, and inspector copy.
 
-7. **backend/analytics/routing/follow_up_classifier.py + frontend banners**
-   - Extend `FollowUpRoute` with `CHART_ONLY` and `NARRATIVE_ONLY`, update `FollowUpClassifier.classify()` to prefer the Gemini bundle when available (for example, `keyword_focus` containing "trend" or "chart" -> chart lane). Update `components/analytics/hooks/useAnalyticsMemoryStream.ts` and `FOLLOW_UP_BANNER_COPY` so the UI shows "Chart Revision" vs "Narrative Revision" banners tied to the new route values and surfaces the Gemini questions in the inspector panel.
+7. **backend/analytics/services/response_search.py + tooling/web retriever**
+   - Add `build_web_research_questions(query, snapshot)` to mirror `RevisionQuestionBundle` for baseline/fresh web runs (two prompts per refresh, logged via `gemini_call(operation="web_research_keywords")` with deterministic fallback when Gemini is unavailable).
+   - Wire `generate_search_topics` / `perform_response_search` so they always emit two `SearchTopicPlan` entries tagged with `question_kind` (`user` vs `industry`) and feed those into `WebRetrieverAdapter.execute` plus `run_web_refresh` helpers.
+   - Persist the bundle via `SessionStateSnapshot.record_web_research_questions` and include the two questions in `web_revision_ready` / `web_ready` SSE payloads; extend `backend/tests/analytics/test_web_retriever_adapter.py` and `backend/tests/analytics/test_response_search.py` accordingly.
 
-8. **State, telemetry, and ledger plumbing**
-   - `SessionStateSnapshot` gains `agent_revision_questions` + `agent_lane_decisions` maps plus helpers to include them in JSON exports. Update `analysis_inputs_manifest` hydration so chart-only revisions still mark SQL receipts as reused.
-   - Extend `analytics/core/telemetry.gemini_call` metrics to tag `operation="revision_keywords"` and add counters for `agent_lane_decision` vs `lane_decision_mismatch` so ops can audit agent compliance.
-   - Update `/docs/agent-process-ledger-*.json` schemas and any ledger parsing scripts to include the new question + lane decision payloads.
 
-9. **Regression + instrumentation coverage**
-   - `backend/tests/analytics/test_revision_routing.py` verifies `_build_revision_inputs_plan` emits the `{lane, web}` schema, never sets `sql`, and stores the Gemini bundle on the directive.
-   - `backend/tests/analytics/test_single_agent_flow.py` and `test_multi_agent_flow.py` mock `derive_revision_questions` + `AgentRuntime` to ensure we wait for `lane_decision`, skip SQL, and persist the right `revision_inputs_outcome`.
-   - `backend/tests/analytics/test_session_state_receipts.py` covers `record_revision_lane_decision`/`record_revision_questions` persistence, while `components/analytics/hooks/useAnalyticsMemoryStream.test.tsx` asserts the new SSE fields drive the correct banners and inspector copy.
-10. **backend/analytics/services/response_search.py + tooling/web retriever**
-    - Introduce `build_web_research_questions(query, snapshot)` that mirrors `RevisionQuestionBundle` for baseline/fresh web runs: Gemini reads the user prompt, emits two prompts (one restating the user ask, one framing the related industry context), logs latency via `gemini_call(operation="web_research_keywords")`, and falls back to deterministic topic derivation only when Gemini is unavailable.
-    - Wire `generate_search_topics` / `perform_response_search` so they accept the bundle and always emit exactly two `SearchTopicPlan` entries, tagging each plan with `question_kind` (`user` or `industry`) for telemetry and downstream SSE.
-    - Update `WebRetrieverAdapter.execute` plus the `web_refresh` helpers in `single_agent_tools.py` / `multi_agent.py` to request or reuse the bundle before hitting Gemini search, persist it via `SessionStateSnapshot.record_web_research_questions`, and include the two questions inside the emitted `web_revision_ready`/`web_ready` SSE payloads for ledger auditing.
-    - Extend `backend/tests/analytics/test_web_retriever_adapter.py` and `backend/tests/analytics/test_response_search.py` to assert that web refreshes call Gemini once per follow-up, generate the two-question plan, and gracefully fall back when Gemini is offline.
+#### Clarifications Needed (November 16, 2025)
+None. Lane schema enforcement, runtime invocation ordering, and frontend data placement decisions are captured above.
 
-## Unresolved Questions
-- Should follow-up requests be queued server-side until `lane_ready` arrives, or should the client automatically retry when it receives the "baseline still finishing" banner?
-- For sessions that exceed the 30-minute timeout or are explicitly reset by the user, should we always treat subsequent queries as completely fresh (ignoring any Agents SDK state), or allow limited reuse of non-sensitive artifacts such as cached chart specs when the same `session_id` is explicitly reused?
