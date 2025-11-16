@@ -37,7 +37,7 @@ from analytics.validators import sanitize_for_json
 from analytics.flows.agents_stream_bridge import AgentsStreamBridge
 from analytics.flows.schedulers import FlowMode, apply_mode_metadata
 
-from .agent_plan import PlanNode, PlanNodeStatus, PlanState, PlanTemplate
+from .agent_plan import AGENTIC_REVISION_PLAN, PlanNode, PlanNodeStatus, PlanState, PlanTemplate
 from .event_bus import AgentEventBus
 from .memory import AgentMemory
 
@@ -102,10 +102,14 @@ class AgentRuntime:
         queue by the time this coroutine resolves.
         """
         start_time = time.time()
+        previous_lane_ts = self._lane_decision_timestamp()
         template = plan_template or self._config.plan_template or PlanTemplate(
             name="single_agent_default",
             nodes=(),
         )
+        agentic_revision = self._is_agentic_revision(template, run_context)
+        if agentic_revision and template.name != AGENTIC_REVISION_PLAN.name:
+            template = AGENTIC_REVISION_PLAN
         plan_state = self._memory.load_plan_state(template)
         active_node_name = self._select_active_node(plan_state)
         plan_state.mark_running(active_node_name)
@@ -173,6 +177,13 @@ class AgentRuntime:
             raise
 
         final_output = self._extract_final_output(run_result)
+        if agentic_revision and not self._has_fresh_lane_decision(previous_lane_ts):
+            await self._handle_missing_lane_decision(
+                session_id=session_id,
+                plan_state=plan_state,
+                node_name=active_node_name,
+            )
+            raise RuntimeError("agent_lane_decision_missing")
         plan_state.record_artifacts(active_node_name, {"final_output": final_output})
         plan_state.mark_finished(active_node_name, PlanNodeStatus.SUCCEEDED)
         self._memory.persist_plan_state(plan_state)
@@ -280,3 +291,84 @@ class AgentRuntime:
         if isinstance(final_output, str):
             return {"analysis": final_output, "analysis_length": len(final_output)}
         return {"analysis": str(final_output), "analysis_length": len(str(final_output))}
+
+    def _lane_decision_timestamp(self) -> Optional[str]:
+        try:
+            decision = self._memory.get_lane_decision()
+        except Exception:  # pragma: no cover - defensive
+            return None
+        if isinstance(decision, Mapping):
+            ts_value = decision.get("ts")
+            if ts_value is None:
+                return None
+            return str(ts_value)
+        return None
+
+    def _has_fresh_lane_decision(self, previous_ts: Optional[str]) -> bool:
+        try:
+            latest = self._memory.get_lane_decision()
+        except Exception:  # pragma: no cover - defensive
+            return False
+        if not isinstance(latest, Mapping):
+            return False
+        latest_ts = latest.get("ts")
+        if latest_ts is None:
+            return previous_ts is None
+        return str(latest_ts) != str(previous_ts or "")
+
+    def _extract_revision_directive(self, run_context: Optional[Any]) -> Optional[Any]:
+        if run_context is None:
+            return None
+        directive = getattr(run_context, "revision_directive", None)
+        if directive is not None:
+            return directive
+        if isinstance(run_context, Mapping):
+            candidate = run_context.get("revision_directive")
+            if candidate is not None:
+                return candidate
+        metadata = getattr(run_context, "metadata", None)
+        if isinstance(metadata, Mapping):
+            return metadata.get("revision_directive")
+        return None
+
+    def _is_agentic_revision(self, template: PlanTemplate, run_context: Optional[Any]) -> bool:
+        if template and template.name == AGENTIC_REVISION_PLAN.name:
+            return True
+        directive = self._extract_revision_directive(run_context)
+        return bool(directive and getattr(directive, "agentic", False))
+
+    async def _handle_missing_lane_decision(
+        self,
+        *,
+        session_id: Optional[str],
+        plan_state: PlanState,
+        node_name: str,
+    ) -> None:
+        node = plan_state.nodes.get(node_name)
+        if node is not None:
+            try:
+                node.increment_retry()
+            except Exception:  # pragma: no cover - defensive
+                node.status = PlanNodeStatus.PENDING
+                node.started_at = None
+                node.finished_at = None
+        self._memory.persist_plan_state(plan_state)
+        payload = {
+            "required_action": "agent_lane_decision",
+            "reason": "lane_decision_missing",
+            "agentic_revision": True,
+        }
+        if session_id:
+            payload["session_id"] = session_id
+        try:
+            await self._event_bus.publish("analysis_revision_blocked", payload)
+        except Exception:  # pragma: no cover - defensive
+            self._logger.exception("Failed to publish analysis_revision_blocked event")
+        telemetry.tool_iteration(
+            tool="agent_controller",
+            status="blocked",
+            step=node_name,
+            session_id=session_id,
+            flow="single-agent",
+            details={"reason": "lane_decision_missing"},
+        )

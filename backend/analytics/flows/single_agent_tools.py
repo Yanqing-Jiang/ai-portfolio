@@ -19,6 +19,16 @@
 #   Called from: tests.analytics.test_single_agent_cohesive_payload, tests.analytics.test_single_agent_flow
 #   Invokes: analytics.validators.sanitize_for_json, copy.deepcopy, analytics.flows.planner_executor._build_analysis_source_summaries
 #   Why: Keeps analytics.flows.single_agent_tools from duplicating build single agent cohesive payload behavior across flows.
+# Function: _build_lane_decision_tool
+#   Role: Emits a synthetic FunctionTool that lets the OpenAI agent persist lane selections and Gemini bundles.
+#   Called from: SingleAgentController.__init__
+#   Invokes: analytics.flows.single_agent_tools._record_lane_decision, analytics.services.revision_focus.RevisionQuestionBundle.from_dict, analytics.core.events.EventEmitter.status
+#   Why: Ensures agentic revision runs can stream structured lane decisions before the planner executes chart or narrative refreshes.
+# Function: _stream_agentic_lane_selection
+#   Role: Runs the dedicated agentic revision plan and forwards streaming SSE events back to the caller.
+#   Called from: analytics.flows.single_agent_tools.run_analysis_refresh
+#   Invokes: analytics.agent_orchestrator.AgentRuntime.run, analytics.flows.single_agent_tools._persist_runtime_metadata
+#   Why: Keeps the lane-decision handshake inside run_analysis_refresh without relying on the planner sequencer fallback path.
 # Function: _apply_lane_transition_event
 #   Role: Updates cached lane state snapshots when planner lane transitions fire.
 #   Called from: tests.analytics.test_single_agent_flow
@@ -60,6 +70,7 @@ from analytics.agent_orchestrator import (
     AgentRuntimeConfig,
     AgentRuntimeResult,
     PlanTemplate,
+    AGENTIC_REVISION_PLAN,
 )
 from analytics.artifacts.models import PipelineArtifacts
 from analytics.core.events import EventEmitter
@@ -1332,6 +1343,7 @@ class SingleAgentController:
                 self._build_function_tool(tool_definition)
                 for tool_definition in self._registry.list_tools()
             ]
+            self._function_tools.append(self._build_lane_decision_tool())
             instructions = self._agent_settings.get(
                 "instructions",
                 (
@@ -1358,7 +1370,7 @@ class SingleAgentController:
         self._lane_warning_events: Deque[Dict[str, Any]] = deque()
         self._lane_warning_emitted: Set[str] = set()
         self._pending_lane_reuse_events: Deque[Dict[str, Any]] = deque()
-        self._revision_inputs_plan: Dict[str, str] = {"sql": "reuse", "web": "refresh"}
+        self._revision_inputs_plan: Dict[str, str] = {"lane": "narrative", "web": "refresh"}
         self._revision_inputs_outcome: Optional[Dict[str, str]] = None
 
     def set_session_follow_up(self, follow_up: bool) -> None:
@@ -2027,9 +2039,73 @@ class SingleAgentController:
         if missing_market:
             async for event in self._market_stage():
                 yield event
-        if missing_analysis:
-            async for event in self._analysis_stage():
+                if missing_analysis:
+                    async for event in self._analysis_stage():
+                        yield event
+
+    async def _stream_agentic_lane_selection(
+        self,
+        *,
+        session_id: str,
+        query: str,
+        revision_directive: Optional["RevisionDirective"],
+        reason: Optional[str],
+        source: Optional[str],
+        apply_revision_context: Optional[Any] = None,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        queue: "asyncio.Queue[Optional[Dict[str, Any]]]" = asyncio.Queue()
+        ctx = await self._planner.initialize_context(query or "", session_id=session_id)
+        if apply_revision_context:
+            try:
+                apply_revision_context(ctx)
+            except Exception:  # pragma: no cover - defensive
+                logger.debug("Failed to apply revision context for agentic lane selection", exc_info=True)
+        run_context = _SingleAgentRunContext(
+            controller=self,
+            session_id=session_id,
+            query=query or "",
+            queue=queue,
+            revision_directive=revision_directive,
+        )
+        runtime = self._build_agent_runtime(queue, session_id)
+        runtime_task = asyncio.create_task(
+            runtime.run(
+                query or "",
+                session_id=session_id,
+                run_context=run_context,
+                plan_template=AGENTIC_REVISION_PLAN,
+            )
+        )
+
+        try:
+            while True:
+                if runtime_task.done() and queue.empty():
+                    break
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=0.1)
+                except asyncio.TimeoutError:
+                    continue
+                if event is None:
+                    continue
                 yield event
+        finally:
+            runtime_result: Optional[AgentRuntimeResult] = None
+            runtime_exc: Optional[BaseException] = None
+            try:
+                runtime_result = await asyncio.shield(runtime_task)
+            except BaseException as exc:  # pragma: no cover - propagate failure
+                runtime_exc = exc
+            if runtime_result is not None:
+                try:
+                    await self._persist_runtime_metadata(
+                        runtime_result=runtime_result,
+                        run_context=run_context,
+                        ctx=ctx,
+                    )
+                except Exception:  # pragma: no cover - defensive logging
+                    logger.exception("Failed to persist agentic lane selection metadata")
+            if runtime_exc is not None:
+                raise runtime_exc
 
     @staticmethod
     def _is_sql_missing(ctx: PlannerPhaseContext) -> bool:
@@ -2535,6 +2611,163 @@ class SingleAgentController:
             name=definition.name,
             description=definition.description,
             params_json_schema=sanitize_for_json(params_schema) if params_schema else {},
+            on_invoke_tool=_on_invoke,
+            strict_json_schema=True,
+        )
+
+    def _build_lane_decision_tool(self) -> FunctionTool:
+        params_schema: Dict[str, Any] = {
+            "type": "object",
+            "properties": {
+                "lane": {
+                    "type": "string",
+                    "enum": ["chart", "narrative"],
+                    "description": "Which revision lane to apply.",
+                },
+                "lane_decision": {
+                    "type": "string",
+                    "enum": ["chart", "narrative"],
+                    "description": "Alias for lane.",
+                },
+                "web": {
+                    "type": "string",
+                    "enum": ["refresh", "reuse"],
+                    "description": "Whether to refresh or reuse cached web context.",
+                },
+                "refresh_web": {"type": "boolean"},
+                "rationale": {"type": "string"},
+                "questions": {
+                    "type": "object",
+                    "properties": {
+                        "keyword_focus": {"type": "string"},
+                        "user_question": {"type": "string"},
+                        "industry_question": {"type": "string"},
+                    },
+                },
+                "keyword_focus": {"type": "string"},
+                "user_question": {"type": "string"},
+                "industry_question": {"type": "string"},
+            },
+            "required": ["lane"],
+            "additionalProperties": False,
+        }
+
+        async def _on_invoke(tool_ctx: ToolContext[Any], args_json: str) -> str:
+            run_context = tool_ctx.context
+            if not isinstance(run_context, _SingleAgentRunContext):
+                return json.dumps(
+                    {
+                        "status": "error",
+                        "error_code": "INVALID_CONTEXT",
+                        "summary": "Lane decision tool requires the single-agent run context.",
+                    }
+                )
+            try:
+                parsed_args = json.loads(args_json) if args_json else {}
+                if not isinstance(parsed_args, dict):
+                    raise ValueError("arguments must be a JSON object")
+            except Exception:
+                return json.dumps(
+                    {
+                        "status": "error",
+                        "error_code": "INVALID_TOOL_ARGS",
+                        "summary": "Unable to parse lane decision arguments.",
+                    }
+                )
+
+            lane_value = parsed_args.get("lane") or parsed_args.get("lane_decision")
+            lane = str(lane_value or "").strip().lower()
+            if lane not in {"chart", "narrative"}:
+                return json.dumps(
+                    {
+                        "status": "error",
+                        "error_code": "INVALID_LANE",
+                        "summary": "Lane decision must be either 'chart' or 'narrative'.",
+                    }
+                )
+
+            web_value = parsed_args.get("web") or parsed_args.get("web_action")
+            refresh_flag = parsed_args.get("refresh_web")
+            web_action = "refresh" if str(web_value or "").strip().lower() == "refresh" else "reuse"
+            if refresh_flag is True:
+                web_action = "refresh"
+
+            rationale_text = str(parsed_args.get("rationale") or "").strip()
+            rationale = rationale_text or f"agent_selected:{lane}"
+
+            questions_payload = parsed_args.get("questions")
+            if not isinstance(questions_payload, Mapping):
+                questions_payload = {
+                    "keyword_focus": parsed_args.get("keyword_focus"),
+                    "user_question": parsed_args.get("user_question"),
+                    "industry_question": parsed_args.get("industry_question"),
+                }
+            sanitized_questions = {
+                "keyword_focus": (str(questions_payload.get("keyword_focus") or "").strip() or None),
+                "user_question": (str(questions_payload.get("user_question") or "").strip() or None),
+                "industry_question": (str(questions_payload.get("industry_question") or "").strip() or None),
+            }
+            sanitized_questions = {
+                key: value for key, value in sanitized_questions.items() if isinstance(value, str) and value
+            }
+
+            bundle_obj: Optional[RevisionQuestionBundle] = None
+            if sanitized_questions:
+                try:
+                    bundle_obj = RevisionQuestionBundle.from_dict(sanitized_questions)
+                except Exception:
+                    bundle_obj = None
+            if bundle_obj:
+                self._revision_question_bundle = bundle_obj
+
+            self._record_lane_decision(
+                lane=lane,
+                planned_lane=lane,
+                questions=bundle_obj,
+                session_id=run_context.session_id,
+            )
+            plan_payload: Dict[str, Any] = {
+                "lane": lane,
+                "web": web_action,
+            }
+            if sanitized_questions:
+                plan_payload["questions"] = dict(sanitized_questions)
+            self._revision_inputs_plan = plan_payload
+            self._revision_inputs_outcome = None
+
+            event = EventEmitter.status(
+                "agent_lane_decision",
+                "Agent selected a revision lane.",
+            )
+            event["event"] = "agent_lane_decision"
+            event_data = event.setdefault("data", {})
+            event_data.update(
+                {
+                    "selected_lane": lane,
+                    "web": web_action,
+                    "rationale": rationale,
+                    "questions": sanitized_questions or None,
+                    "agentic_revision": True,
+                }
+            )
+            if run_context.session_id:
+                event_data["session_id"] = run_context.session_id
+            annotated = apply_mode_metadata(event, self.flow_mode)
+            await run_context.queue.put(annotated)
+
+            return json.dumps(
+                {
+                    "status": "recorded",
+                    "lane": lane,
+                    "web": web_action,
+                    "questions": sanitized_questions or None,
+                }
+            )
+
+        return FunctionTool(
+            name="lane_decision",
+            description="Persist the selected revision lane and Gemini question bundle.",
+            params_json_schema=sanitize_for_json(params_schema),
             on_invoke_tool=_on_invoke,
             strict_json_schema=True,
         )
@@ -4244,6 +4477,55 @@ class SingleAgentController:
         lane_hint = normalized_plan.get("lane", "narrative")
         web_action = normalized_plan.get("web", "reuse")
         questions_bundle = self._resolve_revision_questions(normalized_plan)
+        agentic_revision_active = bool(revision_directive and getattr(revision_directive, "agentic", False))
+        agentic_lane_entry: Optional[Mapping[str, Any]] = None
+        previous_lane_ts: Optional[str] = None
+        if self._agent_memory:
+            existing_lane_payload = self._agent_memory.get_lane_decision()
+            if isinstance(existing_lane_payload, Mapping):
+                previous_lane_ts = str(existing_lane_payload.get("ts") or "")
+
+        if agentic_revision_active and self._agent is not None:
+            async for event in self._stream_agentic_lane_selection(
+                session_id=session_id,
+                query=query or "",
+                revision_directive=revision_directive,
+                reason=reason,
+                source=source or "agentic_revision",
+                apply_revision_context=_apply_revision_context,
+            ):
+                yield event
+            if self._agent_memory:
+                latest_lane = self._agent_memory.get_lane_decision()
+                if isinstance(latest_lane, Mapping):
+                    latest_ts = str(latest_lane.get("ts") or "")
+                    if not previous_lane_ts or latest_ts != previous_lane_ts:
+                        agentic_lane_entry = dict(latest_lane)
+            if agentic_lane_entry is None:
+                raise RuntimeError("Agent lane decision missing; cannot continue revision.")
+            lane_from_agent = str(agentic_lane_entry.get("lane") or "").strip().lower()
+            if lane_from_agent in {"chart", "narrative"}:
+                lane_hint = lane_from_agent
+            web_candidate = str(agentic_lane_entry.get("web") or "").strip().lower()
+            if web_candidate in {"refresh", "reuse"}:
+                web_action = web_candidate
+            agent_questions = agentic_lane_entry.get("questions")
+            if isinstance(agent_questions, Mapping):
+                try:
+                    questions_bundle = RevisionQuestionBundle.from_dict(agent_questions)
+                except Exception:  # pragma: no cover - defensive
+                    logger.debug("Failed to parse agent lane decision questions", exc_info=True)
+            if questions_bundle is not None:
+                self._revision_question_bundle = questions_bundle
+            updated_plan: Dict[str, Any] = {"lane": lane_hint, "web": web_action}
+            if questions_bundle:
+                updated_plan["questions"] = questions_bundle.to_dict()
+            self._revision_inputs_plan = updated_plan
+        elif agentic_revision_active and self._agent is None:
+            logger.warning(
+                "Agentic revision requested but agent runtime is disabled; falling back to planner inputs.",
+                extra={"session_id": session_id},
+            )
 
         ctx = await self._planner.initialize_context(query or "", session_id=session_id)
         _apply_revision_context(ctx)
@@ -4262,12 +4544,13 @@ class SingleAgentController:
         if revision_directive is not None:
             revision_directive.selected_lane = selected_lane  # type: ignore[attr-defined]
 
-        self._record_lane_decision(
-            lane=selected_lane,
-            planned_lane=lane_hint if isinstance(lane_hint, str) else "narrative",
-            questions=questions_bundle,
-            session_id=session_id,
-        )
+        if agentic_lane_entry is None:
+            self._record_lane_decision(
+                lane=selected_lane,
+                planned_lane=lane_hint if isinstance(lane_hint, str) else "narrative",
+                questions=questions_bundle,
+                session_id=session_id,
+            )
 
         if web_action == "refresh":
             async for event in self.run_web_refresh(

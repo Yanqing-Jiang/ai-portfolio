@@ -1686,7 +1686,7 @@ class MultiAgentFlow:
         self._session_follow_up = False
         self._agent_tool_counters: Dict[str, int] = {}
         self._agent_tool_active_ids: Dict[str, str] = {}
-        self._revision_inputs_plan: Dict[str, str] = {"sql": "reuse", "web": "refresh"}
+        self._revision_inputs_plan: Dict[str, str] = {"lane": "narrative", "web": "refresh"}
         self._revision_inputs_outcome: Optional[Dict[str, str]] = None
 
     def _abort_stale_sequencer(self, *, reason: str = "restart") -> None:
