@@ -54,6 +54,21 @@
 #   Called from: analytics.core.session_state.SessionStateSnapshot, analytics.flows.planner_executor
 #   Invokes: Built-in int parsing helpers only
 #   Why: Keeps downstream manifest logic tolerant of serialized row_count strings without duplicating coercion.
+# Function: ensure_dataset_preview_from_revision
+#   Role: Rehydrates planner_dataset_preview / planner_stock_widget when cached revision snapshots or artifacts contain usable data but receipts went missing.
+#   Called from: analytics.flows.workflow
+#   Invokes: analytics.core.session_state.SessionStateSnapshot.record_tool_result, analytics.core.session_state.normalize_row_count
+#   Why: Prevents analysis revisions from regressing when SQL + market artifacts exist but tool receipts were lost.
+# Function: SessionStateSnapshot.record_revision_questions
+#   Role: Persists Gemini revision keyword bundles for telemetry and ledger exports.
+#   Called from: analytics.services.revision_focus, analytics.flows.workflow, analytics.flows.single_agent_tools
+#   Invokes: datetime.now, analytics.services.revision_focus.cache_revision_questions
+#   Why: Keeps downstream controllers and inspectors aligned on the prompts agents actually received.
+# Function: SessionStateSnapshot.record_revision_lane_decision
+#   Role: Captures the selected revision lane plus rationale for auditing agent decisions.
+#   Called from: analytics.flows.single_agent_tools, analytics.flows.multi_agent
+#   Invokes: datetime.now
+#   Why: Ensures ledgers and SSE surface the final lane decision and supporting Gemini hints.
 # --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
@@ -64,7 +79,7 @@ import json
 import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple, TYPE_CHECKING
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple, TYPE_CHECKING, Literal
 from copy import deepcopy
 from collections import deque
 import uuid
@@ -239,6 +254,8 @@ class SessionStateSnapshot(BaseModel):
     agents_delegation_policy_version: Optional[str] = None
     agents_delegation_decisions: List[Dict[str, Any]] = Field(default_factory=list)
     analysis_inputs_manifest: Dict[str, Any] = Field(default_factory=dict)
+    agent_revision_questions: List[Dict[str, Any]] = Field(default_factory=list)
+    agent_lane_decisions: List[Dict[str, Any]] = Field(default_factory=list)
 
     model_config = {
         "extra": "allow",
@@ -309,6 +326,104 @@ class SessionStateSnapshot(BaseModel):
         self.last_revision_directive = payload
         self.touch()
 
+    def record_revision_questions(self, bundle: Any) -> Dict[str, Any]:
+        """Persist the Gemini keyword bundle for ledger hydration."""
+        if hasattr(bundle, "to_dict"):
+            try:
+                payload = dict(bundle.to_dict())  # type: ignore[arg-type]
+            except Exception:
+                payload = {}
+        elif isinstance(bundle, Mapping):
+            payload = dict(bundle)
+        else:
+            payload = {
+                "keyword_focus": getattr(bundle, "keyword_focus", None),
+                "user_question": getattr(bundle, "user_question", None),
+                "industry_question": getattr(bundle, "industry_question", None),
+                "model": getattr(bundle, "model", None),
+                "latency_ms": getattr(bundle, "latency_ms", None),
+                "follow_up_query": getattr(bundle, "follow_up_query", None),
+                "fingerprint": getattr(bundle, "fingerprint", None),
+                "source": getattr(bundle, "source", None),
+                "fallback_reason": getattr(bundle, "fallback_reason", None),
+            }
+        entry = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "keyword_focus": (str(payload.get("keyword_focus") or "").strip()),
+            "user_question": (str(payload.get("user_question") or "").strip()),
+            "industry_question": (str(payload.get("industry_question") or "").strip()),
+            "model": (str(payload.get("model") or "").strip() or None),
+            "latency_ms": payload.get("latency_ms"),
+            "follow_up_query": (str(payload.get("follow_up_query") or "").strip() or None),
+            "fingerprint": (str(payload.get("fingerprint") or "").strip() or None),
+            "source": (str(payload.get("source") or "").strip() or None),
+            "fallback_reason": (str(payload.get("fallback_reason") or "").strip() or None),
+        }
+        questions = self.agent_revision_questions
+        if not isinstance(questions, list):
+            self.agent_revision_questions = []
+            questions = self.agent_revision_questions
+        questions.append(entry)
+        if len(questions) > 25:
+            del questions[:-25]
+        self.touch()
+        try:  # pragma: no cover - lazy import
+            from analytics.services.revision_focus import cache_revision_questions, RevisionQuestionBundle  # type: ignore
+        except Exception:
+            return entry
+        try:
+            if isinstance(bundle, RevisionQuestionBundle):
+                cache_revision_questions(self, bundle)
+            else:
+                cached_bundle = RevisionQuestionBundle.from_dict(payload)  # type: ignore[arg-type]
+                cache_revision_questions(self, cached_bundle)
+        except Exception:
+            logger.debug("Failed to cache revision questions", exc_info=True)
+        return entry
+
+    def record_revision_lane_decision(
+        self,
+        *,
+        lane: Literal["chart", "narrative"],
+        rationale: str,
+        bundle: Optional[Any] = None,
+        decision_source: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Record the lane chosen by the agent runtime."""
+        normalized_lane = str(lane or "").strip().lower() or lane
+        entry: Dict[str, Any] = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "lane": normalized_lane,
+            "rationale": rationale.strip(),
+            "source": decision_source,
+        }
+        if bundle is not None:
+            if hasattr(bundle, "to_dict"):
+                try:
+                    payload = dict(bundle.to_dict())  # type: ignore[arg-type]
+                except Exception:
+                    payload = {}
+            elif isinstance(bundle, Mapping):
+                payload = dict(bundle)
+            else:
+                payload = {
+                    "keyword_focus": getattr(bundle, "keyword_focus", None),
+                    "user_question": getattr(bundle, "user_question", None),
+                    "industry_question": getattr(bundle, "industry_question", None),
+                }
+            entry["keyword_focus"] = (str(payload.get("keyword_focus") or "").strip() or None)
+            entry["user_question"] = (str(payload.get("user_question") or "").strip() or None)
+            entry["industry_question"] = (str(payload.get("industry_question") or "").strip() or None)
+        decisions = self.agent_lane_decisions
+        if not isinstance(decisions, list):
+            self.agent_lane_decisions = []
+            decisions = self.agent_lane_decisions
+        decisions.append(entry)
+        if len(decisions) > 25:
+            del decisions[:-25]
+        self.touch()
+        return entry
+
     def record_tool_result(self, tool: str, payload: Dict[str, Any]) -> None:
         if not isinstance(self.tool_cache, dict):
             self.tool_cache = {}
@@ -327,6 +442,89 @@ class SessionStateSnapshot(BaseModel):
             )
             self.refresh_analysis_inputs_manifest(persist=False)
         self.touch()
+
+    def ensure_dataset_preview_from_revision(self) -> bool:
+        """
+        Function: ensure_dataset_preview_from_revision -- seeds planner_dataset_preview / planner_stock_widget from
+        cached revision snapshots or artifacts so manifest hydration can seal receipts. Called from analytics.flows.workflow.
+        """
+        tool_cache = self.tool_cache if isinstance(self.tool_cache, dict) else {}
+        analytics_cache = tool_cache.get("analytics") if isinstance(tool_cache, Mapping) else None
+        revision_snapshot = (
+            analytics_cache.get("revision_snapshot")
+            if isinstance(analytics_cache, Mapping)
+            else None
+        )
+        artifacts_snapshot = (
+            analytics_cache.get("artifacts")
+            if isinstance(analytics_cache, Mapping)
+            else None
+        )
+
+        dataset_ready = self._analysis_component_ready(
+            "dataset_preview", tool_cache.get("planner_dataset_preview")
+        )
+        market_ready = self._analysis_component_ready(
+            "market", tool_cache.get("planner_stock_widget")
+        )
+        seeded = False
+
+        def _coerce_rows(raw: Any) -> List[Dict[str, Any]]:
+            rows: List[Dict[str, Any]] = []
+            if isinstance(raw, (list, tuple)):
+                for entry in raw:
+                    if isinstance(entry, Mapping) and entry:
+                        rows.append(dict(entry))
+            return rows
+
+        def _seed_dataset(rows_payload: Any, row_count_hint: Any) -> bool:
+            normalized_rows = _coerce_rows(rows_payload)
+            if not normalized_rows:
+                return False
+            normalized_count = normalize_row_count(row_count_hint)
+            payload: Dict[str, Any] = {"rows": normalized_rows}
+            if normalized_count is not None:
+                payload["row_count"] = normalized_count
+            self.record_tool_result("planner_dataset_preview", sanitize_for_json(payload))
+            return True
+
+        def _seed_market(snapshot_payload: Any) -> bool:
+            if not isinstance(snapshot_payload, Mapping) or not snapshot_payload:
+                return False
+            sanitized = sanitize_for_json(snapshot_payload)
+            self.record_tool_result("planner_stock_widget", sanitized)
+            return True
+
+        if not dataset_ready:
+            rows_candidate = None
+            row_count_candidate = None
+            if isinstance(revision_snapshot, Mapping):
+                rows_candidate = revision_snapshot.get("data_sample")
+                row_count_candidate = revision_snapshot.get("sql_row_count")
+            if not rows_candidate and isinstance(artifacts_snapshot, Mapping):
+                sql_exec = artifacts_snapshot.get("sql_execution")
+                if isinstance(sql_exec, Mapping):
+                    rows_candidate = (
+                        sql_exec.get("dataset_preview") or sql_exec.get("sample_rows")
+                    )
+                    row_count_candidate = sql_exec.get("row_count")
+            if rows_candidate and _seed_dataset(rows_candidate, row_count_candidate):
+                dataset_ready = True
+                seeded = True
+
+        if not market_ready:
+            market_payload = None
+            if isinstance(revision_snapshot, Mapping):
+                market_payload = revision_snapshot.get("stock_widget")
+            if not isinstance(market_payload, Mapping) and isinstance(artifacts_snapshot, Mapping):
+                market_artifact = artifacts_snapshot.get("market")
+                if isinstance(market_artifact, Mapping):
+                    market_payload = market_artifact.get("snapshot")
+            if market_payload and _seed_market(market_payload):
+                market_ready = True
+                seeded = True
+
+        return seeded
 
     def record_tool_receipt(self, tool: str, payload: Dict[str, Any]) -> None:
         receipts = self.tool_cache.setdefault("tool_receipts", {})

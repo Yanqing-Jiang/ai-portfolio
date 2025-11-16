@@ -721,6 +721,48 @@ async def test_tool_parallelism_streams_results_immediately():
     assert ctx.tool_parallel_results[0]["tool"] == "market_question_a"
 
 
+@pytest.mark.asyncio
+async def test_tool_parallelism_forced_refresh_without_planner_state():
+    class RefreshAdapter(BaseToolAdapter):
+        name = "web_retriever"
+        display_name = "Web Retriever"
+
+        async def execute(self, context):
+            return ToolAdapterResult(
+                name=self.name,
+                status="completed",
+                payload={"ready": True, "summary": "forced refresh ran"},
+                metadata={"alias": self.name},
+                fatal=False,
+            )
+
+    ctx = planner_executor.PlannerPhaseContext(
+        query="Refresh the analysis narrative",
+        session_id="force-refresh-session",
+        workflow_start=time.time(),
+        timed_emitter=planner_executor.TimedEventEmitter(session_id="force-refresh-session", flow="test"),
+        flow_mode=planner_executor.FlowMode.SINGLE_AGENT,
+        parallelism_enabled=True,
+    )
+    ctx.force_revision_refresh = True
+    ctx.intent = None
+    ctx.plan = None
+    ctx.provisional_plan = None
+
+    events = []
+    async for event in planner_executor.run_tool_parallelism(
+        ctx,
+        adapters=(RefreshAdapter(),),
+        concurrency_override=1,
+    ):
+        events.append(event)
+
+    tool_events = [evt for evt in events if evt.get("event") == "tool_parallel_result"]
+    assert tool_events, "forced refresh should emit tool results even without cached planner state"
+    assert isinstance(ctx.intent, IntentModel)
+    assert isinstance(ctx.plan, QueryPlanModel)
+
+
 def test_stock_revision_targets_emit_without_sql(monkeypatch):
     flow = _setup_planner_flow(monkeypatch)
     flow.flow_mode = planner_executor.FlowMode.SINGLE_AGENT

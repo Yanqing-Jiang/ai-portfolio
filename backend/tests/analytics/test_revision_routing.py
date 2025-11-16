@@ -233,6 +233,98 @@ async def test_baseline_pending_revision_emits_streaming_event(flow_name: str):
 
 
 @pytest.mark.asyncio
+async def test_follow_up_route_includes_revision_plan(monkeypatch):
+    session_id = "plan-route"
+    repo = get_session_state_repository()
+    snapshot = SessionStateSnapshot(session_id=session_id)
+    snapshot.record_outputs(
+        sql="select 1",
+        analysis="Baseline narrative",
+    )
+    snapshot.touch_lane("sql")
+    snapshot.touch_lane("web")
+    await repo.save(snapshot)
+
+    class _PlanAwareFlow:
+        def __init__(self) -> None:
+            self.plan = None
+
+        def set_revision_directive(self, directive) -> None:
+            self.directive = directive
+
+        def prime_with_snapshot(self, snapshot: SessionStateSnapshot) -> None:
+            self.snapshot = snapshot
+
+        def set_revision_targets(self, targets) -> None:
+            self.targets = set(targets)
+
+        def set_follow_up_route(self, route) -> None:
+            self.route = route
+
+        def set_revision_inputs_plan(self, plan: Optional[Dict[str, Any]]) -> None:
+            self.plan = dict(plan or {})
+
+        def get_revision_inputs_outcome(self) -> Optional[Dict[str, str]]:
+            return {"sql": "reuse", "web": "refresh"}
+
+        async def run_analysis_refresh(
+            self,
+            *,
+            session_id: str,
+            query: str,
+            requested_focus: Optional[str],
+            revision_directive,
+            reason: Optional[str] = None,
+            source: Optional[str] = None,
+            revision_inputs_plan: Optional[Dict[str, Any]] = None,
+        ):
+            yield {
+                "event": "analysis_revision",
+                "data": {
+                    "lane": "analysis",
+                    "revision": True,
+                    "session_id": session_id,
+                    "source": source or "analytics_memory_workflow",
+                },
+            }
+
+    def _factory():
+        return _PlanAwareFlow()
+
+    monkeypatch.setitem(workflow_module.FLOW_FACTORIES, "planner-executor", _factory)
+    monkeypatch.setattr(
+        FollowUpClassifier,
+        "classify",
+        lambda *args, **kwargs: FollowUpRoute.REUSE_SQL,
+    )
+    monkeypatch.setattr(
+        FollowUpClassifier,
+        "detect_revision_targets",
+        lambda *args, **kwargs: {"analysis"},
+    )
+
+    events = []
+    async for event in analytics_memory_workflow(
+        query="revise the commentary",
+        session_id=session_id,
+        flow="planner-executor",
+    ):
+        events.append(event)
+
+    follow_up_events = [evt for evt in events if evt.get("event") == "follow_up_route"]
+    assert follow_up_events, "expected follow_up_route events"
+    assert follow_up_events[0]["data"]["revision_inputs_plan"] == {"sql": "reuse", "web": "refresh"}
+    outcome_events = [
+        evt for evt in follow_up_events if evt.get("data", {}).get("phase") == "refresh_outcome"
+    ]
+    assert outcome_events, "refresh outcome follow_up_route should be emitted"
+    assert outcome_events[0]["data"]["revision_inputs_outcome"] == {"sql": "reuse", "web": "refresh"}
+
+    await repo.delete(session_id)
+    await close_session_state_repository()
+
+
+@pytest.mark.asyncio
 async def test_manifest_pending_revision_never_cannot_revise() -> None:
     session_id = "manifest-pending-baseline"
     repo = get_session_state_repository()
@@ -698,6 +790,7 @@ async def test_planner_revision_reuses_manifest_without_analysis(monkeypatch):
             revision_directive,
             reason: Optional[str] = None,
             source: Optional[str] = None,
+            revision_inputs_plan: Optional[Dict[str, Any]] = None,
         ):
             self.ran_analysis_refresh = True
             self.requested_focus = requested_focus

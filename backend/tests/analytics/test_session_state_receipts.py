@@ -700,3 +700,80 @@ async def test_manifest_hydration_seals_pending_dataset_receipts(monkeypatch: py
     assert manifest.get("status") == "sealed"
     receipts = manifest.get("receipts") or {}
     assert receipts.get("dataset_preview"), "Dataset preview receipt should survive manifest hydration"
+
+
+@pytest.mark.asyncio
+async def test_manifest_hydration_backfills_dataset_preview_from_revision_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = _InMemorySessionStateRepository()
+    monkeypatch.setattr("analytics.core.session_state.get_session_state_repository", lambda: repo)
+    monkeypatch.setattr("analytics.flows.planner_executor.get_session_state_repository", lambda: repo)
+
+    session_id = "manifest-hydration-backfill"
+    snapshot = SessionStateSnapshot(session_id=session_id)
+    snapshot.record_outputs(sql="SELECT metric FROM facts")
+    analytics_cache = snapshot.tool_cache.setdefault("analytics", {})
+    analytics_cache["revision_snapshot"] = {
+        "data_sample": [
+            {"calendar_year": 2024, "revenue": 123.0},
+            {"calendar_year": 2023, "revenue": 98.5},
+        ],
+        "sql_row_count": 2,
+    }
+    await repo.save(snapshot)
+
+    hydrated = await _hydrate_inputs_manifest(session_id, repo, snapshot=snapshot)
+    assert hydrated is not None
+    reloaded = await repo.load(session_id)
+    assert reloaded is not None
+    preview_payload = (reloaded.tool_cache or {}).get("planner_dataset_preview")
+    assert isinstance(preview_payload, dict) and preview_payload.get("rows"), "Dataset preview should be backfilled"
+    manifest = reloaded.analysis_inputs_manifest or {}
+    assert manifest.get("status") == "sealed"
+    dataset_state = manifest.get("components", {}).get("dataset_preview", {}).get("state")
+    assert dataset_state == "ready"
+
+
+def test_dataset_preview_backfilled_from_artifacts() -> None:
+    snapshot = SessionStateSnapshot(session_id="seed-artifacts")
+    snapshot.tool_cache["analytics"] = {
+        "artifacts": {
+            "sql_execution": {
+                "dataset_preview": [
+                    {"period": "FY24", "value": 1.23},
+                    {"period": "FY23", "value": 0.87},
+                ],
+                "row_count": 2,
+            }
+        }
+    }
+    changed = snapshot.ensure_dataset_preview_from_revision()
+    assert changed
+    cached_preview = snapshot.tool_cache.get("planner_dataset_preview")
+    assert isinstance(cached_preview, dict) and len(cached_preview.get("rows") or []) == 2
+    snapshot.refresh_analysis_inputs_manifest(persist=False)
+    manifest = snapshot.analysis_inputs_manifest or {}
+    assert manifest.get("components", {}).get("dataset_preview", {}).get("state") == "ready"
+
+
+def test_market_receipt_backfilled_from_artifacts() -> None:
+    snapshot = SessionStateSnapshot(session_id="seed-market")
+    snapshot.tool_cache["analytics"] = {
+        "artifacts": {
+            "market": {
+                "snapshot": {
+                    "tickers": ["AMD", "NVDA"],
+                    "prices": {"AMD": 120.0, "NVDA": 490.0},
+                }
+            }
+        }
+    }
+    changed = snapshot.ensure_dataset_preview_from_revision()
+    assert changed
+    cached_market = snapshot.tool_cache.get("planner_stock_widget")
+    assert isinstance(cached_market, dict)
+    assert cached_market.get("tickers") == ["AMD", "NVDA"]
+    snapshot.refresh_analysis_inputs_manifest(persist=False)
+    manifest = snapshot.analysis_inputs_manifest or {}
+    assert manifest.get("components", {}).get("market", {}).get("state") == "ready"

@@ -114,6 +114,16 @@
 #   Called from: analytics.services.response_search
 #   Invokes: analytics.core.telemetry._base_payload, analytics.core.telemetry._emit
 #   Why: Keeps analytics.core.telemetry from duplicating gemini call behavior across flows.
+# Function: agent_lane_decision
+#   Role: Emits telemetry for the lane chosen by the agent runtime during revisions.
+#   Called from: analytics.flows.single_agent_tools, analytics.flows.multi_agent
+#   Invokes: analytics.core.telemetry._base_payload, analytics.core.telemetry._emit
+#   Why: Audits whether chart vs narrative revisions align with Gemini hints.
+# Function: lane_decision_mismatch
+#   Role: Emits telemetry when the executed lane diverges from the planned route.
+#   Called from: analytics.flows.single_agent_tools, analytics.flows.multi_agent
+#   Invokes: analytics.core.telemetry._base_payload, analytics.core.telemetry._emit
+#   Why: Flags enforcement gaps so ops can triage agent drift.
 # --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
@@ -636,4 +646,46 @@ def gemini_call(
         payload["error"] = error
     if metadata:
         payload["metadata"] = metadata
+    _emit(payload)
+
+
+def agent_lane_decision(
+    *,
+    lane: str,
+    rationale: Optional[str],
+    bundle: Optional[Mapping[str, Any]] = None,
+    session_id: Optional[str] = None,
+    flow: Optional[str] = None,
+    source: Optional[str] = None,
+) -> None:
+    payload = _base_payload("agent_lane_decision", session_id=session_id, flow=flow)
+    payload.update(
+        {
+            "lane": lane,
+            "rationale": rationale,
+            "source": source,
+        }
+    )
+    if bundle and isinstance(bundle, Mapping):
+        payload["bundle"] = {key: value for key, value in bundle.items() if value is not None}
+    _emit(payload)
+
+
+def lane_decision_mismatch(
+    *,
+    expected_lane: str,
+    actual_lane: str,
+    session_id: Optional[str],
+    flow: Optional[str] = None,
+    reason: Optional[str] = None,
+) -> None:
+    payload = _base_payload("agent_lane_decision_mismatch", session_id=session_id, flow=flow)
+    payload.update(
+        {
+            "expected_lane": expected_lane,
+            "actual_lane": actual_lane,
+        }
+    )
+    if reason:
+        payload["reason"] = reason
     _emit(payload)

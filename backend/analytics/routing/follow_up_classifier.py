@@ -28,6 +28,8 @@ class FollowUpRoute(str, Enum):
     STOCK_ONLY = "stock_only"
     REUSE_SQL = "reuse_sql"
     FULL_PIPELINE = "full_pipeline"
+    CHART_ONLY = "chart_only"
+    NARRATIVE_ONLY = "narrative_only"
 
 
 def _contains_any(text: str, candidates: Iterable[str]) -> bool:

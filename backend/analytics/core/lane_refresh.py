@@ -28,6 +28,7 @@ LANE_TTL_DEFAULTS: Dict[str, int] = {
     "web": 120,
     "chart": 600,
     "market": 300,
+    "sql": 600,
 }
 
 LANE_TTL_ENV_KEYS: Dict[str, str] = {
@@ -35,6 +36,7 @@ LANE_TTL_ENV_KEYS: Dict[str, str] = {
     "web": "ANALYTICS_WEB_REFRESH_TTL_SECONDS",
     "chart": "ANALYTICS_CHART_REFRESH_TTL_SECONDS",
     "market": "ANALYTICS_MARKET_REFRESH_TTL_SECONDS",
+    "sql": "ANALYTICS_SQL_REFRESH_TTL_SECONDS",
 }
 
 

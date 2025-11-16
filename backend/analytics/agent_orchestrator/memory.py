@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, Mapping, Optional, List
 
 from analytics.core.session_state import SessionStateSnapshot
 
@@ -118,6 +118,55 @@ class AgentMemory:
             delegation_policy_version=delegation_policy_version,
             decisions=list(decisions) if decisions is not None else None,
         )
+
+    def record_revision_questions(self, bundle: Mapping[str, Any]) -> None:
+        """Persist the latest revision questions bundle for reuse."""
+        payload = dict(bundle)
+        self._agent_cache["revision_questions"] = payload
+        if self._snapshot is not None:
+            try:
+                self._snapshot.record_revision_questions(payload)
+            except Exception:
+                pass
+
+    def get_revision_questions(self) -> Optional[Dict[str, Any]]:
+        """Return the cached revision question bundle if available."""
+        payload = self._agent_cache.get("revision_questions")
+        if isinstance(payload, Mapping):
+            return dict(payload)
+        return None
+
+    def record_lane_decision(self, payload: Mapping[str, Any]) -> None:
+        """Persist the agent-selected lane decision for auditing."""
+        entry = dict(payload)
+        decisions = self._agent_cache.get("revision_lane_decisions")
+        if isinstance(decisions, list):
+            decisions.append(entry)
+            if len(decisions) > 10:
+                del decisions[:-10]
+        else:
+            self._agent_cache["revision_lane_decisions"] = [entry]
+        snapshot = self._snapshot
+        if snapshot is not None:
+            lane_value = str(entry.get("lane") or "").strip().lower() or "narrative"
+            rationale = str(entry.get("rationale") or "").strip() or "agent_lane_decision"
+            bundle = entry.get("questions")
+            try:
+                snapshot.record_revision_lane_decision(
+                    lane=lane_value,
+                    rationale=rationale,
+                    bundle=bundle,
+                    decision_source=entry.get("source"),
+                )
+            except Exception:
+                pass
+
+    def get_lane_decision(self) -> Optional[Dict[str, Any]]:
+        """Return the last recorded lane decision if present."""
+        decisions = self._agent_cache.get("revision_lane_decisions")
+        if isinstance(decisions, list) and decisions:
+            return dict(decisions[-1])
+        return None
 
     def to_dict(self) -> Dict[str, Any]:
         """Expose a copy of the agent cache for diagnostics or testing."""

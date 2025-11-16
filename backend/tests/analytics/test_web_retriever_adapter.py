@@ -3,10 +3,12 @@ import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 
 from analytics.flows import tooling
-from analytics.services.response_search import ResponseSearchError, SearchTopicPlan
+from analytics.services.response_search import ResponseSearchError, SearchTopicPlan, ResponseSearchResult
 from analytics.flows.tooling import WebRetrieverAdapter, ToolExecutionContext
 from analytics.core.session_state import SessionStateSnapshot
 
@@ -198,6 +200,71 @@ def test_expand_uses_revision_topics_when_available(monkeypatch):
     queries = {child._topic_plan.query for child in expanded if child._topic_plan}
     assert "AMD capital expenditure drivers 2025" in queries
     assert "AMD manufacturing investments" in queries
+
+
+# Function: test_web_retriever_revision_refresh_busts_cache — called from pytest to validate that revision-driven web refreshes bypass cached payloads; invokes WebRetrieverAdapter.execute with a cached snapshot and a forced refresh expectation; ensures the project detects when analysis revisions silently reuse stale web context.
+@pytest.mark.asyncio
+async def test_web_retriever_revision_refresh_busts_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    session_id = "revision-web-cache"
+    query = "Extend AMD vs NVDA outlook"
+
+    snapshot = SessionStateSnapshot(session_id=session_id)
+    snapshot.record_tool_result(
+        "web_search",
+        {
+            "query": query,
+            "query_terms": query.lower(),
+            "summary": "cached summary",
+            "snippets": [{"title": "cached", "snippet": "cached body"}],
+            "ready": True,
+            "from_cache": True,
+        },
+    )
+
+    class _Repo:
+        def __init__(self, snap: SessionStateSnapshot) -> None:
+            self.snapshot = snap
+
+        async def load(self, sid: str) -> SessionStateSnapshot:
+            assert sid == self.snapshot.session_id
+            return self.snapshot
+
+        async def save(self, snap: SessionStateSnapshot) -> SessionStateSnapshot:
+            self.snapshot = snap
+            return snap
+
+    repo = _Repo(snapshot)
+    monkeypatch.setattr(tooling, "get_session_state_repository", lambda: repo)
+    monkeypatch.setattr(tooling, "has_search_api_key", lambda: True)
+
+    adapter = WebRetrieverAdapter()
+    context = SimpleNamespace(
+        session_id=session_id,
+        query=query,
+        intent=SimpleNamespace(slots_detected={"original_query": query}),
+        plan=SimpleNamespace(group_by=[], timeframe=None, metrics=[]),
+        template=None,
+        configs={},
+        revision_directive=None,
+        revision_focus=None,
+        revision_search_topics=(),
+        force_revision_refresh=True,
+    )
+
+    search_called = False
+
+    async def fake_perform_response_search(*args, **kwargs) -> ResponseSearchResult:
+        nonlocal search_called
+        search_called = True
+        return ResponseSearchResult(query=query, summary="fresh summary")
+
+    monkeypatch.setattr(tooling, "perform_response_search", fake_perform_response_search)
+
+    result = await adapter.execute(context)
+
+    assert search_called, "analysis revisions should force a fresh web search even if cache exists"
+    assert result.status == "completed", "adapter should emit completed payload when refresh is required"
+    assert result.payload.get("from_cache") is False
 
 
 def test_revision_skips_cache_and_forces_search(monkeypatch):

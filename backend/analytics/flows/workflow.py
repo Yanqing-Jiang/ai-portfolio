@@ -49,6 +49,26 @@
 #   Called from: analytics.flows.workflow
 #   Invokes: None (pure helper)
 #   Why: Keeps banner + telemetry logic consistent when analysis inputs manifest is incomplete.
+# Function: _build_revision_inputs_plan
+#   Role: Builds the `{lane, web}` revision plan using Gemini hints plus manifest readiness.
+#   Called from: analytics.flows.workflow
+#   Invokes: analytics.services.revision_focus.RevisionQuestionBundle.to_dict
+#   Why: Centralizes how revision lanes choose between chart vs narrative while coordinating web refreshes.
+# Function: _requires_revision_directive
+#   Role: Determines when revision lanes must force a directive so accessory lanes refresh.
+#   Called from: analytics.flows.workflow
+#   Invokes: None (pure helper)
+#   Why: Keeps analytics.flows.workflow from duplicating lane inspection logic before forcing directives.
+# Function: _synthesize_minimal_revision_directive
+#   Role: Synthesizes a fallback RevisionDirective with search topics when accessories must refresh.
+#   Called from: analytics.flows.workflow
+#   Invokes: analytics.flows.workflow._normalize_revision_lanes, analytics.flows.workflow._make_topic_entry, analytics.flows.workflow._ensure_dual_topics
+#   Why: Keeps analytics.flows.workflow from duplicating forced refresh directive construction across execution paths.
+# Function: _extract_revision_inputs_outcome
+#   Role: Extracts the `{lane, web}` outcome emitted by revision-aware flows.
+#   Called from: analytics.flows.workflow
+#   Invokes: Flow-provided getters only
+#   Why: Keeps analytics.flows.workflow decoupled from controller-specific bookkeeping for revision inputs.
 # Function: _revision_route_label
 #   Role: Handles revision route label logic for analytics.flows.workflow.
 #   Called from: Internal to analytics.flows.workflow
@@ -95,10 +115,10 @@
 #   Invokes: analytics.flows.workflow._annotated_lane_stream, analytics.flows.instrumentation.emit_revision_lane
 #   Why: Keeps analytics.flows.workflow from duplicating run market lane behavior across flows.
 # Function: _stream_revision_fast_path
-#   Role: Handles stream revision fast path logic for analytics.flows.workflow.
+#   Role: Streams the revision fast path, including Gemini question derivation and the new follow-up routing.
 #   Called from: Internal to analytics.flows.workflow
-#   Invokes: analytics.flows.workflow._initial_revision_status, analytics.flows.workflow._revision_route_label, analytics.flows.workflow._build_revision_banner, uuid.uuid4, +2 more
-#   Why: Keeps analytics.flows.workflow from duplicating stream revision fast path behavior across flows.
+#   Invokes: analytics.services.revision_focus.derive_revision_questions, analytics.services.revision_focus.cache_revision_questions, analytics.flows.workflow._build_revision_banner, uuid.uuid4, +2 more
+#   Why: Ensures plan metadata, SSE payloads, and telemetry stay in sync when revisions bypass the full pipeline.
 # Function: _combine_queries
 #   Role: Handles combine queries logic for analytics.flows.workflow.
 #   Called from: Internal to analytics.flows.workflow
@@ -190,6 +210,11 @@ from .chart_revision import (
 from .instrumentation import emit_revision_lane, instrument_events
 from .revision_directive import RevisionDirective
 from analytics.services.response_search import generate_search_topics, has_search_api_key
+from analytics.services.revision_focus import (
+    RevisionQuestionBundle,
+    cache_revision_questions,
+    derive_revision_questions,
+)
 from .sequencer import PlannerSequencer, PlannerEventBus
 
 logger = logging.getLogger(__name__)
@@ -416,6 +441,132 @@ def _lanes_for_missing_inputs(missing_components: Iterable[str]) -> List[str]:
                 lanes.append(lane)
     return lanes
 
+
+def _build_revision_inputs_plan(
+    lane_readiness: Mapping[str, bool],
+    lane_refresh_required: Mapping[str, bool],
+    missing_components: Iterable[str],
+    *,
+    question_bundle: Optional[RevisionQuestionBundle],
+    revision_lanes: Iterable[str],
+) -> Dict[str, str]:
+    missing_set = {
+        str(component or "").strip().lower()
+        for component in (missing_components or [])
+        if isinstance(component, str) and component.strip()
+    }
+    normalized_lanes = set(_normalize_revision_lanes(revision_lanes))
+    chart_ready = lane_readiness.get("chart", False)
+    narrative_ready = lane_readiness.get("analysis", False)
+
+    def _chart_hint_from_bundle(bundle: RevisionQuestionBundle) -> bool:
+        focus = (bundle.keyword_focus or "").lower()
+        industry = (bundle.industry_question or "").lower()
+        chart_tokens = ("chart", "visual", "plot", "graph", "trend", "line", "bar", "series", "metric")
+        return any(token in industry for token in chart_tokens) or any(token in focus for token in chart_tokens)
+
+    lane_choice = "narrative"
+    if normalized_lanes == {"chart"} or (normalized_lanes == ["chart"]):
+        lane_choice = "chart"
+    elif "chart" in normalized_lanes and "analysis" not in normalized_lanes:
+        lane_choice = "chart"
+    elif "analysis" in normalized_lanes or "web" in normalized_lanes:
+        lane_choice = "narrative"
+    elif "chart" in normalized_lanes:
+        lane_choice = "chart"
+
+    if question_bundle:
+        lane_choice = "chart" if _chart_hint_from_bundle(question_bundle) else "narrative"
+
+    if lane_choice == "chart" and not chart_ready and narrative_ready:
+        lane_choice = "narrative"
+    elif lane_choice == "narrative" and not narrative_ready and chart_ready:
+        lane_choice = "chart"
+
+    web_refresh = (
+        missing_set.intersection({"web"})
+        or lane_refresh_required.get("web")
+        or False
+    )
+    plan: Dict[str, str] = {
+        "lane": lane_choice if lane_choice in {"chart", "narrative"} else "narrative",
+        "web": "refresh" if web_refresh else "reuse",
+    }
+    if question_bundle:
+        plan["questions"] = question_bundle.to_dict()
+    return plan
+
+
+def _requires_revision_directive(lanes: Iterable[str]) -> bool:
+    for lane in lanes or []:
+        normalized = str(lane or "").strip().lower()
+        if normalized in {"analysis", "web"}:
+            return True
+    return False
+
+
+def _synthesize_minimal_revision_directive(
+    *,
+    query: Optional[str],
+    analysis_text: Optional[str],
+    chart_patch: Optional[Dict[str, Any]],
+    lanes: Iterable[str],
+    prefer_agentic_revision: bool,
+) -> Optional[RevisionDirective]:
+    if not _requires_revision_directive(lanes):
+        return None
+    normalized_targets = set(_normalize_revision_lanes(lanes))
+    if not normalized_targets:
+        normalized_targets = {"analysis", "web"}
+    elif normalized_targets.intersection({"analysis", "web"}):
+        normalized_targets.update({"analysis", "web"})
+    condensed_basis = " ".join((analysis_text or query or "").split())
+    topic_basis = condensed_basis or (query or "")
+    sanitized_query = _sanitize_topic_value(topic_basis, limit=256) if topic_basis else ""
+    sanitized_label = _sanitize_topic_value(topic_basis, limit=80) if topic_basis else ""
+    search_topics: List[Dict[str, Any]] = []
+    if topic_basis:
+        seed_entry = _make_topic_entry(
+            sanitized_query or topic_basis[:256],
+            label=sanitized_label or topic_basis[:80],
+            reason="forced_refresh_topic",
+        )
+        search_topics = _ensure_dual_topics(
+            [seed_entry],
+            topic_basis=topic_basis,
+            user_query=query or "",
+            analysis_text=analysis_text,
+        )
+    raw_text = (analysis_text or query or topic_basis or "").strip()
+    return RevisionDirective.from_payload(
+        raw_text=raw_text,
+        targets=sorted(normalized_targets),
+        requested_focus=analysis_text,
+        chart_patch=chart_patch,
+        agentic=bool(prefer_agentic_revision),
+        search_topics=search_topics,
+    )
+
+
+def _extract_revision_inputs_outcome(flow_instance: Any) -> Optional[Dict[str, str]]:
+    getter = getattr(flow_instance, "get_revision_inputs_outcome", None)
+    if getter is None:
+        return None
+    try:
+        outcome = getter()
+    except Exception:  # pragma: no cover - defensive guard
+        return None
+    if not isinstance(outcome, Mapping):
+        return None
+    normalized: Dict[str, str] = {}
+    lane_value = outcome.get("lane")
+    if isinstance(lane_value, str) and lane_value.strip():
+        normalized["lane"] = lane_value.strip().lower()
+    web_value = outcome.get("web")
+    if isinstance(web_value, str) and web_value.strip():
+        normalized["web"] = web_value.strip().lower()
+    return normalized or None
+
 SESSION_MESSAGE_LIMIT = 20
 SESSION_MESSAGE_ARCHIVE_LIMIT = 50
 
@@ -621,6 +772,7 @@ async def _run_analysis_lane(
     revision_id: str,
     snapshot: Optional[SessionStateSnapshot],
     revision_kwargs: Dict[str, Any],
+    revision_inputs_plan: Optional[Dict[str, str]] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     analysis_payload = requested_analysis
     if not analysis_payload and snapshot:
@@ -653,6 +805,7 @@ async def _run_analysis_lane(
                 query=query,
                 requested_focus=analysis_payload,
                 revision_directive=revision_directive,
+                revision_inputs_plan=revision_inputs_plan,
                 **revision_kwargs,
             )
         elif hasattr(flow_instance, "analysis_revision"):
@@ -793,7 +946,9 @@ async def _stream_revision_fast_path(
     repository: Optional[Any],
     snapshot: Optional[SessionStateSnapshot],
     lane_refresh_required: Dict[str, bool],
+    revision_inputs_plan: Optional[Dict[str, str]] = None,
     agentic_revision: bool = False,
+    revision_questions: Optional[RevisionQuestionBundle] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     revision_id = uuid.uuid4().hex
     status_step, status_message = _initial_revision_status(lanes)
@@ -811,6 +966,45 @@ async def _stream_revision_fast_path(
         }
     )
     yield status_event
+
+    questions_bundle = revision_questions
+    if questions_bundle is None:
+        try:
+            questions_bundle = derive_revision_questions(
+                query=combined_query,
+                revision_directive=revision_directive,
+                snapshot=snapshot,
+                session_id=session_id,
+            )
+        except Exception:
+            logger.debug("Failed to derive revision questions", exc_info=True)
+            questions_bundle = None
+    if questions_bundle:
+        if snapshot:
+            try:
+                snapshot.record_revision_questions(questions_bundle)
+            except Exception:
+                logger.debug("Failed to record revision questions on snapshot", exc_info=True)
+        try:
+            cache_revision_questions(snapshot, questions_bundle)
+        except Exception:
+            logger.debug("Failed to cache revision questions bundle", exc_info=True)
+        if revision_directive:
+            if questions_bundle.keyword_focus and not revision_directive.keyword_focus:
+                revision_directive.keyword_focus = questions_bundle.keyword_focus
+            if questions_bundle.user_question and not revision_directive.user_question:
+                revision_directive.user_question = questions_bundle.user_question
+            if questions_bundle.industry_question and not revision_directive.industry_question:
+                revision_directive.industry_question = questions_bundle.industry_question
+
+    if revision_directive is None:
+        revision_directive = _synthesize_minimal_revision_directive(
+            query=combined_query,
+            analysis_text=analysis_text,
+            chart_patch=chart_patch,
+            lanes=lanes,
+            prefer_agentic_revision=agentic_revision,
+        )
 
     if revision_directive:
         rev_event = revision_directive.to_event(session_id=session_id)
@@ -849,11 +1043,27 @@ async def _stream_revision_fast_path(
             "agentic_revision": agentic_revision,
         },
     }
+    if revision_inputs_plan:
+        follow_up_event["data"]["revision_inputs_plan"] = dict(revision_inputs_plan)
+    if questions_bundle:
+        follow_up_event["data"]["revision_questions"] = questions_bundle.to_dict()
     yield follow_up_event
 
-    follow_up_route = FollowUpRoute.STOCK_ONLY if lanes == ["market"] else FollowUpRoute.REUSE_SQL
+    if lanes == ["market"]:
+        follow_up_route = FollowUpRoute.STOCK_ONLY
+    else:
+        lane_hint = (revision_inputs_plan or {}).get("lane")
+        if lane_hint == "chart":
+            follow_up_route = FollowUpRoute.CHART_ONLY
+        else:
+            follow_up_route = FollowUpRoute.NARRATIVE_ONLY
     if hasattr(flow_instance, "set_revision_targets"):
         flow_instance.set_revision_targets(lanes)
+    if revision_inputs_plan and hasattr(flow_instance, "set_revision_inputs_plan"):
+        try:
+            flow_instance.set_revision_inputs_plan(revision_inputs_plan)
+        except Exception:
+            logger.exception("Failed to set revision inputs plan on flow %s", selected_flow)
     if hasattr(flow_instance, "set_follow_up_route"):
         flow_instance.set_follow_up_route(follow_up_route)
     if hasattr(flow_instance, "prime_with_snapshot"):
@@ -883,6 +1093,7 @@ async def _stream_revision_fast_path(
             revision_id=revision_id,
             snapshot=snapshot,
             revision_kwargs=revision_kwargs,
+            revision_inputs_plan=revision_inputs_plan,
         ):
             yield event
 
@@ -896,6 +1107,24 @@ async def _stream_revision_fast_path(
             snapshot=snapshot,
         ):
             yield event
+
+    if revision_inputs_plan:
+        outcome_payload = _extract_revision_inputs_outcome(flow_instance)
+        if outcome_payload:
+            outcome_event = {
+                "event": "follow_up_route",
+                "data": {
+                    "route": follow_up_route.value,
+                    "flow": selected_flow,
+                    "session_id": session_id,
+                    "revision": True,
+                    "revision_id": revision_id,
+                    "phase": "refresh_outcome",
+                    "revision_inputs_plan": dict(revision_inputs_plan),
+                    "revision_inputs_outcome": dict(outcome_payload),
+                },
+            }
+            yield outcome_event
 
     completion_event = EventEmitter.status("revision", "Revision complete")
     completion_event.setdefault("data", {})
@@ -1124,6 +1353,7 @@ async def _hydrate_inputs_manifest(
     if working_snapshot is None:
         return None
     try:
+        working_snapshot.ensure_dataset_preview_from_revision()
         working_snapshot.ensure_analysis_lane_receipts()
         working_snapshot.refresh_analysis_inputs_manifest(persist=True)
     except Exception:
@@ -1151,6 +1381,7 @@ async def analytics_memory_workflow(
         session_id and not chart_revision_requested and is_analysis_revision_query(query)
     )
     revision_requested = bool(chart_revision_requested or analysis_revision_requested)
+    revision_questions_bundle: Optional[RevisionQuestionBundle] = None
 
     repository = get_session_state_repository() if session_id else None
     snapshot: Optional[SessionStateSnapshot] = None
@@ -1158,6 +1389,7 @@ async def analytics_memory_workflow(
         snapshot = await repository.load(session_id)
         if snapshot is not None:
             snapshot_reset = False
+            snapshot_dirty = snapshot.ensure_dataset_preview_from_revision()
             if reset_session:
                 snapshot.reset_agent_session()
                 snapshot_reset = True
@@ -1168,7 +1400,7 @@ async def analytics_memory_workflow(
                 snapshot.refresh_analysis_inputs_manifest(persist=False)
             except Exception:  # pragma: no cover - defensive guard
                 logger.debug("Failed to refresh manifest before workflow start", exc_info=True)
-            if snapshot_reset:
+            if snapshot_reset or snapshot_dirty:
                 try:
                     await repository.save(snapshot)
                 except Exception:  # pragma: no cover - defensive guard
@@ -1200,6 +1432,7 @@ async def analytics_memory_workflow(
     manifest_missing_components: List[str] = []
     manifest_pending_components: List[str] = []
     manifest_inputs_ready = False
+    revision_inputs_plan: Optional[Dict[str, str]] = None
     if analysis_revision_requested and session_id:
         revision_snapshot_ready = True
         try:
@@ -1249,6 +1482,8 @@ async def analytics_memory_workflow(
                     "banner": banner,
                 },
             }
+            if revision_inputs_plan:
+                streaming_event["data"]["revision_inputs_plan"] = dict(revision_inputs_plan)
             yield streaming_event
             _append_session_message(
                 snapshot,
@@ -1278,6 +1513,8 @@ async def analytics_memory_workflow(
                     "banner": banner,
                 },
             }
+            if revision_inputs_plan:
+                follow_up_event["data"]["revision_inputs_plan"] = dict(revision_inputs_plan)
             yield follow_up_event
             _append_session_message(
                 snapshot,
@@ -1361,6 +1598,8 @@ async def analytics_memory_workflow(
         ttl_lanes.add("chart")
     if "market" in revision_lanes or route == FollowUpRoute.STOCK_ONLY:
         ttl_lanes.add("market")
+    if session_follow_up and route == FollowUpRoute.REUSE_SQL:
+        ttl_lanes.add("sql")
     if ttl_lanes:
         lane_refresh_required = compute_lane_refresh_requirements(snapshot, ttl_lanes, ttl_map)
         if (
@@ -1378,9 +1617,12 @@ async def analytics_memory_workflow(
         if "market" not in revision_lanes and "market" not in lane_refresh_required:
             lane_refresh_required["market"] = False
 
+    lane_refresh_required.setdefault("sql", False)
+
     missing_revision_lanes = [
         lane for lane in revision_lanes if not _lane_available(snapshot, lane, lane_readiness)
     ]
+
     for lane in missing_revision_lanes:
         normalized = str(lane or "").strip().lower()
         if not normalized:
@@ -1498,6 +1740,32 @@ async def analytics_memory_workflow(
             agentic=bool(agentic_enabled),
             search_topics=search_topic_entries,
         )
+        if revision_questions_bundle is None:
+            try:
+                revision_questions_bundle = derive_revision_questions(
+                    query=combined_query,
+                    revision_directive=revision_directive,
+                    snapshot=snapshot,
+                    session_id=session_id,
+                )
+            except Exception:
+                logger.debug("Failed to derive revision questions upstream", exc_info=True)
+                revision_questions_bundle = None
+        if revision_questions_bundle and revision_directive:
+            if revision_questions_bundle.keyword_focus:
+                revision_directive.keyword_focus = revision_questions_bundle.keyword_focus
+            if revision_questions_bundle.user_question:
+                revision_directive.user_question = revision_questions_bundle.user_question
+            if revision_questions_bundle.industry_question:
+                revision_directive.industry_question = revision_questions_bundle.industry_question
+        if revision_inputs_plan is None:
+            revision_inputs_plan = _build_revision_inputs_plan(
+                lane_readiness,
+                lane_refresh_required,
+                manifest_missing_components,
+                question_bundle=revision_questions_bundle,
+                revision_lanes=revision_lanes,
+            )
         _append_session_message(snapshot, role="user", content=query)
         snapshot.record_revision_directive(
             revision_directive,
@@ -1514,6 +1782,11 @@ async def analytics_memory_workflow(
             flow_instance.set_revision_directive(revision_directive)  # type: ignore[attr-defined]
         if hasattr(flow_instance, "prime_with_snapshot"):
             flow_instance.prime_with_snapshot(snapshot)
+        if revision_inputs_plan and hasattr(flow_instance, "set_revision_inputs_plan"):
+            try:
+                flow_instance.set_revision_inputs_plan(revision_inputs_plan)
+            except Exception:
+                logger.exception("Failed to set revision inputs plan on flow %s", selected)
         async for event in _stream_revision_fast_path(
             flow_instance,
             combined_query=combined_query,
@@ -1526,7 +1799,9 @@ async def analytics_memory_workflow(
             repository=repository,
             snapshot=snapshot,
             lane_refresh_required=lane_refresh_required,
+            revision_inputs_plan=revision_inputs_plan,
             agentic_revision=prefer_agentic_revision,
+            revision_questions=revision_questions_bundle,
         ):
             yield event
         return
@@ -1549,6 +1824,20 @@ async def analytics_memory_workflow(
     yield initial_status
 
     revision_directive: Optional[RevisionDirective] = None
+
+    if _requires_revision_directive(revision_lanes) and revision_directive is None:
+        revision_directive = _synthesize_minimal_revision_directive(
+            query=query,
+            analysis_text=analysis_text,
+            chart_patch=chart_patch,
+            lanes=revision_lanes,
+            prefer_agentic_revision=prefer_agentic_revision,
+        )
+    if revision_directive and hasattr(flow_instance, "set_revision_directive"):
+        try:
+            flow_instance.set_revision_directive(revision_directive)  # type: ignore[attr-defined]
+        except Exception:
+            logger.exception("Failed to set revision directive on flow %s", selected)
 
     # Treat presence of a revision directive as sufficient to let the active flow
     # handle the revision inside the normal pipeline (even if not explicitly
@@ -1620,6 +1909,7 @@ async def analytics_memory_workflow(
                     session_id=session_id,
                     requested_focus=analysis_text,
                     revision_directive=revision_directive,
+                    revision_inputs_plan=revision_inputs_plan,
                     **revision_kwargs,
                 )
             else:
@@ -1638,6 +1928,7 @@ async def analytics_memory_workflow(
                     query=query or "",
                     requested_focus=analysis_text,
                     revision_directive=revision_directive,
+                    revision_inputs_plan=revision_inputs_plan,
                     **revision_kwargs,
                 )
             else:
@@ -1700,6 +1991,11 @@ async def analytics_memory_workflow(
         flow_instance.set_revision_targets(revision_targets)
     if hasattr(flow_instance, "prime_with_snapshot"):
         flow_instance.prime_with_snapshot(snapshot)
+    if revision_inputs_plan and hasattr(flow_instance, "set_revision_inputs_plan"):
+        try:
+            flow_instance.set_revision_inputs_plan(revision_inputs_plan)
+        except Exception:
+            logger.exception("Failed to set revision inputs plan on flow %s", selected)
     if hasattr(flow_instance, "set_follow_up_route"):
         flow_instance.set_follow_up_route(route)
     follow_up_event = {
@@ -1713,6 +2009,8 @@ async def analytics_memory_workflow(
             "agentic_revision": prefer_agentic_revision,
         },
     }
+    if revision_inputs_plan:
+        follow_up_event["data"]["revision_inputs_plan"] = dict(revision_inputs_plan)
     if missing_revision_lanes:
         follow_up_event["data"]["missing_lanes"] = list(missing_revision_lanes)
     yield follow_up_event
