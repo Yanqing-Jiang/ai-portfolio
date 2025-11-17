@@ -135,6 +135,33 @@ const REVISION_EVENT_ALIASES: Record<string, string> = {
   chart_revision_ready: 'chart_ready',
   analysis_revision_ready: 'analysis_ready',
 };
+const FLOW_MODE_ALIASES: Record<string, FlowMode> = {
+  'planner-executor': 'planner-executor',
+  'planner_executor': 'planner-executor',
+  planner: 'planner-executor',
+  'single-agent': 'single-agent',
+  'single_agent': 'single-agent',
+  'multi-agent': 'multi-agent',
+  'multi_agent': 'multi-agent',
+  supervisor: 'multi-agent',
+};
+
+/*
+Function: coerceFlowMode — called from useAnalyticsMemoryStream's telemetry parser to normalize
+backend `mode`/`flow_mode` values before the ProcessPanel consumes them. It maps scheduler
+aliases (planner_executor, supervisor, etc.), invokes FLOW_MODE_ALIASES for lookups, and keeps
+the UI visualization aligned with whichever agent runtime actually executed the run.
+*/
+const coerceFlowMode = (raw: unknown): FlowMode | undefined => {
+  if (typeof raw !== 'string') {
+    return undefined;
+  }
+  const normalized = raw.trim().toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+  return FLOW_MODE_ALIASES[normalized];
+};
 
 const computeCardPayloadHash = (entry: SpecialistCard): string | undefined => {
   try {
@@ -516,6 +543,7 @@ export const useAnalyticsMemoryStream = (
   const [agenticRevisionActive, setAgenticRevisionActive] = useState<boolean>(false);
   const [freshLaneStates, setFreshLaneStates] = useState<Record<string, FreshLaneStatus>>({});
   const [redirectNotice, setRedirectNotice] = useState<string | null>(null);
+  const [telemetryFlowMode, setTelemetryFlowMode] = useState<FlowMode>(flow);
   const revisionContextRef = useRef<{ id?: string; lanes: string[]; focus?: string }>({
     id: undefined,
     lanes: [],
@@ -531,6 +559,7 @@ export const useAnalyticsMemoryStream = (
   const analysisReadyEmittedRef = useRef<boolean>(false);
   const finalResultMergedRef = useRef<boolean>(false);
   const hasExplicitResultContentRef = useRef<boolean>(false);
+  const telemetryFlowModeRef = useRef<FlowMode>(flow);
   const finalizationMessageRef = useRef<string | null>(null);
   const thoughtHistoryRef = useRef<Record<string, Set<string>>>({});
 
@@ -2099,8 +2128,13 @@ const workflowDataRef = useRef<{
   const stepsHook = useProcessSteps();
 
   useEffect(() => {
-    workflowDataRef.current.flowMode = flow;
+    telemetryFlowModeRef.current = flow;
+    setTelemetryFlowMode(flow);
   }, [flow]);
+
+  useEffect(() => {
+    workflowDataRef.current.flowMode = telemetryFlowMode;
+  }, [telemetryFlowMode]);
 
   // Progressive update function with debouncing
   const scheduleProgressiveUpdate = (updates: Partial<typeof pendingUpdatesRef.current>) => {
@@ -2922,11 +2956,15 @@ const workflowDataRef = useRef<{
           ? eventData.schedule_stage
           : undefined;
       const flowModeValue: FlowMode | undefined =
-        typeof data.mode === 'string'
-          ? (data.mode as FlowMode)
-          : typeof eventData.mode === 'string'
-          ? (eventData.mode as FlowMode)
-          : undefined;
+        coerceFlowMode(data.mode) ??
+        coerceFlowMode((data as any)?.flow_mode) ??
+        coerceFlowMode(eventData.mode) ??
+        coerceFlowMode((eventData as any)?.flow_mode);
+      const resolvedFlowMode: FlowMode = flowModeValue ?? telemetryFlowModeRef.current ?? flow;
+      if (flowModeValue && flowModeValue !== telemetryFlowModeRef.current) {
+        telemetryFlowModeRef.current = flowModeValue;
+        setTelemetryFlowMode(flowModeValue);
+      }
       const toolGroup: string | undefined =
         typeof data.tool_group === 'string'
           ? data.tool_group
@@ -2979,7 +3017,7 @@ const workflowDataRef = useRef<{
           sequence,
           parallelGroup,
           scheduleStage,
-          flowModeValue,
+          resolvedFlowMode,
           {
             lane: overrides?.lane ?? laneFromEvent,
             reused: overrides?.reused ?? reusedFlag,
@@ -3072,7 +3110,7 @@ const workflowDataRef = useRef<{
               title: coerceString(bannerPayload?.title) ?? copy.title,
               message: coerceString(bannerPayload?.message) ?? (statusMessage || copy.message),
               route,
-              flowMode: flowModeValue ?? flow,
+              flowMode: resolvedFlowMode,
               finalAnswerOnly: finalAnswerOnly ?? undefined,
               missingComponents,
               analysisAvailable,
@@ -3201,7 +3239,7 @@ const workflowDataRef = useRef<{
               coerceString(bannerPayload?.message) ??
               'Waiting for the current analysis run to seal required inputs before revisions can start.',
             route,
-            flowMode: flowModeValue ?? flow,
+            flowMode: resolvedFlowMode,
             missingComponents: pendingComponents,
           };
           setFollowUpBanner(banner);
@@ -3218,7 +3256,7 @@ const workflowDataRef = useRef<{
             undefined,
             undefined,
             undefined,
-            flowModeValue ?? flow,
+            resolvedFlowMode,
             {
               followUpRoute: route,
               missingComponents: pendingComponents,
@@ -3243,6 +3281,11 @@ const workflowDataRef = useRef<{
             route,
             reason: reasonKey ?? undefined,
           };
+          const normalizedLanes = Array.isArray(eventData.lanes)
+            ? (eventData.lanes as unknown[])
+                .map((lane) => (typeof lane === 'string' ? lane.toLowerCase() : ''))
+                .filter((lane): lane is string => lane.length > 0)
+            : undefined;
           const questionBundle =
             normalizeQuestionBundle(
               eventData.revision_questions ?? eventData.questions ?? (eventData.banner as any)?.questions,
@@ -3260,11 +3303,6 @@ const workflowDataRef = useRef<{
             );
           }
           setFollowUpBanner(banner);
-          const normalizedLanes = Array.isArray(eventData.lanes)
-            ? (eventData.lanes as unknown[])
-                .map((lane) => (typeof lane === 'string' ? lane.toLowerCase() : ''))
-                .filter((lane): lane is string => lane.length > 0)
-            : undefined;
           const rawFocus =
             coerceString((eventData as Record<string, unknown>)?.analysis_focus) ??
             coerceString((eventData as Record<string, unknown>)?.requested_focus) ??
@@ -3531,7 +3569,7 @@ const workflowDataRef = useRef<{
               sequence,
               parallelGroup,
               scheduleStage,
-              flowModeValue,
+          resolvedFlowMode,
               { lane: 'sql' }
             );
             if (eventData.fallback_reason) {
@@ -3608,7 +3646,7 @@ const workflowDataRef = useRef<{
             sequence,
             parallelGroup,
             scheduleStage,
-            flowModeValue,
+          resolvedFlowMode,
             { lane: 'sql' }
           );
           break;
@@ -3650,7 +3688,7 @@ const workflowDataRef = useRef<{
             sequence,
             parallelGroup,
             scheduleStage,
-            flowModeValue,
+          resolvedFlowMode,
             { lane: 'sql', reused: Boolean(eventData.reused) }
           );
           emitResultOnce();
@@ -3712,7 +3750,7 @@ const workflowDataRef = useRef<{
             sequence,
             parallelGroup,
             scheduleStage,
-            flowModeValue,
+          resolvedFlowMode,
             { lane: eventData.lane ?? 'market', reused: Boolean(eventData.reused) }
           );
           updateStep('tool_execution', 'completed', ['Stock widget ready'], eventData, stepInfo.elapsed_ms, stepInfo.ts);
@@ -3744,7 +3782,7 @@ const workflowDataRef = useRef<{
             sequence,
             parallelGroup,
             scheduleStage,
-            flowModeValue,
+          resolvedFlowMode,
             { lane: eventData.lane ?? 'web', reused: Boolean(eventData.reused) }
           );
           updateStep('web_research_agent', 'completed', ['Web context ready'], eventData, stepInfo.elapsed_ms, stepInfo.ts);
@@ -3882,7 +3920,7 @@ const workflowDataRef = useRef<{
               type: 'assistant',
               content: header,
               chartSpec: normalizedChartSpec,
-              flowMode: flow,
+              flowMode: resolvedFlowMode,
               scheduleStage: eventData.schedule_stage || scheduleStage || 'chart',
               parallelGroup,
               sequence,
@@ -4580,7 +4618,7 @@ const workflowDataRef = useRef<{
                 title: 'Narrative Updated (Cached)',
                 message: 'Quickly refreshed the narrative using cached SQL and web context.',
                 route: routeCandidate,
-                flowMode: existingBanner?.flowMode ?? flowModeValue ?? flow,
+                flowMode: existingBanner?.flowMode ?? resolvedFlowMode,
                 refreshMode: 'light',
               };
               setFollowUpBanner(banner);
@@ -4792,7 +4830,7 @@ const workflowDataRef = useRef<{
                 sequence,
                 parallelGroup,
                 scheduleStage,
-                flowModeValue,
+          resolvedFlowMode,
                 { lane: 'market' }
               );
             }
@@ -4807,7 +4845,7 @@ const workflowDataRef = useRef<{
                 sequence,
                 parallelGroup,
                 scheduleStage,
-                flowModeValue,
+          resolvedFlowMode,
                 { lane: 'web' }
               );
             }
@@ -4848,7 +4886,7 @@ const workflowDataRef = useRef<{
                 sequence,
                 parallelGroup,
                 scheduleStage,
-                flowModeValue,
+          resolvedFlowMode,
                 { lane: 'market', reused: Boolean(eventData.reused) }
               );
             }
@@ -4869,7 +4907,7 @@ const workflowDataRef = useRef<{
                 sequence,
                 parallelGroup,
                 scheduleStage,
-                flowModeValue,
+          resolvedFlowMode,
                 { lane: 'web', reused: Boolean(eventData.reused) }
               );
 
@@ -5355,7 +5393,7 @@ const workflowDataRef = useRef<{
               toolFanoutResults: [],
               concurrencyLimit: 0,
               webSearch: null,
-              flowMode: flow,
+              flowMode: telemetryFlowModeRef.current ?? flow,
               analysisOverview: null,
               analysisSources: null,
               analysisBundle: null,
@@ -5412,10 +5450,13 @@ const workflowDataRef = useRef<{
             bannerPayload['analysis_available'] ?? detailsPayload['analysis_available'] ?? eventData.analysis_available,
           );
           const flowModeOverride =
-            (coerceString(
-              (bannerPayload['flowMode'] ?? bannerPayload['flow_mode'] ?? detailsPayload['flowMode'] ?? detailsPayload['flow_mode'] ?? eventData.flow_mode) as
-                unknown,
-            ) as FlowMode | undefined) ?? flowModeValue ?? flow;
+            coerceFlowMode(
+              bannerPayload['flowMode'] ??
+                bannerPayload['flow_mode'] ??
+                detailsPayload['flowMode'] ??
+                detailsPayload['flow_mode'] ??
+                eventData.flow_mode,
+            ) ?? resolvedFlowMode;
 
           const summaryCopy =
             coerceString(bannerPayload['summary'] ?? detailsPayload['summary'] ?? eventData.summary) ?? undefined;
@@ -5490,7 +5531,7 @@ const workflowDataRef = useRef<{
             const followUpRoute = coerceString(eventData?.follow_up_route) ?? 'full_pipeline';
             const analysisAvailable = coerceBoolean(eventData?.analysis_available);
             const flowModeOverride =
-              (typeof eventData?.flow_mode === 'string' ? (eventData.flow_mode as FlowMode) : undefined) ?? flowModeValue ?? flow;
+              coerceFlowMode(eventData?.flow_mode) ?? resolvedFlowMode;
             emitResultOnce({ content: finalMessage });
             finalizationMessageRef.current =
               finalMessage.trim().toLowerCase() !== 'output ready' ? finalMessage : finalizationMessageRef.current;
@@ -5652,7 +5693,7 @@ const workflowDataRef = useRef<{
       toolFanoutResults: [],
       concurrencyLimit: 0,
       webSearch: null,
-      flowMode: flow,
+      flowMode: telemetryFlowModeRef.current ?? flow,
       analysisOverview: null,
       analysisSources: null,
       analysisBundle: null,
@@ -5709,6 +5750,7 @@ const workflowDataRef = useRef<{
     laneReuseNotices,
     agenticRevisionActive,
     freshLaneStates,
+    flowMode: telemetryFlowMode,
     redirectNotice,
 
     // Progressive rendering state
@@ -5736,6 +5778,33 @@ const workflowDataRef = useRef<{
     clearRedirectNotice,
   };
 };
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

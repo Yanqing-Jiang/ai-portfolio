@@ -36,6 +36,47 @@ interface LiveArtifactsProps {
   latencyGuardrail?: LatencyGuardrail | null;
 }
 
+const FLOW_PRESENTATION: Record<
+  FlowMode,
+  {
+    badge: string;
+    badgeClass: string;
+    finalHeading: string;
+    draftHeading: string;
+    analysisContainer: string;
+    analysisHeader: string;
+    overviewWrapper: string;
+  }
+> = {
+  'planner-executor': {
+    badge: 'Planner-Executor Flow',
+    badgeClass: 'border-emerald-400/60 bg-emerald-500/10 text-emerald-200',
+    finalHeading: 'Financial Analysis',
+    draftHeading: 'Analysis Draft',
+    analysisContainer: 'border-emerald-500/30 bg-emerald-500/10',
+    analysisHeader: 'border-emerald-500/25 bg-emerald-500/15 text-emerald-100/80',
+    overviewWrapper: 'border-emerald-500/20 bg-emerald-500/5 text-emerald-50/90',
+  },
+  'single-agent': {
+    badge: 'Single-Agent Flow',
+    badgeClass: 'border-blue-400/60 bg-blue-500/10 text-blue-200',
+    finalHeading: 'Financial Analysis',
+    draftHeading: 'Analysis Draft',
+    analysisContainer: 'border-blue-500/30 bg-blue-500/10',
+    analysisHeader: 'border-blue-500/25 bg-blue-500/15 text-blue-100/80',
+    overviewWrapper: 'border-blue-500/20 bg-blue-500/5 text-blue-50/90',
+  },
+  'multi-agent': {
+    badge: 'Multi-Agent Supervisor Flow',
+    badgeClass: 'border-purple-400/60 bg-purple-500/10 text-purple-200',
+    finalHeading: 'Supervisor Narrative',
+    draftHeading: 'Supervisor Narrative Draft',
+    analysisContainer: 'border-purple-500/30 bg-purple-500/10',
+    analysisHeader: 'border-purple-500/25 bg-purple-500/15 text-purple-100/80',
+    overviewWrapper: 'border-purple-500/20 bg-purple-500/5 text-purple-50/90',
+  },
+};
+
 export const LiveArtifacts: React.FC<LiveArtifactsProps> = ({
   chartSpec,
   dataSample,
@@ -47,6 +88,7 @@ export const LiveArtifacts: React.FC<LiveArtifactsProps> = ({
   webSearch,
   stockWidget,
   isLoading,
+  flowMode = 'planner-executor',
   persistOnComplete = false,
   analysisOverview = null,
   specialistCards = [],
@@ -74,7 +116,8 @@ export const LiveArtifacts: React.FC<LiveArtifactsProps> = ({
   const hasAnalysis = Boolean(renderedAnalysis);
   const runComplete = Boolean(finalAnalysis);
   const allowArtifacts = isLoading || !runComplete || persistOnComplete;
-  const analysisHeading = showingFinalAnalysis ? 'Financial Analysis' : 'Analysis Draft';
+  const flowTheme = FLOW_PRESENTATION[flowMode] ?? FLOW_PRESENTATION['planner-executor'];
+  const analysisHeading = showingFinalAnalysis ? flowTheme.finalHeading : flowTheme.draftHeading;
   const supplementalCards = specialistCards.filter((card) => card.type !== 'web_context' && card.type !== 'stock_widget');
   const hasSupplementalCards = supplementalCards.length > 0;
   const evidenceEntries = analysisOverview?.evidence ?? [];
@@ -140,12 +183,16 @@ export const LiveArtifacts: React.FC<LiveArtifactsProps> = ({
 
   if (hasAnalysis && allowArtifacts) {
     cards.push(
-      <div key="analysis" className="rounded-xl overflow-hidden border border-blue-500/30 bg-blue-500/10">
-        <div className="border-b border-blue-500/25 bg-blue-500/15 px-4 py-2 text-[11px] font-semibold uppercase tracking-wide text-blue-100/80">
+      <div key="analysis" className={`rounded-xl overflow-hidden border ${flowTheme.analysisContainer}`}>
+        <div
+          className={`border-b px-4 py-2 text-[11px] font-semibold uppercase tracking-wide ${flowTheme.analysisHeader}`}
+        >
           {analysisHeading}
         </div>
         {showingFinalAnalysis && analysisOverview ? (
-          <div className="space-y-3 border-b border-blue-500/20 bg-blue-500/5 px-4 py-3 text-[11px] leading-relaxed text-blue-50/90">
+          <div
+            className={`space-y-3 border-b px-4 py-3 text-[11px] leading-relaxed ${flowTheme.overviewWrapper}`}
+          >
             {analysisOverview.tldr ? (
               <div>
                 <div className="font-semibold uppercase tracking-wide text-emerald-300">Quick Take</div>
@@ -306,7 +353,16 @@ export const LiveArtifacts: React.FC<LiveArtifactsProps> = ({
     return null;
   }
 
-  return <div className="space-y-4">{cards}</div>;
+  return (
+    <div className="space-y-4">
+      <div className="flex justify-end">
+        <span className={`text-[10px] uppercase tracking-wide px-2 py-1 rounded-full border ${flowTheme.badgeClass}`}>
+          {flowTheme.badge}
+        </span>
+      </div>
+      <div className="space-y-4">{cards}</div>
+    </div>
+  );
 };
 
 export default LiveArtifacts;

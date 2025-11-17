@@ -37,9 +37,10 @@ describe('LiveArtifacts', () => {
         isLoading={true}
       />,
     );
-    expect(screen.getByText(/Analysis Draft/i)).toBeInTheDocument();
+    expect(screen.getByText(/Supervisor Narrative Draft/i)).toBeInTheDocument();
     expect(screen.getByTestId('chart-card')).toBeInTheDocument();
     expect(screen.getByText(/Generated SQL Query/i)).toBeInTheDocument();
+    expect(screen.getByText(/Multi-Agent Supervisor Flow/i)).toBeInTheDocument();
   });
 
   it('shows final analysis overview when persisted', () => {
@@ -81,6 +82,7 @@ describe('LiveArtifacts', () => {
     expect(screen.getByRole('link', { name: /NVIDIA Q2 2025 earnings beat/i })).toHaveAttribute('href', 'https://example.com/nvda');
     expect(screen.getByText(/Guardrail: Exceeded/i)).toBeInTheDocument();
     expect(screen.getByText(/Confidence: 82%/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/Supervisor Narrative/i).length).toBeGreaterThan(0);
   });
 
   it('hides when analysis is finalized and not loading', () => {

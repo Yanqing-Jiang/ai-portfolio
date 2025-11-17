@@ -15,8 +15,13 @@ vi.mock('../common', () => ({
   AnalysisCard: () => <div data-testid="analysis-card" />,
 }));
 
+const processPanelPropsSpy = vi.fn();
+
 vi.mock('../common/ProcessPanel', () => ({
-  ProcessPanel: () => <div data-testid="process-panel" />,
+  ProcessPanel: (props: any) => {
+    processPanelPropsSpy(props);
+    return <div data-testid="process-panel" data-flow-mode={props.flowMode} />;
+  },
 }));
 
 vi.mock('./', () => ({
@@ -71,6 +76,11 @@ const buildBaseStreamState = () => ({
   followUpBanner: null,
   slotStatuses: {},
   slotFollowups: [],
+  laneReuseNotices: [],
+  agenticRevisionActive: false,
+  freshLaneStates: {},
+  redirectNotice: null,
+  flowMode: 'planner-executor' as const,
   snapshotReuse: null,
   specialistCards: [],
   latencyGuardrail: null,
@@ -82,6 +92,7 @@ const buildBaseStreamState = () => ({
   handleQuery: vi.fn(),
   submitClarification: vi.fn(),
   stopAnalysis: vi.fn(),
+  clearRedirectNotice: vi.fn(),
 });
 
 type StreamState = ReturnType<typeof buildBaseStreamState>;
@@ -94,6 +105,7 @@ const buildStreamState = (overrides: Partial<StreamState> = {}): StreamState => 
 describe('MemoryAnalyticsPage flow selector locking', () => {
   beforeEach(() => {
     mockUseAnalyticsMemoryStream.mockReset();
+    processPanelPropsSpy.mockReset();
   });
 
   it('keeps the flow selector enabled before the first query', () => {
@@ -134,4 +146,21 @@ describe('MemoryAnalyticsPage flow selector locking', () => {
       expect(screen.getByRole('combobox')).toBeDisabled();
     });
   });
+  it('passes telemetry flow mode into ProcessPanel', () => {
+    mockUseAnalyticsMemoryStream.mockReturnValue(
+      buildStreamState({
+        chatHistory: [buildChatMessage()],
+        flowMode: 'multi-agent',
+      }),
+    );
+
+    render(<MemoryAnalyticsPage />);
+
+    expect(screen.getByTestId('process-panel').getAttribute('data-flow-mode')).toBe('multi-agent');
+  });
 });
+
+
+
+
+

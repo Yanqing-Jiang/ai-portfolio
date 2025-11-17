@@ -53,7 +53,7 @@ vi.mock('../utils', () => ({
 
 beforeEach(() => {
   countUserInputMock.mockClear();
-  startStreamMock.mockClear();
+  startStreamMock.mockReset();
   setErrorMock.mockClear();
   setCurrentStatusMock.mockClear();
 });
@@ -87,5 +87,21 @@ describe('useAnalyticsSqlStream', () => {
     expect(startStreamMock).not.toHaveBeenCalled();
     expect(setErrorMock).toHaveBeenCalledWith('Rate limit exceeded.');
     expect(setCurrentStatusMock).toHaveBeenCalledWith('Error: Rate limit exceeded.');
+  });
+
+  it('updates flow mode when telemetry metadata is streamed', async () => {
+    startStreamMock.mockImplementationOnce(async (_endpoint: string, onEvent: (data: any) => void) => {
+      onEvent({ event: 'status', data: { message: 'starting', mode: 'multi_agent' } });
+      onEvent({ event: 'done', data: {} });
+      return 'mock-stream';
+    });
+
+    const { result } = renderHook(() => useAnalyticsSqlStream());
+
+    await act(async () => {
+      await result.current.handleQuery('Check flow mode');
+    });
+
+    expect(result.current.flowMode).toBe('multi-agent');
   });
 });

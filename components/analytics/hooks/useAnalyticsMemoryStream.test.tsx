@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 import React from 'react';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, act, screen, renderHook, waitFor } from '@testing-library/react';
 import { useAnalyticsMemoryStream } from './useAnalyticsMemoryStream';
@@ -91,6 +93,9 @@ beforeEach(() => {
   countUserInputMock.mockClear();
   startStreamMock.mockClear();
   (globalThis as any).__TEST_EVENTS__ = undefined;
+  if (typeof window !== 'undefined') {
+    window.sessionStorage.clear();
+  }
 });
 
 describe('useAnalyticsMemoryStream rate limiting', () => {
@@ -116,6 +121,80 @@ describe('useAnalyticsMemoryStream rate limiting', () => {
   });
 });
 
+describe('useAnalyticsMemoryStream flow mode telemetry', () => {
+  it('mirrors the selected flow before telemetry events', async () => {
+    const { result } = renderHook(() => useAnalyticsMemoryStream('multi-agent'));
+
+    expect(result.current.flowMode).toBe('multi-agent');
+
+    await act(async () => {
+      await result.current.handleQuery('Flow probe');
+    });
+
+    expect(result.current.flowMode).toBe('multi-agent');
+  });
+
+  it('switches modes when SSE metadata provides a new mode token', async () => {
+    (globalThis as any).__TEST_EVENTS__ = [
+      { event: 'status', data: { step: 'analysis_revision', mode: 'single_agent' } },
+    ];
+
+    const { result } = renderHook(() => useAnalyticsMemoryStream('planner-executor'));
+
+    await act(async () => {
+      await result.current.handleQuery('Switch flows');
+    });
+
+    await waitFor(() => {
+      expect(result.current.flowMode).toBe('single-agent');
+    });
+  });
+
+  it('normalizes flow_mode aliases with underscores', async () => {
+    (globalThis as any).__TEST_EVENTS__ = [
+      { event: 'status', data: { step: 'analysis_ready', flow_mode: 'multi_agent' } },
+    ];
+
+    const { result } = renderHook(() => useAnalyticsMemoryStream('single-agent'));
+
+    await act(async () => {
+      await result.current.handleQuery('Alias test');
+    });
+
+    await waitFor(() => {
+      expect(result.current.flowMode).toBe('multi-agent');
+    });
+  });
+});
+
+describe('useAnalyticsMemoryStream ledger replays', () => {
+  it('detects multi-agent telemetry from the November 17 ledger', async () => {
+    const ledgerPath = resolve(
+      process.cwd(),
+      'docs',
+      'agent-process-ledger - 2025-11-17T013324.509.json',
+    );
+    const ledgerEntries = JSON.parse(readFileSync(ledgerPath, 'utf-8'));
+    (globalThis as any).__TEST_EVENTS__ = ledgerEntries.map((entry: any) => ({
+      event: entry.id,
+      data: {
+        ...entry,
+        mode: entry.flowMode,
+        flow_mode: entry.flowMode,
+      },
+    }));
+
+    const { result } = renderHook(() => useAnalyticsMemoryStream('planner-executor'));
+
+    await act(async () => {
+      await result.current.handleQuery('Replay ledger telemetry');
+    });
+
+    await waitFor(() => {
+      expect(result.current.flowMode).toBe('multi-agent');
+    });
+  });
+});
 function HookHarness({ query, flow }: { query: string; flow: 'planner-executor' | 'single-agent' | 'multi-agent' }) {
   const { handleQuery, chatHistory, processSteps, revisionMode, analysisBundle, specialistCards } = useAnalyticsMemoryStream(flow);
   const firstResult = chatHistory.find((m) => m.type === 'result');
@@ -1491,3 +1570,5 @@ describe('useAnalyticsMemoryStream agent tool events', () => {
     expect(result.current.redirectNotice).toBeNull();
   });
 });
+
+

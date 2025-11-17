@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import { useAnalyticsStream } from './useAnalyticsStream';
 import { applyChartOps } from '../utils';
 import { useProcessSteps } from './useProcessSteps';
 import { STEP_NAME_SQL, STEP_ORDER_SQL } from '../../../constants/analytics';
 import { apiService } from '../../../services/apiService';
+import type { FlowMode } from '../types';
 
 const STEP_ALIASES: Record<string, string> = {
   plan_and_select_template: 'schema',
@@ -62,18 +63,48 @@ const extractStepDetails = (data: any) => {
   return Object.keys(rest).length ? rest : undefined;
 };
 
+const FLOW_MODE_ALIASES: Record<string, FlowMode> = {
+  'planner-executor': 'planner-executor',
+  'planner_executor': 'planner-executor',
+  planner: 'planner-executor',
+  'single-agent': 'single-agent',
+  'single_agent': 'single-agent',
+  'multi-agent': 'multi-agent',
+  'multi_agent': 'multi-agent',
+  supervisor: 'multi-agent',
+};
+
+const coerceFlowMode = (raw: unknown): FlowMode | undefined => {
+  if (typeof raw !== 'string') {
+    return undefined;
+  }
+  const normalized = raw.trim().toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+  return FLOW_MODE_ALIASES[normalized];
+};
+
 export const useAnalyticsSqlStream = () => {
   const [chartSpec, setChartSpec] = useState<any>(null);
   const [analysis, setAnalysis] = useState('');
   const [sqlQuery, setSqlQuery] = useState('');
   const [dataSample, setDataSample] = useState<any[] | null>(null);
   const [streamingText, setStreamingText] = useState('');
+  const [flowMode, setFlowMode] = useState<FlowMode>('planner-executor');
 
   const streamHook = useAnalyticsStream();
   const stepsHook = useProcessSteps({
     stepNames: STEP_NAME_SQL,
     stepOrder: STEP_ORDER_SQL,
   });
+
+  const applyTelemetryFlowMode = useCallback((candidate?: FlowMode) => {
+    if (!candidate) {
+      return;
+    }
+    setFlowMode((prev) => (prev === candidate ? prev : candidate));
+  }, []);
 
   const handleQuery = async (query: string) => {
     if (!query.trim() || streamHook.isLoading) return;
@@ -99,6 +130,10 @@ export const useAnalyticsSqlStream = () => {
     await streamHook.startStream(endpoint, (data) => {
       const eventType = data.event || data.type;
       const eventData = data.data || data;
+      const detectedFlowMode =
+        coerceFlowMode(eventData?.mode) ??
+        coerceFlowMode((eventData as any)?.flow_mode);
+      applyTelemetryFlowMode(detectedFlowMode);
 
       switch (eventType) {
         case 'status':
@@ -338,6 +373,7 @@ export const useAnalyticsSqlStream = () => {
     sqlQuery,
     dataSample,
     streamingText,
+    flowMode,
 
     // Stream state
     isLoading: streamHook.isLoading,
