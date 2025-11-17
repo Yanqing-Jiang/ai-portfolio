@@ -1228,6 +1228,12 @@ async def _web_research_agent(context: AgentRunContext) -> AgentResult:
     payload['ready'] = True
     payload['from_cache'] = False
     payload['attempts'] = attempts_meta
+    questions_payload = getattr(search_result, "questions", None)
+    if snapshot and isinstance(questions_payload, Mapping):
+        try:
+            snapshot.record_web_research_questions(questions_payload)
+        except Exception:
+            logger.debug("Failed to persist multi-agent web question bundle", exc_info=True)
     web_ctx.update(payload)
     web_ctx['status'] = 'run'
 
@@ -3516,6 +3522,15 @@ class MultiAgentFlow:
         ):
             yield self._annotate(event)
 
+        web_search_result = getattr(ctx, "web_search", None)
+        if snapshot and web_search_result is not None:
+            questions_payload = getattr(web_search_result, "questions", None)
+            if isinstance(questions_payload, Mapping):
+                try:
+                    snapshot.record_web_research_questions(questions_payload)
+                except Exception:
+                    logger.debug("Failed to persist web research questions for multi-agent refresh", exc_info=True)
+
         if force_revision_refresh and getattr(ctx.artifacts, "web", None):
             await self._planner._persist_session_state(
                 ctx,
@@ -3589,6 +3604,14 @@ class MultiAgentFlow:
         lane_hint = normalized_plan.get("lane", "narrative")
         web_action = normalized_plan.get("web", "reuse")
         questions_bundle = self._resolve_revision_questions(normalized_plan)
+        if questions_bundle is not None:
+            self._revision_question_bundle = questions_bundle
+            snapshot = self._session_snapshot
+            if snapshot is not None:
+                try:
+                    snapshot.record_revision_questions(questions_bundle.to_dict())
+                except Exception:
+                    logger.debug("Failed to persist revision question bundle on snapshot", exc_info=True)
 
         ctx = await self._planner.initialize_context(query, session_id=session_id)
         _apply_revision_context(ctx)
@@ -3609,6 +3632,39 @@ class MultiAgentFlow:
             questions=questions_bundle,
             session_id=session_id,
         )
+
+        agentic_revision_active = bool(
+            (revision_directive and getattr(revision_directive, "agentic", False))
+            or self._agentic_revision_mode
+        )
+        if agentic_revision_active:
+            async for event in self._stream_agentic_revision(
+                session_id=session_id,
+                query=query,
+                lane=selected_lane,
+                web_action=web_action,
+                reason=reason or "agentic_revision",
+                source=source or "agentic_revision",
+                questions=questions_bundle,
+            ):
+                yield event
+            resolved_source = source or "fresh_revision"
+            resolved_reason = reason or resolved_source
+            ready_event = self._build_analysis_revision_ready_event(
+                session_id=session_id,
+                selected_lane=selected_lane,
+                questions=questions_bundle,
+                resolved_source=resolved_source,
+                resolved_reason=resolved_reason,
+                web_ready_seen=web_action == "refresh",
+                explicit_reason=bool(reason),
+            )
+            self._revision_inputs_outcome = {
+                "lane": selected_lane,
+                "web": "refresh" if web_action == "refresh" else "reuse",
+            }
+            yield ready_event
+            return
 
         if web_action == "refresh":
             async for event in self.run_web_refresh(
@@ -3664,6 +3720,7 @@ class MultiAgentFlow:
         *,
         session_id: Optional[str],
         analysis: Optional[str] = None,
+        requested_focus: Optional[str] = None,
         reason: Optional[str] = None,
         source: Optional[str] = None,
         revision_directive: Optional["RevisionDirective"] = None,
@@ -3682,6 +3739,10 @@ class MultiAgentFlow:
         if effective_lane not in {"chart", "narrative"}:
             effective_lane = "narrative"
         should_refresh_web = refresh_web if refresh_web is not None else web_from_plan == "refresh"
+        agentic_revision_active = bool(
+            (revision_directive and getattr(revision_directive, "agentic", False))
+            or self._agentic_revision_mode
+        )
 
         question_bundle = questions or self._revision_question_bundle
         if question_bundle is None:
@@ -3737,6 +3798,46 @@ class MultiAgentFlow:
             annotated_questions = self._maybe_tag_session_metadata(annotated_questions, session_id)
             yield annotated_questions
 
+        if not self._revision_inputs_outcome:
+            try:
+                self._record_lane_decision(
+                    lane=effective_lane,
+                    planned_lane=effective_lane,
+                    questions=question_bundle,
+                    session_id=session_id,
+                )
+            except Exception:
+                logger.debug("Failed to record multi-agent lane decision", exc_info=True)
+
+        if agentic_revision_active:
+            async for event in self._stream_agentic_revision(
+                session_id=session_id,
+                query=query,
+                lane=effective_lane,
+                web_action="refresh" if should_refresh_web else "reuse",
+                reason=reason or "agentic_revision",
+                source=source or "agentic_revision",
+                questions=question_bundle,
+            ):
+                yield event
+            resolved_source = source or "fresh_revision"
+            resolved_reason = reason or resolved_source
+            ready_event = self._build_analysis_revision_ready_event(
+                session_id=session_id,
+                selected_lane=effective_lane,
+                questions=question_bundle,
+                resolved_source=resolved_source,
+                resolved_reason=resolved_reason,
+                web_ready_seen=should_refresh_web,
+                explicit_reason=bool(reason),
+            )
+            self._revision_inputs_outcome = {
+                "lane": effective_lane,
+                "web": "refresh" if should_refresh_web else "reuse",
+            }
+            yield ready_event
+            return
+
         resolved_source = source or "fresh_revision"
         resolved_reason = reason or resolved_source
         web_ready_seen = False
@@ -3754,17 +3855,6 @@ class MultiAgentFlow:
                     web_ready_seen = True
                 yield event
 
-        if not self._revision_inputs_outcome:
-            try:
-                self._record_lane_decision(
-                    lane=effective_lane,
-                    planned_lane=effective_lane,
-                    questions=question_bundle,
-                    session_id=session_id,
-                )
-            except Exception:
-                logger.debug("Failed to record multi-agent lane decision", exc_info=True)
-
         ctx = await self._planner.initialize_context(query, session_id=session_id)
         registry = get_planner_tool_registry()
         if revision_directive is not None:
@@ -3779,6 +3869,8 @@ class MultiAgentFlow:
                 ctx.revision_focus = focus_hint
             if getattr(revision_directive, "search_topics", None):
                 ctx.revision_search_topics = list(revision_directive.search_topics)
+        if requested_focus:
+            setattr(ctx, "revision_focus", requested_focus)
         tool_stream = registry.invoke(
             "analysis_revision",
             self._planner._pipeline,
@@ -3796,31 +3888,125 @@ class MultiAgentFlow:
         ):
             yield event
 
+        ready_event = self._build_analysis_revision_ready_event(
+            session_id=session_id,
+            selected_lane=effective_lane,
+            questions=question_bundle,
+            resolved_source=resolved_source,
+            resolved_reason=resolved_reason,
+            web_ready_seen=web_ready_seen,
+            explicit_reason=bool(reason),
+        )
+        self._revision_inputs_outcome = {
+            "lane": effective_lane,
+            "web": "refresh" if should_refresh_web else "reuse",
+        }
+        yield ready_event
+
+    async def _stream_agentic_revision(
+        self,
+        *,
+        session_id: str,
+        query: str,
+        lane: str,
+        web_action: str,
+        reason: Optional[str],
+        source: Optional[str],
+        questions: Optional[RevisionQuestionBundle],
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        normalized_lane = lane if lane in {"chart", "narrative"} else "narrative"
+        normalized_web = "refresh" if web_action == "refresh" else "reuse"
+        if not self._supervisor_agent or self._orchestrator is None:
+            logger.warning(
+                "Agentic multi-agent revision requested but supervisor runtime unavailable; emitting guardrail.",
+                extra={"session_id": session_id},
+            )
+            disabled_event = {
+                "event": "revision_agent_disabled",
+                "data": {
+                    "session_id": session_id,
+                    "lane": normalized_lane,
+                    "web": normalized_web,
+                    "revision": True,
+                    "follow_up_route": self.follow_up_route.value,
+                    "reason": (reason or "agent_runtime_disabled"),
+                    "source": source or "agentic_revision",
+                },
+            }
+            if questions:
+                disabled_event["data"]["questions"] = questions.to_dict()
+            annotated_disabled = self._annotate(disabled_event)
+            annotated_disabled = self._maybe_tag_session_metadata(annotated_disabled, session_id)
+            yield annotated_disabled
+            return
+
+        session_event = EventEmitter.session_started(session_id)
+        annotated_session = self._annotate(session_event)
+        annotated_session = self._maybe_tag_session_metadata(annotated_session, session_id)
+        yield annotated_session
+
+        coordination_payload: Dict[str, Any] = {
+            "session_id": session_id,
+            "lane": normalized_lane,
+            "web": normalized_web,
+            "revision": True,
+            "follow_up_route": self.follow_up_route.value,
+            "reason": reason or "agentic_revision",
+            "source": source or "agentic_revision",
+        }
+        if questions:
+            coordination_payload["questions"] = questions.to_dict()
+        coordination_event = self._annotate({"event": "agent_coordination", "data": coordination_payload})
+        coordination_event = self._maybe_tag_session_metadata(coordination_event, session_id)
+        yield coordination_event
+
+        self._prepare_context(query)
+        self._shared_context["session_id"] = session_id
+        plan_payload: Dict[str, Any] = {"lane": normalized_lane, "web": normalized_web}
+        if questions:
+            plan_payload["questions"] = questions.to_dict()
+        self._shared_context["revision_inputs_plan"] = plan_payload
+        lane_requirements = dict(self._shared_context.get("lane_refresh_required") or {})
+        if normalized_web == "refresh":
+            lane_requirements["web"] = True
+        self._shared_context["lane_refresh_required"] = lane_requirements
+
+        async for event in self._run_agent_orchestration(query, session_id):
+            yield self._maybe_tag_session_metadata(event, session_id)
+
+    def _build_analysis_revision_ready_event(
+        self,
+        *,
+        session_id: Optional[str],
+        selected_lane: str,
+        questions: Optional[RevisionQuestionBundle],
+        resolved_source: str,
+        resolved_reason: str,
+        web_ready_seen: bool,
+        explicit_reason: bool = False,
+    ) -> Dict[str, Any]:
         ready_event = EventEmitter.status(
             "analysis_revision_ready",
             "Analysis revision applied.",
         )
         ready_event.setdefault("data", {})
+        reason_value = resolved_reason if (explicit_reason or web_ready_seen) else "cached_revision"
         ready_event["data"].update(
             {
                 "lane": "analysis",
                 "revision": True,
                 "source": resolved_source,
-                "reason": resolved_reason if (reason or web_ready_seen) else "cached_revision",
+                "reason": reason_value,
                 "from_cache": not web_ready_seen,
                 "web_refreshed": web_ready_seen,
-                "selected_lane": effective_lane,
-                "questions": question_bundle.to_dict() if question_bundle else None,
-                "session_id": session_id,
+                "selected_lane": selected_lane,
+                "questions": questions.to_dict() if questions else None,
             }
         )
+        if session_id:
+            ready_event["data"]["session_id"] = session_id
         annotated_ready = self._annotate(ready_event)
-        annotated_ready = self._maybe_tag_session_metadata(annotated_ready, session_id)
-        self._revision_inputs_outcome = {
-            "lane": effective_lane,
-            "web": "refresh" if should_refresh_web else "reuse",
-        }
-        yield annotated_ready
+        return self._maybe_tag_session_metadata(annotated_ready, session_id)
 
     def _prepare_context(self, query: str) -> None:
         preserved_market = self._shared_context.get('market', {})

@@ -1047,6 +1047,62 @@ describe('useAnalyticsMemoryStream follow-up guidance', () => {
       expect(result.current.followUpBanner?.questions?.industry).toContain('industry');
     });
   });
+
+  it('uses missing_analysis banner copy when reason provided', async () => {
+    const { result } = renderHook(() => useAnalyticsMemoryStream('single-agent'));
+
+    (globalThis as any).__TEST_EVENTS__ = [
+      {
+        event: 'follow_up_route',
+        data: {
+          route: 'cannot_revise',
+          banner: {
+            route: 'cannot_revise',
+            reason: 'missing_analysis',
+          },
+        },
+      },
+    ];
+
+    await act(async () => {
+      await result.current.handleQuery('blocked revision');
+    });
+
+    await waitFor(() => {
+      expect(result.current.followUpBanner?.title).toBe('Baseline Missing');
+      expect(result.current.followUpBanner?.reason).toBe('missing_analysis');
+    });
+  });
+
+  it('handles revision_agent_disabled events by surfacing coordination errors', async () => {
+    const { result } = renderHook(() => useAnalyticsMemoryStream('multi-agent'));
+
+    (globalThis as any).__TEST_EVENTS__ = [
+      {
+        event: 'session_started',
+        data: { session_id: 'rev-guard' },
+      },
+      {
+        event: 'revision_agent_disabled',
+        data: {
+          lane: 'analysis',
+          reason: 'runtime unavailable',
+        },
+      },
+      { event: 'done' },
+    ];
+
+    await act(async () => {
+      await result.current.handleQuery('agent guardrail');
+    });
+
+    await waitFor(() => {
+      const coordinationStep = result.current.processSteps.find((step) => step.id === 'agent_coordination');
+      expect(coordinationStep?.status).toBe('error');
+      expect(result.current.followUpBanner?.title).toContain('Agent Runtime');
+      expect(result.current.followUpBanner?.route).toBe('cannot_revise');
+    });
+  });
 });
 
 describe('useAnalyticsMemoryStream web research questions', () => {

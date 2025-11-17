@@ -26,6 +26,7 @@ from analytics.flows.multi_agent import (
     _market_agent,
     _web_research_agent,
 )
+from analytics.flows.revision_directive import RevisionDirective
 from analytics.core.session_state import SessionStateSnapshot
 from analytics.flows.sequencer import PlannerSequencer
 from analytics.flows.orchestrator import AgentResult, AgentRunContext
@@ -801,3 +802,66 @@ def test_sequencer_lane_order():
         "market_stage",
         "analysis_stage",
     ]
+
+
+def test_multi_agent_agentic_revision_emits_guardrail_when_runtime_missing() -> None:
+    flow = MultiAgentFlow()
+    flow._supervisor_agent = None
+    flow._orchestrator = None
+    directive = RevisionDirective.from_payload(
+        raw_text="refresh analysis lane",
+        chart_patch=None,
+        targets={"analysis"},
+        agentic=True,
+        requested_focus="focus on NVDA",
+    )
+
+    async def _run():
+        events_local = []
+        async for event in flow.run_analysis_refresh(
+            "NVDA follow-up",
+            session_id="sess-guard",
+            requested_focus="focus on NVDA",
+            revision_directive=directive,
+            revision_inputs_plan={"lane": "narrative", "web": "reuse"},
+        ):
+            events_local.append(event)
+        return events_local
+
+    events = asyncio.run(_run())
+    assert any(evt.get("event") == "revision_agent_disabled" for evt in events)
+
+
+def test_multi_agent_agentic_revision_streams_agent_events() -> None:
+    flow = MultiAgentFlow()
+    directive = RevisionDirective.from_payload(
+        raw_text="apply narrative revision",
+        chart_patch=None,
+        targets={"analysis"},
+        agentic=True,
+        requested_focus="highlight catalysts",
+    )
+
+    async def _fake_run(self, query: str, session_id: str):
+        yield self._annotate({"event": "agent_turn_start", "data": {"role": "planner_agent"}})
+
+    flow._run_agent_orchestration = types.MethodType(_fake_run, flow)
+
+    async def _run():
+        events_local = []
+        async for event in flow.run_analysis_refresh(
+            "Run revision",
+            session_id="sess-agentic",
+            requested_focus="highlight catalysts",
+            revision_directive=directive,
+            revision_inputs_plan={"lane": "narrative", "web": "reuse"},
+        ):
+            events_local.append(event)
+        return events_local
+
+    events = asyncio.run(_run())
+    assert events[0]["event"] == "session_started"
+    assert any(evt.get("event") == "agent_coordination" for evt in events)
+    assert any(evt.get("event") == "agent_turn_start" for evt in events)
+    assert events[-1]["event"] == "status"
+    assert (events[-1].get("data") or {}).get("step") == "analysis_revision_ready"
