@@ -25,6 +25,7 @@ const SqlAnalyticsPage: React.FC = () => {
     sqlQuery,
     dataSample,
     streamingText,
+    flowMode,
     
     // Stream state
     isLoading,
@@ -334,7 +335,7 @@ const SqlAnalyticsPage: React.FC = () => {
       {/* Process Visualization Panel */}
       <ProcessPanel
         steps={processSteps}
-        flowMode="planner-executor"
+        flowMode={flowMode}
         showVisualization={false}
         show={showProcessPanel}
         onClose={() => setShowProcessPanel(false)}

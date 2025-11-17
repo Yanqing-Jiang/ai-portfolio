@@ -19,6 +19,7 @@ import "@xyflow/react/dist/style.css";
 import { ProcessNode } from "./ProcessNode";
 import {
   FlowVisualTheme,
+  FlowMode,
   ProcessStep,
   SingleAgentFanout,
   FanoutBranchStatus,
@@ -56,18 +57,46 @@ const nodeTypes = {
   processNode: ProcessNode,
 };
 
-const SINGLE_AGENT_THEME: FlowVisualTheme = {
-  id: "single-agent",
-  accent: "#60a5fa",
-  nodeGradient: ["rgba(30, 64, 175, 0.32)", "rgba(15, 23, 42, 0.78)"],
-  nodeBorder: "border-blue-400/60",
-  nodeGlow: "shadow-[0_0_22px_rgba(96,165,250,0.35)]",
-  edgeIdle: "#3b82f655",
-  edgeActive: "#60a5fa",
-  edgeCompleted: "#bfdbfe",
-  badgeClass: "text-blue-200 bg-blue-500/15 border border-blue-400/30",
-  pulseClass: "bg-blue-400/90",
+const FANOUT_THEMES: Record<FlowMode, FlowVisualTheme> = {
+  'single-agent': {
+    id: "single-agent",
+    accent: "#60a5fa",
+    nodeGradient: ["rgba(30, 64, 175, 0.32)", "rgba(15, 23, 42, 0.78)"],
+    nodeBorder: "border-blue-400/60",
+    nodeGlow: "shadow-[0_0_22px_rgba(96,165,250,0.35)]",
+    edgeIdle: "#3b82f655",
+    edgeActive: "#60a5fa",
+    edgeCompleted: "#bfdbfe",
+    badgeClass: "text-blue-200 bg-blue-500/15 border border-blue-400/30",
+    pulseClass: "bg-blue-400/90",
+  },
+  'planner-executor': {
+    id: "planner-executor",
+    accent: "#34d399",
+    nodeGradient: ["rgba(6, 95, 70, 0.32)", "rgba(5, 46, 22, 0.78)"],
+    nodeBorder: "border-emerald-400/70",
+    nodeGlow: "shadow-[0_0_22px_rgba(16,185,129,0.35)]",
+    edgeIdle: "#04785755",
+    edgeActive: "#34d399",
+    edgeCompleted: "#a7f3d0",
+    badgeClass: "text-emerald-100 bg-emerald-500/15 border border-emerald-400/30",
+    pulseClass: "bg-emerald-300/90",
+  },
+  'multi-agent': {
+    id: "multi-agent",
+    accent: "#c084fc",
+    nodeGradient: ["rgba(91, 33, 182, 0.35)", "rgba(46, 16, 101, 0.75)"],
+    nodeBorder: "border-purple-400/70",
+    nodeGlow: "shadow-[0_0_22px_rgba(192,132,252,0.4)]",
+    edgeIdle: "#7c3aed55",
+    edgeActive: "#c084fc",
+    edgeCompleted: "#e9d5ff",
+    badgeClass: "text-purple-100 bg-purple-500/15 border border-purple-400/30",
+    pulseClass: "bg-purple-300/90",
+  },
 };
+
+const resolveFanoutTheme = (mode: FlowMode): FlowVisualTheme => FANOUT_THEMES[mode] ?? FANOUT_THEMES['single-agent'];
 
 const mapBranchStatus = (status: FanoutBranchStatus): ProcessStep["status"] => {
   switch (status) {
@@ -96,12 +125,14 @@ const sanitizeLabel = (branch: SingleAgentFanoutBranch) => {
 
 interface SingleAgentFanoutCanvasProps {
   fanout: SingleAgentFanout;
+  flowMode?: FlowMode;
 }
 
-const SingleAgentFanoutCanvasInner: React.FC<SingleAgentFanoutCanvasProps> = ({ fanout }) => {
+const SingleAgentFanoutCanvasInner: React.FC<SingleAgentFanoutCanvasProps> = ({ fanout, flowMode = 'single-agent' }) => {
   const [nodes, setNodes, onNodesChange] = useNodesState<Node<ProcessNodeData>>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge[]>([]);
   const instanceRef = useRef<ReactFlowInstance | null>(null);
+  const activeTheme = useMemo(() => resolveFanoutTheme(flowMode), [flowMode]);
 
   const { nodeConfigs, edgeConfigs } = useMemo(() => {
     const branches = fanout.branches ?? [];
@@ -142,7 +173,7 @@ const SingleAgentFanoutCanvasInner: React.FC<SingleAgentFanoutCanvasProps> = ({ 
       data: {
         step: startStep,
         phase: "analysis",
-        theme: SINGLE_AGENT_THEME,
+        theme: activeTheme,
         isActive: false,
         isCompleted: true,
         hasError: false,
@@ -199,7 +230,7 @@ const SingleAgentFanoutCanvasInner: React.FC<SingleAgentFanoutCanvasProps> = ({ 
       data: {
         step: agentStep,
         phase: "planning",
-        theme: SINGLE_AGENT_THEME,
+        theme: activeTheme,
         isActive: agentStatus === "in_progress",
         isCompleted: agentStatus === "completed",
         hasError: agentStatus === "error",
@@ -262,7 +293,7 @@ const SingleAgentFanoutCanvasInner: React.FC<SingleAgentFanoutCanvasProps> = ({ 
         data: {
           step: branchStep,
           phase: "execution",
-          theme: SINGLE_AGENT_THEME,
+          theme: activeTheme,
           isActive: status === "in_progress",
           isCompleted: status === "completed",
           hasError: status === "error",
@@ -341,7 +372,7 @@ const SingleAgentFanoutCanvasInner: React.FC<SingleAgentFanoutCanvasProps> = ({ 
       data: {
         step: endStep,
         phase: "synthesis",
-        theme: SINGLE_AGENT_THEME,
+        theme: activeTheme,
         isActive: endStatus === "in_progress",
         isCompleted: endStatus === "completed",
         hasError: endStatus === "error",
@@ -481,12 +512,12 @@ const SingleAgentFanoutCanvasInner: React.FC<SingleAgentFanoutCanvasProps> = ({ 
             return '#ef4444';
           }
           if (data.isActive) {
-            return SINGLE_AGENT_THEME.edgeActive;
+            return activeTheme.edgeActive;
           }
           if (data.isCompleted) {
-            return SINGLE_AGENT_THEME.edgeCompleted;
+            return activeTheme.edgeCompleted;
           }
-          return SINGLE_AGENT_THEME.edgeIdle;
+          return activeTheme.edgeIdle;
         }}
       />
       <Background variant={BackgroundVariant.Lines} gap={32} size={1} color="#1f2937" />

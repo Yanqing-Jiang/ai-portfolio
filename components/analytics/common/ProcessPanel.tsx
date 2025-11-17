@@ -2778,7 +2778,7 @@ export const ProcessPanel: React.FC<ProcessPanelProps> = ({
         >
           {isFanoutMode && singleAgentFanout ? (
 
-            <SingleAgentFanoutCanvas fanout={singleAgentFanout} />
+            <SingleAgentFanoutCanvas fanout={singleAgentFanout} flowMode={flowMode} />
 
           ) : (
 

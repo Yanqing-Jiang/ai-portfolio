@@ -127,6 +127,7 @@ const MemoryAnalyticsPage: React.FC = () => {
     specialistCards,
     latencyGuardrail,
     redirectNotice,
+    flowMode: activeFlowMode,
     
     // Stream state
     isLoading,
@@ -645,7 +646,7 @@ Multi-Agent: workload delegation & orchestration, fastest speed
       {/* Process Panel */}
       <ProcessPanel
         steps={processSteps}
-        flowMode={selectedFlow}
+        flowMode={activeFlowMode}
         singleAgentFanout={singleAgentFanout}
         followUpBanner={followUpBanner}
         slotStatuses={slotStatuses}
@@ -666,6 +667,9 @@ Multi-Agent: workload delegation & orchestration, fastest speed
 };
 
 export default MemoryAnalyticsPage;
+
+
+
 
 
 
