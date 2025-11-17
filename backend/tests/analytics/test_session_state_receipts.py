@@ -110,6 +110,27 @@ def test_lane_receipts_emit_manifest_metrics(monkeypatch: pytest.MonkeyPatch) ->
     assert "dataset_preview" in missing_metrics[0]["missing_components"]
 
 
+def test_manifest_marks_reused_components() -> None:
+    snapshot = SessionStateSnapshot(session_id="manifest-reuse")
+    snapshot.record_outputs(sql="SELECT 42")
+    snapshot.record_tool_result(
+        "planner_dataset_preview",
+        {"rows": [{"label": "Q1"}], "row_count": 1},
+    )
+    reuse_metadata = {
+        "lane": "sql",
+        "reason": "chart_revision",
+        "ts": datetime.now(timezone.utc).isoformat(),
+    }
+    snapshot.record_lane_reuse("sql", reuse_metadata)
+    snapshot.refresh_analysis_inputs_manifest(persist=False)
+    manifest = snapshot.analysis_inputs_manifest or {}
+    sql_component = manifest.get("components", {}).get("sql", {})
+    assert sql_component.get("state") == "ready"
+    assert sql_component.get("reused") is True
+    assert sql_component.get("reuse_metadata", {}).get("reason") == "chart_revision"
+
+
 def test_lane_missing_artifact_metric_emitted_for_incomplete_payload(monkeypatch: pytest.MonkeyPatch) -> None:
     missing_artifact_calls: List[Dict[str, Any]] = []
     missing_manifest_calls: List[Dict[str, Any]] = []

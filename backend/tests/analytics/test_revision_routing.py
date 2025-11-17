@@ -12,6 +12,7 @@ from analytics.flows.workflow import analytics_memory_workflow
 from analytics.routing import FollowUpRoute
 from analytics.routing.follow_up_classifier import FollowUpClassifier
 from analytics.services.response_search import SearchTopicPlan
+from analytics.services.revision_focus import RevisionQuestionBundle
 from analytics.services.polygon import DailyBar, MarketSnapshot
 from analytics.core.session_state import SessionStateSnapshot, get_session_state_repository, close_session_state_repository
 
@@ -847,6 +848,61 @@ async def test_planner_revision_reuses_manifest_without_analysis(monkeypatch):
 
     await repo.delete(session_id)
     await close_session_state_repository()
+
+
+def test_build_revision_inputs_plan_carries_questions() -> None:
+    bundle = RevisionQuestionBundle(
+        keyword_focus="Revenue trend",
+        user_question="Show quarterly revenue as a chart",
+        industry_question="Compare revenue growth to peers",
+    )
+    plan = workflow_module._build_revision_inputs_plan(
+        {"chart": True, "analysis": True},
+        {"web": True},
+        [],
+        question_bundle=bundle,
+        revision_lanes=["analysis"],
+    )
+    assert plan["lane"] == "narrative"
+    assert plan["web"] == "refresh"
+    assert plan["questions"] == bundle.to_dict()
+    assert set(plan.keys()) == {"lane", "web", "questions"}
+
+
+def test_follow_up_classifier_prefers_revision_chart_bundle() -> None:
+    classifier = FollowUpClassifier()
+    snapshot = SessionStateSnapshot(session_id="rev-chart")
+    snapshot.record_revision_questions(
+        {
+            "keyword_focus": "Visual refresh",
+            "user_question": "Update the chart with bars",
+            "industry_question": "Compare chart trends across peers",
+        }
+    )
+    route = classifier.classify(
+        "revise chart",
+        snapshot,
+        lane_readiness={"sql": True, "chart": True, "analysis": True},
+    )
+    assert route == FollowUpRoute.CHART_ONLY
+
+
+def test_follow_up_classifier_prefers_revision_narrative_bundle() -> None:
+    classifier = FollowUpClassifier()
+    snapshot = SessionStateSnapshot(session_id="rev-narrative")
+    snapshot.record_revision_questions(
+        {
+            "keyword_focus": "Narrative refresh",
+            "user_question": "Explain updated demand drivers",
+            "industry_question": "Summarize peer commentary",
+        }
+    )
+    route = classifier.classify(
+        "revise analysis",
+        snapshot,
+        lane_readiness={"sql": True, "chart": True, "analysis": True},
+    )
+    assert route == FollowUpRoute.NARRATIVE_ONLY
 
 def _seed_revision_snapshot(snapshot: SessionStateSnapshot, *, include_market: bool = False) -> None:
     snapshot.record_query("How is AMD revenue trending?", "revenue_trend")

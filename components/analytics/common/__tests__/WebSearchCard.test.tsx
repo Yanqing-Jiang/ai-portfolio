@@ -134,4 +134,27 @@ describe('WebSearchCard topics', () => {
     expect(screen.getByText('Secondary insight body.')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Next topic' })).not.toBeInTheDocument();
   });
+
+  it('renders Gemini question bundle when available', () => {
+    render(
+      <WebSearchCard
+        result={{
+          query: 'AI hiring plans',
+          snippets: [],
+          topics: [],
+          questions: {
+            keywordFocus: 'AI hiring plans',
+            user: 'Explain how AI hiring changed last quarter.',
+            industry: 'How are peers approaching AI hiring?',
+          },
+        }}
+      />,
+    );
+
+    expect(screen.getByText(/Focus:/)).toHaveTextContent('AI hiring plans');
+    expect(screen.getByText(/User question/)).toBeInTheDocument();
+    expect(screen.getByText('Explain how AI hiring changed last quarter.')).toBeInTheDocument();
+    expect(screen.getByText(/Industry question/)).toBeInTheDocument();
+    expect(screen.getByText('How are peers approaching AI hiring?')).toBeInTheDocument();
+  });
 });

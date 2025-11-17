@@ -1,5 +1,6 @@
 import sys
 import asyncio
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -8,7 +9,12 @@ import pytest
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 
 from analytics.flows import tooling
-from analytics.services.response_search import ResponseSearchError, SearchTopicPlan, ResponseSearchResult
+from analytics.services.response_search import (
+    ResponseSearchError,
+    ResponseSearchResult,
+    SearchTopicPlan,
+    WebResearchQuestionBundle,
+)
 from analytics.flows.tooling import WebRetrieverAdapter, ToolExecutionContext
 from analytics.core.session_state import SessionStateSnapshot
 
@@ -56,6 +62,7 @@ class _DummySearchResult:
         self.latency_ms = 123
         self.search_id = "search-123"
         self.summary = "Stub summary"
+        self.questions = None
 
     def to_payload(self):
         return {
@@ -64,10 +71,22 @@ class _DummySearchResult:
             "search_id": self.search_id,
         }
 
+    def to_agent_envelope(self, *, status: str = "completed", cached: bool = False):
+        return {
+            "status": status,
+            "summary": self.summary,
+            "from_cache": cached,
+        }
+
 
 def test_web_retriever_fetches_when_api_key_present(monkeypatch):
     adapter = WebRetrieverAdapter()
     context = _build_context("sess-run", "AMD vs NVDA earnings")
+    adapter._research_bundle = WebResearchQuestionBundle(
+        keyword_focus="AMD vs NVDA",
+        user_question="What updates compare AMD vs NVDA earnings?",
+        industry_question="How is the semiconductor industry trending overall?",
+    )
 
     repo = _DummyRepo()
 
@@ -83,8 +102,10 @@ def test_web_retriever_fetches_when_api_key_present(monkeypatch):
     assert result.status == "completed"
     assert result.payload.get("ready") is True
     assert result.payload.get("summary") == "Stub summary"
+    assert result.payload.get("questions", {}).get("user_question")
     assert repo.saved_snapshot is not None
     assert repo.saved_snapshot.tool_cache.get("web_search", {}).get("summary") == "Stub summary"
+    assert repo.saved_snapshot.web_research_questions
 
 def test_web_retriever_reports_error_stage(monkeypatch):
     adapter = WebRetrieverAdapter()
@@ -115,11 +136,17 @@ def test_expand_generates_unique_names_for_duplicate_labels(monkeypatch):
         SearchTopicPlan(label="Market Outlook", query="market outlook by region"),
     ]
 
-    async def _fake_generate(*args, **kwargs):
-        return plans
+    bundle = WebResearchQuestionBundle(
+        keyword_focus="Market outlook",
+        user_question="market outlook 2025",
+        industry_question="market outlook by region",
+    )
+
+    async def _fake_build(*args, **kwargs):
+        return bundle, plans
 
     monkeypatch.setattr(tooling, "has_search_api_key", lambda: True)
-    monkeypatch.setattr(tooling, "generate_search_topics", _fake_generate)
+    monkeypatch.setattr(tooling, "build_web_research_questions", _fake_build)
 
     expanded = asyncio.run(adapter.expand(context))
 
@@ -140,6 +167,11 @@ def test_topic_execute_includes_position_metadata(monkeypatch):
         base_query="regulation watch 2025",
         label_occurrence=2,
         label_total=2,
+    )
+    adapter._research_bundle = WebResearchQuestionBundle(
+        keyword_focus="Regulation",
+        user_question="regulation watch 2025",
+        industry_question="industry regulation outlook 2025",
     )
     context = _build_context("sess-topic", "regulation watch 2025")
 
@@ -164,6 +196,7 @@ def test_topic_execute_includes_position_metadata(monkeypatch):
     assert result.payload.get("topic_total") == 3
     assert result.payload.get("topic_position") == 2
     assert result.metadata.get("topic_position") == 2
+    assert result.payload.get("questions", {}).get("user_question")
     assert repo.saved_snapshot is not None
     topic_cache = repo.saved_snapshot.tool_cache.get("web_search_topics", {})
     assert adapter._topic_key in topic_cache
@@ -189,10 +222,10 @@ def test_expand_uses_revision_topics_when_available(monkeypatch):
 
     monkeypatch.setattr(tooling, "has_search_api_key", lambda: True)
 
-    def _fail_generate(*args, **kwargs):
-        raise AssertionError("generate_search_topics should not be called")
+    async def _fail_build(*args, **kwargs):
+        raise AssertionError("build_web_research_questions should not be called")
 
-    monkeypatch.setattr(tooling, "generate_search_topics", _fail_generate)
+    monkeypatch.setattr(tooling, "build_web_research_questions", _fail_build)
 
     expanded = asyncio.run(adapter.expand(context))
 
@@ -346,3 +379,30 @@ def test_revision_refresh_web_lane(monkeypatch):
     assert result.status == "completed"
     assert result.payload.get("from_cache") is False
     assert result.payload.get("summary") == "Stub summary"
+
+
+@pytest.mark.asyncio
+async def test_revision_topics_emit_question_bundle(monkeypatch):
+    adapter = WebRetrieverAdapter()
+    base_context = _build_context("sess-revision-topics", "AMD refresh")
+    context = replace(
+        base_context,
+        revision_search_topics=tuple(
+            [
+                {"label": "User focus", "query": "AMD latest guidance"},
+                {"label": "Industry context", "query": "semiconductor industry outlook"},
+            ]
+        ),
+    )
+
+    monkeypatch.setattr(tooling, "has_search_api_key", lambda: True)
+
+    adapters = await adapter.expand(context)
+    assert adapters
+    for child in adapters:
+        assert isinstance(child, WebRetrieverAdapter)
+        assert child._research_bundle is not None
+        bundle = child._research_bundle.to_dict()
+        assert bundle["user_question"].startswith("AMD")
+        assert bundle["industry_question"]
+        assert child._topic_plan.question_kind in {"user", "industry"}

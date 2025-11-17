@@ -10,6 +10,31 @@ vi.mock('../useAnalyticsStream', () => ({
   useAnalyticsStream: vi.fn(),
 }));
 
+const { countUserInputMock } = vi.hoisted(() => ({
+  countUserInputMock: vi.fn(async () => ({
+    success: true,
+    data: {
+      success: true,
+      scope: 'next-gen-analytics-agent',
+      identifier: 'ip:127.0.0.1|next-gen-analytics-agent',
+      base_identifier: 'ip:127.0.0.1',
+      current_usage: 1,
+      limit: 5,
+      remaining: 4,
+      user_type: 'guest',
+    },
+  })),
+}));
+
+vi.mock('../../../../services/apiService', () => ({
+  apiService: {
+    countUserInput: countUserInputMock,
+    post: vi.fn(),
+    streamWithAuth: vi.fn(),
+    getUsageStats: vi.fn(),
+  },
+}));
+
 describe('useAnalyticsMemoryStream metadata wiring', () => {
   let latestStreamCallback: ((payload: any) => void) | undefined;
   const startStreamMock = vi.fn();

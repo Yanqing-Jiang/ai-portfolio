@@ -592,7 +592,7 @@ export const useAnalyticsMemoryStream = (
     if (entry.outputArtifacts && entry.outputArtifacts.length) {
       metadataSegments.push(`outputs ${entry.outputArtifacts.slice(0, 3).join(', ')}`);
     }
-    const metadataText = metadataSegments.length ? ` [${metadataSegments.join(' • ')}]` : '';
+    const metadataText = metadataSegments.length ? ` [${metadataSegments.join(' ò ')}]` : '';
     const message = `Tool ${payload.tool} ${statusLabel}${durationText}${metadataText}`;
 
     stepsHook.updateStepStatus(
@@ -672,7 +672,7 @@ export const useAnalyticsMemoryStream = (
     const baseMessage = summaryText
       ? `${config.label}: ${summaryText}`
       : `${config.label}: ${payload.status}`;
-    const laneMessage = metadataParts.length ? `${baseMessage} [${metadataParts.join(' • ')}]` : baseMessage;
+    const laneMessage = metadataParts.length ? `${baseMessage} [${metadataParts.join(' ò ')}]` : baseMessage;
 
     stepsHook.updateStepStatus(
       config.stepId,

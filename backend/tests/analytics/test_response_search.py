@@ -98,6 +98,7 @@ def test_perform_response_search_uses_gemin_api_key(monkeypatch):
     assert result.model == "gemini-test-model"
     assert result.snippets, "Expected grounded snippets from dummy response"
     assert result.search_topics and result.search_topics[0] == "NVDA latest earnings"
+    assert result.questions and result.questions.get("user_question")
     assert calls.get("configured_with") == "dummy-key"
 
     instance = DummyGenerativeModel.created_instances[0]
@@ -118,6 +119,7 @@ def test_perform_response_search_uses_gemin_api_key(monkeypatch):
     payload = result.to_payload()
     assert 'Summary from Gemini' in (payload["summary"] or '')
     assert payload.get('topics') and payload['topics'][0]['snippets'][0]['title'] == "Headline"
+    assert payload.get("questions") and payload["questions"]["user_question"].startswith("NVDA")
 
 
 
@@ -485,3 +487,72 @@ def test_default_model_guardrail(monkeypatch):
     assert result.model == "gemini-2.5-flash-lite"
     assert DummyGenerativeModel.created_instances
     assert DummyGenerativeModel.created_instances[0].model_name == "gemini-2.5-flash-lite"
+
+
+def test_build_web_research_questions_fallback(monkeypatch):
+    class FakeModel:
+        model_name = "gemini-fallback"
+
+    async def failing_generate(*args, **kwargs):
+        raise RuntimeError("LLM unavailable")
+
+    monkeypatch.setattr(response_search, "_ensure_model", lambda *_, **__: FakeModel())
+    monkeypatch.setattr(response_search, "_generate_search_topics", failing_generate)
+    captured_calls = []
+    monkeypatch.setattr(response_search, "gemini_call", lambda **kwargs: captured_calls.append(kwargs))
+
+    bundle, plans = asyncio.run(
+        response_search.build_web_research_questions("Acme earnings outlook", snapshot=None, session_id="session-456")
+    )
+
+    assert len(plans) == 2
+    assert bundle.source == "fallback"
+    assert bundle.user_question
+    assert bundle.industry_question
+    assert any(call.get("operation") == "web_research_keywords" for call in captured_calls)
+
+
+@pytest.mark.asyncio
+async def test_generate_search_topics_preserves_question_kind(monkeypatch):
+    async def _fake_build(query: str, *, snapshot=None, session_id=None, min_topics: int = 2):
+        bundle = response_search.WebResearchQuestionBundle(
+            keyword_focus="Focus",
+            user_question="User Q",
+            industry_question="Industry Q",
+        )
+        plans = [
+            response_search.SearchTopicPlan(label="Primary", query="user query", question_kind="user"),
+            response_search.SearchTopicPlan(label="Industry context", query="industry query", question_kind="industry"),
+        ]
+        return bundle, plans
+
+    monkeypatch.setattr(response_search, "build_web_research_questions", _fake_build)
+    topics = await response_search.generate_search_topics("Need fresh headlines")
+    assert len(topics) == 2
+    assert [topic.question_kind for topic in topics] == ["user", "industry"]
+
+
+@pytest.mark.asyncio
+async def test_perform_response_search_uses_revision_topic_plans(monkeypatch):
+    DummyGenerativeModel.created_instances = []
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setattr(response_search.genai, "configure", lambda **kwargs: None)
+    monkeypatch.setattr(response_search.genai, "GenerativeModel", DummyGenerativeModel)
+
+    topic_plans = [
+        response_search.SearchTopicPlan(label="User focus", query="AMD latest updates"),
+        response_search.SearchTopicPlan(label="Industry context", query="semiconductor outlook 2025"),
+    ]
+
+    result = await response_search.perform_response_search(
+        "Need revision context",
+        session_id="sess-topics",
+        topic_plans=topic_plans,
+    )
+
+    assert result.questions
+    assert result.questions["user_question"] == "AMD latest updates"
+    assert result.questions["industry_question"] == "semiconductor outlook 2025"
+    assert len(result.topics) >= 2
+    assert result.topics[0].question_kind == "user"
+    assert result.topics[1].question_kind == "industry"

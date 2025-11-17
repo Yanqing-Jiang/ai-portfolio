@@ -46,36 +46,25 @@
 - **Gemini questions for fresh + revision web paths:** `services/response_search.py` grows a helper that always returns two prompts (user focus + industry context). Both `WebRetrieverAdapter.execute` and `_web_search_phase` emit the bundle, persist it via `SessionStateSnapshot.record_web_research_questions`, and include the questions in every `web_ready`/`web_revision_ready` SSE so revisions reuse the same hints.
 - **Frontend data model:** `WebSearchResult` / `normalizeWebContext` absorb the new question pair, and `WebSearchCard` surfaces them so the inspector + web research widget display "User question" vs "Industry context" without new streams. Because `webSearch` already powers revision prompts, no extra state slices are required.
 
-
+### True Agentic Revision Plan Progress (Nov 17, 2025)
+- **Single-agent revision orchestration:** 
+un_analysis_refresh() and nalysis_revision() now honor the normalized revision plan, reuse Gemini bundles from AgentMemory, gate web refreshes on {lane, web} hints, emit 
+evision_questions_ready SSEs with specialist cards, and persist 
+evision_inputs_outcome for the ledger (ackend/analytics/flows/single_agent_tools.py, components/analytics/hooks/useAnalyticsMemoryStream.ts).
+- **Multi-agent revision parity:** Multi-agent flows mirror the same plan-driven lane selection, stream the Gemini bundles to specialists, emit the new SSE/card payloads, and persist revision outcomes so supervisor telemetry matches planner executions (ackend/analytics/flows/multi_agent.py).
+- **Classifier + UI awareness of Gemini prompts:** FollowUpClassifier.classify() now consults cached revision bundles before keyword heuristics, and the frontend stream hook/banners surface the question pair plus a dedicated “Revision Questions” specialist card (ackend/analytics/routing/follow_up_classifier.py, components/analytics/hooks/useAnalyticsMemoryStream.ts, .test.tsx).
+- **State + ledger instrumentation:** SessionStateSnapshot.refresh_analysis_inputs_manifest() carries lane reuse metadata so chart-only revisions still show SQL receipts as reused, and new tests cover reuse + plan propagation (ackend/analytics/core/session_state.py, ackend/tests/analytics/test_session_state_receipts.py, ackend/tests/analytics/test_revision_routing.py).
+- **Web research question bundles:** uild_web_research_questions, perform_response_search, and WebRetrieverAdapter now generate deterministic user/industry prompts (with question_kind tagging), persist them via SessionStateSnapshot.record_web_research_questions, surface them in web_ready/web_revision_ready SSE payloads, and hydrate specialist cards/tests (ackend/analytics/services/response_search.py, ackend/analytics/flows/tooling.py, ackend/tests/analytics/test_response_search.py, ackend/tests/analytics/test_web_retriever_adapter.py).
 
 ## Remaining Work
 All outstanding deliverables live here so controller, UI, and ops stakeholders can work from a single queue.
 
-### True Agentic Revision Plan (Gemini-driven keyword follow-ups — Remaining Tasks)
-1. **backend/analytics/flows/multi_agent.py**
-   - Finish `_normalize_revision_inputs_plan` / `set_revision_inputs_plan` so `{lane, web}` plus the Gemini bundle propagate through `_stream_sql_refresh` bypass logic while reusing cached SQL receipts.
-   - `run_analysis_refresh()` must feed the Gemini questions into the right specialists (`chart_designer` vs `analysis_writer`), persist each `lane_outcome`, and ensure SSE events document which specialist satisfied which hint.
-   - `analysis_revision()` needs to forward the Gemini questions to the chosen specialist and tag SSEs so inspectors can see who answered the user vs industry prompt.
-
-2. **backend/analytics/routing/follow_up_classifier.py + frontend banners**
-   - Teach `FollowUpClassifier.classify()` to consult the Gemini bundle (e.g., trend/visual keywords drive `CHART_ONLY`) and fall back to readiness heuristics when the bundle is absent.
-   - Update `components/analytics/hooks/useAnalyticsMemoryStream.ts` plus `FOLLOW_UP_BANNER_COPY` so the UI surfaces "Chart Revision" vs "Narrative Revision" banners and renders the Gemini questions inside inspector panes.
-   - Extend associated unit tests to cover both the routing logic and the new UI payloads.
-
-3. **State, telemetry, and ledger plumbing**
-   - Keep growing `SessionStateSnapshot.agent_revision_questions` / `agent_lane_decisions`, hydrate them into `/docs/agent-process-ledger-*.json`, and ensure chart-only revisions still mark SQL receipts as reused in the `analysis_inputs_manifest`.
-   - Tag `analytics/core/telemetry.gemini_call` with `operation="revision_keywords"`, emit `agent_lane_decision` vs `lane_decision_mismatch` counters, and refresh ledger snapshots once controllers/UI emit the richer payloads.
-
-4. **Regression + instrumentation coverage**
-   - `backend/tests/analytics/test_revision_routing.py` should assert `_build_revision_inputs_plan` emits `{lane, web}` only and carries the Gemini bundle on the directive.
-   - `backend/tests/analytics/test_single_agent_flow.py`, `test_multi_agent_flow.py`, and `backend/tests/analytics/test_session_state_receipts.py` need mocks/assertions for `derive_revision_questions`, agent lane decisions, and persistence of `revision_inputs_outcome`.
-   - `components/analytics/hooks/useAnalyticsMemoryStream.test.tsx` must cover the new SSE fields, banners, and inspector copy.
-
-5. **backend/analytics/services/response_search.py + tooling/web retriever**
-   - Add `build_web_research_questions(query, snapshot)` to mirror `RevisionQuestionBundle` for baseline/fresh web runs (two prompts per refresh, logged via `gemini_call(operation="web_research_keywords")` with deterministic fallback when Gemini is unavailable).
-   - Wire `generate_search_topics` / `perform_response_search` so they always emit two `SearchTopicPlan` entries tagged with `question_kind` (`user` vs `industry`) and feed those into `WebRetrieverAdapter.execute` plus `run_web_refresh` helpers.
-   - Persist the bundle via `SessionStateSnapshot.record_web_research_questions` and include the two questions in `web_revision_ready` / `web_ready` SSE payloads; extend `backend/tests/analytics/test_web_retriever_adapter.py` and `backend/tests/analytics/test_response_search.py` accordingly.
-
+### True Agentic Revision Plan (Gemini-driven keyword follow-ups - Remaining Tasks)
+- _None — queue cleared as of Nov 17, 2025._
+   - Add uild_web_research_questions(query, snapshot) to mirror RevisionQuestionBundle for baseline/fresh web runs (two prompts per refresh, logged via gemini_call(operation="web_research_keywords") with deterministic fallback when Gemini is unavailable).
+   - Wire generate_search_topics / perform_response_search so they always emit two SearchTopicPlan entries tagged with question_kind (user vs industry) and feed those into WebRetrieverAdapter.execute plus 
+un_web_refresh helpers.
+   - Persist the bundle via SessionStateSnapshot.record_web_research_questions and include the two questions in web_revision_ready / web_ready SSE payloads; extend ackend/tests/analytics/test_web_retriever_adapter.py and ackend/tests/analytics/test_response_search.py accordingly.
 
 #### Clarifications Needed (November 16, 2025)
 None. Lane schema enforcement, runtime invocation ordering, and frontend data placement decisions are captured above.

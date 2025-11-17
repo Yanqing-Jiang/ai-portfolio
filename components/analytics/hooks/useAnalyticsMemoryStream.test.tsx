@@ -308,6 +308,43 @@ describe('useAnalyticsMemoryStream result deduping', () => {
     expect(order).toContain('web_context');
   });
 
+  it('surfaces revision question bundles as specialist cards', async () => {
+    (globalThis as any).__TEST_EVENTS__ = [
+      { event: 'session_started', data: { session_id: 'rev-questions' } },
+      {
+        event: 'follow_up_route',
+        data: {
+          route: 'chart_revision',
+          revision: true,
+          revision_questions: {
+            keyword_focus: 'Gemini focus',
+            user_question: 'Show revenue as a chart',
+            industry_question: 'Compare peers visually',
+          },
+        },
+      },
+      {
+        event: 'analysis_revision_ready',
+        data: {
+          revision: true,
+          selected_lane: 'chart',
+        },
+      },
+      { event: 'workflow_complete' },
+    ];
+
+    await act(async () => {
+      render(<HookHarness query="emit revision card" flow="single-agent" />);
+    });
+
+    await waitFor(() => {
+      const count = Number(screen.getByTestId('specialist-card-count').textContent ?? '0');
+      expect(count).toBeGreaterThan(0);
+    });
+    const order = screen.getByTestId('specialist-card-order').textContent ?? '';
+    expect(order).toContain('revision_questions');
+  });
+
   it('merges repeated analysis_ready sources into a single Financial Analysis card', async () => {
     (globalThis as any).__TEST_EVENTS__ = [
       {
@@ -980,6 +1017,65 @@ describe('useAnalyticsMemoryStream follow-up guidance', () => {
     await waitFor(() => {
       const stepIds = result.current.processSteps.map((step) => `${step.id}:${step.status}`);
       expect(stepIds).toContain('follow_up_route:completed');
+    });
+  });
+
+  it('captures question bundle for revision-focused follow-up routes', async () => {
+    const { result } = renderHook(() => useAnalyticsMemoryStream('planner-executor'));
+
+    (globalThis as any).__TEST_EVENTS__ = [
+      {
+        event: 'follow_up_route',
+        data: {
+          route: 'narrative_only',
+          revision_questions: {
+            keyword_focus: 'margin expansion',
+            user_question: 'Explain how margins expanded last quarter.',
+            industry_question: 'Compare with industry peers.',
+          },
+        },
+      },
+    ];
+
+    await act(async () => {
+      await result.current.handleQuery('rev question bundle');
+    });
+
+    await waitFor(() => {
+      expect(result.current.followUpBanner?.route).toBe('narrative_only');
+      expect(result.current.followUpBanner?.questions?.user).toContain('margins');
+      expect(result.current.followUpBanner?.questions?.industry).toContain('industry');
+    });
+  });
+});
+
+describe('useAnalyticsMemoryStream web research questions', () => {
+  it('stores Gemini questions from web_ready events', async () => {
+    const { result } = renderHook(() => useAnalyticsMemoryStream('planner-executor'));
+
+    (globalThis as any).__TEST_EVENTS__ = [
+      {
+        event: 'web_ready',
+        data: {
+          summary: 'Refreshed snippets',
+          ready: true,
+          queries: ['ai hiring'],
+          snippets: [],
+          questions: {
+            user_question: 'How did AI hiring change?',
+            industry_question: 'How are peers hiring for AI roles?',
+          },
+        },
+      },
+    ];
+
+    await act(async () => {
+      await result.current.handleQuery('web refresh event');
+    });
+
+    await waitFor(() => {
+      expect(result.current.webSearch?.questions?.user).toContain('AI hiring');
+      expect(result.current.webSearch?.questions?.industry).toContain('peers hiring');
     });
   });
 });

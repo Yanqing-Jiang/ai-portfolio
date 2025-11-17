@@ -57,3 +57,17 @@ def test_detect_revision_targets_pairs_analysis_with_web() -> None:
     analytics_cache["artifacts"] = {"web": {"ready": True}}
     targets = classifier.detect_revision_targets("analysis: refresh the summary", snapshot)
     assert targets == {"analysis", "web"}
+
+
+def test_classifier_prefers_chart_when_gemini_bundle_mentions_visuals() -> None:
+    classifier = FollowUpClassifier()
+    snapshot = _snapshot(sql="SELECT 1", chart_spec={"title": {"text": "Revenue"}})
+    snapshot.web_research_questions.append(
+        {
+            "keyword_focus": "visual trend",
+            "user_question": "Update the revenue chart visuals",
+            "industry_question": "How are industry visuals trending",
+        }
+    )
+    route = classifier.classify("Follow-up", snapshot)
+    assert route is FollowUpRoute.CHART_ONLY

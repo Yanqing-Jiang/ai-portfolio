@@ -91,6 +91,7 @@ import os
 import re
 import time
 from collections import Counter, defaultdict
+from collections.abc import Mapping as MappingABC
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import (
@@ -99,6 +100,7 @@ from typing import (
     Callable,
     Dict,
     List,
+    Mapping,
     Optional,
     Sequence,
     Set,
@@ -116,6 +118,8 @@ from analytics.core.state import QueryPlanModel
 from analytics.services.response_search import (
     ResponseSearchError,
     SearchTopicPlan,
+    WebResearchQuestionBundle,
+    build_web_research_questions,
     generate_search_topics,
     has_search_api_key,
     perform_response_search,
@@ -527,6 +531,7 @@ class WebRetrieverAdapter(BaseToolAdapter):
         base_query: Optional[str] = None,
         label_occurrence: Optional[int] = None,
         label_total: Optional[int] = None,
+        research_bundle: Optional[WebResearchQuestionBundle] = None,
     ) -> None:
         self._topic_plan = topic_plan
         self._topic_index = topic_index
@@ -535,6 +540,7 @@ class WebRetrieverAdapter(BaseToolAdapter):
         self._label_occurrence = label_occurrence
         self._label_total = label_total
         self._topic_key = _normalize_topic_key(topic_plan.query) if topic_plan else None
+        self._research_bundle = research_bundle
         self._topic_position: Optional[int] = None
         if isinstance(topic_index, int) and topic_index >= 0:
             self._topic_position = topic_index + 1
@@ -573,6 +579,58 @@ class WebRetrieverAdapter(BaseToolAdapter):
     def is_topic_adapter(self) -> bool:
         return self._topic_plan is not None
 
+    @staticmethod
+    def _bundle_from_topics(
+        plans: Sequence[SearchTopicPlan],
+        *,
+        base_query: str,
+    ) -> Tuple[Optional[WebResearchQuestionBundle], List[SearchTopicPlan]]:
+        normalized: List[SearchTopicPlan] = []
+        for plan in plans:
+            if not isinstance(plan, SearchTopicPlan):
+                continue
+            query_value = (plan.query or "").strip()
+            if not query_value:
+                continue
+            normalized.append(
+                SearchTopicPlan(
+                    label=(plan.label or "Research focus").strip() or "Research focus",
+                    query=query_value,
+                    reason=plan.reason,
+                    question_kind=plan.question_kind,
+                )
+            )
+        if not normalized:
+            fallback_query = base_query or "latest market context"
+            normalized = [
+                SearchTopicPlan(
+                    label="Primary question",
+                    query=fallback_query,
+                    reason="User focus",
+                    question_kind="user",
+                )
+            ]
+        if len(normalized) == 1:
+            normalized.append(
+                SearchTopicPlan(
+                    label="Industry context",
+                    query=f"{normalized[0].query} industry outlook",
+                    reason="Broader sector context",
+                    question_kind="industry",
+                )
+            )
+        if not normalized[0].question_kind:
+            normalized[0].question_kind = "user"
+        if not normalized[1].question_kind:
+            normalized[1].question_kind = "industry"
+        bundle = WebResearchQuestionBundle(
+            keyword_focus=normalized[0].label or normalized[0].query or base_query,
+            user_question=normalized[0].query,
+            industry_question=normalized[1].query,
+            source="planner_topics",
+        )
+        return bundle, normalized
+
     async def expand(self, context: ToolExecutionContext) -> Sequence["BaseToolAdapter"]:
         if self.is_topic_adapter or not has_search_api_key():
             return (self,)
@@ -596,7 +654,13 @@ class WebRetrieverAdapter(BaseToolAdapter):
                 filtered.append(SearchTopicPlan(label=label_value, query=query_value, reason=reason))
         else:
             try:
-                planned_topics = await generate_search_topics(base_query, session_id=context.session_id, min_topics=2)
+                bundle, planned_topics = await build_web_research_questions(
+                    base_query,
+                    snapshot=None,
+                    session_id=context.session_id,
+                    min_topics=2,
+                )
+                self._research_bundle = bundle
             except Exception as exc:  # pragma: no cover - defensive planning guard
                 logger.debug("WebRetrieverAdapter topic planning failed: %s", exc)
                 return (self,)
@@ -610,6 +674,10 @@ class WebRetrieverAdapter(BaseToolAdapter):
         if len(filtered) <= 1 and not allow_single_topic:
             return (self,)
 
+        if revision_topics_raw:
+            bundle_for_topics, filtered = self._bundle_from_topics(filtered, base_query=base_query)
+        else:
+            bundle_for_topics = self._research_bundle
         label_keys: List[str] = []
         for idx, plan in enumerate(filtered):
             label_value = plan.label if isinstance(plan.label, str) else ""
@@ -634,6 +702,7 @@ class WebRetrieverAdapter(BaseToolAdapter):
                     base_query=base_query,
                     label_occurrence=occurrence,
                     label_total=label_total,
+                    research_bundle=bundle_for_topics,
                 )
             )
         return tuple(adapters)
@@ -643,6 +712,12 @@ class WebRetrieverAdapter(BaseToolAdapter):
         base_query = self._base_query or str(context.query or "").strip() or query_terms
         metadata = self.get_metadata()
         payload: Dict[str, Any] = {"query_terms": query_terms, "ready": False}
+        questions_payload: Optional[Dict[str, Any]] = None
+        if self._research_bundle:
+            try:
+                questions_payload = self._research_bundle.to_dict()
+            except Exception:
+                logger.debug("Failed to serialize stored web research bundle", exc_info=True)
         if self.is_topic_adapter:
             payload["topic_index"] = self._topic_index
             payload["topic_total"] = self._topic_total
@@ -712,12 +787,19 @@ class WebRetrieverAdapter(BaseToolAdapter):
                 payload.setdefault("topic_index", self._topic_index)
                 payload.setdefault("topic_total", self._topic_total)
                 payload.setdefault("topic_label", self._topic_plan.label if self._topic_plan else None)
-                if self._topic_position is not None:
-                    payload.setdefault("topic_position", self._topic_position)
+            if self._topic_position is not None:
+                payload.setdefault("topic_position", self._topic_position)
                 metadata["topic_cached"] = True
                 if self._topic_position is not None:
                     metadata["topic_position"] = self._topic_position
             metadata["preview_keys"] = list(payload.keys())
+            cached_questions = cached_payload.get("questions")
+            if questions_payload is None and isinstance(cached_questions, MappingABC):
+                questions_payload = dict(cached_questions)
+            if questions_payload:
+                payload["questions"] = dict(questions_payload)
+                metadata["questions"] = dict(questions_payload)
+                metadata["preview_keys"] = list(dict.fromkeys(metadata["preview_keys"] + ["questions"]))
             metadata["agent_envelope"] = payload.get("agent_envelope")
             return ToolAdapterResult(name=self.name, status="completed", payload=payload, metadata=metadata)
 
@@ -780,6 +862,12 @@ class WebRetrieverAdapter(BaseToolAdapter):
         result_payload["from_cache"] = False
         if search_result.latency_ms is not None:
             result_payload["latency_ms"] = search_result.latency_ms
+        existing_questions = getattr(search_result, "questions", None)
+        if questions_payload is None and isinstance(existing_questions, MappingABC):
+            questions_payload = dict(existing_questions)
+        elif questions_payload is not None:
+            if not existing_questions:
+                setattr(search_result, "questions", dict(questions_payload))
         if self.is_topic_adapter:
             result_payload.setdefault("search_topics", [self._topic_plan.query])
             result_payload["topic_index"] = self._topic_index
@@ -807,6 +895,9 @@ class WebRetrieverAdapter(BaseToolAdapter):
             metadata["search_query"] = query_terms
             if self._topic_position is not None:
                 metadata["topic_position"] = self._topic_position
+        if questions_payload:
+            payload["questions"] = dict(questions_payload)
+            metadata["questions"] = dict(questions_payload)
         metadata["preview_keys"] = list(payload.keys())
         metadata["agent_envelope"] = agent_envelope
 
@@ -814,6 +905,8 @@ class WebRetrieverAdapter(BaseToolAdapter):
         cache_payload.setdefault("query", base_query)
         cache_payload.setdefault("query_terms", query_terms)
         cache_payload["ready"] = True
+        if questions_payload:
+            cache_payload["questions"] = dict(questions_payload)
 
         await self._record_cache(
             repository,
@@ -821,6 +914,11 @@ class WebRetrieverAdapter(BaseToolAdapter):
             cache_payload,
             base_query=base_query,
         )
+        if snapshot is not None and questions_payload:
+            try:
+                snapshot.record_web_research_questions(questions_payload)
+            except Exception:
+                logger.debug("Failed to persist web research questions on snapshot", exc_info=True)
 
         return ToolAdapterResult(name=self.name, status="completed", payload=payload, metadata=metadata)
 

@@ -9,6 +9,11 @@
 #   Called from: Internal to analytics.routing.follow_up_classifier
 #   Invokes: Internal helpers only
 #   Why: Keeps analytics.routing.follow_up_classifier from duplicating contains any behavior across flows.
+# Function: _latest_revision_questions
+#   Role: Fetches the latest Gemini revision bundle stored on the session snapshot.
+#   Called from: analytics.routing.follow_up_classifier.FollowUpClassifier.classify
+#   Invokes: analytics.core.session_state.SessionStateSnapshot.agent_revision_questions, analytics.core.session_state.SessionStateSnapshot.tool_cache
+#   Why: Lets FollowUpClassifier honor Gemini hints when selecting chart vs narrative follow-ups.
 # Class: FollowUpClassifier
 #   Role: Handles FollowUpClassifier logic for analytics.routing.follow_up_classifier.
 #   Called from: analytics.flows.workflow, analytics.routing, tests.analytics.test_follow_up_classifier, tests.analytics.test_revision_followups, +1 more
@@ -19,7 +24,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Iterable, Mapping, Optional
+from typing import Any, Iterable, Mapping, Optional
 
 from analytics.core.session_state import SessionStateSnapshot, chart_spec_has_numeric_payload
 
@@ -94,6 +99,47 @@ class FollowUpClassifier:
         history = getattr(snapshot, "schedule_history", []) or []
         return any((entry.get("stage") == stage) for entry in history)
 
+    def _latest_web_questions(self, snapshot: Optional[SessionStateSnapshot]) -> Optional[Mapping[str, Any]]:
+        if snapshot is None:
+            return None
+        history = getattr(snapshot, "web_research_questions", None)
+        if isinstance(history, list) and history:
+            latest = history[-1]
+            if isinstance(latest, Mapping):
+                return latest
+        tool_cache = snapshot.tool_cache if isinstance(snapshot.tool_cache, dict) else {}
+        cache_entry = tool_cache.get("web_research_questions")
+        if isinstance(cache_entry, Mapping):
+            return cache_entry
+        return None
+
+    def _latest_revision_questions(self, snapshot: Optional[SessionStateSnapshot]) -> Optional[Mapping[str, Any]]:
+        if snapshot is None:
+            return None
+        history = getattr(snapshot, "agent_revision_questions", None)
+        if isinstance(history, list) and history:
+            latest = history[-1]
+            if isinstance(latest, Mapping):
+                return latest
+        tool_cache = snapshot.tool_cache if isinstance(snapshot.tool_cache, dict) else {}
+        agent_cache = tool_cache.get("agent")
+        if isinstance(agent_cache, Mapping):
+            store = agent_cache.get("revision_questions")
+            if isinstance(store, Mapping):
+                latest_entry = store.get("latest")
+                if isinstance(latest_entry, Mapping):
+                    bundle = latest_entry.get("bundle")
+                    if isinstance(bundle, Mapping):
+                        return bundle
+                    return latest_entry
+        return None
+
+    def _bundle_prefers_chart(self, bundle: Mapping[str, Any]) -> bool:
+        focus = (" ".join(str(bundle.get(key) or "") for key in ("keyword_focus", "user_question"))).lower()
+        industry_text = str(bundle.get("industry_question") or "").lower()
+        combined = f"{focus} {industry_text}"
+        return any(token in combined for token in ("chart", "visual", "plot", "trend", "graph"))
+
     def classify(
         self,
         query: str,
@@ -106,9 +152,21 @@ class FollowUpClassifier:
         if lane_readiness is not None:
             has_sql = bool(lane_readiness.get("sql"))
             has_chart = bool(lane_readiness.get("chart"))
+            has_analysis = bool(lane_readiness.get("analysis"))
         else:
             has_sql = bool(snapshot and snapshot.last_sql) or self._stage_seen(snapshot, "sql")
             has_chart = bool(snapshot and snapshot.last_chart_spec) or self._stage_seen(snapshot, "chart")
+            has_analysis = bool(snapshot and snapshot.last_analysis) or self._stage_seen(snapshot, "analysis")
+        revision_bundle = self._latest_revision_questions(snapshot)
+        if revision_bundle:
+            prefers_chart = self._bundle_prefers_chart(revision_bundle)
+            if prefers_chart and has_chart:
+                return FollowUpRoute.CHART_ONLY
+            if has_analysis:
+                return FollowUpRoute.NARRATIVE_ONLY
+        bundle = self._latest_web_questions(snapshot)
+        if bundle and has_chart and self._bundle_prefers_chart(bundle):
+            return FollowUpRoute.CHART_ONLY
         if has_sql and _contains_any(normalized_query, self.stock_keywords):
             return FollowUpRoute.STOCK_ONLY
         if has_chart and has_sql and _contains_any(normalized_query, self.chart_keywords):

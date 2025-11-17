@@ -5263,7 +5263,12 @@ class PlannerPipeline:
             "summary": payload.get("summary"),
             "snippets": payload.get("snippets", []),
         }
-        event_payload = {"web_context": payload, "specialist_card": card}
+        event_payload = {
+            "web_context": payload,
+            "specialist_card": card,
+        }
+        if payload.get("questions"):
+            event_payload["questions"] = payload.get("questions")
         result_event = EventEmitter.result("web_search", event_payload)
         result_event["data"]["ts"] = datetime.utcnow().isoformat()
         result_event["data"]["specialist_card"] = card
