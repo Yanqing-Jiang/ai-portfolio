@@ -255,6 +255,7 @@ class SessionStateSnapshot(BaseModel):
     agents_delegation_decisions: List[Dict[str, Any]] = Field(default_factory=list)
     analysis_inputs_manifest: Dict[str, Any] = Field(default_factory=dict)
     agent_revision_questions: List[Dict[str, Any]] = Field(default_factory=list)
+    web_research_questions: List[Dict[str, Any]] = Field(default_factory=list)
     agent_lane_decisions: List[Dict[str, Any]] = Field(default_factory=list)
 
     model_config = {
@@ -379,6 +380,35 @@ class SessionStateSnapshot(BaseModel):
                 cache_revision_questions(self, cached_bundle)
         except Exception:
             logger.debug("Failed to cache revision questions", exc_info=True)
+        return entry
+
+    def record_web_research_questions(self, bundle: Mapping[str, Any]) -> Dict[str, Any]:
+        """Persist the Gemini-powered web question bundle for reuse and ledgers."""
+        payload = dict(bundle)
+        entry = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "keyword_focus": (str(payload.get("keyword_focus") or "").strip() or None),
+            "user_question": (str(payload.get("user_question") or "").strip() or None),
+            "industry_question": (str(payload.get("industry_question") or "").strip() or None),
+            "model": (str(payload.get("model") or "").strip() or None),
+            "latency_ms": payload.get("latency_ms"),
+            "source": (str(payload.get("source") or "").strip() or None),
+            "fallback_reason": (str(payload.get("fallback_reason") or "").strip() or None),
+        }
+        questions = self.web_research_questions
+        if not isinstance(questions, list):
+            self.web_research_questions = []
+            questions = self.web_research_questions
+        questions.append(entry)
+        if len(questions) > 25:
+            del questions[:-25]
+        try:
+            cache = self.tool_cache.setdefault("web_research_questions", {})
+            if isinstance(cache, dict):
+                cache.update(entry)
+        except Exception:
+            logger.debug("Failed to mirror web research questions in tool cache", exc_info=True)
+        self.touch()
         return entry
 
     def record_revision_lane_decision(
@@ -1147,9 +1177,14 @@ class SessionStateSnapshot(BaseModel):
                 "lane": lane,
                 "source": ANALYSIS_INPUT_SOURCES[component],
             }
+            reuse_metadata = self._lane_reuse_metadata(lane) if lane else None
+            if reuse_metadata:
+                entry["reuse_metadata"] = reuse_metadata
             if self._analysis_component_ready(component, payload):
                 state = "ready"
                 ready_components.append(component)
+                if reuse_metadata:
+                    entry["reused"] = True
             else:
                 lane_timestamp = self.get_lane_timestamp(lane) if lane else None
                 if lane_timestamp:

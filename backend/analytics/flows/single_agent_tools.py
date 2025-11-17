@@ -29,6 +29,16 @@
 #   Called from: analytics.flows.single_agent_tools.run_analysis_refresh
 #   Invokes: analytics.agent_orchestrator.AgentRuntime.run, analytics.flows.single_agent_tools._persist_runtime_metadata
 #   Why: Keeps the lane-decision handshake inside run_analysis_refresh without relying on the planner sequencer fallback path.
+# Function: run_analysis_refresh
+#   Role: Coordinates web refreshes and lane execution for revision requests, honoring agent lane decisions and Gemini bundles.
+#   Called from: analytics.flows.workflow, tests.analytics.test_single_agent_flow
+#   Invokes: analytics.flows.single_agent_tools._stream_agentic_lane_selection, analytics.flows.single_agent_tools.analysis_revision, analytics.flows.single_agent_tools.run_web_refresh
+#   Why: Ensures single-agent revisions stay deterministic while still letting the agent override lane/web plans.
+# Function: analysis_revision
+#   Role: Applies narrative/chart revisions while streaming Gemini questions to telemetry + SSE consumers.
+#   Called from: analytics.flows.workflow, analytics.flows.single_agent_tools.run_analysis_refresh
+#   Invokes: analytics.flows.single_agent_tools.run_web_refresh, analytics.flows.single_agent_tools._invoke_planner_tool, analytics.core.events.EventEmitter.status
+#   Why: Keeps analysis revisions aligned with revision plans so manifests, telemetry, and UI stay consistent.
 # Function: _apply_lane_transition_event
 #   Role: Updates cached lane state snapshots when planner lane transitions fire.
 #   Called from: tests.analytics.test_single_agent_flow
@@ -1233,6 +1243,7 @@ class SingleAgentController:
         "analysis_revision_ready",
         "analysis_complete",
         "workflow_complete",
+        "revision_questions_ready",
     }
 
     LANE_CACHE_TTL_SECONDS: int = 600
@@ -4603,15 +4614,78 @@ class SingleAgentController:
         source: Optional[str] = None,
         query: Optional[str] = None,
         revision_directive: Optional["RevisionDirective"] = None,
-        refresh_web: bool = True,
-        selected_lane: str = "narrative",
+        refresh_web: Optional[bool] = None,
+        selected_lane: Optional[str] = None,
         questions: Optional[RevisionQuestionBundle] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         hooks = _SingleAgentToolHooks(self, session_id=session_id)
+        plan_source = self._revision_inputs_plan or {}
+        normalized_plan = self._normalize_revision_inputs_plan(plan_source)
+        lane_from_plan = str(normalized_plan.get("lane") or "").strip().lower()
+        web_from_plan = str(normalized_plan.get("web") or "").strip().lower()
+        effective_lane = (selected_lane or lane_from_plan or "narrative").strip().lower()
+        if effective_lane not in {"chart", "narrative"}:
+            effective_lane = "narrative"
+        should_refresh_web = refresh_web if refresh_web is not None else web_from_plan == "refresh"
+
+        question_bundle = questions or self._revision_question_bundle
+        if question_bundle is None:
+            question_bundle = self._resolve_revision_questions(normalized_plan)
+        if question_bundle is None and revision_directive is not None:
+            directive_payload = {
+                "keyword_focus": getattr(revision_directive, "keyword_focus", None)
+                or getattr(revision_directive, "requested_focus", None)
+                or getattr(revision_directive, "raw_text", None),
+                "user_question": getattr(revision_directive, "user_question", None),
+                "industry_question": getattr(revision_directive, "industry_question", None),
+            }
+            if any(directive_payload.values()):
+                try:
+                    question_bundle = RevisionQuestionBundle.from_dict(directive_payload)
+                except Exception:
+                    logger.debug("Failed to hydrate revision questions from directive", exc_info=True)
+        if question_bundle is not None:
+            self._revision_question_bundle = question_bundle
+            snapshot = self._session_snapshot
+            if snapshot is not None:
+                try:
+                    snapshot.record_revision_questions(question_bundle.to_dict())
+                except Exception:
+                    logger.debug("Failed to persist revision question bundle on snapshot", exc_info=True)
+            card_payload = {
+                "type": "revision_questions",
+                "state": "ready",
+                "title": "Gemini Revision Focus",
+                "message": (question_bundle.keyword_focus or "").strip() or "Revision questions captured",
+                "lane": effective_lane,
+                "revision": True,
+                "snippets": [
+                    {"title": "User question", "snippet": question_bundle.user_question},
+                    {"title": "Industry question", "snippet": question_bundle.industry_question},
+                ],
+            }
+            question_event = EventEmitter.status(
+                "revision_questions_ready",
+                "Gemini revision prompts captured.",
+            )
+            question_event.setdefault("data", {})
+            question_event["data"].update(
+                {
+                    "session_id": session_id,
+                    "revision": True,
+                    "selected_lane": effective_lane,
+                    "questions": question_bundle.to_dict(),
+                    "specialist_card": card_payload,
+                }
+            )
+            annotated_card = apply_mode_metadata(question_event, self.flow_mode)
+            annotated_card["data"]["follow_up_route"] = self.follow_up_route.value
+            yield annotated_card
+
         resolved_source = source or "fresh_revision"
         resolved_reason = reason or resolved_source
         web_ready_seen = False
-        if refresh_web:
+        if should_refresh_web:
             async for event in self.run_web_refresh(
                 session_id=session_id,
                 query=query,
@@ -4624,6 +4698,18 @@ class SingleAgentController:
                 if event_name in {"web_ready", "web_revision_ready"}:
                     web_ready_seen = True
                 yield event
+
+        if not self._revision_inputs_outcome:
+            try:
+                self._record_lane_decision(
+                    lane=effective_lane,
+                    planned_lane=effective_lane,
+                    questions=question_bundle,
+                    session_id=session_id,
+                )
+            except Exception:
+                logger.debug("Failed to record analysis revision lane decision", exc_info=True)
+
         async for event in self._invoke_planner_tool(
             "analysis_revision",
             session_id=session_id,
@@ -4635,6 +4721,7 @@ class SingleAgentController:
             source=source,
         ):
             yield event
+
         ready_event = EventEmitter.status(
             "analysis_revision_ready",
             "Analysis revision applied.",
@@ -4648,14 +4735,18 @@ class SingleAgentController:
                 "reason": resolved_reason if (reason or web_ready_seen) else "cached_revision",
                 "from_cache": not web_ready_seen,
                 "web_refreshed": web_ready_seen,
-                "selected_lane": selected_lane,
-                "questions": questions.to_dict() if questions else None,
+                "selected_lane": effective_lane,
+                "questions": question_bundle.to_dict() if question_bundle else None,
             }
         )
         if session_id:
             ready_event["data"]["session_id"] = session_id
         annotated_ready = apply_mode_metadata(ready_event, self.flow_mode)
         annotated_ready["data"]["follow_up_route"] = self.follow_up_route.value
+        self._revision_inputs_outcome = {
+            "lane": effective_lane,
+            "web": "refresh" if should_refresh_web else "reuse",
+        }
         yield annotated_ready
 
     def get_tool_metadata_for_step(self, step: Optional[str]) -> Optional[Dict[str, Any]]:

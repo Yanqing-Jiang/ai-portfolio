@@ -67,8 +67,16 @@ const FOLLOW_UP_BANNER_COPY: Record<string, { title: string; message: string }> 
     title: 'Chart Update Requested',
     message: 'Applying the cached dataset to refresh the chart.',
   },
+  chart_only: {
+    title: 'Chart Revision',
+    message: 'Applying the cached dataset to refresh the chart visuals.',
+  },
   analysis_only: {
     title: 'Narrative Refresh',
+    message: 'Refreshing the analysis narrative and citations without replanning or rerunning SQL.',
+  },
+  narrative_only: {
+    title: 'Narrative Revision',
     message: 'Refreshing the analysis narrative and citations without replanning or rerunning SQL.',
   },
   market_only: {
@@ -113,6 +121,7 @@ const SPECIALIST_TYPE_TO_LANE: Record<string, string> = {
   analysis_summary: 'analysis',
   analysis_writer: 'analysis',
   chart_designer: 'chart',
+  revision_questions: 'analysis',
 };
 
 const REVISION_EVENT_ALIASES: Record<string, string> = {
@@ -1027,6 +1036,25 @@ export const useAnalyticsMemoryStream = (
     return result;
   };
 
+  const normalizeQuestionBundle = (
+    raw: any,
+  ): { keywordFocus?: string | null; user?: string | null; industry?: string | null } | undefined => {
+    if (!raw || typeof raw !== 'object') {
+      return undefined;
+    }
+    const keywordFocus = coerceString(raw.keyword_focus ?? raw.keywordFocus);
+    const userQuestion = coerceString(raw.user_question ?? raw.userQuestion);
+    const industryQuestion = coerceString(raw.industry_question ?? raw.industryQuestion);
+    if (!keywordFocus && !userQuestion && !industryQuestion) {
+      return undefined;
+    }
+    return {
+      keywordFocus: keywordFocus ?? null,
+      user: userQuestion ?? null,
+      industry: industryQuestion ?? null,
+    };
+  };
+
   const normalizeWebContext = (raw: any): WebSearchResult | null => {
     if (!raw) {
       return null;
@@ -1158,6 +1186,7 @@ export const useAnalyticsMemoryStream = (
         samples,
       };
     }
+    const questions = normalizeQuestionBundle(raw.questions);
     return {
       query,
       queryTerms,
@@ -1186,6 +1215,7 @@ export const useAnalyticsMemoryStream = (
           : typeof raw.topicTotal === 'number'
             ? raw.topicTotal
             : undefined,
+      questions,
     };
   };
 
@@ -2028,6 +2058,38 @@ const workflowDataRef = useRef<{
     });
     refreshResultMessage();
   }, [refreshResultMessage, sessionId]);
+
+  const emitRevisionQuestionCard = useCallback(
+    (
+      bundle: { keywordFocus?: string | null; user?: string | null; industry?: string | null } | undefined,
+      laneHint?: string | null,
+      revisionId?: string | null,
+    ) => {
+      if (!bundle) {
+        return;
+      }
+      const normalizedLane = laneHint ? laneHint.trim().toLowerCase() : undefined;
+      const resolvedLane = normalizedLane === 'chart' ? 'chart' : 'analysis';
+      const snippets: SpecialistCard['snippets'] = [];
+      if (bundle.user) {
+        snippets.push({ title: 'User prompt', snippet: bundle.user });
+      }
+      if (bundle.industry) {
+        snippets.push({ title: 'Industry prompt', snippet: bundle.industry });
+      }
+      upsertSpecialistCard({
+        type: 'revision_questions',
+        lane: resolvedLane,
+        title: resolvedLane === 'chart' ? 'Chart Revision Questions' : 'Narrative Revision Questions',
+        message: bundle.keywordFocus ?? undefined,
+        snippets,
+        revision: true,
+        revisionId: revisionId ?? revisionContextRef.current.id ?? undefined,
+        ts: new Date().toISOString(),
+      });
+    },
+    [upsertSpecialistCard],
+  );
 
   const streamHook = useAnalyticsStream();
   const stepsHook = useProcessSteps();
@@ -3010,6 +3072,28 @@ const workflowDataRef = useRef<{
               analysisAvailable,
               summary: summaryCopy,
             };
+            const normalizedQuestions =
+              normalizeQuestionBundle(
+                bannerPayload?.questions ??
+                  bannerPayload?.revision_questions ??
+                  eventData.revision_questions ??
+                  data.revision_questions,
+              ) ?? undefined;
+            if (normalizedQuestions) {
+              banner.questions = normalizedQuestions;
+              workflowDataRef.current.revisionQuestions = normalizedQuestions;
+              const laneFromRoute =
+                route.startsWith('chart')
+                  ? 'chart'
+                  : route.includes('analysis') || route.includes('narrative')
+                    ? 'analysis'
+                    : undefined;
+              emitRevisionQuestionCard(
+                normalizedQuestions,
+                laneFromRoute,
+                effectiveRevisionId ?? revisionContextRef.current.id ?? null,
+              );
+            }
             setFollowUpBanner(banner);
             workflowDataRef.current.followUpBanner = banner;
             refreshResultMessage();
@@ -3147,6 +3231,22 @@ const workflowDataRef = useRef<{
             message: copy.message,
             route,
           };
+          const questionBundle =
+            normalizeQuestionBundle(
+              eventData.revision_questions ?? eventData.questions ?? (eventData.banner as any)?.questions,
+            ) ?? undefined;
+          if (questionBundle) {
+            banner.questions = questionBundle;
+            workflowDataRef.current.revisionQuestions = questionBundle;
+            const laneFromBanner =
+              coerceString(eventData.selected_lane) ??
+              (normalizedLanes && normalizedLanes.length === 1 ? normalizedLanes[0] : undefined);
+            emitRevisionQuestionCard(
+              questionBundle,
+              laneFromBanner,
+              effectiveRevisionId ?? revisionContextRef.current.id ?? null,
+            );
+          }
           setFollowUpBanner(banner);
           const normalizedLanes = Array.isArray(eventData.lanes)
             ? (eventData.lanes as unknown[])
@@ -3160,7 +3260,10 @@ const workflowDataRef = useRef<{
           const trimmedFocus =
             rawFocus && typeof rawFocus === 'string' && rawFocus.trim().length ? rawFocus.trim() : undefined;
           const pendingFocus =
-            trimmedFocus ?? (route === 'analysis_only' ? pendingRevisionFocusRef.current : undefined);
+            trimmedFocus ??
+            (route === 'analysis_only' || route === 'narrative_only'
+              ? pendingRevisionFocusRef.current
+              : undefined);
           if (normalizedLanes && normalizedLanes.length) {
             revisionContextRef.current = {
               id: revisionContextRef.current.id,
@@ -3177,7 +3280,8 @@ const workflowDataRef = useRef<{
               pendingRevisionFocusRef.current = undefined;
               break;
             }
-            case 'analysis_only': {
+            case 'analysis_only':
+            case 'narrative_only': {
               setRevisionMode('analysis');
               revisionModeRef.current = 'analysis';
               revisionContextRef.current.focus =
@@ -3193,7 +3297,8 @@ const workflowDataRef = useRef<{
               pendingRevisionFocusRef.current = undefined;
               break;
             }
-            case 'chart_revision': {
+            case 'chart_revision':
+            case 'chart_only': {
               setRevisionMode('chart');
               revisionModeRef.current = 'chart';
               workflowDataRef.current.revisionFocus = null;
@@ -3203,7 +3308,7 @@ const workflowDataRef = useRef<{
             case 'mixed_revision': {
               setRevisionMode('mixed');
               revisionModeRef.current = 'mixed';
-              if (route !== 'analysis_only') {
+              if (route !== 'analysis_only' && route !== 'narrative_only') {
                 workflowDataRef.current.revisionFocus =
                   normalizedLanes?.includes('analysis') ? pendingFocus ?? revisionContextRef.current.focus ?? null : null;
               }
@@ -3233,7 +3338,7 @@ const workflowDataRef = useRef<{
                   revisionModeRef.current = 'mixed';
                 }
               }
-              if (route !== 'analysis_only') {
+              if (route !== 'analysis_only' && route !== 'narrative_only') {
                 workflowDataRef.current.revisionFocus = null;
                 pendingRevisionFocusRef.current = undefined;
               }
@@ -3612,6 +3717,9 @@ const workflowDataRef = useRef<{
           if (webContext) {
             scheduleProgressiveUpdate({ webSearch: webContext });
             workflowDataRef.current.webSearch = webContext;
+            if (webContext.questions) {
+              workflowDataRef.current.webQuestions = webContext.questions;
+            }
             refreshResultMessage();
           }
           stepsHook.updateStepStatus(
@@ -3651,6 +3759,16 @@ const workflowDataRef = useRef<{
           );
           if (readySources) {
             applyAnalysisSourcesUpdate(readySources);
+          }
+          const readyQuestions =
+            normalizeQuestionBundle(eventData.questions ?? eventData.revision_questions ?? data.questions) ?? undefined;
+          if (readyQuestions) {
+            workflowDataRef.current.revisionQuestions = readyQuestions;
+            emitRevisionQuestionCard(
+              readyQuestions,
+              coerceString(eventData.selected_lane),
+              effectiveRevisionId ?? revisionContextRef.current.id ?? null,
+            );
           }
           updateStep('analysis_generation', 'completed', ['Analysis ready'], eventData, stepInfo.elapsed_ms, stepInfo.ts);
           if (isFirstReady) {
@@ -4418,7 +4536,7 @@ const workflowDataRef = useRef<{
 
             if (refreshMode === 'light' && !isThinkingEvent) {
               const existingBanner = followUpBanner ?? workflowDataRef.current.followUpBanner ?? null;
-              const routeCandidate = existingBanner?.route ?? (revisionFlag ? 'analysis_only' : 'reuse_sql');
+              const routeCandidate = existingBanner?.route ?? (revisionFlag ? 'narrative_only' : 'reuse_sql');
               const banner: FollowUpBanner = {
                 title: 'Narrative Updated (Cached)',
                 message: 'Quickly refreshed the narrative using cached SQL and web context.',
@@ -5505,6 +5623,8 @@ const workflowDataRef = useRef<{
       snapshotReuse: null,
       requestedGranularity: null,
       revisionFocus: null,
+      revisionQuestions: undefined,
+      webQuestions: undefined,
     };
   };
 

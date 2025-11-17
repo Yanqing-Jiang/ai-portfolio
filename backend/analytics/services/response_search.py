@@ -180,6 +180,7 @@ else:  # pragma: no cover - keep runtime lightweight
     _genai_types = Any  # type: ignore[assignment]
 
 from analytics.core.telemetry import gemini_call
+from analytics.core.session_state import SessionStateSnapshot
 
 logger = logging.getLogger(__name__)
 
@@ -235,6 +236,7 @@ class SearchTopicPlan:
     label: str
     query: str
     reason: Optional[str] = None
+    question_kind: Optional[str] = None
 
 
 @dataclass
@@ -260,6 +262,7 @@ class ResponseSearchResult:
     latency_ms: Optional[int] = None
     model: Optional[str] = None
     from_cache: bool = False
+    questions: Optional[Dict[str, Any]] = None
 
     def to_payload(self) -> Dict[str, Any]:
         payload = {
@@ -277,6 +280,8 @@ class ResponseSearchResult:
             'model': self.model,
             'from_cache': self.from_cache,
         }
+        if self.questions:
+            payload['questions'] = dict(self.questions)
         return payload
 
     def to_agent_envelope(self, *, status: str = "completed", cached: bool = False) -> Dict[str, Any]:
@@ -295,6 +300,7 @@ class ResponseSearchResult:
                 "query": topic.query,
                 "summary": topic.summary,
                 "snippets": len(topic.snippets),
+                "question_kind": topic.question_kind,
             }
             for topic in self.topics
         ]
@@ -308,7 +314,51 @@ class ResponseSearchResult:
             "from_cache": cached or self.from_cache,
             "snippets": snippets_payload,
             "topics": topics_payload,
+            "questions": dict(self.questions) if self.questions else None,
         }
+
+
+@dataclass
+class WebResearchQuestionBundle:
+    """Structured Gemini metadata for baseline web research prompts."""
+
+    keyword_focus: str
+    user_question: str
+    industry_question: str
+    model: Optional[str] = None
+    latency_ms: Optional[int] = None
+    generated_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    source: str = "gemini"
+    fallback_reason: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "keyword_focus": self.keyword_focus,
+            "user_question": self.user_question,
+            "industry_question": self.industry_question,
+            "generated_at": self.generated_at,
+            "source": self.source,
+        }
+        if self.model:
+            payload["model"] = self.model
+        if self.latency_ms is not None:
+            payload["latency_ms"] = self.latency_ms
+        if self.fallback_reason:
+            payload["fallback_reason"] = self.fallback_reason
+        return payload
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "WebResearchQuestionBundle":
+        return cls(
+            keyword_focus=str(payload.get("keyword_focus") or "").strip(),
+            user_question=str(payload.get("user_question") or "").strip(),
+            industry_question=str(payload.get("industry_question") or "").strip(),
+            model=str(payload.get("model") or "").strip() or None,
+            latency_ms=payload.get("latency_ms"),
+            generated_at=str(payload.get("generated_at") or datetime.utcnow().isoformat()),
+            source=str(payload.get("source") or "gemini"),
+            fallback_reason=str(payload.get("fallback_reason") or "").strip() or None,
+        )
 
 
 def _resolve_search_api_key() -> Optional[str]:
@@ -606,7 +656,8 @@ async def _generate_search_topics(
 
     configured_max = max(1, min_topics, _MAX_TOPICS)
     desired_count = min(2, configured_max)
-    return deduped[:desired_count]
+    normalized = _select_primary_and_industry(deduped[:desired_count], original_query=query)
+    return normalized[:desired_count]
 
 
 async def _generate_search_topic(
@@ -631,6 +682,67 @@ async def generate_search_topic(query: str, *, session_id: Optional[str] = None)
     return await _generate_search_topic(gemini_model, query, session_id=session_id)
 
 
+async def build_web_research_questions(
+    query: str,
+    *,
+    snapshot: Optional[SessionStateSnapshot] = None,
+    session_id: Optional[str] = None,
+    min_topics: int = 2,
+) -> Tuple[WebResearchQuestionBundle, List[SearchTopicPlan]]:
+    """Return Gemini-derived user + industry web prompts plus sanitized topic plans."""
+    normalized_query = (query or getattr(snapshot, "last_query", "") or "").strip()
+    if not normalized_query:
+        normalized_query = "latest market outlook"
+    gemini_model = _ensure_model()
+    start = time.perf_counter()
+    fallback_reason: Optional[str] = None
+    try:
+        generated_topics = await _generate_search_topics(
+            gemini_model,
+            normalized_query,
+            session_id=session_id,
+            min_topics=max(2, min_topics),
+        )
+        duration_ms = int((time.perf_counter() - start) * 1000)
+        gemini_call(
+            operation="web_research_keywords",
+            model=gemini_model.model_name,
+            duration_ms=duration_ms,
+            status="success",
+            session_id=session_id,
+            metadata={"topic_count": len(generated_topics)},
+        )
+    except Exception as exc:
+        duration_ms = int((time.perf_counter() - start) * 1000)
+        fallback_reason = str(exc)
+        gemini_call(
+            operation="web_research_keywords",
+            model=getattr(gemini_model, "model_name", _DEFAULT_MODEL),
+            duration_ms=duration_ms,
+            status="error",
+            session_id=session_id,
+            error=str(exc),
+        )
+        generated_topics = []
+    selected_plans = _select_primary_and_industry(generated_topics, original_query=normalized_query)
+    keyword_focus = selected_plans[0].label or normalized_query
+    bundle = WebResearchQuestionBundle(
+        keyword_focus=keyword_focus,
+        user_question=selected_plans[0].query,
+        industry_question=selected_plans[1].query,
+        model=getattr(gemini_model, "model_name", _DEFAULT_MODEL),
+        latency_ms=duration_ms,
+        source="fallback" if fallback_reason else "gemini",
+        fallback_reason=fallback_reason,
+    )
+    if snapshot is not None:
+        try:
+            snapshot.record_web_research_questions(bundle.to_dict())
+        except Exception:
+            logger.debug("Failed to persist web research question bundle", exc_info=True)
+    return bundle, selected_plans
+
+
 async def generate_search_topics(
     query: str,
     *,
@@ -638,13 +750,13 @@ async def generate_search_topics(
     min_topics: int = 2,
 ) -> List[SearchTopicPlan]:
     """Return structured topic prompts without issuing live web calls."""
-    gemini_model = _ensure_model()
-    return await _generate_search_topics(
-        gemini_model,
+    _, plans = await build_web_research_questions(
         query,
+        snapshot=None,
         session_id=session_id,
         min_topics=min_topics,
     )
+    return plans
 
 
 def _extract_support_text(support: Dict[str, Any], chunk_map: Dict[int, Dict[str, Any]]) -> Optional[str]:
@@ -1037,6 +1149,88 @@ def _dedupe_snippets(snippets: Iterable[SearchSnippet]) -> List[SearchSnippet]:
     return list(seen.values())
 
 
+def _select_primary_and_industry(
+    candidate_plans: Sequence[SearchTopicPlan],
+    *,
+    original_query: str,
+) -> List[SearchTopicPlan]:
+    """Ensure at least two distinct topic plans covering user + industry context."""
+    plans: List[SearchTopicPlan] = [plan for plan in candidate_plans if plan.query]
+    if not plans:
+        primary_query = _sanitize_search_query(original_query, original_query)
+        industry_query = _sanitize_search_query(f"{primary_query} industry outlook", primary_query)
+        return [
+            SearchTopicPlan(label="Primary question", query=primary_query, reason="User focus", question_kind="user"),
+            SearchTopicPlan(
+                label="Industry context",
+                query=industry_query,
+                reason="Broader sector trend",
+                question_kind="industry",
+            ),
+        ]
+
+    primary = plans[0]
+    industry: Optional[SearchTopicPlan] = None
+    for plan in plans[1:]:
+        normalized_blob = " ".join(filter(None, [plan.label, plan.query, plan.reason or ""])).lower()
+        if any(token in normalized_blob for token in ("industry", "sector", "market")):
+            industry = plan
+            break
+    if industry is None and len(plans) > 1:
+        industry = plans[1]
+
+    primary_query = _sanitize_search_query(primary.query, original_query)
+    if industry is None or _sanitize_search_query(industry.query, original_query).lower() == primary_query.lower():
+        fallback_seed = primary_query or original_query
+        fallback_query = _sanitize_search_query(f"{fallback_seed} industry outlook", fallback_seed or original_query)
+        industry = SearchTopicPlan(
+            label="Industry context",
+            query=fallback_query,
+            reason="Provide wider sector context",
+        )
+
+    sanitized_industry_query = _sanitize_search_query(industry.query, original_query)
+    if sanitized_industry_query.lower() == primary_query.lower():
+        sanitized_industry_query = _sanitize_search_query(
+            f"{primary_query} broader industry trend",
+            primary_query,
+        )
+    finalized = [
+        SearchTopicPlan(
+            label=primary.label or "Primary question",
+            query=primary_query,
+            reason=primary.reason,
+            question_kind="user",
+        ),
+        SearchTopicPlan(
+            label=industry.label or "Industry context",
+            query=sanitized_industry_query,
+            reason=industry.reason or "Broader sector context",
+            question_kind="industry",
+        ),
+    ]
+    return finalized
+
+
+def _bundle_from_topic_plans(
+    plans: Sequence[SearchTopicPlan],
+    *,
+    original_query: str,
+    model_name: Optional[str],
+    source: str = "gemini",
+) -> Tuple[WebResearchQuestionBundle, List[SearchTopicPlan]]:
+    normalized_plans = _select_primary_and_industry(plans, original_query=original_query)
+    primary, industry = normalized_plans[0], normalized_plans[1]
+    bundle = WebResearchQuestionBundle(
+        keyword_focus=primary.label or primary.query or original_query,
+        user_question=primary.query or original_query,
+        industry_question=industry.query or f"{original_query} industry outlook",
+        model=model_name,
+        source=source,
+    )
+    return bundle, normalized_plans
+
+
 def _build_prompt(search_query: str) -> List[str]:
     lines: List[str] = [
         'You are a financial research assistant. You MUST use google_search and ground every statement in returned sources. If no sources are found, reply: "no sources found" and stop.',
@@ -1081,78 +1275,74 @@ async def perform_response_search(
     logger.debug('Resolved Gemini search model: %s', getattr(gemini_model, 'model_name', _DEFAULT_MODEL))
 
     plans: List[SearchTopicPlan] = []
+    questions_payload: Optional[Dict[str, Any]] = None
+    model_name = getattr(gemini_model, "model_name", _DEFAULT_MODEL)
     if topic_plans:
+        provided_plans: List[SearchTopicPlan] = []
         for plan in topic_plans:
             if not isinstance(plan, SearchTopicPlan):
                 continue
             sanitized_query = _sanitize_search_query(plan.query, plan.query)
             if not sanitized_query:
                 continue
-            if all(sanitized_query.lower() != existing.query.lower() for existing in plans):
-                plans.append(
-                    SearchTopicPlan(
-                        label=plan.label or 'Research focus',
-                        query=sanitized_query,
-                        reason=plan.reason,
-                    )
+            provided_plans.append(
+                SearchTopicPlan(
+                    label=plan.label or "Research focus",
+                    query=sanitized_query,
+                    reason=plan.reason,
+                    question_kind=getattr(plan, "question_kind", None),
                 )
+            )
+        if provided_plans:
+            bundle, normalized_plans = _bundle_from_topic_plans(
+                provided_plans,
+                original_query=normalized_query,
+                model_name=model_name,
+                source="revision_topics",
+            )
+            questions_payload = bundle.to_dict()
+            plans = normalized_plans
     else:
         if search_topic and isinstance(search_topic, str) and search_topic.strip():
-            plans.append(
-                SearchTopicPlan(
-                    label='Primary question',
-                    query=_sanitize_search_query(search_topic, search_topic),
-                )
+            bundle, generated_plans = await build_web_research_questions(
+                normalized_query,
+                snapshot=None,
+                session_id=session_id,
+                min_topics=2,
             )
-        generated_plans = await _generate_search_topics(gemini_model, query, session_id=session_id, min_topics=2)
-        for candidate_plan in generated_plans:
-            if all(candidate_plan.query.lower() != existing.query.lower() for existing in plans):
-                plans.append(candidate_plan)
+            sanitized = _sanitize_search_query(search_topic, search_topic)
+            user_plan = SearchTopicPlan(
+                label='Primary question',
+                query=sanitized,
+                reason='User supplied topic',
+                question_kind='user',
+            )
+            industry_plan = generated_plans[1] if len(generated_plans) > 1 else generated_plans[0]
+            industry_plan.question_kind = industry_plan.question_kind or 'industry'
+            plans = [user_plan, industry_plan]
+            bundle.keyword_focus = bundle.keyword_focus or sanitized
+            bundle.user_question = user_plan.query
+            questions_payload = bundle.to_dict()
+        else:
+            bundle, bundle_plans = await build_web_research_questions(
+                normalized_query,
+                snapshot=None,
+                session_id=session_id,
+                min_topics=2,
+            )
+            plans = bundle_plans
+            questions_payload = bundle.to_dict()
     if not plans:
-        plans.append(SearchTopicPlan(label='Primary question', query=_sanitize_search_query(query, query)))
-
-    def _select_primary_and_industry(candidate_plans: List[SearchTopicPlan]) -> List[SearchTopicPlan]:
-        """Ensure the first topic mirrors the user query and the second covers industry context."""
-        if not candidate_plans:
-            primary_query = _sanitize_search_query(query, query)
-            background_query = _sanitize_search_query(f"{primary_query} industry outlook", primary_query)
-            return [
-                SearchTopicPlan(label='Primary question', query=primary_query),
-                SearchTopicPlan(label='Industry context', query=background_query, reason='Provide wider sector context'),
-            ]
-
-        primary = candidate_plans[0]
-        industry: Optional[SearchTopicPlan] = None
-        for plan in candidate_plans[1:]:
-            text_blob = " ".join(filter(None, [plan.label, plan.query, plan.reason or ""])).lower()
-            if 'industry' in text_blob or 'sector' in text_blob:
-                industry = plan
-                break
-
-        if industry is None and len(candidate_plans) > 1:
-            industry = candidate_plans[1]
-
-        primary_query = _sanitize_search_query(primary.query, query)
-        if industry is None or industry.query.lower() == primary_query.lower():
-            fallback_seed = primary_query or query
-            fallback_query = _sanitize_search_query(f"{fallback_seed} industry outlook", fallback_seed or query)
-            industry = SearchTopicPlan(
-                label='Industry context',
-                query=fallback_query,
-                reason='Provide wider sector context',
-            )
-
-        # Ensure distinct queries
-        if industry.query.lower() == primary_query.lower():
-            industry = SearchTopicPlan(
-                label='Industry context',
-                query=_sanitize_search_query(f"{primary_query} broader industry trend", primary_query),
-                reason='Provide wider sector context',
-            )
-
-        return [SearchTopicPlan(label='Primary question', query=primary_query, reason=primary.reason), industry]
-
-    plans = _select_primary_and_industry(plans)
+        plans = _select_primary_and_industry([], original_query=normalized_query)
+        questions_payload = {
+            "keyword_focus": normalized_query,
+            "user_question": plans[0].query,
+            "industry_question": plans[1].query,
+            "generated_at": datetime.utcnow().isoformat(),
+            "source": "fallback",
+        }
+    elif not questions_payload:
+        plans = _select_primary_and_industry(plans, original_query=normalized_query)
 
     logger.info('Generated search topics %s', [plan.query for plan in plans])
     logger.info(
@@ -1341,6 +1531,7 @@ async def perform_response_search(
             label=plan.label,
             query=plan.query,
             reason=plan.reason,
+            question_kind=getattr(plan, "question_kind", None),
             summary=topic_summary,
             snippets=topic_snippets,
             search_id=response_dict.get('response_id') or response_dict.get('id'),
@@ -1393,6 +1584,8 @@ async def perform_response_search(
         latency_ms=total_latency or None,
         model=getattr(gemini_model, 'model_name', model or _DEFAULT_MODEL),
     )
+    if questions_payload:
+        result.questions = dict(questions_payload)
 
     logger.info('Response search produced %s snippets (summary=%s) for query %s', len(result.snippets), bool(result.summary), normalized_query)
     logger.info(

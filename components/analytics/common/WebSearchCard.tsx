@@ -58,7 +58,19 @@ export const WebSearchCard: React.FC<WebSearchCardProps> = ({
     model,
     topics = [],
     topicTotal,
+    questions,
   } = result;
+  const keywordFocus =
+    typeof questions?.keywordFocus === 'string' && questions.keywordFocus.trim().length
+      ? questions.keywordFocus.trim()
+      : undefined;
+  const questionEntries: { label: string; value: string }[] = [];
+  if (typeof questions?.user === 'string' && questions.user.trim().length) {
+    questionEntries.push({ label: 'User question', value: questions.user.trim() });
+  }
+  if (typeof questions?.industry === 'string' && questions.industry.trim().length) {
+    questionEntries.push({ label: 'Industry question', value: questions.industry.trim() });
+  }
 
   const isDisabled = error === 'search_api_missing' || reason === 'search_api_missing';
   const FALLBACK_SNIPPETS_PER_TOPIC = 2;
@@ -394,6 +406,22 @@ export const WebSearchCard: React.FC<WebSearchCardProps> = ({
           )}
         </div>
       </div>
+
+      {(!isDisabled && (keywordFocus || questionEntries.length > 0)) ? (
+        <div className="px-4 pb-2 text-xs text-slate-300 space-y-1">
+          {keywordFocus ? (
+            <p className="text-[11px] uppercase tracking-wide text-slate-500">
+              Focus: <span className="text-slate-300 normal-case">{keywordFocus}</span>
+            </p>
+          ) : null}
+          {questionEntries.map((entry) => (
+            <p key={entry.label} className="leading-snug">
+              <span className="font-semibold text-slate-200">{entry.label}:</span>{' '}
+              <span className="text-slate-300">{entry.value}</span>
+            </p>
+          ))}
+        </div>
+      ) : null}
 
       <div className="flex flex-wrap items-center gap-2 px-4 pb-2 text-xs text-slate-400">
         <span>{topicSummaryLabel}</span>

@@ -1412,6 +1412,7 @@ class MultiAgentFlow:
         "analysis_revision_ready",
         "analysis_complete",
         "workflow_complete",
+        "revision_questions_ready",
     }
 
     AGENT_START_STEPS = {
@@ -2609,8 +2610,16 @@ class MultiAgentFlow:
         self._planner.set_analysis_refresh_mode(mode)
 
     def set_revision_inputs_plan(self, plan: Optional[Mapping[str, Any]]) -> None:
-        self._revision_inputs_plan = self._normalize_revision_inputs_plan(plan)
+        normalized_plan = self._normalize_revision_inputs_plan(plan)
+        self._revision_inputs_plan = normalized_plan
         self._revision_inputs_outcome = None
+        self._revision_question_bundle = None
+        questions_payload = normalized_plan.get("questions")
+        if isinstance(questions_payload, Mapping):
+            try:
+                self._revision_question_bundle = RevisionQuestionBundle.from_dict(questions_payload)
+            except Exception:
+                logger.debug("Failed to hydrate multi-agent revision questions", exc_info=True)
 
     def get_revision_inputs_outcome(self) -> Optional[Dict[str, str]]:
         if not self._revision_inputs_outcome:
@@ -3658,13 +3667,104 @@ class MultiAgentFlow:
         reason: Optional[str] = None,
         source: Optional[str] = None,
         revision_directive: Optional["RevisionDirective"] = None,
-        refresh_web: bool = False,
-        selected_lane: str = "narrative",
+        refresh_web: Optional[bool] = None,
+        selected_lane: Optional[str] = None,
         questions: Optional[RevisionQuestionBundle] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         if session_id is None:
             raise ValueError("analysis_revision requires an existing session_id")
         hooks = _MultiAgentHooks(self, query, session_id=session_id)
+        plan_source = self._revision_inputs_plan or {}
+        normalized_plan = self._normalize_revision_inputs_plan(plan_source)
+        lane_from_plan = str(normalized_plan.get("lane") or "").strip().lower()
+        web_from_plan = str(normalized_plan.get("web") or "").strip().lower()
+        effective_lane = (selected_lane or lane_from_plan or "narrative").strip().lower()
+        if effective_lane not in {"chart", "narrative"}:
+            effective_lane = "narrative"
+        should_refresh_web = refresh_web if refresh_web is not None else web_from_plan == "refresh"
+
+        question_bundle = questions or self._revision_question_bundle
+        if question_bundle is None:
+            question_bundle = self._resolve_revision_questions(normalized_plan)
+        if question_bundle is None and revision_directive is not None:
+            directive_payload = {
+                "keyword_focus": getattr(revision_directive, "keyword_focus", None)
+                or getattr(revision_directive, "requested_focus", None)
+                or getattr(revision_directive, "raw_text", None),
+                "user_question": getattr(revision_directive, "user_question", None),
+                "industry_question": getattr(revision_directive, "industry_question", None),
+            }
+            if any(directive_payload.values()):
+                try:
+                    question_bundle = RevisionQuestionBundle.from_dict(directive_payload)
+                except Exception:
+                    logger.debug("Failed to derive revision questions from directive", exc_info=True)
+        if question_bundle is not None:
+            self._revision_question_bundle = question_bundle
+            snapshot = self._session_snapshot
+            if snapshot is not None:
+                try:
+                    snapshot.record_revision_questions(question_bundle.to_dict())
+                except Exception:
+                    logger.debug("Failed to persist revision questions on snapshot", exc_info=True)
+            card_payload = {
+                "type": "revision_questions",
+                "state": "ready",
+                "title": "Gemini Revision Focus",
+                "message": (question_bundle.keyword_focus or "").strip() or "Revision questions captured",
+                "lane": effective_lane,
+                "revision": True,
+                "snippets": [
+                    {"title": "User question", "snippet": question_bundle.user_question},
+                    {"title": "Industry question", "snippet": question_bundle.industry_question},
+                ],
+            }
+            question_event = EventEmitter.status(
+                "revision_questions_ready",
+                "Gemini revision prompts captured.",
+            )
+            question_event.setdefault("data", {})
+            question_event["data"].update(
+                {
+                    "session_id": session_id,
+                    "revision": True,
+                    "selected_lane": effective_lane,
+                    "questions": question_bundle.to_dict(),
+                    "specialist_card": card_payload,
+                }
+            )
+            annotated_questions = self._annotate(question_event)
+            annotated_questions = self._maybe_tag_session_metadata(annotated_questions, session_id)
+            yield annotated_questions
+
+        resolved_source = source or "fresh_revision"
+        resolved_reason = reason or resolved_source
+        web_ready_seen = False
+        if should_refresh_web:
+            async for event in self.run_web_refresh(
+                query,
+                session_id=session_id,
+                reason=resolved_reason,
+                source=resolved_source,
+                revision_directive=revision_directive,
+                force_revision_refresh=True,
+            ):
+                event_name = str(event.get("event") or "")
+                if event_name in {"web_ready", "web_revision_ready"}:
+                    web_ready_seen = True
+                yield event
+
+        if not self._revision_inputs_outcome:
+            try:
+                self._record_lane_decision(
+                    lane=effective_lane,
+                    planned_lane=effective_lane,
+                    questions=question_bundle,
+                    session_id=session_id,
+                )
+            except Exception:
+                logger.debug("Failed to record multi-agent lane decision", exc_info=True)
+
         ctx = await self._planner.initialize_context(query, session_id=session_id)
         registry = get_planner_tool_registry()
         if revision_directive is not None:
@@ -3679,16 +3779,6 @@ class MultiAgentFlow:
                 ctx.revision_focus = focus_hint
             if getattr(revision_directive, "search_topics", None):
                 ctx.revision_search_topics = list(revision_directive.search_topics)
-        if refresh_web:
-            async for event in self.run_web_refresh(
-                query,
-                session_id=session_id,
-                reason=reason,
-                source=source or "fresh_revision",
-                revision_directive=revision_directive,
-                force_revision_refresh=True,
-            ):
-                yield event
         tool_stream = registry.invoke(
             "analysis_revision",
             self._planner._pipeline,
@@ -3705,6 +3795,32 @@ class MultiAgentFlow:
             ensure_session_event=True,
         ):
             yield event
+
+        ready_event = EventEmitter.status(
+            "analysis_revision_ready",
+            "Analysis revision applied.",
+        )
+        ready_event.setdefault("data", {})
+        ready_event["data"].update(
+            {
+                "lane": "analysis",
+                "revision": True,
+                "source": resolved_source,
+                "reason": resolved_reason if (reason or web_ready_seen) else "cached_revision",
+                "from_cache": not web_ready_seen,
+                "web_refreshed": web_ready_seen,
+                "selected_lane": effective_lane,
+                "questions": question_bundle.to_dict() if question_bundle else None,
+                "session_id": session_id,
+            }
+        )
+        annotated_ready = self._annotate(ready_event)
+        annotated_ready = self._maybe_tag_session_metadata(annotated_ready, session_id)
+        self._revision_inputs_outcome = {
+            "lane": effective_lane,
+            "web": "refresh" if should_refresh_web else "reuse",
+        }
+        yield annotated_ready
 
     def _prepare_context(self, query: str) -> None:
         preserved_market = self._shared_context.get('market', {})

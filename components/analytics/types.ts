@@ -177,6 +177,11 @@ export interface WebSearchResult {
   provider?: string;
   model?: string;
   latencyStats?: { total_ms?: number; p50_ms?: number; max_ms?: number; min_ms?: number; samples?: number };
+  questions?: {
+    keywordFocus?: string | null;
+    user?: string | null;
+    industry?: string | null;
+  };
 }
 
 export interface AnalysisSourceInsight {
@@ -242,6 +247,11 @@ export interface FollowUpBanner {
   analysisAvailable?: boolean;
   summary?: string;
   refreshMode?: 'light' | 'full';
+  questions?: {
+    keywordFocus?: string | null;
+    user?: string | null;
+    industry?: string | null;
+  };
 }
 
 export interface SpecialistCard {
