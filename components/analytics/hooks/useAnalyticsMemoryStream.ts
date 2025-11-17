@@ -91,6 +91,10 @@ const FOLLOW_UP_BANNER_COPY: Record<string, { title: string; message: string }> 
     title: 'Revision Not Available',
     message: 'Start a new question to rebuild missing results before revising again.',
   },
+  missing_analysis: {
+    title: 'Baseline Missing',
+    message: 'Run a fresh analysis to capture the initial chart and narrative before revising.',
+  },
 };
 
 const formatLaneName = (lane?: string) => {
@@ -3053,7 +3057,9 @@ const workflowDataRef = useRef<{
           const bannerPayload = eventData.banner || data.banner;
           if (stepInfo.step === 'follow_up_route' || bannerPayload) {
             const route = coerceString(bannerPayload?.route) ?? 'full_pipeline';
-            const copy = FOLLOW_UP_BANNER_COPY[route] ?? FOLLOW_UP_BANNER_COPY.full_pipeline;
+            const reasonKey = coerceString(bannerPayload?.reason ?? eventData.reason);
+            const copyKey = reasonKey && FOLLOW_UP_BANNER_COPY[reasonKey] ? reasonKey : route;
+            const copy = FOLLOW_UP_BANNER_COPY[copyKey] ?? FOLLOW_UP_BANNER_COPY.full_pipeline;
             const finalAnswerOnly = coerceBoolean(bannerPayload?.final_answer_only);
             const missingComponents = Array.isArray(bannerPayload?.missing_components)
               ? (bannerPayload.missing_components as unknown[])
@@ -3071,6 +3077,7 @@ const workflowDataRef = useRef<{
               missingComponents,
               analysisAvailable,
               summary: summaryCopy,
+              reason: reasonKey ?? undefined,
             };
             const normalizedQuestions =
               normalizeQuestionBundle(
@@ -3225,11 +3232,16 @@ const workflowDataRef = useRef<{
           const agenticFlag =
             coerceBoolean(eventData.agentic_revision ?? data.agentic_revision) ?? false;
           setAgenticRevisionActive(agenticFlag);
-          const copy = FOLLOW_UP_BANNER_COPY[route] ?? FOLLOW_UP_BANNER_COPY.full_pipeline;
+          const reasonKey =
+            coerceString((eventData.banner as any)?.reason ?? eventData.reason) ?? undefined;
+          const bannerKey =
+            reasonKey && FOLLOW_UP_BANNER_COPY[reasonKey] ? reasonKey : route;
+          const copy = FOLLOW_UP_BANNER_COPY[bannerKey] ?? FOLLOW_UP_BANNER_COPY.full_pipeline;
           const banner: FollowUpBanner = {
             title: copy.title,
             message: copy.message,
             route,
+            reason: reasonKey ?? undefined,
           };
           const questionBundle =
             normalizeQuestionBundle(
@@ -3777,6 +3789,33 @@ const workflowDataRef = useRef<{
           if (isRevisionEvent) {
             markRevisionMode('analysis');
           }
+          refreshResultMessage();
+          break;
+        }
+
+        case 'revision_agent_disabled': {
+          const laneLabel = formatLaneName(coerceString(eventData.lane) || 'analysis');
+          const reasonText = coerceString(eventData.reason) || 'agent runtime unavailable';
+          updateAgentCoordination(
+            [`${laneLabel}: ${reasonText}`],
+            'error',
+            { ts: stepInfo.ts, elapsed_ms: stepInfo.elapsed_ms, sequence },
+          );
+          stepsHook.updateStepStatus(
+            'agent_coordination',
+            'error',
+            [`Revision blocked: ${reasonText}`],
+            eventData,
+            stepInfo.elapsed_ms,
+            stepInfo.ts,
+          );
+          const disabledBanner: FollowUpBanner = {
+            title: 'Agent Runtime Disabled',
+            message: 'Switch to a deterministic revision or rerun the full workflow once the agent service is restored.',
+            route: 'cannot_revise',
+          };
+          setFollowUpBanner(disabledBanner);
+          workflowDataRef.current.followUpBanner = disabledBanner;
           refreshResultMessage();
           break;
         }
