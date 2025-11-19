@@ -104,6 +104,11 @@
 #   Called from: analytics.flows.workflow, tests.analytics.test_multi_agent_flow, tests.analytics.test_multi_agent_rerun_policy, tests.analytics.test_prompt_contracts, +3 more
 #   Collaborators: analytics.core.config_store.get_config_store, os.getenv, analytics.flows.supervisor_retry_manager.SupervisorRetryManager, analytics.flows.planner_executor.PlannerExecutorFlow, +2 more
 #   Why: Supports downstream analytics workflows that rely on MultiAgentFlow.
+# Function: MultiAgentFlow.events
+#   Role: Streams fresh multi-agent runs through the supervisor agent orchestration path.
+#   Called from: analytics.flows.workflow, tests.analytics.test_multi_agent_flow
+#   Invokes: MultiAgentFlow._run_agent_orchestration, MultiAgentFlow._forward_with_hooks, analytics.core.events.EventEmitter.session_started
+#   Why: Ensures MULTI_AGENT fresh runs emit Agent SDK telemetry (agent_turn_*) instead of deterministic planner-only events.
 # --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
@@ -1704,6 +1709,7 @@ class MultiAgentFlow:
         self._pending_artifact_events: List[Dict[str, Any]] = []
         self._artifact_flush_pending: bool = False
         self._chart_revision_missing_session: bool = False
+        self._agent_turn_observed: bool = False
         self._revision_directive: Optional["RevisionDirective"] = None
         self._agentic_revision_mode: bool = False
         self._lane_refresh_required: Dict[str, bool] = {}
@@ -3415,47 +3421,43 @@ class MultiAgentFlow:
         sequencer_state: Optional[_SupervisorSequencerState] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         self._abort_stale_sequencer(reason="restart")
-        if self._agentic_revision_mode:
-            sequencer = None
-            sequencer_state = None
+        self._agent_turn_observed = False
         if sequencer is not None:
-            async for event in self.sequencer_stream(
-                query,
-                session_id=session_id,
-                sequencer=sequencer,
-                state=sequencer_state,
-            ):
-                yield event
-            return
-
-        planner_events = getattr(self._planner, "events", None)
+            raise ValueError(
+                "MultiAgentFlow.events no longer supports deterministic sequencer fallbacks; "
+                "fresh runs must stream via the supervisor AgentRuntime."
+            )
+        if self._agentic_revision_mode:
+            sequencer_state = None
         hooks = _MultiAgentHooks(self, query, session_id=session_id)
-        if callable(planner_events):
-            try:
-                async for event in planner_events(query, session_id=session_id, hooks=hooks):
-                    yield event
-                return
-            except TypeError:
-                planner_stream = planner_events(query, session_id=session_id)
-                async for event in self._forward_with_hooks(
-                    planner_stream,
-                    hooks,
-                    query,
-                    session_id,
-                    ensure_session_event=True,
-                ):
-                    yield event
-                return
 
-        planner_stream = run_planner_executor(query, session_id=session_id)
+        self._prepare_context(query)
+        if session_id:
+            self._shared_context["session_id"] = session_id
+        orchestrated_stream = self._run_agent_orchestration(query, session_id)
         async for event in self._forward_with_hooks(
-            planner_stream,
+            orchestrated_stream,
             hooks,
             query,
             session_id,
             ensure_session_event=True,
         ):
             yield event
+        self._orchestrated = True
+        if not self._agent_turn_observed:
+            error_event = EventEmitter.error(
+                "workflow_error",
+                "agent runtime emitted no agent_turn telemetry; supervisor path required",
+                code="agent_runtime_missing_agent_turns",
+                details={"flow_mode": self.flow_mode.value if self.flow_mode else "multi_agent"},
+            )
+            error_event["event"] = "workflow_error"
+            error_event.setdefault("data", {})
+            error_event["data"]["error_code"] = "agent_runtime_missing_agent_turns"
+            yield self._maybe_tag_session_metadata(
+                self._annotate(error_event),
+                session_id,
+            )
 
     async def chart_revision(
         self,
@@ -4469,6 +4471,8 @@ class MultiAgentFlow:
     def _capture_event(self, event: Dict[str, Any]) -> None:
         name = event.get("event")
         data = event.get("data") or {}
+        if isinstance(name, str) and name.startswith("agent_turn"):
+            self._agent_turn_observed = True
         if name == "criteria_ready":
             self._mark_accessories_ready()
         elif name == "clarification_skipped":

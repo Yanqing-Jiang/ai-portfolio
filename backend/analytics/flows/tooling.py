@@ -115,6 +115,7 @@ from analytics.core import telemetry
 from analytics.core.events import EventEmitter
 from analytics.core.intent_impl.models import IntentModel
 from analytics.core.session_state import SessionStateSnapshot, get_session_state_repository
+from analytics.core.lane_refresh import resolve_lane_ttls
 from analytics.core.state import QueryPlanModel
 from analytics.services.response_search import (
     ResponseSearchError,
@@ -241,6 +242,23 @@ def _merge_web_payloads(
         "topic_count": len(entries),
     }
     return merged
+
+
+def _lane_ttl_remaining(
+    snapshot: Optional[SessionStateSnapshot],
+    lane: str,
+    *,
+    now: Optional[datetime] = None,
+) -> Optional[int]:
+    ttl_map = resolve_lane_ttls()
+    ttl = int(ttl_map.get(lane, 0))
+    if ttl <= 0 or snapshot is None:
+        return None
+    age = snapshot.lane_age_seconds(lane, now=now)
+    if age is None:
+        return None
+    remaining = ttl - age
+    return int(remaining) if remaining > 0 else None
 
 
 if TYPE_CHECKING:  # pragma: no cover - import guard for typing only
@@ -856,6 +874,18 @@ class WebRetrieverAdapter(BaseToolAdapter):
         if force_revision_refresh:
             metadata["revision_refresh"] = True
 
+        backpressure_remaining = None if force_revision_refresh else _lane_ttl_remaining(snapshot, "web")
+        if backpressure_remaining is not None:
+            metadata["summary"] = (
+                metadata.get("summary")
+                or f"Web search throttled for {backpressure_remaining} seconds to honor TTL."
+            )
+            metadata["preview_only"] = True
+            metadata["cache_hit"] = False
+            metadata["backpressure_seconds"] = backpressure_remaining
+            payload["backpressure_seconds"] = backpressure_remaining
+            return ToolAdapterResult(name=self.name, status="queued", payload=payload, metadata=metadata)
+
         if not force_revision_refresh and not self._should_refresh(query_terms, snapshot):
             metadata["summary"] = "Web search will run when the user requests the latest context."
             metadata["preview_only"] = True
@@ -1187,6 +1217,27 @@ class StockTrackerAdapter(BaseToolAdapter):
         metadata = self.get_metadata()
         metadata["preview_keys"] = list(payload.keys())
 
+        repository = get_session_state_repository()
+        snapshot: Optional[SessionStateSnapshot] = None
+        try:
+            snapshot = await repository.load(context.session_id)
+        except Exception:
+            logger.debug("Failed to load session snapshot for market TTL checks", exc_info=True)
+
+        def _snapshot_cached_payload(symbol_key: str) -> Optional[Dict[str, Any]]:
+            cache = snapshot.tool_cache if snapshot and isinstance(snapshot.tool_cache, dict) else {}
+            cached_widget = cache.get("planner_stock_widget")
+            if not isinstance(cached_widget, Mapping):
+                return None
+            cached_symbol = str(cached_widget.get("symbol") or cached_widget.get("ticker") or "").upper()
+            if cached_symbol and cached_symbol != symbol_key:
+                return None
+            cached = dict(cached_widget)
+            cached.setdefault("symbol", symbol_key)
+            cached.setdefault("ready", True)
+            cached.setdefault("from_cache", True)
+            return cached
+
         widget_symbols: List[List[str]] = []
         for raw in tickers:
             symbol = raw.upper()
@@ -1224,6 +1275,8 @@ class StockTrackerAdapter(BaseToolAdapter):
                 metadata=metadata,
             )
 
+        remaining_market_ttl = _lane_ttl_remaining(snapshot, "market")
+
         client = PolygonMarketDataClient()
         if not getattr(client, "is_configured", False):
             metadata["summary"] = "Polygon client not configured; showing TradingView fallback."
@@ -1240,6 +1293,48 @@ class StockTrackerAdapter(BaseToolAdapter):
             )
 
         symbol = tickers[0].upper()
+        cached_market = _snapshot_cached_payload(symbol)
+        if remaining_market_ttl is not None:
+            if cached_market:
+                payload.update(copy.deepcopy(cached_market))
+                metadata["summary"] = metadata.get("summary") or "Reused cached market snapshot inside TTL."
+                metadata["from_cache"] = True
+                metadata["preview_only"] = False
+                metadata["preview_keys"] = sorted(set(metadata.get("preview_keys", [])))
+                return ToolAdapterResult(
+                    name=self.name,
+                    status="completed",
+                    payload=payload,
+                    metadata=metadata,
+                )
+
+            metadata["summary"] = (
+                metadata.get("summary")
+                or "Market snapshot throttled until TTL expires to avoid hammering Polygon."
+            )
+            metadata["preview_only"] = True
+            metadata["backpressure_seconds"] = remaining_market_ttl
+            payload["backpressure_seconds"] = remaining_market_ttl
+            return ToolAdapterResult(
+                name=self.name,
+                status="queued",
+                payload=payload,
+                metadata=metadata,
+            )
+
+        if cached_market and not remaining_market_ttl:
+            payload.update(copy.deepcopy(cached_market))
+            metadata["summary"] = metadata.get("summary") or "Reused cached market snapshot."
+            metadata["from_cache"] = True
+            metadata["preview_only"] = False
+            metadata["preview_keys"] = sorted(set(metadata.get("preview_keys", [])))
+            return ToolAdapterResult(
+                name=self.name,
+                status="completed",
+                payload=payload,
+                metadata=metadata,
+            )
+
         start_time = time.perf_counter()
         try:
             snapshot = await fetch_daily_snapshot(symbol, client=client)

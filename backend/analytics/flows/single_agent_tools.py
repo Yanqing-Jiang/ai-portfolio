@@ -59,6 +59,16 @@
 #   Called from: analytics.flows.workflow, tests.analytics.test_chart_revision, tests.analytics.test_session_state_receipts, tests.analytics.test_single_agent_controller_agents, +5 more
 #   Collaborators: analytics.flows.planner_executor.PlannerExecutorFlow, analytics.core.config_store.get_config_store, analytics.agent_orchestrator.AgentRuntimeConfig, analytics.flows.pipeline_tools.get_planner_tool_registry, +2 more
 #   Why: Supports downstream analytics workflows that rely on SingleAgentController.
+# Function: _is_chart_missing
+#   Role: Detect whether the chart lane produced a spec or recorded reuse so the agent runtime can enforce required outputs.
+#   Called from: analytics.flows.single_agent_tools._missing_required_artifacts
+#   Invokes: Internal helpers only
+#   Why: Prevents planner fallbacks by letting SingleAgent know when chart artifacts are absent.
+# Function: _missing_required_artifacts
+#   Role: Computes which lanes are required for the current follow-up route and reports any missing artifacts.
+#   Called from: analytics.flows.single_agent_tools._agent_run_stage
+#   Invokes: analytics.flows.single_agent_tools._is_sql_missing, analytics.flows.single_agent_tools._is_chart_missing, analytics.flows.single_agent_tools._is_analysis_missing, analytics.flows.single_agent_tools._is_market_missing
+#   Why: Surfaces agent runtime gaps as workflow errors instead of rerunning deterministic planner stages.
 # --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
@@ -1559,22 +1569,19 @@ class SingleAgentController:
         External callers (analytics_memory_workflow, tests) can use the returned adapter
         to drive a PlannerSequencer without reimplementing the lane mapping logic.
         """
-        use_agent = (
-            use_agent_override
-            if use_agent_override is not None
-            else self._should_use_agent_runtime()
-        )
+        if use_agent_override is False:
+            logger.warning(
+                "single_agent planner fallback ignored; agent runtime is mandatory",
+                extra={"flow": self.flow_label},
+            )
+        if not self._should_use_agent_runtime():
+            raise RuntimeError("AgentRuntime must be available for single-agent mode")
+
         intent_runner = self._intent_stage
-        if use_agent:
-            sql_runner = self._agent_run_stage
-            web_runner = self._noop_stage
-            market_runner = self._noop_stage
-            analysis_runner = self._noop_stage
-        else:
-            sql_runner = self._sql_stage
-            web_runner = self._web_stage
-            market_runner = self._market_stage
-            analysis_runner = self._analysis_stage
+        sql_runner = self._agent_run_stage
+        web_runner = self._noop_stage
+        market_runner = self._noop_stage
+        analysis_runner = self._noop_stage
         base_metadata = {
             "flow": self.flow_label,
             "flow_mode": self.flow_mode.value,
@@ -2007,19 +2014,58 @@ class SingleAgentController:
             record_artifacts=True,
             **self._lane_persistence_flags(ctx),
         )
-        if self._agent_runtime_needs_fallback(ctx):
-            async for event in self._run_agent_runtime_fallback(state):
-                yield event
+        missing = self._missing_required_artifacts(ctx)
+        if missing:
+            missing_lanes = sorted(missing)
+            follow_up_value = getattr(
+                ctx, "follow_up_route", FollowUpRoute.FULL_PIPELINE
+            ).value
+            error_event = EventEmitter.error(
+                "workflow_error",
+                "agent runtime completed without required artifacts",
+                details={
+                    "missing_lanes": missing_lanes,
+                    "follow_up_route": follow_up_value,
+                },
+                code="agent_runtime_missing_required_artifacts",
+            )
+            error_event.setdefault("data", {})
+            error_event["data"]["error_code"] = "agent_runtime_missing_required_artifacts"
+            error_event["data"]["missing_lanes"] = missing_lanes
+            error_event["data"]["follow_up_route"] = follow_up_value
+            error_event["event"] = "workflow_error"
+            yield self._planner._annotate(error_event)
 
-    def _agent_runtime_needs_fallback(self, ctx: PlannerPhaseContext) -> bool:
-        return any(
-            [
-                self._is_sql_missing(ctx),
-                self._is_web_missing(ctx),
-                self._is_market_missing(ctx),
-                self._is_analysis_missing(ctx),
-            ]
-        )
+    def _missing_required_artifacts(self, ctx: PlannerPhaseContext) -> Set[str]:
+        route = getattr(ctx, "follow_up_route", FollowUpRoute.FULL_PIPELINE)
+        missing: Set[str] = set()
+
+        if route != FollowUpRoute.STOCK_ONLY and route != FollowUpRoute.CHART_ONLY:
+            if self._is_sql_missing(ctx):
+                missing.add("sql")
+
+        if route in (
+            FollowUpRoute.FULL_PIPELINE,
+            FollowUpRoute.REUSE_SQL,
+            FollowUpRoute.NARRATIVE_ONLY,
+            FollowUpRoute.CHART_ONLY,
+        ):
+            if self._is_analysis_missing(ctx):
+                missing.add("analysis")
+
+        if route in (
+            FollowUpRoute.FULL_PIPELINE,
+            FollowUpRoute.REUSE_SQL,
+            FollowUpRoute.CHART_ONLY,
+        ):
+            if self._is_chart_missing(ctx):
+                missing.add("chart")
+
+        if route == FollowUpRoute.STOCK_ONLY:
+            if self._is_market_missing(ctx):
+                missing.add("market")
+
+        return missing
 
     # Function: _agent_dataset_ready
     #   Role: Detects whether the agent runtime or cached snapshot surfaced a usable SQLExecutionArtifact payload.
@@ -2198,6 +2244,18 @@ class SingleAgentController:
             return True
         snapshot = getattr(market_art, "snapshot", None)
         return not bool(snapshot)
+
+    @staticmethod
+    def _is_chart_missing(ctx: PlannerPhaseContext) -> bool:
+        artifacts = getattr(ctx, "artifacts", None)
+        if artifacts is None:
+            return True
+        if getattr(ctx, "reused_chart", False):
+            return False
+        chart_art = getattr(artifacts, "chart", None)
+        if chart_art and getattr(chart_art, "spec", None):
+            return False
+        return True
 
     @staticmethod
     def _is_analysis_missing(ctx: PlannerPhaseContext) -> bool:
