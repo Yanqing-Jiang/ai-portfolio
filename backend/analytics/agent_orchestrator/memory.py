@@ -23,31 +23,40 @@ class AgentMemory:
 
     def __init__(self, snapshot: Optional[SessionStateSnapshot]) -> None:
         self._snapshot = snapshot
+        self._plan_state: Dict[str, Any] = {}
+        self._tool_receipts: Dict[str, Any] = {}
+        self._clarifications: List[Dict[str, Any]] = []
+        self._guardrails: Dict[str, Any] = {}
+        self._revision_questions: Optional[Dict[str, Any]] = None
+        self._lane_decisions: List[Dict[str, Any]] = []
         if snapshot is None:
-            self._agent_cache: Dict[str, Any] = {}
             return
-        tool_cache = snapshot.tool_cache
-        if not isinstance(tool_cache, dict):
-            snapshot.tool_cache = {}
-            tool_cache = snapshot.tool_cache
-        agent_cache = tool_cache.get("agent")
-        if not isinstance(agent_cache, dict):
-            agent_cache = {}
-            tool_cache["agent"] = agent_cache
-        self._agent_cache = agent_cache
+        if isinstance(snapshot.agents_plan_state, Mapping):
+            self._plan_state = dict(snapshot.agents_plan_state)
+        if isinstance(snapshot.agents_tool_receipts, Mapping):
+            self._tool_receipts = dict(snapshot.agents_tool_receipts)
+        if isinstance(snapshot.agents_clarifications, list):
+            self._clarifications = list(snapshot.agents_clarifications)
+        if isinstance(snapshot.agents_guardrails, Mapping):
+            self._guardrails = dict(snapshot.agents_guardrails)
+        store = snapshot.agents_revision_question_store
+        if isinstance(store, Mapping):
+            latest = store.get("latest")
+            if isinstance(latest, Mapping):
+                bundle = latest.get("bundle")
+                if isinstance(bundle, Mapping):
+                    self._revision_questions = dict(bundle)
+        if isinstance(snapshot.agent_lane_decisions, list):
+            self._lane_decisions = list(snapshot.agent_lane_decisions)
 
     @property
     def snapshot(self) -> Optional[SessionStateSnapshot]:
         return self._snapshot
 
-    @property
-    def agent_cache(self) -> Dict[str, Any]:
-        return self._agent_cache
-
     def load_plan_state(self, template: PlanTemplate) -> PlanState:
         """Rehydrate plan state using the stored snapshot when available."""
-        persisted = self._agent_cache.get(self._PLAN_STATE_KEY)
-        if isinstance(persisted, Mapping):
+        persisted = self._plan_state
+        if isinstance(persisted, Mapping) and persisted:
             return PlanState.from_template(template, previous_state=persisted)
         return PlanState.from_template(template)
 
@@ -56,7 +65,8 @@ class AgentMemory:
         if self._snapshot is None:
             return
         payload = state.to_dict()
-        self._agent_cache[self._PLAN_STATE_KEY] = deepcopy(payload)
+        self._plan_state = deepcopy(payload)
+        self._snapshot.agents_plan_state = deepcopy(payload)
         self._snapshot.touch()
 
     def record_tool_receipt(self, tool_name: str, payload: Mapping[str, Any]) -> None:
@@ -64,14 +74,15 @@ class AgentMemory:
         if self._snapshot is None:
             return
         self._snapshot.record_tool_receipt(tool_name, dict(payload))
-        receipts = self._agent_cache.setdefault("tool_receipts", {})
+        receipts = dict(self._tool_receipts)
         sanitized = dict(payload)
         receipts[str(tool_name)] = sanitized
+        self._tool_receipts = receipts
         self._snapshot.touch()
 
     def get_tool_receipt(self, tool_name: str) -> Optional[Dict[str, Any]]:
         """Fetch the last recorded receipt for a tool if available."""
-        receipts = self._agent_cache.get("tool_receipts")
+        receipts = self._tool_receipts
         if not isinstance(receipts, Mapping):
             return None
         payload = receipts.get(str(tool_name))
@@ -83,11 +94,10 @@ class AgentMemory:
         """Persist clarification outcomes for agent reuse."""
         if self._snapshot is None:
             return
-        clarifications = self._agent_cache.setdefault("clarifications", [])
-        if isinstance(clarifications, list):
-            clarifications.append(dict(payload))
-        else:  # pragma: no cover - defensive reset
-            self._agent_cache["clarifications"] = [dict(payload)]
+        clarifications = list(self._clarifications)
+        clarifications.append(dict(payload))
+        self._clarifications = clarifications
+        self._snapshot.agents_clarifications = list(clarifications)
         self._snapshot.touch()
 
     def record_agent_run(
@@ -123,7 +133,7 @@ class AgentMemory:
     def record_revision_questions(self, bundle: Mapping[str, Any]) -> None:
         """Persist the latest revision questions bundle for reuse."""
         payload = dict(bundle)
-        self._agent_cache["revision_questions"] = payload
+        self._revision_questions = payload
         if self._snapshot is not None:
             try:
                 self._snapshot.record_revision_questions(payload)
@@ -135,9 +145,9 @@ class AgentMemory:
         if not guardrail_id:
             return
         entry = sanitize_for_json(dict(payload))
-        guardrail_cache = self._agent_cache.setdefault("guardrails", {})
-        if isinstance(guardrail_cache, dict):
-            guardrail_cache[str(guardrail_id)] = entry
+        guardrail_cache = dict(self._guardrails)
+        guardrail_cache[str(guardrail_id)] = entry
+        self._guardrails = guardrail_cache
         if self._snapshot is None:
             return
         try:
@@ -147,23 +157,21 @@ class AgentMemory:
 
     def get_revision_questions(self) -> Optional[Dict[str, Any]]:
         """Return the cached revision question bundle if available."""
-        payload = self._agent_cache.get("revision_questions")
-        if isinstance(payload, Mapping):
-            return dict(payload)
+        if isinstance(self._revision_questions, Mapping):
+            return dict(self._revision_questions)
         return None
 
     def record_lane_decision(self, payload: Mapping[str, Any]) -> None:
         """Persist the agent-selected lane decision for auditing."""
         entry = dict(payload)
-        decisions = self._agent_cache.get("revision_lane_decisions")
-        if isinstance(decisions, list):
-            decisions.append(entry)
-            if len(decisions) > 10:
-                del decisions[:-10]
-        else:
-            self._agent_cache["revision_lane_decisions"] = [entry]
+        decisions = list(self._lane_decisions)
+        decisions.append(entry)
+        if len(decisions) > 10:
+            del decisions[:-10]
+        self._lane_decisions = decisions
         snapshot = self._snapshot
         if snapshot is not None:
+            snapshot.agent_lane_decisions = list(decisions)
             lane_value = str(entry.get("lane") or "").strip().lower() or "narrative"
             rationale = str(entry.get("rationale") or "").strip() or "agent_lane_decision"
             bundle = entry.get("questions")
@@ -179,11 +187,19 @@ class AgentMemory:
 
     def get_lane_decision(self) -> Optional[Dict[str, Any]]:
         """Return the last recorded lane decision if present."""
-        decisions = self._agent_cache.get("revision_lane_decisions")
-        if isinstance(decisions, list) and decisions:
-            return dict(decisions[-1])
+        if isinstance(self._lane_decisions, list) and self._lane_decisions:
+            return dict(self._lane_decisions[-1])
         return None
 
     def to_dict(self) -> Dict[str, Any]:
         """Expose a copy of the agent cache for diagnostics or testing."""
-        return deepcopy(self._agent_cache)
+        return {
+            "plan_state": deepcopy(self._plan_state),
+            "tool_receipts": deepcopy(self._tool_receipts),
+            "clarifications": deepcopy(self._clarifications),
+            "guardrails": deepcopy(self._guardrails),
+            "revision_questions": deepcopy(self._revision_questions)
+            if isinstance(self._revision_questions, Mapping)
+            else None,
+            "revision_lane_decisions": deepcopy(self._lane_decisions),
+        }

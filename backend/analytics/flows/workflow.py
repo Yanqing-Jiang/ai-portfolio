@@ -1520,21 +1520,11 @@ def _append_session_message(
             break
 
     if overflow:
-        tool_cache = snapshot.tool_cache
-        if not isinstance(tool_cache, dict):
-            tool_cache = {}
-            snapshot.tool_cache = tool_cache
-        agent_cache = tool_cache.get("agent")
-        if not isinstance(agent_cache, dict):
-            agent_cache = {}
-            tool_cache["agent"] = agent_cache
-        backlog = agent_cache.get("message_backlog")
-        if not isinstance(backlog, list):
-            backlog = []
+        backlog = list(snapshot.agents_message_backlog)
         backlog.extend(overflow)
         if len(backlog) > SESSION_MESSAGE_ARCHIVE_LIMIT:
             backlog = backlog[-SESSION_MESSAGE_ARCHIVE_LIMIT:]
-        agent_cache["message_backlog"] = backlog
+        snapshot.agents_message_backlog = backlog
     snapshot.touch()
 
 
@@ -1557,10 +1547,7 @@ def _session_idle_expired(
     *,
     idle_timeout_seconds: int = 30 * 60,
 ) -> bool:
-    cache = snapshot.tool_cache if isinstance(snapshot.tool_cache, dict) else {}
-    agent_cache = cache.get("agent") if isinstance(cache, Mapping) else {}
-    recorded_at_value = agent_cache.get("recorded_at") if isinstance(agent_cache, Mapping) else None
-    recorded_at = _parse_snapshot_timestamp(recorded_at_value)
+    recorded_at = _parse_snapshot_timestamp(snapshot.agents_recorded_at)
     reference_ts = recorded_at or getattr(snapshot, "updated_at", None)
     if not isinstance(reference_ts, datetime):
         return False

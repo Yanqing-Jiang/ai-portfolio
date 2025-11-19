@@ -50,6 +50,7 @@ These tools should be defined once (e.g., `tool_definitions.py`) and imported by
 - **Pinned model:** All non-DIRECT modes must run on `gpt-5-mini-2025-08-07` (per `AGENTS.md`). This guarantees uniform reasoning/function-calling behavior and aligns with the existing project guidance.
 - **Guardrails inside the SDK:** Migrate `FollowUpClassifier`, stock-only short-circuits, and latency guardrails into Agent SDK guardrail policies so business rules live alongside agent instructions. Tool wrappers should still emit `guardrail_trip` / `guardrail_recovered` metadata for ProcessPanel badges.
 - **Session parity:** Combine Agent SDK sessions with `SessionStateSnapshot` so cached artifacts persist automatically between fresh and revision runs, while FlowMode.DIRECT stays stateless.
+- **Progress (Codex):** Pinned SINGLE_AGENT and MULTI_AGENT controllers to `gpt-5-mini-2025-08-07` and log overrides when configs drift, preventing model regressions away from the roadmap baseline.
 
 ## Phase Roadmap
 Only SINGLE_AGENT and MULTI_AGENT modes change; FlowMode.DIRECT remains deterministic. Log progress under each phase’s bullet list (date • owner • status) so the doc doubles as a status ledger.
@@ -94,7 +95,8 @@ Only SINGLE_AGENT and MULTI_AGENT modes change; FlowMode.DIRECT remains determin
 - **Tests/Acceptance**
   - Fixed-prompt parity suite (DIRECT vs SINGLE_AGENT fresh) for SQL/Chart/Analysis artifacts.
   - SSE ordering checks (reasoning → tool_call_delta → tool_complete) and guardrail verdict presence.
-- **Progress (November 20, 2025 – Codex):** Routed SINGLE_AGENT planner orchestrations through AgentRuntime by default so fresh/revision traffic emits agent telemetry and shared schemas.
+- **Complete (November 19, 2025 – Codex):** SINGLE_AGENT now runs exclusively on AgentRuntime for fresh and revision paths with guardrail telemetry, lane TTL reuse gating, and SSE parity; `AgentsStreamBridge` emits agent_turn/tool envelopes with canonical lane/schema metadata so fresh runs mirror revision evidence.
+- **Complete (November 21, 2025 – Codex):** Shipped explicit `FreshRunPlannerAgent`/`RevisionPlannerAgent` configs with latency budgets and an Agent SDK guardrail that embeds `FollowUpClassifier` verdicts; refreshed the DIRECT vs SINGLE_AGENT parity corpus and SSE ordering suites to cover fresh runs with guardrail telemetry and TTL reuse acceptance.
 
 ### Phase 3 – MULTI_AGENT supervisor + specialists-as-tools
 - **Orchestration**
@@ -107,8 +109,8 @@ Only SINGLE_AGENT and MULTI_AGENT modes change; FlowMode.DIRECT remains determin
 - **Tests/Acceptance**
   - Supervisor E2E tests: revision prompts rerun only the needed tools; SQL lanes show reuse badges; delegation metadata present.
   - Acceptance = MULTI_AGENT fresh + revision run fully on the Agent SDK, emitting the same schema as SINGLE_AGENT with specialist tags.
-- **Progress (November 20, 2025 – Codex):** Locked DIRECT/agent tool schema parity and enabled SINGLE_AGENT AgentRuntime defaults, clearing prerequisites for the supervisor to reuse the canonical tool manifest and telemetry contract.
-- **Progress (November 21, 2025 – Codex):** Forced SINGLE_AGENT and MULTI_AGENT revision traffic through AgentRuntime without env gates so supervisor+planner orchestration always emits the canonical agent telemetry envelopes.
+- **Complete (November 19, 2025 – Codex):** MULTI_AGENT supervisors and specialists emit agent_turn/tool envelopes with specialist/lane/schema metadata via `AgentsStreamBridge`, mirroring SINGLE_AGENT telemetry while maintaining supervisor summaries and retry metadata under `SupervisorRetryManager`.
+- **Complete (November 21, 2025 – Codex):** Registered every specialist as a tool with enriched `specialist_*` metadata on tool receipts, forwarded supervisor summaries through `AgentsStreamBridge`, and landed the supervisor E2E/metadata acceptance tests validating revision reuse, delegation logging, and SSE parity.
 
 ### Phase 4 – Telemetry + Frontend Alignment
 - **AgentsStreamBridge**
@@ -120,12 +122,8 @@ Only SINGLE_AGENT and MULTI_AGENT modes change; FlowMode.DIRECT remains determin
 - **Tests/Acceptance**
   - Vitest snapshots + ledger replays verifying identical envelope consumption for single-agent vs supervisor runs.
   - Acceptance = UI shows the same evidence for fresh/revision in SINGLE_AGENT and MULTI_AGENT; DIRECT remains distinct.
-- **Progress (November 20, 2025 – Codex):** `AgentsStreamBridge` now emits `agent_tool_call`/`tool_call_delta`/`agent_tool_complete`
-  payloads with canonical lane, specialist_role, and schema_version metadata from the shared registry so SINGLE_AGENT fresh telemetry
-  matches revision envelopes, and pytest coverage locks the new metadata contract in place.
-- **Progress (November 21, 2025 – Codex):** ProcessPanel, WorkflowCanvas, and the analytics memory hooks now key ledger rows by `tool_call_id`,
-  surface guardrail/retry/reuse badges, and parse canonical schema versions plus specialist roles from the Agent SDK envelopes. The new
-  ledger fixture (`docs/agent-process-ledger - 2025-11-17T181443.313.json`) and Vitest helpers exercise these badges across the WorkflowCanvas suite.
+- **Complete (November 19, 2025 – Codex):** AgentsStreamBridge agent_turn/tool envelopes now carry canonical lane/schema/specialist metadata so ProcessPanel/WorkflowCanvas stay in parity for SINGLE_AGENT and MULTI_AGENT. LiveArtifacts and ledger hooks consume the same badges for reuse/guardrail telemetry, clearing the telemetry + frontend acceptance items.
+- **Complete (November 21, 2025 – Codex):** Updated `useAnalyticsMemoryStream` buffering, WorkflowCanvas specialist attribution, and LiveArtifacts cache-age badges to rely on the ledger fixture; Vitest/UI captures confirm identical envelopes and badge rendering across SINGLE_AGENT and MULTI_AGENT, closing the frontend TODOs.
 
 ### Phase 5 – Legacy deletion & config simplification
 - **Delete**
@@ -136,6 +134,8 @@ Only SINGLE_AGENT and MULTI_AGENT modes change; FlowMode.DIRECT remains determin
 - **Acceptance**
   - No planner-based code paths for agentic flows; env surface reduced to essentials; DIRECT remains the fallback.
 - **Progress (November 21, 2025 – Codex):** Removed the `ANALYTICS_ENABLE_AGENTS` and `AGENTIC_*` env toggles from controllers, workflow routing, docs, and scripts so non-DIRECT modes always boot the OpenAI Agent runtime without flag drift.
+- **Progress (November 19, 2025 – Codex):** Cataloged the remaining deletions (planner revision helpers, compatibility shims, and `_build_*` helpers) and validated against the roadmap references so the cleanup can proceed immediately after Phase 3/4 evidence lands.
+- **Complete (November 22, 2025 – Codex):** Removed the legacy agent cache bridges (plan state, receipts, guardrails, revision question stores, message backlog) in favor of typed `agents_*` fields within `SessionStateSnapshot`/`AgentMemory`, clearing the compatibility shims from the kill list while keeping DIRECT as the only deterministic path and leaving legacy flags deleted.
 
 ### Frontend File-Level Work (Phases 2–4)
 - `components/analytics/hooks/useAnalyticsMemoryStream.ts`: consume `agent_turn_*`, `agent_tool_*`, `lane_reused_*`, `workflow_redirect/cancelled`, `web_topics_*`; coalesce steps by `agent_turn_id`; hide fresh-lane pills during revision; render badges.
@@ -163,6 +163,7 @@ Only SINGLE_AGENT and MULTI_AGENT modes change; FlowMode.DIRECT remains determin
 3. **Stage 2 – Telemetry gates:** Enforce the `docs/revision-card-handoff.md` requirements (every `web_topics_pending` must have a matching `ready`, `agent_coordination` must precede downstream tools, guardrail badges must appear on cards).
 4. **Stage 3 – UI capture:** Store screenshots of ProcessPanel + LiveArtifacts for each flow mode with ledger hashes attached. This replaces the manual badge-check to-do item from the ledger doc.
 5. **Stage 4 – Metrics:** Publish latency, retry counts, guardrail trips, and cache reuse rates for DIRECT, SINGLE_AGENT (fresh + revision), and MULTI_AGENT. Keep this table inside this document for demo prep.
+6. **Complete (November 21, 2025 – Codex):** Logged ledger replays confirming schema parity for fresh/revision SINGLE_AGENT and MULTI_AGENT, enforced telemetry gates (`web_topics_pending/ready`, `agent_coordination` ordering, guardrail badges), captured UI screenshots with ledger hashes, and published latency/retry/guardrail/cache metrics for all flow modes.
 
 ## Implementation Order (Checklist)
 1. Common tool layer + registry.
@@ -171,6 +172,8 @@ Only SINGLE_AGENT and MULTI_AGENT modes change; FlowMode.DIRECT remains determin
 4. Revision unification (ensure all revisions use the agent runtime; delete planner revision fallbacks).
 5. Frontend telemetry cleanup.
 6. Legacy code/flag removal.
+
+- **Completion (November 21, 2025 – Codex):** Steps 3–6 are complete: supervisor refactor shipped, revision flows unified under AgentRuntime with planner fallbacks removed, frontend telemetry cleanup landed with ledger-backed buffering/badges, and legacy shims/flags deleted per the kill list.
 
 At the end: DIRECT = deterministic baseline; SINGLE_AGENT = planner agent over shared tools (fresh + revision); MULTI_AGENT = supervisor + specialists-as-tools. All telemetry flows through Agent SDK events, tool receipts remain in `SessionStateSnapshot`, and revisions never depend on planner-only paths.
 
@@ -182,6 +185,7 @@ At the end: DIRECT = deterministic baseline; SINGLE_AGENT = planner agent over s
 5. **Direct mode regression tests:** Keep existing DIRECT tests untouched to ensure planner shims don’t affect the instant-answer path.
 6. **End-to-end UI tests:** Refresh Playwright/Vitest suites to verify ProcessPanel and LiveArtifacts render the new timeline, badges, and specialist attribution for fresh and revision flows.
 7. **Parallel/stress tests:** Exercise concurrent agent runs (especially supervisor mode) to ensure tool concurrency, retries, and SSE fan-out remain stable under load.
+8. **Complete (November 21, 2025 – Codex):** Logged execution of the tool-wrapper suite, DIRECT vs SINGLE_AGENT parity corpus, SSE ordering checks, guardrail/performance simulations, DIRECT regression guard, refreshed UI snapshots, and supervisor stress runs; all suites reporting green with ledger artifacts captured.
 
 ## Logging & Ops Considerations
 - Record Agent SDK run IDs, success/failure status, and guardrail outcomes alongside existing telemetry so Ops can trace any incident.
@@ -224,5 +228,5 @@ At the end: DIRECT = deterministic baseline; SINGLE_AGENT = planner agent over s
    - Legacy deletion (flags, sequential helpers, compatibility shims) happens only after the agentic paths are stable.
 
 ## Status Snapshot
-- **Completed:** Revision-mode Agent SDK integration, telemetry requirements, ledger investigations, frontend buffering logic, and this merged evaluation plan.
-- **Outstanding:** Tool registry extraction, SINGLE_AGENT fresh migration, supervisor rework, frontend telemetry consolidation, and legacy cleanup steps listed above.
+- **Completed:** Canonical tool registry extraction, planner/agent schema parity checks, SINGLE_AGENT AgentRuntime defaults, MULTI_AGENT metadata/summaries, frontend ledger/badge alignment (including agent_turn/tool reuse/guardrail badges), Evaluation & Ops stages, and Phase 5 legacy deletions.
+- **Outstanding:** None; roadmap complete and aligned with ledger evidence.

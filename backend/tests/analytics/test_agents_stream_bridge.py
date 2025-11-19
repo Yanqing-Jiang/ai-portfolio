@@ -95,6 +95,12 @@ async def test_bridge_emits_tool_call_events() -> None:
     run_item_event = RunItemStreamEvent(name="tool_called", item=_ToolCallRunItem(tool_entry))
     await bridge._handle_stream_event(run_item_event)
 
+    turn_event = await queue.get()
+    assert turn_event["event"] == "agent_turn_start"
+    assert turn_event["data"]["role"] == "planner_agent"
+    assert turn_event["data"]["lane"] == "classification"
+    assert turn_event["data"]["schema_version"] == DEFAULT_SCHEMA_VERSION
+
     started_event = await queue.get()
     assert started_event["event"] == "agent_tool_call"
     started_tool = started_event["data"]["tool_call"]
@@ -189,6 +195,11 @@ async def test_bridge_emits_analysis_events() -> None:
     assert tool_call["metadata"]["lane"] == "analysis"
     assert tool_call["metadata"]["schema_version"] == DEFAULT_SCHEMA_VERSION
 
+    turn_end = await queue.get()
+    assert turn_end["event"] == "agent_turn_end"
+    assert turn_end["data"]["role"] == "planner_agent"
+    assert turn_end["data"]["status"] == "complete"
+
 
 @pytest.mark.asyncio
 async def test_bridge_emits_supervisor_events() -> None:
@@ -222,12 +233,17 @@ async def test_bridge_emits_lane_completions_for_supervisor_tools() -> None:
         await bridge._handle_stream_event(RunItemStreamEvent(name="tool_called", item=_ToolCallRunItem(tool_entry)))
         completion_payload = _ToolCompletionPayload(tool_entry["id"], tool)
         await bridge._handle_raw_response_event(completion_payload)  # type: ignore[arg-type]
+        turn_start = await queue.get()
+        assert turn_start["event"] == "agent_turn_start"
         started_event = await queue.get()
         assert started_event["event"] == "agent_tool_call"
         completion_event = await queue.get()
         assert completion_event["event"] == "agent_tool_complete"
         tool_call = completion_event["data"]["tool_call"]
         assert tool_call["name"] == tool
+        turn_end = await queue.get()
+        assert turn_end["event"] == "agent_turn_end"
+        assert turn_end["data"]["tool"] == tool
 
 
 @pytest.mark.asyncio
@@ -247,6 +263,8 @@ async def test_bridge_emits_latency_guardrail_on_budget_violation(monkeypatch: p
 
     tool_entry = {"id": "classification_tool_guardrail", "name": "classification"}
     await bridge._handle_stream_event(RunItemStreamEvent(name="tool_called", item=_ToolCallRunItem(tool_entry)))
+    turn_start = await queue.get()
+    assert turn_start["event"] == "agent_turn_start"
     await queue.get()  # Drain agent_tool_call
 
     completion_payload = _ToolCompletionPayload(tool_entry["id"], tool_entry["name"])

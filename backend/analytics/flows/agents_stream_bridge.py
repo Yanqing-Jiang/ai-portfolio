@@ -1,4 +1,14 @@
 # --- Analytics Function/Class Map ---
+# Function: _agent_role_for_tool
+#   Role: Determine the specialist role for a tool so agent_turn_* events can mirror planner telemetry.
+#   Called from: analytics.flows.agents_stream_bridge.AgentsStreamBridge._record_turn_start
+#   Invokes: Internal helpers only
+#   Why: Keeps supervisor and single-agent agent_turn events aligned with tool metadata for UI badges.
+# Function: _agent_turn_payload
+#   Role: Build the agent_turn_start/end payloads with lane, schema_version, and tool identifiers.
+#   Called from: analytics.flows.agents_stream_bridge.AgentsStreamBridge._record_turn_start/_record_turn_end
+#   Invokes: datetime.utcnow, analytics.flows.agents_stream_bridge.AgentsStreamBridge._clean_dict
+#   Why: Ensures SSE turn events expose canonical metadata for ProcessPanel/WorkflowCanvas.
 # Class: AgentsStreamBridge
 #   Role: Convert OpenAI Agents SDK streaming events into planner-style SSE payloads.
 #   Called from: analytics.agent_orchestrator.agent_runtime, tests.analytics.test_agents_stream_bridge
@@ -11,7 +21,7 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Mapping
 
 from agents.result import RunResultStreaming
 from agents.stream_events import (
@@ -75,6 +85,7 @@ class AgentsStreamBridge:
         }
         self._definitions_by_name = {definition.name: definition for definition in TOOL_REGISTRY.values()}
         self._tool_metadata: Dict[str, Dict[str, Any]] = {}
+        self._turn_state: Dict[str, Dict[str, Any]] = {}
 
     async def forward(self, result: RunResultStreaming) -> RunResultStreaming:
         """Translate streaming events into SSE payloads."""
@@ -150,6 +161,7 @@ class AgentsStreamBridge:
             tool_name=tool_name,
             runtime_metadata=getattr(raw_item, "metadata", None),
         )
+        await self._record_turn_start(tool_id=tool_id, tool_name=tool_name, metadata=metadata)
         payload = {
             "tool_call": self._clean_dict(
                 {
@@ -321,6 +333,7 @@ class AgentsStreamBridge:
         if tool_id:
             self._tool_metadata.pop(tool_id, None)
             self._tool_start_times.pop(tool_id, None)
+        await self._record_turn_end(tool_id=tool_id, tool_name=tool_name, metadata=metadata)
 
     async def _enqueue_event(self, name: str, data: Dict[str, Any]) -> None:
         event = {"event": name, "data": sanitize_for_json(data)}
@@ -381,6 +394,88 @@ class AgentsStreamBridge:
         guardrail["tool"] = tool_name
         guardrail["threshold_ms"] = definition.latency_budget_ms
         return guardrail
+
+    @staticmethod
+    def _agent_role_for_tool(tool_name: Optional[str], metadata: Mapping[str, Any]) -> str:
+        specialist_role = metadata.get("specialist_role")
+        if isinstance(specialist_role, str) and specialist_role.strip():
+            return specialist_role.strip()
+        if isinstance(tool_name, str) and tool_name.strip():
+            return tool_name.strip()
+        return "planner_agent"
+
+    def _agent_turn_payload(
+        self,
+        *,
+        tool_id: Optional[str],
+        tool_name: Optional[str],
+        metadata: Mapping[str, Any],
+        status: str,
+        elapsed_ms: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        role = self._agent_role_for_tool(tool_name, metadata)
+        lane = metadata.get("lane") or metadata.get("telemetry_step")
+        payload: Dict[str, Any] = {
+            "role": role,
+            "status": status,
+            "tool": tool_name,
+            "tool_call_id": tool_id,
+            "lane": lane,
+            "schema_version": metadata.get("schema_version"),
+            "specialist_role": metadata.get("specialist_role"),
+            "ts": datetime.utcnow().isoformat(),
+        }
+        if elapsed_ms is not None:
+            payload["elapsed_ms"] = elapsed_ms
+        for key in ("latency_budget_ms", "output_artifacts", "concurrency_limit"):
+            if metadata.get(key) is not None:
+                payload[key] = metadata.get(key)
+        return self._clean_dict(payload)
+
+    async def _record_turn_start(
+        self, *, tool_id: Optional[str], tool_name: Optional[str], metadata: Mapping[str, Any]
+    ) -> None:
+        if not tool_id and not tool_name:
+            return
+        payload = self._agent_turn_payload(
+            tool_id=tool_id,
+            tool_name=tool_name,
+            metadata=metadata,
+            status="start",
+        )
+        if tool_id:
+            self._turn_state[tool_id] = {
+                "metadata": dict(metadata),
+                "started_at": time.monotonic(),
+                "tool_name": tool_name,
+            }
+        await self._enqueue_event("agent_turn_start", payload)
+
+    async def _record_turn_end(
+        self, *, tool_id: Optional[str], tool_name: Optional[str], metadata: Mapping[str, Any]
+    ) -> None:
+        turn_state = self._turn_state.pop(str(tool_id), None) if tool_id else None
+        started_at = turn_state.get("started_at") if isinstance(turn_state, Mapping) else None
+        elapsed_ms: Optional[int] = None
+        if started_at is not None:
+            try:
+                elapsed_ms = int((time.monotonic() - float(started_at)) * 1000)
+            except Exception:
+                elapsed_ms = None
+        elif metadata.get("elapsed_ms") is not None:
+            try:
+                elapsed_ms = int(metadata.get("elapsed_ms"))  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                elapsed_ms = None
+        payload = self._agent_turn_payload(
+            tool_id=tool_id,
+            tool_name=tool_name or (turn_state or {}).get("tool_name"),
+            metadata=(turn_state or {}).get("metadata") or metadata,
+            status="complete",
+            elapsed_ms=elapsed_ms,
+        )
+        if payload:
+            await self._enqueue_event("agent_turn_end", payload)
 
     @staticmethod
     def _extract_tool_identifier(raw_item: Any) -> Optional[str]:
