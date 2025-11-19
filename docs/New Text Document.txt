@@ -1,0 +1,561 @@
+0. Target State in One Picture
+
+Anchor this as the “endgame” you’re heading toward:
+
+FlowMode.DIRECT
+
+Stays as is: deterministic SQL → chart → web/market → analysis via PlannerExecutorFlow.events().
+
+No session memory hydration, no agents, used for “instant answer” demos only.
+
+FlowMode.SINGLE_AGENT
+
+Both fresh and revision runs go through AgentRuntime with a single planner agent.
+
+Planner agent calls tools that wrap your existing lanes (sql_lane, chart_lane, fanout, analysis_lane, revision tools); PlannerSequencer is only used under the hood for DIRECT.
+
+FlowMode.MULTI_AGENT
+
+A supervisor agent (manager) orchestrates lane-specialist tools via the Agents SDK manager pattern:
+
+sql_specialist, chart_specialist, web_specialist, market_specialist, analysis_specialist, revision_specialist.
+
+Specialists are implemented as function tools backed by your existing Python modules and run under a single supervisor run.
+
+Sessions + guardrails
+
+Sessions use OpenAI Agents sessions + your existing SessionStateSnapshot to share state across runs.
+
+Guardrails live at the agent level (input/output policies) plus your existing business guardrails in SupervisorRetryManager, FollowUpClassifier, and tool-specific policies.
+
+No new feature flags. DIRECT remains your rollback path. Single- and multi-agent modes move to “agent-only” once you’ve walked through the phases below.
+
+1. Common Tool Layer (Supervisor + Specialists-as-Tools)
+
+Right now tools are split between:
+
+PlannerToolRegistry / pipeline_tools.get_planner_tool_registry()
+
+Agents function definitions in backend/config/schemas/agents.yaml
+
+Adapters in flows/tooling.py, flows/planner/*, and supervisor configs.
+
+You want a single canonical tool surface that:
+
+Is registered once.
+
+Is callable from:
+
+DIRECT (via PlannerExecutorFlow + PlannerSequencer),
+
+Single-agent (planner agent tools),
+
+Multi-agent (supervisor + specialists-as-tools).
+
+1.1 Canonical tool inventory
+
+Use this as your “golden list” of tools, each modeled as an Agents SDK function tool with strict JSON schema. 
+OpenAI Cookbook
++2
+OpenAI
++2
+
+Core intent + planning
+
+classification_tool
+
+Impl: core.intent.classify_query_async / core.intent_impl.detection.classify_query_async.
+
+clarify_schema_tool
+
+Impl: agents/schema_clarifier.decide_schema_clarification + _run_agent fallback.
+
+plan_sql_tool
+
+Impl: sql.sql_planner.plan_sql_rule_based + sql.templates.fetch_templates_for_intent.
+
+SQL + datasets
+
+compile_and_validate_sql_tool
+
+Impl: sql.compiler.compile_sql_from_plan, sql.validator.validate_sql.
+
+execute_sql_tool
+
+Impl: sql.executor.execute_sql, plus dataset preview and row-count normalization.
+
+Visualization
+
+build_chart_spec_tool
+
+Impl: core.charting.plan_chart_rule_based, core.charting.build_chart_spec, PlannerExecutorFlow._generate_chart_design.
+
+Accessories
+
+web_research_tool
+
+Impl: services/response_search.build_web_research_questions, generate_search_topics, perform_response_search.
+
+market_data_tool
+
+Impl: services/polygon.PolygonMarketDataClient, fetch_daily_snapshot.
+
+stock_widget_tool
+
+Impl: existing stock tracker adapter in flows/tooling.py / StockTrackerAdapter.
+
+Narrative + revisions
+
+analysis_writer_tool
+
+Impl: core.analysis.stream_insights_llm with your guardrail wiring and accessory bundle logic.
+
+analysis_revision_tool
+
+Impl: flows/planner/analysis_lane.stream_analysis_lane revision path + emit_analysis_revision.
+
+chart_revision_tool
+
+Impl: flows/chart_revision.py + PlannerExecutorFlow.emit_chart_patch.
+
+lane_decision_tool and apply_revision_lane_tool
+
+Already outlined in 4.9 of the roadmap; keep them and make them first-class tools instead of hidden helpers.
+
+Session + routing
+
+follow_up_classifier_tool
+
+Impl: routing/follow_up_classifier.FollowUpClassifier.classify.
+
+revision_context_tool
+
+Thin façade around SessionStateSnapshot.revision_context (should_refresh("web"), etc.) to let agents ask “is web stale?” as a tool call instead of embedding the logic in prompts.
+
+1.2 Implementation steps
+
+Step T1 – Normalize tool definitions
+
+Add a new module: backend/analytics/tools/agent_tools.py (or extend flows/pipeline_tools.py) that defines:
+
+A canonical ToolId enum.
+
+A ToolDefinition dataclass with:
+
+id, description, json_schema, lane, specialist_role, impl (Python callable), requires_snapshot, writes_artifacts.
+
+Refactor get_planner_tool_registry() to:
+
+Use ToolDefinition as the single source of truth.
+
+Produce:
+
+Planner-internal registry (current behavior).
+
+Agents SDK function tool manifests consumed by AgentRuntime and supervisor_orchestrator.build_supervisor_bundle().
+
+Step T2 – Tool invocation glue
+
+Implement a run_tool_by_id(tool_id, args, ctx) helper in the same module:
+
+Resolves the Python impl.
+
+Manages SessionStateSnapshot.record_tool_receipt, guardrail metadata, and ToolInvocationReceipt updates.
+
+Emits telemetry via core.telemetry.tool_iteration and PlannerEventBus where needed.
+
+Step T3 – Agents SDK integration
+
+Replace any ad-hoc tool registration in agents.yaml / agent_orchestrator.agent_plan with a codepath that:
+
+Pulls tool JSON schemas from ToolDefinition.
+
+Registers them with the Agents SDK as function tools.
+
+Result: one canonical tool set; both planner, single-agent, and supervisor flows consume exactly the same tools.
+
+2. Backend Refactor Roadmap (Supervisor + Specialists-as-Tools)
+Phase 1 – Single-Agent Fresh Runs on AgentRuntime
+
+Today: fresh runs in single-agent mode still go through PlannerExecutorFlow.events() deterministically; revisions use AgentRuntime.
+
+Goal: for FlowMode.SINGLE_AGENT, both fresh + revision runs are fully agentic; DIRECT keeps the deterministic pipeline.
+
+P1.1 – “FreshRunPlannerAgent” instructions
+
+In agent_orchestrator/agent_plan.py, define a fresh-plan template:
+
+Planner agent is instructed to always call classification_tool, plan_sql_tool, compile_and_validate_sql_tool, execute_sql_tool, build_chart_spec_tool, web_research_tool, market_data_tool, analysis_writer_tool in order.
+
+Each step writes receipts and artifacts via run_tool_by_id.
+
+This is just a planning prompt + tool list; no change to underlying tests or Python behaviors.
+
+P1.2 – Controller shim
+
+In flows/workflow.analytics_memory_workflow:
+
+For FlowMode.SINGLE_AGENT and session_follow_up == False:
+
+Call AgentRuntime.run() with the fresh plan instead of PlannerExecutorFlow.events().
+
+Keep SessionStateSnapshot hydration disabled for fresh runs (you already enforce stateless fresh in the roadmap).
+
+Keep DIRECT wired to run_planner_executor() unchanged.
+
+P1.3 – Telemetry parity
+
+Ensure AgentsStreamBridge.forward() emits:
+
+agent_turn_start/end, agent_tool_call/complete, planner_lane_transition equivalents.
+
+Lane tags (sql, chart, web, market, analysis) sourced from ToolDefinition.lane.
+
+Update flows/instrumentation.instrument_events to treat single-agent runs as just another event source, not a special case.
+
+P1.4 – Tests
+
+Mirror test_fresh_pipeline.py:
+
+New tests test_single_agent_fresh_pipeline_sql_chart_web_analysis verifying:
+
+All core tools were called exactly once.
+
+Receipts persisted and fresh_* lane markers emitted via agent_tool_call/complete.
+
+Existing tests around revision routing (test_revision_routing.py) stay unchanged.
+
+Phase 2 – Supervisor + Specialists-as-Tools
+
+You already have MultiAgentFlow, SupervisorSpecialistConfig, and build_supervisor_bundle() around the Agents SDK.
+
+Goal: implement the manager + specialists-as-tools pattern explicitly, aligned with OpenAI manager pattern guidance. 
+OpenAI Cookbook
++2
+OpenAI
++2
+
+P2.1 – Explicit specialist agents
+
+In supervisor_orchestrator.py:
+
+For each lane, define a specialist agent spec backed by a single tool or tool bundle:
+
+sql_specialist: tools = [classification_tool, plan_sql_tool, compile_and_validate_sql_tool, execute_sql_tool]
+
+chart_specialist: tools = [build_chart_spec_tool, chart_revision_tool]
+
+web_specialist: tools = [web_research_tool]
+
+market_specialist: tools = [market_data_tool, stock_widget_tool]
+
+analysis_specialist: tools = [analysis_writer_tool, analysis_revision_tool]
+
+revision_specialist: tools = [lane_decision_tool, apply_revision_lane_tool]
+
+Register each specialist as an agent with the Agents SDK, then expose them as tools via .asTool() on the supervisor agent. 
+OpenAI Cookbook
++2
+OpenAI Platform
++2
+
+P2.2 – Supervisor plan
+
+In agent_plan.py, create a supervisor plan template:
+
+Supervisor decides which lane-specialist to call based on:
+
+FollowUpClassifier output (via follow_up_classifier_tool).
+
+revision_context_tool signals for “stale web/analysis/market”.
+
+Supervisor calls specialists as tools, not peers; this keeps a single run_id and consistent sessions.
+
+P2.3 – MultiAgentFlow wiring
+
+In flows/multi_agent.py:
+
+For both fresh and revision runs:
+
+Instantiate AgentRuntime with the supervisor agent and the specialist tools.
+
+Remove any residual direct calls to PlannerExecutorFlow when FlowMode.MULTI_AGENT is active; DIRECT remains your deterministic backup.
+
+Use set_planner_event_bus() so that lane telemetry still flows through PlannerEventBus and the UI doesn’t lose lane-level badges.
+
+P2.4 – Receipts + metrics
+
+Ensure specialists write receipts with role and lane fields:
+
+Attach to ToolInvocationReceipt.metadata (e.g., {"role": "sql_specialist","lane":"sql"}).
+
+Update SessionStateSnapshot.record_agent_run() to aggregate:
+
+Per-specialist retry counts.
+
+Delegation policy decisions.
+
+Update CI tests:
+
+test_multi_agent_flow.py to assert that all lanes are executed via specialist tools and that the schema matches single-agent tool telemetry.
+
+Phase 3 – Unify Revisions Under AgentRuntime
+
+Most of the “True Agentic Revision” plan is already implemented: revisions hydrate SessionStateSnapshot.revision_context, use RevisionDirective, and stream agent_coordination, web_topics_pending/ready, etc.
+
+Goal here: remove any remaining planner-based revision paths so that revisions in both single-agent and multi-agent modes are entirely agent-driven.
+
+P3.1 – Kill sequencer usage for revisions
+
+In flows/workflow.analytics_memory_workflow:
+
+For follow-ups (session_follow_up == True) and agentic_revision_active == True, enforce:
+
+Route to SingleAgentController._agentic_event_stream or MultiAgentFlow.run_analysis_refresh only.
+
+Never call PlannerExecutorFlow for revisions; keep redirect-to-fresh behavior only via an explicit workflow_redirect emitted by the agent plan.
+
+P3.2 – Revision plan enforcement
+
+Make sure AGENTIC_REVISION_PLAN (in agent_plan.py) always calls:
+
+lane_decision_tool
+
+apply_revision_lane_tool
+before emitting analysis_revision_ready, as described in the roadmap history.
+
+P3.3 – Tests + smoke
+
+Extend test_single_agent_stream_events.py and test_multi_agent_flow.py:
+
+Assert that any revision-run ledger includes agent_turn_start/end and agent_tool_call/complete for the lane-decision and revision tools.
+
+Assert no fresh_* deterministic events appear once in revision mode.
+
+Keep PowerShell smoke tests as described, but switch their expectations to the unified agent event schema.
+
+Phase 4 – Remove agent-adjacent legacy paths
+
+Once the above is stable, strip now-dead code that was only there for rollbacks.
+
+In flows/workflow.py:
+
+Remove _agentic_revision_enabled() branches that spin up planner-based revisions.
+
+Remove ANALYTICS_ENABLE_AGENTS, AGENTIC_REVISION_* feature flags used only for toggling between agentic and planner revisions. DIRECT remains your only non-agentic mode.
+
+In flows/planner_executor.py and flows/sequencer.py:
+
+Delete any revision-specific paths (set_revision_directive usage) that are only used for agentic revisions; retain them for DIRECT-only if needed.
+
+Update docs:
+
+Mark planner-based revisions as “historic” and point all new development to the agent run paths.
+
+3. Frontend Roadmap (ProcessPanel, WorkflowCanvas, LiveArtifacts)
+
+The docs already reference the key pieces:
+
+components/analytics/hooks/useAnalyticsMemoryStream.ts
+
+ProcessPanel, WorkflowCanvas, ProcessNode, LiveArtifacts, WebSearchCard, etc.
+
+3.1 Event model consolidation
+
+Goal: frontend consumes one SSE schema for tools and agents, regardless of mode.
+
+F1 – Normalize event parsing
+
+In useAnalyticsMemoryStream.ts:
+
+Treat agent_turn_start/end, agent_tool_call/complete, planner_lane_transition, and lane_reused_* as a single unified event set coming from Agents.
+
+Stop relying on legacy deterministic-only events for single-agent/multi-agent flows; keep those only for DIRECT.
+
+Use lane and role fields from ToolInvocationReceipt.metadata to build UI chips (e.g., “SQL specialist”, “Web specialist”).
+
+F2 – Flow mode handling
+
+Maintain telemetryFlowMode but simplify:
+
+direct, single_agent, supervisor.
+
+For single_agent and supervisor, hide any deterministic “fresh SQL/web” pills; use agent cards exclusively.
+
+Keep the existing behavior where fresh-run DIRECT uses deterministic pills plus fresh_* markers.
+
+3.2 Supervisor + specialists visualization
+
+F3 – ProcessPanel
+
+For MULTI_AGENT:
+
+Render agent_turn cards with:
+
+Header = specialist role (e.g., “Chart Specialist”).
+
+Lane chips from the lane metadata.
+
+Retry badges from retry_count.
+
+For supervisor turns:
+
+Render them as high-level “Supervisor” cards that mention which specialists were chosen and why (extracted from reasoning deltas).
+
+F4 – WorkflowCanvas
+
+Use lane + mode metadata already in SSE events:
+
+For DIRECT: keep existing pipeline layout (SQL→Chart→Web→Analysis).
+
+For SINGLE_AGENT:
+
+Show a single lane with embedded tool cards.
+
+For MULTI_AGENT:
+
+Supervisor lane across the top.
+
+Specialist lanes vertically aligned below, as your docs already describe.
+
+3.3 Revision UX
+
+The roadmap already says: revision mode should suppress fresh-run cards, buffer until web topics complete, and show revision badges.
+
+F5 – Revision card rules
+
+In useAnalyticsMemoryStream.appendResultSnapshot:
+
+For analysis_revision flows, set pruneFreshResults=true and ensure only the revision card is shown in the Memory view.
+
+In LiveArtifacts:
+
+Keep fresh-run artifacts visible (since they may still be reused) but show clear badges like:
+
+“Reused from fresh run (age 64s)”.
+
+Use age_seconds and fast_path_latency_ms from accessory receipts.
+
+F6 – Guardrail surfacing
+
+Use new guardrail telemetry (guardrail_trip, guardrail_recovered) embedded in tool events:
+
+Display concise badges (“Guardrails: pass / blocked / recovered”) on ProcessPanel cards.
+
+Do not introduce new SSE events; rely on the existing schema from backend.
+
+3.4 Frontend cleanup
+
+Once the backend is fully agentic for single/supervisor modes:
+
+Remove any code paths that:
+
+Expect deterministic planner events for single-agent or multi-agent flows (e.g., old fresh_*-only logic).
+
+Render “cannot revise” banners that assume planner-only manifests; you now have proper analysis_inputs_manifest + revision manifests.
+
+Keep a minimal DIRECT path in the UI for demos that explicitly request it.
+
+4. Legacy Code and Flag Removal Plan
+
+ARCHITECTURE.md already calls out which pieces are regression-only or rollback-only. Use that as the basis for removal.
+
+4.1 Legacy sequential pipelines
+
+To remove after agentic paths are stable:
+
+analytics_agent.AnalyticsWorkflow._build_market_share_sql
+
+_build_margins_sql
+
+_build_rnd_sql
+
+_build_echarts_spec
+plus any tests that depend exclusively on these fixtures.
+
+Replacement: regression tests against PlannerExecutorFlow (DIRECT) and agentic paths.
+
+4.2 Feature flags and rollback paths
+
+You explicitly said no need for feature flags; you’ll rollback if needed.
+
+Start deleting:
+
+ANALYTICS_ENABLE_AGENTS
+
+AGENTIC_REVISIONS_ENABLED, AGENTIC_REVISION_SINGLE_AGENT, AGENTIC_REVISION_MULTI_AGENT, AGENTIC_REVISION_PLANNER_EXECUTOR
+
+Any _env_flag() branches that only exist to choose between planner and agents in non-DIRECT modes.
+
+Keep only:
+
+ANALYTICS_FLOW_MODE (to pick direct, single_agent, multi_agent at startup).
+
+TTL and cache env vars.
+
+4.3 Compatibility shims
+
+Once you’re fully on the agentic path:
+
+Remove tool_cache["agent"] compatibility writes in:
+
+SessionStateSnapshot.record_agent_run
+
+AgentMemory.record_tool_receipt
+leaving just the typed agents_* fields.
+
+Remove dual-shape artifact serialization in artifacts.models.BaseArtifact.to_dict() once the React canvases no longer use the legacy flat props.
+
+4.4 Planner-only revision helpers
+
+After you’ve verified that all revisions are agentic:
+
+Delete or demote planner revision helpers:
+
+flows/planner/revision.derive_revision_targets that are only used in agentic flows.
+
+Any revision-only PlannerSequencer logic that doesn’t apply to DIRECT.
+
+Move remaining revision logic into:
+
+RevisionDirective + agent tooling only.
+
+5. Suggested Implementation Order
+
+If you want a blunt ordering that minimizes thrash:
+
+Tool layer first
+
+Build ToolDefinition, run_tool_by_id, and rewire PlannerToolRegistry + Agents manifests to consume it.
+
+Single-agent fresh → agentic
+
+Fresh runs in FlowMode.SINGLE_AGENT go through AgentRuntime with the fresh plan.
+
+Supervisor + specialists-as-tools
+
+Turn MultiAgentFlow into a supervisor + *.asTool() pattern; stop calling planner directly from supervisor modes.
+
+Revision unification
+
+Enforce agent-only revisions; delete planner revision branches in analytics_memory_workflow.
+
+Frontend consolidation
+
+Normalize event consumption to the agent schema; update WorkflowCanvas + ProcessPanel + LiveArtifacts.
+
+Legacy removal
+
+Sequential pipeline deletion, flag cleanup, compatibility shim removal.
+
+At the end of this sequence you have:
+
+DIRECT = deterministic baseline.
+
+SINGLE_AGENT = planner agent over shared tools.
+
+MULTI_AGENT = supervisor + specialists-as-tools.
+
+One tool registry, one SSE schema, and no planner-based revision paths left to maintain.
+
+If you want, next step after this is to design a “planner agent” on top of the supervisor stack (optional), but you don’t need that to get to a clean, modern agentic architecture.

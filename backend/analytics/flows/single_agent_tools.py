@@ -177,6 +177,7 @@ def _build_tool_metadata(manifest: Any) -> Dict[str, Dict[str, Any]]:
             "latency_budget_ms": entry.get("latency_budget_ms"),
             "output_artifacts": entry.get("output_artifacts"),
             "concurrency_limit": entry.get("concurrency_limit"),
+            "schema_version": entry.get("schema_version"),
         }
     return metadata
 

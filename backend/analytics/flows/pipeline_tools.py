@@ -22,11 +22,14 @@
 # --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass, field
 from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, Iterable, Optional, Sequence, Set
 import logging
 
 from .planner_executor import PlannerPipeline, PlannerPhaseContext
+
+from analytics.tools.definitions import TOOL_REGISTRY, ToolDefinition, ToolId
 
 
 logger = logging.getLogger(__name__)
@@ -56,6 +59,7 @@ class PlannerToolDefinition:
     response_schema: Optional[Dict[str, Any]] = None
     retryable_errors: Sequence[str] = field(default_factory=tuple)
     error_severity: str = "transient"
+    schema_version: str = "analytics_tool_schema/unspecified"
 
 
 class PlannerToolRegistry:
@@ -115,6 +119,7 @@ class PlannerToolRegistry:
                 "response_schema": dict(definition.response_schema or {}),
                 "retryable_errors": list(definition.retryable_errors or ()),
                 "error_severity": definition.error_severity,
+                "schema_version": definition.schema_version,
             }
             for definition in self.list_tools()
         )
@@ -251,358 +256,60 @@ def _bootstrap_registry(registry: PlannerToolRegistry) -> None:
         ):
             yield event
 
-    base_response_schema: Dict[str, Any] = {
-        "type": "object",
-        "properties": {
-            "status": {
-                "type": "string",
-                "enum": ["completed", "skipped", "error"],
-            },
-            "summary": {"type": "string"},
-            "artifacts": {"type": "object"},
-            "error_code": {"type": "string"},
-            "reused": {"type": "boolean"},
-        },
-        "required": ["status"],
-        "additionalProperties": True,
+    handler_map: Dict[ToolId, PlannerToolHandler] = {
+        ToolId.CLASSIFICATION: _run_classification,
+        ToolId.INTENT_DETECTION: _run_intent,
+        ToolId.CLARIFICATION: _run_clarification,
+        ToolId.PLAN_GENERATION: _run_plan,
+        ToolId.SQL_GENERATION: _run_sql,
+        ToolId.CHART_GENERATION: _run_chart,
+        ToolId.ANALYSIS_GENERATION: _run_analysis,
+        ToolId.CHART_REVISION: _run_chart_revision,
+        ToolId.ANALYSIS_REVISION: _run_analysis_revision,
+        ToolId.WEB_REFRESH: _run_web_refresh,
+        ToolId.MARKET_REFRESH: _run_market_refresh,
+        ToolId.SQL_REGENERATION: _run_sql,
     }
 
-    def _schema(
-        properties: Optional[Dict[str, Any]] = None,
-        *,
-        required: Optional[Sequence[str]] = None,
-        allow_extra: bool = False,
-    ) -> Dict[str, Any]:
-        schema: Dict[str, Any] = {
-            "type": "object",
-            "properties": properties or {},
-            "additionalProperties": allow_extra,
-        }
-        if required is not None:
-            schema["required"] = list(required)
-        return schema
+    for tool_id, handler in handler_map.items():
+        registry.register(_build_planner_definition(tool_id, handler))
 
-    retryable_default = ("transient_tool_error", "rate_limit", "upstream_timeout")
+    _assert_tool_parity(registry)
 
-    registry.register(
-        PlannerToolDefinition(
-            name="classification",
-            description="Run query classification and record topic metadata",
-            handler=_run_classification,
-            telemetry_step="classification",
-            inputs=("query",),
-            outputs=("classification",),
-            output_artifacts=("classification",),
-            latency_budget_ms=500,
-            concurrency_limit=1,
-            parameters_schema=_schema(
-                {
-                    "query": {
-                        "type": "string",
-                        "description": "User query to classify; defaults to pipeline context when omitted.",
-                    },
-                    "reason": {
-                        "type": ["string", "null"],
-                        "description": "Optional rationale for telemetry and audits.",
-                    },
-                },
-                required=("query",),
-            ),
-            response_schema=base_response_schema,
-            retryable_errors=retryable_default,
-        )
-    )
-    registry.register(
-        PlannerToolDefinition(
-            name="intent_detection",
-            description="Detect analytics intent and required slots",
-            handler=_run_intent,
-            prerequisites=("classification",),
-            telemetry_step="intent_detection",
-            inputs=("classification",),
-            outputs=("intent",),
-            output_artifacts=("intent",),
-            latency_budget_ms=1500,
-            concurrency_limit=1,
-            parameters_schema=_schema({}, required=()),
-            response_schema=base_response_schema,
-            retryable_errors=retryable_default,
-        )
-    )
-    registry.register(
-        PlannerToolDefinition(
-            name="clarification",
-            description="Collect missing slot answers before planning",
-            handler=_run_clarification,
-            prerequisites=("intent_detection",),
-            telemetry_step="clarification",
-            inputs=("intent",),
-            outputs=("clarifications",),
-            output_artifacts=("clarification",),
-            latency_budget_ms=2000,
-            concurrency_limit=1,
-            parameters_schema=_schema(
-                {
-                    "clarification_budget": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "description": "Max clarification rounds to run.",
-                    },
-                    "reason": {"type": "string"},
-                }
-            ),
-            response_schema=base_response_schema,
-            retryable_errors=retryable_default,
-        )
-    )
-    registry.register(
-        PlannerToolDefinition(
-            name="plan_generation",
-            description="Construct query plan and select template",
-            handler=_run_plan,
-            prerequisites=("clarification",),
-            telemetry_step="plan_generation",
-            inputs=("clarifications",),
-            outputs=("plan",),
-            output_artifacts=("plan",),
-            latency_budget_ms=2000,
-            concurrency_limit=1,
-            parameters_schema=_schema(
-                {
-                    "reason": {"type": "string"},
-                    "force_template": {
-                        "type": "string",
-                        "description": "Template identifier to force when planner should reuse a cached template.",
-                    },
-                }
-            ),
-            response_schema=base_response_schema,
-            retryable_errors=retryable_default,
-        )
-    )
-    registry.register(
-        PlannerToolDefinition(
-            name="sql_generation",
-            description="Generate, validate, and execute SQL for the current plan",
-            handler=_run_sql,
-            prerequisites=("plan_generation",),
-            telemetry_step="sql_generation",
-            inputs=("plan",),
-            outputs=("sql",),
-            output_artifacts=("sql_generation", "sql_execution"),
-            latency_budget_ms=7000,
-            concurrency_limit=1,
-            parameters_schema=_schema(
-                {
-                    "reason": {"type": "string"},
-                    "rerun": {
-                        "type": "boolean",
-                        "description": "Force SQL generation even when cached receipts exist.",
-                    },
-                    "allow_cached_execution": {
-                        "type": "boolean",
-                        "description": "Permit reuse of previous execution results.",
-                    },
-                }
-            ),
-            response_schema=base_response_schema,
-            retryable_errors=retryable_default,
-        )
-    )
-    registry.register(
-        PlannerToolDefinition(
-            name="chart_generation",
-            description="Design chart specification for the current dataset",
-            handler=_run_chart,
-            prerequisites=("sql_generation",),
-            telemetry_step="chart_generation",
-            inputs=("sql",),
-            outputs=("chart_spec",),
-            output_artifacts=("chart",),
-            latency_budget_ms=1500,
-            concurrency_limit=1,
-            parameters_schema=_schema(
-                {
-                    "reason": {"type": "string"},
-                    "chart_intent": {
-                        "type": "string",
-                        "description": "Override detected chart intent for experimentation.",
-                    },
-                }
-            ),
-            response_schema=base_response_schema,
-            retryable_errors=retryable_default,
-        )
-    )
-    registry.register(
-        PlannerToolDefinition(
-            name="analysis_generation",
-            description="Synthesize narrative analysis from dataset and chart",
-            handler=_run_analysis,
-            prerequisites=("chart_generation",),
-            telemetry_step="analysis_generation",
-            inputs=("chart_spec",),
-            outputs=("analysis",),
-            output_artifacts=("analysis",),
-            latency_budget_ms=5000,
-            concurrency_limit=1,
-            parameters_schema=_schema(
-                {
-                    "reason": {"type": "string"},
-                    "include_market": {
-                        "type": "boolean",
-                        "description": "Indicate whether market context must be incorporated.",
-                    },
-                    "clarity_mode": {
-                        "type": "string",
-                        "description": "Optional style override for summarization.",
-                    },
-                }
-            ),
-            response_schema=base_response_schema,
-            retryable_errors=retryable_default,
-        )
-    )
-    registry.register(
-        PlannerToolDefinition(
-            name="chart_revision",
-            description="Apply chart patch operations to the last saved spec",
-            handler=_run_chart_revision,
-            prerequisites=(),
-            telemetry_step="chart_revision",
-            inputs=("patch",),
-            outputs=("chart_patch",),
-            output_artifacts=("revision",),
-            latency_budget_ms=800,
-            concurrency_limit=2,
-            parameters_schema=_schema(
-                {
-                    "patch": {
-                        "oneOf": [{"type": "object"}, {"type": "string"}],
-                        "description": "Chart patch operations to apply.",
-                    },
-                    "reason": {"type": "string"},
-                    "source": {"type": "string"},
-                },
-                required=["patch"],
-            ),
-            response_schema=base_response_schema,
-            retryable_errors=retryable_default,
-        )
+
+def _build_planner_definition(tool_id: ToolId, handler: PlannerToolHandler) -> PlannerToolDefinition:
+    canonical: ToolDefinition = TOOL_REGISTRY[tool_id]
+    return PlannerToolDefinition(
+        name=canonical.name,
+        description=canonical.description,
+        handler=handler,
+        prerequisites=tuple(dep.value for dep in canonical.depends_on),
+        telemetry_step=canonical.telemetry_step,
+        inputs=tuple(canonical.inputs),
+        outputs=tuple(canonical.outputs),
+        output_artifacts=tuple(canonical.output_artifacts or canonical.outputs),
+        latency_budget_ms=canonical.latency_budget_ms,
+        concurrency_limit=canonical.concurrency_limit,
+        parameters_schema=copy.deepcopy(dict(canonical.parameters_schema or {})),
+        response_schema=copy.deepcopy(dict(canonical.response_schema or {})),
+        retryable_errors=tuple(canonical.retryable_errors),
+        error_severity=canonical.error_severity,
+        schema_version=canonical.schema_version,
     )
 
-    registry.register(
-        PlannerToolDefinition(
-            name="analysis_revision",
-            description="Apply narrative edits to the last saved analysis",
-            handler=_run_analysis_revision,
-            prerequisites=(),
-            telemetry_step="analysis_revision",
-            inputs=("analysis",),
-            outputs=("analysis",),
-            output_artifacts=("revision",),
-            latency_budget_ms=1200,
-            concurrency_limit=2,
-            parameters_schema=_schema(
-                {
-                    "analysis": {
-                        "type": "string",
-                        "description": "Revised analysis text to apply.",
-                    },
-                    "reason": {"type": "string"},
-                    "source": {"type": "string"},
-                },
-                required=["analysis"],
-            ),
-            response_schema=base_response_schema,
-            retryable_errors=retryable_default,
-        )
-    )
 
-    registry.register(
-        PlannerToolDefinition(
-            name="web_refresh",
-            description="Refresh cached web research artifacts for revision lanes",
-            handler=_run_web_refresh,
-            prerequisites=(),
-            telemetry_step="web_refresh",
-            inputs=(),
-            outputs=("web_ready",),
-            output_artifacts=("web",),
-            latency_budget_ms=800,
-            concurrency_limit=2,
-            parameters_schema=_schema(
-                {
-                    "queries": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Optional override queries to fetch.",
-                    },
-                    "reason": {"type": "string"},
-                    "force_live": {
-                        "type": "boolean",
-                        "description": "Set true to bypass cached web receipts.",
-                    },
-                }
-            ),
-            response_schema=base_response_schema,
-            retryable_errors=retryable_default,
+def _assert_tool_parity(registry: PlannerToolRegistry) -> None:
+    canonical_names = [tool_id.value for tool_id in TOOL_REGISTRY.keys()]
+    registered_names = [definition.name for definition in registry.list_tools()]
+    if canonical_names != registered_names:
+        missing = sorted(set(canonical_names) - set(registered_names))
+        extra = sorted(set(registered_names) - set(canonical_names))
+        raise AssertionError(
+            f"Planner tool registry drift detected (missing={missing}, extra={extra})",
         )
-    )
-
-    registry.register(
-        PlannerToolDefinition(
-            name="market_refresh",
-            description="Refresh cached market data for revision lanes",
-            handler=_run_market_refresh,
-            prerequisites=(),
-            telemetry_step="market_refresh",
-            inputs=(),
-            outputs=("stock_ready",),
-            output_artifacts=("market",),
-            latency_budget_ms=800,
-            concurrency_limit=2,
-            parameters_schema=_schema(
-                {
-                    "tickers": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Tickers to refresh; defaults to session tickers.",
-                    },
-                    "reason": {"type": "string"},
-                    "force_live": {
-                        "type": "boolean",
-                        "description": "Bypass cached market data when true.",
-                    },
-                }
-            ),
-            response_schema=base_response_schema,
-            retryable_errors=retryable_default,
-        )
-    )
-
-    registry.register(
-        PlannerToolDefinition(
-            name="sql_regeneration",
-            description="Regenerate SQL using the current plan context",
-            handler=_run_sql,
-            prerequisites=("plan_generation",),
-            telemetry_step="sql_regeneration",
-            inputs=("plan",),
-            outputs=("sql",),
-            output_artifacts=("sql_generation", "sql_execution"),
-            latency_budget_ms=7000,
-            concurrency_limit=1,
-            parameters_schema=_schema(
-                {
-                    "reason": {"type": "string"},
-                    "strategy": {
-                        "type": "string",
-                        "description": "Planner strategy override (e.g., 'fallback_template').",
-                    },
-                }
-            ),
-            response_schema=base_response_schema,
-            retryable_errors=retryable_default,
-        )
-    )
+    for tool_id, canonical in TOOL_REGISTRY.items():
+        registered = registry.get(canonical.name)
+        if registered.schema_version != canonical.schema_version:
+            raise AssertionError(
+                f"Planner tool '{canonical.name}' schema_version mismatch: {registered.schema_version} vs {canonical.schema_version}",
+            )
