@@ -1188,6 +1188,46 @@ describe('useAnalyticsMemoryStream follow-up guidance', () => {
       expect(result.current.followUpBanner?.route).toBe('cannot_revise');
     });
   });
+
+  it('does not emit invalid hook call warnings when question bundles normalize mid-stream', async () => {
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    (globalThis as any).__TEST_EVENTS__ = [
+      {
+        event: 'follow_up_route',
+        data: {
+          route: 'analysis_only',
+          banner: {
+            route: 'analysis_only',
+          },
+          revision_questions: {
+            keyword_focus: 'margin focus',
+            user_question: 'Explain the upside for margins.',
+            industry_question: 'Do industry peers match the trajectory?',
+          },
+        },
+      },
+      { event: 'done' },
+    ];
+
+    try {
+      const { result } = renderHook(() => useAnalyticsMemoryStream('planner-executor'));
+
+      await act(async () => {
+        await result.current.handleQuery('question bundle audit');
+      });
+
+      const invalidHookWarnings = consoleErrorSpy.mock.calls.filter(([message]) => {
+        if (typeof message !== 'string') {
+          return false;
+        }
+        return message.toLowerCase().includes('invalid hook call');
+      });
+      expect(invalidHookWarnings).toHaveLength(0);
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
+  });
 });
 
 describe('useAnalyticsMemoryStream web research questions', () => {

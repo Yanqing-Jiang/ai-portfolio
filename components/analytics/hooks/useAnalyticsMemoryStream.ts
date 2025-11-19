@@ -853,14 +853,6 @@ export const useAnalyticsMemoryStream = (
         allow_custom: owns.call(update, 'allow_custom') ? update.allow_custom : existing.allow_custom,
       };
 
-      useEffect(() => {
-        if (topicProgress.total > 0 && topicProgress.pending === 0 && pendingAnalysisBufferRef.current) {
-          // Flush buffer
-          setAnalysis(pendingAnalysisBufferRef.current);
-          pendingAnalysisBufferRef.current = '';
-        }
-      }, [topicProgress.total, topicProgress.pending]);
-
       return { ...prev, [slot]: next };
     });
   };
@@ -1029,15 +1021,6 @@ export const useAnalyticsMemoryStream = (
       return null;
     }
 
-
-    useEffect(() => {
-      if (topicProgress.total > 0 && topicProgress.pending === 0 && pendingAnalysisBufferRef.current) {
-        // Flush buffer
-        setAnalysis(pendingAnalysisBufferRef.current);
-        pendingAnalysisBufferRef.current = '';
-      }
-    }, [topicProgress.total, topicProgress.pending]);
-
     return {
       tldr: tldrValue || undefined,
       highlights: hasHighlights ? highlightsValue?.slice(0, 3) : undefined,
@@ -1118,15 +1101,6 @@ export const useAnalyticsMemoryStream = (
     const pickArray = (next?: string[], prev?: string[]) =>
       Array.isArray(next) && next.length ? next : prev;
 
-
-    useEffect(() => {
-      if (topicProgress.total > 0 && topicProgress.pending === 0 && pendingAnalysisBufferRef.current) {
-        // Flush buffer
-        setAnalysis(pendingAnalysisBufferRef.current);
-        pendingAnalysisBufferRef.current = '';
-      }
-    }, [topicProgress.total, topicProgress.pending]);
-
     return {
       id: incoming.id ?? existing?.id ?? fallbackKey,
       lane: incoming.lane ?? existing?.lane,
@@ -1166,6 +1140,14 @@ export const useAnalyticsMemoryStream = (
     return result;
   };
 
+  /*
+  Function: normalizeQuestionBundle — called from useAnalyticsMemoryStream SSE handlers
+  (follow_up_route, web_ready, agent HTML revisions) to sanitize Gemini question payloads before
+  emitting revision cards and follow-up banners. Invokes coerceString to strip unsafe text and keep
+  the UI inputs consistent, giving downstream emitRevisionQuestionCard/followUpBanner writers one
+  reliable representation of user/industry questions. Exists so non-React callers can normalize
+  question metadata without tripping hook rules.
+  */
   const normalizeQuestionBundle = (
     raw: any,
   ): { keywordFocus?: string | null; user?: string | null; industry?: string | null } | undefined => {
@@ -1178,14 +1160,6 @@ export const useAnalyticsMemoryStream = (
     if (!keywordFocus && !userQuestion && !industryQuestion) {
       return undefined;
     }
-
-    useEffect(() => {
-      if (topicProgress.total > 0 && topicProgress.pending === 0 && pendingAnalysisBufferRef.current) {
-        // Flush buffer
-        setAnalysis(pendingAnalysisBufferRef.current);
-        pendingAnalysisBufferRef.current = '';
-      }
-    }, [topicProgress.total, topicProgress.pending]);
 
     return {
       keywordFocus: keywordFocus ?? null,
@@ -2254,9 +2228,11 @@ export const useAnalyticsMemoryStream = (
   }, [telemetryFlowMode]);
 
   useEffect(() => {
-    if (topicProgress.total > 0 && topicProgress.pending === 0 && pendingAnalysisBufferRef.current) {
-      // Flush buffer
-      setAnalysis(pendingAnalysisBufferRef.current);
+    const bufferedAnalysis = pendingAnalysisBufferRef.current;
+    if (topicProgress.total > 0 && topicProgress.pending === 0 && bufferedAnalysis) {
+      // Flush buffered analysis updates once topic branches complete
+      setAnalysis(bufferedAnalysis);
+      workflowDataRef.current.analysis = bufferedAnalysis;
       pendingAnalysisBufferRef.current = '';
     }
   }, [topicProgress.total, topicProgress.pending]);
@@ -3091,14 +3067,6 @@ export const useAnalyticsMemoryStream = (
             ) {
               return prev;
             }
-
-            useEffect(() => {
-              if (topicProgress.total > 0 && topicProgress.pending === 0 && pendingAnalysisBufferRef.current) {
-                // Flush buffer
-                setAnalysis(pendingAnalysisBufferRef.current);
-                pendingAnalysisBufferRef.current = '';
-              }
-            }, [topicProgress.total, topicProgress.pending]);
 
             return {
               ...prev,
@@ -6044,6 +6012,7 @@ export const useAnalyticsMemoryStream = (
     criteria,
     streamingText,
     webSearch,
+    topicProgress,
     stockWidget,
     analysisOverview,
     analysisSources,
