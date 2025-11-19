@@ -93,6 +93,7 @@ from analytics.core.cache import get_cache_service
 from analytics.validators import sanitize_for_json
 from analytics.routing import FollowUpRoute
 from analytics.services.revision_focus import RevisionQuestionBundle
+from .exceptions import AgentRevisionLaneMissing
 from .hooks import AnalyticsFlowHooks
 from .planner_executor import (
     _build_analysis_source_summaries,
@@ -192,6 +193,10 @@ class _SingleAgentRunContext:
     tool_receipts: Dict[str, Any] = field(default_factory=dict)
     run_id: Optional[str] = None
     trace_id: Optional[str] = None
+    revision_inputs_plan: Dict[str, Any] = field(default_factory=dict)
+    execute_revision: bool = False
+    analysis_focus: Optional[str] = None
+    revision_questions: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -1335,6 +1340,8 @@ class SingleAgentController:
             metadata = self._tool_metadata_by_registry.get(registry_name)
             if metadata:
                 self.tool_metadata[alias] = metadata
+        self._web_topic_branch_states: Dict[str, str] = {}
+        self._web_topic_pending = 0
 
         raw_flag = os.getenv("ANALYTICS_ENABLE_AGENTS")
         normalized_flag = str(raw_flag or "").strip().lower()
@@ -1355,12 +1362,15 @@ class SingleAgentController:
                 for tool_definition in self._registry.list_tools()
             ]
             self._function_tools.append(self._build_lane_decision_tool())
+            self._function_tools.append(self._build_revision_executor_tool())
             instructions = self._agent_settings.get(
                 "instructions",
                 (
                     "You are the Analytics Planner. Execute classification, planning, SQL, chart, "
                     "market, and analysis tools to fulfill the user's analytics request. Respect "
-                    "cached receipts when provided, and only call tools necessary to refresh stale lanes."
+                    "cached receipts when provided, and only call tools necessary to refresh stale lanes. "
+                    "During revision follow-ups, always call the lane_decision tool to pick a lane and "
+                    "then invoke apply_revision_lane so the refreshed cards stream back to the user."
                 ),
             )
             self._agent = Agent(
@@ -2063,6 +2073,10 @@ class SingleAgentController:
         reason: Optional[str],
         source: Optional[str],
         apply_revision_context: Optional[Any] = None,
+        revision_inputs_plan: Optional[Mapping[str, Any]] = None,
+        questions: Optional[RevisionQuestionBundle] = None,
+        execute_revision: bool = False,
+        requested_focus: Optional[str] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         queue: "asyncio.Queue[Optional[Dict[str, Any]]]" = asyncio.Queue()
         ctx = await self._planner.initialize_context(query or "", session_id=session_id)
@@ -2078,6 +2092,12 @@ class SingleAgentController:
             queue=queue,
             revision_directive=revision_directive,
         )
+        if revision_inputs_plan:
+            run_context.revision_inputs_plan = dict(revision_inputs_plan)
+        if questions:
+            run_context.revision_questions = questions.to_dict()
+        run_context.execute_revision = execute_revision
+        run_context.analysis_focus = requested_focus
         runtime = self._build_agent_runtime(queue, session_id)
         runtime_task = asyncio.create_task(
             runtime.run(
@@ -2466,6 +2486,69 @@ class SingleAgentController:
         except Exception:
             logger.debug("Failed to emit lane decision telemetry", exc_info=True)
 
+    def _reset_web_topic_progress(self, total: int = 0) -> None:
+        self._web_topic_branch_states = {}
+        self._web_topic_pending = max(total, 0)
+
+    def _mark_web_topic_branch(self, branch_id: Optional[str], status: Optional[str]) -> None:
+        if not branch_id:
+            return
+        normalized = str(branch_id).strip().lower()
+        if normalized not in {"user_question", "industry_question"}:
+            return
+        previous_status = str(self._web_topic_branch_states.get(normalized) or "").strip().lower()
+        if previous_status in {"ready", "error"}:
+            return
+        resolved_status = "ready" if str(status or "").strip().lower() == "ready" else "error"
+        self._web_topic_branch_states[normalized] = resolved_status
+        if self._web_topic_pending > 0:
+            self._web_topic_pending = max(self._web_topic_pending - 1, 0)
+
+    def _topic_progress_ready(self) -> bool:
+        return self._web_topic_pending <= 0
+
+    def _record_agent_coordination_event(self, payload: Mapping[str, Any]) -> None:
+        snapshot = self._session_snapshot
+        if snapshot is None:
+            return
+        try:
+            snapshot.record_agent_coordination(payload)
+        except Exception:
+            logger.debug("Failed to persist agent coordination payload", exc_info=True)
+
+    def _build_missing_analysis_events(
+        self,
+        *,
+        session_id: str,
+        reason: Optional[str],
+        source: Optional[str],
+    ) -> List[Dict[str, Any]]:
+        skip_message = "Revision skipped: missing baseline analysis."
+        error_event = EventEmitter.error(
+            "analysis_revision",
+            skip_message,
+            details={"session_id": session_id},
+            code="ANALYSIS_REVISION_MISSING_ANALYSIS",
+        )
+        tagged_error = self._maybe_tag_session_metadata(error_event, session_id)
+        result_payload = {
+            "analysis": "",
+            "analysis_length": 0,
+            "status": "skipped",
+            "reason": reason or "missing_analysis",
+            "source": source or "missing_analysis_guard",
+            "error": "missing_analysis",
+            "session_id": session_id,
+        }
+        skip_event = EventEmitter.result("analysis_revision", result_payload)
+        skip_event = apply_mode_metadata(skip_event, self.flow_mode)
+        skip_event = self._maybe_tag_session_metadata(skip_event, session_id)
+        skip_data = skip_event.setdefault("data", {})
+        skip_data.setdefault("lane", "analysis")
+        skip_data["revision"] = True
+        skip_data["revision_event"] = True
+        return [tagged_error, skip_event]
+
     @classmethod
     def _lane_for_tool(cls, tool_name: Optional[str]) -> Optional[str]:
         if not tool_name:
@@ -2783,6 +2866,258 @@ class SingleAgentController:
             strict_json_schema=True,
         )
 
+    def _build_revision_executor_tool(self) -> FunctionTool:
+        params_schema: Dict[str, Any] = {
+            "type": "object",
+            "properties": {
+                "lane": {"type": "string", "enum": ["chart", "narrative"]},
+                "lane_decision": {"type": "string", "enum": ["chart", "narrative"]},
+                "web": {"type": "string", "enum": ["refresh", "reuse"]},
+                "web_action": {"type": "string", "enum": ["refresh", "reuse"]},
+                "refresh_web": {"type": "boolean"},
+                "reason": {"type": "string"},
+                "source": {"type": "string"},
+                "analysis_focus": {"type": "string"},
+                "questions": {
+                    "type": "object",
+                    "properties": {
+                        "keyword_focus": {"type": "string"},
+                        "user_question": {"type": "string"},
+                        "industry_question": {"type": "string"},
+                    },
+                },
+                "keyword_focus": {"type": "string"},
+                "user_question": {"type": "string"},
+                "industry_question": {"type": "string"},
+            },
+            "additionalProperties": False,
+        }
+
+        async def _on_invoke(tool_ctx: ToolContext[Any], args_json: str) -> str:
+            run_context = tool_ctx.context
+            if not isinstance(run_context, _SingleAgentRunContext):
+                return json.dumps(
+                    {
+                        "status": "error",
+                        "error_code": "INVALID_CONTEXT",
+                        "summary": "apply_revision_lane requires the single-agent run context.",
+                    }
+                )
+            if not run_context.execute_revision:
+                return json.dumps(
+                    {
+                        "status": "error",
+                        "error_code": "REVISION_EXECUTION_DISABLED",
+                        "summary": "Revision execution is only available inside revision flows.",
+                    }
+                )
+            try:
+                parsed_args = json.loads(args_json) if args_json else {}
+                if not isinstance(parsed_args, dict):
+                    raise ValueError("arguments must be an object")
+            except Exception:
+                return json.dumps(
+                    {
+                        "status": "error",
+                        "error_code": "INVALID_TOOL_ARGS",
+                        "summary": "Unable to parse apply_revision_lane arguments.",
+                    }
+                )
+
+            session_id = run_context.session_id or str(uuid.uuid4())
+            run_context.session_id = session_id
+            plan_hint = run_context.revision_inputs_plan or {}
+            lane_value = (
+                parsed_args.get("lane")
+                or parsed_args.get("lane_decision")
+                or plan_hint.get("lane")
+            )
+            lane = str(lane_value or "").strip().lower()
+            if lane not in {"chart", "narrative"}:
+                lane = "narrative"
+            web_value = (
+                parsed_args.get("web")
+                or parsed_args.get("web_action")
+                or plan_hint.get("web")
+            )
+            web_action = "refresh" if str(web_value or "").strip().lower() == "refresh" else "reuse"
+            if parsed_args.get("refresh_web") is True:
+                web_action = "refresh"
+            reason_value = str(parsed_args.get("reason") or "").strip()
+            source_value = str(parsed_args.get("source") or "").strip()
+            resolved_source = source_value or "agentic_revision"
+            resolved_reason = reason_value or resolved_source
+            focus_arg = parsed_args.get("analysis_focus") or parsed_args.get("analysis")
+            if isinstance(focus_arg, str) and focus_arg.strip():
+                run_context.analysis_focus = focus_arg.strip()
+            questions_payload = parsed_args.get("questions")
+            if not isinstance(questions_payload, Mapping):
+                questions_payload = {
+                    "keyword_focus": parsed_args.get("keyword_focus"),
+                    "user_question": parsed_args.get("user_question"),
+                    "industry_question": parsed_args.get("industry_question"),
+                }
+            if not isinstance(questions_payload, Mapping):
+                questions_payload = {}
+            sanitized_questions = {
+                "keyword_focus": (str(questions_payload.get("keyword_focus") or "").strip() or None),
+                "user_question": (str(questions_payload.get("user_question") or "").strip() or None),
+                "industry_question": (str(questions_payload.get("industry_question") or "").strip() or None),
+            }
+            sanitized_questions = {
+                key: value for key, value in sanitized_questions.items() if isinstance(value, str) and value
+            }
+            if not sanitized_questions and isinstance(plan_hint.get("questions"), Mapping):
+                sanitized_questions = {
+                    key: str(value).strip()
+                    for key, value in plan_hint["questions"].items()
+                    if isinstance(value, str) and value.strip()
+                }
+            if not sanitized_questions and isinstance(run_context.revision_questions, Mapping):
+                sanitized_questions = {
+                    key: str(value).strip()
+                    for key, value in run_context.revision_questions.items()
+                    if isinstance(value, str) and value.strip()
+                }
+            bundle_obj: Optional[RevisionQuestionBundle] = None
+            if sanitized_questions:
+                try:
+                    bundle_obj = RevisionQuestionBundle.from_dict(sanitized_questions)
+                except Exception:
+                    bundle_obj = None
+            if bundle_obj:
+                self._revision_question_bundle = bundle_obj
+                run_context.revision_questions = bundle_obj.to_dict()
+
+            plan_payload: Dict[str, Any] = {"lane": lane, "web": web_action}
+            if bundle_obj:
+                plan_payload["questions"] = bundle_obj.to_dict()
+            previous_plan = dict(self._revision_inputs_plan or {})
+            self._revision_inputs_plan = plan_payload
+            self._revision_inputs_outcome = None
+            if (
+                not previous_plan
+                or previous_plan.get("lane") != lane
+                or previous_plan.get("web") != web_action
+            ):
+                try:
+                    self._record_lane_decision(
+                        lane=lane,
+                        planned_lane=lane,
+                        questions=bundle_obj,
+                        session_id=session_id,
+                    )
+                except Exception:
+                    logger.debug("Failed to persist lane decision during apply_revision_lane", exc_info=True)
+
+            try:
+                async for event in self._execute_revision_lane_from_agent(
+                    session_id=session_id,
+                    query=run_context.query,
+                    lane=lane,
+                    web_action=web_action,
+                    revision_directive=run_context.revision_directive or self._revision_directive,
+                    requested_focus=run_context.analysis_focus,
+                    reason=resolved_reason,
+                    source=resolved_source,
+                    questions=bundle_obj,
+                ):
+                    await run_context.queue.put(event)
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.exception("apply_revision_lane failed")
+                return json.dumps(
+                    {
+                        "status": "error",
+                        "error_code": "REVISION_LANE_FAILED",
+                        "summary": f"apply_revision_lane failed: {exc}",
+                    }
+                )
+
+            return json.dumps(
+                {
+                    "status": "completed",
+                    "lane": lane,
+                    "web": web_action,
+                    "questions": bundle_obj.to_dict() if bundle_obj else None,
+                    "reason": resolved_reason,
+                    "source": resolved_source,
+                }
+            )
+
+        return FunctionTool(
+            name="apply_revision_lane",
+            description="Execute the selected revision lane and stream the refreshed cards.",
+            params_json_schema=sanitize_for_json(params_schema),
+            on_invoke_tool=_on_invoke,
+            strict_json_schema=True,
+        )
+
+    async def _execute_revision_lane_from_agent(
+        self,
+        *,
+        session_id: str,
+        query: str,
+        lane: str,
+        web_action: str,
+        revision_directive: Optional["RevisionDirective"],
+        requested_focus: Optional[str],
+        reason: Optional[str],
+        source: Optional[str],
+        questions: Optional[RevisionQuestionBundle],
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        normalized_lane = lane if lane in {"chart", "narrative"} else "narrative"
+        chart_patch = getattr(revision_directive, "chart_patch", None) if revision_directive else None
+        if normalized_lane == "chart" and not chart_patch:
+            normalized_lane = "narrative"
+        resolved_source = source or "agentic_revision"
+        resolved_reason = reason or resolved_source
+        question_bundle = questions or self._revision_question_bundle
+        if question_bundle is not None:
+            self._revision_question_bundle = question_bundle
+        if web_action == "refresh":
+            web_ready_seen = False
+            async for event in self.run_web_refresh(
+                session_id=session_id,
+                query=query,
+                reason=resolved_reason,
+                source=resolved_source,
+                revision_directive=revision_directive,
+                force_revision_refresh=True,
+            ):
+                if str(event.get("event") or "") in {"web_ready", "web_revision_ready"}:
+                    web_ready_seen = True
+                yield event
+        else:
+            web_ready_seen = False
+        if normalized_lane == "chart" and chart_patch:
+            async for event in self.chart_revision(
+                session_id=session_id,
+                patch=chart_patch,
+                reason=resolved_reason,
+                source=resolved_source,
+                query=query,
+            ):
+                yield event
+        else:
+            async for event in self.analysis_revision(
+                session_id=session_id,
+                analysis=requested_focus,
+                reason=resolved_reason,
+                source=resolved_source,
+                query=query,
+                revision_directive=revision_directive,
+                refresh_web=False,
+                selected_lane=normalized_lane,
+                questions=question_bundle,
+                pre_refreshed_web=(web_action == "refresh"),
+                forced_web_ready_seen=web_ready_seen,
+            ):
+                yield event
+        self._revision_inputs_outcome = {
+            "lane": normalized_lane,
+            "web": "refresh" if web_action == "refresh" else "reuse",
+        }
+
     def _is_cached_receipt_reusable(self, lane: Optional[str], cached_receipt: Mapping[str, Any]) -> bool:
         status = str(cached_receipt.get("status") or "").lower()
         if status not in {"completed", "reused"}:
@@ -2834,6 +3169,11 @@ class SingleAgentController:
                 ctx.revision_focus = focus_hint
             if getattr(revision_directive, "search_topics", None):
                 ctx.revision_search_topics = list(revision_directive.search_topics)
+        plan_hint = run_context.revision_inputs_plan or {}
+        if isinstance(plan_hint, Mapping) and str(plan_hint.get("web") or "").strip().lower() == "refresh":
+            setattr(ctx, "force_revision_refresh", True)
+        if run_context.analysis_focus and not getattr(ctx, "revision_focus", None):
+            ctx.revision_focus = run_context.analysis_focus
 
         registry_name = self._resolve_registry_name(definition.name)
         normalized_key = self._normalize_tool_key(registry_name or definition.name) or definition.name
@@ -4411,6 +4751,57 @@ class SingleAgentController:
             setattr(ctx, "force_revision_refresh", True)
         _reset_revision_accessories(ctx, {"web"})
         self._prime_lane_reuse_events(ctx)
+        emit_topic_progress = bool(
+            force_revision_refresh
+            or revision_directive
+            or getattr(ctx, "revision_search_topics", None)
+        )
+
+        def _build_topic_branch_event(event: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+            if not emit_topic_progress or not isinstance(event, Mapping):
+                return None
+            name = str(event.get("event") or "")
+            if name != "tool_parallel_result":
+                return None
+            data = event.get("data") or {}
+            tool_name = str(data.get("name") or "").lower()
+            if "web_retriever" not in tool_name:
+                return None
+            payload = data.get("payload") or {}
+            if not isinstance(payload, Mapping):
+                return None
+            topic_index = payload.get("topic_index")
+            topic_label = payload.get("topic_label")
+            if topic_index is None and topic_label is None:
+                return None
+            branch_guess = "industry_question" if isinstance(topic_index, int) and topic_index >= 1 else "user_question"
+            if isinstance(topic_label, str) and "industry" in topic_label.lower():
+                branch_guess = "industry_question"
+            status_value = str(data.get("status") or "").strip().lower()
+            normalized_status = "ready" if status_value in {"completed", "complete", "ready"} else "error"
+            branch_payload: Dict[str, Any] = {
+                "branch": branch_guess,
+                "status": normalized_status,
+                "revision": True,
+                "session_id": session_id,
+                "topic_index": topic_index,
+                "topic_label": topic_label,
+            }
+            summary_value = payload.get("summary") or data.get("summary")
+            if isinstance(summary_value, str) and summary_value.strip():
+                branch_payload["summary"] = summary_value.strip()
+            error_value = data.get("error")
+            if isinstance(error_value, str) and error_value.strip():
+                branch_payload["error"] = error_value.strip()
+            questions_payload = payload.get("questions")
+            if isinstance(questions_payload, Mapping):
+                branch_payload["questions"] = dict(questions_payload)
+            branch_event = EventEmitter.status("web_topics_branch", "Revision web topic branch updated.")
+            branch_event["event"] = "web_topics_branch"
+            branch_event.setdefault("data", {}).update(branch_payload)
+            annotated = apply_mode_metadata(branch_event, self.flow_mode)
+            self._mark_web_topic_branch(branch_guess, normalized_status)
+            return annotated
 
         async def _stream() -> AsyncGenerator[Dict[str, Any], None]:
             async for event in self._planner.invoke_tool(
@@ -4422,6 +4813,10 @@ class SingleAgentController:
                 yield event
 
         async for event in self._forward_with_hooks(_stream(), hooks, session_id, ensure_session_event=True):
+            if emit_topic_progress:
+                branch_event = _build_topic_branch_event(event)
+                if branch_event:
+                    yield branch_event
             yield event
 
         if force_revision_refresh and getattr(ctx.artifacts, "web", None):
@@ -4456,6 +4851,116 @@ class SingleAgentController:
         async for event in self._forward_with_hooks(_stream(), hooks, session_id, ensure_session_event=True):
             yield event
 
+    async def _run_agentic_revision_flow(
+        self,
+        *,
+        session_id: str,
+        query: str,
+        revision_directive: Optional["RevisionDirective"],
+        reason: Optional[str],
+        source: Optional[str],
+        normalized_plan: Mapping[str, Any],
+        questions_bundle: Optional[RevisionQuestionBundle],
+        apply_revision_context: Any,
+        requested_focus: Optional[str],
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        lane_hint = str(normalized_plan.get("lane") or "narrative").strip().lower() or "narrative"
+        web_action = str(normalized_plan.get("web") or "reuse").strip().lower()
+        if web_action not in {"refresh", "reuse"}:
+            web_action = "reuse"
+        previous_lane_ts: Optional[str] = None
+        if self._agent_memory:
+            existing_lane_payload = self._agent_memory.get_lane_decision()
+            if isinstance(existing_lane_payload, Mapping):
+                previous_lane_ts = str(existing_lane_payload.get("ts") or "")
+        coordination_event = {
+            "event": "agent_coordination",
+            "data": {
+                "session_id": session_id,
+                "lane": str(lane_hint or "narrative"),
+                "web": web_action,
+                "revision": True,
+                "follow_up_route": self.follow_up_route.value,
+                "reason": reason or "agentic_revision",
+                "source": source or "agentic_revision",
+            },
+        }
+        if questions_bundle:
+            coordination_event["data"]["questions"] = questions_bundle.to_dict()
+        self._record_agent_coordination_event(coordination_event["data"])
+        yield apply_mode_metadata(coordination_event, self.flow_mode)
+        agent_turn_start = EventEmitter.agent_turn_start(
+            "single_agent_revision",
+            lane=str(lane_hint or "narrative"),
+            parallel_group="agent_coordination",
+            metadata={
+                "session_id": session_id,
+                "revision": True,
+                "follow_up_route": self.follow_up_route.value,
+            },
+        )
+        agent_turn_start["data"]["session_id"] = session_id
+        agent_turn_start["data"]["revision"] = True
+        yield apply_mode_metadata(agent_turn_start, self.flow_mode)
+        turn_started = time.time()
+        async for event in self._stream_agentic_lane_selection(
+            session_id=session_id,
+            query=query or "",
+            revision_directive=revision_directive,
+            reason=reason,
+            source=source or "agentic_revision",
+            apply_revision_context=apply_revision_context,
+            revision_inputs_plan=normalized_plan,
+            questions=questions_bundle,
+            execute_revision=True,
+            requested_focus=requested_focus,
+        ):
+            yield event
+        agentic_lane_entry: Optional[Mapping[str, Any]] = None
+        if self._agent_memory:
+            latest_lane = self._agent_memory.get_lane_decision()
+            if isinstance(latest_lane, Mapping):
+                latest_ts = str(latest_lane.get("ts") or "")
+                if not previous_lane_ts or latest_ts != previous_lane_ts:
+                    agentic_lane_entry = dict(latest_lane)
+        elapsed_ms = int((time.time() - turn_started) * 1000)
+        agent_turn_end = EventEmitter.agent_turn_end(
+            "single_agent_revision",
+            lane=str(lane_hint or "narrative"),
+            elapsed_ms=elapsed_ms,
+            metadata={
+                "session_id": session_id,
+                "revision": True,
+                "follow_up_route": self.follow_up_route.value,
+            },
+        )
+        agent_turn_end["data"]["session_id"] = session_id
+        agent_turn_end["data"]["revision"] = True
+        yield apply_mode_metadata(agent_turn_end, self.flow_mode)
+        if agentic_lane_entry is None:
+            raise AgentRevisionLaneMissing("Agent lane decision missing; cannot continue revision.")
+        lane_from_agent = str(agentic_lane_entry.get("lane") or "").strip().lower()
+        web_candidate = str(agentic_lane_entry.get("web") or "").strip().lower()
+        if lane_from_agent in {"chart", "narrative"}:
+            lane_hint = lane_from_agent
+        if web_candidate in {"refresh", "reuse"}:
+            web_action = web_candidate
+        agent_questions = agentic_lane_entry.get("questions")
+        if isinstance(agent_questions, Mapping):
+            try:
+                questions_bundle = RevisionQuestionBundle.from_dict(agent_questions)
+            except Exception:  # pragma: no cover - defensive
+                logger.debug("Failed to parse agent lane decision questions", exc_info=True)
+                questions_bundle = None
+        if questions_bundle is not None:
+            self._revision_question_bundle = questions_bundle
+        updated_plan: Dict[str, Any] = {"lane": lane_hint, "web": web_action}
+        if questions_bundle:
+            updated_plan["questions"] = questions_bundle.to_dict()
+        self._revision_inputs_plan = updated_plan
+        if not self._revision_inputs_outcome:
+            raise AgentRevisionLaneMissing("Revision lane execution missing from agent runtime.")
+
 
     async def run_analysis_refresh(
         self,
@@ -4488,58 +4993,96 @@ class SingleAgentController:
         lane_hint = normalized_plan.get("lane", "narrative")
         web_action = normalized_plan.get("web", "reuse")
         questions_bundle = self._resolve_revision_questions(normalized_plan)
-        agentic_revision_active = bool(revision_directive and getattr(revision_directive, "agentic", False))
-        agentic_lane_entry: Optional[Mapping[str, Any]] = None
-        previous_lane_ts: Optional[str] = None
-        if self._agent_memory:
-            existing_lane_payload = self._agent_memory.get_lane_decision()
-            if isinstance(existing_lane_payload, Mapping):
-                previous_lane_ts = str(existing_lane_payload.get("ts") or "")
+        agentic_revision_active = bool(
+            (revision_directive and getattr(revision_directive, "agentic", False))
+            or self._agentic_revision_mode
+        )
+        if agentic_revision_active:
+            if self._agent is None:
+                logger.warning(
+                    "Agentic revision requested but agent runtime is disabled; emitting guardrail.",
+                    extra={"session_id": session_id},
+                )
+                disabled_event = {
+                    "event": "revision_agent_disabled",
+                    "data": {
+                        "session_id": session_id,
+                        "lane": str(lane_hint or "narrative"),
+                        "web": web_action,
+                        "revision": True,
+                        "follow_up_route": self.follow_up_route.value,
+                        "reason": (reason or "agent_runtime_disabled"),
+                        "source": source or "agentic_revision",
+                    },
+                }
+                if questions_bundle:
+                    disabled_event["data"]["questions"] = questions_bundle.to_dict()
+                yield apply_mode_metadata(disabled_event, self.flow_mode)
+                return
+            try:
+                async for event in self._run_agentic_revision_flow(
+                    session_id=session_id,
+                    query=query,
+                    revision_directive=revision_directive,
+                    reason=reason,
+                    source=source,
+                    normalized_plan=normalized_plan,
+                    questions_bundle=questions_bundle,
+                    apply_revision_context=_apply_revision_context,
+                    requested_focus=requested_focus,
+                ):
+                    yield event
+            except AgentRevisionLaneMissing as exc:
+                guardrail_event = {
+                    "event": "revision_agent_disabled",
+                    "data": {
+                        "session_id": session_id,
+                        "lane": str(lane_hint or "narrative"),
+                        "web": web_action,
+                        "revision": True,
+                        "follow_up_route": self.follow_up_route.value,
+                        "reason": "agent_revision_missing",
+                        "source": source or "agentic_revision",
+                        "error": str(exc),
+                    },
+                }
+                if questions_bundle:
+                    guardrail_event["data"]["questions"] = questions_bundle.to_dict()
+                yield apply_mode_metadata(guardrail_event, self.flow_mode)
+                return
+            except Exception as exc:
+                logger.exception("Agentic revision flow failed", exc_info=True)
+                failed_event = {
+                    "event": "revision_agent_disabled",
+                    "data": {
+                        "session_id": session_id,
+                        "lane": str(lane_hint or "narrative"),
+                        "web": web_action,
+                        "revision": True,
+                        "follow_up_route": self.follow_up_route.value,
+                        "reason": "agent_runtime_failed",
+                        "source": source or "agentic_revision",
+                        "error": str(exc),
+                    },
+                }
+                if questions_bundle:
+                    failed_event["data"]["questions"] = questions_bundle.to_dict()
+                yield apply_mode_metadata(failed_event, self.flow_mode)
+                return
+            return
 
-        if agentic_revision_active and self._agent is not None:
-            async for event in self._stream_agentic_lane_selection(
-                session_id=session_id,
-                query=query or "",
-                revision_directive=revision_directive,
-                reason=reason,
-                source=source or "agentic_revision",
-                apply_revision_context=_apply_revision_context,
-            ):
-                yield event
-            if self._agent_memory:
-                latest_lane = self._agent_memory.get_lane_decision()
-                if isinstance(latest_lane, Mapping):
-                    latest_ts = str(latest_lane.get("ts") or "")
-                    if not previous_lane_ts or latest_ts != previous_lane_ts:
-                        agentic_lane_entry = dict(latest_lane)
-            if agentic_lane_entry is None:
-                raise RuntimeError("Agent lane decision missing; cannot continue revision.")
-            lane_from_agent = str(agentic_lane_entry.get("lane") or "").strip().lower()
-            if lane_from_agent in {"chart", "narrative"}:
-                lane_hint = lane_from_agent
-            web_candidate = str(agentic_lane_entry.get("web") or "").strip().lower()
-            if web_candidate in {"refresh", "reuse"}:
-                web_action = web_candidate
-            agent_questions = agentic_lane_entry.get("questions")
-            if isinstance(agent_questions, Mapping):
-                try:
-                    questions_bundle = RevisionQuestionBundle.from_dict(agent_questions)
-                except Exception:  # pragma: no cover - defensive
-                    logger.debug("Failed to parse agent lane decision questions", exc_info=True)
-            if questions_bundle is not None:
-                self._revision_question_bundle = questions_bundle
-            updated_plan: Dict[str, Any] = {"lane": lane_hint, "web": web_action}
-            if questions_bundle:
-                updated_plan["questions"] = questions_bundle.to_dict()
-            self._revision_inputs_plan = updated_plan
-        elif agentic_revision_active and self._agent is None:
-            logger.warning(
-                "Agentic revision requested but agent runtime is disabled; falling back to planner inputs.",
-                extra={"session_id": session_id},
-            )
+        selected_lane = lane_hint if lane_hint in {"chart", "narrative"} else "narrative"
 
         ctx = await self._planner.initialize_context(query or "", session_id=session_id)
         _apply_revision_context(ctx)
+        if selected_lane == "narrative" and self._is_analysis_missing(ctx):
+            for event in self._build_missing_analysis_events(
+                session_id=session_id,
+                reason=reason or "missing_analysis",
+                source=source or "missing_analysis_guard",
+            ):
+                yield event
+            return
         if web_action == "refresh":
             setattr(ctx, "force_revision_refresh", True)
         ctx.reused_analysis = False
@@ -4547,7 +5090,6 @@ class SingleAgentController:
         _reset_revision_accessories(ctx, {"web", "market"})
         self._prime_lane_reuse_events(ctx)
 
-        selected_lane = lane_hint if lane_hint in {"chart", "narrative"} else "narrative"
         chart_patch = getattr(revision_directive, "chart_patch", None) if revision_directive else None
         if selected_lane == "chart" and not chart_patch:
             selected_lane = "narrative"
@@ -4555,15 +5097,19 @@ class SingleAgentController:
         if revision_directive is not None:
             revision_directive.selected_lane = selected_lane  # type: ignore[attr-defined]
 
-        if agentic_lane_entry is None:
+        try:
             self._record_lane_decision(
                 lane=selected_lane,
                 planned_lane=lane_hint if isinstance(lane_hint, str) else "narrative",
                 questions=questions_bundle,
                 session_id=session_id,
             )
+        except Exception:
+            logger.debug("Failed to record deterministic lane decision", exc_info=True)
 
-        if web_action == "refresh":
+        pre_refreshed_web = web_action == "refresh"
+        pre_refresh_ready = False
+        if pre_refreshed_web:
             async for event in self.run_web_refresh(
                 session_id=session_id,
                 query=query,
@@ -4572,31 +5118,61 @@ class SingleAgentController:
                 revision_directive=revision_directive,
                 force_revision_refresh=True,
             ):
+                if str(event.get("event") or "") in {"web_ready", "web_revision_ready"}:
+                    pre_refresh_ready = True
                 yield event
 
         async def _stream_lane() -> AsyncGenerator[Dict[str, Any], None]:
-            if selected_lane == "chart" and chart_patch:
-                async for event in self.chart_revision(
+            tool_label = "chart_revision" if selected_lane == "chart" else "analysis_revision"
+            start_event = {
+                "event": "tool_start",
+                "data": {
+                    "tool": tool_label,
+                    "lane": selected_lane,
+                    "session_id": session_id,
+                    "revision": True,
+                    "follow_up_route": self.follow_up_route.value,
+                    "reason": reason or source or "agentic_revision",
+                },
+            }
+            yield apply_mode_metadata(start_event, self.flow_mode)
+            try:
+                if selected_lane == "chart" and chart_patch:
+                    async for event in self.chart_revision(
+                        session_id=session_id,
+                        patch=chart_patch,
+                        reason=reason,
+                        source=source or "fresh_revision",
+                        query=query,
+                    ):
+                        yield event
+                    return
+                async for event in self.analysis_revision(
                     session_id=session_id,
-                    patch=chart_patch,
+                    analysis=requested_focus,
                     reason=reason,
                     source=source or "fresh_revision",
                     query=query,
+                    revision_directive=revision_directive,
+                    refresh_web=False,
+                    selected_lane=selected_lane,
+                    questions=questions_bundle,
+                    pre_refreshed_web=pre_refreshed_web,
+                    forced_web_ready_seen=pre_refresh_ready,
                 ):
                     yield event
-                return
-            async for event in self.analysis_revision(
-                session_id=session_id,
-                analysis=requested_focus,
-                reason=reason,
-                source=source or "fresh_revision",
-                query=query,
-                revision_directive=revision_directive,
-                refresh_web=False,
-                selected_lane=selected_lane,
-                questions=questions_bundle,
-            ):
-                yield event
+            finally:
+                end_event = {
+                    "event": "tool_end",
+                    "data": {
+                        "tool": tool_label,
+                        "lane": selected_lane,
+                        "session_id": session_id,
+                        "revision": True,
+                        "follow_up_route": self.follow_up_route.value,
+                    },
+                }
+                yield apply_mode_metadata(end_event, self.flow_mode)
 
         async for event in self._forward_with_hooks(_stream_lane(), hooks, session_id, ensure_session_event=True):
             yield event
@@ -4617,6 +5193,8 @@ class SingleAgentController:
         refresh_web: Optional[bool] = None,
         selected_lane: Optional[str] = None,
         questions: Optional[RevisionQuestionBundle] = None,
+        pre_refreshed_web: bool = False,
+        forced_web_ready_seen: Optional[bool] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         hooks = _SingleAgentToolHooks(self, session_id=session_id)
         plan_source = self._revision_inputs_plan or {}
@@ -4626,7 +5204,13 @@ class SingleAgentController:
         effective_lane = (selected_lane or lane_from_plan or "narrative").strip().lower()
         if effective_lane not in {"chart", "narrative"}:
             effective_lane = "narrative"
-        should_refresh_web = refresh_web if refresh_web is not None else web_from_plan == "refresh"
+        should_refresh_web = web_from_plan == "refresh"
+        if refresh_web is True:
+            should_refresh_web = True
+        elif refresh_web is False and not pre_refreshed_web:
+            should_refresh_web = False
+        if pre_refreshed_web:
+            should_refresh_web = True
 
         question_bundle = questions or self._revision_question_bundle
         if question_bundle is None:
@@ -4652,6 +5236,18 @@ class SingleAgentController:
                     snapshot.record_revision_questions(question_bundle.to_dict())
                 except Exception:
                     logger.debug("Failed to persist revision question bundle on snapshot", exc_info=True)
+        if effective_lane == "narrative":
+            snapshot = self._session_snapshot
+            analysis_ready = bool(getattr(snapshot, "last_analysis", None)) if snapshot else False
+            chart_ready = bool(getattr(snapshot, "last_chart_spec", None)) if snapshot else False
+            if not (analysis_ready and chart_ready):
+                for event in self._build_missing_analysis_events(
+                    session_id=session_id,
+                    reason=reason or "missing_analysis",
+                    source=source or "missing_analysis_guard",
+                ):
+                    yield event
+                return
             card_payload = {
                 "type": "revision_questions",
                 "state": "ready",
@@ -4684,8 +5280,13 @@ class SingleAgentController:
 
         resolved_source = source or "fresh_revision"
         resolved_reason = reason or resolved_source
-        web_ready_seen = False
-        if should_refresh_web:
+        web_ready_seen = bool(forced_web_ready_seen)
+        if pre_refreshed_web and not web_ready_seen:
+            web_ready_seen = True
+        run_inline_refresh = should_refresh_web and not pre_refreshed_web and refresh_web is not False
+        topic_branch_total = 2 if run_inline_refresh else 0
+        self._reset_web_topic_progress(topic_branch_total)
+        if run_inline_refresh:
             async for event in self.run_web_refresh(
                 session_id=session_id,
                 query=query,
@@ -4698,6 +5299,8 @@ class SingleAgentController:
                 if event_name in {"web_ready", "web_revision_ready"}:
                     web_ready_seen = True
                 yield event
+
+        topic_status_ready = self._topic_progress_ready()
 
         if not self._revision_inputs_outcome:
             try:
@@ -4737,6 +5340,7 @@ class SingleAgentController:
                 "web_refreshed": web_ready_seen,
                 "selected_lane": effective_lane,
                 "questions": question_bundle.to_dict() if question_bundle else None,
+                "topic_status": "ready" if topic_status_ready else "pending",
             }
         )
         if session_id:

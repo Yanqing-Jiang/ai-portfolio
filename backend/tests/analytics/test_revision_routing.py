@@ -200,6 +200,31 @@ async def test_analysis_revision_routed_fast_path(monkeypatch):
     topics_emitted = revision_requests[0].get("data", {}).get("search_topics") or []
     assert len(topics_emitted) >= 2, f"Expected at least two topics, got {topics_emitted}"
 
+    plan_events = [evt for evt in events if evt.get("event") == "revision_inputs_plan"]
+    assert plan_events, "Expected revision_inputs_plan event"
+    plan_payload = plan_events[0].get("data", {}).get("plan") or {}
+    assert plan_payload.get("lane") in {"chart", "narrative"}
+    assert plan_payload.get("web") in {"refresh", "reuse"}
+
+    outcome_events = [evt for evt in events if evt.get("event") == "revision_inputs_outcome"]
+    assert outcome_events, "Expected revision_inputs_outcome event"
+    outcome_payload = outcome_events[-1].get("data", {}).get("outcome") or {}
+    assert outcome_payload.get("lane") in {"chart", "narrative"}
+
+    pending_topics = [evt for evt in events if evt.get("event") == "web_topics_pending"]
+    ready_topics = [evt for evt in events if evt.get("event") == "web_topics_ready"]
+    assert pending_topics, "Expected web_topics_pending to signal Gemini progress"
+    assert ready_topics, "Expected web_topics_ready event"
+    ready_payload = ready_topics[-1].get("data", {})
+    assert ready_payload.get("pending") in {0, None}
+    assert ready_payload.get("topic_status", "ready") == "ready"
+    snapshot = await repo.load(session_id)
+    assert snapshot is not None
+    assert snapshot.web_topics_ready is not None
+    stored_questions = snapshot.web_topics_ready.get("questions", {}) if snapshot.web_topics_ready else {}
+    assert stored_questions.get("user_question")
+    assert stored_questions.get("industry_question")
+
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("flow_name", ["single-agent", "multi-agent"])
@@ -845,6 +870,38 @@ async def test_planner_revision_reuses_manifest_without_analysis(monkeypatch):
     assert stub.requested_focus is not None
     assert stub.snapshot is not None and stub.snapshot.last_analysis is None
     assert stub.revision_targets == {"analysis", "web"}, f"Expected analysis/web targets, got {stub.revision_targets}"
+
+    await repo.delete(session_id)
+    await close_session_state_repository()
+
+
+@pytest.mark.asyncio
+async def test_revision_blocked_when_analysis_missing() -> None:
+    session_id = "missing-analysis-guard"
+    repo = get_session_state_repository()
+    snapshot = SessionStateSnapshot(session_id=session_id)
+    snapshot.record_outputs(
+        chart_spec={
+            "data": {"values": [{"period": "FY24", "value": 100}]},
+            "encoding": {"x": {"field": "period"}, "y": {"field": "value"}},
+        }
+    )
+    _seed_revision_snapshot(snapshot)
+    await repo.save(snapshot)
+
+    events: List[Dict[str, Any]] = []
+    async for event in analytics_memory_workflow(
+        query="analysis: rewrite the summary with new highlights",
+        session_id=session_id,
+        flow="single-agent",
+    ):
+        events.append(event)
+
+    follow_up_events = [evt for evt in events if evt.get("event") == "follow_up_route"]
+    assert follow_up_events, "Expected follow_up_route event for missing baseline analysis"
+    banner = follow_up_events[0].get("data", {}).get("banner") or {}
+    assert banner.get("reason") == "missing_analysis"
+    assert follow_up_events[0].get("data", {}).get("route") == "cannot_revise"
 
     await repo.delete(session_id)
     await close_session_state_repository()

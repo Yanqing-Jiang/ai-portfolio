@@ -172,7 +172,7 @@ describe('useAnalyticsMemoryStream ledger replays', () => {
     const ledgerPath = resolve(
       process.cwd(),
       'docs',
-      'agent-process-ledger - 2025-11-17T013324.509.json',
+      'agent-process-ledger - 2025-11-17T181443.313.json',
     );
     const ledgerEntries = JSON.parse(readFileSync(ledgerPath, 'utf-8'));
     (globalThis as any).__TEST_EVENTS__ = ledgerEntries.map((entry: any) => ({
@@ -233,7 +233,7 @@ function HookHarness({ query, flow }: { query: string; flow: 'planner-executor' 
       <div data-testid="specialist-card-revision-ids">
         {specialistCards.map((card) => card.revisionId ?? '').join('|')}
       </div>
-  </div>
+    </div>
   );
 }
 
@@ -571,14 +571,17 @@ describe('useAnalyticsMemoryStream result deduping', () => {
     expect(stepIds).toContain('analysis_revision:completed');
 
     const resultCount = Number(screen.getByTestId('result-count').textContent);
-    expect(resultCount).toBe(2);
-    expect(screen.getByTestId('first-result-content').textContent || '').toContain('Streaming analysis');
-    expect(screen.getByTestId('latest-result-content').textContent || '').toContain('Revision: Analysis updated');
+    expect(resultCount).toBe(1);
+    const firstContent = screen.getByTestId('first-result-content').textContent || '';
+    const latestContent = screen.getByTestId('latest-result-content').textContent || '';
+    expect(firstContent).toContain('Revision: Analysis updated');
+    expect(firstContent).toBe(latestContent);
+    expect(firstContent).not.toContain('Streaming analysis');
 
     expect(screen.getByTestId('revision-mode').textContent).toBe('analysis');
   });
 
-  it('keeps existing result when analysis revision arrives', async () => {
+  it('replaces the prior fresh result when analysis revision arrives', async () => {
     (globalThis as any).__TEST_EVENTS__ = [
       { event: 'analysis_complete', analysis: 'Original overview' },
       { event: 'analysis_revision', data: { analysis: 'Updated summary', status: 'applied', revision_id: 'rev-keep' } },
@@ -589,9 +592,10 @@ describe('useAnalyticsMemoryStream result deduping', () => {
     });
 
     const resultCount = Number(screen.getByTestId('result-count').textContent);
-    expect(resultCount).toBe(2);
-    expect(screen.getByTestId('first-result-content').textContent || '').toContain('Streaming analysis');
-    expect(screen.getByTestId('latest-result-content').textContent || '').toContain('Revision: Analysis updated');
+    expect(resultCount).toBe(1);
+    const firstContent = screen.getByTestId('first-result-content').textContent || '';
+    expect(firstContent).toContain('Revision: Analysis updated');
+    expect(firstContent).not.toContain('Original overview');
   });
 
   it('dedupes repeated analysis_revision events with same revision id', async () => {
@@ -606,10 +610,12 @@ describe('useAnalyticsMemoryStream result deduping', () => {
     });
 
     const resultCount = Number(screen.getByTestId('result-count').textContent);
-    expect(resultCount).toBe(2);
+    expect(resultCount).toBe(1);
     const latestContent = screen.getByTestId('latest-result-content').textContent || '';
+    const firstContent = screen.getByTestId('first-result-content').textContent || '';
     expect(latestContent).toContain('Revision: Analysis updated');
     expect(latestContent).toContain('Updated summary second');
+    expect(firstContent).toBe(latestContent);
   });
 
   it('replaces duplicate revision payloads instead of appending new messages', async () => {
@@ -713,8 +719,8 @@ describe('useAnalyticsMemoryStream guardrail finalization', () => {
     const content = screen.getByTestId('first-result-content').textContent || '';
     expect(content).toBe(declineCopy);
     expect(setCurrentStatusMock).toHaveBeenCalled();
-      const statusCalls = setCurrentStatusMock.mock.calls.map((call) => call[0]);
-      expect(statusCalls.at(-1)).toBe('');
+    const statusCalls = setCurrentStatusMock.mock.calls.map((call) => call[0]);
+    expect(statusCalls.at(-1)).toBe('');
   });
 
   it('preserves guardrail finalization when workflow completes before done', async () => {
@@ -1213,6 +1219,114 @@ describe('useAnalyticsMemoryStream web research questions', () => {
       expect(result.current.webSearch?.questions?.industry).toContain('peers hiring');
     });
   });
+
+  it('updates topic progress when Gemini topic events stream', async () => {
+    const { result } = renderHook(() => useAnalyticsMemoryStream('single-agent'));
+
+    (globalThis as any).__TEST_EVENTS__ = [
+      {
+        event: 'web_topics_pending',
+        data: {
+          total: 2,
+          branches: [
+            { id: 'user_question', label: 'User Question' },
+            { id: 'industry_question', label: 'Industry Question' },
+          ],
+        },
+      },
+      {
+        event: 'web_topics_ready',
+        data: {
+          total: 2,
+          completed: 2,
+          pending: 0,
+          branches: [
+            { id: 'user_question', label: 'User Question', status: 'ready' },
+            { id: 'industry_question', label: 'Industry Question', status: 'ready' },
+          ],
+          questions: {
+            user_question: 'What did the CFO focus on?',
+            industry_question: 'How are peers reacting?',
+          },
+        },
+      },
+    ];
+
+    await act(async () => {
+      await result.current.handleQuery('topic progress events');
+    });
+
+    await waitFor(() => {
+      expect(result.current.topicProgress.total).toBe(2);
+      expect(result.current.topicProgress.pending).toBe(0);
+      expect(Object.keys(result.current.topicProgress.branches)).toHaveLength(2);
+    });
+  });
+
+  it('buffers analysis updates until topic branches finish', async () => {
+    const { result } = renderHook(() => useAnalyticsMemoryStream('single-agent'));
+
+    (globalThis as any).__TEST_EVENTS__ = [
+      {
+        event: 'web_topics_pending',
+        data: {
+          total: 2,
+          branches: [
+            { id: 'user_question', label: 'User', status: 'queued' },
+            { id: 'industry_question', label: 'Industry', status: 'queued' },
+          ],
+        },
+      },
+      {
+        event: 'analysis_revision_ready',
+        data: {
+          analysis: 'Buffered revision narrative',
+          topic_status: 'pending',
+          questions: {
+            user_question: 'How is demand trending?',
+            industry_question: 'What are peers doing?',
+          },
+        },
+      },
+      {
+        event: 'web_topics_branch',
+        data: {
+          branch: 'user_question',
+          status: 'ready',
+          topic_label: 'User focus',
+          ts: new Date().toISOString(),
+        },
+      },
+      {
+        event: 'web_topics_ready',
+        data: {
+          total: 2,
+          completed: 2,
+          pending: 0,
+          branches: [
+            { id: 'user_question', label: 'User focus', status: 'ready' },
+            { id: 'industry_question', label: 'Industry lens', status: 'ready' },
+          ],
+          questions: {
+            user_question: 'How is demand trending?',
+            industry_question: 'What are peers doing?',
+          },
+        },
+      },
+    ];
+
+    await act(async () => {
+      await result.current.handleQuery('buffered web topics');
+    });
+
+    await waitFor(() => {
+      expect(result.current.analysis).toContain('Buffered revision narrative');
+    });
+    expect(result.current.topicProgress.pending).toBe(0);
+    expect(Object.keys(result.current.topicProgress.branches)).toEqual(
+      expect.arrayContaining(['user_question', 'industry_question']),
+    );
+  });
 });
 
 describe('useAnalyticsMemoryStream session reuse', () => {
@@ -1369,6 +1483,66 @@ describe('useAnalyticsMemoryStream agent tool events', () => {
     expect(latest?.tool).toBe('sql_specialist');
     expect(latest?.specialist).toBe('sql_specialist');
     expect(latest?.status).toBe('complete');
+  });
+
+  it('exposes agent evidence when coordination and turns stream', async () => {
+    (globalThis as any).__TEST_EVENTS__ = [
+      {
+        event: 'agent_coordination',
+        data: { lane: 'analysis', reason: 'Refreshing analysis lane' },
+      },
+      {
+        event: 'agent_turn',
+        data: {
+          agent_turn_id: 'turn-100',
+          role: 'analysis_writer',
+          status: 'start',
+          lane: 'analysis',
+          tool: 'analysis_writer',
+        },
+      },
+      {
+        event: 'agent_turn',
+        data: {
+          agent_turn_id: 'turn-100',
+          role: 'analysis_writer',
+          status: 'complete',
+          lane: 'analysis',
+          tool: 'analysis_writer',
+        },
+      },
+    ];
+
+    const { result } = renderHook(() => useAnalyticsMemoryStream('single-agent'));
+
+    await act(async () => {
+      await result.current.handleQuery('agent evidence telemetry');
+    });
+
+    await waitFor(() => {
+      expect(result.current.agentEvidence?.status).toBe('agent_run');
+      expect(result.current.agentEvidence?.turns?.length).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  it('marks agent evidence as disabled when guardrails emit revision_agent_disabled', async () => {
+    (globalThis as any).__TEST_EVENTS__ = [
+      {
+        event: 'revision_agent_disabled',
+        data: { lane: 'analysis', reason: 'agent_runtime_disabled' },
+      },
+    ];
+
+    const { result } = renderHook(() => useAnalyticsMemoryStream('single-agent'));
+
+    await act(async () => {
+      await result.current.handleQuery('agent disabled evidence');
+    });
+
+    await waitFor(() => {
+      expect(result.current.agentEvidence?.status).toBe('agent_disabled');
+      expect(result.current.agentEvidence?.reason).toContain('agent');
+    });
   });
 
   it('surfaces lane_reused events as reusable notices', async () => {

@@ -152,6 +152,7 @@ from .planner_executor import (
     _reset_revision_accessories,
     _INTENT_LANE_HINTS,
 )
+from .exceptions import AgentRevisionLaneMissing
 from .hooks import AnalyticsFlowHooks
 from .tool_bundle import collect_tool_bundle
 from .pipeline_tools import (
@@ -1647,6 +1648,8 @@ class MultiAgentFlow:
         self.flow_label = "multi-agent"
         self._cohesive_validator = CohesiveResultValidator()
         self._prompt_versions = dict(self._PROMPT_VERSIONS)
+        self._web_topic_branch_states: Dict[str, str] = {}
+        self._web_topic_pending = 0
         registry = get_planner_tool_registry()
         self._planner_tool_manifest = registry.describe_tools()
         self._tool_metadata_by_registry = _build_tool_metadata(self._planner_tool_manifest)
@@ -2632,6 +2635,36 @@ class MultiAgentFlow:
             return None
         return dict(self._revision_inputs_outcome)
 
+    def _record_agent_coordination_event(self, payload: Mapping[str, Any]) -> None:
+        snapshot = self._session_snapshot
+        if snapshot is None:
+            return
+        try:
+            snapshot.record_agent_coordination(payload)
+        except Exception:
+            logger.debug("Failed to persist agent coordination payload for multi-agent flow", exc_info=True)
+
+    def _reset_web_topic_progress(self, total: int = 0) -> None:
+        self._web_topic_branch_states = {}
+        self._web_topic_pending = max(total, 0)
+
+    def _mark_web_topic_branch(self, branch_id: Optional[str], status: Optional[str]) -> None:
+        if not branch_id:
+            return
+        normalized = str(branch_id).strip().lower()
+        if normalized not in {"user_question", "industry_question"}:
+            return
+        previous_status = str(self._web_topic_branch_states.get(normalized) or "").strip().lower()
+        if previous_status in {"ready", "error"}:
+            return
+        resolved_status = "ready" if str(status or "").strip().lower() == "ready" else "error"
+        self._web_topic_branch_states[normalized] = resolved_status
+        if self._web_topic_pending > 0:
+            self._web_topic_pending = max(self._web_topic_pending - 1, 0)
+
+    def _topic_progress_ready(self) -> bool:
+        return self._web_topic_pending <= 0
+
     def _normalize_revision_inputs_plan(
         self,
         plan: Optional[Mapping[str, Any]],
@@ -3504,6 +3537,55 @@ class MultiAgentFlow:
         if refresh_flags:
             ctx.lane_refresh_required = refresh_flags
 
+        emit_topic_progress = bool(
+            force_revision_refresh
+            or revision_directive
+            or getattr(ctx, "revision_search_topics", None)
+        )
+
+        def _build_topic_branch_event(event: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+            if not emit_topic_progress or not isinstance(event, Mapping):
+                return None
+            name = str(event.get("event") or "")
+            if name != "tool_parallel_result":
+                return None
+            data = event.get("data") or {}
+            tool_name = str(data.get("name") or "").lower()
+            if "web_retriever" not in tool_name:
+                return None
+            payload = data.get("payload") or {}
+            if not isinstance(payload, Mapping):
+                return None
+            topic_index = payload.get("topic_index")
+            topic_label = payload.get("topic_label")
+            if topic_index is None and topic_label is None:
+                return None
+            branch_guess = "industry_question" if isinstance(topic_index, int) and topic_index >= 1 else "user_question"
+            if isinstance(topic_label, str) and "industry" in topic_label.lower():
+                branch_guess = "industry_question"
+            status_value = str(data.get("status") or "").strip().lower()
+            normalized_status = "ready" if status_value in {"completed", "complete", "ready"} else "error"
+            branch_payload: Dict[str, Any] = {
+                "branch": branch_guess,
+                "status": normalized_status,
+                "revision": True,
+                "session_id": session_id,
+                "topic_index": topic_index,
+                "topic_label": topic_label,
+            }
+            summary_value = payload.get("summary") or data.get("summary")
+            if isinstance(summary_value, str) and summary_value.strip():
+                branch_payload["summary"] = summary_value.strip()
+            error_value = data.get("error")
+            if isinstance(error_value, str) and error_value.strip():
+                branch_payload["error"] = error_value.strip()
+            questions_payload = payload.get("questions")
+            if isinstance(questions_payload, Mapping):
+                branch_payload["questions"] = dict(questions_payload)
+            branch_event = {"event": "web_topics_branch", "data": branch_payload}
+            self._mark_web_topic_branch(branch_guess, normalized_status)
+            return branch_event
+
         async def _stream() -> AsyncGenerator[Dict[str, Any], None]:
             async for event in self._planner.invoke_tool(
                 "web_refresh",
@@ -3520,6 +3602,11 @@ class MultiAgentFlow:
             session_id,
             ensure_session_event=True,
         ):
+            if emit_topic_progress:
+                branch_event = _build_topic_branch_event(event)
+                if branch_event:
+                    annotated_branch = self._annotate(branch_event)
+                    yield annotated_branch
             yield self._annotate(event)
 
         web_search_result = getattr(ctx, "web_search", None)
@@ -3638,34 +3725,59 @@ class MultiAgentFlow:
             or self._agentic_revision_mode
         )
         if agentic_revision_active:
-            async for event in self._stream_agentic_revision(
-                session_id=session_id,
-                query=query,
-                lane=selected_lane,
-                web_action=web_action,
-                reason=reason or "agentic_revision",
-                source=source or "agentic_revision",
-                questions=questions_bundle,
-            ):
-                yield event
-            resolved_source = source or "fresh_revision"
-            resolved_reason = reason or resolved_source
-            ready_event = self._build_analysis_revision_ready_event(
-                session_id=session_id,
-                selected_lane=selected_lane,
-                questions=questions_bundle,
-                resolved_source=resolved_source,
-                resolved_reason=resolved_reason,
-                web_ready_seen=web_action == "refresh",
-                explicit_reason=bool(reason),
-            )
-            self._revision_inputs_outcome = {
-                "lane": selected_lane,
-                "web": "refresh" if web_action == "refresh" else "reuse",
-            }
-            yield ready_event
+            try:
+                async for event in self._stream_agentic_revision(
+                    session_id=session_id,
+                    query=query,
+                    lane=selected_lane,
+                    web_action=web_action,
+                    reason=reason or "agentic_revision",
+                    source=source or "agentic_revision",
+                    questions=questions_bundle,
+                ):
+                    yield event
+            except AgentRevisionLaneMissing as exc:
+                guardrail_event = {
+                    "event": "revision_agent_disabled",
+                    "data": {
+                        "session_id": session_id,
+                        "lane": selected_lane,
+                        "web": web_action,
+                        "revision": True,
+                        "follow_up_route": self.follow_up_route.value,
+                        "reason": "agent_revision_missing",
+                        "source": source or "agentic_revision",
+                        "error": str(exc),
+                    },
+                }
+                if questions_bundle:
+                    guardrail_event["data"]["questions"] = questions_bundle.to_dict()
+                annotated_guardrail = self._annotate(guardrail_event)
+                annotated_guardrail = self._maybe_tag_session_metadata(annotated_guardrail, session_id)
+                yield annotated_guardrail
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.exception("Agentic multi-agent revision failed", exc_info=True)
+                failed_event = {
+                    "event": "revision_agent_disabled",
+                    "data": {
+                        "session_id": session_id,
+                        "lane": selected_lane,
+                        "web": web_action,
+                        "revision": True,
+                        "follow_up_route": self.follow_up_route.value,
+                        "reason": "agent_runtime_failed",
+                        "source": source or "agentic_revision",
+                        "error": str(exc),
+                    },
+                }
+                if questions_bundle:
+                    failed_event["data"]["questions"] = questions_bundle.to_dict()
+                annotated_failed = self._annotate(failed_event)
+                annotated_failed = self._maybe_tag_session_metadata(annotated_failed, session_id)
+                yield annotated_failed
             return
 
+        self._reset_web_topic_progress(2 if web_action == "refresh" else 0)
         if web_action == "refresh":
             async for event in self.run_web_refresh(
                 query,
@@ -3810,32 +3922,56 @@ class MultiAgentFlow:
                 logger.debug("Failed to record multi-agent lane decision", exc_info=True)
 
         if agentic_revision_active:
-            async for event in self._stream_agentic_revision(
-                session_id=session_id,
-                query=query,
-                lane=effective_lane,
-                web_action="refresh" if should_refresh_web else "reuse",
-                reason=reason or "agentic_revision",
-                source=source or "agentic_revision",
-                questions=question_bundle,
-            ):
-                yield event
-            resolved_source = source or "fresh_revision"
-            resolved_reason = reason or resolved_source
-            ready_event = self._build_analysis_revision_ready_event(
-                session_id=session_id,
-                selected_lane=effective_lane,
-                questions=question_bundle,
-                resolved_source=resolved_source,
-                resolved_reason=resolved_reason,
-                web_ready_seen=should_refresh_web,
-                explicit_reason=bool(reason),
-            )
-            self._revision_inputs_outcome = {
-                "lane": effective_lane,
-                "web": "refresh" if should_refresh_web else "reuse",
-            }
-            yield ready_event
+            try:
+                async for event in self._stream_agentic_revision(
+                    session_id=session_id,
+                    query=query,
+                    lane=effective_lane,
+                    web_action="refresh" if should_refresh_web else "reuse",
+                    reason=reason or "agentic_revision",
+                    source=source or "agentic_revision",
+                    questions=question_bundle,
+                ):
+                    yield event
+            except AgentRevisionLaneMissing as exc:
+                guardrail_event = {
+                    "event": "revision_agent_disabled",
+                    "data": {
+                        "session_id": session_id,
+                        "lane": effective_lane,
+                        "web": "refresh" if should_refresh_web else "reuse",
+                        "revision": True,
+                        "follow_up_route": self.follow_up_route.value,
+                        "reason": "agent_revision_missing",
+                        "source": source or "agentic_revision",
+                        "error": str(exc),
+                    },
+                }
+                if question_bundle:
+                    guardrail_event["data"]["questions"] = question_bundle.to_dict()
+                annotated_guardrail = self._annotate(guardrail_event)
+                annotated_guardrail = self._maybe_tag_session_metadata(annotated_guardrail, session_id)
+                yield annotated_guardrail
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.exception("Agentic multi-agent analysis revision failed", exc_info=True)
+                failed_event = {
+                    "event": "revision_agent_disabled",
+                    "data": {
+                        "session_id": session_id,
+                        "lane": effective_lane,
+                        "web": "refresh" if should_refresh_web else "reuse",
+                        "revision": True,
+                        "follow_up_route": self.follow_up_route.value,
+                        "reason": "agent_runtime_failed",
+                        "source": source or "agentic_revision",
+                        "error": str(exc),
+                    },
+                }
+                if question_bundle:
+                    failed_event["data"]["questions"] = question_bundle.to_dict()
+                annotated_failed = self._annotate(failed_event)
+                annotated_failed = self._maybe_tag_session_metadata(annotated_failed, session_id)
+                yield annotated_failed
             return
 
         resolved_source = source or "fresh_revision"
@@ -3888,6 +4024,7 @@ class MultiAgentFlow:
         ):
             yield event
 
+        topic_status_ready = self._topic_progress_ready() or not should_refresh_web
         ready_event = self._build_analysis_revision_ready_event(
             session_id=session_id,
             selected_lane=effective_lane,
@@ -3896,6 +4033,7 @@ class MultiAgentFlow:
             resolved_reason=resolved_reason,
             web_ready_seen=web_ready_seen,
             explicit_reason=bool(reason),
+            topic_status_ready=topic_status_ready,
         )
         self._revision_inputs_outcome = {
             "lane": effective_lane,
@@ -3956,6 +4094,7 @@ class MultiAgentFlow:
         }
         if questions:
             coordination_payload["questions"] = questions.to_dict()
+        self._record_agent_coordination_event(coordination_payload)
         coordination_event = self._annotate({"event": "agent_coordination", "data": coordination_payload})
         coordination_event = self._maybe_tag_session_metadata(coordination_event, session_id)
         yield coordination_event
@@ -3971,8 +4110,41 @@ class MultiAgentFlow:
             lane_requirements["web"] = True
         self._shared_context["lane_refresh_required"] = lane_requirements
 
+        lane_turn_seen = False
+        web_ready_seen = False
         async for event in self._run_agent_orchestration(query, session_id):
-            yield self._maybe_tag_session_metadata(event, session_id)
+            annotated = self._maybe_tag_session_metadata(event, session_id)
+            event_name = str(annotated.get("event") or "")
+            if event_name in {"web_ready", "web_revision_ready"}:
+                web_ready_seen = True
+            if event_name == "agent_turn_end":
+                data = annotated.get("data") or {}
+                lane_label = str(data.get("lane") or "").strip().lower()
+                if lane_label in {"analysis", "chart"}:
+                    lane_turn_seen = True
+            yield annotated
+
+        if not lane_turn_seen:
+            raise AgentRevisionLaneMissing("Supervisor revision lane missing")
+
+        self._revision_inputs_outcome = {
+            "lane": normalized_lane,
+            "web": normalized_web,
+        }
+        resolved_source = source or "fresh_revision"
+        resolved_reason = reason or resolved_source
+        topic_status_ready = self._topic_progress_ready() or normalized_web != "refresh"
+        ready_event = self._build_analysis_revision_ready_event(
+            session_id=session_id,
+            selected_lane=normalized_lane,
+            questions=questions,
+            resolved_source=resolved_source,
+            resolved_reason=resolved_reason,
+            web_ready_seen=web_ready_seen or normalized_web == "refresh",
+            explicit_reason=bool(reason),
+            topic_status_ready=topic_status_ready,
+        )
+        yield ready_event
 
     def _build_analysis_revision_ready_event(
         self,
@@ -3984,6 +4156,7 @@ class MultiAgentFlow:
         resolved_reason: str,
         web_ready_seen: bool,
         explicit_reason: bool = False,
+        topic_status_ready: bool = True,
     ) -> Dict[str, Any]:
         ready_event = EventEmitter.status(
             "analysis_revision_ready",
@@ -4001,6 +4174,7 @@ class MultiAgentFlow:
                 "web_refreshed": web_ready_seen,
                 "selected_lane": selected_lane,
                 "questions": questions.to_dict() if questions else None,
+                "topic_status": "ready" if topic_status_ready else "pending",
             }
         )
         if session_id:

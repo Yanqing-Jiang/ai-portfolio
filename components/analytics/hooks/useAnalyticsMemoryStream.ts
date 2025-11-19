@@ -12,6 +12,9 @@ import {
   StockWidgetConfig,
   WebSearchResult,
   WebSearchTopic,
+  WebSearchTopicProgress,
+  WebTopicBranchProgress,
+  WebTopicBranchStatus,
   AnalysisOverview,
   AnalysisEvidenceLink,
   AnalysisSources,
@@ -27,6 +30,7 @@ import {
   SlotStatusPayload,
   LaneReuseNotice,
   FreshLaneStatus,
+  AgentEvidence,
 } from '../types';
 import { apiService } from '../../../services/apiService';
 import { useAnalyticsStream } from './useAnalyticsStream';
@@ -147,7 +151,7 @@ const FLOW_MODE_ALIASES: Record<string, FlowMode> = {
 };
 
 /*
-Function: coerceFlowMode � called from useAnalyticsMemoryStream's telemetry parser to normalize
+Function: coerceFlowMode  called from useAnalyticsMemoryStream's telemetry parser to normalize
 backend `mode`/`flow_mode` values before the ProcessPanel consumes them. It maps scheduler
 aliases (planner_executor, supervisor, etc.), invokes FLOW_MODE_ALIASES for lookups, and keeps
 the UI visualization aligned with whichever agent runtime actually executed the run.
@@ -294,7 +298,7 @@ const extractAnalysisFocus = (raw: string): string | undefined => {
     if (!result) {
       return undefined;
     }
-    result = result.replace(/^[\s:,\-–—]+/, '').trim();
+    result = result.replace(/^[\s:,\-ââ]+/, '').trim();
     result = result.replace(/\s*(?:please|pls)\.?$/i, '').trim();
     result = result.replace(/\s*(?:thanks?|thank you)\.?$/i, '').trim();
     result = result.replace(/^to\s+/, '').trim();
@@ -310,7 +314,7 @@ const extractAnalysisFocus = (raw: string): string | undefined => {
     return result || undefined;
   };
 
-  const direct = normalized.match(/analysis\s*[:\-–—]\s*(.+)$/i);
+  const direct = normalized.match(/analysis\s*[:\-ââ]\s*(.+)$/i);
   const directFocus = cleanFocus(direct?.[1]);
   if (directFocus) {
     return directFocus;
@@ -528,6 +532,19 @@ export const useAnalyticsMemoryStream = (
   const [revisionMode, setRevisionMode] = useState<'none' | 'chart' | 'analysis' | 'market' | 'mixed'>('none');
   const [streamingText, setStreamingText] = useState('');
   const [webSearch, setWebSearch] = useState<WebSearchResult | null>(null);
+  const [topicProgress, setTopicProgress] = useState<WebSearchTopicProgress>({ total: 0, completed: 0, pending: 0, branches: {} });
+  const [agentEvidence, setAgentEvidence] = useState<AgentEvidence | null>(null);
+  const agentEvidenceRef = useRef<AgentEvidence | null>(null);
+  const applyAgentEvidenceUpdate = useCallback(
+    (updater: (prev: AgentEvidence | null) => AgentEvidence | null) => {
+      setAgentEvidence((prev) => {
+        const next = updater(prev);
+        agentEvidenceRef.current = next;
+        return next;
+      });
+    },
+    [],
+  );
   const [stockWidget, setStockWidget] = useState<StockWidgetConfig | null>(null);
   const [singleAgentFanout, setSingleAgentFanout] = useState<SingleAgentFanout | null>(null);
   const [analysisOverview, setAnalysisOverview] = useState<AnalysisOverview | null>(null);
@@ -535,6 +552,9 @@ export const useAnalyticsMemoryStream = (
   const [analysisBundle, setAnalysisBundle] = useState<Record<string, any> | null>(null);
   const [followUpBanner, setFollowUpBanner] = useState<FollowUpBanner | null>(null);
   const [latencyGuardrail, setLatencyGuardrail] = useState<LatencyGuardrail | null>(null);
+  useEffect(() => {
+    agentEvidenceRef.current = agentEvidence;
+  }, [agentEvidence]);
   const [specialistCards, setSpecialistCards] = useState<SpecialistCard[]>([]);
   const [slotStatuses, setSlotStatuses] = useState<SlotStatusMap>({});
   const [slotFollowups, setSlotFollowups] = useState<ClarifyRequest[]>([]);
@@ -562,6 +582,9 @@ export const useAnalyticsMemoryStream = (
   const telemetryFlowModeRef = useRef<FlowMode>(flow);
   const finalizationMessageRef = useRef<string | null>(null);
   const thoughtHistoryRef = useRef<Record<string, Set<string>>>({});
+  const pendingAnalysisBufferRef = useRef<string>('');
+
+
 
   const markThoughtIfNew = (stepId?: string, thoughtId?: string | null) => {
     if (!stepId || !thoughtId) {
@@ -702,7 +725,7 @@ export const useAnalyticsMemoryStream = (
       prev.map((message) => (message.id === messageId ? { ...message, ...payload } : message)),
     );
   }, [setChatHistory, flow]);
-  
+
   // Progressive rendering: update state immediately instead of accumulating in refs
   const [progressiveAnalysis, setProgressiveAnalysis] = useState('');
   const [progressiveText, setProgressiveText] = useState('');
@@ -747,8 +770,55 @@ export const useAnalyticsMemoryStream = (
     return undefined;
   };
 
+  const normalizeTopicBranchPayload = (
+    rawBranches: any,
+    fallbackStatus: WebTopicBranchStatus,
+  ): Record<string, WebTopicBranchProgress> => {
+    if (!rawBranches) {
+      return {};
+    }
+    const entries = Array.isArray(rawBranches)
+      ? rawBranches
+      : typeof rawBranches === 'object'
+        ? Object.values(rawBranches)
+        : [];
+    const normalized: Record<string, WebTopicBranchProgress> = {};
+    entries.forEach((entry: any, index: number) => {
+      if (!entry || typeof entry !== 'object') {
+        return;
+      }
+      const identifier =
+        coerceString(entry.id) ||
+        coerceString(entry.question_kind) ||
+        coerceString(entry.questionKind) ||
+        `topic_${index}`;
+      if (!identifier) {
+        return;
+      }
+      normalized[identifier] = {
+        id: identifier,
+        questionKind: coerceString(entry.question_kind ?? entry.questionKind) ?? undefined,
+        label: coerceString(entry.label ?? entry.title) ?? undefined,
+        status: (entry.status as WebTopicBranchStatus) ?? fallbackStatus,
+        latencyMs:
+          typeof entry.latency_ms === 'number'
+            ? entry.latency_ms
+            : typeof entry.latencyMs === 'number'
+              ? entry.latencyMs
+              : undefined,
+        startedAt: coerceString(entry.started_at ?? entry.startedAt) ?? undefined,
+        completedAt: coerceString(entry.completed_at ?? entry.completedAt) ?? undefined,
+        error: coerceString(entry.error) ?? undefined,
+      };
+    });
+    return normalized;
+  };
+
   const normalizeSlotStatuses = (payload: any): SlotStatusMap => {
     if (!payload || typeof payload !== 'object') {
+
+
+
       return {};
     }
     const result: SlotStatusMap = {};
@@ -782,6 +852,15 @@ export const useAnalyticsMemoryStream = (
         suggestions: owns.call(update, 'suggestions') ? update.suggestions : existing.suggestions,
         allow_custom: owns.call(update, 'allow_custom') ? update.allow_custom : existing.allow_custom,
       };
+
+      useEffect(() => {
+        if (topicProgress.total > 0 && topicProgress.pending === 0 && pendingAnalysisBufferRef.current) {
+          // Flush buffer
+          setAnalysis(pendingAnalysisBufferRef.current);
+          pendingAnalysisBufferRef.current = '';
+        }
+      }, [topicProgress.total, topicProgress.pending]);
+
       return { ...prev, [slot]: next };
     });
   };
@@ -950,6 +1029,15 @@ export const useAnalyticsMemoryStream = (
       return null;
     }
 
+
+    useEffect(() => {
+      if (topicProgress.total > 0 && topicProgress.pending === 0 && pendingAnalysisBufferRef.current) {
+        // Flush buffer
+        setAnalysis(pendingAnalysisBufferRef.current);
+        pendingAnalysisBufferRef.current = '';
+      }
+    }, [topicProgress.total, topicProgress.pending]);
+
     return {
       tldr: tldrValue || undefined,
       highlights: hasHighlights ? highlightsValue?.slice(0, 3) : undefined,
@@ -976,10 +1064,10 @@ export const useAnalyticsMemoryStream = (
         (lane === 'sql'
           ? 'SQL data'
           : lane === 'web'
-          ? 'Online research'
-          : lane === 'stock'
-          ? 'Stock data'
-          : undefined);
+            ? 'Online research'
+            : lane === 'stock'
+              ? 'Stock data'
+              : undefined);
       const summary = coerceString((rawValue as any).summary);
       const reused = resolveReusedFlag(
         (rawValue as any).reused,
@@ -1029,6 +1117,15 @@ export const useAnalyticsMemoryStream = (
   ): AnalysisSourceInsight => {
     const pickArray = (next?: string[], prev?: string[]) =>
       Array.isArray(next) && next.length ? next : prev;
+
+
+    useEffect(() => {
+      if (topicProgress.total > 0 && topicProgress.pending === 0 && pendingAnalysisBufferRef.current) {
+        // Flush buffer
+        setAnalysis(pendingAnalysisBufferRef.current);
+        pendingAnalysisBufferRef.current = '';
+      }
+    }, [topicProgress.total, topicProgress.pending]);
 
     return {
       id: incoming.id ?? existing?.id ?? fallbackKey,
@@ -1081,6 +1178,15 @@ export const useAnalyticsMemoryStream = (
     if (!keywordFocus && !userQuestion && !industryQuestion) {
       return undefined;
     }
+
+    useEffect(() => {
+      if (topicProgress.total > 0 && topicProgress.pending === 0 && pendingAnalysisBufferRef.current) {
+        // Flush buffer
+        setAnalysis(pendingAnalysisBufferRef.current);
+        pendingAnalysisBufferRef.current = '';
+      }
+    }, [topicProgress.total, topicProgress.pending]);
+
     return {
       keywordFocus: keywordFocus ?? null,
       user: userQuestion ?? null,
@@ -1133,29 +1239,29 @@ export const useAnalyticsMemoryStream = (
       : (typeof raw.latencyMs === 'number' ? raw.latencyMs : null);
     const topics = Array.isArray(raw.topics)
       ? raw.topics
-          .map((topic: any, index: number) => ({
-            label: coerceString(topic?.label) ?? coerceString(topic?.topic_label) ?? `Topic ${index + 1}`,
-            topic_label: coerceString(topic?.topic_label) ?? coerceString(topic?.label),
-            topicLabel: coerceString(topic?.topic_label) ?? coerceString(topic?.label),
-            query: coerceString(topic?.query) ?? coerceString(topic?.base_query) ?? query ?? '',
-            reason: coerceString(topic?.reason),
-            summary: coerceString(topic?.summary),
-            search_id: coerceString(topic?.search_id) ?? coerceString(topic?.searchId),
-            latency_ms: typeof topic?.latency_ms === 'number'
-              ? topic.latency_ms
-              : (typeof topic?.latencyMs === 'number' ? topic.latencyMs : null),
-            snippets: Array.isArray(topic?.snippets) ? topic.snippets.map(normalizeSnippet) : [],
-            topic_index: coerceNumber(topic?.topic_index ?? topic?.topicIndex),
-            topicIndex: coerceNumber(topic?.topic_index ?? topic?.topicIndex),
-            topic_position: coerceNumber(topic?.topic_position ?? topic?.topicPosition),
-            topicPosition: coerceNumber(topic?.topic_position ?? topic?.topicPosition),
-          }))
-          .filter((topic: any) => topic.query)
+        .map((topic: any, index: number) => ({
+          label: coerceString(topic?.label) ?? coerceString(topic?.topic_label) ?? `Topic ${index + 1}`,
+          topic_label: coerceString(topic?.topic_label) ?? coerceString(topic?.label),
+          topicLabel: coerceString(topic?.topic_label) ?? coerceString(topic?.label),
+          query: coerceString(topic?.query) ?? coerceString(topic?.base_query) ?? query ?? '',
+          reason: coerceString(topic?.reason),
+          summary: coerceString(topic?.summary),
+          search_id: coerceString(topic?.search_id) ?? coerceString(topic?.searchId),
+          latency_ms: typeof topic?.latency_ms === 'number'
+            ? topic.latency_ms
+            : (typeof topic?.latencyMs === 'number' ? topic.latencyMs : null),
+          snippets: Array.isArray(topic?.snippets) ? topic.snippets.map((item: any) => normalizeSnippet(item)) : [],
+          topic_index: coerceNumber(topic?.topic_index ?? topic?.topicIndex),
+          topicIndex: coerceNumber(topic?.topic_index ?? topic?.topicIndex),
+          topic_position: coerceNumber(topic?.topic_position ?? topic?.topicPosition),
+          topicPosition: coerceNumber(topic?.topic_position ?? topic?.topicPosition),
+        }))
+        .filter((topic: any) => topic.query)
       : [];
     if (searchTopics && searchTopics.length && !searchTopicValue) {
       searchTopicValue = searchTopics[0];
     }
-    if ((topicLabel || topicIndex != null) && !topics.some((topic) => {
+    if ((topicLabel || topicIndex != null) && !topics.some((topic: any) => {
       const currentIndex = typeof topic.topic_index === 'number' ? topic.topic_index : (typeof topic.topicIndex === 'number' ? topic.topicIndex : undefined);
       if (currentIndex != null && topicIndex != null) {
         return currentIndex === topicIndex;
@@ -1174,7 +1280,7 @@ export const useAnalyticsMemoryStream = (
         summary,
         search_id: coerceString(raw.search_id) ?? coerceString(raw.searchId),
         latency_ms: latencyValue,
-        snippets: snippets.map((item) => ({ ...item })),
+        snippets: snippets.map((item: any) => ({ ...item })),
         topic_index: topicIndex ?? null,
         topicIndex: topicIndex ?? null,
         topic_position: topicPosition ?? null,
@@ -1187,7 +1293,7 @@ export const useAnalyticsMemoryStream = (
       if (topicLabel) {
         source.add(topicLabel);
       }
-      topics.forEach((topic) => {
+      topics.forEach((topic: any) => {
         if (topic.label) {
           source.add(topic.label);
         }
@@ -1209,8 +1315,8 @@ export const useAnalyticsMemoryStream = (
       const samples = typeof rawLatencyStats.samples === 'number'
         ? rawLatencyStats.samples
         : (typeof rawLatencyStats.latency_samples === 'number'
-            ? rawLatencyStats.latency_samples
-            : (typeof rawLatencyStats.sample_count === 'number' ? rawLatencyStats.sample_count : undefined));
+          ? rawLatencyStats.latency_samples
+          : (typeof rawLatencyStats.sample_count === 'number' ? rawLatencyStats.sample_count : undefined));
       latencyStats = {
         total_ms: totalMs,
         p50_ms: p50Ms,
@@ -1220,6 +1326,9 @@ export const useAnalyticsMemoryStream = (
       };
     }
     const questions = normalizeQuestionBundle(raw.questions);
+
+
+
     return {
       query,
       queryTerms,
@@ -1241,6 +1350,7 @@ export const useAnalyticsMemoryStream = (
       provider: coerceString(raw.provider) ?? (raw.model ? 'Gemini' : undefined),
       model: coerceString(raw.model) ?? coerceString(raw.model_name) ?? coerceString(raw.modelName),
       latencyStats,
+      questions,
       searchTopics: mergedSearchTopics ?? searchTopics,
       topicTotal:
         typeof raw.topic_total === 'number'
@@ -1248,7 +1358,6 @@ export const useAnalyticsMemoryStream = (
           : typeof raw.topicTotal === 'number'
             ? raw.topicTotal
             : undefined,
-      questions,
     };
   };
 
@@ -1465,6 +1574,9 @@ export const useAnalyticsMemoryStream = (
       return b ?? a;
     };
 
+
+
+
     return {
       ...current,
       query: incoming.query ?? current.query,
@@ -1527,13 +1639,13 @@ export const useAnalyticsMemoryStream = (
 
     const snippets = Array.isArray(raw.snippets)
       ? raw.snippets
-          .map(normalizeSnippet)
-          .filter((entry: any) => entry.title || entry.snippet || entry.url)
+        .map(normalizeSnippet)
+        .filter((entry: any) => entry.title || entry.snippet || entry.url)
       : undefined;
     const symbols = Array.isArray(raw.symbols)
       ? raw.symbols
-          .map(normalizeSymbol)
-          .filter((symbol): symbol is string => Boolean(symbol))
+        .map(normalizeSymbol)
+        .filter((symbol: any): symbol is string => Boolean(symbol))
       : undefined;
 
     const card: SpecialistCard = {
@@ -1871,7 +1983,7 @@ export const useAnalyticsMemoryStream = (
   const agentLaneStateRef = useRef<Record<string, ProcessStep['status']>>({});
 
   // Workflow data ref for result accumulation
-const workflowDataRef = useRef<{
+  const workflowDataRef = useRef<{
     chartSpec: any;
     analysis: string;
     progressiveAnalysis: string;
@@ -1885,40 +1997,42 @@ const workflowDataRef = useRef<{
     toolFanoutResults: ToolFanoutResult[];
     concurrencyLimit: number;
     webSearch: WebSearchResult | null;
-  flowMode: FlowMode;
-  analysisOverview: AnalysisOverview | null;
-  analysisSources: AnalysisSources | null;
-  analysisBundle: Record<string, any> | null;
-  followUpBanner: FollowUpBanner | null;
-  specialistCards: SpecialistCard[];
-  latencyGuardrail: LatencyGuardrail | null;
-  snapshotReuse: SnapshotReuseInfo | null;
-  requestedGranularity: ChartGranularity | null;
-  revisionFocus: string | null;
-}>({
-  chartSpec: null,
-  analysis: '',
-  progressiveAnalysis: '',
-  progressiveText: '',
-  sqlQuery: '',
-  dataSample: null,
+    flowMode: FlowMode;
+    analysisOverview: AnalysisOverview | null;
+    analysisSources: AnalysisSources | null;
+    analysisBundle: Record<string, any> | null;
+    followUpBanner: FollowUpBanner | null;
+    specialistCards: SpecialistCard[];
+    latencyGuardrail: LatencyGuardrail | null;
+    snapshotReuse: SnapshotReuseInfo | null;
+    requestedGranularity: ChartGranularity | null;
+    revisionFocus: string | null;
+    revisionQuestions?: { keywordFocus?: string | null; user?: string | null; industry?: string | null };
+    webQuestions?: { keywordFocus?: string | null; user?: string | null; industry?: string | null };
+  }>({
+    chartSpec: null,
+    analysis: '',
+    progressiveAnalysis: '',
+    progressiveText: '',
+    sqlQuery: '',
+    dataSample: null,
     streamingText: '',
     criteria: null,
     stockWidget: null,
     toolFanoutManifest: [],
     toolFanoutResults: [],
     concurrencyLimit: 0,
-  webSearch: null,
-  flowMode: flow,
-  analysisOverview: null,
-  analysisSources: null,
-  analysisBundle: null,
-  followUpBanner: null,
-  specialistCards: [],
+    webSearch: null,
+    flowMode: flow,
+    analysisOverview: null,
+    analysisSources: null,
+    analysisBundle: null,
+    followUpBanner: null,
+    specialistCards: [],
     latencyGuardrail: null,
     snapshotReuse: null,
-  requestedGranularity: null,
-  revisionFocus: null,
+    requestedGranularity: null,
+    revisionFocus: null,
   });
 
   const commitRequestedGranularity = useCallback(
@@ -1971,6 +2085,9 @@ const workflowDataRef = useRef<{
       } else {
         nextMeta.timeframe = { granularity };
       }
+
+
+
       return {
         ...spec,
         meta: nextMeta,
@@ -2135,6 +2252,14 @@ const workflowDataRef = useRef<{
   useEffect(() => {
     workflowDataRef.current.flowMode = telemetryFlowMode;
   }, [telemetryFlowMode]);
+
+  useEffect(() => {
+    if (topicProgress.total > 0 && topicProgress.pending === 0 && pendingAnalysisBufferRef.current) {
+      // Flush buffer
+      setAnalysis(pendingAnalysisBufferRef.current);
+      pendingAnalysisBufferRef.current = '';
+    }
+  }, [topicProgress.total, topicProgress.pending]);
 
   // Progressive update function with debouncing
   const scheduleProgressiveUpdate = (updates: Partial<typeof pendingUpdatesRef.current>) => {
@@ -2427,6 +2552,27 @@ const workflowDataRef = useRef<{
       agentTurnsRef.current = [...agentTurnsRef.current, entry].slice(-15);
     }
 
+    applyAgentEvidenceUpdate((prev) => {
+      if (prev && prev.status !== 'agent_run') {
+        return prev;
+      }
+      const priorTurns = prev?.turns ?? [];
+      if (entry.id) {
+        const existingIndex = priorTurns.findIndex((turn) => turn.id === entry.id);
+        if (existingIndex >= 0) {
+          const merged = { ...priorTurns[existingIndex], ...entry };
+          const nextTurns = [
+            ...priorTurns.slice(0, existingIndex),
+            merged,
+            ...priorTurns.slice(existingIndex + 1),
+          ];
+          return { status: 'agent_run', turns: nextTurns };
+        }
+      }
+      const nextTurns = [...priorTurns, entry].slice(-15);
+      return { status: 'agent_run', turns: nextTurns };
+    });
+
     const status: ProcessStep['status'] = payload.status === 'complete'
       ? 'completed'
       : payload.status === 'error'
@@ -2441,8 +2587,8 @@ const workflowDataRef = useRef<{
     const summaryText = typeof rawSummary === 'string'
       ? rawSummary
       : rawSummary
-      ? JSON.stringify(rawSummary)
-      : undefined;
+        ? JSON.stringify(rawSummary)
+        : undefined;
     const metadataParts: string[] = [];
     if (latencyBudget !== undefined) {
       metadataParts.push(`budget ${latencyBudget}ms`);
@@ -2619,19 +2765,31 @@ const workflowDataRef = useRef<{
         : snapshot.revisionFocus ?? null;
 
     setChatHistory((prev) => {
+      const lastResultIndex = (() => {
+        for (let idx = prev.length - 1; idx >= 0; idx -= 1) {
+          if (prev[idx].type === 'result') {
+            return idx;
+          }
+        }
+        return -1;
+      })();
+
       const filtered = options.replacePriorResult
-        ? prev.filter((message) => {
-            if (message.type !== 'result') {
-              return true;
-            }
-            if (options.revisionId) {
-              return message.revisionId !== options.revisionId;
-            }
-            if (message.revision) {
-              return false;
-            }
+        ? prev.filter((message, index) => {
+          if (message.type !== 'result') {
             return true;
-          })
+          }
+          if (options.revisionId && message.revisionId === options.revisionId) {
+            return false;
+          }
+          if (!options.revisionId && message.revision) {
+            return false;
+          }
+          if (index === lastResultIndex) {
+            return false;
+          }
+          return true;
+        })
         : prev;
       let base = filtered;
       let mutated = false;
@@ -2651,6 +2809,9 @@ const workflowDataRef = useRef<{
             return message;
           }
           mutated = true;
+
+
+
           return {
             ...message,
             chartSpec: null,
@@ -2731,7 +2892,7 @@ const workflowDataRef = useRef<{
   const handleQuery = async (query: string) => {
     const trimmed = query.trim();
     if (!trimmed) return;
-    
+
     // Stop any existing stream before starting a new one
     if (streamHook.isLoading) {
       streamHook.stopStream();
@@ -2751,14 +2912,14 @@ const workflowDataRef = useRef<{
       });
       return;
     }
-    
+
     // Add user query to chat history
     addChatMessage({
       type: 'user',
       content: trimmed,
     });
 
-    
+
     const hadResult = resultSentRef.current;
     const isFollowUp = Boolean(hadResult && activeSessionId);
     if (hadResult && !activeSessionId) {
@@ -2869,8 +3030,8 @@ const workflowDataRef = useRef<{
             : undefined;
       const normalizedRevisionLanes = Array.isArray(revisionLanesRaw)
         ? (revisionLanesRaw as unknown[])
-            .map((lane) => (typeof lane === 'string' ? lane.toLowerCase() : ''))
-            .filter((lane): lane is string => lane.length > 0)
+          .map((lane) => (typeof lane === 'string' ? lane.toLowerCase() : ''))
+          .filter((lane): lane is string => lane.length > 0)
         : [];
       if (revisionId || normalizedRevisionLanes.length) {
         revisionContextRef.current = {
@@ -2930,6 +3091,15 @@ const workflowDataRef = useRef<{
             ) {
               return prev;
             }
+
+            useEffect(() => {
+              if (topicProgress.total > 0 && topicProgress.pending === 0 && pendingAnalysisBufferRef.current) {
+                // Flush buffer
+                setAnalysis(pendingAnalysisBufferRef.current);
+                pendingAnalysisBufferRef.current = '';
+              }
+            }, [topicProgress.total, topicProgress.pending]);
+
             return {
               ...prev,
               [laneKey]: nextState,
@@ -2937,24 +3107,24 @@ const workflowDataRef = useRef<{
           });
         }
       }
-            const sequence: number | undefined =
+      const sequence: number | undefined =
         typeof data.seq === 'number'
           ? data.seq
           : typeof eventData.sequence === 'number'
-          ? eventData.sequence
-          : undefined;
+            ? eventData.sequence
+            : undefined;
       const parallelGroup: string | undefined =
         typeof data.parallel_group === 'string'
           ? data.parallel_group
           : typeof eventData.parallel_group === 'string'
-          ? eventData.parallel_group
-          : undefined;
+            ? eventData.parallel_group
+            : undefined;
       const scheduleStage: string | undefined =
         typeof data.schedule_stage === 'string'
           ? data.schedule_stage
           : typeof eventData.schedule_stage === 'string'
-          ? eventData.schedule_stage
-          : undefined;
+            ? eventData.schedule_stage
+            : undefined;
       const flowModeValue: FlowMode | undefined =
         coerceFlowMode(data.mode) ??
         coerceFlowMode((data as any)?.flow_mode) ??
@@ -2969,8 +3139,8 @@ const workflowDataRef = useRef<{
         typeof data.tool_group === 'string'
           ? data.tool_group
           : typeof eventData.tool_group === 'string'
-          ? eventData.tool_group
-          : undefined;
+            ? eventData.tool_group
+            : undefined;
       const laneFromEvent = resolveLane(eventData, eventData?.metadata, eventData?.details, data);
       const reusedFlag = resolveReusedFlag(eventData, eventData?.metadata, eventData?.details, data);
 
@@ -2984,7 +3154,6 @@ const workflowDataRef = useRef<{
         'sql_compilation',
         'sql_validation',
         'sql_executor',
-        'sql_execution',
         'sql_lane',
       ]);
 
@@ -3011,14 +3180,12 @@ const workflowDataRef = useRef<{
           stepId,
           status,
           thinking,
-          details,
-          elapsed,
-          ts,
-          sequence,
-          parallelGroup,
-          scheduleStage,
-          resolvedFlowMode,
           {
+            ...details,
+            sequence,
+            parallelGroup,
+            scheduleStage,
+            flowMode: resolvedFlowMode,
             lane: overrides?.lane ?? laneFromEvent,
             reused: overrides?.reused ?? reusedFlag,
             finalAnswerOnly: overrides?.finalAnswerOnly,
@@ -3026,6 +3193,8 @@ const workflowDataRef = useRef<{
             followUpRoute: overrides?.followUpRoute,
             analysisAvailable: overrides?.analysisAvailable,
           },
+          elapsed,
+          ts,
         );
       };
 
@@ -3043,7 +3212,7 @@ const workflowDataRef = useRef<{
           upsertSpecialistCard(mergedCard);
         }
       }
-      
+
       switch (eventType) {
         case 'session_started':
           {
@@ -3056,14 +3225,14 @@ const workflowDataRef = useRef<{
             ? effectiveRevisionLanes
             : Array.isArray(eventData.lanes)
               ? (eventData.lanes as unknown[])
-                  .map((lane) => (typeof lane === 'string' ? lane.toLowerCase() : ''))
-                  .filter((lane): lane is string => lane.length > 0)
-          : [];
-        revisionContextRef.current = {
-          id: effectiveRevisionId ?? revisionContextRef.current.id,
-          lanes: normalizedLanes,
-          focus: revisionContextRef.current.focus,
-        };
+                .map((lane) => (typeof lane === 'string' ? lane.toLowerCase() : ''))
+                .filter((lane): lane is string => lane.length > 0)
+              : [];
+          revisionContextRef.current = {
+            id: effectiveRevisionId ?? revisionContextRef.current.id,
+            lanes: normalizedLanes,
+            focus: revisionContextRef.current.focus,
+          };
           if (normalizedLanes.length === 1) {
             const lane = normalizedLanes[0] === 'web' ? 'analysis' : normalizedLanes[0] === 'stock' ? 'market' : normalizedLanes[0];
             if (lane === 'chart' || lane === 'analysis' || lane === 'market') {
@@ -3085,7 +3254,7 @@ const workflowDataRef = useRef<{
           }
           break;
         }
-          
+
 
         case 'status':
         case 'progress':
@@ -3101,8 +3270,8 @@ const workflowDataRef = useRef<{
             const finalAnswerOnly = coerceBoolean(bannerPayload?.final_answer_only);
             const missingComponents = Array.isArray(bannerPayload?.missing_components)
               ? (bannerPayload.missing_components as unknown[])
-                  .map((component) => coerceString(component))
-                  .filter(Boolean) as string[]
+                .map((component) => coerceString(component))
+                .filter(Boolean) as string[]
               : undefined;
             const analysisAvailable = coerceBoolean(bannerPayload?.analysis_available);
             const summaryCopy = coerceString(bannerPayload?.summary);
@@ -3120,9 +3289,9 @@ const workflowDataRef = useRef<{
             const normalizedQuestions =
               normalizeQuestionBundle(
                 bannerPayload?.questions ??
-                  bannerPayload?.revision_questions ??
-                  eventData.revision_questions ??
-                  data.revision_questions,
+                bannerPayload?.revision_questions ??
+                eventData.revision_questions ??
+                data.revision_questions,
               ) ?? undefined;
             if (normalizedQuestions) {
               banner.questions = normalizedQuestions;
@@ -3184,10 +3353,10 @@ const workflowDataRef = useRef<{
             }
             const detailPayload = eventData.code || eventData.attempt
               ? {
-                  code: eventData.code,
-                  attempt: eventData.attempt,
-                  message: statusMessage,
-                }
+                code: eventData.code,
+                attempt: eventData.attempt,
+                message: statusMessage,
+              }
               : undefined;
             updateStep(
               normalizedStep,
@@ -3207,11 +3376,11 @@ const workflowDataRef = useRef<{
             stepsHook.updateStepStatus(stepInfo.step, 'completed', thinkingLogs, eventData, stepInfo.elapsed_ms, stepInfo.ts);
           }
           break;
-          
+
         case 'intent_draft':
           updateStep('intent_detection', 'in_progress', ['Intent detected; needs clarification'], eventData, eventData.elapsed_ms);
           break;
-          
+
         case 'intent_decided':
         case 'intent_resolved':
           // Handle both old heavy format and new lightweight format
@@ -3225,12 +3394,12 @@ const workflowDataRef = useRef<{
           const bannerPayload = eventData.banner || data.banner || {};
           const pendingComponents = Array.isArray(eventData.pending_components)
             ? (eventData.pending_components as unknown[])
-                .map((component) => coerceString(component))
-                .filter((component): component is string => Boolean(component))
+              .map((component) => coerceString(component))
+              .filter((component): component is string => Boolean(component))
             : Array.isArray(bannerPayload?.pending_components)
               ? (bannerPayload.pending_components as unknown[])
-                  .map((component) => coerceString(component))
-                  .filter((component): component is string => Boolean(component))
+                .map((component) => coerceString(component))
+                .filter((component): component is string => Boolean(component))
               : undefined;
           const route = 'baseline_still_streaming';
           const banner: FollowUpBanner = {
@@ -3270,6 +3439,7 @@ const workflowDataRef = useRef<{
           const agenticFlag =
             coerceBoolean(eventData.agentic_revision ?? data.agentic_revision) ?? false;
           setAgenticRevisionActive(agenticFlag);
+          applyAgentEvidenceUpdate(() => null);
           const reasonKey =
             coerceString((eventData.banner as any)?.reason ?? eventData.reason) ?? undefined;
           const bannerKey =
@@ -3283,9 +3453,10 @@ const workflowDataRef = useRef<{
           };
           const normalizedLanes = Array.isArray(eventData.lanes)
             ? (eventData.lanes as unknown[])
-                .map((lane) => (typeof lane === 'string' ? lane.toLowerCase() : ''))
-                .filter((lane): lane is string => lane.length > 0)
-            : undefined;
+              .map((lane) => (typeof lane === 'string' ? lane.toLowerCase() : ''))
+              .filter((lane): lane is string => lane.length > 0)
+            : undefined;
+
           const questionBundle =
             normalizeQuestionBundle(
               eventData.revision_questions ?? eventData.questions ?? (eventData.banner as any)?.questions,
@@ -3358,10 +3529,8 @@ const workflowDataRef = useRef<{
             case 'mixed_revision': {
               setRevisionMode('mixed');
               revisionModeRef.current = 'mixed';
-              if (route !== 'analysis_only' && route !== 'narrative_only') {
-                workflowDataRef.current.revisionFocus =
-                  normalizedLanes?.includes('analysis') ? pendingFocus ?? revisionContextRef.current.focus ?? null : null;
-              }
+              workflowDataRef.current.revisionFocus =
+                normalizedLanes?.includes('analysis') ? pendingFocus ?? revisionContextRef.current.focus ?? null : null;
               pendingRevisionFocusRef.current = undefined;
               break;
             }
@@ -3405,7 +3574,7 @@ const workflowDataRef = useRef<{
           streamHook.setCurrentStatus(hasExplicitResultContentRef.current ? '' : copy.message);
           break;
         }
-          
+
         case 'clarification_request': {
           const request = eventData as ClarifyRequest;
           console.log('?? [DEBUG] Received clarification_request:', request);
@@ -3431,7 +3600,7 @@ const workflowDataRef = useRef<{
           addChatMessage(clarificationMessage);
           break;
         }
-          
+
         case 'clarification_ack': {
           setPendingClarification(null);
           setSlotFollowups((prev) => prev.filter((item) => item.request_id !== eventData.request_id));
@@ -3464,8 +3633,8 @@ const workflowDataRef = useRef<{
             Boolean(ackEcho) &&
             Boolean(
               pendingEcho &&
-                pendingEcho.slot === ackSlot &&
-                pendingEcho.content === ackEcho
+              pendingEcho.slot === ackSlot &&
+              pendingEcho.content === ackEcho
             );
           if (!isDuplicate) {
             if (ackEcho) {
@@ -3496,7 +3665,7 @@ const workflowDataRef = useRef<{
           streamHook.setCurrentStatus('Processing your clarification answer');
           break;
         }
-          
+
         case 'plan_built': {
           // Combined planning step for streamlined agent flow
           // Handle both old (eventData.plan) and new (simplified) formats
@@ -3532,7 +3701,7 @@ const workflowDataRef = useRef<{
             templateId ? `Selected template: ${templateId}` : 'Template selected'
           ], { template: templateData }, stepInfo.elapsed_ms);
           break;
-          
+
         case 'sql_compiled':
           {
             const attempt = eventData.attempt ?? 1;
@@ -3569,7 +3738,7 @@ const workflowDataRef = useRef<{
               sequence,
               parallelGroup,
               scheduleStage,
-          resolvedFlowMode,
+              resolvedFlowMode,
               { lane: 'sql' }
             );
             if (eventData.fallback_reason) {
@@ -3623,7 +3792,7 @@ const workflowDataRef = useRef<{
             }
           }
           break;
-          
+
         case 'execution_stats':
           // Handle both old (eventData.columns) and new (eventData.columns_count) formats
           const executionData = {
@@ -3646,11 +3815,11 @@ const workflowDataRef = useRef<{
             sequence,
             parallelGroup,
             scheduleStage,
-          resolvedFlowMode,
+            resolvedFlowMode,
             { lane: 'sql' }
           );
           break;
-          
+
         case 'data_retrieved':
           // Handle both old and new formats
           if (Array.isArray(eventData.sample_data)) {
@@ -3663,9 +3832,9 @@ const workflowDataRef = useRef<{
           try {
             const rc = typeof eventData.row_count === 'number' ? eventData.row_count : (eventData.sample_data?.length ?? 0);
             updateAgentCoordination([`Rows retrieved: ${rc}`]);
-          } catch {}
+          } catch { }
           break;
-          
+
         case 'sql_ready': {
           const sqlPreview = eventData.sql ? [`SQL ready (${eventData.sql.length} chars)`] : ['SQL ready'];
           scheduleProgressiveUpdate({
@@ -3688,7 +3857,7 @@ const workflowDataRef = useRef<{
             sequence,
             parallelGroup,
             scheduleStage,
-          resolvedFlowMode,
+            resolvedFlowMode,
             { lane: 'sql', reused: Boolean(eventData.reused) }
           );
           emitResultOnce();
@@ -3698,7 +3867,7 @@ const workflowDataRef = useRef<{
           refreshResultMessage();
           break;
         }
-          
+
         case 'chart_ready': {
           const normalizedChartSpec =
             resolveChartSpecOption(eventData.chart_spec) ??
@@ -3750,7 +3919,7 @@ const workflowDataRef = useRef<{
             sequence,
             parallelGroup,
             scheduleStage,
-          resolvedFlowMode,
+            resolvedFlowMode,
             { lane: eventData.lane ?? 'market', reused: Boolean(eventData.reused) }
           );
           updateStep('tool_execution', 'completed', ['Stock widget ready'], eventData, stepInfo.elapsed_ms, stepInfo.ts);
@@ -3782,7 +3951,7 @@ const workflowDataRef = useRef<{
             sequence,
             parallelGroup,
             scheduleStage,
-          resolvedFlowMode,
+            resolvedFlowMode,
             { lane: eventData.lane ?? 'web', reused: Boolean(eventData.reused) }
           );
           updateStep('web_research_agent', 'completed', ['Web context ready'], eventData, stepInfo.elapsed_ms, stepInfo.ts);
@@ -3791,6 +3960,11 @@ const workflowDataRef = useRef<{
             markRevisionMode('analysis');
           }
           refreshResultMessage();
+          const fromCache = coerceBoolean(eventData.from_cache ?? data.from_cache);
+          if (fromCache && agenticRevisionActive && !agentEvidenceRef.current) {
+            const fallbackReason = coerceString(eventData.reason) ?? 'cached_revision';
+            applyAgentEvidenceUpdate(() => ({ status: 'agent_fallback', reason: fallbackReason }));
+          }
           break;
         }
 
@@ -3803,9 +3977,9 @@ const workflowDataRef = useRef<{
           }
           const readySources = parseAnalysisSources(
             (eventData.analysis_sources && typeof eventData.analysis_sources === 'object' && eventData.analysis_sources) ??
-              (typeof eventData.analysis === 'object' && eventData.analysis !== null
-                ? (eventData.analysis as any).analysis_sources ?? (eventData.analysis as any).sources
-                : undefined)
+            (typeof eventData.analysis === 'object' && eventData.analysis !== null
+              ? (eventData.analysis as any).analysis_sources ?? (eventData.analysis as any).sources
+              : undefined)
           );
           if (readySources) {
             applyAnalysisSourcesUpdate(readySources);
@@ -3855,6 +4029,27 @@ const workflowDataRef = useRef<{
           setFollowUpBanner(disabledBanner);
           workflowDataRef.current.followUpBanner = disabledBanner;
           refreshResultMessage();
+          applyAgentEvidenceUpdate(() => ({ status: 'agent_disabled', reason: reasonText }));
+          break;
+        }
+
+        case 'agent_coordination': {
+          const laneLabel = formatLaneName(coerceString(eventData.lane) || 'analysis');
+          const reasonText = coerceString(eventData.reason);
+          const summaryMessages = reasonText
+            ? [`${laneLabel}: ${reasonText}`]
+            : [`${laneLabel}: coordinating revisions`];
+          updateAgentCoordination(summaryMessages, undefined, {
+            ts: stepInfo.ts,
+            elapsed_ms: stepInfo.elapsed_ms,
+            sequence,
+          });
+          const coordinationQuestions =
+            normalizeQuestionBundle(eventData.questions ?? data.questions) ?? undefined;
+          if (coordinationQuestions) {
+            workflowDataRef.current.revisionQuestions = coordinationQuestions;
+          }
+          applyAgentEvidenceUpdate(() => ({ status: 'agent_run', turns: [] }));
           break;
         }
 
@@ -3900,9 +4095,9 @@ const workflowDataRef = useRef<{
           );
           try {
             const seriesCount = Array.isArray(normalizedChartSpec?.series) ? normalizedChartSpec.series.length : undefined;
-            const msg = `Chart complete${chartType ? ` (type: ${chartType})` : ''}${seriesCount!=null ? `, series: ${seriesCount}` : ''}`;
+            const msg = `Chart complete${chartType ? ` (type: ${chartType})` : ''}${seriesCount != null ? `, series: ${seriesCount}` : ''}`;
             updateAgentCoordination([msg]);
-          } catch {}
+          } catch { }
           // Live specialist bubble (Chart)
           if (isLiveSpecialistsEnabled() && normalizedChartSpec && !isThinkingEvent) {
             const seriesCount = Array.isArray(normalizedChartSpec.series) ? normalizedChartSpec.series.length : undefined;
@@ -3975,9 +4170,9 @@ const workflowDataRef = useRef<{
           );
           try {
             const seriesCount = Array.isArray(normalizedChartSpec?.series) ? normalizedChartSpec.series.length : undefined;
-            const msg = `Chart generated${chartType ? ` (type: ${chartType})` : ''}${seriesCount!=null ? `, series: ${seriesCount}` : ''}`;
+            const msg = `Chart generated${chartType ? ` (type: ${chartType})` : ''}${seriesCount != null ? `, series: ${seriesCount}` : ''}`;
             updateAgentCoordination([msg]);
-          } catch {}
+          } catch { }
           break;
         }
 
@@ -4018,9 +4213,8 @@ const workflowDataRef = useRef<{
                     case 'set_stack':
                       return `Stacking -> ${op.stack ? op.mode || 'normal' : 'off'}`;
                     case 'toggle_series':
-                      return `Toggle series (${op.visible ? 'show' : 'hide'}): ${
-                        Array.isArray(op.names) ? op.names.join(', ') : ''
-                      }`;
+                      return `Toggle series (${op.visible ? 'show' : 'hide'}): ${Array.isArray(op.names) ? op.names.join(', ') : ''
+                        }`;
                     case 'set_y_axis_format':
                       return `Y format -> ${op.valueType}`;
                     case 'set_x_axis':
@@ -4129,7 +4323,7 @@ const workflowDataRef = useRef<{
               workflowDataRef.current.progressiveText = '';
               workflowDataRef.current.streamingText = '';
               setSqlQuery('');
-              workflowDataRef.current.sqlQuery = null;
+              workflowDataRef.current.sqlQuery = '';
               setDataSample(null);
               workflowDataRef.current.dataSample = null;
               setStockWidget(null);
@@ -4168,7 +4362,7 @@ const workflowDataRef = useRef<{
           }
           break;
         }
-          
+
         case 'analysis_revision': {
           const normalizedStatus =
             typeof eventData?.status === 'string' ? eventData.status.toLowerCase() : '';
@@ -4183,8 +4377,18 @@ const workflowDataRef = useRef<{
                 : '';
 
             if (revisionApplied && updatedAnalysis) {
+            const readyTopicStatus = coerceString(eventData.topic_status) ?? (topicProgress.pending === 0 ? 'ready' : 'pending');
+            const shouldBufferAnalysis = readyTopicStatus !== 'ready' || (topicProgress.total > 0 && topicProgress.pending > 0);
+            if (shouldBufferAnalysis) {
+              pendingAnalysisBufferRef.current = updatedAnalysis;
+            } else {
               setAnalysis(updatedAnalysis);
               workflowDataRef.current.analysis = updatedAnalysis;
+              pendingAnalysisBufferRef.current = '';
+            }
+            if (shouldBufferAnalysis) {
+              workflowDataRef.current.analysis = updatedAnalysis;
+            }
             }
             if (revisionApplied) {
               analysisReadyEmittedRef.current = false;
@@ -4193,11 +4397,10 @@ const workflowDataRef = useRef<{
 
             const summaryLine =
               updatedAnalysis && revisionApplied
-                ? `Analysis -> ${
-                    updatedAnalysis.length > 140
-                      ? `${updatedAnalysis.slice(0, 140).trimEnd()}...`
-                      : updatedAnalysis
-                  }`
+                ? `Analysis -> ${updatedAnalysis.length > 140
+                  ? `${updatedAnalysis.slice(0, 140).trimEnd()}...`
+                  : updatedAnalysis
+                }`
                 : revisionApplied
                   ? 'Applied analysis revision'
                   : undefined;
@@ -4270,7 +4473,104 @@ const workflowDataRef = useRef<{
           }
           break;
         }
-          
+
+        case 'web_topics_pending': {
+          const totalFromPayload =
+            typeof eventData.total === 'number'
+              ? eventData.total
+              : Array.isArray(eventData.branches)
+                ? eventData.branches.length
+                : topicProgress.total || 0;
+          const completedFromPayload =
+            typeof eventData.completed === 'number' ? eventData.completed : 0;
+          const pendingFromPayload =
+            typeof eventData.pending === 'number'
+              ? eventData.pending
+              : Math.max(totalFromPayload - completedFromPayload, 0);
+          const branches = normalizeTopicBranchPayload(eventData.branches, 'queued');
+          setTopicProgress({
+            total: totalFromPayload,
+            completed: completedFromPayload,
+            pending: pendingFromPayload,
+            branches,
+            pendingSince: eventData.ts ?? new Date().toISOString(),
+            lastUpdated: eventData.ts ?? new Date().toISOString(),
+            guardrailStatus: 'pending',
+          });
+          break;
+        }
+        case 'web_topics_branch': {
+          const derivedStatus = coerceString(eventData.status)?.toLowerCase() === 'error' ? 'error' : 'ready';
+          const normalizedBranch = normalizeTopicBranchPayload(
+            [
+              {
+                id: eventData.branch ?? eventData.id,
+                question_kind: eventData.question_kind,
+                label: eventData.topic_label ?? eventData.label,
+                status: derivedStatus,
+                summary: eventData.summary,
+              },
+            ],
+            derivedStatus as WebTopicBranchStatus,
+          );
+          const branchId = Object.keys(normalizedBranch)[0];
+          if (!branchId) {
+            break;
+          }
+          setTopicProgress((prev) => {
+            const previousStatus = prev.branches[branchId]?.status;
+            const nextBranches = { ...prev.branches, ...normalizedBranch };
+            const totalTopics = prev.total || Math.max(Object.keys(nextBranches).length, 2);
+            const alreadyCompleted = previousStatus && ['ready', 'error'].includes(previousStatus) ? 0 : 1;
+            const completedCount = Math.min((prev.completed || 0) + alreadyCompleted, totalTopics);
+            const pendingCount = Math.max(totalTopics - completedCount, 0);
+            return {
+              ...prev,
+              total: totalTopics,
+              completed: completedCount,
+              pending: pendingCount,
+              branches: nextBranches,
+              lastUpdated: eventData.ts ?? new Date().toISOString(),
+            };
+          });
+          break;
+        }
+
+        case 'web_topics_ready': {
+          const readyBranches = normalizeTopicBranchPayload(eventData.branches, 'ready');
+          setTopicProgress((prev) => {
+            const derivedTotal = Object.keys(readyBranches).length || prev.total || 0;
+            const totalFromPayload =
+              typeof eventData.total === 'number' ? eventData.total : derivedTotal;
+            const completedFromPayload =
+              typeof eventData.completed === 'number' ? eventData.completed : totalFromPayload;
+            const pendingFromPayload =
+              typeof eventData.pending === 'number'
+                ? eventData.pending
+                : Math.max(totalFromPayload - completedFromPayload, 0);
+            return {
+              total: totalFromPayload,
+              completed: completedFromPayload,
+              pending: pendingFromPayload,
+              branches: Object.keys(readyBranches).length ? readyBranches : prev.branches,
+              pendingSince: prev.pendingSince,
+              lastUpdated: eventData.ts ?? new Date().toISOString(),
+              guardrailStatus: 'ready',
+            };
+          });
+          const readyQuestions =
+            normalizeQuestionBundle(eventData.questions ?? data.questions) ?? undefined;
+          if (readyQuestions) {
+            workflowDataRef.current.revisionQuestions = readyQuestions;
+            emitRevisionQuestionCard(
+              readyQuestions,
+              coerceString(eventData.selected_lane),
+              effectiveRevisionId ?? revisionContextRef.current.id ?? null,
+            );
+          }
+          break;
+        }
+
         case 'web_search': {
           const stepId = 'web_research_agent';
           if (eventData.web_context) {
@@ -4292,8 +4592,8 @@ const workflowDataRef = useRef<{
               const snippetsCount = Array.isArray(webContext.snippets)
                 ? webContext.snippets.length
                 : (Array.isArray(webContext.topics)
-                    ? webContext.topics.reduce((acc: number, topic: any) => acc + (Array.isArray(topic?.snippets) ? topic.snippets.length : 0), 0)
-                    : 0);
+                  ? webContext.topics.reduce((acc: number, topic: any) => acc + (Array.isArray(topic?.snippets) ? topic.snippets.length : 0), 0)
+                  : 0);
               thinking.push(`Snippets: ${snippetsCount}`);
               const previewSnippet = (() => {
                 if (Array.isArray(webContext.topics)) {
@@ -4375,12 +4675,12 @@ const workflowDataRef = useRef<{
               typeof eventData?.partial_analysis === 'string'
                 ? eventData.partial_analysis
                 : typeof eventData?.delta === 'string'
-                ? eventData.delta
-                : typeof eventData?.text === 'string'
-                ? eventData.text
-                : typeof data?.partial_analysis === 'string' // New format: direct access
-                ? data.partial_analysis
-                : '';
+                  ? eventData.delta
+                  : typeof eventData?.text === 'string'
+                    ? eventData.text
+                    : typeof data?.partial_analysis === 'string' // New format: direct access
+                      ? data.partial_analysis
+                      : '';
             if (chunk) {
               if (!resultSentRef.current) {
                 emitResultOnce();
@@ -4470,8 +4770,8 @@ const workflowDataRef = useRef<{
             }
             const cohesiveSources = parseAnalysisSources(
               (bundle.analysis_sources && typeof bundle.analysis_sources === 'object' && bundle.analysis_sources) ||
-                (bundle.analysis_overview && typeof bundle.analysis_overview === 'object' ? (bundle.analysis_overview as any).sources : undefined) ||
-                (bundle.analysis && typeof bundle.analysis === 'object' ? (bundle.analysis as any).analysis_sources ?? (bundle.analysis as any).sources : undefined)
+              (bundle.analysis_overview && typeof bundle.analysis_overview === 'object' ? (bundle.analysis_overview as any).sources : undefined) ||
+              (bundle.analysis && typeof bundle.analysis === 'object' ? (bundle.analysis as any).analysis_sources ?? (bundle.analysis as any).sources : undefined)
             );
             if (cohesiveSources) {
               applyAnalysisSourcesUpdate(cohesiveSources);
@@ -4513,11 +4813,10 @@ const workflowDataRef = useRef<{
                 analysis_sources: workflowDataRef.current.analysisSources,
                 banner: workflowDataRef.current.followUpBanner,
                 latency_guardrail: workflowDataRef.current.latencyGuardrail,
+                parallelGroup,
               },
               stepInfo.elapsed_ms,
               stepInfo.ts,
-              sequence,
-              parallelGroup,
             );
 
             // Emit the result bubble exactly once; guard handles subsequent workflow_complete
@@ -4816,9 +5115,10 @@ const workflowDataRef = useRef<{
             updateStep('tool_fanout', 'in_progress', [fanoutThought], {
               tool_manifest: manifest,
               concurrency_limit: concurrencyLimit,
-            }, stepInfo.elapsed_ms, stepInfo.ts, sequence, parallelGroup);
+              parallelGroup,
+            }, stepInfo.elapsed_ms, stepInfo.ts);
 
-            const normalizedTools = manifest.map((entry) => String(entry.name || entry.tool || '').toLowerCase());
+            const normalizedTools = manifest.map((entry) => String(entry.name || (entry as any).tool || '').toLowerCase());
             if (normalizedTools.some((tool) => tool.includes('stock') || tool.startsWith('market_question'))) {
               stepsHook.updateStepStatus(
                 'market_lane',
@@ -4830,7 +5130,7 @@ const workflowDataRef = useRef<{
                 sequence,
                 parallelGroup,
                 scheduleStage,
-          resolvedFlowMode,
+                resolvedFlowMode,
                 { lane: 'market' }
               );
             }
@@ -4845,7 +5145,7 @@ const workflowDataRef = useRef<{
                 sequence,
                 parallelGroup,
                 scheduleStage,
-          resolvedFlowMode,
+                resolvedFlowMode,
                 { lane: 'web' }
               );
             }
@@ -4880,14 +5180,16 @@ const workflowDataRef = useRef<{
                 'market_lane',
                 laneStatus,
                 thinkingLogs,
-                { result: resultSummary },
+                {
+                  result: resultSummary,
+                  parallelGroup,
+                  scheduleStage,
+                  flowMode: resolvedFlowMode,
+                  laneInfo: { lane: 'market', reused: Boolean(eventData.reused) },
+                },
                 eventData.elapsed_ms,
                 eventData.completed_at,
                 sequence,
-                parallelGroup,
-                scheduleStage,
-          resolvedFlowMode,
-                { lane: 'market', reused: Boolean(eventData.reused) }
               );
             }
             if (toolNameLower.includes('web_retriever') || toolNameLower.includes('web-search')) {
@@ -4901,14 +5203,16 @@ const workflowDataRef = useRef<{
                 'web_lane',
                 laneStatus,
                 thinkingLogs,
-                { result: resultSummary },
+                {
+                  result: resultSummary,
+                  parallelGroup,
+                  scheduleStage,
+                  flowMode: resolvedFlowMode,
+                  laneInfo: { lane: 'web', reused: Boolean(eventData.reused) },
+                },
                 eventData.elapsed_ms,
                 eventData.completed_at,
                 sequence,
-                parallelGroup,
-                scheduleStage,
-          resolvedFlowMode,
-                { lane: 'web', reused: Boolean(eventData.reused) }
               );
 
               if (toolNameLower.startsWith('web_retriever_')) {
@@ -4976,8 +5280,8 @@ const workflowDataRef = useRef<{
                 const count = Array.isArray(contextForThinking.snippets)
                   ? contextForThinking.snippets.length
                   : (Array.isArray(contextForThinking.topics)
-                      ? contextForThinking.topics.reduce((acc: number, topic: any) => acc + (Array.isArray(topic?.snippets) ? topic.snippets.length : 0), 0)
-                      : 0);
+                    ? contextForThinking.topics.reduce((acc: number, topic: any) => acc + (Array.isArray(topic?.snippets) ? topic.snippets.length : 0), 0)
+                    : 0);
                 thinking.push(`Snippets: ${count}`);
                 if (typeof contextForThinking.latencyMs === 'number') thinking.push(`Latency: ${contextForThinking.latencyMs}ms`);
                 if (contextForThinking.model) thinking.push(`Model: ${contextForThinking.model}`);
@@ -4994,11 +5298,10 @@ const workflowDataRef = useRef<{
                 tool_manifest: manifest,
                 tool_fanout_results: toolFanoutRef.current.results,
                 concurrency_limit: toolFanoutRef.current.concurrencyLimit,
+                parallelGroup,
               },
               eventData.elapsed_ms ?? stepInfo.elapsed_ms,
               stepInfo.ts,
-              sequence,
-              parallelGroup,
             );
             refreshFanoutState();
           }
@@ -5017,11 +5320,10 @@ const workflowDataRef = useRef<{
                 tool_manifest: toolFanoutRef.current.manifest,
                 tool_fanout_results: toolFanoutRef.current.results,
                 concurrency_limit: toolFanoutRef.current.concurrencyLimit,
+                parallelGroup,
               },
               stepInfo.elapsed_ms,
               stepInfo.ts,
-              sequence,
-              parallelGroup,
             );
             refreshFanoutState();
           }
@@ -5042,7 +5344,7 @@ const workflowDataRef = useRef<{
           const safeThreshold = Number.isFinite(rawThreshold) ? rawThreshold : 0;
           const decisionStep = eventData.policy === 'planner_sql_retry' ? 'sql_compilation' : 'agent_coordination';
           const message = `Policy ${eventData.action === 'skip_retry' ? 'blocked' : 'allowed'} (score ${safeScore.toFixed(2)} / threshold ${safeThreshold.toFixed(2)})`;
-          updateAgentCoordination([message], eventData.action === 'skip_retry' ? 'stopped' : undefined, {
+          updateAgentCoordination([message], eventData.action === 'skip_retry' ? 'completed' : undefined, {
             ts: eventData.ts ?? stepInfo.ts,
             elapsed_ms: stepInfo.elapsed_ms,
             sequence,
@@ -5050,7 +5352,7 @@ const workflowDataRef = useRef<{
           const policyMessages = eventData.reason ? [message, String(eventData.reason)] : [message];
           stepsHook.updateStepStatus(
             decisionStep,
-            eventData.action === 'skip_retry' ? 'stopped' : 'in_progress',
+            eventData.action === 'skip_retry' ? 'error' : 'in_progress',
             policyMessages,
             {
               policy: eventData.policy,
@@ -5058,11 +5360,11 @@ const workflowDataRef = useRef<{
               score: rawScore,
               threshold: rawThreshold,
               attempt: eventData.attempt,
+              parallelGroup,
             },
             stepInfo.elapsed_ms,
             eventData.ts ?? stepInfo.ts,
             sequence,
-            parallelGroup,
           );
           break;
         }
@@ -5079,7 +5381,7 @@ const workflowDataRef = useRef<{
         case 'thinking_log':
           stepsHook.updateStepStatus('tool_execution', 'in_progress', [eventData.message]);
           break;
-          
+
         // ===== NEW ENHANCED EVENTS =====
         case 'classification_started':
           stepsHook.updateStepStatus('classification', 'in_progress', ['Starting query classification...'], { model: eventData.model }, undefined, eventData.ts);
@@ -5202,12 +5504,12 @@ const workflowDataRef = useRef<{
           stepsHook.updateStepStatus('tool_execution', 'in_progress', [`Executing: ${eventData.tool}`]);
           streamHook.setCurrentStatus(`Executing tool: ${eventData.tool}`);
           break;
-          
+
         case 'tool_end':
           // Tool completed - keep execution phase active until all tools done
           stepsHook.updateStepStatus('tool_execution', 'in_progress', [`Completed: ${eventData.tool}`]);
           break;
-          
+
         case 'tool_error':
           stepsHook.updateStepStatus('tool_execution', 'error', [`Error in ${eventData.tool}: ${eventData.error}`]);
           streamHook.setCurrentStatus(`Tool error: ${eventData.error}`);
@@ -5216,7 +5518,7 @@ const workflowDataRef = useRef<{
             content: `**Tool Error:** ${eventData.tool} - ${eventData.error}`,
           });
           break;
-          
+
         case 'final_summary':
           stepsHook.updateStepStatus('finalization', 'completed', ['Workflow summary generated']);
           const summaryStatusMessage =
@@ -5401,7 +5703,10 @@ const workflowDataRef = useRef<{
               specialistCards: [],
               latencyGuardrail: null,
               snapshotReuse: null,
+              requestedGranularity: null,
               revisionFocus: null,
+              revisionQuestions: undefined,
+              webQuestions: undefined,
             };
             setChartSpec(null);
             setAnalysis('');
@@ -5452,10 +5757,10 @@ const workflowDataRef = useRef<{
           const flowModeOverride =
             coerceFlowMode(
               bannerPayload['flowMode'] ??
-                bannerPayload['flow_mode'] ??
-                detailsPayload['flowMode'] ??
-                detailsPayload['flow_mode'] ??
-                eventData.flow_mode,
+              bannerPayload['flow_mode'] ??
+              detailsPayload['flowMode'] ??
+              detailsPayload['flow_mode'] ??
+              eventData.flow_mode,
             ) ?? resolvedFlowMode;
 
           const summaryCopy =
@@ -5575,13 +5880,13 @@ const workflowDataRef = useRef<{
             streamHook.setCurrentStatus(hasExplicitResultContentRef.current ? '' : responseStatus);
           }
           break;
-          
+
         case 'done': {
           const hasFinalizationCopy = Boolean(finalizationMessageRef.current);
           streamHook.setCurrentStatus(hasExplicitResultContentRef.current || hasFinalizationCopy ? '' : 'Output ready');
           break;
         }
-          
+
         case 'error':
           {
             const errorStep = eventData.step || stepInfo.step || 'unknown';
@@ -5643,6 +5948,7 @@ const workflowDataRef = useRef<{
     workflowDataRef.current.progressiveAnalysis = '';
     workflowDataRef.current.progressiveText = '';
     setWebSearch(null);
+    setTopicProgress({ total: 0, completed: 0, pending: 0, branches: {} });
     setStockWidget(null);
     setSingleAgentFanout(null);
     setRevisionMode('none');
@@ -5651,6 +5957,7 @@ const workflowDataRef = useRef<{
     setAnalysisSources(null);
     setAnalysisBundle(null);
     setFollowUpBanner(null);
+    applyAgentEvidenceUpdate(() => null);
     setSpecialistCards([]);
     setLatencyGuardrail(null);
     setSnapshotReuse(null);
@@ -5722,6 +6029,9 @@ const workflowDataRef = useRef<{
     setRedirectNotice(null);
   }, []);
 
+
+
+
   return {
     // State
     sessionId,
@@ -5739,6 +6049,7 @@ const workflowDataRef = useRef<{
     analysisSources,
     analysisBundle,
     followUpBanner,
+    agentEvidence,
     specialistCards,
     singleAgentFanout,
     revisionMode,
@@ -5778,6 +6089,7 @@ const workflowDataRef = useRef<{
     clearRedirectNotice,
   };
 };
+
 
 
 
