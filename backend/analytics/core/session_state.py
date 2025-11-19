@@ -274,6 +274,11 @@ class SessionStateSnapshot(BaseModel):
     agents_parallel_groups: Dict[str, Any] = Field(default_factory=dict)
     agents_delegation_policy_version: Optional[str] = None
     agents_delegation_decisions: List[Dict[str, Any]] = Field(default_factory=list)
+    agents_plan_state: Dict[str, Any] = Field(default_factory=dict)
+    agents_guardrails: Dict[str, Any] = Field(default_factory=dict)
+    agents_clarifications: List[Dict[str, Any]] = Field(default_factory=list)
+    agents_revision_question_store: Dict[str, Any] = Field(default_factory=dict)
+    agents_message_backlog: List[Dict[str, Any]] = Field(default_factory=list)
     analysis_inputs_manifest: Dict[str, Any] = Field(default_factory=dict)
     revision_inputs_plan: Optional[Dict[str, Any]] = None
     revision_inputs_outcome: Optional[Dict[str, Any]] = None
@@ -553,17 +558,7 @@ class SessionStateSnapshot(BaseModel):
         """Persist guardrail verdicts emitted by the agent runtime."""
         if not guardrail_id:
             return
-        if not isinstance(self.tool_cache, dict):
-            self.tool_cache = {}
-        agent_cache = self.tool_cache.setdefault("agent", {})
-        if not isinstance(agent_cache, dict):
-            agent_cache = {}
-            self.tool_cache["agent"] = agent_cache
-        guardrails = agent_cache.setdefault("guardrails", {})
-        if not isinstance(guardrails, dict):
-            guardrails = {}
-            agent_cache["guardrails"] = guardrails
-        guardrails[str(guardrail_id)] = sanitize_for_json(dict(payload))
+        self.agents_guardrails[str(guardrail_id)] = sanitize_for_json(dict(payload))
         self.touch()
 
     def record_web_research_questions(self, bundle: Mapping[str, Any]) -> Dict[str, Any]:
@@ -999,6 +994,7 @@ class SessionStateSnapshot(BaseModel):
             except (TypeError, ValueError):
                 pass
         receipts[tool] = enhanced
+        self.agents_tool_receipts = dict(receipts)
         self.touch()
 
     def record_lane_reuse(
@@ -1096,58 +1092,39 @@ class SessionStateSnapshot(BaseModel):
         delegation_policy_version: Optional[str] = None,
         decisions: Optional[Iterable[Dict[str, Any]]] = None,
     ) -> None:
-        agent_cache = self.tool_cache.setdefault("agent", {})
-        previous_run_id = agent_cache.get("last_run_id")
-        if run_id:
-            normalized_run_id = str(run_id)
-            agent_cache["last_run_id"] = normalized_run_id
+        previous_run_id = self.agents_run_id
+        normalized_run_id = str(run_id) if run_id else None
+        if normalized_run_id:
             self.agents_run_id = normalized_run_id
-        if trace_id:
-            normalized_trace_id = str(trace_id)
-            agent_cache["trace_id"] = normalized_trace_id
-            self.agents_trace_id = normalized_trace_id
-        if manager_trace_id:
-            normalized_manager_trace_id = str(manager_trace_id)
-            agent_cache["manager_trace_id"] = normalized_manager_trace_id
+        normalized_trace_id = str(trace_id) if trace_id else None
+        self.agents_trace_id = normalized_trace_id
+        normalized_manager_trace_id = str(manager_trace_id) if manager_trace_id else None
+        if normalized_manager_trace_id:
             self.agents_manager_trace_id = normalized_manager_trace_id
-        elif previous_run_id and self.agents_run_id and self.agents_run_id != previous_run_id:
-            agent_cache.pop("manager_trace_id", None)
+        elif previous_run_id and normalized_run_id and normalized_run_id != previous_run_id:
             self.agents_manager_trace_id = None
-        if model:
-            normalized_model = str(model)
-            agent_cache["model"] = normalized_model
-            self.agents_model = normalized_model
-        if previous_run_id and self.agents_run_id and self.agents_run_id != previous_run_id:
-            agent_cache.pop("tool_attempts", None)
-            agent_cache.pop("retry_counts", None)
-            agent_cache.pop("receipts", None)
+        self.agents_model = str(model) if model else self.agents_model
+        if previous_run_id and normalized_run_id and normalized_run_id != previous_run_id:
             self.agents_tool_attempts = {}
             self.agents_retry_counts = {}
             self.agents_tool_receipts = {}
         recorded_at = datetime.now(timezone.utc).isoformat()
-        agent_cache["recorded_at"] = recorded_at
         self.agents_recorded_at = recorded_at
         if tool_attempts:
-            attempts_payload = {
+            self.agents_tool_attempts = {
                 str(key): int(value)
                 for key, value in tool_attempts.items()
                 if key is not None
             }
-            agent_cache["tool_attempts"] = attempts_payload
-            self.agents_tool_attempts = dict(attempts_payload)
         else:
-            agent_cache.pop("tool_attempts", None)
             self.agents_tool_attempts = {}
         if retry_counts:
-            retry_payload = {
+            self.agents_retry_counts = {
                 str(key): int(value)
                 for key, value in retry_counts.items()
                 if key is not None
             }
-            agent_cache["retry_counts"] = retry_payload
-            self.agents_retry_counts = dict(retry_payload)
         else:
-            agent_cache.pop("retry_counts", None)
             self.agents_retry_counts = {}
         if receipts:
             try:
@@ -1156,10 +1133,8 @@ class SessionStateSnapshot(BaseModel):
                 sanitized_receipts = json.loads(json.dumps(receipts, default=str))
             if not isinstance(sanitized_receipts, dict):
                 sanitized_receipts = {"receipt": sanitized_receipts}
-            agent_cache["receipts"] = sanitized_receipts
             self.agents_tool_receipts = dict(sanitized_receipts)
         else:
-            agent_cache.pop("receipts", None)
             self.agents_tool_receipts = {}
         if parallel_groups:
             try:
@@ -1168,17 +1143,12 @@ class SessionStateSnapshot(BaseModel):
                 sanitized_groups = json.loads(json.dumps(parallel_groups, default=str))
             if not isinstance(sanitized_groups, dict):
                 sanitized_groups = {"groups": sanitized_groups}
-            agent_cache["parallel_groups"] = sanitized_groups
             self.agents_parallel_groups = dict(sanitized_groups)
         else:
-            agent_cache.pop("parallel_groups", None)
             self.agents_parallel_groups = {}
         if delegation_policy_version:
-            normalized_version = str(delegation_policy_version)
-            agent_cache["delegation_policy_version"] = normalized_version
-            self.agents_delegation_policy_version = normalized_version
+            self.agents_delegation_policy_version = str(delegation_policy_version)
         else:
-            agent_cache.pop("delegation_policy_version", None)
             self.agents_delegation_policy_version = None
         if decisions:
             decisions_list = []
@@ -1188,7 +1158,6 @@ class SessionStateSnapshot(BaseModel):
                 except Exception:
                     sanitized_entry = json.loads(json.dumps(entry, default=str))
                 decisions_list.append(sanitized_entry)
-            agent_cache["delegation_decisions"] = decisions_list
             normalized_decisions: List[Dict[str, Any]] = []
             for item in decisions_list:
                 if isinstance(item, dict):
@@ -1197,7 +1166,6 @@ class SessionStateSnapshot(BaseModel):
                     normalized_decisions.append({"value": item})
             self.agents_delegation_decisions = normalized_decisions
         else:
-            agent_cache.pop("delegation_decisions", None)
             self.agents_delegation_decisions = []
         self.touch()
 

@@ -45,7 +45,7 @@
 #   Invokes: analytics.services.revision_focus.RevisionQuestionBundle.from_dict
 #   Why: Lets flows reuse prior Gemini answers without reissuing API calls.
 # Function: cache_revision_questions
-#   Role: Persists the supplied bundle under snapshot.tool_cache["agent"]["revision_questions"].
+#   Role: Persists the supplied bundle under snapshot.agents_revision_question_store.
 #   Called from: analytics.services.revision_focus, analytics.flows.workflow
 #   Invokes: analytics.services.revision_focus.RevisionQuestionBundle.to_dict
 #   Why: Provides a single mutation point for revision question caching and history trimming.
@@ -366,15 +366,7 @@ def cache_revision_questions(
 ) -> RevisionQuestionBundle:
     if snapshot is None:
         return bundle
-    tool_cache = snapshot.tool_cache
-    if not isinstance(tool_cache, dict):
-        snapshot.tool_cache = {}
-        tool_cache = snapshot.tool_cache
-    agent_cache = tool_cache.get("agent")
-    if not isinstance(agent_cache, dict):
-        agent_cache = {}
-        tool_cache["agent"] = agent_cache
-    store = agent_cache.setdefault("revision_questions", {})
+    store = snapshot.agents_revision_question_store
     payload = {
         "fingerprint": bundle.fingerprint,
         "bundle": bundle.to_dict(),
