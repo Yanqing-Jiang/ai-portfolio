@@ -17,6 +17,7 @@ import {
   ToolCallTelemetry,
   LaneReuseNotice,
   FreshLaneStatus,
+  AgentEvidence,
 } from '../types';
 import { isValidChartSpec } from '../utils';
 const ChartCardLazy = React.lazy(() => import('./ChartCard').then((module) => ({ default: module.ChartCard })));
@@ -63,6 +64,7 @@ interface ProcessPanelProps {
   freshLaneStates?: Record<string, FreshLaneStatus> | null;
 
   redirectNotice?: string | null;
+  agentEvidence?: AgentEvidence | null;
 
 }
 
@@ -798,6 +800,8 @@ export const ProcessPanel: React.FC<ProcessPanelProps> = ({
 
   redirectNotice = null,
 
+  agentEvidence = null,
+
 }) => {
 
   const nodeRef = useRef<HTMLDivElement>(null);
@@ -1393,6 +1397,34 @@ export const ProcessPanel: React.FC<ProcessPanelProps> = ({
   }
 
   const flowMeta = FLOW_META[flowMode] ?? FLOW_META['planner-executor'];
+  const agentEvidenceBadge = useMemo(() => {
+    if (!agentEvidence) {
+      return null;
+    }
+    if (agentEvidence.status === 'agent_run') {
+      const turnCount = agentEvidence.turns?.length ?? 0;
+      return (
+        <span className="rounded-full border border-emerald-400/40 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-100">
+          Agent Verified{turnCount ? ` · ${turnCount} turns` : ''}
+        </span>
+      );
+    }
+    if (agentEvidence.status === 'agent_disabled') {
+      return (
+        <span className="rounded-full border border-amber-400/40 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-100">
+          Agent Disabled · {agentEvidence.reason}
+        </span>
+      );
+    }
+    if (agentEvidence.status === 'agent_fallback') {
+      return (
+        <span className="rounded-full border border-rose-400/40 bg-rose-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-rose-100">
+          Agent Fallback · {agentEvidence.reason}
+        </span>
+      );
+    }
+    return null;
+  }, [agentEvidence]);
   const isCanvasExpanded = showVisualization && focusedPane === 'canvas';
   const isLedgerExpanded = !showVisualization || focusedPane === 'ledger';
 
@@ -2883,6 +2915,11 @@ export const ProcessPanel: React.FC<ProcessPanelProps> = ({
                 <div className="text-[11px] text-gray-500">{subtitle}</div>
 
                 <div className="text-[11px] text-gray-600">{flowMeta.description}</div>
+                {agentEvidenceBadge ? (
+                  <div className="mt-2 flex flex-wrap gap-2 text-[10px] uppercase tracking-wide">
+                    {agentEvidenceBadge}
+                  </div>
+                ) : null}
 
                 {followUpBanner && shouldRenderFollowUpBanner && (
                   <div className="mt-2 rounded-lg border border-amber-400/40 bg-amber-500/10 px-3 py-2 shadow-sm">

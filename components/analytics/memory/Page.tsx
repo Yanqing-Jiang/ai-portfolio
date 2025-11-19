@@ -7,6 +7,7 @@ import { useAnalyticsMemoryStream } from '../hooks';
 import type { FlowMode } from '../types';
 import { deriveRevisionContext, buildPromptCandidates } from './revisionPrompts';
 import type { PromptCandidate } from './revisionPrompts';
+import { demoAgentEvidence, demoFollowUpBanner, demoProcessSteps } from './demoProcessPanel';
 
 
 type FlowOption = FlowMode;
@@ -126,26 +127,35 @@ const MemoryAnalyticsPage: React.FC = () => {
     freshLaneStates,
     specialistCards,
     latencyGuardrail,
+    agentEvidence,
     redirectNotice,
     flowMode: activeFlowMode,
-    
+
     // Stream state
     isLoading,
     currentStatus,
     statusTimestamp,
-    
+
     // Process steps
     processSteps,
 
     // Revision telemetry
     revisionMode,
-    
+
     // Actions
     handleQuery,
     submitClarification,
     stopAnalysis,
     clearRedirectNotice,
+    topicProgress,
   } = useAnalyticsMemoryStream(selectedFlow);
+
+  const shouldShowPrefillProcess = processSteps.length === 0;
+  const processPanelSteps = shouldShowPrefillProcess ? demoProcessSteps : processSteps;
+  const processPanelFlowMode: FlowMode = shouldShowPrefillProcess ? 'multi-agent' : activeFlowMode;
+  const processPanelAgentEvidence = shouldShowPrefillProcess ? demoAgentEvidence : agentEvidence;
+  const processPanelFollowUpBanner = shouldShowPrefillProcess ? demoFollowUpBanner : followUpBanner;
+  const processPanelAgenticRevision = shouldShowPrefillProcess ? true : agenticRevisionActive;
   const revisionContext = useMemo(
     () =>
       deriveRevisionContext({
@@ -290,13 +300,13 @@ Multi-Agent: workload delegation & orchestration, fastest speed
     if (!query.trim() || isLoading) return;
     const queryToSubmit = query.trim();
     setQuery(''); // Clear input after starting analysis
-    
+
     // Auto-collapse header on first query
     if (!hasStartedChat) {
       setHasStartedChat(true);
       setIsHeaderCollapsed(true);
     }
-    
+
     await handleQuery(queryToSubmit);
   };
 
@@ -326,15 +336,15 @@ Multi-Agent: workload delegation & orchestration, fastest speed
         : revisionMode === 'market'
           ? 'Revision fast-path A� market snapshots without SQL rerun'
           : revisionMode === 'mixed'
-          ? 'Revision fast-path Â· chart & narrative tweaks on cached data'
-          : 'Real-time agent reasoning & tool execution';
+            ? 'Revision fast-path Â· chart & narrative tweaks on cached data'
+            : 'Real-time agent reasoning & tool execution';
 
   return (
     <div className="flex h-screen bg-gray-900 text-gray-100 overflow-hidden">
       {/* Main Content */}
       <div className={`flex-1 flex flex-col transition-all duration-300 overflow-hidden ${showProcessPanel ? 'md:mr-80' : ''}`}>
         {/* Enhanced Header */}
-        <motion.div 
+        <motion.div
           initial={false}
           animate={isHeaderCollapsed ? { height: 60 } : { height: 'auto' }}
           transition={{ duration: 0.3, ease: 'easeInOut' }}
@@ -347,8 +357,8 @@ Multi-Agent: workload delegation & orchestration, fastest speed
                 <h2 className="text-lg md:text-xl font-bold text-white truncate">{projectData.title}</h2>
                 <div className="hidden sm:flex gap-2">
                   {projectData.technologies.slice(0, 3).map(tech => (
-                    <span 
-                      key={tech} 
+                    <span
+                      key={tech}
                       className="px-2 py-0.5 rounded-full bg-gray-700 text-gray-200 text-xs border border-gray-600"
                     >
                       {tech}
@@ -362,14 +372,12 @@ Multi-Agent: workload delegation & orchestration, fastest speed
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                {hasStartedChat && (
-                  <button
-                    onClick={() => setShowProcessPanel(!showProcessPanel)}
-                    className="px-3 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-gray-200 rounded-lg transition-colors"
-                  >
-                    {showProcessPanel ? 'Hide' : 'Show'} Process
-                  </button>
-                )}
+                <button
+                  onClick={() => setShowProcessPanel(!showProcessPanel)}
+                  className="px-3 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-gray-200 rounded-lg transition-colors"
+                >
+                  {showProcessPanel ? 'Hide' : 'Show'} Process
+                </button>
                 <button
                   onClick={() => setIsHeaderCollapsed(!isHeaderCollapsed)}
                   className="p-2 hover:bg-gray-700 rounded-lg transition-colors text-gray-400 hover:text-white shrink-0"
@@ -384,7 +392,7 @@ Multi-Agent: workload delegation & orchestration, fastest speed
           ) : (
             // Expanded header view - compact design
             <div className="p-2 sm:p-3 md:p-4 lg:p-5 relative">
-              
+
               <div className="flex flex-col md:flex-row gap-3 sm:gap-4 md:gap-5">
                 {/* Project content - responsive layout */}
                 <div className="flex-1 flex flex-col justify-center min-w-0">
@@ -392,7 +400,7 @@ Multi-Agent: workload delegation & orchestration, fastest speed
                                  mb-2 sm:mb-2.5 md:mb-3 leading-tight">
                     {projectData.title}
                   </h2>
-                  
+
                   <div className="text-gray-400 text-xs sm:text-sm md:text-base 
                                   max-w-none md:max-w-2xl mb-2 sm:mb-3 md:mb-4 
                                   space-y-1 sm:space-y-1.5 overflow-y-auto flex-1 md:flex-none">
@@ -436,11 +444,10 @@ Multi-Agent: workload delegation & orchestration, fastest speed
                                   : `Switch flow to ${FLOW_META[flowKey].chip}`
                               }
                               aria-disabled={flowSelectionLocked || isLoading}
-                              className={`px-2 py-0.5 text-[10px] sm:text-xs rounded-full border transition-colors duration-200 ${
-                                isLoading || flowSelectionLocked
-                                  ? 'opacity-60 cursor-not-allowed'
-                                  : 'cursor-pointer hover:opacity-90'
-                              } ${chipClass}`}
+                              className={`px-2 py-0.5 text-[10px] sm:text-xs rounded-full border transition-colors duration-200 ${isLoading || flowSelectionLocked
+                                ? 'opacity-60 cursor-not-allowed'
+                                : 'cursor-pointer hover:opacity-90'
+                                } ${chipClass}`}
                             >
                               {label}
                             </span>
@@ -457,12 +464,12 @@ Multi-Agent: workload delegation & orchestration, fastest speed
                       );
                     })}
                   </div>
-                  
+
                   {/* Technology tags - compact sizing */}
                   <div className="flex gap-1 sm:gap-1.5 flex-wrap mt-auto">
                     {projectData.technologies.map(tech => (
-                      <span 
-                        key={tech} 
+                      <span
+                        key={tech}
                         className="bg-gray-700 text-gray-300 text-[10px] sm:text-xs font-medium 
                                  px-1.5 sm:px-2 py-0.5 sm:py-1 rounded-full whitespace-nowrap"
                       >
@@ -484,16 +491,24 @@ Multi-Agent: workload delegation & orchestration, fastest speed
                 )}
               </div>
 
-              {/* Collapse button - bottom right */}
-              <button
-                onClick={() => setIsHeaderCollapsed(!isHeaderCollapsed)}
-                className="absolute bottom-1 right-1 p-1.5 hover:bg-gray-700 rounded-lg transition-colors text-gray-400 hover:text-white"
-                title="Collapse header"
-              >
-                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
-                </svg>
-              </button>
+              {/* Header actions - bottom right */}
+              <div className="absolute bottom-1 right-1 flex gap-2">
+                <button
+                  onClick={() => setShowProcessPanel(!showProcessPanel)}
+                  className="px-2.5 py-1 text-[11px] bg-gray-700 hover:bg-gray-600 text-gray-200 rounded-lg transition-colors"
+                >
+                  {showProcessPanel ? 'Hide' : 'Show'} Process
+                </button>
+                <button
+                  onClick={() => setIsHeaderCollapsed(!isHeaderCollapsed)}
+                  className="p-1.5 hover:bg-gray-700 rounded-lg transition-colors text-gray-400 hover:text-white"
+                  title="Collapse header"
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
+                  </svg>
+                </button>
+              </div>
             </div>
           )}
         </motion.div>
@@ -501,12 +516,13 @@ Multi-Agent: workload delegation & orchestration, fastest speed
         {/* Main Content Area */}
         <div className="flex-1 overflow-auto p-4 sm:p-6 lg:p-8 pb-32 md:pb-6 bg-gray-900">
           <div className="w-full max-w-5xl mx-auto space-y-4 sm:space-y-6 overflow-hidden">
-            <ChatHistory 
-              messages={chatHistory} 
-              isLoading={isLoading} 
+            <ChatHistory
+              messages={chatHistory}
+              isLoading={isLoading}
               status={{ text: currentStatus, timestamp: statusTimestamp }}
               onSubmitClarification={submitClarification}
               processSteps={processSteps}
+              topicProgress={topicProgress}
             />
           </div>
         </div>
@@ -614,7 +630,7 @@ Multi-Agent: workload delegation & orchestration, fastest speed
                   </div>
                 </div>
               )}
-              
+
               {/* Input row */}
               <div className="mt-3 sm:mt-4 flex items-center gap-2 sm:gap-3 w-full">
                 <input
@@ -629,11 +645,10 @@ Multi-Agent: workload delegation & orchestration, fastest speed
                 <button
                   onClick={isLoading ? stopAnalysis : handleAnalyticsQuery}
                   disabled={!query.trim() && !isLoading}
-                  className={`px-4 sm:px-6 py-3.5 text-sm md:text-base rounded-xl font-medium transition-all duration-200 min-h-[48px] shrink-0 shadow-lg ${
-                    isLoading 
-                      ? 'bg-red-600/90 hover:bg-red-600 text-white'
-                      : 'bg-blue-600/90 hover:bg-blue-600 text-white disabled:bg-gray-600/50 disabled:cursor-not-allowed'
-                  }`}
+                  className={`px-4 sm:px-6 py-3.5 text-sm md:text-base rounded-xl font-medium transition-all duration-200 min-h-[48px] shrink-0 shadow-lg ${isLoading
+                    ? 'bg-red-600/90 hover:bg-red-600 text-white'
+                    : 'bg-blue-600/90 hover:bg-blue-600 text-white disabled:bg-gray-600/50 disabled:cursor-not-allowed'
+                    }`}
                 >
                   {isLoading ? 'Stop' : 'Analyze'}
                 </button>
@@ -644,23 +659,26 @@ Multi-Agent: workload delegation & orchestration, fastest speed
       </div>
 
       {/* Process Panel */}
-      <ProcessPanel
-        steps={processSteps}
-        flowMode={activeFlowMode}
-        singleAgentFanout={singleAgentFanout}
-        followUpBanner={followUpBanner}
-        slotStatuses={slotStatuses}
-        slotFollowups={slotFollowups}
-        laneReuseNotices={showLaneReuseUi ? laneReuseNotices : null}
-        agenticRevision={agenticRevisionActive}
-        freshLaneStates={freshLaneStates}
-        redirectNotice={redirectNotice}
-        show={showProcessPanel}
-        showVisualization={true}
-        onClose={() => setShowProcessPanel(false)}
-        title="Agent Thinking Process"
-        subtitle={processSubtitle}
-      />
+      {showProcessPanel ? (
+        <ProcessPanel
+          steps={processPanelSteps}
+          flowMode={processPanelFlowMode}
+          singleAgentFanout={singleAgentFanout}
+          followUpBanner={processPanelFollowUpBanner}
+          agentEvidence={processPanelAgentEvidence}
+          slotStatuses={slotStatuses}
+          slotFollowups={slotFollowups}
+          laneReuseNotices={showLaneReuseUi ? laneReuseNotices : null}
+          agenticRevision={processPanelAgenticRevision}
+          freshLaneStates={shouldShowPrefillProcess ? undefined : freshLaneStates}
+          redirectNotice={redirectNotice}
+          show
+          showVisualization
+          onClose={() => setShowProcessPanel(false)}
+          title="Agent Thinking Process"
+          subtitle={processSubtitle}
+        />
+      ) : null}
 
     </div>
   );

@@ -320,5 +320,11 @@ AGENTIC_REVISION_PLAN = PlanTemplate(
             depends_on=("collect_keyword_evidence",),
             metadata={"description": "Commit to either the chart or narrative lane based on gathered context."},
         ),
+        PlanTemplateNode(
+            name="execute_revision_lane",
+            kind="tool",
+            depends_on=("apply_revision_lane",),
+            metadata={"description": "Call apply_revision_lane to stream the selected revision cards back to the user."},
+        ),
     ),
 )

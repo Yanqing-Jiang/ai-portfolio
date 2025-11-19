@@ -16,6 +16,8 @@ import type {
   SpecialistCard,
   LatencyGuardrail,
   AnalysisSources,
+  AgentEvidence,
+  WebSearchTopicProgress,
 } from '../types';
 
 interface LiveArtifactsProps {
@@ -34,6 +36,8 @@ interface LiveArtifactsProps {
   analysisOverview?: AnalysisOverview | null;
   specialistCards?: SpecialistCard[];
   latencyGuardrail?: LatencyGuardrail | null;
+  agentEvidence?: AgentEvidence | null;
+  topicProgress?: WebSearchTopicProgress;
 }
 
 const FLOW_PRESENTATION: Record<
@@ -93,14 +97,16 @@ export const LiveArtifacts: React.FC<LiveArtifactsProps> = ({
   analysisOverview = null,
   specialistCards = [],
   latencyGuardrail = null,
+  agentEvidence = null,
+  topicProgress,
 }) => {
   const hasChart = chartSpec && isValidChartSpec(chartSpec);
   const hasSql = Boolean(sqlQuery?.trim()) || (Array.isArray(dataSample) && dataSample.length > 0);
   const hasStock = Boolean(stockWidget && Array.isArray(stockWidget.symbols) && stockWidget.symbols.length);
   const hasWeb = Boolean(
     webSearch &&
-      (webSearch.summary?.trim() ||
-        (Array.isArray(webSearch.snippets) && webSearch.snippets.some((snippet) => snippet?.snippet))),
+    (webSearch.summary?.trim() ||
+      (Array.isArray(webSearch.snippets) && webSearch.snippets.some((snippet) => snippet?.snippet))),
   );
   const progressiveDraft = (progressiveAnalysis || progressiveText || '').trim();
   const finalAnalysis = (analysis || '').trim();
@@ -118,6 +124,34 @@ export const LiveArtifacts: React.FC<LiveArtifactsProps> = ({
   const allowArtifacts = isLoading || !runComplete || persistOnComplete;
   const flowTheme = FLOW_PRESENTATION[flowMode] ?? FLOW_PRESENTATION['planner-executor'];
   const analysisHeading = showingFinalAnalysis ? flowTheme.finalHeading : flowTheme.draftHeading;
+  const agentEvidenceBadge = React.useMemo(() => {
+    if (!agentEvidence) {
+      return null;
+    }
+    if (agentEvidence.status === 'agent_run') {
+      const turnCount = agentEvidence.turns?.length ?? 0;
+      return (
+        <span className="rounded-full border border-emerald-400/50 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-100">
+          Agent Verified{turnCount ? ` · ${turnCount} turns` : ''}
+        </span>
+      );
+    }
+    if (agentEvidence.status === 'agent_disabled') {
+      return (
+        <span className="rounded-full border border-amber-400/50 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-100">
+          Agent Disabled · {agentEvidence.reason}
+        </span>
+      );
+    }
+    if (agentEvidence.status === 'agent_fallback') {
+      return (
+        <span className="rounded-full border border-rose-400/50 bg-rose-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-rose-100">
+          Agent Fallback · {agentEvidence.reason}
+        </span>
+      );
+    }
+    return null;
+  }, [agentEvidence]);
   const supplementalCards = specialistCards.filter((card) => card.type !== 'web_context' && card.type !== 'stock_widget');
   const hasSupplementalCards = supplementalCards.length > 0;
   const evidenceEntries = analysisOverview?.evidence ?? [];
@@ -176,7 +210,7 @@ export const LiveArtifacts: React.FC<LiveArtifactsProps> = ({
             </span>
           </div>
         ) : null}
-        <WebSearchCard result={webSearch} title="Market Research" emptyMessage="No snippets yet." />
+        <WebSearchCard result={webSearch} title="Market Research" emptyMessage="No snippets yet." topicProgress={topicProgress} />
       </CollapsibleSection>,
     );
   }
@@ -303,7 +337,7 @@ export const LiveArtifacts: React.FC<LiveArtifactsProps> = ({
         defaultOpen={false}
         className="bg-gray-800/50"
       >
-        <SqlCard sqlQuery={sqlQuery} dataSample={dataSample || undefined} compact />
+        <SqlCard sqlQuery={sqlQuery} compact />
       </CollapsibleSection>,
     );
   }
@@ -355,10 +389,11 @@ export const LiveArtifacts: React.FC<LiveArtifactsProps> = ({
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-end">
+      <div className="flex flex-wrap justify-end gap-2">
         <span className={`text-[10px] uppercase tracking-wide px-2 py-1 rounded-full border ${flowTheme.badgeClass}`}>
           {flowTheme.badge}
         </span>
+        {agentEvidenceBadge}
       </div>
       <div className="space-y-4">{cards}</div>
     </div>
