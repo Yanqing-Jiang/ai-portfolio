@@ -4,6 +4,11 @@
 #   Called from: Internal to analytics.flows.single_agent_tools
 #   Invokes: Internal helpers only
 #   Why: Keeps analytics.flows.single_agent_tools from duplicating build tool metadata behavior across flows.
+# Function: _coerce_agent_model
+#   Role: Pins analytics agent model selection to the project baseline and logs drift.
+#   Called from: analytics.flows.single_agent_tools.SingleAgentController.__init__
+#   Invokes: logging.getLogger
+#   Why: Enforces the roadmap requirement that non-DIRECT flows always use the canonical GPT-5 model.
 # Class: _SingleAgentRunContext
 #   Role: Handles SingleAgentRunContext logic for analytics.flows.single_agent_tools.
 #   Called from: tests.analytics.test_single_agent_controller_agents
@@ -138,6 +143,8 @@ from analytics.core.config_store import get_config_store
 
 logger = logging.getLogger(__name__)
 
+PINNED_AGENT_MODEL = "gpt-5-mini-2025-08-07"
+
 LANE_TTL_DEFAULTS: Dict[str, int] = {
     "analysis": 300,
     "web": 120,
@@ -180,6 +187,18 @@ def _build_tool_metadata(manifest: Any) -> Dict[str, Dict[str, Any]]:
             "schema_version": entry.get("schema_version"),
         }
     return metadata
+
+
+def _coerce_agent_model(configured: Optional[str]) -> str:
+    """Return the pinned analytics agent model, logging whenever configuration drifts."""
+
+    model = (configured or "").strip()
+    if model and model != PINNED_AGENT_MODEL:
+        logger.warning(
+            "Overriding analytics agent model to pinned baseline",
+            extra={"configured_model": model, "pinned_model": PINNED_AGENT_MODEL},
+        )
+    return PINNED_AGENT_MODEL
 
 
 @dataclass
@@ -1292,7 +1311,7 @@ class SingleAgentController:
         self.flow_label = "single-agent"
         self._config_store = get_config_store()
         self._agent_settings = self._config_store.get_agent_mode_config("single_agent")
-        self._agent_model = str(self._agent_settings.get("model") or "gpt-5-mini-2025-08-07")
+        self._agent_model = _coerce_agent_model(self._agent_settings.get("model"))
         self._agent_reasoning_effort = str(
             self._agent_settings.get("reasoning_effort") or "medium"
         )

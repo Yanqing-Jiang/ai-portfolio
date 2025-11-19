@@ -19,6 +19,11 @@
 #   Called from: Internal to analytics.flows.multi_agent
 #   Invokes: Internal helpers only
 #   Why: Keeps analytics.flows.multi_agent from duplicating canonical tool name behavior across flows.
+# Function: _coerce_agent_model
+#   Role: Pins analytics supervisor/specialist model selection to the roadmap baseline and logs drift.
+#   Called from: analytics.flows.multi_agent.MultiAgentFlow.__init__
+#   Invokes: logging.getLogger
+#   Why: Enforces the pinned GPT-5 model requirement for all non-DIRECT agent flows.
 # Function: _infer_tickers
 #   Role: Handles infer tickers logic for analytics.flows.multi_agent.
 #   Called from: Internal to analytics.flows.multi_agent
@@ -191,6 +196,8 @@ from .supervisor_retry_manager import SupervisorRetryManager
 
 logger = logging.getLogger(__name__)
 
+PINNED_AGENT_MODEL = "gpt-5-mini-2025-08-07"
+
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .revision_directive import RevisionDirective
@@ -218,6 +225,18 @@ def _build_tool_metadata(manifest: Any) -> Dict[str, Dict[str, Any]]:
             "schema_version": entry.get("schema_version"),
         }
     return metadata
+
+
+def _coerce_agent_model(configured: Optional[str]) -> str:
+    """Return the pinned analytics agent model, logging whenever configuration drifts."""
+
+    model = (configured or "").strip()
+    if model and model != PINNED_AGENT_MODEL:
+        logger.warning(
+            "Overriding analytics agent model to pinned baseline",
+            extra={"configured_model": model, "pinned_model": PINNED_AGENT_MODEL},
+        )
+    return PINNED_AGENT_MODEL
 
 
 from .chart_revision import (
@@ -1602,7 +1621,7 @@ class MultiAgentFlow:
         self._max_tool_retries = int(self._supervisor_settings.get("max_tool_retries") or 2)
         supervisor_name = str(self._supervisor_settings.get("name") or "analytics_supervisor")
         supervisor_instructions = str(self._supervisor_settings.get("instructions") or "")
-        supervisor_model = str(self._supervisor_settings.get("model") or "gpt-5-mini-2025-08-07")
+        supervisor_model = _coerce_agent_model(self._supervisor_settings.get("model"))
         supervisor_reasoning = self._supervisor_settings.get("reasoning_effort")
         supervisor_max_turns = self._supervisor_settings.get("max_turns")
 
@@ -1617,7 +1636,7 @@ class MultiAgentFlow:
                     name=str(entry.get("name") or f"{lane}_specialist"),
                     instructions=str(entry.get("instructions") or supervisor_instructions),
                     description=entry.get("description"),
-                    model=entry.get("model"),
+                    model=_coerce_agent_model(entry.get("model")),
                     reasoning_effort=entry.get("reasoning_effort"),
                     max_turns=entry.get("max_turns"),
                 )

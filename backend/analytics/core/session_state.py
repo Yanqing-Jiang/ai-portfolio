@@ -44,6 +44,16 @@
 #   Called from: Internal to analytics.core.session_state
 #   Invokes: Internal helpers only
 #   Why: Keeps analytics.core.session_state from duplicating normalize tool name behavior across flows.
+# Function: _resolve_lane_ttl_map
+#   Role: Resolve lane TTL configuration so cache reuse checks honor freshness budgets.
+#   Called from: analytics.core.session_state.SessionStateSnapshot._is_lane_reuse_stale
+#   Invokes: analytics.core.lane_refresh.resolve_lane_ttls
+#   Why: Prevents SessionStateSnapshot from reusing lane payloads beyond configured TTLs.
+# Function: _is_lane_reuse_stale
+#   Role: Determine whether cached lane artifacts are expired before marking reuse on receipts.
+#   Called from: analytics.core.session_state.SessionStateSnapshot.record_tool_receipt
+#   Invokes: analytics.core.session_state.SessionStateSnapshot.lane_age_seconds, analytics.core.session_state._resolve_lane_ttl_map
+#   Why: Ensures reuse badges/metadata only apply when lane outputs remain within TTL.
 # Function: chart_spec_has_numeric_payload
 #   Role: Detects whether a chart spec payload contains at least one numeric data point.
 #   Called from: analytics.core.session_state.SessionStateSnapshot.record_outputs, analytics.flows.workflow
@@ -321,6 +331,24 @@ class SessionStateSnapshot(BaseModel):
             return max(delta.total_seconds(), 0.0)
         except Exception:
             return None
+
+    def _is_lane_reuse_stale(self, lane: str, *, now: Optional[datetime] = None) -> bool:
+        """Return True when cached lane artifacts exceed configured TTLs."""
+
+        normalized = (lane or "").strip().lower()
+        if not normalized:
+            return True
+        ttl_map = _resolve_lane_ttl_map()
+        ttl = int(ttl_map.get(normalized, 0) or 0)
+        if ttl <= 0:
+            return True
+        age = self.lane_age_seconds(normalized, now=now)
+        if age is None:
+            return True
+        try:
+            return age > ttl
+        except Exception:
+            return True
 
     def record_query(self, query: str, intent_key: Optional[str]) -> None:
         self.last_query = query
@@ -923,7 +951,6 @@ class SessionStateSnapshot(BaseModel):
             metadata_payload.setdefault("schema_version", canonical_definition.schema_version)
             enhanced.setdefault("schema_version", canonical_definition.schema_version)
         reuse_flag = bool(enhanced.get("reused")) or bool(enhanced.get("reuse_metadata"))
-        metadata_payload.setdefault("from_cache", reuse_flag)
         elapsed_ms = enhanced.get("latency_ms")
         try:
             if elapsed_ms is not None:
@@ -940,16 +967,21 @@ class SessionStateSnapshot(BaseModel):
                 retry_count = None
         if retry_count is not None:
             metadata_payload.setdefault("retry_count", retry_count)
-        if metadata_payload:
-            enhanced["metadata"] = sanitize_for_json(metadata_payload)
         if lane:
             reuse_metadata = self._lane_reuse_metadata(lane)
+            if reuse_metadata and self._is_lane_reuse_stale(lane):
+                reuse_metadata = None
+                reuse_flag = False
             if reuse_metadata:
+                reuse_flag = True
                 enhanced.setdefault("reuse_metadata", reuse_metadata)
                 if enhanced.get("reused_at_ms") is None:
                     fast_path_latency = reuse_metadata.get("fast_path_latency_ms")
                     if isinstance(fast_path_latency, (int, float)):
                         enhanced["reused_at_ms"] = int(fast_path_latency)
+        metadata_payload.setdefault("from_cache", reuse_flag)
+        if metadata_payload:
+            enhanced["metadata"] = sanitize_for_json(metadata_payload)
         if enhanced.get("latency_ms") is None:
             latency_candidate = enhanced.get("elapsed_ms")
             if latency_candidate is None:
@@ -1952,6 +1984,25 @@ def _normalize_tool_name(tool: Optional[str]) -> Optional[str]:
         return None
     normalized = str(tool).strip().lower()
     return normalized or None
+
+
+def _resolve_lane_ttl_map() -> Dict[str, int]:
+    """Return the configured lane TTLs for reuse gating."""
+
+    try:
+        from analytics.core import lane_refresh  # type: ignore
+    except Exception:  # pragma: no cover - defensive import
+        return {}
+
+    resolver = getattr(lane_refresh, "resolve_lane_ttls", None)
+    if not callable(resolver):
+        return {}
+
+    try:
+        ttl_map = dict(resolver())
+    except Exception:  # pragma: no cover - defensive fallback
+        ttl_map = {}
+    return ttl_map
 
 
 def _tool_definition_for_receipt(tool: str) -> Optional[ToolDefinition]:
