@@ -1990,12 +1990,13 @@ async def analytics_memory_workflow(
                     user_query=query,
                     analysis_text=analysis_text,
                 )
+        agentic_enabled = bool(prefer_agentic_revision)
         revision_directive = RevisionDirective.from_payload(
             raw_text=combined_query,
             targets=directive_targets or set(revision_lanes) or {"analysis"},
             requested_focus=analysis_text,
             chart_patch=chart_patch,
-            agentic=bool(agentic_enabled),
+            agentic=agentic_enabled,
             search_topics=search_topic_entries,
         )
         if revision_questions_bundle is None:

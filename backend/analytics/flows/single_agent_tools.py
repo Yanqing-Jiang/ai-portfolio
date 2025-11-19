@@ -1342,11 +1342,18 @@ class SingleAgentController:
             retry_policy=dict(self._agent_settings.get("retry_policy") or {}),
         )
         runtime_flag = self._agent_settings.get("enable_runtime")
-        runtime_allowed = True if runtime_flag is None else bool(runtime_flag)
+        if runtime_flag is False:
+            logger.warning(
+                "single_agent_runtime_disabled_flag_ignored",
+                extra={"reason": "agent_runtime_always_on"},
+            )
         runtime_env = os.getenv("ANALYTICS_AGENT_RUNTIME_ENABLED")
-        if runtime_env:
-            runtime_allowed = runtime_env.strip().lower() in {"1", "true", "yes", "on"}
-        self._agent_runtime_allowed = runtime_allowed
+        if runtime_env is not None:
+            logger.warning(
+                "ANALYTICS_AGENT_RUNTIME_ENABLED is deprecated; ignoring explicit override.",
+                extra={"value": runtime_env},
+            )
+        self._agent_runtime_allowed = True
         self._agent_snapshot: Optional[SessionStateSnapshot] = None
         self._session_snapshot: Optional[SessionStateSnapshot] = None
         self._agent_memory: Optional[AgentMemory] = None

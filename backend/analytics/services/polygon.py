@@ -42,6 +42,17 @@ _POLYGON_BASE_URL = "https://api.polygon.io"
 class PolygonError(Exception):
     """Raised when the Polygon API returns an error payload or bad status."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: Optional[int] = None,
+        retry_after: Optional[float] = None,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.retry_after = retry_after
+
 
 @dataclass
 class DailyBar:
@@ -99,12 +110,34 @@ class PolygonMarketDataClient:
         )
 
         def _request() -> Dict[str, Any]:
-            response = self._session.get(url, params=params, timeout=10)
-            response.raise_for_status()
+            try:
+                response = self._session.get(url, params=params, timeout=10)
+                response.raise_for_status()
+            except requests.HTTPError as exc:
+                status_code = getattr(exc.response, "status_code", None)
+                retry_after_header = (
+                    exc.response.headers.get("Retry-After") if getattr(exc, "response", None) else None
+                )
+                retry_after = None
+                if retry_after_header:
+                    try:
+                        retry_after = float(retry_after_header)
+                    except ValueError:
+                        retry_after = None
+                raise PolygonError(
+                    exc.response.text if getattr(exc, "response", None) else str(exc),
+                    status_code=status_code,
+                    retry_after=retry_after,
+                ) from exc
+            except requests.RequestException as exc:
+                raise PolygonError(str(exc)) from exc
             payload = response.json()
             status = (payload.get("status") or "").upper()
             if status not in {"OK", "DELAYED"} or not payload.get("results"):
-                raise PolygonError(payload.get("error") or "Polygon API returned no results")
+                raise PolygonError(
+                    payload.get("error") or "Polygon API returned no results",
+                    status_code=response.status_code,
+                )
             return payload
 
         payload = await asyncio.to_thread(_request)

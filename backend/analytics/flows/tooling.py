@@ -110,6 +110,7 @@ from typing import (
 )
 import inspect
 
+from analytics.artifacts.models import MarketArtifact, PipelineArtifacts, WebContextArtifact
 from analytics.core import telemetry
 from analytics.core.events import EventEmitter
 from analytics.core.intent_impl.models import IntentModel
@@ -259,6 +260,8 @@ class ToolExecutionContext:
     revision_directive: Optional[Any] = None
     revision_focus: Optional[str] = None
     revision_search_topics: Tuple[Dict[str, Any], ...] = field(default_factory=tuple)
+    artifacts: Optional[PipelineArtifacts] = None
+    snapshot_artifacts: Optional[PipelineArtifacts] = None
 
 
 @dataclass
@@ -579,6 +582,53 @@ class WebRetrieverAdapter(BaseToolAdapter):
     def is_topic_adapter(self) -> bool:
         return self._topic_plan is not None
 
+    def _cached_web_payload(
+        self,
+        context: ToolExecutionContext,
+        query_terms: str,
+    ) -> Optional[Tuple[Dict[str, Any], Dict[str, Any]]]:
+        """Return cached web payload sourced from artifacts when Gemini search fails."""
+        normalized_query = query_terms.strip().lower()
+        sources = tuple(
+            source for source in (getattr(context, "artifacts", None), getattr(context, "snapshot_artifacts", None)) if source
+        )
+        for source in sources:
+            web_artifact = getattr(source, "web", None)
+            if not isinstance(web_artifact, WebContextArtifact):
+                continue
+            cached_query = (web_artifact.query or "").strip().lower()
+            if cached_query and cached_query != normalized_query:
+                continue
+            if not (web_artifact.summary or web_artifact.snippets):
+                continue
+            payload = {
+                "query": web_artifact.query or query_terms,
+                "query_terms": query_terms,
+                "summary": web_artifact.summary,
+                "snippets": copy.deepcopy(web_artifact.snippets or []),
+                "search_id": web_artifact.search_id,
+                "from_cache": True,
+                "ready": True,
+                "agent_envelope": {
+                    "status": "cached",
+                    "query": web_artifact.query or query_terms,
+                    "summary": web_artifact.summary,
+                    "error": None,
+                    "retryable": True,
+                    "from_cache": True,
+                },
+            }
+            metadata = {
+                "summary": "Reused cached web research.",
+                "provider": "cache",
+                "preview_only": False,
+                "snippets_count": len(payload["snippets"]),
+                "search_id": web_artifact.search_id,
+                "from_cache": True,
+            }
+            return payload, metadata
+        return None
+
     @staticmethod
     def _bundle_from_topics(
         plans: Sequence[SearchTopicPlan],
@@ -826,15 +876,32 @@ class WebRetrieverAdapter(BaseToolAdapter):
 
         except ResponseSearchError as exc:
             error_stage = getattr(exc, "stage", "unknown")
-            metadata["summary"] = "Web search unavailable (Gemini search error)."
-            metadata["preview_only"] = True
+            cached_payload = self._cached_web_payload(context, query_terms)
             metadata["error"] = str(exc)
             metadata["error_stage"] = error_stage
             metadata["retryable_error_code"] = getattr(exc, "code", None) or f"search_{error_stage}"
             metadata["retryable"] = bool(getattr(exc, "retryable", True))
             payload["error"] = str(exc)
             payload["error_stage"] = error_stage
-            payload["retryable"] = bool(getattr(exc, "retryable", True))
+            payload["retryable"] = metadata["retryable"]
+            if cached_payload:
+                cached_result, cached_meta = cached_payload
+                payload.update(cached_result)
+                metadata.update(cached_meta)
+                metadata["preview_keys"] = list(payload.keys())
+                metadata["agent_envelope"] = payload.get("agent_envelope")
+                logger.warning(
+                    "WebRetrieverAdapter search failed during %s; reused cached payload.",
+                    error_stage,
+                )
+                return ToolAdapterResult(
+                    name=self.name,
+                    status="completed",
+                    payload=payload,
+                    metadata=metadata,
+                )
+            metadata["summary"] = "Web search unavailable (Gemini search error)."
+            metadata["preview_only"] = True
             payload["agent_envelope"] = {
                 "status": "error",
                 "query": base_query,
@@ -1037,6 +1104,36 @@ class StockTrackerAdapter(BaseToolAdapter):
 
     _TICKER_BLACKLIST = {"WITH", "FROM", "AND", "THE", "WHERE", "SELECT", "JOIN"}
 
+    def _cached_market_snapshot(
+        self,
+        context: ToolExecutionContext,
+        symbol: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Reuse a cached market snapshot when live Polygon data is unavailable."""
+        symbol_key = symbol.upper()
+        sources = tuple(
+            source for source in (getattr(context, "artifacts", None), getattr(context, "snapshot_artifacts", None)) if source
+        )
+        for source in sources:
+            market_artifact = getattr(source, "market", None)
+            if not isinstance(market_artifact, MarketArtifact):
+                continue
+            snapshot = getattr(market_artifact, "snapshot", None)
+            if not isinstance(snapshot, Mapping):
+                continue
+            tracked = {ticker.strip().upper() for ticker in (market_artifact.tickers or []) if isinstance(ticker, str)}
+            if tracked and symbol_key not in tracked:
+                continue
+            cached_payload = dict(snapshot)
+            cached_payload.setdefault("symbol", symbol_key)
+            cached_payload.setdefault("bars", snapshot.get("bars") or [])
+            cached_payload["ready"] = True
+            cached_payload["from_cache"] = True
+            if "fetched_at" not in cached_payload:
+                cached_payload["fetched_at"] = datetime.utcnow().isoformat()
+            return cached_payload
+        return None
+
     async def execute(self, context: ToolExecutionContext) -> ToolAdapterResult:
         slots = getattr(context.intent, "slots_detected", {}) or {}
         query = (context.query or "").strip()
@@ -1148,12 +1245,26 @@ class StockTrackerAdapter(BaseToolAdapter):
             snapshot = await fetch_daily_snapshot(symbol, client=client)
         except PolygonError as exc:
             error_message = str(exc)
-            metadata["summary"] = f"Polygon error for {symbol}: {error_message}"
+            cached_snapshot = self._cached_market_snapshot(context, symbol)
+            error_code = "polygon_rate_limited" if getattr(exc, "status_code", None) == 429 else "polygon_error"
             metadata["error"] = error_message
-            metadata["retryable_error_code"] = "polygon_error"
+            metadata["retryable_error_code"] = error_code
             metadata["retryable"] = True
             payload["error"] = error_message
             payload["retryable"] = True
+            if cached_snapshot:
+                payload.update({key: copy.deepcopy(value) for key, value in cached_snapshot.items()})
+                metadata["summary"] = f"Reused cached market snapshot for {cached_snapshot.get('symbol')} (live fetch unavailable)."
+                metadata["from_cache"] = True
+                metadata["preview_only"] = False
+                metadata["preview_keys"] = sorted(set(metadata.get("preview_keys", [])))
+                return ToolAdapterResult(
+                    name=self.name,
+                    status="completed",
+                    payload=payload,
+                    metadata=metadata,
+                )
+            metadata["summary"] = f"Polygon error for {symbol}: {error_message}"
             return ToolAdapterResult(
                 name=self.name,
                 status="error",
@@ -1401,6 +1512,8 @@ async def run_tool_parallelism(
         revision_directive=directive,
         revision_focus=revision_focus,
         revision_search_topics=revision_topics,
+        artifacts=getattr(ctx, "artifacts", None),
+        snapshot_artifacts=getattr(ctx, "snapshot_artifacts", None),
     )
 
     expanded_adapters: List[BaseToolAdapter] = []
