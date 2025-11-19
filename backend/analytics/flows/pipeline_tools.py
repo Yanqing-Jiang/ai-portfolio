@@ -313,3 +313,15 @@ def _assert_tool_parity(registry: PlannerToolRegistry) -> None:
             raise AssertionError(
                 f"Planner tool '{canonical.name}' schema_version mismatch: {registered.schema_version} vs {canonical.schema_version}",
             )
+        registered_parameters = registered.parameters_schema or {}
+        canonical_parameters = canonical.parameters_schema or {}
+        if registered_parameters != canonical_parameters:
+            raise AssertionError(
+                f"Planner tool '{canonical.name}' parameters schema drift detected",
+            )
+        registered_response = registered.response_schema or {}
+        canonical_response = canonical.response_schema or {}
+        if registered_response != canonical_response:
+            raise AssertionError(
+                f"Planner tool '{canonical.name}' response schema drift detected",
+            )

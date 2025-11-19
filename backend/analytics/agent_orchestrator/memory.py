@@ -11,6 +11,7 @@ from copy import deepcopy
 from typing import Any, Dict, Mapping, Optional, List
 
 from analytics.core.session_state import SessionStateSnapshot
+from analytics.validators import sanitize_for_json
 
 from .agent_plan import PlanState, PlanTemplate
 
@@ -128,6 +129,21 @@ class AgentMemory:
                 self._snapshot.record_revision_questions(payload)
             except Exception:
                 pass
+
+    def record_guardrail(self, guardrail_id: str, payload: Mapping[str, Any]) -> None:
+        """Persist guardrail verdicts so follow-up routing decisions remain auditable."""
+        if not guardrail_id:
+            return
+        entry = sanitize_for_json(dict(payload))
+        guardrail_cache = self._agent_cache.setdefault("guardrails", {})
+        if isinstance(guardrail_cache, dict):
+            guardrail_cache[str(guardrail_id)] = entry
+        if self._snapshot is None:
+            return
+        try:
+            self._snapshot.record_agent_guardrail(guardrail_id, entry)
+        except Exception:
+            pass
 
     def get_revision_questions(self) -> Optional[Dict[str, Any]]:
         """Return the cached revision question bundle if available."""

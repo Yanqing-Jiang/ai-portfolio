@@ -308,7 +308,12 @@ const parseTimestamp = (value?: string) => {
   return Number.isNaN(ms) ? undefined : ms;
 };
 
-const buildToolBadges = (step: ProcessStep): ToolBadgeMeta[] => {
+/*
+Function: buildToolBadgeModels — called from WorkflowCanvas node builders and
+unit tests to derive ToolBadgeMeta objects from ProcessStep telemetry (tool
+calls + agent turns) so the canvas shows consistent badge pills.
+*/
+export const buildToolBadgeModels = (step: ProcessStep, limit?: number): ToolBadgeMeta[] => {
   const details = step.details;
   const toolCalls = Array.isArray(details?.tool_calls) ? (details?.tool_calls as ToolCallTelemetry[]) : [];
   const agentTurns = Array.isArray(details?.agent_turns) ? (details?.agent_turns as AgentTurnTelemetry[]) : [];
@@ -378,6 +383,8 @@ const buildToolBadges = (step: ProcessStep): ToolBadgeMeta[] => {
     }
   });
 
+  const effectiveLimit = typeof limit === 'number' && limit > 0 ? limit : TOOL_BADGE_LIMIT;
+
   return Array.from(deduped.values())
     .sort((a, b) => {
       const tsDiff = (a.ts ?? a.seq ?? 0) - (b.ts ?? b.seq ?? 0);
@@ -386,7 +393,7 @@ const buildToolBadges = (step: ProcessStep): ToolBadgeMeta[] => {
       }
       return (a.seq ?? 0) - (b.seq ?? 0);
     })
-    .slice(-TOOL_BADGE_LIMIT)
+    .slice(-effectiveLimit)
     .reverse()
     .map(({ statusKey: _statusKey, ts: _ts, seq: _seq, ...badge }) => badge);
 };
@@ -961,7 +968,7 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
         finalAnswerOnly: Boolean(step.finalAnswerOnly),
         missingComponents: step.missingComponents,
         analysisAvailable: step.analysisAvailable,
-        toolBadges: buildToolBadges(step),
+        toolBadges: buildToolBadgeModels(step),
       };
     });
   }
@@ -1046,7 +1053,7 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
         finalAnswerOnly: Boolean(step.finalAnswerOnly),
         missingComponents: step.missingComponents,
         analysisAvailable: step.analysisAvailable,
-        toolBadges: buildToolBadges(step),
+        toolBadges: buildToolBadgeModels(step),
       };
     });
   }
@@ -1127,7 +1134,7 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
         finalAnswerOnly: Boolean(step.finalAnswerOnly),
         missingComponents: step.missingComponents,
         analysisAvailable: step.analysisAvailable,
-        toolBadges: buildToolBadges(step),
+        toolBadges: buildToolBadgeModels(step),
       };
     });
   }, [steps, flowMode, layout.columns, layout.horizontalGap, layout.verticalGap]);

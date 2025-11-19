@@ -23,8 +23,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Iterable, Mapping, Optional
+from typing import Any, Iterable, Mapping, Optional, Sequence
 
 from analytics.core.session_state import SessionStateSnapshot, chart_spec_has_numeric_payload
 
@@ -172,6 +173,51 @@ class FollowUpClassifier:
         if has_chart and has_sql and _contains_any(normalized_query, self.chart_keywords):
             return FollowUpRoute.REUSE_SQL
         return FollowUpRoute.FULL_PIPELINE
+
+    def build_guardrail_payload(
+        self,
+        *,
+        route: FollowUpRoute,
+        query: str,
+        snapshot: Optional[SessionStateSnapshot],
+        lane_readiness: Optional[Mapping[str, bool]] = None,
+        session_follow_up: bool = False,
+    ) -> Mapping[str, Any]:
+        """
+        Build a structured guardrail payload that explains why a follow-up route was selected.
+
+        The payload is attached to follow_up_route events plus persisted inside the session snapshot
+        so UI + Agents telemetry can render badges even when clients reconnect mid-run.
+        """
+
+        def _lanes_ready(source: Optional[Mapping[str, bool]]) -> Sequence[str]:
+            if not source:
+                available = self._lanes_available(snapshot)
+                return tuple(sorted(available))
+            ready = [lane for lane, is_ready in source.items() if is_ready]
+            return tuple(sorted(ready))
+
+        ready_lanes = _lanes_ready(lane_readiness)
+        reason_map = {
+            FollowUpRoute.STOCK_ONLY: "stock_keywords_with_cached_sql",
+            FollowUpRoute.REUSE_SQL: "chart_keywords_with_cached_sql_and_chart",
+            FollowUpRoute.CHART_ONLY: "chart_revision_bundle_ready",
+            FollowUpRoute.NARRATIVE_ONLY: "narrative_revision_bundle_ready",
+            FollowUpRoute.FULL_PIPELINE: "full_pipeline_required",
+        }
+        status = "redirected" if route is not FollowUpRoute.FULL_PIPELINE else "pass"
+        payload = {
+            "id": "follow_up_classifier",
+            "name": "Follow-Up Guardrail",
+            "status": status,
+            "route": route.value,
+            "reason": reason_map.get(route, "full_pipeline_required"),
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "session_follow_up": session_follow_up,
+            "lanes_ready": list(ready_lanes),
+            "query_hint": (query or "").strip()[:160],
+        }
+        return payload
 
     def _lanes_available(self, snapshot: Optional[SessionStateSnapshot]) -> set[str]:
         if snapshot is None:

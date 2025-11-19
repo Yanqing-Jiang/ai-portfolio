@@ -569,6 +569,7 @@ const LinkedInPhotoPage: React.FC<LinkedInPhotoPageProps> = ({ apiPath = '/api/l
                     type="file"
                     accept="image/jpeg,image/png"
                     onChange={handleInputChange}
+                    aria-label="Upload photo"
                     className="hidden"
                   />
                   {photoPreview ? (

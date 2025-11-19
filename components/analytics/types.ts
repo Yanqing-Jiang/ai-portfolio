@@ -30,6 +30,14 @@ export interface ToolCallTelemetry {
   lane?: string;
   reused?: boolean;
   guardrail?: Record<string, any>;
+  toolCallId?: string;
+  specialistRole?: string;
+  specialistLabel?: string;
+  schemaVersion?: string;
+  retryCount?: number;
+  cacheAgeSeconds?: number;
+  cacheSource?: string;
+  fastPathLatencyMs?: number;
 }
 
 export interface LaneReuseNotice {
@@ -293,6 +301,7 @@ export interface FollowUpBanner {
     user?: string | null;
     industry?: string | null;
   };
+  guardrail?: Record<string, any>;
 }
 
 export interface SpecialistCard {
@@ -396,12 +405,31 @@ export interface ChatMessage {
 
 export interface ProcessStep {
   id: string;
-  label: string;
-  status: 'pending' | 'in_progress' | 'completed' | 'error';
-  messages: string[];
+  name: string;
+  status: 'pending' | 'in_progress' | 'completed' | 'error' | 'stopped';
+  thinking: string[];
   details?: Record<string, any>;
-  elapsedMs?: number;
-  ts?: string;
+  elapsed_ms?: number;
+  timestamp?: string;
+  sequence?: number;
+  parallelGroup?: string;
+  scheduleStage?: string;
+  flowMode?: FlowMode;
+  lane?: string;
+  reused?: boolean;
+  finalAnswerOnly?: boolean;
+  missingComponents?: string[];
+  followUpRoute?: string;
+  analysisAvailable?: boolean;
+  toolCallId?: string;
+  specialistRole?: string;
+  specialistLabel?: string;
+  guardrail?: Record<string, any>;
+  retryCount?: number;
+  cacheAgeSeconds?: number;
+  cacheSource?: string;
+  schemaVersion?: string;
+  fastPathLatencyMs?: number;
 }
 
 export interface SlotStatusPayload {

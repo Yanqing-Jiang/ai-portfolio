@@ -33,6 +33,7 @@ import {
   AgentEvidence,
 } from '../types';
 import { apiService } from '../../../services/apiService';
+import { STEP_NAME } from '../../../constants/analytics';
 import { useAnalyticsStream } from './useAnalyticsStream';
 
 const AGENT_ROLE_CONFIG: Record<string, { stepId: string; lane: string; label: string }> = {
@@ -165,6 +166,79 @@ const coerceFlowMode = (raw: unknown): FlowMode | undefined => {
     return undefined;
   }
   return FLOW_MODE_ALIASES[normalized];
+};
+
+/*
+Function: formatSpecialistRoleLabel — called from resolveToolDisplayName and
+agent tool SSE handlers to convert snake/slug specialist roles into a title
+case badge label so ProcessPanel and WorkflowCanvas surface consistent human
+labels for each tool call.
+*/
+const formatSpecialistRoleLabel = (role?: string): string | undefined => {
+  if (!role) {
+    return undefined;
+  }
+  const trimmed = role.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return trimmed
+    .split(/[_-]/g)
+    .filter(Boolean)
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+    .join(' ');
+};
+
+/*
+Function: resolveToolDisplayName — called from agent tool SSE handlers to
+merge specialist labels with canonical STEP_NAME entries so ledger steps
+render `Specialist · Friendly Tool` strings for badge rows.
+*/
+const resolveToolDisplayName = (toolName?: string, specialistLabel?: string): string => {
+  const normalizedTool = toolName?.trim();
+  const friendlyTool = normalizedTool
+    ? STEP_NAME[normalizedTool] ?? formatLaneName(normalizedTool)
+    : 'Agent Tool';
+  return specialistLabel ? `${specialistLabel} · ${friendlyTool}` : friendlyTool;
+};
+
+/*
+Function: resolveToolStatusLabel — called from agent tool SSE handlers to
+map event types into succinct status copy (“started”, “completed”, etc.)
+before pushing thought summaries into ProcessPanel.
+*/
+const resolveToolStatusLabel = (eventType: string, toolStatus?: string): string => {
+  switch (eventType) {
+    case 'agent_tool_call':
+      return 'started';
+    case 'tool_call_delta':
+      return 'streaming arguments';
+    case 'tool_call_arguments':
+      return 'arguments finalized';
+    case 'agent_tool_complete':
+      return toolStatus ? toolStatus : 'completed';
+    default:
+      return toolStatus || 'update';
+  }
+};
+
+/*
+Function: mapToolCompletionStatus — called from agent_tool_complete events to
+translate free-form completion status strings into canonical ProcessStep
+statuses so ledger entries align with the rest of the workflow.
+*/
+const mapToolCompletionStatus = (raw?: string): ProcessStep['status'] => {
+  if (!raw) {
+    return 'completed';
+  }
+  const normalized = raw.toLowerCase();
+  if (normalized.includes('fail') || normalized.includes('error')) {
+    return 'error';
+  }
+  if (normalized === 'skipped' || normalized === 'cancelled' || normalized === 'stopped') {
+    return 'stopped';
+  }
+  return 'completed';
 };
 
 const computeCardPayloadHash = (entry: SpecialistCard): string | undefined => {
@@ -2374,6 +2448,7 @@ export const useAnalyticsMemoryStream = (
       return;
     }
 
+    const metadata = (payload.metadata ?? {}) as Record<string, any>;
     const entry: ToolCallTelemetry = {
       tool: payload.tool,
       status: payload.status,
@@ -2395,6 +2470,23 @@ export const useAnalyticsMemoryStream = (
     if (reusedFlag !== undefined) {
       entry.reused = reusedFlag;
     }
+    const toolCallId =
+      coerceString((payload as any).tool_call_id) ??
+      coerceString((payload as any).id) ??
+      coerceString(metadata.id);
+    if (toolCallId) {
+      entry.toolCallId = toolCallId;
+    }
+    const specialistRole = coerceString(metadata.specialist_role ?? (payload as any).specialist_role);
+    if (specialistRole) {
+      entry.specialistRole = specialistRole;
+    }
+    const specialistLabel =
+      coerceString(metadata.specialist_label ?? (payload as any).specialist_label) ??
+      formatSpecialistRoleLabel(specialistRole);
+    if (specialistLabel) {
+      entry.specialistLabel = specialistLabel;
+    }
     const latencyBudget = typeof payload.latency_budget_ms === 'number' ? payload.latency_budget_ms : undefined;
     const concurrencyLimit = typeof payload.concurrency_limit === 'number' ? payload.concurrency_limit : undefined;
     const outputArtifacts = Array.isArray(payload.output_artifacts)
@@ -2408,6 +2500,26 @@ export const useAnalyticsMemoryStream = (
     }
     if (outputArtifacts && outputArtifacts.length) {
       entry.outputArtifacts = outputArtifacts;
+    }
+    const schemaVersion = coerceString(metadata.schema_version ?? (payload as any).schema_version);
+    if (schemaVersion) {
+      entry.schemaVersion = schemaVersion;
+    }
+    const retryCount = coerceNumber(metadata.retry_count ?? (payload as any).retry_count);
+    if (retryCount !== undefined) {
+      entry.retryCount = retryCount;
+    }
+    const cacheAgeSeconds = coerceNumber(metadata.cache_age_seconds ?? (payload as any).cache_age_seconds);
+    if (cacheAgeSeconds !== undefined) {
+      entry.cacheAgeSeconds = cacheAgeSeconds;
+    }
+    const cacheSource = coerceString(metadata.cache_source ?? (payload as any).cache_source);
+    if (cacheSource) {
+      entry.cacheSource = cacheSource;
+    }
+    const fastPathLatency = coerceNumber(metadata.fast_path_latency_ms ?? (payload as any).fast_path_latency_ms);
+    if (fastPathLatency !== undefined) {
+      entry.fastPathLatencyMs = fastPathLatency;
     }
     const guardrailPayload =
       payload.guardrail ??
@@ -3144,16 +3256,38 @@ export const useAnalyticsMemoryStream = (
         if (revisionModeRef.current !== 'none' && suppressedRevisionSteps.has(stepId)) {
           return;
         }
+        const enrichedDetails =
+          details ||
+          sequence !== undefined ||
+          parallelGroup !== undefined ||
+          scheduleStage !== undefined ||
+          resolvedFlowMode
+            ? {
+                ...(details ?? {}),
+                sequence,
+                parallelGroup,
+                scheduleStage,
+                flowMode: resolvedFlowMode,
+                lane: overrides?.lane ?? laneFromEvent,
+                reused: overrides?.reused ?? reusedFlag,
+                finalAnswerOnly: overrides?.finalAnswerOnly,
+                missingComponents: overrides?.missingComponents,
+                followUpRoute: overrides?.followUpRoute,
+                analysisAvailable: overrides?.analysisAvailable,
+              }
+            : details;
         stepsHook.updateStepStatus(
           stepId,
           status,
           thinking,
+          enrichedDetails,
+          elapsed,
+          ts,
+          sequence,
+          parallelGroup,
+          scheduleStage,
+          resolvedFlowMode,
           {
-            ...details,
-            sequence,
-            parallelGroup,
-            scheduleStage,
-            flowMode: resolvedFlowMode,
             lane: overrides?.lane ?? laneFromEvent,
             reused: overrides?.reused ?? reusedFlag,
             finalAnswerOnly: overrides?.finalAnswerOnly,
@@ -3161,8 +3295,72 @@ export const useAnalyticsMemoryStream = (
             followUpRoute: overrides?.followUpRoute,
             analysisAvailable: overrides?.analysisAvailable,
           },
-          elapsed,
-          ts,
+        );
+      };
+
+      /*
+      Function: upsertAgentToolStep — called from agent tool SSE handlers to
+      materialize one ProcessStep per tool_call_id with enriched metadata so the
+      ProcessPanel ledger can display specialist, guardrail, retry, and cache
+      badges that match the backend receipts.
+      */
+      const upsertAgentToolStep = (
+        toolCall: Record<string, any>,
+        status: ProcessStep['status'],
+        summary: string[],
+        detailOverrides?: Record<string, any>,
+        extras?: {
+          lane?: string;
+          reused?: boolean;
+          guardrail?: Record<string, any>;
+          toolCallId?: string;
+          specialistRole?: string;
+          specialistLabel?: string;
+          schemaVersion?: string;
+          retryCount?: number;
+          cacheAgeSeconds?: number;
+          cacheSource?: string;
+          fastPathLatencyMs?: number;
+          displayName?: string;
+        },
+        eventTimestamp?: string,
+      ) => {
+        const toolCallId =
+          extras?.toolCallId ??
+          coerceString(toolCall.id) ??
+          coerceString((toolCall as any).tool_call_id) ??
+          coerceString((toolCall as any).call_id) ??
+          `${toolCall.name ?? 'agent_tool'}-${sequence ?? Date.now()}`;
+        const metadata = (toolCall.metadata ?? {}) as Record<string, any>;
+        stepsHook.updateStepStatus(
+          toolCallId,
+          status,
+          summary,
+          {
+            ...detailOverrides,
+            tool_call: toolCall,
+            metadata,
+          },
+          stepInfo.elapsed_ms,
+          eventTimestamp ?? stepInfo.ts,
+          sequence,
+          parallelGroup,
+          scheduleStage,
+          resolvedFlowMode,
+          {
+            lane: extras?.lane ?? resolveLane(toolCall, metadata, { lane: laneFromEvent }) ?? laneFromEvent,
+            reused: extras?.reused ?? resolveReusedFlag(toolCall, metadata, eventData, data),
+            guardrail: extras?.guardrail,
+            toolCallId,
+            specialistRole: extras?.specialistRole,
+            specialistLabel: extras?.specialistLabel,
+            schemaVersion: extras?.schemaVersion,
+            retryCount: extras?.retryCount,
+            cacheAgeSeconds: extras?.cacheAgeSeconds,
+            cacheSource: extras?.cacheSource,
+            fastPathLatencyMs: extras?.fastPathLatencyMs,
+            displayName: extras?.displayName,
+          },
         );
       };
 
@@ -3408,6 +3606,11 @@ export const useAnalyticsMemoryStream = (
             coerceBoolean(eventData.agentic_revision ?? data.agentic_revision) ?? false;
           setAgenticRevisionActive(agenticFlag);
           applyAgentEvidenceUpdate(() => null);
+          const guardrailPayload =
+            (eventData.guardrail as Record<string, any> | undefined) ?? undefined;
+          if (guardrailPayload) {
+            workflowDataRef.current.followUpGuardrail = guardrailPayload;
+          }
           const reasonKey =
             coerceString((eventData.banner as any)?.reason ?? eventData.reason) ?? undefined;
           const bannerKey =
@@ -3419,6 +3622,9 @@ export const useAnalyticsMemoryStream = (
             route,
             reason: reasonKey ?? undefined,
           };
+          if (guardrailPayload) {
+            banner.guardrail = guardrailPayload;
+          }
           const normalizedLanes = Array.isArray(eventData.lanes)
             ? (eventData.lanes as unknown[])
               .map((lane) => (typeof lane === 'string' ? lane.toLowerCase() : ''))
@@ -3535,10 +3741,24 @@ export const useAnalyticsMemoryStream = (
           workflowDataRef.current.followUpBanner = banner;
           refreshResultMessage();
           const thinking = [`Route selected: ${route.replace(/[_-]/g, ' ')}`];
+          if (guardrailPayload?.status) {
+            thinking.push(`Guardrail: ${guardrailPayload.status}`);
+          }
           if (normalizedLanes && normalizedLanes.length) {
             thinking.push(`Revision lanes: ${normalizedLanes.join(', ')}`);
           }
-          updateStep('follow_up_route', 'in_progress', thinking, { banner }, stepInfo.elapsed_ms, stepInfo.ts);
+          const stepDetails: Record<string, any> = { banner };
+          if (guardrailPayload) {
+            stepDetails.guardrail = guardrailPayload;
+          }
+          updateStep(
+            'follow_up_route',
+            'in_progress',
+            thinking,
+            stepDetails,
+            stepInfo.elapsed_ms,
+            stepInfo.ts,
+          );
           streamHook.setCurrentStatus(hasExplicitResultContentRef.current ? '' : copy.message);
           break;
         }
@@ -5009,12 +5229,65 @@ export const useAnalyticsMemoryStream = (
         case 'agent_tool_call':
         case 'agent_tool_complete': {
           const toolCall = (eventData.tool_call ?? {}) as Record<string, any>;
-          const toolName =
-            coerceString(toolCall.name) ??
-            coerceString(toolCall.tool) ??
+          const toolMetadata = (toolCall.metadata ?? {}) as Record<string, any>;
+          const specialistRole = coerceString(toolMetadata.specialist_role);
+          const specialistLabel =
+            coerceString(toolMetadata.specialist_label) ?? formatSpecialistRoleLabel(specialistRole);
+          const displayName = resolveToolDisplayName(coerceString(toolCall.name), specialistLabel);
+          const toolCallId =
             coerceString(toolCall.id) ??
-            'agent_tool';
+            coerceString((toolCall as any).tool_call_id) ??
+            coerceString((toolCall as any).call_id);
           const eventTimestamp = coerceString(eventData.ts) ?? stepInfo.ts ?? new Date().toISOString();
+          const guardrailPayload =
+            (eventData.guardrail as Record<string, any> | undefined) ??
+            (eventData.latency_guardrail as Record<string, any> | undefined) ??
+            (toolMetadata.guardrail as Record<string, any> | undefined);
+          const retryCount = coerceNumber(toolMetadata.retry_count);
+          const cacheAgeSeconds = coerceNumber(toolMetadata.cache_age_seconds);
+          const cacheSource = coerceString(toolMetadata.cache_source);
+          const schemaVersion = coerceString(toolMetadata.schema_version);
+          const fastPathLatencyMs = coerceNumber(toolMetadata.fast_path_latency_ms);
+          const statusLabel = resolveToolStatusLabel(eventType, coerceString(toolCall.status));
+          const summaryMessages = [`${displayName}: ${statusLabel}`];
+          if (retryCount && retryCount > 0) {
+            summaryMessages.push(`Retry ${retryCount}`);
+          }
+          if (cacheAgeSeconds && cacheAgeSeconds > 0) {
+            summaryMessages.push(`Cache age ~${Math.round(cacheAgeSeconds)}s`);
+          }
+          const toolStepStatus =
+            eventType === 'agent_tool_complete'
+              ? mapToolCompletionStatus(coerceString(toolCall.status))
+              : 'in_progress';
+          const detailOverrides: Record<string, any> = {
+            arguments: toolCall.arguments,
+            arguments_delta: toolCall.arguments_delta,
+            status: toolCall.status,
+            sequence_number: toolCall.sequence_number ?? toolCall.sequenceNumber,
+            output_index: toolCall.output_index ?? toolCall.outputIndex,
+          };
+          upsertAgentToolStep(
+            toolCall,
+            toolStepStatus,
+            summaryMessages,
+            detailOverrides,
+            {
+              lane: laneFromEvent,
+              reused: reusedFlag ?? resolveReusedFlag(toolCall, toolMetadata, eventData, data),
+              guardrail: guardrailPayload,
+              toolCallId,
+              specialistRole,
+              specialistLabel,
+              schemaVersion,
+              retryCount,
+              cacheAgeSeconds,
+              cacheSource,
+              fastPathLatencyMs,
+              displayName,
+            },
+            eventTimestamp,
+          );
           const syntheticMetadata: Record<string, any> = {};
           const laneCandidate = resolveLane(eventData, toolCall, { lane: laneFromEvent });
           if (laneCandidate) {
@@ -5036,13 +5309,11 @@ export const useAnalyticsMemoryStream = (
             syntheticMetadata.status = toolCall.status;
           }
           const syntheticPayload = {
-            tool: toolName,
+            tool: coerceString(toolCall.name) ?? coerceString(toolCall.tool) ?? toolCallId ?? 'agent_tool',
             status:
               eventType === 'tool_call_arguments' || eventType === 'agent_tool_complete'
                 ? 'completed'
-                : eventType === 'agent_tool_call'
-                  ? 'running'
-                  : 'running',
+                : 'running',
             ts: eventTimestamp,
             metadata: syntheticMetadata,
             details: {
@@ -5056,7 +5327,7 @@ export const useAnalyticsMemoryStream = (
             elapsed_ms: stepInfo.elapsed_ms,
             sequence,
             parallel_group: parallelGroup,
-            tool_group: toolGroup ?? toolName,
+            tool_group: toolGroup ?? syntheticPayload.tool,
           });
           break;
         }

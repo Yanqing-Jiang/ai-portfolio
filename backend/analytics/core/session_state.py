@@ -98,6 +98,7 @@ from decimal import Decimal
 from pydantic import BaseModel, Field, field_validator
 
 from analytics.validators import sanitize_for_json
+from analytics.tools.definitions import TOOL_REGISTRY, ToolDefinition
 from analytics.core.telemetry import (
     analysis_inputs_manifest_sealed,
     analysis_inputs_missing,
@@ -520,6 +521,23 @@ class SessionStateSnapshot(BaseModel):
             logger.debug("Failed to cache revision questions", exc_info=True)
         return entry
 
+    def record_agent_guardrail(self, guardrail_id: str, payload: Mapping[str, Any]) -> None:
+        """Persist guardrail verdicts emitted by the agent runtime."""
+        if not guardrail_id:
+            return
+        if not isinstance(self.tool_cache, dict):
+            self.tool_cache = {}
+        agent_cache = self.tool_cache.setdefault("agent", {})
+        if not isinstance(agent_cache, dict):
+            agent_cache = {}
+            self.tool_cache["agent"] = agent_cache
+        guardrails = agent_cache.setdefault("guardrails", {})
+        if not isinstance(guardrails, dict):
+            guardrails = {}
+            agent_cache["guardrails"] = guardrails
+        guardrails[str(guardrail_id)] = sanitize_for_json(dict(payload))
+        self.touch()
+
     def record_web_research_questions(self, bundle: Mapping[str, Any]) -> Dict[str, Any]:
         """Persist the Gemini-powered web question bundle for reuse and ledgers."""
         payload = dict(bundle)
@@ -875,21 +893,21 @@ class SessionStateSnapshot(BaseModel):
         output_digest = digest_tool_payload(output_payload)
         if output_digest and not enhanced.get("output_digest"):
             enhanced["output_digest"] = output_digest
-        metadata_payload = enhanced.get("metadata") if isinstance(enhanced.get("metadata"), Mapping) else None
+        canonical_definition = _tool_definition_for_receipt(tool)
+        metadata_payload: Dict[str, Any] = (
+            dict(enhanced.get("metadata")) if isinstance(enhanced.get("metadata"), Mapping) else {}
+        )
         guardrail_payload = (
             enhanced.get("latency_guardrail")
             or enhanced.get("guardrail")
-            or (metadata_payload.get("guardrail") if metadata_payload else None)
-            or (metadata_payload.get("latency_guardrail") if metadata_payload else None)
+            or metadata_payload.get("guardrail")
+            or metadata_payload.get("latency_guardrail")
         )
         if guardrail_payload:
             sanitized_guardrail = sanitize_for_json(guardrail_payload)
             enhanced.setdefault("latency_guardrail", sanitized_guardrail)
             enhanced.setdefault("guardrail", sanitized_guardrail)
-            if metadata_payload is not None:
-                merged_metadata = dict(metadata_payload)
-                merged_metadata.setdefault("guardrail", sanitized_guardrail)
-                enhanced["metadata"] = merged_metadata
+            metadata_payload.setdefault("guardrail", sanitized_guardrail)
         normalized_tool = _normalize_tool_name(enhanced.get("tool"))
         lane = (enhanced.get("lane") or "").strip().lower()
         source_lane = lane
@@ -897,6 +915,33 @@ class SessionStateSnapshot(BaseModel):
             source_lane = TOOL_LANE_HINTS.get(normalized_tool)
         if source_lane:
             enhanced.setdefault("source_lane", source_lane)
+        lane_hint = lane or source_lane or (canonical_definition.telemetry_step if canonical_definition else None)
+        if lane_hint:
+            metadata_payload.setdefault("lane", lane_hint)
+            enhanced.setdefault("lane", lane_hint)
+        if canonical_definition:
+            metadata_payload.setdefault("schema_version", canonical_definition.schema_version)
+            enhanced.setdefault("schema_version", canonical_definition.schema_version)
+        reuse_flag = bool(enhanced.get("reused")) or bool(enhanced.get("reuse_metadata"))
+        metadata_payload.setdefault("from_cache", reuse_flag)
+        elapsed_ms = enhanced.get("latency_ms")
+        try:
+            if elapsed_ms is not None:
+                metadata_payload.setdefault("elapsed_ms", int(elapsed_ms))
+        except (TypeError, ValueError):
+            pass
+        retry_count = enhanced.get("retry_count")
+        if retry_count is None:
+            attempt_value = enhanced.get("attempts")
+            try:
+                if attempt_value is not None:
+                    retry_count = max(int(attempt_value) - 1, 0)
+            except (TypeError, ValueError):
+                retry_count = None
+        if retry_count is not None:
+            metadata_payload.setdefault("retry_count", retry_count)
+        if metadata_payload:
+            enhanced["metadata"] = sanitize_for_json(metadata_payload)
         if lane:
             reuse_metadata = self._lane_reuse_metadata(lane)
             if reuse_metadata:
@@ -1907,3 +1952,15 @@ def _normalize_tool_name(tool: Optional[str]) -> Optional[str]:
         return None
     normalized = str(tool).strip().lower()
     return normalized or None
+
+
+def _tool_definition_for_receipt(tool: str) -> Optional[ToolDefinition]:
+    """Return the canonical ToolDefinition for a recorded tool name when present."""
+
+    normalized = _normalize_tool_name(tool)
+    if not normalized:
+        return None
+    for definition in TOOL_REGISTRY.values():
+        if definition.name == normalized:
+            return definition
+    return None
