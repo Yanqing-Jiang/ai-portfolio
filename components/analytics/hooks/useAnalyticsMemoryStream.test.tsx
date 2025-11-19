@@ -1133,6 +1133,29 @@ describe('useAnalyticsMemoryStream follow-up guidance', () => {
     });
   });
 
+  it('surfaces guardrail metadata inside follow_up_route steps', async () => {
+    const { result } = renderHook(() => useAnalyticsMemoryStream('planner-executor'));
+
+    (globalThis as any).__TEST_EVENTS__ = [
+      {
+        event: 'follow_up_route',
+        data: {
+          route: 'reuse_sql',
+          guardrail: { id: 'follow_up_classifier', status: 'redirected' },
+        },
+      },
+    ];
+
+    await act(async () => {
+      await result.current.handleQuery('guardrail follow up');
+    });
+
+    await waitFor(() => {
+      const followUpStep = result.current.processSteps.find((step) => step.id === 'follow_up_route');
+      expect(followUpStep?.details?.guardrail?.status).toBe('redirected');
+    });
+  });
+
   it('uses missing_analysis banner copy when reason provided', async () => {
     const { result } = renderHook(() => useAnalyticsMemoryStream('single-agent'));
 

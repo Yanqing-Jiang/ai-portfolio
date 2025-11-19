@@ -63,6 +63,7 @@ Only SINGLE_AGENT and MULTI_AGENT modes change; FlowMode.DIRECT remains determin
   - Make `flows/pipeline_tools.get_planner_tool_registry()` a thin adapter over the new registry; generate Agents manifests from the same data.
   - Add a CI check that the JSON schema for each tool in DIRECT’s adapter matches the Agents manifest byte-for-byte.
 - **Progress (November 19, 2025 – Codex):** Delivered the shared `backend/analytics/tools/definitions.py`, rewired `pipeline_tools` and agent manifests to consume it (with schema_version + depends_on), exposed `run_tool_by_id`, and added a planner parity assertion so DIRECT and Agent SDK paths stay in lockstep.
+- **Progress (November 20, 2025 – Codex):** Added a regression guard in `pipeline_tools` plus a pytest that compares DIRECT planner tool schemas to the canonical registry to prevent manifest drift.
 - **Acceptance**
   - A single registry powers DIRECT, SINGLE_AGENT, and MULTI_AGENT; manifests are generated from it, guaranteeing schema parity.
 
@@ -73,6 +74,9 @@ Only SINGLE_AGENT and MULTI_AGENT modes change; FlowMode.DIRECT remains determin
   - Populate `ToolInvocationReceipt.metadata = {schema_version, guardrail, elapsed_ms, retry_count, from_cache, lane}` and persist via `SessionStateSnapshot.record_tool_receipt`.
   - Add unit tests per wrapper to assert the underlying lane adapter ran and receipts contain the new metadata.
 - **Progress (November 19, 2025 – Codex):** Shared tool schemas (`ToolDefinition` + `depends_on`) now feed DIRECT + agent flows; metadata persistence/tests remain to be implemented.
+- **Progress (November 19, 2025 – Codex):** SessionStateSnapshot now enriches tool receipts with schema_version, lane, cache, latency, and retry metadata from the canonical registry, and pytest coverage asserts the enriched shape.
+- **Progress (November 20, 2025 – Codex):** SINGLE_AGENT controllers now default to the AgentRuntime path for fresh and revision runs, keeping schema/version parity by reusing the canonical tool registry.
+- **Progress (November 19, 2025 – Codex):** FollowUpClassifier verdicts now emit guardrail payloads across workflow + agent SSE events, persist in SessionStateSnapshot, and the AgentsStreamBridge annotates tool completions with latency budgets/guardrail metadata so SINGLE_AGENT fresh runs expose the same badges/tests as revisions.
 - **Acceptance**
   - Planner adapter, single-agent controller, and supervisor import the same `TOOL_REGISTRY`; CI enforces schema parity.
 
@@ -90,6 +94,7 @@ Only SINGLE_AGENT and MULTI_AGENT modes change; FlowMode.DIRECT remains determin
 - **Tests/Acceptance**
   - Fixed-prompt parity suite (DIRECT vs SINGLE_AGENT fresh) for SQL/Chart/Analysis artifacts.
   - SSE ordering checks (reasoning → tool_call_delta → tool_complete) and guardrail verdict presence.
+- **Progress (November 20, 2025 – Codex):** Routed SINGLE_AGENT planner orchestrations through AgentRuntime by default so fresh/revision traffic emits agent telemetry and shared schemas.
 
 ### Phase 3 – MULTI_AGENT supervisor + specialists-as-tools
 - **Orchestration**
@@ -102,6 +107,8 @@ Only SINGLE_AGENT and MULTI_AGENT modes change; FlowMode.DIRECT remains determin
 - **Tests/Acceptance**
   - Supervisor E2E tests: revision prompts rerun only the needed tools; SQL lanes show reuse badges; delegation metadata present.
   - Acceptance = MULTI_AGENT fresh + revision run fully on the Agent SDK, emitting the same schema as SINGLE_AGENT with specialist tags.
+- **Progress (November 20, 2025 – Codex):** Locked DIRECT/agent tool schema parity and enabled SINGLE_AGENT AgentRuntime defaults, clearing prerequisites for the supervisor to reuse the canonical tool manifest and telemetry contract.
+- **Progress (November 21, 2025 – Codex):** Forced SINGLE_AGENT and MULTI_AGENT revision traffic through AgentRuntime without env gates so supervisor+planner orchestration always emits the canonical agent telemetry envelopes.
 
 ### Phase 4 – Telemetry + Frontend Alignment
 - **AgentsStreamBridge**
@@ -113,6 +120,12 @@ Only SINGLE_AGENT and MULTI_AGENT modes change; FlowMode.DIRECT remains determin
 - **Tests/Acceptance**
   - Vitest snapshots + ledger replays verifying identical envelope consumption for single-agent vs supervisor runs.
   - Acceptance = UI shows the same evidence for fresh/revision in SINGLE_AGENT and MULTI_AGENT; DIRECT remains distinct.
+- **Progress (November 20, 2025 – Codex):** `AgentsStreamBridge` now emits `agent_tool_call`/`tool_call_delta`/`agent_tool_complete`
+  payloads with canonical lane, specialist_role, and schema_version metadata from the shared registry so SINGLE_AGENT fresh telemetry
+  matches revision envelopes, and pytest coverage locks the new metadata contract in place.
+- **Progress (November 21, 2025 – Codex):** ProcessPanel, WorkflowCanvas, and the analytics memory hooks now key ledger rows by `tool_call_id`,
+  surface guardrail/retry/reuse badges, and parse canonical schema versions plus specialist roles from the Agent SDK envelopes. The new
+  ledger fixture (`docs/agent-process-ledger - 2025-11-17T181443.313.json`) and Vitest helpers exercise these badges across the WorkflowCanvas suite.
 
 ### Phase 5 – Legacy deletion & config simplification
 - **Delete**
@@ -122,6 +135,7 @@ Only SINGLE_AGENT and MULTI_AGENT modes change; FlowMode.DIRECT remains determin
   - DIRECT planner/tests, `ANALYTICS_FLOW_MODE`, TTL + cache env vars.
 - **Acceptance**
   - No planner-based code paths for agentic flows; env surface reduced to essentials; DIRECT remains the fallback.
+- **Progress (November 21, 2025 – Codex):** Removed the `ANALYTICS_ENABLE_AGENTS` and `AGENTIC_*` env toggles from controllers, workflow routing, docs, and scripts so non-DIRECT modes always boot the OpenAI Agent runtime without flag drift.
 
 ### Frontend File-Level Work (Phases 2–4)
 - `components/analytics/hooks/useAnalyticsMemoryStream.ts`: consume `agent_turn_*`, `agent_tool_*`, `lane_reused_*`, `workflow_redirect/cancelled`, `web_topics_*`; coalesce steps by `agent_turn_id`; hide fresh-lane pills during revision; render badges.

@@ -50,6 +50,12 @@ export const demoProcessSteps: ProcessStep[] = [
     parallelGroup: 'coordination',
     flowMode: 'multi-agent',
     lane: 'coordination',
+    toolCallId: 'sup-call-001',
+    specialistRole: 'supervisor_agent',
+    specialistLabel: 'Supervisor Agent',
+    schemaVersion: 'analytics_tool_schema/2025-11-19',
+    cacheAgeSeconds: 42,
+    fastPathLatencyMs: 38,
   },
   {
     id: 'web_research_agent',
@@ -69,6 +75,15 @@ export const demoProcessSteps: ProcessStep[] = [
     parallelGroup: 'web',
     flowMode: 'multi-agent',
     lane: 'web',
+    toolCallId: 'web-call-992',
+    specialistRole: 'web_specialist',
+    specialistLabel: 'Web Research Specialist',
+    schemaVersion: 'analytics_tool_schema/2025-11-19',
+    guardrail: {
+      status: 'pass',
+      thresholds: { p50_ms: 800, p95_ms: 1500 },
+    },
+    cacheSource: 'web_cache',
   },
   {
     id: 'analysis_revision',
@@ -88,6 +103,16 @@ export const demoProcessSteps: ProcessStep[] = [
     parallelGroup: 'analysis',
     flowMode: 'multi-agent',
     lane: 'analysis',
+    toolCallId: 'analysis-call-447',
+    specialistRole: 'analysis_specialist',
+    specialistLabel: 'Analysis Specialist',
+    schemaVersion: 'analytics_tool_schema/2025-11-19',
+    retryCount: 1,
+    guardrail: {
+      status: 'recovered',
+      violations: ['latency_spike'],
+      thresholds: { p50_ms: 900, p95_ms: 2000 },
+    },
   },
 ];
 

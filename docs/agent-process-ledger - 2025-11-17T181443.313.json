@@ -1,0 +1,31 @@
+[
+    {
+        "agent":  "analytics_supervisor",
+        "model":  "gpt-5-mini-2025-08-07",
+        "id":  "agent_supervisor_started",
+        "flowMode":  "multi-agent",
+        "ts":  "2025-11-17T18:14:43.313Z"
+    },
+    {
+        "id":  "agent_tool_call",
+        "ts":  "2025-11-17T18:14:44.100Z",
+        "specialist_role":  "sql_specialist",
+        "lane":  "sql",
+        "flowMode":  "multi-agent",
+        "tool":  "sql_generation"
+    },
+    {
+        "id":  "agent_tool_complete",
+        "ts":  "2025-11-17T18:14:44.450Z",
+        "specialist_role":  "sql_specialist",
+        "lane":  "sql",
+        "flowMode":  "multi-agent",
+        "tool":  "sql_generation"
+    },
+    {
+        "total_elapsed_ms":  125000,
+        "id":  "workflow_complete",
+        "flowMode":  "multi-agent",
+        "ts":  "2025-11-17T18:19:10.000Z"
+    }
+]

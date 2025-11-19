@@ -86,9 +86,8 @@ def _patch_agent(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("analytics.flows.single_agent_tools.Agent", _DummyAgent)
 
 
-def test_single_agent_controller_auto_enables_with_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("ANALYTICS_ENABLE_AGENTS", raising=False)
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+def test_single_agent_controller_enables_agents_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     controller = SingleAgentController()
 
@@ -97,20 +96,9 @@ def test_single_agent_controller_auto_enables_with_api_key(monkeypatch: pytest.M
 
 
 def test_single_agent_controller_respects_disable_flag(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ANALYTICS_ENABLE_AGENTS", "0")
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-
-    controller = SingleAgentController()
-
-    assert controller._agents_enabled is False
-    assert controller._agent is None
-
-
-def test_single_agent_controller_requires_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("ANALYTICS_ENABLE_AGENTS", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
-    controller = SingleAgentController(enable_agents=True)
+    controller = SingleAgentController(enable_agents=False)
 
     assert controller._agents_enabled is False
     assert controller._agent is None

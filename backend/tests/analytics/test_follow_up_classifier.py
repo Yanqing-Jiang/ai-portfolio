@@ -71,3 +71,32 @@ def test_classifier_prefers_chart_when_gemini_bundle_mentions_visuals() -> None:
     )
     route = classifier.classify("Follow-up", snapshot)
     assert route is FollowUpRoute.CHART_ONLY
+
+
+def test_guardrail_payload_marks_redirect_for_stock_only_route() -> None:
+    classifier = FollowUpClassifier()
+    snapshot = _snapshot(sql="SELECT 1", chart_spec={"title": {"text": "Mix"}})
+    payload = classifier.build_guardrail_payload(
+        route=FollowUpRoute.STOCK_ONLY,
+        query="Update the stock performance",
+        snapshot=snapshot,
+        lane_readiness={"sql": True, "analysis": True},
+        session_follow_up=True,
+    )
+    assert payload["status"] == "redirected"
+    assert payload["route"] == FollowUpRoute.STOCK_ONLY.value
+    assert payload["session_follow_up"] is True
+    assert "lanes_ready" in payload
+
+
+def test_guardrail_payload_passes_for_full_pipeline() -> None:
+    classifier = FollowUpClassifier()
+    payload = classifier.build_guardrail_payload(
+        route=FollowUpRoute.FULL_PIPELINE,
+        query="Fresh analysis",
+        snapshot=None,
+        lane_readiness=None,
+        session_follow_up=False,
+    )
+    assert payload["status"] == "pass"
+    assert payload["route"] == FollowUpRoute.FULL_PIPELINE.value

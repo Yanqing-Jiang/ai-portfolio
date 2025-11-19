@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timezone
+import time
 from typing import Any, Dict, List, Optional
 
 from agents.result import RunResultStreaming
@@ -35,7 +36,9 @@ from openai.types.responses.response_text_done_event import (
     ResponseTextDoneEvent,
 )
 
+from analytics.flows.planner_executor import _evaluate_latency_guardrail
 from analytics.flows.schedulers import FlowMode, apply_mode_metadata
+from analytics.tools import TOOL_REGISTRY
 from analytics.validators import sanitize_for_json
 
 
@@ -56,6 +59,22 @@ class AgentsStreamBridge:
         self._output_buffers: Dict[str, str] = {}
         self._supervisor_seen = False
         self._supervisor_specialists: List[str] = []
+        self._tool_start_times: Dict[str, float] = {}
+        self._definition_metadata = {
+            definition.name: self._clean_dict(
+                {
+                    "lane": definition.lane,
+                    "specialist_role": definition.specialist_role,
+                    "schema_version": definition.schema_version,
+                    "latency_budget_ms": definition.latency_budget_ms,
+                    "concurrency_limit": definition.concurrency_limit,
+                    "output_artifacts": list(definition.output_artifacts or (definition.outputs or ())),
+                }
+            )
+            for definition in TOOL_REGISTRY.values()
+        }
+        self._definitions_by_name = {definition.name: definition for definition in TOOL_REGISTRY.values()}
+        self._tool_metadata: Dict[str, Dict[str, Any]] = {}
 
     async def forward(self, result: RunResultStreaming) -> RunResultStreaming:
         """Translate streaming events into SSE payloads."""
@@ -68,7 +87,7 @@ class AgentsStreamBridge:
 
     async def _handle_stream_event(self, event: StreamEvent) -> None:
         if isinstance(event, RunItemStreamEvent):
-            self._remember_tool_metadata(event)
+            await self._handle_tool_called_event(event)
             return
         if isinstance(event, RawResponsesStreamEvent):
             await self._handle_raw_response_event(event.data)
@@ -115,21 +134,33 @@ class AgentsStreamBridge:
         self._supervisor_seen = False
         self._supervisor_specialists.clear()
 
-    def _remember_tool_metadata(self, event: RunItemStreamEvent) -> None:
+    async def _handle_tool_called_event(self, event: RunItemStreamEvent) -> None:
         if event.name != "tool_called":
             return
         raw_item = getattr(event.item, "raw_item", None)
-        tool_name = getattr(raw_item, "name", None)
-        if not tool_name:
+        if raw_item is None:
             return
-        identifier_candidates = (
-            getattr(raw_item, "id", None),
-            getattr(raw_item, "call_id", None),
-            getattr(raw_item, "tool_call_id", None),
+        tool_id = self._extract_tool_identifier(raw_item)
+        tool_name = getattr(raw_item, "name", None)
+        if tool_id:
+            self._tool_names[tool_id] = str(tool_name or tool_id)
+            self._tool_start_times[tool_id] = time.monotonic()
+        metadata = self._merge_tool_metadata(
+            tool_id=tool_id,
+            tool_name=tool_name,
+            runtime_metadata=getattr(raw_item, "metadata", None),
         )
-        for candidate in identifier_candidates:
-            if candidate:
-                self._tool_names[str(candidate)] = str(tool_name)
+        payload = {
+            "tool_call": self._clean_dict(
+                {
+                    "id": tool_id,
+                    "name": tool_name,
+                    "status": "running",
+                    "metadata": metadata or None,
+                }
+            )
+        }
+        await self._enqueue_event("agent_tool_call", payload)
 
     async def _handle_raw_response_event(self, payload: Any) -> None:
         event_type = getattr(payload, "type", None)
@@ -158,6 +189,7 @@ class AgentsStreamBridge:
     ) -> None:
         tool_id = str(payload.item_id)
         tool_name = self._tool_names.get(tool_id)
+        metadata = self._merge_tool_metadata(tool_id=tool_id, tool_name=tool_name, runtime_metadata=None)
         delta_payload = {
             "tool_call": self._clean_dict(
                 {
@@ -166,6 +198,7 @@ class AgentsStreamBridge:
                     "arguments_delta": payload.delta,
                     "sequence_number": payload.sequence_number,
                     "output_index": payload.output_index,
+                    "metadata": metadata or None,
                 }
             )
         }
@@ -176,6 +209,7 @@ class AgentsStreamBridge:
     ) -> None:
         tool_id = str(payload.item_id)
         self._tool_names.setdefault(tool_id, payload.name)
+        metadata = self._merge_tool_metadata(tool_id=tool_id, tool_name=payload.name, runtime_metadata=None)
         summary_payload = {
             "tool_call": self._clean_dict(
                 {
@@ -184,6 +218,7 @@ class AgentsStreamBridge:
                     "arguments": payload.arguments,
                     "sequence_number": payload.sequence_number,
                     "output_index": payload.output_index,
+                    "metadata": metadata or None,
                 }
             )
         }
@@ -245,21 +280,47 @@ class AgentsStreamBridge:
             return
         tool_name = getattr(item, "name", None)
         status = getattr(item, "status", None)
+        tool_id = self._extract_tool_identifier(item)
         if tool_name:
-            self._tool_names[str(getattr(item, "id", tool_name))] = str(tool_name)
+            identifier_key = tool_id or str(getattr(item, "id", tool_name))
+            self._tool_names[str(identifier_key)] = str(tool_name)
+        metadata = self._merge_tool_metadata(
+            tool_id=tool_id,
+            tool_name=tool_name,
+            runtime_metadata=getattr(item, "metadata", None),
+        )
+        elapsed_ms: Optional[int] = None
+        if tool_id and tool_id in self._tool_start_times:
+            try:
+                elapsed_ms = int((time.monotonic() - self._tool_start_times.pop(tool_id)) * 1000)
+            except Exception:
+                elapsed_ms = None
+        guardrail_payload = self._build_latency_guardrail(tool_name, elapsed_ms)
         completion_payload = {
             "tool_call": self._clean_dict(
                 {
-                    "id": getattr(item, "id", None),
+                    "id": tool_id or getattr(item, "id", None),
                     "name": tool_name,
                     "status": status,
                     "call_id": getattr(item, "call_id", None),
                     "output_index": getattr(payload, "output_index", None),
                     "sequence_number": getattr(payload, "sequence_number", None),
+                    "metadata": metadata or None,
                 }
             )
         }
+        if elapsed_ms is not None:
+            completion_payload["elapsed_ms"] = elapsed_ms
+            completion_payload["tool_call"]["elapsed_ms"] = elapsed_ms
+            metadata.setdefault("elapsed_ms", elapsed_ms)
+        if guardrail_payload:
+            completion_payload["latency_guardrail"] = guardrail_payload
+            completion_payload["tool_call"]["metadata"] = metadata or {}
+            completion_payload["tool_call"]["metadata"]["guardrail"] = guardrail_payload
         await self._enqueue_event("agent_tool_complete", completion_payload)
+        if tool_id:
+            self._tool_metadata.pop(tool_id, None)
+            self._tool_start_times.pop(tool_id, None)
 
     async def _enqueue_event(self, name: str, data: Dict[str, Any]) -> None:
         event = {"event": name, "data": sanitize_for_json(data)}
@@ -269,3 +330,62 @@ class AgentsStreamBridge:
     @staticmethod
     def _clean_dict(data: Dict[str, Any]) -> Dict[str, Any]:
         return {key: value for key, value in data.items() if value is not None}
+
+    def _canonical_tool_metadata(self, tool_name: Optional[str]) -> Dict[str, Any]:
+        if not tool_name:
+            return {}
+        canonical = self._definition_metadata.get(str(tool_name))
+        return dict(canonical) if canonical else {}
+
+    def _merge_tool_metadata(
+        self,
+        *,
+        tool_id: Optional[str],
+        tool_name: Optional[str],
+        runtime_metadata: Optional[Any],
+    ) -> Dict[str, Any]:
+        merged: Dict[str, Any] = {}
+        if tool_id and tool_id in self._tool_metadata:
+            merged.update(self._tool_metadata[tool_id])
+        if isinstance(runtime_metadata, dict):
+            merged.update({key: value for key, value in runtime_metadata.items() if value is not None})
+        for key, value in self._canonical_tool_metadata(tool_name).items():
+            merged.setdefault(key, value)
+        clean = {key: value for key, value in merged.items() if value is not None}
+        if tool_id:
+            if clean:
+                self._tool_metadata[tool_id] = clean
+            else:
+                self._tool_metadata.pop(tool_id, None)
+        return clean
+
+    def _build_latency_guardrail(
+        self,
+        tool_name: Optional[str],
+        elapsed_ms: Optional[int],
+    ) -> Optional[Dict[str, Any]]:
+        if not tool_name or elapsed_ms is None:
+            return None
+        definition = self._definitions_by_name.get(tool_name)
+        if definition is None or definition.latency_budget_ms is None:
+            return None
+        stats = {"p50_ms": elapsed_ms, "p95_ms": elapsed_ms, "total_ms": elapsed_ms}
+        guardrail = _evaluate_latency_guardrail(
+            stats,
+            p50_threshold=definition.latency_budget_ms,
+            p95_threshold=definition.latency_budget_ms,
+        )
+        if not guardrail:
+            return None
+        guardrail["source"] = "agent_latency_budget"
+        guardrail["tool"] = tool_name
+        guardrail["threshold_ms"] = definition.latency_budget_ms
+        return guardrail
+
+    @staticmethod
+    def _extract_tool_identifier(raw_item: Any) -> Optional[str]:
+        for attr in ("id", "call_id", "tool_call_id"):
+            value = getattr(raw_item, attr, None)
+            if value:
+                return str(value)
+        return None

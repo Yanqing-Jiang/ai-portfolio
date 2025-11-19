@@ -87,12 +87,13 @@ async def _dump_stream(
     session_id: Optional[str],
     max_turns: Optional[int],
 ) -> None:
-    os.environ.setdefault("ANALYTICS_ENABLE_AGENTS", "1")
+    if not os.getenv("OPENAI_API_KEY"):
+        raise RuntimeError("Set OPENAI_API_KEY before dumping agent streams.")
 
     controller = SingleAgentController()
     if not getattr(controller, "_agents_enabled", False) or controller._agent is None:
         raise RuntimeError(
-            "Agents mode is disabled. Set OPENAI_API_KEY and ANALYTICS_ENABLE_AGENTS=1 before running."
+            "SingleAgentController failed to initialize the agent. Ensure OPENAI_API_KEY is set and agent mode remains enabled."
         )
 
     run_session = session_id or str(uuid.uuid4())

@@ -4,13 +4,11 @@ This reference captures how to collect and inspect raw OpenAI Agents streaming e
 
 ## Prerequisites
 - Valid `OPENAI_API_KEY` with access to the Agents SDK.
-- `ANALYTICS_ENABLE_AGENTS=1` so the single-agent controller initializes the Agents runner.
 - Repository dependencies installed (`pip install -r backend/requirements.txt`).
 
 ## Capture Workflow (PowerShell)
 ```powershell
 Set-Location C:\Users\Y_J\Desktop\ai-portfolio-main
-$env:ANALYTICS_ENABLE_AGENTS = "1"
 $env:OPENAI_API_KEY = "<your-key>"
 python scripts/dump_agents_stream.py "Build a KPI dashboard for Snowflake revenue" --output docs/references/agents-stream-fixture.json
 ```

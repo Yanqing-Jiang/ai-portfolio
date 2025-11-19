@@ -1284,7 +1284,7 @@ class SingleAgentController:
         tool.lower(): lane for lane, tools in LANE_TOOL_MAP.items() for tool in tools
     }
 
-    def __init__(self, *, enable_agents: Optional[bool] = None) -> None:
+    def __init__(self, *, enable_agents: bool = True) -> None:
         self._planner = PlannerExecutorFlow(flow_mode=FlowMode.SINGLE_AGENT)
         self.follow_up_route = FollowUpRoute.FULL_PIPELINE
         self._planner.set_follow_up_route(self.follow_up_route)
@@ -1344,16 +1344,8 @@ class SingleAgentController:
         self._web_topic_branch_states: Dict[str, str] = {}
         self._web_topic_pending = 0
 
-        raw_flag = os.getenv("ANALYTICS_ENABLE_AGENTS")
-        normalized_flag = str(raw_flag or "").strip().lower()
-        if enable_agents is not None:
-            self._agents_enabled = bool(enable_agents)
-        elif normalized_flag:
-            self._agents_enabled = normalized_flag in {"1", "true", "yes", "on"}
-        else:
-            api_key_present = bool(os.getenv("OPENAI_API_KEY"))
-            self._agents_enabled = bool(self._agent_settings) and api_key_present
-        if self._agents_enabled and not os.getenv("OPENAI_API_KEY"):
+        self._agents_enabled = bool(enable_agents)
+        if self._agents_enabled and not self._agent_settings:
             self._agents_enabled = False
         self._function_tools: List[FunctionTool] = []
         self._agent: Optional[Agent[Any]] = None
@@ -1392,6 +1384,8 @@ class SingleAgentController:
         self._lane_warning_events: Deque[Dict[str, Any]] = deque()
         self._lane_warning_emitted: Set[str] = set()
         self._pending_lane_reuse_events: Deque[Dict[str, Any]] = deque()
+        self._follow_up_guardrail: Optional[Dict[str, Any]] = None
+        self._pending_guardrails: Dict[str, Dict[str, Any]] = {}
         self._revision_inputs_plan: Dict[str, str] = {"lane": "narrative", "web": "refresh"}
         self._revision_inputs_outcome: Optional[Dict[str, str]] = None
 
@@ -1576,8 +1570,7 @@ class SingleAgentController:
     def _should_use_agent_runtime(self) -> bool:
         if not (self._agent_runtime_allowed and self._agents_enabled and self._agent is not None):
             return False
-        prefer_agentic = bool(self._agentic_revision_mode or self._session_follow_up)
-        return prefer_agentic
+        return True
 
     def _lane_persistence_flags(self, ctx: PlannerPhaseContext) -> Dict[str, bool]:
         artifacts = getattr(ctx, "artifacts", None)
@@ -1859,6 +1852,8 @@ class SingleAgentController:
                 session_identifier = getattr(ctx, "session_id", None)
                 if session_identifier:
                     banner_event["data"]["session_id"] = session_identifier
+                if self._follow_up_guardrail:
+                    banner_event["data"]["guardrail"] = self._follow_up_guardrail
                 yield self._planner._annotate_revision(banner_event, ctx)
                 planner_payload = _build_planner_result_payload(ctx)
                 result_event = EventEmitter.result("planner_result", planner_payload)
@@ -2318,6 +2313,7 @@ class SingleAgentController:
         self._session_snapshot = snapshot
         self._agent_snapshot = snapshot
         self._agent_memory = AgentMemory(snapshot) if snapshot is not None else None
+        self._flush_pending_guardrails()
 
     def _build_agent_runtime(
         self,
@@ -2342,6 +2338,7 @@ class SingleAgentController:
         memory = self._agent_memory if self._agent_memory and self._agent_memory.snapshot is snapshot else AgentMemory(snapshot)
         self._agent_snapshot = snapshot
         self._agent_memory = memory
+        self._flush_pending_guardrails()
         return AgentRuntime(
             agent=self._agent,
             memory=memory,
@@ -4277,6 +4274,32 @@ class SingleAgentController:
         resolved = self._resolve_agentic_route(route)
         self.follow_up_route = resolved
         self._planner.set_follow_up_route(resolved)
+
+    def set_follow_up_guardrail(self, payload: Optional[Mapping[str, Any]]) -> None:
+        if payload is None:
+            self._follow_up_guardrail = None
+            self._pending_guardrails.pop("follow_up_classifier", None)
+            return
+        try:
+            sanitized = sanitize_for_json(dict(payload))
+        except Exception:
+            sanitized = dict(payload)
+        self._follow_up_guardrail = sanitized
+        self._pending_guardrails["follow_up_classifier"] = sanitized
+        self._flush_pending_guardrails()
+
+    def _flush_pending_guardrails(self) -> None:
+        if not self._pending_guardrails or self._agent_memory is None:
+            return
+        flushed: List[str] = []
+        for guardrail_id, guardrail_payload in self._pending_guardrails.items():
+            try:
+                self._agent_memory.record_guardrail(guardrail_id, guardrail_payload)
+                flushed.append(guardrail_id)
+            except Exception:
+                logger.debug("Failed to persist guardrail payload %s", guardrail_id, exc_info=True)
+        for guardrail_id in flushed:
+            self._pending_guardrails.pop(guardrail_id, None)
 
     def set_revision_targets(self, targets: Iterable[str]) -> None:
         self._planner.set_revision_targets(targets)

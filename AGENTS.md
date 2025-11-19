@@ -12,42 +12,30 @@ List any unresolved questions at the end, if any.
 The Vite frontend lives at the repo root, with `App.tsx` routing into feature components. UI pieces sit under `components/`, shared data in `constants/` + `constants.ts`, and network helpers in `services/`. The FastAPI backend is in `backend/`, See `ARCHITECTURE.md` for deeper diagrams.
 
 ## Build, Test & Development Commands
-Install dependencies with `npm install`, then `npm run dev` for the frontend at http://localhost:5173. `npm run build` emits production assets to `dist/`; `npm run preview` serves that bundle. For the backend, `pip install -r requirements.txt` inside `backend/` and start `py -m uvicorn main:app --reload --port 8000`, restarting before summarizing key changes. Use `pytest backend` for Python checks.
+Frontend: `npm install`, `npm run dev`, `npm run build`, `npm run preview`. Backend: `pip install -r backend/requirements.txt`, then `py -m uvicorn main:app --reload --port 8000`. Tests: `pytest backend`.
 
 ## Quick Startup Workflow (PowerShell)
-1. **Prep backend port 8000**
+1. Clear ports 8000/5173:
    ```powershell
-   Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue }
-   if (Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue) { throw "Port 8000 still occupied" }
+   foreach ($port in 8000,5173) { Get-NetTCPConnection -LocalPort $port -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue } }
    ```
-2. **Launch backend with logging + PID capture**
+2. Backend (log + PID):
    ```powershell
    $backend = Start-Process powershell -ArgumentList '-NoLogo','-NoProfile','-Command','Set-Location ''backend''; $env:PYTHONPATH=(Resolve-Path ''..''); py -m uvicorn main:app --reload --port 8000 *> backend_uvicorn.log' -PassThru
-   $backend.Id
    ```
-3. **Verify backend health**
+3. Health check:
    ```powershell
-   Invoke-RestMethod http://127.0.0.1:8000/docs -TimeoutSec 5 | Out-Null
-   Get-Content backend\backend_uvicorn.log -Tail 20
+   Invoke-RestMethod http://127.0.0.1:8000/docs -TimeoutSec 5 | Out-Null; Get-Content backend\backend_uvicorn.log -Tail 20
    ```
-4. **Prep frontend port 5173**
-   ```powershell
-   Get-NetTCPConnection -LocalPort 5173 -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue }
-   ```
-5. **Start Vite dev server with log stream**
+4. Frontend (log + PID):
    ```powershell
    $frontend = Start-Process powershell -ArgumentList '-NoLogo','-NoProfile','-Command','Set-Location ''C:\Users\Y_J\Desktop\ai-portfolio-main''; npm run dev *> vite.log' -PassThru
-   $frontend.Id
    ```
-6. **Verify frontend**
+5. Frontend check:
    ```powershell
-   Invoke-WebRequest http://localhost:5173/@vite/client -TimeoutSec 5 -UseBasicParsing | Out-Null
-   Get-Content vite.log -Tail 20
+   Invoke-WebRequest http://localhost:5173/@vite/client -TimeoutSec 5 -UseBasicParsing | Out-Null; Get-Content vite.log -Tail 20
    ```
-7. **Shutdown reminder**
-   ```powershell
-   Stop-Process -Id $backend.Id,$frontend.Id
-   ```
+6. Shutdown: `Stop-Process -Id $backend.Id,$frontend.Id`.
 
 ## Testing Guidelines
 Write backend tests with pytest, naming files `test_<feature>.py` beside the code or under `backend/tests/`, mocking Supabase, Gemini, and external HTTP calls. New UI logic should ship with colocated tests such as `ComponentName.test.tsx`; consider Playwright for flow coverage. 

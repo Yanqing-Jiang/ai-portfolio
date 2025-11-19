@@ -268,6 +268,18 @@ def test_record_tool_receipt_persists_digests_and_guardrail() -> None:
     assert guardrail.get("status") == "ok"
 
 
+def test_record_agent_guardrail_persists_payload() -> None:
+    snapshot = SessionStateSnapshot(session_id="sess-guardrail")
+    payload = {"status": "redirected", "route": "reuse_sql"}
+    snapshot.record_agent_guardrail("follow_up_classifier", payload)
+    agent_cache = snapshot.tool_cache.get("agent") if isinstance(snapshot.tool_cache, dict) else {}
+    assert isinstance(agent_cache, dict)
+    guardrails = agent_cache.get("guardrails")
+    assert isinstance(guardrails, dict)
+    stored = guardrails.get("follow_up_classifier")
+    assert stored and stored["route"] == "reuse_sql"
+
+
 def test_market_receipts_expire_when_stale() -> None:
     ttl_seconds = SingleAgentController.LANE_CACHE_TTL_SECONDS
     stale_a = ToolInvocationReceipt(tool="market_question_a", status="completed")

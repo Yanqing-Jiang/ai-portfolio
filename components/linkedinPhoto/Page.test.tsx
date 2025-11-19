@@ -3,6 +3,9 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Page } from './Page';
+import { apiService } from '@/services/apiService';
+
+const countUserInputMock = vi.spyOn(apiService, 'countUserInput');
 
 const createHeadshotResponse = () => ({
   expanded_prompt:
@@ -33,10 +36,17 @@ const createHeadshotResponse = () => ({
   processing_ms: 2500,
 });
 
+const canonicalPromptPayload = {
+  professional: 'Studio preset prompt with neutral background and crisp wardrobe details.',
+  creative: 'Editorial preset prompt with bold gels and creative direction.',
+  warm: 'Warm preset prompt with golden-hour tones and approachable cues.',
+};
+
 describe('LinkedInPhotoPage', () => {
   const originalFetch = global.fetch;
   const originalCreateObjectUrl = global.URL.createObjectURL;
   const originalRevokeObjectUrl = global.URL.revokeObjectURL;
+  const originalScrollIntoView = window.HTMLElement.prototype.scrollIntoView;
 
   beforeAll(() => {
     Object.defineProperty(global.URL, 'createObjectURL', {
@@ -45,6 +55,11 @@ describe('LinkedInPhotoPage', () => {
       value: vi.fn(() => 'blob:preview-url'),
     });
     Object.defineProperty(global.URL, 'revokeObjectURL', {
+      configurable: true,
+      writable: true,
+      value: vi.fn(),
+    });
+    Object.defineProperty(window.HTMLElement.prototype, 'scrollIntoView', {
       configurable: true,
       writable: true,
       value: vi.fn(),
@@ -72,25 +87,55 @@ describe('LinkedInPhotoPage', () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       delete (global.URL as any).revokeObjectURL;
     }
+    if (originalScrollIntoView) {
+      Object.defineProperty(window.HTMLElement.prototype, 'scrollIntoView', {
+        configurable: true,
+        writable: true,
+        value: originalScrollIntoView,
+      });
+    } else {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      delete (window.HTMLElement.prototype as any).scrollIntoView;
+    }
   });
 
   beforeEach(() => {
     vi.clearAllMocks();
+    countUserInputMock.mockResolvedValue({
+      success: true,
+      data: {
+        current_usage: 0,
+        limit: 10,
+        remaining: 10,
+        user_type: 'guest',
+        identifier: 'test-user',
+        scope: 'next-gen-analytics-agent',
+      },
+    });
+    global.fetch = vi.fn(async () => ({
+      ok: true,
+      json: async () => canonicalPromptPayload,
+    })) as unknown as typeof fetch;
   });
 
   afterEach(() => {
     vi.clearAllMocks();
+    countUserInputMock.mockReset();
     global.fetch = originalFetch;
+  });
+
+  afterAll(() => {
+    countUserInputMock.mockRestore();
   });
 
   it('keeps Generate button disabled until photo is uploaded and style is selected', async () => {
     render(<Page apiPath="/api/mock" />);
 
-    const generateButton = screen.getByRole('button', { name: /generate professional headshots/i });
+    const generateButton = screen.getByRole('button', { name: /generate linkedin headshot/i });
     expect(generateButton).toBeDisabled();
 
     // Upload a photo
-    const fileInput = screen.getByRole('textbox', { hidden: true }) as HTMLInputElement;
+    const fileInput = screen.getByLabelText(/upload photo/i) as HTMLInputElement;
     const file = new File(['portrait-bytes'], 'portrait.jpg', { type: 'image/jpeg' });
     await userEvent.upload(fileInput, file);
 
@@ -107,9 +152,15 @@ describe('LinkedInPhotoPage', () => {
   it('submits form data and renders multiple variations with expanded prompt', async () => {
     const mockResponse = createHeadshotResponse();
     const fetchMock = vi.fn(async (_input: RequestInfo, init?: RequestInit) => {
-      expect(init?.method).toBe('POST');
-      expect(init?.body).toBeInstanceOf(FormData);
-      const formData = init?.body as FormData;
+      if (!init || !init.method || init.method === 'GET') {
+        return {
+          ok: true,
+          json: async () => canonicalPromptPayload,
+        } as Response;
+      }
+      expect(init.method).toBe('POST');
+      expect(init.body).toBeInstanceOf(FormData);
+      const formData = init.body as FormData;
       expect(formData.get('prompt')).toBeTruthy();
       const uploaded = formData.get('photo');
       expect(uploaded).toBeInstanceOf(File);
@@ -123,7 +174,7 @@ describe('LinkedInPhotoPage', () => {
     render(<Page apiPath="/api/mock" />);
 
     // Upload photo
-    const fileInput = screen.getByRole('textbox', { hidden: true }) as HTMLInputElement;
+    const fileInput = screen.getByLabelText(/upload photo/i) as HTMLInputElement;
     const file = new File(['portrait-bytes'], 'portrait.jpg', { type: 'image/jpeg' });
     await userEvent.upload(fileInput, file);
 
@@ -132,22 +183,31 @@ describe('LinkedInPhotoPage', () => {
     await userEvent.click(professionalCard);
 
     // Click generate button
-    const generateButton = screen.getByRole('button', { name: /generate professional headshots/i });
+    const generateButton = screen.getByRole('button', { name: /generate linkedin headshot/i });
     await userEvent.click(generateButton);
 
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
 
     // Check that variations are rendered
-    await waitFor(() => {
-      expect(screen.getByText(/3 variations generated/i)).toBeInTheDocument();
-    });
+    await waitFor(
+      () => {
+        expect(screen.getByText(/all variations \(3\)/i)).toBeInTheDocument();
+      },
+      { timeout: 3000 },
+    );
 
     // Check expanded prompt is displayed
     expect(screen.getByText(mockResponse.expanded_prompt)).toBeInTheDocument();
   });
 
   it('displays error message when generation fails', async () => {
-    const fetchMock = vi.fn(async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo, init?: RequestInit) => {
+      if (!init || !init.method || init.method === 'GET') {
+        return {
+          ok: true,
+          json: async () => canonicalPromptPayload,
+        } as Response;
+      }
       return {
         ok: false,
         json: async () => ({ detail: 'Generation failed due to server error' }),
@@ -158,7 +218,7 @@ describe('LinkedInPhotoPage', () => {
     render(<Page apiPath="/api/mock" />);
 
     // Upload photo
-    const fileInput = screen.getByRole('textbox', { hidden: true }) as HTMLInputElement;
+    const fileInput = screen.getByLabelText(/upload photo/i) as HTMLInputElement;
     const file = new File(['portrait-bytes'], 'portrait.jpg', { type: 'image/jpeg' });
     await userEvent.upload(fileInput, file);
 
@@ -167,7 +227,7 @@ describe('LinkedInPhotoPage', () => {
     await userEvent.click(professionalCard);
 
     // Generate
-    const generateButton = screen.getByRole('button', { name: /generate professional headshots/i });
+    const generateButton = screen.getByRole('button', { name: /generate linkedin headshot/i });
     await userEvent.click(generateButton);
 
     await waitFor(() => {

@@ -3,7 +3,7 @@ _Target window: Week of November 10, 2025 (all times UTC)_
 
 ## 1. Pre-Rollout (T-48h to T-1h)
 - [x] **Comms posted** - Launch ETA, on-call roster, and rollback plan shared in #analytics-launch (2025-11-06 10:00 UTC).
-- [x] **Feature flags** - Confirmed `ANALYTICS_FLOW_MODE=single-agent` and `AGENTIC_REVISIONS_ENABLED` for production.
+- [x] **Feature flags** - Confirmed `ANALYTICS_FLOW_MODE=single-agent`; non-DIRECT flows now run on AgentRuntime by default so no additional `AGENTIC_*` toggles are required.
 - [x] **Cache warm-up** - Staging-to-prod warmers documented; see `scripts/cache/prewarm-agents.ps1`.
 - [x] **Monitoring ready**
   - [x] Grafana dashboards: agent_retry_rate, agent_turn_error_count, sse_delivery_latency (see `docs/ops/agents-supervisor-alerts.md`).

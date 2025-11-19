@@ -446,8 +446,6 @@ async def test_agentic_revision_emits_follow_up_flag(monkeypatch):
     _seed_revision_snapshot(snapshot)
     await repo.save(snapshot)
 
-    monkeypatch.setenv("AGENTIC_REVISIONS_ENABLED", "1")
-    monkeypatch.setenv("AGENTIC_REVISION_SINGLE_AGENT", "1")
     monkeypatch.setenv("ANALYTICS_MEMORY_INSTRUMENT", "1")
     monkeypatch.setattr(
         FollowUpClassifier,
@@ -498,8 +496,6 @@ async def test_multi_agent_agentic_revision_skips_sequencer(monkeypatch):
     _seed_revision_snapshot(snapshot, include_market=True)
     await repo.save(snapshot)
 
-    monkeypatch.setenv("AGENTIC_REVISIONS_ENABLED", "1")
-    monkeypatch.setenv("AGENTIC_REVISION_MULTI_AGENT", "1")
     monkeypatch.setenv("ANALYTICS_MEMORY_INSTRUMENT", "1")
     monkeypatch.setattr(
         FollowUpClassifier,

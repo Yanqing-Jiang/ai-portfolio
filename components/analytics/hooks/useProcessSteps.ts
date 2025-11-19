@@ -57,6 +57,13 @@ const shouldUpgradeStatus = (current: ProcessStep['status'], incoming: ProcessSt
   return incoming !== current;
 };
 
+const formatStepId = (id: string): string =>
+  id
+    .split(/[_-]/g)
+    .filter(Boolean)
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+    .join(' ');
+
 export const useProcessSteps = (config?: StepConfig) => {
   const [processSteps, setProcessSteps] = useState<ProcessStep[]>([]);
 
@@ -81,15 +88,28 @@ export const useProcessSteps = (config?: StepConfig) => {
       missingComponents?: string[];
       followUpRoute?: string;
       analysisAvailable?: boolean;
+      toolCallId?: string;
+      specialistRole?: string;
+      specialistLabel?: string;
+      guardrail?: Record<string, any>;
+      retryCount?: number;
+      cacheAgeSeconds?: number;
+      cacheSource?: string;
+      schemaVersion?: string;
+      fastPathLatencyMs?: number;
+      displayName?: string;
+      replaceDetails?: boolean;
     },
   ) => {
     setProcessSteps((prev) => {
       const existing = prev.find((s) => s.id === stepId);
 
       if (existing) {
-        const mergedDetails = details
-          ? { ...(existing.details ?? {}), ...details }
-          : existing.details;
+        const mergedDetails = extras?.replaceDetails
+          ? details
+          : details
+            ? { ...(existing.details ?? {}), ...details }
+            : existing.details;
 
         return prev.map((step) => {
           if (step.id !== stepId) {
@@ -112,6 +132,12 @@ export const useProcessSteps = (config?: StepConfig) => {
           };
 
           if (extras) {
+            if (extras.displayName) {
+              updated.name = extras.displayName;
+            }
+            if (extras.replaceDetails) {
+              updated.details = details;
+            }
             if (extras.lane !== undefined) {
               updated.lane = extras.lane;
             }
@@ -130,6 +156,33 @@ export const useProcessSteps = (config?: StepConfig) => {
             if (extras.analysisAvailable !== undefined) {
               updated.analysisAvailable = extras.analysisAvailable;
             }
+            if (extras.toolCallId !== undefined) {
+              updated.toolCallId = extras.toolCallId;
+            }
+            if (extras.specialistRole !== undefined) {
+              updated.specialistRole = extras.specialistRole;
+            }
+            if (extras.specialistLabel !== undefined) {
+              updated.specialistLabel = extras.specialistLabel;
+            }
+            if (extras.guardrail !== undefined) {
+              updated.guardrail = extras.guardrail;
+            }
+            if (extras.retryCount !== undefined) {
+              updated.retryCount = extras.retryCount;
+            }
+            if (extras.cacheAgeSeconds !== undefined) {
+              updated.cacheAgeSeconds = extras.cacheAgeSeconds;
+            }
+            if (extras.cacheSource !== undefined) {
+              updated.cacheSource = extras.cacheSource;
+            }
+            if (extras.schemaVersion !== undefined) {
+              updated.schemaVersion = extras.schemaVersion;
+            }
+            if (extras.fastPathLatencyMs !== undefined) {
+              updated.fastPathLatencyMs = extras.fastPathLatencyMs;
+            }
           }
 
           return updated;
@@ -140,7 +193,7 @@ export const useProcessSteps = (config?: StepConfig) => {
         ...prev,
         {
           id: stepId,
-          name: stepNames[stepId] || stepId,
+          name: extras?.displayName ?? stepNames[stepId] ?? formatStepId(stepId),
           status,
           thinking: thinking.filter(Boolean),
           details,
@@ -156,6 +209,15 @@ export const useProcessSteps = (config?: StepConfig) => {
           missingComponents: extras?.missingComponents,
           followUpRoute: extras?.followUpRoute,
           analysisAvailable: extras?.analysisAvailable,
+          toolCallId: extras?.toolCallId,
+          specialistRole: extras?.specialistRole,
+          specialistLabel: extras?.specialistLabel,
+          guardrail: extras?.guardrail,
+          retryCount: extras?.retryCount,
+          cacheAgeSeconds: extras?.cacheAgeSeconds,
+          cacheSource: extras?.cacheSource,
+          schemaVersion: extras?.schemaVersion,
+          fastPathLatencyMs: extras?.fastPathLatencyMs,
         },
       ];
 

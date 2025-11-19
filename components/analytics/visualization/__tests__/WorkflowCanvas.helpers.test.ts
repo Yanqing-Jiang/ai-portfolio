@@ -21,25 +21,25 @@ describe('buildToolBadgeModels', () => {
     const badges = buildToolBadgeModels(baseStep, 3);
     expect(badges).toHaveLength(2);
     expect(badges[0]).toMatchObject({
-      tool: 'sql_generator',
-      laneLabel: 'Sql Generator',
-      statusLabel: 'running',
-      elapsedLabel: '120ms',
-      reused: false,
-    });
-    expect(badges[1]).toMatchObject({
-      tool: 'web_retriever',
-      laneLabel: 'Web',
-      statusLabel: 'completed',
+      tool: 'Web Retriever',
+      laneLabel: 'Web Research',
+      statusLabel: 'Complete',
       elapsedLabel: '640ms',
       reused: true,
+    });
+    expect(badges[1]).toMatchObject({
+      tool: 'Sql Generator',
+      laneLabel: 'sql_generator',
+      statusLabel: 'Running',
+      elapsedLabel: '120ms',
+      reused: undefined,
     });
   });
 
   it('respects the limit parameter and falls back gracefully', () => {
     const singleBadge = buildToolBadgeModels(baseStep, 1);
     expect(singleBadge).toHaveLength(1);
-    expect(singleBadge[0].tool).toBe('web_retriever');
+    expect(singleBadge[0].tool).toBe('Web Retriever');
 
     const empty = buildToolBadgeModels({ ...baseStep, details: {} }, 2);
     expect(empty).toEqual([]);

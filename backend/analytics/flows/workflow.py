@@ -14,11 +14,6 @@
 #   Called from: Internal to analytics.flows.workflow
 #   Invokes: os.getenv
 #   Why: Keeps analytics.flows.workflow from duplicating env flag behavior across flows.
-# Function: _agentic_revision_enabled
-#   Role: Handles agentic revision enabled logic for analytics.flows.workflow.
-#   Called from: Internal to analytics.flows.workflow
-#   Invokes: analytics.flows.workflow._env_flag
-#   Why: Keeps analytics.flows.workflow from duplicating agentic revision enabled behavior across flows.
 # Function: _resolve_agentic_revision_flag
 #   Role: Resolves whether the current flow instance is operating in agentic revision mode.
 #   Called from: analytics.flows.workflow
@@ -280,21 +275,6 @@ def _env_flag(name: str, *, default: bool = False) -> bool:
     if normalized in {"0", "false", "no", "off"}:
         return False
     return default
-
-
-def _agentic_revision_enabled(flow_name: Optional[str]) -> bool:
-    if not _env_flag("AGENTIC_REVISIONS_ENABLED", default=False):
-        return False
-    normalized = (flow_name or "").strip().lower() or DEFAULT_FLOW
-    overrides = {
-        "single-agent": _env_flag("AGENTIC_REVISION_SINGLE_AGENT", default=True),
-        "multi-agent": _env_flag("AGENTIC_REVISION_MULTI_AGENT", default=True),
-        "planner-executor": _env_flag("AGENTIC_REVISION_PLANNER_EXECUTOR", default=False),
-    }
-    if normalized in overrides:
-        return overrides[normalized]
-    env_key = "AGENTIC_REVISION_" + normalized.replace("-", "_").upper()
-    return _env_flag(env_key, default=False)
 
 
 def _resolve_agentic_revision_flag(
@@ -1247,6 +1227,22 @@ async def _stream_revision_fast_path(
 
     route_label = _revision_route_label(lanes)
     banner = _build_revision_banner(route_label, lanes)
+
+    if lanes == ["market"]:
+        follow_up_route = FollowUpRoute.STOCK_ONLY
+    else:
+        lane_hint = (revision_inputs_plan or {}).get("lane")
+        if lane_hint == "chart":
+            follow_up_route = FollowUpRoute.CHART_ONLY
+        else:
+            follow_up_route = FollowUpRoute.NARRATIVE_ONLY
+    revision_guardrail = classifier.build_guardrail_payload(
+        route=follow_up_route,
+        query=combined_query or "",
+        snapshot=snapshot,
+        lane_readiness=lane_readiness,
+        session_follow_up=True,
+    )
     follow_up_event = {
         "event": "follow_up_route",
         "data": {
@@ -1260,20 +1256,13 @@ async def _stream_revision_fast_path(
             "agentic_revision": agentic_revision,
         },
     }
+    if revision_guardrail:
+        follow_up_event["data"]["guardrail"] = revision_guardrail
     if revision_inputs_plan:
         follow_up_event["data"]["revision_inputs_plan"] = dict(revision_inputs_plan)
     if questions_bundle:
         follow_up_event["data"]["revision_questions"] = questions_bundle.to_dict()
     yield follow_up_event
-
-    if lanes == ["market"]:
-        follow_up_route = FollowUpRoute.STOCK_ONLY
-    else:
-        lane_hint = (revision_inputs_plan or {}).get("lane")
-        if lane_hint == "chart":
-            follow_up_route = FollowUpRoute.CHART_ONLY
-        else:
-            follow_up_route = FollowUpRoute.NARRATIVE_ONLY
     if hasattr(flow_instance, "set_revision_targets"):
         flow_instance.set_revision_targets(lanes)
     if revision_inputs_plan and hasattr(flow_instance, "set_revision_inputs_plan"):
@@ -1283,6 +1272,11 @@ async def _stream_revision_fast_path(
             logger.exception("Failed to set revision inputs plan on flow %s", selected_flow)
     if hasattr(flow_instance, "set_follow_up_route"):
         flow_instance.set_follow_up_route(follow_up_route)
+    if revision_guardrail and hasattr(flow_instance, "set_follow_up_guardrail"):
+        try:
+            flow_instance.set_follow_up_guardrail(revision_guardrail)  # type: ignore[attr-defined]
+        except Exception:
+            logger.exception("Failed to set revision guardrail on flow %s", selected_flow)
     if hasattr(flow_instance, "prime_with_snapshot"):
         flow_instance.prime_with_snapshot(snapshot)
 
@@ -1663,6 +1657,13 @@ async def analytics_memory_workflow(
 
     classifier = FollowUpClassifier()
     route = classifier.classify(query, snapshot, lane_readiness=lane_readiness)
+    follow_up_guardrail = classifier.build_guardrail_payload(
+        route=route,
+        query=query or "",
+        snapshot=snapshot,
+        lane_readiness=lane_readiness,
+        session_follow_up=session_follow_up,
+    )
     detected_targets = classifier.detect_revision_targets(query, snapshot, lane_readiness=lane_readiness)
 
     chart_patch = patch_probe if chart_revision_requested else None
@@ -1811,10 +1812,8 @@ async def analytics_memory_workflow(
         except Exception:
             logger.exception("Failed to set session_follow_up on flow %s", selected)
 
-    agentic_enabled = _agentic_revision_enabled(selected)
     prefer_agentic_revision = bool(
-        agentic_enabled
-        and session_follow_up
+        session_follow_up
         and isinstance(flow_instance, (SingleAgentController, MultiAgentFlow))
         and revision_requested
     )
@@ -2283,6 +2282,11 @@ async def analytics_memory_workflow(
             logger.exception("Failed to set revision inputs plan on flow %s", selected)
     if hasattr(flow_instance, "set_follow_up_route"):
         flow_instance.set_follow_up_route(route)
+    if follow_up_guardrail and hasattr(flow_instance, "set_follow_up_guardrail"):
+        try:
+            flow_instance.set_follow_up_guardrail(follow_up_guardrail)  # type: ignore[attr-defined]
+        except Exception:
+            logger.exception("Failed to set follow-up guardrail on flow %s", selected)
     follow_up_event = {
         "event": "follow_up_route",
         "data": {
@@ -2294,6 +2298,8 @@ async def analytics_memory_workflow(
             "agentic_revision": agentic_revision_flag,
         },
     }
+    if follow_up_guardrail:
+        follow_up_event["data"]["guardrail"] = follow_up_guardrail
     if revision_inputs_plan:
         follow_up_event["data"]["revision_inputs_plan"] = dict(revision_inputs_plan)
     if missing_revision_lanes:

@@ -238,6 +238,86 @@ const formatTimeframeValue = (raw: unknown): string | undefined => {
   return undefined;
 };
 
+/*
+Function: formatCacheAge — called from ProcessPanel ledger badges to translate
+cache age seconds into short text like “~2m” so reuse badges stay readable.
+*/
+const formatCacheAge = (ageSeconds?: number): string | undefined => {
+  if (ageSeconds === undefined || ageSeconds === null) {
+    return undefined;
+  }
+  if (!Number.isFinite(ageSeconds)) {
+    return undefined;
+  }
+  if (ageSeconds >= 60) {
+    return `~${Math.round(ageSeconds / 60)}m`;
+  }
+  return `~${Math.max(1, Math.round(ageSeconds))}s`;
+};
+
+/*
+Function: formatReuseBadgeLabel — called from ProcessPanel ledger rows to build
+`Reused • ~Xm • fast_path` copy summarizing cache metadata on each step card.
+*/
+const formatReuseBadgeLabel = (step: ProcessStep): string | undefined => {
+  if (!step.reused) {
+    return undefined;
+  }
+  const parts = ['Reused'];
+  const ageLabel = formatCacheAge(step.cacheAgeSeconds);
+  if (ageLabel) {
+    parts.push(ageLabel);
+  }
+  if (typeof step.fastPathLatencyMs === 'number' && Number.isFinite(step.fastPathLatencyMs)) {
+    parts.push(`fast_path ${Math.round(step.fastPathLatencyMs)}ms`);
+  }
+  return parts.join(' • ');
+};
+
+/*
+Function: resolveGuardrailBadge — called from ProcessPanel ledger rows to map
+guardrail metadata into pill labels/colors (pass/violation/recovered) so ops
+can eyeball issues quickly.
+*/
+const resolveGuardrailBadge = (
+  guardrail?: Record<string, any>,
+): { label: string; className: string } | null => {
+  if (!guardrail) {
+    return null;
+  }
+  const status = typeof guardrail.status === 'string' ? guardrail.status.toLowerCase() : 'pass';
+  if (status === 'violation') {
+    return {
+      label: 'Guardrail Violation',
+      className: 'border border-rose-400/60 bg-rose-500/10 text-rose-200',
+    };
+  }
+  if (status.includes('recover')) {
+    return {
+      label: 'Guardrail Recovered',
+      className: 'border border-amber-400/60 bg-amber-500/15 text-amber-200',
+    };
+  }
+  return {
+    label: 'Guardrail Pass',
+    className: 'border border-emerald-400/50 bg-emerald-500/10 text-emerald-100',
+  };
+};
+
+/*
+Function: formatSchemaVersionLabel — called from ProcessPanel metadata grids to
+collapse fully-qualified schema URIs (e.g., analytics_tool_schema/2025-11-19)
+into the trailing token for compact display.
+*/
+const formatSchemaVersionLabel = (schema?: string): string | undefined => {
+  if (!schema) {
+    return undefined;
+  }
+  const parts = schema.split('/');
+  const tail = parts[parts.length - 1];
+  return tail || schema;
+};
+
 const formatSlotLabel = (slot: string): string => {
   if (!slot) return 'Unknown';
   return slot
@@ -1461,6 +1541,20 @@ export const ProcessPanel: React.FC<ProcessPanelProps> = ({
 
     };
     const { banner, analysis_overview, analysis_sources, specialist_card, latency, latency_guardrail, web_context: _webContext, ...otherDetails } = details;
+    const guardrailDetails = (step.guardrail as Record<string, any> | undefined) ?? (latency_guardrail as Record<string, any> | undefined);
+    const detailToolCall = (details as any)?.tool_call;
+    const detailToolCallId = typeof detailToolCall?.id === 'string' ? (detailToolCall.id as string) : undefined;
+    const resolvedToolCallId = step.toolCallId ?? detailToolCallId;
+    const resolvedSchemaVersion = step.schemaVersion ?? (typeof detailToolCall?.metadata?.schema_version === 'string' ? (detailToolCall.metadata.schema_version as string) : undefined);
+    const resolvedRetryCount = typeof step.retryCount === 'number' ? step.retryCount : undefined;
+    const metadataEntries = [
+      resolvedToolCallId ? { label: 'Tool Call ID', value: resolvedToolCallId } : null,
+      resolvedSchemaVersion ? { label: 'Schema Version', value: resolvedSchemaVersion } : null,
+      typeof resolvedRetryCount === 'number' && resolvedRetryCount > 0
+        ? { label: 'Retry Count', value: resolvedRetryCount.toString() }
+        : null,
+      step.cacheSource ? { label: 'Cache Source', value: formatScheduleStage(step.cacheSource) } : null,
+    ].filter((entry): entry is { label: string; value: string } => entry !== null);
     const chartSpecCandidateRaw =
       (details as any)?.chart_spec ??
       (details as any)?.chartSpec ??
@@ -1660,6 +1754,17 @@ export const ProcessPanel: React.FC<ProcessPanelProps> = ({
 
           </div>
 
+        ) : null}
+
+        {metadataEntries.length > 0 ? (
+          <div className="grid gap-2 text-[11px] text-gray-300 sm:grid-cols-2">
+            {metadataEntries.map((entry) => (
+              <div key={entry.label} className="rounded-lg border border-gray-800/60 bg-gray-900/50 px-3 py-2">
+                <div className="text-[10px] uppercase tracking-wide text-gray-500">{entry.label}</div>
+                <div className="mt-0.5 font-mono text-xs text-gray-100 break-all">{entry.value}</div>
+              </div>
+            ))}
+          </div>
         ) : null}
 
         {stepHasChartPreview ? (
@@ -2084,13 +2189,13 @@ export const ProcessPanel: React.FC<ProcessPanelProps> = ({
 
         ) : null}
 
-        {latency_guardrail ? (
+        {guardrailDetails ? (
 
           <div
 
             className={`rounded-xl border p-3 ${
 
-              latency_guardrail.status === 'violation'
+              guardrailDetails.status === 'violation'
 
                 ? 'border-amber-500/50 bg-amber-600/10 text-amber-100/90'
 
@@ -2102,27 +2207,27 @@ export const ProcessPanel: React.FC<ProcessPanelProps> = ({
 
             <div className="text-[10px] uppercase tracking-wide">
 
-              Guardrail Status: {latency_guardrail.status === 'violation' ? 'Exceeded' : 'Within Thresholds'}
+              Guardrail Status: {guardrailDetails.status === 'violation' ? 'Exceeded' : 'Within Thresholds'}
 
             </div>
 
-            {latency_guardrail.violations?.length ? (
+            {guardrailDetails.violations?.length ? (
 
               <div className="mt-1 text-[11px] leading-relaxed">
 
-                Tripped: {latency_guardrail.violations.join(', ')}
+                Tripped: {guardrailDetails.violations.join(', ')}
 
               </div>
 
             ) : null}
 
-            {latency_guardrail.thresholds ? (
+            {guardrailDetails.thresholds ? (
 
               <div className="mt-1 text-[11px] leading-relaxed text-emerald-200/80">
 
-                Targets: p50 = {latency_guardrail.thresholds.p50_ms ?? 'N/A'} ms{' '}
+                Targets: p50 = {guardrailDetails.thresholds.p50_ms ?? 'N/A'} ms{' '}
 
-                p95 = {latency_guardrail.thresholds.p95_ms ?? 'N/A'} ms
+                p95 = {guardrailDetails.thresholds.p95_ms ?? 'N/A'} ms
 
               </div>
 
@@ -2467,175 +2572,141 @@ export const ProcessPanel: React.FC<ProcessPanelProps> = ({
 
             <div className="space-y-3">
 
-              {displaySteps.map((step, index) => {
-
-                const style = STATUS_STYLES[step.status];
-
-                const isExpanded = expandedLedgerSteps[step.id];
-
-                const durationLabel = formatDuration(step.elapsed_ms);
-
-                const timestampLabel = formatTimestamp(step.timestamp);
-
-                const rawName = step.name || formatScheduleStage(step.id);
-
-                const displayName = step.reused ? `${rawName} (cached)` : rawName;
-
-                const laneLabel = step.lane ?? step.parallelGroup;
-
-                const laneDisplay = laneLabel ? formatScheduleStage(laneLabel) : null;
-
-                const missingComponentsLabel = step.missingComponents?.length
-
-                  ? step.missingComponents.map((component) => formatScheduleStage(component)).join(', ')
-
-                  : null;
-
-                return (
-
-                  <div
-
-                    key={step.id}
-
-                    className={`rounded-2xl border ${style.border} bg-gray-900/70 p-3 transition shadow-sm hover:shadow-lg`}
-
-                  >
-
-                    <button
-
-                      type="button"
-
-                      onClick={() => handleLedgerToggle(step.id)}
-
-                      className="flex w-full items-start justify-between gap-3 text-left"
-
+                {displaySteps.map((step, index) => {
+                  const style = STATUS_STYLES[step.status];
+                  const stepKey = step.toolCallId ?? step.id;
+                  const isExpanded = expandedLedgerSteps[stepKey];
+                  const durationLabel = formatDuration(step.elapsed_ms);
+                  const timestampLabel = formatTimestamp(step.timestamp);
+                  const rawName = step.name || formatScheduleStage(step.id);
+                  const displayName = step.reused ? `${rawName} (cached)` : rawName;
+                  const laneLabel = step.lane ?? step.parallelGroup;
+                  const laneDisplay = laneLabel ? formatScheduleStage(laneLabel) : null;
+                  const missingComponentsLabel = step.missingComponents?.length
+                    ? step.missingComponents.map((component) => formatScheduleStage(component)).join(', ')
+                    : null;
+                  const details = (step.details ?? {}) as Record<string, any>;
+                  const guardrailBadge = resolveGuardrailBadge(
+                    step.guardrail ?? (details.latency_guardrail as Record<string, any> | undefined),
+                  );
+                  const reuseBadgeLabel = formatReuseBadgeLabel(step);
+                  const schemaBadgeLabel = formatSchemaVersionLabel(
+                    step.schemaVersion ??
+                      (typeof (details as any)?.tool_call?.metadata?.schema_version === 'string'
+                        ? ((details as any).tool_call.metadata.schema_version as string)
+                        : undefined),
+                  );
+                  const cacheSourceLabel = step.cacheSource ? formatScheduleStage(step.cacheSource) : undefined;
+                  const resolvedToolCallId =
+                    step.toolCallId ??
+                    (typeof (details as any)?.tool_call?.id === 'string'
+                      ? ((details as any).tool_call.id as string)
+                      : undefined);
+                  const resolvedSpecialistRole =
+                    step.specialistRole ??
+                    (typeof (details as any)?.tool_call?.metadata?.specialist_role === 'string'
+                      ? ((details as any).tool_call.metadata.specialist_role as string)
+                      : undefined);
+                  return (
+                    <div
+                      key={stepKey}
+                      className={`rounded-2xl border ${style.border} bg-gray-900/70 p-3 transition shadow-sm hover:shadow-lg`}
                     >
-
-                      <div className="flex flex-1 flex-col gap-2">
-
-                        <div className="flex items-start justify-between gap-3">
-
-                          <div>
-
-                            <div className="flex items-center gap-2 text-xs text-gray-400">
-
-                              <span className={`inline-flex h-2 w-2 rounded-full ${style.indicator}`} />
-
-                              <span className="font-semibold text-gray-100">
-
-                                {`${String(index + 1).padStart(2, '0')} - ${displayName}`}
-
-                              </span>
-
-                              {typeof step.sequence === 'number' && (
-
-                                <span className="rounded-full bg-gray-800/50 px-2 py-0.5 text-[10px] text-gray-300">#{step.sequence}</span>
-
-                              )}
-
-                              {laneDisplay && (
-
-                                <span className="rounded-full bg-gray-800/50 px-2 py-0.5 text-[10px] uppercase tracking-wide text-gray-200">
-
-                                  {laneLabel === 'coordination' ? 'Coordinator Lane' : `Lane ${laneDisplay}`}
-
+                      <button
+                        type="button"
+                        onClick={() => handleLedgerToggle(stepKey)}
+                        className="flex w-full items-start justify-between gap-3 text-left"
+                      >
+                        <div className="flex flex-1 flex-col gap-2">
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <div className="flex flex-wrap items-center gap-2 text-xs text-gray-400">
+                                <span className={`inline-flex h-2 w-2 rounded-full ${style.indicator}`} />
+                                <span className="font-semibold text-gray-100">
+                                  {`${String(index + 1).padStart(2, '0')} - ${displayName}`}
                                 </span>
-
-                              )}
-
-                              {step.scheduleStage && (
-
-                                <span className="rounded-full bg-indigo-800/50 px-2 py-0.5 text-[10px] uppercase tracking-wide text-indigo-200">
-
-                                  Stage {formatScheduleStage(step.scheduleStage)}
-
-                                </span>
-
-                              )}
-
-                              {step.flowMode && (
-
-                                <span className="rounded-full bg-purple-800/50 px-2 py-0.5 text-[10px] uppercase tracking-wide text-purple-200">
-
-                                  {formatScheduleStage(step.flowMode)}
-
-                                </span>
-
-                              )}
-
-                              {step.reused && (
-
-                                <span className="rounded-full border border-emerald-400/60 bg-emerald-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-emerald-200">
-
-                                  Cached
-
-                                </span>
-
-                              )}
-
-                              {step.finalAnswerOnly && (
-
-                                <span className="rounded-full border border-amber-400/60 bg-amber-500/15 px-2 py-0.5 text-[10px] uppercase tracking-wide text-amber-200">
-
-                                  Final Answer Only
-
-                                </span>
-
-                              )}
-
+                                {typeof step.sequence === 'number' && (
+                                  <span className="rounded-full bg-gray-800/50 px-2 py-0.5 text-[10px] text-gray-300">#{step.sequence}</span>
+                                )}
+                                {laneDisplay && (
+                                  <span className="rounded-full bg-gray-800/50 px-2 py-0.5 text-[10px] uppercase tracking-wide text-gray-200">
+                                    {laneLabel === 'coordination' ? 'Coordinator Lane' : `Lane ${laneDisplay}`}
+                                  </span>
+                                )}
+                                {step.scheduleStage && (
+                                  <span className="rounded-full bg-indigo-800/50 px-2 py-0.5 text-[10px] uppercase tracking-wide text-indigo-200">
+                                    Stage {formatScheduleStage(step.scheduleStage)}
+                                  </span>
+                                )}
+                                {step.flowMode && (
+                                  <span className="rounded-full bg-purple-800/50 px-2 py-0.5 text-[10px] uppercase tracking-wide text-purple-200">
+                                    {formatScheduleStage(step.flowMode)}
+                                  </span>
+                                )}
+                                {step.specialistLabel && (
+                                  <span className="rounded-full border border-sky-400/60 bg-sky-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-sky-200">
+                                    {step.specialistLabel}
+                                  </span>
+                                )}
+                                {typeof step.retryCount === 'number' && step.retryCount > 0 && (
+                                  <span className="rounded-full border border-amber-400/60 bg-amber-500/15 px-2 py-0.5 text-[10px] uppercase tracking-wide text-amber-200">
+                                    Retry ×{step.retryCount}
+                                  </span>
+                                )}
+                                {schemaBadgeLabel && (
+                                  <span className="rounded-full border border-gray-700/70 bg-gray-800/60 px-2 py-0.5 text-[10px] uppercase tracking-wide text-gray-200">
+                                    Schema {schemaBadgeLabel}
+                                  </span>
+                                )}
+                                {guardrailBadge && (
+                                  <span className={`rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide ${guardrailBadge.className}`}>
+                                    {guardrailBadge.label}
+                                  </span>
+                                )}
+                                {reuseBadgeLabel && (
+                                  <span className="rounded-full border border-emerald-400/60 bg-emerald-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-emerald-200">
+                                    {reuseBadgeLabel}
+                                  </span>
+                                )}
+                                {step.finalAnswerOnly && (
+                                  <span className="rounded-full border border-amber-400/60 bg-amber-500/15 px-2 py-0.5 text-[10px] uppercase tracking-wide text-amber-200">
+                                    Final Answer Only
+                                  </span>
+                                )}
+                              </div>
+                              {step.thinking?.length ? (
+                                <div className="text-[11px] text-gray-400">{step.thinking.slice(-1)[0]}</div>
+                              ) : null}
                             </div>
-
-                            {step.thinking?.length ? (
-
-                              <div className="text-[11px] text-gray-400">{step.thinking.slice(-1)[0]}</div>
-
-                            ) : null}
-
+                            <span className={`rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide ${style.pill}`}>
+                              {friendlyStatus(step.status)}
+                            </span>
                           </div>
-
-                          <span className={`rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide ${style.pill}`}>
-
-                            {friendlyStatus(step.status)}
-
-                          </span>
-
+                          <div className="flex flex-wrap gap-3 text-[10px] text-gray-500">
+                            {timestampLabel && <span>{timestampLabel}</span>}
+                            {durationLabel && <span>{durationLabel}</span>}
+                            {typeof step.sequence === 'number' && <span>{`Seq ${step.sequence}`}</span>}
+                            {laneDisplay && <span className="uppercase text-gray-300">{`Lane ${laneDisplay}`}</span>}
+                            {step.scheduleStage && (
+                              <span className="uppercase text-indigo-300">{formatScheduleStage(step.scheduleStage)}</span>
+                            )}
+                            {resolvedToolCallId && (
+                              <span className="font-mono text-gray-400">Call {resolvedToolCallId}</span>
+                            )}
+                            {resolvedSpecialistRole && (
+                              <span className="uppercase text-sky-300">{formatScheduleStage(resolvedSpecialistRole)}</span>
+                            )}
+                            {cacheSourceLabel && <span className="text-emerald-300">{`Cache ${cacheSourceLabel}`}</span>}
+                            {step.analysisAvailable === false && (
+                              <span className="uppercase text-amber-300">Analysis Pending</span>
+                            )}
+                            {missingComponentsLabel && (
+                              <span className="uppercase text-amber-200">{`Missing: ${missingComponentsLabel}`}</span>
+                            )}
+                            <span>Toggle for full insight</span>
+                          </div>
                         </div>
-
-                        <div className="flex flex-wrap gap-3 text-[10px] text-gray-500">
-
-                          {timestampLabel && <span>{timestampLabel}</span>}
-
-                          {durationLabel && <span>{durationLabel}</span>}
-
-                          {typeof step.sequence === 'number' && <span>{`Seq ${step.sequence}`}</span>}
-
-                          {laneDisplay && <span className="uppercase text-gray-300">{`Lane ${laneDisplay}`}</span>}
-
-                          {step.scheduleStage && (
-
-                            <span className="uppercase text-indigo-300">{formatScheduleStage(step.scheduleStage)}</span>
-
-                          )}
-
-                          {step.analysisAvailable === false && (
-
-                            <span className="uppercase text-amber-300">Analysis Pending</span>
-
-                          )}
-
-                          {missingComponentsLabel && (
-
-                            <span className="uppercase text-amber-200">{`Missing: ${missingComponentsLabel}`}</span>
-
-                          )}
-
-                          <span>Toggle for full insight</span>
-
-                        </div>
-
-                      </div>
-
-                    </button>
+                      </button>
 
                     <AnimatePresence initial={false}>
 

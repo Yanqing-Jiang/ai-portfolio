@@ -8,7 +8,31 @@ import pytest
 
 from analytics.flows.agents_stream_bridge import AgentsStreamBridge
 from analytics.flows.schedulers import FlowMode
+from analytics.tools import DEFAULT_SCHEMA_VERSION
 from agents.stream_events import AgentUpdatedStreamEvent, RawResponsesStreamEvent, RunItemStreamEvent
+
+# --- Analytics Function/Class Map ---
+# Function: test_bridge_emits_tool_call_events
+#   Role: Verifies AgentsStreamBridge forwards tool start/delta/completion events with canonical metadata.
+#   Called from: pytest
+#   Invokes: analytics.flows.agents_stream_bridge.AgentsStreamBridge
+#   Why: Ensures SINGLE_AGENT telemetry exposes lane/specialist/schema fields for frontend parity.
+# Function: test_bridge_emits_analysis_events
+#   Role: Confirms analysis streaming + completion payloads retain metadata across tool completions.
+#   Called from: pytest
+#   Invokes: analytics.flows.agents_stream_bridge.AgentsStreamBridge
+#   Why: Guarantees narrative streaming cards show the analysis lane metadata.
+# Function: test_bridge_emits_supervisor_events
+#   Role: Validates supervisor start/summary envelopes so ProcessPanel can render manager runs.
+#   Called from: pytest
+#   Invokes: analytics.flows.agents_stream_bridge.AgentsStreamBridge
+#   Why: Keeps MULTI_AGENT mode emitting consistent supervisor telemetry.
+# Function: test_bridge_emits_lane_completions_for_supervisor_tools
+#   Role: Checks multi-agent tool completions continue to emit agent_tool_complete events per tool.
+#   Called from: pytest
+#   Invokes: analytics.flows.agents_stream_bridge.AgentsStreamBridge
+#   Why: Ensures fan-out tool completions surface even when definitions are unknown to the registry.
+# --- End Analytics Function/Class Map ---
 
 
 class _ToolCallRawItem:
@@ -71,6 +95,16 @@ async def test_bridge_emits_tool_call_events() -> None:
     run_item_event = RunItemStreamEvent(name="tool_called", item=_ToolCallRunItem(tool_entry))
     await bridge._handle_stream_event(run_item_event)
 
+    started_event = await queue.get()
+    assert started_event["event"] == "agent_tool_call"
+    started_tool = started_event["data"]["tool_call"]
+    assert started_tool["name"] == "classification"
+    assert started_tool["metadata"]["lane"] == "classification"
+    assert started_tool["metadata"]["specialist_role"] == "planner_agent"
+    assert started_tool["metadata"]["schema_version"] == DEFAULT_SCHEMA_VERSION
+    assert started_tool["metadata"]["latency_budget_ms"] == 500
+    assert started_tool["metadata"]["concurrency_limit"] == 1
+
     delta_entry = {
         "item_id": "fc_tool_1",
         "arguments_delta": {"query": "AMD revenue"},
@@ -92,11 +126,14 @@ async def test_bridge_emits_tool_call_events() -> None:
     assert delta_event["event"] == "tool_call_delta"
     assert delta_event["data"]["tool_call"]["arguments_delta"] == {"query": "AMD revenue"}
     assert delta_event["data"]["mode"] == "single_agent"
+    assert delta_event["data"]["tool_call"]["metadata"]["lane"] == "classification"
 
     done_event = await queue.get()
     assert done_event["event"] == "tool_call_arguments"
     tool_call = done_event["data"]["tool_call"]
     assert tool_call["name"] == "classification"
+    assert tool_call["metadata"]["schema_version"] == DEFAULT_SCHEMA_VERSION
+    assert tool_call["metadata"]["latency_budget_ms"] == 500
 
 
 @pytest.mark.asyncio
@@ -149,6 +186,8 @@ async def test_bridge_emits_analysis_events() -> None:
     tool_call = tool_event["data"]["tool_call"]
     assert tool_call["name"] == "analysis_revision"
     assert tool_call["status"] == "completed"
+    assert tool_call["metadata"]["lane"] == "analysis"
+    assert tool_call["metadata"]["schema_version"] == DEFAULT_SCHEMA_VERSION
 
 
 @pytest.mark.asyncio
@@ -183,7 +222,38 @@ async def test_bridge_emits_lane_completions_for_supervisor_tools() -> None:
         await bridge._handle_stream_event(RunItemStreamEvent(name="tool_called", item=_ToolCallRunItem(tool_entry)))
         completion_payload = _ToolCompletionPayload(tool_entry["id"], tool)
         await bridge._handle_raw_response_event(completion_payload)  # type: ignore[arg-type]
+        started_event = await queue.get()
+        assert started_event["event"] == "agent_tool_call"
         completion_event = await queue.get()
         assert completion_event["event"] == "agent_tool_complete"
         tool_call = completion_event["data"]["tool_call"]
         assert tool_call["name"] == tool
+
+
+@pytest.mark.asyncio
+async def test_bridge_emits_latency_guardrail_on_budget_violation(monkeypatch: pytest.MonkeyPatch) -> None:
+    queue: "asyncio.Queue[Dict[str, Any]]" = asyncio.Queue()
+    bridge = AgentsStreamBridge(flow_mode=FlowMode.SINGLE_AGENT, queue=queue)
+
+    tick_values = iter([10.0, 12.5])
+
+    def _fake_monotonic() -> float:
+        try:
+            return next(tick_values)
+        except StopIteration:
+            return 12.5
+
+    monkeypatch.setattr("analytics.flows.agents_stream_bridge.time.monotonic", _fake_monotonic)
+
+    tool_entry = {"id": "classification_tool_guardrail", "name": "classification"}
+    await bridge._handle_stream_event(RunItemStreamEvent(name="tool_called", item=_ToolCallRunItem(tool_entry)))
+    await queue.get()  # Drain agent_tool_call
+
+    completion_payload = _ToolCompletionPayload(tool_entry["id"], tool_entry["name"])
+    await bridge._handle_raw_response_event(completion_payload)  # type: ignore[arg-type]
+    completion_event = await queue.get()
+    assert completion_event["event"] == "agent_tool_complete"
+    guardrail = completion_event["data"].get("latency_guardrail") or {}
+    assert guardrail.get("status") == "violation"
+    assert guardrail.get("tool") == "classification"
+    assert completion_event["data"]["elapsed_ms"] >= 2000
