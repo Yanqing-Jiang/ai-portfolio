@@ -15,6 +15,7 @@ from analytics.services.response_search import (
     TopicSearchResult,
     _DEFAULT_MODEL,
 )
+from analytics.core.session_state import SessionStateSnapshot
 
 
 @pytest.mark.asyncio
@@ -79,3 +80,57 @@ async def test_web_research_agent_records_latency_distribution(monkeypatch):
     assert latency_stats["per_topic_ms"] == [320, 490]
 
     assert shared_state["web"]["model"] == _DEFAULT_MODEL
+
+
+@pytest.mark.asyncio
+async def test_web_research_agent_persists_question_bundle(monkeypatch):
+    shared_state = {"web": {}}
+    context = AgentRunContext(
+        query="Which catalysts matter?",
+        session_id="session-questions",
+        shared=shared_state,
+        dependencies={},
+        inputs={},
+    )
+
+    response = ResponseSearchResult(
+        query=context.query,
+        summary="Upside tied to AI catalysts.",
+        snippets=[SearchSnippet(title="AI spending surges")],
+    )
+    response.questions = {
+        "keyword_focus": "AI catalysts",
+        "user_question": "How will AI catalysts shift revenue?",
+        "industry_question": "How are peers positioning for AI demand?",
+    }
+
+    async def fake_perform_response_search(query: str, session_id: Optional[str] = None):
+        assert session_id == "session-questions"
+        return response
+
+    class _StubRepo:
+        def __init__(self) -> None:
+            self.snapshot = SessionStateSnapshot(session_id="session-questions")
+
+        async def load(self, session_id: str):
+            return self.snapshot if session_id == self.snapshot.session_id else None
+
+        async def save(self, snapshot: SessionStateSnapshot):
+            self.snapshot = snapshot
+
+    stub_repo = _StubRepo()
+
+    monkeypatch.setattr(
+        "analytics.flows.multi_agent.perform_response_search",
+        fake_perform_response_search,
+    )
+    monkeypatch.setattr(
+        "analytics.flows.multi_agent.get_session_state_repository",
+        lambda: stub_repo,
+    )
+
+    await _web_research_agent(context)
+
+    stored_questions = stub_repo.snapshot.web_research_questions
+    assert stored_questions, "Expected web research questions recorded on snapshot"
+    assert stored_questions[-1]["keyword_focus"] == "AI catalysts"

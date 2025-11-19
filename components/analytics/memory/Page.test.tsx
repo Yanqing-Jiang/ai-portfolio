@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import React from 'react';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, act } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { ChatMessage } from '../types';
 import MemoryAnalyticsPage from './Page';
@@ -155,6 +155,10 @@ describe('MemoryAnalyticsPage flow selector locking', () => {
     );
 
     render(<MemoryAnalyticsPage />);
+    const showButton = screen.getAllByText(/Show Process/i)[0];
+    act(() => {
+      showButton.click();
+    });
 
     expect(screen.getByTestId('process-panel').getAttribute('data-flow-mode')).toBe('multi-agent');
   });

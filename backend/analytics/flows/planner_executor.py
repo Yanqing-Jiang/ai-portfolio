@@ -3061,6 +3061,7 @@ class PlannerPipeline:
         self.revision_hint_active: bool = False
         self.revision_directive: Optional["RevisionDirective"] = None
         self.agentic_revision_mode: bool = False
+        self._suppress_fresh_pipeline: bool = False
         self._tool_registry: Optional[Any] = None
         self._lane_refresh_required: Dict[str, bool] = {}
         self._analysis_refresh_mode: str = "full"
@@ -3333,6 +3334,9 @@ class PlannerPipeline:
             if candidate in {"light", "full"}:
                 normalized = candidate
         self._analysis_refresh_mode = normalized
+
+    def suppress_fresh_pipeline_events(self) -> None:
+        self._suppress_fresh_pipeline = True
 
     @staticmethod
     def _lane_for_tool_name(tool_name: str) -> Optional[str]:
@@ -3664,6 +3668,8 @@ class PlannerPipeline:
         *,
         reason: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
+        if self._suppress_fresh_pipeline:
+            return None
         if not getattr(ctx, "force_full_fresh_pipeline", False):
             return None
         status_map: Dict[str, str] = getattr(ctx, "_fresh_lane_status", {})
@@ -6693,6 +6699,7 @@ class PlannerExecutorFlow:
         self._prompt_versions = dict(self._PROMPT_VERSIONS)
         self._thought_counters: Dict[str, int] = {}
         self._last_thoughts: Dict[str, str] = {}
+        self._suppress_fresh_pipeline = False
 
     def __getattr__(self, name: str):
         try:

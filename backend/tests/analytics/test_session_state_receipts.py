@@ -798,3 +798,40 @@ def test_market_receipt_backfilled_from_artifacts() -> None:
     snapshot.refresh_analysis_inputs_manifest(persist=False)
     manifest = snapshot.analysis_inputs_manifest or {}
     assert manifest.get("components", {}).get("market", {}).get("state") == "ready"
+
+
+def test_analysis_outputs_hydrated_from_revision_snapshot() -> None:
+    snapshot = SessionStateSnapshot(session_id="hydrate-analysis")
+    updated_at = datetime.now(timezone.utc).isoformat()
+    snapshot.tool_cache["analytics"] = {
+        "revision_snapshot": {
+            "analysis": "Cached semiconductor summary",
+            "chart_spec": {"data": {"values": [{"period": "2024", "value": 42}]}},
+            "updated_at": updated_at,
+        }
+    }
+    changed = snapshot.ensure_analysis_outputs_from_revision()
+    assert changed is True
+    assert snapshot.last_analysis == "Cached semiconductor summary"
+    assert snapshot.last_chart_spec and snapshot.last_chart_spec["data"]["values"][0]["value"] == 42
+    assert snapshot.get_lane_timestamp("analysis") is not None
+    assert snapshot.get_lane_timestamp("chart") is not None
+
+
+def test_analysis_outputs_hydrated_from_artifacts_when_snapshot_empty() -> None:
+    snapshot = SessionStateSnapshot(session_id="hydrate-artifacts")
+    snapshot.tool_cache["analytics"] = {
+        "artifacts": {
+            "analysis": {"analysis_text": "Artifact narrative"},
+            "chart": {
+                "spec": {
+                    "data": {"values": [{"period": "FY24", "value": 17}]},
+                    "encoding": {"x": {"field": "period"}, "y": {"field": "value"}},
+                }
+            },
+        }
+    }
+    seeded = snapshot.ensure_analysis_outputs_from_revision()
+    assert seeded is True
+    assert snapshot.last_analysis == "Artifact narrative"
+    assert snapshot.last_chart_spec["data"]["values"][0]["value"] == 17

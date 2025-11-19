@@ -88,7 +88,7 @@ describe('WorkflowCanvas', () => {
     expect(root).toHaveAttribute('data-screenshot-target', 'workflow-canvas');
   });
 
-  it('shows agentic badge and fresh lane telemetry pills', async () => {
+  it('shows agentic badge but hides fresh lane telemetry pills while revising', async () => {
     const step = buildStep();
     render(
       <WorkflowCanvas
@@ -107,6 +107,26 @@ describe('WorkflowCanvas', () => {
       />,
     );
     await waitFor(() => expect(screen.getByText(/Agentic Revision/i)).toBeInTheDocument());
-    expect(screen.getByText(/SQL Lane completed/i)).toBeInTheDocument();
+    expect(screen.queryByText(/SQL Lane completed/i)).not.toBeInTheDocument();
+  });
+
+  it('renders fresh lane telemetry pills when not in agentic mode', async () => {
+    const step = buildStep();
+    render(
+      <WorkflowCanvas
+        steps={[step]}
+        flowMode="single-agent"
+        freshLaneStates={{
+          sql: {
+            lane: 'sql',
+            status: 'completed',
+            ts: new Date().toISOString(),
+            reason: 'Forced fresh run',
+            reasoningEffort: 'minimal',
+          },
+        }}
+      />,
+    );
+    await waitFor(() => expect(screen.getByText(/SQL Lane completed/i)).toBeInTheDocument());
   });
 });

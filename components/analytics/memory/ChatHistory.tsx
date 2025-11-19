@@ -1,16 +1,16 @@
 ﻿import React, { Suspense } from 'react';
-import { ChatHistoryProps } from '../types';
-import { ClarificationOptions } from './ClarificationOptions';
 import {
   AnalysisCard,
-  SqlCard,
   CollapsibleSection,
+  SqlCard,
   TradingViewSymbolOverview,
   WebSearchCard,
 } from '../common';
 import { isValidChartSpec } from '../utils';
 import { RobotIcon } from '../../icons/RobotIcon';
 import { UserIcon } from '../../icons/UserIcon';
+import { ChatHistoryProps } from '../types';
+import { ClarificationOptions } from './ClarificationOptions';
 
 const ChartCard = React.lazy(() => import('../common/ChartCard').then((m) => ({ default: m.ChartCard })));
 const MAX_WEB_SNIPPETS = 3;
@@ -188,6 +188,7 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
   isLoading,
   onSubmitClarification,
   processSteps: _processSteps = [],
+  topicProgress,
 }) => {
   const rawStatusText = status?.text ?? '';
   const normalizedStatusText = React.useMemo(() => {
@@ -278,26 +279,26 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
           const baseWebSearch = message.webSearch;
           const resolvedWebSearch = isAnalysisRevisionResult
             ? (() => {
-                if (baseWebSearch) {
-                  return {
-                    ...baseWebSearch,
-                    snippets: Array.isArray(baseWebSearch.snippets) ? baseWebSearch.snippets : [],
-                  };
-                }
+              if (baseWebSearch) {
                 return {
-                  query: revisionFocus ?? '',
-                  summary: '',
-                  snippets: [],
-                  ready: false,
-                  reason: 'no_web_research',
+                  ...baseWebSearch,
+                  snippets: Array.isArray(baseWebSearch.snippets) ? baseWebSearch.snippets : [],
                 };
-              })()
+              }
+              return {
+                query: revisionFocus ?? '',
+                summary: '',
+                snippets: [],
+                ready: false,
+                reason: 'no_web_research',
+              };
+            })()
             : baseWebSearch
-            ? {
+              ? {
                 ...baseWebSearch,
                 snippets: Array.isArray(baseWebSearch.snippets) ? baseWebSearch.snippets : [],
               }
-            : null;
+              : null;
           const showTradingView =
             !isAnalysisRevisionResult &&
             Array.isArray(message.stockWidgetConfig?.symbols) &&
@@ -305,12 +306,12 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
           const attachmentsAvailable = isAnalysisRevisionResult
             ? Boolean(primaryAnalysisContent) || Boolean(resolvedWebSearch)
             : Boolean(
-                (message.chartSpec && isValidChartSpec(message.chartSpec)) ||
-                  (showTradingView && message.stockWidgetConfig) ||
-                  primaryAnalysisContent ||
-                  resolvedWebSearch ||
-                  message.sqlQuery,
-              );
+              (message.chartSpec && isValidChartSpec(message.chartSpec)) ||
+              (showTradingView && message.stockWidgetConfig) ||
+              primaryAnalysisContent ||
+              resolvedWebSearch ||
+              message.sqlQuery,
+            );
           const contentText =
             typeof message.content === 'string' && message.content.trim().length > 0 ? message.content : '';
 
@@ -397,6 +398,7 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
                               }
                               title="Market Research"
                               emptyMessage="No web research snippets available."
+                              topicProgress={topicProgress}
                             />
                           </CollapsibleSection>
                           <div className="pt-3 border-t border-dashed border-gray-700 text-xs text-gray-400">

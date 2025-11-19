@@ -8,3 +8,4 @@ export { ProcessPanel } from './ProcessPanel';
 export { TradingViewSymbolOverview } from './TradingViewSymbolOverview';
 export { CollapsibleSection } from './CollapsibleSection';
 export { WebSearchCard } from './WebSearchCard';
+export { WebResearchQuestionsCard } from './WebResearchQuestionsCard';

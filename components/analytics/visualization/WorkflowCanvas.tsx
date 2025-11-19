@@ -902,6 +902,7 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
   const layout = FLOW_LAYOUT[flowMode];
   const laneReusePills = useMemo(() => buildLaneReusePills(laneReuseNotices), [laneReuseNotices]);
   const freshLanePills = useMemo(() => buildFreshLanePills(freshLaneStates), [freshLaneStates]);
+  const showFreshLanePills = !agenticRevision && freshLanePills.length > 0;
 
   const processedSteps = useMemo(() => {
     const prioritizedSteps = flowMode === 'multi-agent'
@@ -1755,22 +1756,23 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
             {currentDuration && <span>{currentDuration}</span>}
           </div>
         </div>
-        {(agenticRevision || freshLanePills.length > 0) && (
+        {(agenticRevision || showFreshLanePills) && (
           <div className="flex flex-wrap items-center gap-2 text-[10px] text-purple-100">
             {agenticRevision && (
               <span className="rounded-full border border-purple-400/40 bg-purple-500/20 px-2 py-0.5 uppercase tracking-wide text-purple-100">
                 Agentic Revision
               </span>
             )}
-            {freshLanePills.map((pill) => (
-              <span
-                key={pill.key}
-                title={pill.title}
-                className={`rounded-full px-2 py-0.5 ${FRESH_STATUS_BADGES[pill.status]}`}
-              >
-                {pill.text}
-              </span>
-            ))}
+            {showFreshLanePills &&
+              freshLanePills.map((pill) => (
+                <span
+                  key={pill.key}
+                  title={pill.title}
+                  className={`rounded-full px-2 py-0.5 ${FRESH_STATUS_BADGES[pill.status]}`}
+                >
+                  {pill.text}
+                </span>
+              ))}
           </div>
         )}
         {laneReusePills.length > 0 && (

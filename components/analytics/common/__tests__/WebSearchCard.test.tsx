@@ -92,6 +92,36 @@ describe('WebSearchCard topics', () => {
     expect(screen.getByText('AMD vs NVIDIA revenue comparison')).toBeInTheDocument();
   });
 
+  it('displays topic progress badges when topicProgress metadata is supplied', () => {
+    render(
+      <WebSearchCard
+        result={{
+          query: 'AI hiring sentiment',
+          snippets: [],
+        }}
+        topicProgress={{
+          total: 2,
+          completed: 1,
+          pending: 1,
+          branches: {
+            user_question: {
+              id: 'user_question',
+              label: 'User Focus',
+              status: 'ready',
+            },
+            industry_question: {
+              id: 'industry_question',
+              label: 'Industry Follow-up',
+              status: 'queued',
+            },
+          },
+        }}
+      />
+    );
+
+    expect(screen.getByText('Topics: 1/2 ready')).toBeInTheDocument();
+  });
+
   it('renders primary and secondary market research questions together', () => {
     render(
       <WebSearchCard

@@ -132,4 +132,26 @@ describe('ProcessPanel cached and final-answer presentation', () => {
 
     expect(screen.queryByText(/Guided Final Answer/i)).not.toBeInTheDocument();
   });
+
+  it('renders agent evidence badges', () => {
+    const steps: ProcessStep[] = [
+      {
+        ...baseStep,
+        lane: 'analysis',
+        parallelGroup: 'analysis',
+        status: 'completed',
+      },
+    ];
+    render(
+      <ProcessPanel
+        steps={steps}
+        flowMode="multi-agent"
+        show
+        onClose={() => {}}
+        showVisualization={false}
+        agentEvidence={{ status: 'agent_fallback', reason: 'cached_revision' }}
+      />,
+    );
+    expect(screen.getByText(/Agent Fallback/i)).toBeInTheDocument();
+  });
 });

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
+from types import MethodType, SimpleNamespace
 from typing import Any, Dict, List
 
 import pytest
@@ -9,6 +9,7 @@ from analytics.core.session_state import SessionStateSnapshot
 from analytics.flows.instrumentation import _maybe_update_session_state
 from analytics.flows.schedulers import FlowMode
 from analytics.flows.single_agent_tools import SingleAgentController, _SingleAgentToolHooks
+from analytics.flows.revision_directive import RevisionDirective
 from analytics.flows.orchestrator_adapter import PlannerOrchestratorAdapter
 from analytics.flows.sequencer import PlannerSequencer
 from analytics.routing import FollowUpRoute
@@ -89,6 +90,108 @@ def test_instrumentation_records_agent_tool_receipts() -> None:
     assert updated_complete
     receipts = snapshot.tool_cache.get("tool_receipts", {})
     assert receipts["web_retriever"]["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_agentic_revision_guard_emits_disabled_event() -> None:
+    controller = SingleAgentController(enable_agents=False)
+    directive = RevisionDirective.from_payload(
+        raw_text="Refresh the analysis lane",
+        targets={"analysis"},
+        requested_focus="focus on NVDA adoption",
+        agentic=True,
+        chart_patch=None,
+    )
+    controller.set_revision_directive(directive)
+    controller.set_revision_inputs_plan({"lane": "narrative", "web": "reuse"})
+
+    events = []
+
+    async for event in controller.run_analysis_refresh(
+        session_id="sess-agent-disabled",
+        query="Revise NVDA analysis",
+        requested_focus="highlight NVDA adoption signals",
+        revision_directive=directive,
+        revision_inputs_plan={"lane": "narrative", "web": "reuse"},
+        reason="revision_request",
+        source="test_harness",
+    ):
+        events.append(event)
+
+    assert events, "Expected at least one SSE event"
+    assert any(evt.get("event") == "revision_agent_disabled" for evt in events)
+
+
+@pytest.mark.asyncio
+async def test_execute_revision_lane_streams_web_and_analysis_events() -> None:
+    controller = _make_controller()
+    call_flags = {"web": 0, "analysis": 0}
+
+    async def _fake_web_refresh(self, *, session_id: str, **_: Any):
+        call_flags["web"] += 1
+        yield {"event": "web_ready", "data": {"session_id": session_id}}
+
+    async def _fake_analysis_revision(self, *, session_id: str, **_: Any):
+        call_flags["analysis"] += 1
+        yield {"event": "analysis_revision_ready", "data": {"session_id": session_id}}
+
+    controller.run_web_refresh = MethodType(_fake_web_refresh, controller)
+    controller.analysis_revision = MethodType(_fake_analysis_revision, controller)
+
+    events: List[Dict[str, Any]] = []
+    async for event in controller._execute_revision_lane_from_agent(
+        session_id="sess-agent-helper",
+        query="Revise NVDA analysis",
+        lane="narrative",
+        web_action="refresh",
+        revision_directive=None,
+        requested_focus="focus on NVDA",
+        reason="unit_test",
+        source="unit_test",
+        questions=None,
+    ):
+        events.append(event)
+
+    assert call_flags == {"web": 1, "analysis": 1}
+    assert any(evt.get("event") == "analysis_revision_ready" for evt in events)
+    assert controller._revision_inputs_outcome == {"lane": "narrative", "web": "refresh"}
+
+
+@pytest.mark.asyncio
+async def test_analysis_revision_marks_pre_refreshed_metadata() -> None:
+    controller = _make_controller()
+    snapshot = SessionStateSnapshot(session_id="sess-pre-refresh")
+    snapshot.last_analysis = "baseline narrative"
+    snapshot.last_chart_spec = {"series": []}
+    controller._session_snapshot = snapshot
+    controller._revision_inputs_plan = {"lane": "narrative", "web": "refresh"}
+
+    async def _fake_invoke(self, tool_name: str, *_, **__):
+        assert tool_name == "analysis_revision"
+        yield {"event": "tool_start", "data": {"tool": tool_name}}
+
+    controller._invoke_planner_tool = MethodType(_fake_invoke, controller)
+
+    events: List[Dict[str, Any]] = []
+    async for event in controller.analysis_revision(
+        session_id="sess-pre-refresh",
+        analysis="Focus on NVDA attach rate",
+        reason="agentic_revision",
+        source="unit_test",
+        query="Revise NVDA analysis",
+        refresh_web=False,
+        selected_lane="narrative",
+        pre_refreshed_web=True,
+        forced_web_ready_seen=True,
+    ):
+        events.append(event)
+
+    ready_events = [evt for evt in events if evt.get("event") == "analysis_revision_ready"]
+    assert ready_events, "analysis_revision_ready event missing"
+    ready_payload = ready_events[-1]["data"]
+    assert ready_payload["web_refreshed"] is True
+    assert ready_payload["from_cache"] is False
+    assert controller._revision_inputs_outcome == {"lane": "narrative", "web": "refresh"}
 
 
 @pytest.mark.asyncio

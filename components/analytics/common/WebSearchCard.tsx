@@ -1,10 +1,11 @@
 import React, { useMemo } from 'react';
-import { WebSearchResult, WebSearchTopic } from '../types';
+import { WebSearchResult, WebSearchTopic, WebSearchTopicProgress } from '../types';
 
 interface WebSearchCardProps {
   result: WebSearchResult;
   title?: string;
   emptyMessage?: string;
+  topicProgress?: WebSearchTopicProgress;
 }
 
 const formatPublishedDate = (value?: string) => {
@@ -38,6 +39,7 @@ export const WebSearchCard: React.FC<WebSearchCardProps> = ({
   result,
   title = 'Market Research',
   emptyMessage,
+  topicProgress,
 }) => {
   if (!result) {
     return null;
@@ -60,16 +62,35 @@ export const WebSearchCard: React.FC<WebSearchCardProps> = ({
     topicTotal,
     questions,
   } = result;
+
   const keywordFocus =
     typeof questions?.keywordFocus === 'string' && questions.keywordFocus.trim().length
       ? questions.keywordFocus.trim()
       : undefined;
-  const questionEntries: { label: string; value: string }[] = [];
+
+  const getQuestionStatus = (kind: string) => {
+    if (!topicProgress?.branches) return null;
+    // Match by questionKind or id
+    const branch = Object.values(topicProgress.branches).find(
+      (b) => b.questionKind === kind || b.id === kind || (kind === 'user' && b.id === 'user_question') || (kind === 'industry' && b.id === 'industry_question')
+    );
+    if (!branch) return null;
+
+    switch (branch.status) {
+      case 'ready': return { text: 'Ready', className: 'text-emerald-300 bg-emerald-500/10 border-emerald-500/40' };
+      case 'running': return { text: 'Searching…', className: 'text-blue-300 bg-blue-500/10 border-blue-500/40 animate-pulse' };
+      case 'queued': return { text: 'Queued', className: 'text-slate-400 bg-slate-800/50 border-slate-700/50' };
+      case 'error': return { text: 'Error', className: 'text-red-300 bg-red-500/10 border-red-500/40' };
+      default: return { text: branch.status, className: 'text-slate-400 bg-slate-800/50 border-slate-700/50' };
+    }
+  };
+
+  const questionEntries: { label: string; value: string; kind: string }[] = [];
   if (typeof questions?.user === 'string' && questions.user.trim().length) {
-    questionEntries.push({ label: 'User question', value: questions.user.trim() });
+    questionEntries.push({ label: 'User question', value: questions.user.trim(), kind: 'user' });
   }
   if (typeof questions?.industry === 'string' && questions.industry.trim().length) {
-    questionEntries.push({ label: 'Industry question', value: questions.industry.trim() });
+    questionEntries.push({ label: 'Industry question', value: questions.industry.trim(), kind: 'industry' });
   }
 
   const isDisabled = error === 'search_api_missing' || reason === 'search_api_missing';
@@ -348,6 +369,9 @@ export const WebSearchCard: React.FC<WebSearchCardProps> = ({
     return `Topic ${fallbackIndex + 1}`;
   };
   const topicSummaryLabel = (() => {
+    if (topicProgress) {
+      return `Topics: ${topicProgress.completed}/${topicProgress.total} ready`;
+    }
     if (hasExpectedTopicTotal) {
       if (totalTopics === 0) {
         return `Topics: showing 0 of ${announcedTopicTotal}`;
@@ -362,7 +386,7 @@ export const WebSearchCard: React.FC<WebSearchCardProps> = ({
     }
     return totalTopics === 1 ? 'Topics: 1' : `Topics: ${totalTopics}`;
   })();
-  const missingTopicNotice = hasAnnouncedTopicGap
+  const missingTopicNotice = hasAnnouncedTopicGap && !topicProgress
     ? `Waiting on ${missingTopicCount} more ${missingTopicCount === 1 ? 'topic' : 'topics'} from merge pipeline`
     : undefined;
   const topicDenominator =
@@ -414,12 +438,22 @@ export const WebSearchCard: React.FC<WebSearchCardProps> = ({
               Focus: <span className="text-slate-300 normal-case">{keywordFocus}</span>
             </p>
           ) : null}
-          {questionEntries.map((entry) => (
-            <p key={entry.label} className="leading-snug">
-              <span className="font-semibold text-slate-200">{entry.label}:</span>{' '}
-              <span className="text-slate-300">{entry.value}</span>
-            </p>
-          ))}
+          {questionEntries.map((entry) => {
+            const status = getQuestionStatus(entry.kind);
+            return (
+              <div key={entry.label} className="flex items-center justify-between gap-2">
+                <p className="leading-snug">
+                  <span className="font-semibold text-slate-200">{entry.label}:</span>{' '}
+                  <span className="text-slate-300">{entry.value}</span>
+                </p>
+                {status && (
+                  <span className={`px-2 py-0.5 rounded-full border text-[10px] font-medium uppercase tracking-wide whitespace-nowrap ${status.className}`}>
+                    {status.text}
+                  </span>
+                )}
+              </div>
+            );
+          })}
         </div>
       ) : null}
 

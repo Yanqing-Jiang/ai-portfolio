@@ -131,4 +131,16 @@ describe('LiveArtifacts', () => {
       screen.getByText(/No grounded sources returned. Consider re-running web research/i),
     ).toBeInTheDocument();
   });
+
+  it('displays agent evidence badges when provided', () => {
+    render(
+      <LiveArtifacts
+        {...baseProps}
+        analysis="Agent produced narrative"
+        persistOnComplete={true}
+        agentEvidence={{ status: 'agent_disabled', reason: 'agent_runtime_disabled' }}
+      />,
+    );
+    expect(screen.getByText(/Agent Disabled/i)).toBeInTheDocument();
+  });
 });

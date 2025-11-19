@@ -71,6 +71,14 @@ export interface AgentTurnTelemetry {
   reused?: boolean;
 }
 
+export interface AgentReasoningTelemetry {
+  role: string;
+  thought: string;
+  ts?: string;
+  sequence?: number;
+  parallelGroup?: string;
+}
+
 export interface ToolFanoutManifest {
   name: string;
   display_name?: string;
@@ -124,6 +132,12 @@ export interface SingleAgentFanout {
   runningCount: number;
   lastUpdated?: string;
 }
+export interface AgentEvidence {
+  status: 'agent_run' | 'agent_disabled' | 'agent_fallback';
+  turns?: AgentTurnTelemetry[];
+  reason?: string;
+}
+
 export interface WebSearchTopic {
   label?: string;
   query: string;
@@ -139,6 +153,8 @@ export interface WebSearchTopic {
   topicLabel?: string;
   display_name?: string;
   displayName?: string;
+  question_kind?: string;
+  questionKind?: string;
   snippets: Array<{
     title?: string;
     url?: string;
@@ -146,6 +162,29 @@ export interface WebSearchTopic {
     display_url?: string;
     published_at?: string;
   }>;
+}
+
+export type WebTopicBranchStatus = 'queued' | 'running' | 'ready' | 'error';
+
+export interface WebTopicBranchProgress {
+  id: string;
+  questionKind?: string;
+  label?: string;
+  status: WebTopicBranchStatus;
+  latencyMs?: number | null;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  error?: string | null;
+}
+
+export interface WebSearchTopicProgress {
+  total: number;
+  completed: number;
+  pending: number;
+  pendingSince?: string;
+  lastUpdated?: string;
+  guardrailStatus?: 'idle' | 'pending' | 'ready' | 'timeout';
+  branches: Record<string, WebTopicBranchProgress>;
 }
 
 export interface WebSearchResult {
@@ -182,6 +221,7 @@ export interface WebSearchResult {
     user?: string | null;
     industry?: string | null;
   };
+  topicProgress?: WebSearchTopicProgress | null;
 }
 
 export interface AnalysisSourceInsight {
@@ -201,16 +241,6 @@ export interface AnalysisSourceInsight {
 
 export type AnalysisSources = Record<string, AnalysisSourceInsight>;
 
-export interface AnalysisOverview {
-  tldr?: string;
-  highlights?: string[];
-  keyNumbers?: string[];
-  riskWatch?: string[];
-  nextSteps?: string[];
-  evidence?: AnalysisEvidenceLink[];
-  sources?: AnalysisSources;
-}
-
 export interface AnalysisEvidenceLink {
   sourceUrl: string;
   title?: string;
@@ -219,6 +249,16 @@ export interface AnalysisEvidenceLink {
   claim?: string;
   publishedAt?: string;
   confidence?: number;
+}
+
+export interface AnalysisOverview {
+  tldr?: string;
+  highlights?: string[];
+  keyNumbers?: string[];
+  riskWatch?: string[];
+  nextSteps?: string[];
+  evidence?: AnalysisEvidenceLink[];
+  sources?: AnalysisSources;
 }
 
 export interface LatencyGuardrail {
@@ -247,6 +287,7 @@ export interface FollowUpBanner {
   analysisAvailable?: boolean;
   summary?: string;
   refreshMode?: 'light' | 'full';
+  reason?: string;
   questions?: {
     keywordFocus?: string | null;
     user?: string | null;
@@ -304,197 +345,67 @@ export interface StockWidgetConfig {
   }[];
 }
 
-export interface ProcessStepDetails {
-  sql?: string;
-  template?: string;
-  template_used?: string;
-  row_count?: number;
-  rowCount?: number; // Alternative naming
-  sample_data?: any[];
-  sampleData?: any[]; // Alternative naming
-  error?: string;
-  args?: any;
-  args_summary?: string;
-  duration_ms?: number;
-  success?: boolean;
-  sql_executed?: string;
-  columns?: string[];
-  confidence?: number;
-  category?: string;
-  is_financial?: boolean;
-  intent_key?: string;
-  available_tools?: string[];
-  strategy?: string;
-  reasoning?: string;
-  tool?: string;
-  args_preview?: string;
-  result?: any;
-  sql_length?: number;
-  tool_calls?: ToolCallTelemetry[];
-  agent_turns?: AgentTurnTelemetry[];
-  agent_reasoning?: AgentReasoningTelemetry[];
-  tool_manifest?: ToolFanoutManifest[];
-  tool_fanout_results?: ToolFanoutResult[];
-  concurrency_limit?: number;
-  stock_widget?: StockWidgetConfig;
-  banner?: FollowUpBanner;
-  analysis_overview?: AnalysisOverview;
-  specialist_card?: SpecialistCard;
-  latency_guardrail?: LatencyGuardrail;
-  lane?: string;
-  parallel_group?: string;
-  reused?: boolean;
-  final_answer_only?: boolean;
-  hedged?: boolean;
-  missing_components?: string[];
-  follow_up_route?: string;
-  analysis_available?: boolean;
-  final_answer_message?: string;
-}
-
-export interface ProcessStep {
-  id: string;
-  name: string;
-  status: 'pending' | 'queued' | 'in_progress' | 'completed' | 'error' | 'stopped';
-  thinking: string[];
-  details?: ProcessStepDetails;
-  elapsed_ms?: number;
-  timestamp?: string;
-  sequence?: number;
-  parallelGroup?: string;
-  scheduleStage?: string;
-  flowMode?: FlowMode;
-  lane?: string;
-  reused?: boolean;
-  finalAnswerOnly?: boolean;
-  missingComponents?: string[];
-  followUpRoute?: string;
-  analysisAvailable?: boolean;
-}
-
-export interface ChatMessage {
-  id: string;
-  type: 'user' | 'clarification' | 'result' | 'assistant';
-  content: string;
-  flowMode?: FlowMode;
-  timestamp: string;
-  clarifications?: ClarifyRequest[];
-  answers?: Record<string, any>;
-  analysis?: string;
-  progressiveAnalysis?: string;
-  progressiveText?: string;
-  chartSpec?: any;
-  sqlQuery?: string;
-  dataSample?: any[];
-  stockWidgetConfig?: StockWidgetConfig | null;
-  toolFanoutManifest?: ToolFanoutManifest[];
-  toolFanoutResults?: ToolFanoutResult[];
-  webSearch?: WebSearchResult | null;
-  analysisOverview?: AnalysisOverview | null;
-  analysisSources?: AnalysisSources | null;
-  banner?: FollowUpBanner | null;
-  specialistCards?: SpecialistCard[];
-  latencyGuardrail?: LatencyGuardrail | null;
-  revisionId?: string;
-  revision?: boolean;
-  revisionEvent?: boolean;
-  revisionFocus?: string | null;
-}
-
 export interface ClarifyRequest {
-  session_id: string;
   request_id: string;
-  slot: string;
   question: string;
-  type: 'single' | 'multi' | 'free';
-  options: string[];
-  default: any;
-  proposed?: any;
-  proposed_confidence?: number;
+  slot: string;
   reason?: string;
-  required: boolean;
+  options?: string[];
   allow_custom?: boolean;
+  session_id?: string;
 }
 
 export interface ClarifyAnswer {
   session_id: string;
   request_id: string;
   slot: string;
-  value: any;
+  value: string;
   ts: string;
 }
 
-// Component Props
-export interface HeaderProps {
-  title: string;
-  description: string;
-  technologies: string[];
-  imageUrl?: string;
-  showProcessPanel?: boolean;
-  onToggleProcess?: () => void;
-  isCollapsed?: boolean;
-  onToggleCollapse?: () => void;
-}
-
-export interface ChartCardProps {
-  chartSpec: any;
+export interface ChatMessage {
+  id: string;
+  type: 'user' | 'assistant' | 'result' | 'clarification';
+  content: string;
+  timestamp: string;
+  chartSpec?: any;
+  sqlQuery?: string | null;
   dataSample?: any[] | null;
-  useAltChart?: boolean;
-  height?: string;
-  onError?: (error: any) => void;
-  enableDropdown?: boolean;
-  enableCsvDownload?: boolean;
-}
-
-export interface ProcessPanelProps {
-  singleAgentFanout?: SingleAgentFanout | null;
-  steps: ProcessStep[];
-  flowMode: FlowMode;
-  showVisualization?: boolean;
-  show: boolean;
-  onClose: () => void;
-  showElapsedTime?: boolean;
-  followUpBanner?: FollowUpBanner | null;
-}
-
-export interface PromptBarProps {
-  value: string;
-  onChange: (value: string) => void;
-  onSubmit: () => void;
-  onStop?: () => void;
-  isLoading: boolean;
-  disabled?: boolean;
-  placeholder?: string;
-  showProcessToggle: boolean;
-  onToggleProcess: () => void;
-  suggestedQueries?: string[];
-}
-
-export interface AnalysisCardProps {
-  analysis: string;
+  stockWidgetConfig?: StockWidgetConfig | null;
+  toolFanoutManifest?: ToolFanoutManifest[];
+  toolFanoutResults?: ToolFanoutResult[];
+  webSearch?: WebSearchResult | null;
+  analysisOverview?: AnalysisOverview | null;
   analysisSources?: AnalysisSources | null;
-  evidenceLinks?: AnalysisEvidenceLink[] | null;
+  analysisBundle?: Record<string, any> | null;
+  banner?: FollowUpBanner | null;
+  specialistCards?: SpecialistCard[];
+  latencyGuardrail?: LatencyGuardrail | null;
+  revision?: boolean;
+  revisionId?: string;
+  revisionFocus?: string | null;
+  flowMode?: FlowMode;
+  scheduleStage?: string;
+  parallelGroup?: string;
+  sequence?: number;
+  clarifications?: ClarifyRequest[];
+  analysis?: string;
+  progressiveAnalysis?: string;
+  progressiveText?: string;
 }
 
-export interface SqlCardProps {
-  sqlQuery: string;
-  compact?: boolean;
-  showCopy?: boolean;
-}
-
-export interface SuggestedQueriesProps {
-  queries: string[];
-  onPick: (query: string) => void;
-}
-
-export interface ClarificationOptionsProps {
-  clarification: ClarifyRequest;
-  onSubmit: (value: any) => Promise<void>;
-  disabled?: boolean;
+export interface ProcessStep {
+  id: string;
+  label: string;
+  status: 'pending' | 'in_progress' | 'completed' | 'error';
+  messages: string[];
+  details?: Record<string, any>;
+  elapsedMs?: number;
+  ts?: string;
 }
 
 export interface SlotStatusPayload {
-  status: 'filled' | 'missing' | 'defaulted' | 'assumed';
+  status: 'missing' | 'filled' | 'confirmed';
   value?: any;
   reason?: string;
   suggestions?: string[];
@@ -503,34 +414,7 @@ export interface SlotStatusPayload {
 
 export type SlotStatusMap = Record<string, SlotStatusPayload>;
 
-export interface ChatStatusPayload {
-  text: string;
-  timestamp?: string | null;
-}
-
-export interface ChatHistoryProps {
-  messages: ChatMessage[];
-  isLoading?: boolean;
-  status: ChatStatusPayload;
-  onSubmitClarification?: (value: any, request: ClarifyRequest) => Promise<void>;
-  processSteps?: ProcessStep[];
-}
-
-// Hook State Types
-export interface AnalyticsState {
-  isLoading: boolean;
-  error: string;
-  chartSpec: any | null;
-  analysis: string;
-  sqlQuery: string;
-  dataSample: any[] | null;
-  currentStatus: string;
-  statusTimestamp?: string | null;
-  useAltChart: boolean;
-  streamingText: string;
-}
-
-export interface AnalyticsMemoryState extends AnalyticsState {
+export interface AnalyticsMemoryState {
   sessionId: string;
   pendingClarification: ClarifyRequest | null;
   chatHistory: ChatMessage[];
@@ -548,8 +432,3 @@ export interface ProjectData {
   technologies: string[];
   imageUrl: string;
 }
-
-
-
-
-
