@@ -19,6 +19,11 @@
 #   Called from: Internal to analytics.flows.workflow
 #   Invokes: analytics.flows.workflow._env_flag
 #   Why: Keeps analytics.flows.workflow from duplicating agentic revision enabled behavior across flows.
+# Function: _resolve_agentic_revision_flag
+#   Role: Resolves whether the current flow instance is operating in agentic revision mode.
+#   Called from: analytics.flows.workflow
+#   Invokes: Flow/controller attributes only
+#   Why: Ensures telemetry + UI events reflect the true agent runtime when env heuristics disagree.
 # Function: _lane_sort_key
 #   Role: Handles lane sort key logic for analytics.flows.workflow.
 #   Called from: Internal to analytics.flows.workflow
@@ -54,6 +59,16 @@
 #   Called from: analytics.flows.workflow
 #   Invokes: analytics.services.revision_focus.RevisionQuestionBundle.to_dict
 #   Why: Centralizes how revision lanes choose between chart vs narrative while coordinating web refreshes.
+# Function: _build_web_topic_branches
+#   Role: Builds structured topic-branch payloads for Gemini topic telemetry events.
+#   Called from: analytics.flows.workflow._stream_revision_fast_path
+#   Invokes: analytics.services.revision_focus.RevisionQuestionBundle accessors
+#   Why: Keeps web topic progress SSE events consistent between pending and ready transitions.
+# Function: _suppress_fresh_pipeline_latch
+#   Role: Tells PlannerExecutorFlow instances to stop emitting `fresh_*` events once agentic revisions begin.
+#   Called from: analytics.flows.workflow._stream_revision_fast_path
+#   Invokes: Flow/controller suppressor hooks only
+#   Why: Prevents stale fresh-run telemetry from replaying after an agentic revision request.
 # Function: _requires_revision_directive
 #   Role: Determines when revision lanes must force a directive so accessory lanes refresh.
 #   Called from: analytics.flows.workflow
@@ -282,6 +297,33 @@ def _agentic_revision_enabled(flow_name: Optional[str]) -> bool:
     return _env_flag(env_key, default=False)
 
 
+def _resolve_agentic_revision_flag(
+    flow_instance: Any,
+    prefer_agentic_revision: bool,
+    revision_directive: Optional[RevisionDirective],
+) -> bool:
+    """Determine whether the active flow is operating in agentic revision mode."""
+    if prefer_agentic_revision:
+        return True
+    if revision_directive is not None:
+        return True
+    flow_flags = (
+        getattr(flow_instance, "_agentic_revision_mode", False),
+        getattr(flow_instance, "agentic_revision_mode", False),
+    )
+    if any(flow_flags):
+        return True
+    planner = getattr(flow_instance, "_planner", None)
+    if planner:
+        planner_flags = (
+            getattr(planner, "_agentic_revision_mode", False),
+            getattr(planner, "agentic_revision_mode", False),
+        )
+        if any(planner_flags):
+            return True
+    return False
+
+
 REVISION_LANE_ORDER: tuple[str, ...] = ("chart", "analysis", "market")
 
 
@@ -495,6 +537,45 @@ def _build_revision_inputs_plan(
     if question_bundle:
         plan["questions"] = question_bundle.to_dict()
     return plan
+
+
+def _build_web_topic_branches(
+    bundle: Optional[RevisionQuestionBundle],
+    *,
+    status: str,
+) -> List[Dict[str, Any]]:
+    definitions = (
+        ("user_question", "User Question", "user"),
+        ("industry_question", "Industry Question", "industry"),
+    )
+    branches: List[Dict[str, Any]] = []
+    for key, label, question_kind in definitions:
+        question_value = getattr(bundle, key, None) if bundle else None
+        if bundle is None or (isinstance(question_value, str) and question_value.strip()):
+            entry: Dict[str, Any] = {
+                "id": key,
+                "label": label,
+                "question_kind": question_kind,
+                "status": status,
+            }
+            if isinstance(question_value, str) and question_value.strip():
+                entry["summary"] = question_value.strip()
+            branches.append(entry)
+    return branches
+
+
+def _suppress_fresh_pipeline_latch(flow_instance: Any) -> None:
+    targets = [flow_instance]
+    planner = getattr(flow_instance, "_planner", None)
+    if planner:
+        targets.append(planner)
+    for target in targets:
+        suppress_fn = getattr(target, "suppress_fresh_pipeline_events", None)
+        if callable(suppress_fn):
+            try:
+                suppress_fn()
+            except Exception:
+                logger.debug("Failed to suppress fresh pipeline events", exc_info=True)
 
 
 def _requires_revision_directive(lanes: Iterable[str]) -> bool:
@@ -963,9 +1044,59 @@ async def _stream_revision_fast_path(
             "revision": True,
             "revision_id": revision_id,
             "lane_refresh_required": dict(lane_refresh_required),
+            "agentic_revision": agentic_revision,
         }
     )
     yield status_event
+
+    plan_metadata: Dict[str, Any] = {
+        "flow": selected_flow,
+        "session_id": session_id,
+        "revision_id": revision_id,
+        "agentic_revision": agentic_revision,
+    }
+    should_emit_topics = any(lane in {"analysis", "web"} for lane in lanes)
+    pending_topics_sent = False
+    pending_topic_total = 0
+    topic_branch_states: Dict[str, Dict[str, Any]] = {}
+    topic_ready_emitted = False
+    topic_questions_payload: Optional[Dict[str, Any]] = None
+
+    if agentic_revision:
+        _suppress_fresh_pipeline_latch(flow_instance)
+
+    if revision_inputs_plan:
+        plan_payload = dict(revision_inputs_plan)
+        plan_event = EventEmitter.status("revision_inputs_plan", "Revision plan prepared.")
+        plan_event["event"] = "revision_inputs_plan"
+        plan_event.setdefault("data", {}).update({**plan_metadata, "plan": plan_payload})
+        yield plan_event
+        if snapshot:
+            try:
+                snapshot.record_revision_inputs_plan(plan_payload, metadata=plan_metadata)
+            except Exception:
+                logger.debug("Failed to persist revision inputs plan", exc_info=True)
+
+    if should_emit_topics:
+        pending_branches = _build_web_topic_branches(None, status="pending")
+        if pending_branches:
+            pending_topic_total = len(pending_branches)
+            pending_event = EventEmitter.status("web_topics_pending", "Generating revision web topics.")
+            pending_event["event"] = "web_topics_pending"
+            pending_payload = {
+                **plan_metadata,
+                "total": pending_topic_total,
+                "completed": 0,
+                "pending": pending_topic_total,
+                "branches": pending_branches,
+            }
+            pending_event.setdefault("data", {}).update(pending_payload)
+            yield pending_event
+            pending_topics_sent = True
+            for branch in pending_branches:
+                branch_id = str(branch.get("id") or branch.get("branch") or "").strip()
+                if branch_id:
+                    topic_branch_states[branch_id] = dict(branch)
 
     questions_bundle = revision_questions
     if questions_bundle is None:
@@ -997,6 +1128,12 @@ async def _stream_revision_fast_path(
             if questions_bundle.industry_question and not revision_directive.industry_question:
                 revision_directive.industry_question = questions_bundle.industry_question
 
+    if questions_bundle:
+        try:
+            topic_questions_payload = questions_bundle.to_dict()
+        except Exception:
+            topic_questions_payload = None
+
     if revision_directive is None:
         revision_directive = _synthesize_minimal_revision_directive(
             query=combined_query,
@@ -1005,6 +1142,85 @@ async def _stream_revision_fast_path(
             lanes=lanes,
             prefer_agentic_revision=agentic_revision,
         )
+
+    def _update_topic_branch_state(branch_payload: Mapping[str, Any]) -> None:
+        if not should_emit_topics or not isinstance(branch_payload, Mapping):
+            return
+        branch_id = str(branch_payload.get("branch") or branch_payload.get("id") or "").strip()
+        if not branch_id:
+            return
+        entry = topic_branch_states.setdefault(branch_id, {"id": branch_id, "status": "pending"})
+        status_value = str(branch_payload.get("status") or "").strip() or "ready"
+        entry["status"] = status_value
+        summary_value = branch_payload.get("summary")
+        if isinstance(summary_value, str) and summary_value.strip():
+            entry["summary"] = summary_value.strip()
+        question_kind = branch_payload.get("question_kind")
+        if isinstance(question_kind, str) and question_kind.strip():
+            entry["question_kind"] = question_kind.strip()
+
+    def _maybe_emit_topics_ready() -> Optional[Dict[str, Any]]:
+        nonlocal topic_ready_emitted
+        if not should_emit_topics or topic_ready_emitted:
+            return None
+        total_topics = pending_topic_total or len(topic_branch_states)
+        if total_topics <= 0:
+            return None
+        completed_topics = sum(
+            1
+            for branch in topic_branch_states.values()
+            if str(branch.get("status") or "").strip().lower() in {"ready", "error"}
+        )
+        pending_count = max(total_topics - completed_topics, 0)
+        if pending_count > 0:
+            return None
+        branches_payload: List[Dict[str, Any]] = list(topic_branch_states.values())
+        if not branches_payload and questions_bundle:
+            branches_payload = _build_web_topic_branches(questions_bundle, status="ready")
+        ready_event = EventEmitter.status("web_topics_ready", "Revision web topics ready.")
+        ready_event["event"] = "web_topics_ready"
+        ready_payload: Dict[str, Any] = {
+            **plan_metadata,
+            "total": total_topics,
+            "completed": completed_topics,
+            "pending": pending_count,
+            "branches": branches_payload,
+        }
+        if topic_questions_payload:
+            ready_payload["questions"] = dict(topic_questions_payload)
+        ready_event.setdefault("data", {}).update(ready_payload)
+        topic_ready_emitted = True
+        if snapshot:
+            try:
+                snapshot.record_web_topics_ready(ready_payload, metadata=plan_metadata)
+            except Exception:
+                logger.debug("Failed to persist web topics ready payload", exc_info=True)
+        return ready_event
+
+    def _process_topic_signal(event: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+        nonlocal topic_questions_payload
+        if not should_emit_topics or not isinstance(event, Mapping):
+            return None
+        name = str(event.get("event") or "")
+        if not name:
+            return None
+        data = event.get("data") or {}
+        if name == "web_topics_branch":
+            _update_topic_branch_state(data)
+            questions = data.get("questions")
+            if isinstance(questions, Mapping):
+                topic_questions_payload = dict(questions)
+            return _maybe_emit_topics_ready()
+        if name in {"web_ready", "web_revision_ready"}:
+            questions = data.get("questions")
+            if isinstance(questions, Mapping):
+                topic_questions_payload = dict(questions)
+            for branch in topic_branch_states.values():
+                status_value = str(branch.get("status") or "").strip().lower()
+                if status_value not in {"ready", "error"}:
+                    branch["status"] = "ready"
+            return _maybe_emit_topics_ready()
+        return None
 
     if revision_directive:
         rev_event = revision_directive.to_event(session_id=session_id)
@@ -1024,6 +1240,7 @@ async def _stream_revision_fast_path(
             "revision": True,
             "revision_id": revision_id,
             "lane_refresh_required": dict(lane_refresh_required),
+            "agentic_revision": agentic_revision,
         }
     )
     yield rev_event
@@ -1096,6 +1313,9 @@ async def _stream_revision_fast_path(
             revision_inputs_plan=revision_inputs_plan,
         ):
             yield event
+            topic_event = _process_topic_signal(event)
+            if topic_event:
+                yield topic_event
 
     if "market" in lanes:
         async for event in _run_market_lane(
@@ -1111,6 +1331,17 @@ async def _stream_revision_fast_path(
     if revision_inputs_plan:
         outcome_payload = _extract_revision_inputs_outcome(flow_instance)
         if outcome_payload:
+            outcome_status = EventEmitter.status("revision_inputs_outcome", "Revision plan executed.")
+            outcome_status["event"] = "revision_inputs_outcome"
+            outcome_status.setdefault("data", {}).update(
+                {**plan_metadata, "outcome": dict(outcome_payload)}
+            )
+            yield outcome_status
+            if snapshot:
+                try:
+                    snapshot.record_revision_inputs_outcome(outcome_payload, metadata=plan_metadata)
+                except Exception:
+                    logger.debug("Failed to persist revision inputs outcome", exc_info=True)
             outcome_event = {
                 "event": "follow_up_route",
                 "data": {
@@ -1381,6 +1612,10 @@ async def analytics_memory_workflow(
         session_id and not chart_revision_requested and is_analysis_revision_query(query)
     )
     revision_requested = bool(chart_revision_requested or analysis_revision_requested)
+    if revision_requested:
+        # Skip planner instrumentation for revision-only runs so we do not
+        # replay the deterministic planner pipeline ahead of targeted lanes.
+        should_instrument = False
     revision_questions_bundle: Optional[RevisionQuestionBundle] = None
 
     repository = get_session_state_repository() if session_id else None
@@ -1389,7 +1624,9 @@ async def analytics_memory_workflow(
         snapshot = await repository.load(session_id)
         if snapshot is not None:
             snapshot_reset = False
-            snapshot_dirty = snapshot.ensure_dataset_preview_from_revision()
+            dataset_seeded = snapshot.ensure_dataset_preview_from_revision()
+            analysis_seeded = snapshot.ensure_analysis_outputs_from_revision()
+            snapshot_dirty = bool(dataset_seeded or analysis_seeded)
             if reset_session:
                 snapshot.reset_agent_session()
                 snapshot_reset = True
@@ -1416,6 +1653,9 @@ async def analytics_memory_workflow(
         hydrated = await _hydrate_inputs_manifest(session_id, repository, snapshot=snapshot)
         if hydrated is not None:
             snapshot = hydrated
+
+    has_chart = bool(getattr(snapshot, "last_chart_spec", None)) if snapshot else False
+    has_analysis = bool(getattr(snapshot, "last_analysis", None)) if snapshot else False
 
     lane_readiness = _lane_readiness(snapshot)
     baseline_ready = _baseline_ready(snapshot, lane_readiness=lane_readiness)
@@ -1532,6 +1772,34 @@ async def analytics_memory_workflow(
             if repository and snapshot is not None:
                 await repository.save(snapshot)
             return
+        if not has_analysis:
+            lanes = ["analysis", "web"]
+            lane_refresh_required = {lane: True for lane in lanes}
+            banner = _build_cannot_revise_banner(lanes, ["analysis"])
+            banner["reason"] = "missing_analysis"
+            follow_up_event = {
+                "event": "follow_up_route",
+                "data": {
+                    "route": "cannot_revise",
+                    "flow": selected,
+                    "session_id": session_id,
+                    "lanes": lanes,
+                    "lane_refresh_required": lane_refresh_required,
+                    "session_follow_up": session_follow_up,
+                    "banner": banner,
+                },
+            }
+            if revision_inputs_plan:
+                follow_up_event["data"]["revision_inputs_plan"] = dict(revision_inputs_plan)
+            yield follow_up_event
+            _append_session_message(
+                snapshot,
+                role="system",
+                content="Revision skipped because the baseline chart and narrative were never recorded. Start a new analytics run to capture them before revising.",
+            )
+            if repository and snapshot is not None:
+                await repository.save(snapshot)
+            return
     analysis_focus = bool(analysis_revision_requested or analysis_text)
 
     factory = _get_flow_factory(selected)
@@ -1548,8 +1816,12 @@ async def analytics_memory_workflow(
         agentic_enabled
         and session_follow_up
         and isinstance(flow_instance, (SingleAgentController, MultiAgentFlow))
+        and revision_requested
     )
     if prefer_agentic_revision:
+        # Agentic revisions stream their own agent_coordination/tool events,
+        # so planner instrumentation would only duplicate the lane timelines.
+        should_instrument = False
         setattr(flow_instance, "_agentic_revision_mode", True)
 
     requested_lanes: Set[str] = set()
@@ -1787,6 +2059,13 @@ async def analytics_memory_workflow(
                 flow_instance.set_revision_inputs_plan(revision_inputs_plan)
             except Exception:
                 logger.exception("Failed to set revision inputs plan on flow %s", selected)
+        agentic_revision_flag = _resolve_agentic_revision_flag(
+            flow_instance,
+            prefer_agentic_revision,
+            revision_directive,
+        )
+        if agentic_revision_flag:
+            should_instrument = False
         async for event in _stream_revision_fast_path(
             flow_instance,
             combined_query=combined_query,
@@ -1800,7 +2079,7 @@ async def analytics_memory_workflow(
             snapshot=snapshot,
             lane_refresh_required=lane_refresh_required,
             revision_inputs_plan=revision_inputs_plan,
-            agentic_revision=prefer_agentic_revision,
+            agentic_revision=agentic_revision_flag,
             revision_questions=revision_questions_bundle,
         ):
             yield event
@@ -1847,6 +2126,14 @@ async def analytics_memory_workflow(
         revision_directive and hasattr(flow_instance, "set_revision_directive")
     )
 
+    agentic_revision_flag = _resolve_agentic_revision_flag(
+        flow_instance,
+        prefer_agentic_revision,
+        revision_directive,
+    )
+    if agentic_revision_flag:
+        should_instrument = False
+
     # Always surface a revision_request event for UI/telemetry, even when not
     # running in agentic mode. This helps diagnostics when a session snapshot
     # is missing and lanes cannot be restricted yet.
@@ -1855,11 +2142,9 @@ async def analytics_memory_workflow(
         rev_event.setdefault("data", {})
         rev_event["data"]["flow"] = selected
         rev_event["data"]["phase"] = "initial"
+        rev_event["data"]["agentic_revision"] = agentic_revision_flag
         yield rev_event
 
-    # Determine whether we can apply revisions immediately or need to defer
-    has_chart = bool(getattr(snapshot, "last_chart_spec", None))
-    has_analysis = bool(getattr(snapshot, "last_analysis", None))
     defer_chart_revision = bool(chart_revision_requested and not has_chart)
     defer_analysis_revision = bool(analysis_revision_requested and not has_analysis)
 
@@ -2006,7 +2291,7 @@ async def analytics_memory_workflow(
             "lanes": list(revision_lanes),
             "lane_refresh_required": dict(lane_refresh_required),
             "session_follow_up": session_follow_up,
-            "agentic_revision": prefer_agentic_revision,
+            "agentic_revision": agentic_revision_flag,
         },
     }
     if revision_inputs_plan:

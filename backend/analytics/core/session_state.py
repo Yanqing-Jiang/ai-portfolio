@@ -54,6 +54,11 @@
 #   Called from: analytics.core.session_state.SessionStateSnapshot, analytics.flows.planner_executor
 #   Invokes: Built-in int parsing helpers only
 #   Why: Keeps downstream manifest logic tolerant of serialized row_count strings without duplicating coercion.
+# Function: ensure_analysis_outputs_from_revision
+#   Role: Rehydrates last_analysis/last_chart_spec plus lane timestamps from cached revision snapshots or artifacts.
+#   Called from: analytics.flows.workflow
+#   Invokes: analytics.validators.sanitize_for_json, analytics.core.session_state.chart_spec_has_numeric_payload
+#   Why: Prevents revision-only flows from running before baseline narratives/charts exist.
 # Function: ensure_dataset_preview_from_revision
 #   Role: Rehydrates planner_dataset_preview / planner_stock_widget when cached revision snapshots or artifacts contain usable data but receipts went missing.
 #   Called from: analytics.flows.workflow
@@ -64,6 +69,11 @@
 #   Called from: analytics.services.revision_focus, analytics.flows.workflow, analytics.flows.single_agent_tools
 #   Invokes: datetime.now, analytics.services.revision_focus.cache_revision_questions
 #   Why: Keeps downstream controllers and inspectors aligned on the prompts agents actually received.
+# Function: SessionStateSnapshot.record_web_topics_ready
+#   Role: Captures the final `web_topics_ready` payload for audit trails and replay.
+#   Called from: analytics.flows.workflow
+#   Invokes: datetime.now
+#   Why: Lets future revisions or UI replays recover the exact topic branches and prompts that shipped.
 # Function: SessionStateSnapshot.record_revision_lane_decision
 #   Role: Captures the selected revision lane plus rationale for auditing agent decisions.
 #   Called from: analytics.flows.single_agent_tools, analytics.flows.multi_agent
@@ -254,8 +264,12 @@ class SessionStateSnapshot(BaseModel):
     agents_delegation_policy_version: Optional[str] = None
     agents_delegation_decisions: List[Dict[str, Any]] = Field(default_factory=list)
     analysis_inputs_manifest: Dict[str, Any] = Field(default_factory=dict)
+    revision_inputs_plan: Optional[Dict[str, Any]] = None
+    revision_inputs_outcome: Optional[Dict[str, Any]] = None
+    agent_coordination_events: List[Dict[str, Any]] = Field(default_factory=list)
     agent_revision_questions: List[Dict[str, Any]] = Field(default_factory=list)
     web_research_questions: List[Dict[str, Any]] = Field(default_factory=list)
+    web_topics_ready: Optional[Dict[str, Any]] = None
     agent_lane_decisions: List[Dict[str, Any]] = Field(default_factory=list)
 
     model_config = {
@@ -326,6 +340,130 @@ class SessionStateSnapshot(BaseModel):
             payload.update({key: value for key, value in metadata.items() if value is not None})
         self.last_revision_directive = payload
         self.touch()
+
+    def record_revision_inputs_plan(
+        self,
+        plan: Optional[Mapping[str, Any]],
+        *,
+        metadata: Optional[Mapping[str, Any]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        if not plan:
+            self.revision_inputs_plan = None
+            self.touch()
+            return None
+        normalized = self._normalize_revision_inputs_payload(plan, metadata=metadata)
+        self.revision_inputs_plan = normalized
+        self.touch()
+        return normalized
+
+    def record_revision_inputs_outcome(
+        self,
+        outcome: Optional[Mapping[str, Any]],
+        *,
+        metadata: Optional[Mapping[str, Any]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        if not outcome:
+            self.revision_inputs_outcome = None
+            self.touch()
+            return None
+        normalized = self._normalize_revision_inputs_payload(
+            outcome,
+            metadata=metadata,
+            include_questions=False,
+        )
+        self.revision_inputs_outcome = normalized
+        self.touch()
+        return normalized
+
+    def record_web_topics_ready(
+        self,
+        payload: Optional[Mapping[str, Any]],
+        *,
+        metadata: Optional[Mapping[str, Any]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        if not payload:
+            self.web_topics_ready = None
+            self.touch()
+            return None
+
+        def _coerce_int(value: Any) -> Optional[int]:
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return None
+
+        normalized: Dict[str, Any] = {
+            "total": _coerce_int(payload.get("total")),
+            "completed": _coerce_int(payload.get("completed")),
+            "pending": _coerce_int(payload.get("pending")),
+            "recorded_at": datetime.now(timezone.utc).isoformat(),
+        }
+        branches_payload: List[Dict[str, Any]] = []
+        branches = payload.get("branches")
+        if isinstance(branches, Iterable):
+            for idx, branch in enumerate(branches):
+                if not isinstance(branch, Mapping):
+                    continue
+                branch_id = str(branch.get("id") or branch.get("branch") or f"branch_{idx}")
+                status_value = str(branch.get("status") or "").strip() or "ready"
+                branch_entry: Dict[str, Any] = {
+                    "id": branch_id,
+                    "status": status_value,
+                }
+                summary_value = branch.get("summary")
+                if isinstance(summary_value, str) and summary_value.strip():
+                    branch_entry["summary"] = summary_value.strip()
+                question_kind = branch.get("question_kind")
+                if isinstance(question_kind, str) and question_kind.strip():
+                    branch_entry["question_kind"] = question_kind.strip()
+                branches_payload.append(branch_entry)
+        if branches_payload:
+            normalized["branches"] = branches_payload
+
+        questions = payload.get("questions")
+        if isinstance(questions, Mapping):
+            normalized["questions"] = dict(questions)
+        if metadata:
+            normalized["metadata"] = {key: value for key, value in metadata.items() if value is not None}
+
+        self.web_topics_ready = normalized
+        self.touch()
+        return normalized
+
+    def record_agent_coordination(self, payload: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+        if not isinstance(payload, Mapping):
+            return None
+        normalized: Dict[str, Any] = {}
+        lane = str(payload.get("lane") or "").strip().lower()
+        if lane:
+            normalized["lane"] = lane
+        web_value = str(payload.get("web") or "").strip().lower()
+        if web_value:
+            normalized["web"] = web_value
+        reason = payload.get("reason") or payload.get("message")
+        if isinstance(reason, str) and reason.strip():
+            normalized["reason"] = reason.strip()
+        source = payload.get("source")
+        if isinstance(source, str) and source.strip():
+            normalized["source"] = source.strip()
+        questions = self._normalize_revision_questions_payload(payload.get("questions"))
+        if questions:
+            normalized["questions"] = questions
+        normalized["revision"] = bool(payload.get("revision", True))
+        ts_value = payload.get("ts") or payload.get("timestamp")
+        normalized["ts"] = (
+            ts_value if isinstance(ts_value, str) and ts_value.strip() else datetime.now(timezone.utc).isoformat()
+        )
+        session_id = payload.get("session_id")
+        if isinstance(session_id, str) and session_id.strip():
+            normalized["session_id"] = session_id.strip()
+        events = list(self.agent_coordination_events)
+        events.append(normalized)
+        if len(events) > 20:
+            events = events[-20:]
+        self.agent_coordination_events = events
+        self.touch()
+        return normalized
 
     def record_revision_questions(self, bundle: Any) -> Dict[str, Any]:
         """Persist the Gemini keyword bundle for ledger hydration."""
@@ -410,6 +548,58 @@ class SessionStateSnapshot(BaseModel):
             logger.debug("Failed to mirror web research questions in tool cache", exc_info=True)
         self.touch()
         return entry
+
+    def _normalize_revision_inputs_payload(
+        self,
+        payload: Mapping[str, Any],
+        *,
+        metadata: Optional[Mapping[str, Any]] = None,
+        include_questions: bool = True,
+    ) -> Dict[str, Any]:
+        normalized: Dict[str, Any] = {
+            "recorded_at": datetime.now(timezone.utc).isoformat(),
+        }
+        lane_value = str(payload.get("lane") or "").strip().lower()
+        if lane_value:
+            normalized["lane"] = lane_value
+        web_value = str(payload.get("web") or "").strip().lower()
+        if web_value:
+            normalized["web"] = web_value
+        if include_questions:
+            questions = self._normalize_revision_questions_payload(payload.get("questions"))
+            if questions:
+                normalized["questions"] = questions
+        if metadata:
+            for key, value in metadata.items():
+                if value is not None:
+                    normalized[key] = value
+        return normalized
+
+    def _normalize_revision_questions_payload(self, payload: Any) -> Optional[Dict[str, Any]]:
+        if payload is None:
+            return None
+        if hasattr(payload, "to_dict"):
+            try:
+                payload = payload.to_dict()
+            except Exception:
+                payload = {}
+        if not isinstance(payload, Mapping):
+            return None
+        sanitized: Dict[str, Any] = {}
+        for key in ("keyword_focus", "user_question", "industry_question"):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                sanitized[key] = value.strip()
+        model = payload.get("model")
+        if isinstance(model, str) and model.strip():
+            sanitized["model"] = model.strip()
+        latency = payload.get("latency_ms")
+        if isinstance(latency, (int, float)):
+            sanitized["latency_ms"] = int(latency)
+        source = payload.get("source")
+        if isinstance(source, str) and source.strip():
+            sanitized["source"] = source.strip()
+        return sanitized or None
 
     def record_revision_lane_decision(
         self,
@@ -552,6 +742,110 @@ class SessionStateSnapshot(BaseModel):
                     market_payload = market_artifact.get("snapshot")
             if market_payload and _seed_market(market_payload):
                 market_ready = True
+                seeded = True
+
+        return seeded
+
+    def ensure_analysis_outputs_from_revision(self) -> bool:
+        """
+        Function: ensure_analysis_outputs_from_revision -- rehydrates missing analysis/chart outputs and lane
+        timestamps from cached revision snapshots or persisted artifacts so revision-only requests never run
+        without a baseline narrative. Called from analytics.flows.workflow.
+        """
+        tool_cache = self.tool_cache if isinstance(self.tool_cache, dict) else {}
+        analytics_cache = tool_cache.get("analytics") if isinstance(tool_cache, Mapping) else None
+        revision_snapshot = (
+            analytics_cache.get("revision_snapshot")
+            if isinstance(analytics_cache, Mapping)
+            else None
+        )
+        artifacts_snapshot = (
+            analytics_cache.get("artifacts")
+            if isinstance(analytics_cache, Mapping)
+            else None
+        )
+        analysis_present = isinstance(self.last_analysis, str) and bool(self.last_analysis.strip())
+        chart_present = isinstance(self.last_chart_spec, Mapping) and bool(self.last_chart_spec)
+        seeded = False
+
+        def _parse_timestamp(value: Any) -> Optional[datetime]:
+            if isinstance(value, str):
+                candidate = value.strip()
+                if not candidate:
+                    return None
+                normalized = candidate[:-1] + "+00:00" if candidate.endswith("Z") else candidate
+                try:
+                    parsed = datetime.fromisoformat(normalized)
+                except ValueError:
+                    return None
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=timezone.utc)
+                return parsed.astimezone(timezone.utc)
+            return None
+
+        def _coerce_analysis(payload: Any) -> Optional[str]:
+            if isinstance(payload, str):
+                stripped = payload.strip()
+                return stripped or None
+            if isinstance(payload, Mapping):
+                for key in ("analysis", "analysis_text", "final", "summary"):
+                    candidate = payload.get(key)
+                    if isinstance(candidate, str) and candidate.strip():
+                        return candidate.strip()
+            return None
+
+        def _coerce_chart_spec(payload: Any) -> Optional[Dict[str, Any]]:
+            if not isinstance(payload, Mapping):
+                return None
+            if "spec" in payload and isinstance(payload["spec"], Mapping):
+                payload = payload["spec"]
+            sanitized = sanitize_for_json(payload)
+            if isinstance(sanitized, Mapping) and chart_spec_has_numeric_payload(sanitized):
+                return dict(sanitized)
+            return None
+
+        timestamp_hint = None
+        if isinstance(revision_snapshot, Mapping):
+            timestamp_hint = _parse_timestamp(revision_snapshot.get("updated_at"))
+        if timestamp_hint is None:
+            timestamp_hint = self.updated_at if isinstance(self.updated_at, datetime) else None
+        timestamp_hint = timestamp_hint or datetime.now(timezone.utc)
+
+        if not analysis_present:
+            analysis_candidate = None
+            if isinstance(revision_snapshot, Mapping):
+                analysis_candidate = revision_snapshot.get("analysis")
+            if analysis_candidate is None and isinstance(artifacts_snapshot, Mapping):
+                analysis_artifact = artifacts_snapshot.get("analysis")
+                analysis_candidate = (
+                    analysis_artifact.get("analysis_text")
+                    if isinstance(analysis_artifact, Mapping)
+                    else None
+                )
+                if analysis_candidate is None and isinstance(analysis_artifact, Mapping):
+                    analysis_candidate = (
+                        analysis_artifact.get("analysis")
+                        or analysis_artifact.get("final")
+                        or analysis_artifact.get("summary")
+                    )
+            normalized_analysis = _coerce_analysis(analysis_candidate)
+            if normalized_analysis:
+                self.last_analysis = normalized_analysis
+                self.touch_lane("analysis", at=timestamp_hint)
+                seeded = True
+
+        if not chart_present:
+            chart_candidate = None
+            if isinstance(revision_snapshot, Mapping):
+                chart_candidate = revision_snapshot.get("chart_spec")
+            if chart_candidate is None and isinstance(artifacts_snapshot, Mapping):
+                chart_artifact = artifacts_snapshot.get("chart")
+                if isinstance(chart_artifact, Mapping):
+                    chart_candidate = chart_artifact.get("spec") or chart_artifact.get("chart_spec")
+            normalized_chart = _coerce_chart_spec(chart_candidate)
+            if normalized_chart:
+                self.last_chart_spec = normalized_chart
+                self.touch_lane("chart", at=timestamp_hint)
                 seeded = True
 
         return seeded
