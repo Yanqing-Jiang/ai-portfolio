@@ -123,7 +123,6 @@ from .planner_executor import (
     _INTENT_LANE_HINTS,
     _apply_revision_context_hints,
 )
-from .orchestrator_adapter import PlannerOrchestratorAdapter, LaneCompleteCallback
 from .pipeline_tools import PlannerToolDefinition, PlannerToolRegistry, get_planner_tool_registry
 from .schedulers import FlowMode, apply_mode_metadata, get_mode_config
 from .planner import (
@@ -146,7 +145,6 @@ from .sequencer import (
     LANE_STATUS_SKIPPED,
     LANE_TOOL_LOOKUP as SEQUENCER_LANE_TOOL_LOOKUP,
     LANE_TOOL_MAP as SEQUENCER_LANE_TOOL_MAP,
-    PlannerSequencer,
 )
 from .tooling import StockTrackerAdapter
 from analytics.core.config_store import get_config_store
@@ -1414,7 +1412,6 @@ class SingleAgentController:
         self._agentic_lane_targets: Set[str] = set()
         self._tool_attempts: Dict[str, int] = {}
         self._sequencer_state: Optional[_SequencerRunState] = None
-        self._active_sequencer: Optional[PlannerSequencer] = None
         self._lane_retry_counts: Dict[str, int] = {}
         self._session_follow_up = False
         self._lane_warning_events: Deque[Dict[str, Any]] = deque()
@@ -1557,49 +1554,6 @@ class SingleAgentController:
         self._prime_lane_reuse_events(ctx)
         return state
 
-    def build_planner_orchestrator(
-        self,
-        *,
-        metadata: Optional[Dict[str, Any]] = None,
-        lane_complete_callback: Optional[LaneCompleteCallback] = None,
-        use_agent_override: Optional[bool] = None,
-    ) -> PlannerOrchestratorAdapter:
-        """
-        Construct a PlannerOrchestratorAdapter wired to this controller's stage runners.
-        External callers (analytics_memory_workflow, tests) can use the returned adapter
-        to drive a PlannerSequencer without reimplementing the lane mapping logic.
-        """
-        if use_agent_override is False:
-            logger.warning(
-                "single_agent planner fallback ignored; agent runtime is mandatory",
-                extra={"flow": self.flow_label},
-            )
-        if not self._should_use_agent_runtime():
-            raise RuntimeError("AgentRuntime must be available for single-agent mode")
-
-        intent_runner = self._intent_stage
-        sql_runner = self._agent_run_stage
-        web_runner = self._noop_stage
-        market_runner = self._noop_stage
-        analysis_runner = self._noop_stage
-        base_metadata = {
-            "flow": self.flow_label,
-            "flow_mode": self.flow_mode.value,
-        }
-        if metadata:
-            base_metadata.update(metadata)
-        callback = lane_complete_callback or self._handle_lane_complete
-        return PlannerOrchestratorAdapter(
-            intent_runner=intent_runner,
-            sql_runner=sql_runner,
-            web_runner=web_runner,
-            market_runner=market_runner,
-            analysis_runner=analysis_runner,
-            metadata=base_metadata,
-            optional_lanes=("web", "market"),
-            lane_complete_callback=callback,
-        )
-
     def _should_use_agent_runtime(self) -> bool:
         if not (self._agent_runtime_allowed and self._agents_enabled and self._agent is not None):
             return False
@@ -1738,6 +1692,8 @@ class SingleAgentController:
             and bool(fanout_adapters)
             and not (ctx.reuse_sql and ctx.reuse_snapshot_active)
         )
+        if bool(getattr(state, "use_agent_runtime", False)):
+            should_run_parallel = False
         if should_run_parallel:
             runtime = self._planner._start_tool_parallelism(
                 ctx,
@@ -1933,7 +1889,7 @@ class SingleAgentController:
 
     # Function: _agent_run_stage
     #   Role: Streams the agent runtime lane when PlannerOrchestratorAdapter selects the agent path so emitted events stay in sync with planner telemetry.
-    #   Called from: PlannerOrchestratorAdapter.sql_runner when build_planner_orchestrator(use_agent=True) routes execution through AgentRuntime.
+    #   Called from: analytics.flows.single_agent_tools._run_agentic_revision_loop when use_agent_runtime is true so fresh runs stay on the AgentRuntime path.
     #   Invokes: AgentRuntime.run via _build_agent_runtime, _persist_runtime_metadata, and _run_agent_runtime_fallback so SQL/web/analysis receipts stay sealed for revisions.
     #   Why: Keeps the agent-based execution path aligned with planner/executor persistence semantics and manifest expectations.
     async def _agent_run_stage(self) -> AsyncGenerator[Dict[str, Any], None]:
@@ -2689,26 +2645,38 @@ class SingleAgentController:
     def _notify_retry_signal(self, registry_name: Optional[str], attempt: int) -> None:
         if attempt <= 1:
             return
-        sequencer = self._active_sequencer
-        if sequencer is None:
-            return
         lane = self._lane_for_tool(registry_name)
         if lane is None:
             alias = self._resolve_alias_for_registry(registry_name)
             lane = self._lane_for_tool(alias)
         if lane is None:
             return
-        normalized_name = self._normalize_tool_key(registry_name) or registry_name
-        metadata: Dict[str, Any] = {
-            "tool": normalized_name,
-            "retry_count": max(attempt - 1, 0),
+        retry_count = max(attempt - 1, 0)
+        self._lane_retry_counts[lane] = retry_count
+        state = self._sequencer_state
+        ctx = getattr(state, "ctx", None) if state else None
+        session_id = getattr(ctx, "session_id", None) if ctx else None
+        tool_name = self._normalize_tool_key(registry_name) or registry_name or lane
+        details: Dict[str, Any] = {
+            "lane": lane,
+            "attempt": attempt,
+            "retry_count": retry_count,
+            "tool": tool_name,
         }
-        sequencer.notify_retry(
-            lane,
-            attempt=attempt,
-            reason="tool_retry",
-            metadata=metadata,
+        telemetry.tool_iteration(
+            tool=str(tool_name or f"{lane}_lane"),
+            status="retry",
+            step=f"{lane}_retry",
+            session_id=session_id,
+            flow=self.flow_label,
+            details=details,
         )
+        if ctx is not None:
+            lane_counts = getattr(ctx, "lane_retry_counts", None)
+            if not isinstance(lane_counts, dict):
+                lane_counts = {}
+                setattr(ctx, "lane_retry_counts", lane_counts)
+            lane_counts[lane] = retry_count
 
     async def _emit_tool_event(
         self,
@@ -3776,14 +3744,6 @@ class SingleAgentController:
             data.setdefault("reused", False)
         self._finalize_receipt(ctx, lane, tool_name, data)
 
-    def _sync_lane_states_from_sequencer(
-        self,
-        lane_states: Dict[str, str],
-        sequencer: PlannerSequencer,
-    ) -> None:
-        lane_states.clear()
-        lane_states.update(sequencer.lane_presentations())
-
     def _handle_lane_complete(
         self,
         lane: str,
@@ -3801,52 +3761,6 @@ class SingleAgentController:
             ctx.reused_web = bool(reused)
         elif lane == "market":
             ctx.reused_stock = bool(reused)
-
-    def _handle_retry(
-        self,
-        lane: str,
-        attempt: int,
-        reason: Optional[str],
-        error: Optional[str],
-        metadata: Optional[Mapping[str, Any]],
-    ) -> None:
-        retry_count = max(attempt - 1, 0)
-        if retry_count <= 0:
-            return
-        state = self._sequencer_state
-        ctx = getattr(state, "ctx", None) if state else None
-        session_id = getattr(ctx, "session_id", None) if ctx else None
-        tool_name: Optional[str] = None
-        metadata_dict: Dict[str, Any] = {}
-        if isinstance(metadata, Mapping):
-            metadata_dict = dict(metadata)
-            tool_name = metadata_dict.get("tool") or metadata_dict.get("tool_name")
-        details: Dict[str, Any] = {
-            "lane": lane,
-            "attempt": attempt,
-            "retry_count": retry_count,
-        }
-        if reason:
-            details["reason"] = reason
-        if error:
-            details["error"] = error
-        if metadata_dict:
-            details.update(metadata_dict)
-        telemetry.tool_iteration(
-            tool=str(tool_name or f"{lane}_lane"),
-            status="retry",
-            step=f"{lane}_retry",
-            session_id=session_id,
-            flow=self.flow_label,
-            details=details,
-        )
-        self._lane_retry_counts[lane] = retry_count
-        if ctx is not None:
-            lane_counts = getattr(ctx, "lane_retry_counts", None)
-            if not isinstance(lane_counts, dict):
-                lane_counts = {}
-                setattr(ctx, "lane_retry_counts", lane_counts)
-            lane_counts[lane] = retry_count
 
     async def _persist_agent_run_metadata(
         self,
@@ -4090,12 +4004,7 @@ class SingleAgentController:
     ) -> None:
         name = event.get("event") or ""
         data = event.get("data") or {}
-        sequencer = self._active_sequencer
 
-        if sequencer and name == "planner_result":
-            lane_requirements = data.get("lane_refresh_required")
-            if isinstance(lane_requirements, Mapping):
-                sequencer.update_lane_requirements(lane_requirements)
         lane = data.get("lane")
         reused = bool(data.get("reused"))
         schedule_stage = data.get("schedule_stage")
@@ -4111,44 +4020,31 @@ class SingleAgentController:
             lanes = data.get("lanes") or []
             revision_targets.clear()
             revision_targets.update(str(l).strip().lower() for l in lanes if l)
-            if sequencer:
-                sequencer.set_revision_targets(revision_targets)
         elif name in {"sql_ready", "sql_revision_ready"}:
-            if sequencer:
-                sequencer.mark_lane_complete("sql", result=data, reused=reused, success=True)
+            lane_states["sql"] = "reused" if reused else "completed"
         elif name in {"chart_ready", "chart_revision_ready"}:
-            if sequencer:
-                sequencer.mark_lane_complete("chart", result=data, reused=reused, success=True)
+            lane_states["chart"] = "reused" if reused else "completed"
         elif name in {"analysis_ready", "analysis_revision_ready", "analysis_complete"}:
-            if sequencer:
-                sequencer.mark_lane_complete("analysis", result=data, reused=reused, success=True)
+            lane_states["analysis"] = "reused" if reused else "completed"
         elif name in {"stock_ready", "stock_revision_ready"}:
-            if sequencer:
-                schedule = str(data.get("schedule_stage") or "").strip().lower()
-                reuse_hint = reused or (schedule == "hedged_accessories" and name == "stock_ready")
-                sequencer.mark_lane_complete("market", result=data, reused=reuse_hint, success=True)
+            schedule = str(data.get("schedule_stage") or "").strip().lower()
+            reuse_hint = reused or (schedule == "hedged_accessories" and name == "stock_ready")
+            lane_states["market"] = "reused" if reuse_hint else "completed"
         elif name in {"web_ready", "web_revision_ready"}:
-            if sequencer:
-                schedule = str(data.get("schedule_stage") or "").strip().lower()
-                reuse_hint = reused or (schedule == "hedged_accessories" and name == "web_ready")
-                sequencer.mark_lane_complete("web", result=data, reused=reuse_hint, success=True)
+            schedule = str(data.get("schedule_stage") or "").strip().lower()
+            reuse_hint = reused or (schedule == "hedged_accessories" and name == "web_ready")
+            lane_states["web"] = "reused" if reuse_hint else "completed"
         elif lane in lane_states and name == "tool_parallel_result":
             status = str(data.get("status") or "").lower()
-            if sequencer and lane:
-                sequencer.mark_lane_complete(
-                    str(lane),
-                    result=data,
-                    reused=reused if reused else status in {"cached", "reused"},
-                )
+            if status in {"cached", "reused"} or reused:
+                lane_states[str(lane)] = "reused"
         elif name == "lane_reused":
             reused_lane = str(data.get("lane") or "").strip().lower()
             if reused_lane and reused_lane in lane_states:
                 lane_states[reused_lane] = "reused"
-            if sequencer and reused_lane:
-                sequencer.mark_lane_complete(reused_lane, result=data, reused=True, success=True)
         elif lane in lane_states and schedule_stage in {"hedged_accessories"}:
-            if sequencer and lane:
-                sequencer.mark_lane_complete(str(lane), result=data, reused=reused)
+            lane_states[str(lane)] = "reused"
+
         self._check_for_lane_telemetry_gaps(lane_states, name)
 
     def _check_for_lane_telemetry_gaps(self, lane_states: Mapping[str, str], event_name: Optional[str]) -> None:
@@ -4492,20 +4388,15 @@ class SingleAgentController:
         *,
         reason: str,
     ) -> AsyncGenerator[Dict[str, Any], None]:
-        sequencer = self._active_sequencer
+        state = getattr(self, "_sequencer_state", None)
+        snapshot = getattr(state, "lane_states", None) if state else None
+        lane_snapshot: Dict[str, Any] = dict(snapshot) if isinstance(snapshot, dict) else {}
         cancelled_lanes: List[str] = []
-        lane_snapshot: Dict[str, Any] = {}
-        if sequencer is not None:
-            try:
-                cancelled_lanes = sequencer.abort_pending_lanes(reason=reason)
-            except Exception:  # pragma: no cover - defensive logging
-                logger.exception("Failed to cancel pending lanes for reason=%s", reason)
-            lane_snapshot = sequencer.lane_presentations()
-        else:
-            state = getattr(self, "_sequencer_state", None)
-            snapshot = getattr(state, "lane_states", None) if state else None
-            if isinstance(snapshot, dict):
-                lane_snapshot = dict(snapshot)
+        if lane_snapshot:
+            for lane, status in lane_snapshot.items():
+                normalized_status = str(status or "").strip().lower()
+                if normalized_status in {"pending", "running", "queued"}:
+                    cancelled_lanes.append(str(lane))
         payload = {
             "status": "cancelled",
             "reason": reason,
@@ -4519,8 +4410,6 @@ class SingleAgentController:
         event = EventEmitter.result("workflow_complete", payload)
         event["event"] = "workflow_complete"
         annotated = self._planner._annotate(event)
-        if sequencer is not None and self._active_sequencer is sequencer:
-            self._active_sequencer = None
         async for pre_event in hooks.before_event(hook_ctx, annotated):
             yield pre_event
         yield annotated
@@ -4528,15 +4417,19 @@ class SingleAgentController:
             yield post_event
 
     def _abort_stale_sequencer(self, *, reason: str = "restart") -> None:
-        sequencer = self._active_sequencer
-        if sequencer is None:
+        state = getattr(self, "_sequencer_state", None)
+        if state is None:
             return
-        try:
-            sequencer.abort_pending_lanes(reason=reason)
-        except Exception:  # pragma: no cover - defensive logging
-            logger.exception("Failed to abort pending lanes for reason=%s", reason)
-        finally:
-            self._active_sequencer = None
+        runtime = getattr(state, "tool_runtime", None)
+        if runtime is not None:
+            try:
+                loop = asyncio.get_event_loop()
+                loop.create_task(runtime.close())
+            except Exception:  # pragma: no cover - best effort cleanup
+                logger.debug("Failed to schedule runtime close during %s", reason, exc_info=True)
+        self._sequencer_state = None
+        self._tool_attempts.clear()
+        self._lane_retry_counts.clear()
 
     async def _resolve_session_query(self, session_id: str) -> str:
         repository = get_session_state_repository()
@@ -4579,121 +4472,12 @@ class SingleAgentController:
         self,
         query: str,
         session_id: Optional[str] = None,
-        *,
-        sequencer: Optional[PlannerSequencer] = None,
-        lane_states: Optional[Dict[str, str]] = None,
-        revision_targets: Optional[Set[str]] = None,
-        emit_prefill_summary: Optional[bool] = None,
-        sequencer_state: Optional[_SequencerRunState] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         self._abort_stale_sequencer(reason="restart")
         hooks = _SingleAgentToolHooks(self, session_id=session_id)
-        if sequencer is None:
-            stream = self._agentic_event_stream(query, session_id=session_id)
-        else:
-            stream = self.sequencer_stream(
-                query,
-                session_id=session_id,
-                sequencer=sequencer,
-                lane_states=lane_states,
-                revision_targets=revision_targets,
-                emit_prefill_summary=emit_prefill_summary,
-                state=sequencer_state,
-            )
+        stream = self._agentic_event_stream(query, session_id=session_id)
         async for event in self._forward_with_hooks(stream, hooks, session_id, ensure_session_event=True):
             yield event
-
-    async def sequencer_stream(
-        self,
-        query: str,
-        *,
-        session_id: Optional[str],
-        sequencer: PlannerSequencer,
-        lane_states: Optional[Dict[str, str]] = None,
-        revision_targets: Optional[Set[str]] = None,
-        emit_prefill_summary: Optional[bool] = None,
-        state: Optional[_SequencerRunState] = None,
-    ) -> AsyncGenerator[Dict[str, Any], None]:
-        working_lane_states = dict(lane_states or self._initial_lane_states())
-        working_revision_targets = set(revision_targets or set())
-        self._tool_attempts.clear()
-        self._lane_retry_counts.clear()
-
-        if emit_prefill_summary is None:
-            emit_prefill_summary = bool(self._agentic_revision_mode and working_revision_targets)
-
-        summary_emitted = False
-        if emit_prefill_summary:
-            summary_event = self._emit_lane_summary(working_lane_states)
-            if summary_event:
-                if self._agentic_revision_mode:
-                    summary_event.setdefault("data", {})
-                    summary_event["data"]["mode"] = "agentic_revision"
-                yield summary_event
-                summary_emitted = True
-
-        if state is None:
-            state = await self._prepare_sequencer_state(query, session_id=session_id)
-        else:
-            self._sequencer_state = state
-        state.lane_states = working_lane_states  # type: ignore[attr-defined]
-
-        transition_events: Deque[Dict[str, Any]] = deque()
-
-        def _on_lane_transition(event: Dict[str, Any]) -> None:
-            annotated_event = self._planner._annotate(copy.deepcopy(event))
-            transition_events.append(annotated_event)
-            self._sync_lane_states_from_sequencer(working_lane_states, sequencer)
-
-        sequencer.event_bus.subscribe(_on_lane_transition)
-        self._active_sequencer = sequencer
-        sequencer.on_retry(self._handle_retry)
-        sequencer.prefill_lane_states(working_lane_states)
-        sequencer.set_revision_targets(working_revision_targets)
-        self._sync_lane_states_from_sequencer(working_lane_states, sequencer)
-        while transition_events:
-            yield transition_events.popleft()
-
-        try:
-            async for event in sequencer.run():
-                while transition_events:
-                    yield transition_events.popleft()
-                self._update_lane_state_from_event(
-                    working_lane_states,
-                    event,
-                    revision_targets=working_revision_targets,
-                )
-                for warning_event in self._drain_lane_warning_events():
-                    yield warning_event
-                self._sync_lane_states_from_sequencer(working_lane_states, sequencer)
-                if not summary_emitted and self._should_emit_lane_summary_before(event):
-                    summary_event = self._emit_lane_summary(working_lane_states)
-                    if summary_event:
-                        yield summary_event
-                    summary_emitted = True
-                yield event
-        except Exception:
-            while transition_events:
-                yield transition_events.popleft()
-            raise
-        else:
-            while transition_events:
-                yield transition_events.popleft()
-        finally:
-            sequencer.remove_retry_callback(self._handle_retry)
-            sequencer.event_bus.unsubscribe(_on_lane_transition)
-            if self._active_sequencer is sequencer:
-                self._active_sequencer = None
-            self._sequencer_state = None
-            self._sync_lane_states_from_sequencer(working_lane_states, sequencer)
-            transition_events.clear()
-
-        if not summary_emitted and any(
-            status not in {"pending", "queued", "skipped"} for status in working_lane_states.values()
-        ):
-            summary_event = self._emit_lane_summary(working_lane_states)
-            if summary_event:
-                yield summary_event
 
     async def _agentic_event_stream(
         self,
@@ -4707,6 +4491,9 @@ class SingleAgentController:
         emit_prefill_summary = bool(self._agentic_revision_mode and self._agentic_lane_targets)
 
         state = await self._prepare_sequencer_state(query, session_id=session_id)
+        use_agent_runtime = not self._agentic_revision_mode
+        setattr(state, "use_agent_runtime", use_agent_runtime)
+        state.lane_states = lane_states  # type: ignore[attr-defined]
         self._sequencer_state = state
         summary_emitted = False
         try:
@@ -4716,7 +4503,12 @@ class SingleAgentController:
                     yield summary_event
                     summary_emitted = True
 
-            async for event in self._run_agentic_revision_loop(state, lane_states, revision_targets):
+            async for event in self._run_agentic_revision_loop(
+                state,
+                lane_states,
+                revision_targets,
+                use_agent_runtime=use_agent_runtime,
+            ):
                 if self._should_emit_lane_summary_before(event):
                     summary_event = self._emit_lane_summary(lane_states)
                     if summary_event:
@@ -4743,11 +4535,18 @@ class SingleAgentController:
         state: "_SequencerRunState",
         lane_states: Dict[str, str],
         revision_targets: Set[str],
+        *,
+        use_agent_runtime: bool,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         ctx = state.ctx
         async for event in self._intent_stage():
             yield event
         if getattr(ctx, "halted", False):
+            return
+
+        if use_agent_runtime:
+            async for event in self._agent_run_stage():
+                yield event
             return
 
         try:

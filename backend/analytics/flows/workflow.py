@@ -225,7 +225,6 @@ from analytics.services.revision_focus import (
     cache_revision_questions,
     derive_revision_questions,
 )
-from .sequencer import PlannerSequencer, PlannerEventBus
 
 logger = logging.getLogger(__name__)
 
@@ -1990,13 +1989,12 @@ async def analytics_memory_workflow(
                     user_query=query,
                     analysis_text=analysis_text,
                 )
-        agentic_enabled = bool(prefer_agentic_revision)
         revision_directive = RevisionDirective.from_payload(
             raw_text=combined_query,
             targets=directive_targets or set(revision_lanes) or {"analysis"},
             requested_focus=analysis_text,
             chart_patch=chart_patch,
-            agentic=agentic_enabled,
+            agentic=bool(prefer_agentic_revision),
             search_topics=search_topic_entries,
         )
         if revision_questions_bundle is None:
@@ -2293,34 +2291,6 @@ async def analytics_memory_workflow(
     if missing_revision_lanes:
         follow_up_event["data"]["missing_lanes"] = list(missing_revision_lanes)
     yield follow_up_event
-    sequencer: Optional[PlannerSequencer] = None
-    sequencer_state: Optional[Any] = None
-    emit_prefill_summary: Optional[bool] = None
-    if isinstance(flow_instance, SingleAgentController) and not prefer_agentic_revision:
-        sequencer_state = await flow_instance._prepare_sequencer_state(
-            query,
-            session_id=session_id,
-        )
-        lane_refresh_config = dict(getattr(sequencer_state.ctx, "lane_refresh_required", {}) or {})
-        orchestrator = flow_instance.build_planner_orchestrator()
-        sequencer = PlannerSequencer(
-            orchestrator,
-            lane_refresh_required=lane_refresh_config,
-        )
-        emit_prefill_summary = None
-    elif isinstance(flow_instance, MultiAgentFlow) and not prefer_agentic_revision:
-        sequencer_state = await flow_instance._prepare_sequencer_state(
-            query,
-            session_id=session_id,
-        )
-        lane_refresh_config = dict(getattr(sequencer_state.ctx, "lane_refresh_required", {}) or {})
-        orchestrator = flow_instance.build_planner_orchestrator()
-        sequencer = PlannerSequencer(
-            orchestrator,
-            lane_refresh_required=lane_refresh_config,
-        )
-        flow_instance.set_planner_event_bus(sequencer.event_bus)
-        emit_prefill_summary = None
     if should_instrument:
         label = selected
         async for event in instrument_events(
@@ -2328,9 +2298,6 @@ async def analytics_memory_workflow(
             query,
             session_id=session_id,
             flow_label=label,
-            sequencer=sequencer,
-            emit_prefill_summary=emit_prefill_summary,
-            sequencer_state=sequencer_state,
             revision_requested=revision_requested,
         ):
             yield event
@@ -2357,14 +2324,6 @@ async def analytics_memory_workflow(
                 yield evt
     else:
         event_kwargs: Dict[str, Any] = {"session_id": session_id}
-        if sequencer is not None:
-            event_kwargs.update(
-                {
-                    "sequencer": sequencer,
-                    "emit_prefill_summary": emit_prefill_summary,
-                    "sequencer_state": sequencer_state,
-                }
-            )
         if revision_requested and isinstance(flow_instance, PlannerExecutorFlow):
             event_kwargs["revision_requested"] = True
         stream = flow_instance.events(query, **event_kwargs)
