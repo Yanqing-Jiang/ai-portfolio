@@ -241,6 +241,21 @@ def _bootstrap_registry(registry: PlannerToolRegistry) -> None:
             yield event
 
     async def _run_web_refresh(pipeline: PlannerPipeline, ctx: PlannerPhaseContext, kwargs: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
+        lane_refresh_flags = dict(getattr(ctx, "lane_refresh_required", {}) or {})
+        if lane_refresh_flags.get("web") is False:
+            yield {
+                "event": "web_refresh",
+                "data": {
+                    "lane": "web",
+                    "revision": True,
+                    "phase": "reused",
+                    "from_cache": True,
+                    "reason": kwargs.get("reason"),
+                    "source": kwargs.get("source"),
+                },
+            }
+            return
+
         async for event in pipeline.refresh_web_lane(
             ctx,
             reason=kwargs.get("reason"),
@@ -249,6 +264,21 @@ def _bootstrap_registry(registry: PlannerToolRegistry) -> None:
             yield event
 
     async def _run_market_refresh(pipeline: PlannerPipeline, ctx: PlannerPhaseContext, kwargs: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
+        lane_refresh_flags = dict(getattr(ctx, "lane_refresh_required", {}) or {})
+        if lane_refresh_flags.get("market") is False:
+            yield {
+                "event": "market_refresh",
+                "data": {
+                    "lane": "market",
+                    "revision": True,
+                    "phase": "reused",
+                    "from_cache": True,
+                    "reason": kwargs.get("reason"),
+                    "source": kwargs.get("source"),
+                },
+            }
+            return
+
         async for event in pipeline.refresh_market_lane(
             ctx,
             reason=kwargs.get("reason"),
