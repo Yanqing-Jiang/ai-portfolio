@@ -14,6 +14,11 @@
 #   Called from: analytics.agent_orchestrator.agent_runtime, tests.analytics.test_agents_stream_bridge
 #   Collaborators: analytics.flows.schedulers.apply_mode_metadata, logging.getLogger, analytics.validators.sanitize_for_json
 #   Why: Supports downstream analytics workflows that rely on AgentsStreamBridge.
+# Class: ForbiddenToolCallError
+#   Role: Raised when an incoming Agent SDK tool invocation violates a guardrail allowlist so controllers can redirect to DIRECT.
+#   Called from: analytics.agent_orchestrator.agent_runtime.AgentRuntime.run via AgentsStreamBridge._handle_tool_called_event
+#   Invokes: Exception base class only
+#   Why: Surfaces guardrail-enforced tool blocking as a hard failure to keep telemetry honest when agents ignore allowlists.
 # --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
@@ -21,7 +26,7 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 import time
-from typing import Any, Dict, List, Optional, Mapping
+from typing import Any, Dict, List, Optional, Mapping, Iterable
 
 from agents.result import RunResultStreaming
 from agents.stream_events import (
@@ -52,6 +57,15 @@ from analytics.tools import TOOL_REGISTRY
 from analytics.validators import sanitize_for_json
 
 
+class ForbiddenToolCallError(Exception):
+    """Raised when an Agent SDK tool call violates the configured allowlist."""
+
+    def __init__(self, tool_name: str, guardrail: Optional[Mapping[str, Any]] = None) -> None:
+        super().__init__(tool_name)
+        self.tool_name = tool_name
+        self.guardrail = guardrail or {}
+
+
 class AgentsStreamBridge:
     """Convert OpenAI Agents SDK streaming events into planner-style SSE payloads."""
 
@@ -61,10 +75,15 @@ class AgentsStreamBridge:
         flow_mode: FlowMode,
         queue: "asyncio.Queue[Optional[Dict[str, Any]]]",
         logger: Optional[logging.Logger] = None,
+        tool_allowlist: Optional[Iterable[str]] = None,
+        guardrail_metadata: Optional[Mapping[str, Any]] = None,
     ) -> None:
         self._flow_mode = flow_mode
         self._queue = queue
         self._logger = logger or logging.getLogger(__name__)
+        allowlist_set = {tool.strip() for tool in (tool_allowlist or []) if isinstance(tool, str) and tool.strip()}
+        self._tool_allowlist = allowlist_set if allowlist_set else None
+        self._guardrail_metadata = sanitize_for_json(dict(guardrail_metadata or {})) if guardrail_metadata else None
         self._tool_names: Dict[str, str] = {}
         self._output_buffers: Dict[str, str] = {}
         self._supervisor_seen = False
@@ -156,6 +175,18 @@ class AgentsStreamBridge:
         if tool_id:
             self._tool_names[tool_id] = str(tool_name or tool_id)
             self._tool_start_times[tool_id] = time.monotonic()
+        violation = self._tool_violation(tool_name)
+        if violation is not None:
+            await self._enqueue_event(
+                "workflow_error",
+                {
+                    "error_code": "agent_tool_blocked",
+                    "tool": tool_name,
+                    "tool_call_id": tool_id,
+                    "guardrail": violation,
+                },
+            )
+            raise ForbiddenToolCallError(str(tool_name or ""), violation)
         metadata = self._merge_tool_metadata(
             tool_id=tool_id,
             tool_name=tool_name,
@@ -344,6 +375,23 @@ class AgentsStreamBridge:
     def _clean_dict(data: Dict[str, Any]) -> Dict[str, Any]:
         return {key: value for key, value in data.items() if value is not None}
 
+    def _tool_violation(self, tool_name: Optional[str]) -> Optional[Dict[str, Any]]:
+        """Return a guardrail payload when a tool is not allowlisted."""
+        if not self._tool_allowlist or not tool_name:
+            return None
+        normalized = str(tool_name).strip()
+        if not normalized:
+            return None
+        if normalized in self._tool_allowlist:
+            return None
+        payload: Dict[str, Any] = {
+            "reason": "guardrail_allowlist_block",
+            "tool": normalized,
+        }
+        if isinstance(self._guardrail_metadata, Mapping):
+            payload["guardrail"] = dict(self._guardrail_metadata)
+        return payload
+
     def _canonical_tool_metadata(self, tool_name: Optional[str]) -> Dict[str, Any]:
         if not tool_name:
             return {}
@@ -364,6 +412,8 @@ class AgentsStreamBridge:
             merged.update({key: value for key, value in runtime_metadata.items() if value is not None})
         for key, value in self._canonical_tool_metadata(tool_name).items():
             merged.setdefault(key, value)
+        if self._guardrail_metadata:
+            merged.setdefault("guardrail", self._guardrail_metadata)
         clean = {key: value for key, value in merged.items() if value is not None}
         if tool_id:
             if clean:

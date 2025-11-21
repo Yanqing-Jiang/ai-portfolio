@@ -23,7 +23,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from dataclasses import dataclass, field
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, Mapping, Optional, Iterable
 
 from agents import Agent, Runner
 from agents.result import RunResultStreaming
@@ -34,7 +34,7 @@ from openai.types.shared import Reasoning
 from analytics.core import telemetry
 from analytics.core.events import EventEmitter
 from analytics.validators import sanitize_for_json
-from analytics.flows.agents_stream_bridge import AgentsStreamBridge
+from analytics.flows.agents_stream_bridge import AgentsStreamBridge, ForbiddenToolCallError
 from analytics.flows.schedulers import FlowMode, apply_mode_metadata
 
 from .agent_plan import AGENTIC_REVISION_PLAN, PlanNode, PlanNodeStatus, PlanState, PlanTemplate
@@ -52,6 +52,8 @@ class AgentRuntimeConfig:
     reasoning_effort: Optional[str] = None
     retry_policy: Dict[str, Any] = field(default_factory=dict)
     plan_template: Optional[PlanTemplate] = None
+    tool_allowlist: Optional[Iterable[str]] = None
+    guardrail_payload: Optional[Mapping[str, Any]] = None
 
 
 @dataclass
@@ -84,6 +86,10 @@ class AgentRuntime:
         self._flow_mode = flow_mode
         self._logger = logger or logging.getLogger(__name__)
         self._config = config
+        self._tool_allowlist = {
+            str(tool).strip() for tool in (config.tool_allowlist or []) if isinstance(tool, str) and str(tool).strip()
+        }
+        self._guardrail_payload = dict(config.guardrail_payload) if isinstance(config.guardrail_payload, Mapping) else None
         self._event_bus = AgentEventBus(queue, flow_mode=flow_mode, logger=self._logger)
 
     async def run(
@@ -159,8 +165,28 @@ class AgentRuntime:
                     max_turns=self._config.max_turns,
                     run_config=run_config,
                 )
-            bridge = AgentsStreamBridge(flow_mode=self._flow_mode, queue=self._queue, logger=self._logger)
+            bridge = AgentsStreamBridge(
+                flow_mode=self._flow_mode,
+                queue=self._queue,
+                logger=self._logger,
+                tool_allowlist=self._tool_allowlist,
+                guardrail_metadata=self._guardrail_payload,
+            )
             run_result = await bridge.forward(run_result_streaming)
+        except ForbiddenToolCallError as exc:
+            self._logger.exception("Agent runtime blocked a tool call")
+            plan_state.mark_finished(active_node_name, PlanNodeStatus.FAILED)
+            self._memory.persist_plan_state(plan_state)
+            await self._publish_plan(plan_state)
+            telemetry.tool_iteration(
+                tool="agent_controller",
+                status="failed",
+                step=active_node_name,
+                session_id=session_id,
+                flow="single-agent",
+                details={"error": str(exc), "tool": getattr(exc, "tool_name", None)},
+            )
+            raise
         except Exception as exc:
             self._logger.exception("Agent runtime failed")
             plan_state.mark_finished(active_node_name, PlanNodeStatus.FAILED)
@@ -228,10 +254,11 @@ class AgentRuntime:
         if self._config.reasoning_effort is not None:
             settings_kwargs["reasoning"] = Reasoning(effort=self._config.reasoning_effort)
         model_settings = ModelSettings(**settings_kwargs) if settings_kwargs else None
+        trace_id = f"trace_{uuid.uuid4()}"
         return RunConfig(
             model=self._config.model,
             model_settings=model_settings,
-            trace_id=str(uuid.uuid4()),
+            trace_id=trace_id,
         )
 
     def _select_active_node(self, plan_state: PlanState) -> str:

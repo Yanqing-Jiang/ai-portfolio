@@ -9,6 +9,11 @@
 #   Called from: analytics.flows.single_agent_tools.SingleAgentController.__init__
 #   Invokes: logging.getLogger
 #   Why: Enforces the roadmap requirement that non-DIRECT flows always use the canonical GPT-5 model.
+# Function: _workflow_redirect_event
+#   Role: Emits a workflow_redirect payload instructing callers to fall back to DIRECT when agent runtime is unavailable or blocked.
+#   Called from: analytics.flows.single_agent_tools._agentic_event_stream
+#   Invokes: analytics.flows.schedulers.apply_mode_metadata, analytics.validators.sanitize_for_json
+#   Why: Provides guardrail-driven rollback signaling so controllers surface a safe deterministic path.
 # Class: _SingleAgentRunContext
 #   Role: Handles SingleAgentRunContext logic for analytics.flows.single_agent_tools.
 #   Called from: tests.analytics.test_single_agent_controller_agents
@@ -75,7 +80,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 import copy
 import json
@@ -103,6 +108,7 @@ from analytics.core import telemetry
 from analytics.core.telemetry import tool_iteration as log_tool_iteration
 from analytics.core.intent import OffTopicClassifierSchema
 from analytics.core.session_state import SessionStateSnapshot, get_session_state_repository, normalize_row_count
+from analytics.flows.agents_stream_bridge import ForbiddenToolCallError
 from analytics.accessory_receipts import build_lane_reuse_event
 from analytics.core.cache import get_cache_service
 from analytics.validators import sanitize_for_json
@@ -1378,34 +1384,29 @@ class SingleAgentController:
         self._web_topic_branch_states: Dict[str, str] = {}
         self._web_topic_pending = 0
 
-        self._agents_enabled = bool(enable_agents)
-        if self._agents_enabled and not self._agent_settings:
-            self._agents_enabled = False
-        self._function_tools: List[FunctionTool] = []
-        self._agent: Optional[Agent[Any]] = None
-        if self._agents_enabled:
-            self._function_tools = [
-                self._build_function_tool(tool_definition)
-                for tool_definition in self._registry.list_tools()
-            ]
-            self._function_tools.append(self._build_lane_decision_tool())
-            self._function_tools.append(self._build_revision_executor_tool())
-            instructions = self._agent_settings.get(
-                "instructions",
-                (
-                    "You are the Analytics Planner. Execute classification, planning, SQL, chart, "
-                    "market, and analysis tools to fulfill the user's analytics request. Respect "
-                    "cached receipts when provided, and only call tools necessary to refresh stale lanes. "
-                    "During revision follow-ups, always call the lane_decision tool to pick a lane and "
-                    "then invoke apply_revision_lane so the refreshed cards stream back to the user."
-                ),
-            )
-            self._agent = Agent(
-                name="analytics_single_agent",
-                instructions=instructions,
-                model=self._agent_model,
-                tools=list(self._function_tools),
-            )
+        # Force-enable the agent runtime for SINGLE_AGENT; fallbacks happen via workflow_redirect, not by disabling agents.
+        self._agents_enabled = True
+        self._function_tools: List[FunctionTool] = [
+            self._build_function_tool(tool_definition) for tool_definition in self._registry.list_tools()
+        ]
+        self._function_tools.append(self._build_lane_decision_tool())
+        self._function_tools.append(self._build_revision_executor_tool())
+        instructions = self._agent_settings.get(
+            "instructions",
+            (
+                "You are the Analytics Planner. Execute classification, planning, SQL, chart, "
+                "market, and analysis tools to fulfill the user's analytics request. Respect "
+                "cached receipts when provided, and only call tools necessary to refresh stale lanes. "
+                "During revision follow-ups, always call the lane_decision tool to pick a lane and "
+                "then invoke apply_revision_lane so the refreshed cards stream back to the user."
+            ),
+        )
+        self._agent: Agent[Any] = Agent(
+            name="analytics_single_agent",
+            instructions=instructions,
+            model=self._agent_model,
+            tools=list(self._function_tools),
+        )
 
         self._revision_directive: Optional["RevisionDirective"] = None
         self._agentic_revision_mode: bool = False
@@ -1421,6 +1422,8 @@ class SingleAgentController:
         self._pending_guardrails: Dict[str, Dict[str, Any]] = {}
         self._revision_inputs_plan: Dict[str, str] = {"lane": "narrative", "web": "refresh"}
         self._revision_inputs_outcome: Optional[Dict[str, str]] = None
+        self._agent_turn_observed: bool = False
+        self._last_agent_runtime_used: bool = False
 
     def set_session_follow_up(self, follow_up: bool) -> None:
         self._session_follow_up = bool(follow_up)
@@ -1433,6 +1436,15 @@ class SingleAgentController:
         session_id: Optional[str],
     ) -> _SequencerRunState:
         ctx = await self._planner.initialize_context(query or "", session_id=session_id)
+        # Ensure accessory fan-out runs with at least three concurrent adapters (web+web+stock)
+        configs = getattr(ctx, "configs", {}) or {}
+        tooling_cfg = configs.setdefault("tooling", {})
+        tooling_cfg.setdefault("concurrency_limit", 3)
+        analytics_cfg = configs.setdefault("analytics", {}).setdefault("tool_parallelism", {})
+        analytics_cfg.setdefault("concurrency_limit", 3)
+        ctx.configs = configs
+        ctx.parallelism_enabled = True
+        ctx.tool_parallel_concurrency = 3
         registry = self._registry
         executed: Set[str] = set()
         mode_config = get_mode_config(self.flow_mode)
@@ -1555,9 +1567,35 @@ class SingleAgentController:
         return state
 
     def _should_use_agent_runtime(self) -> bool:
-        if not (self._agent_runtime_allowed and self._agents_enabled and self._agent is not None):
+        if not self._agent_runtime_allowed:
+            return False
+        if self._agent is None:
+            logger.warning("single_agent_runtime_missing_agent_fallback", extra={"flow": self.flow_label})
             return False
         return True
+
+    def _workflow_redirect_event(
+        self,
+        *,
+        session_id: Optional[str],
+        reason: str,
+        guardrail: Optional[Mapping[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Build a workflow_redirect payload that tells callers to fall back to DIRECT."""
+
+        payload: Dict[str, Any] = {
+            "target": "direct",
+            "reason": reason,
+            "flow": self.flow_label,
+            "follow_up_route": (self.follow_up_route.value if self.follow_up_route else None),
+        }
+        if guardrail:
+            payload["guardrail"] = sanitize_for_json(dict(guardrail))
+        event = {"event": "workflow_redirect", "data": payload}
+        annotated = apply_mode_metadata(event, self.flow_mode)
+        if session_id:
+            annotated["data"]["session_id"] = session_id
+        return annotated
 
     def _lane_persistence_flags(self, ctx: PlannerPhaseContext) -> Dict[str, bool]:
         artifacts = getattr(ctx, "artifacts", None)
@@ -1698,6 +1736,7 @@ class SingleAgentController:
             runtime = self._planner._start_tool_parallelism(
                 ctx,
                 adapters=fanout_adapters,
+                concurrency_override=ctx.tool_parallel_concurrency,
             )
             state.tool_runtime = runtime
             state.tool_state = {"queue": runtime.queue, "active": True, "runtime": runtime}
@@ -2355,6 +2394,38 @@ class SingleAgentController:
         self._agent_memory = AgentMemory(snapshot) if snapshot is not None else None
         self._flush_pending_guardrails()
 
+    # Function: _record_skipped_tool_receipt
+    #   Role: Persist a skipped tool receipt when guardrails or cache reuse prevent execution.
+    #   Called from: analytics.flows.single_agent_tools._build_agent_runtime
+    #   Invokes: analytics.core.session_state.SessionStateSnapshot.record_tool_receipt, analytics.validators.sanitize_for_json
+    #   Why: Ensures UI/ledger badge metadata reflects guardrail or cache-based allowlist pruning.
+    def _record_skipped_tool_receipt(
+        self,
+        tool_name: str,
+        lane: str,
+        *,
+        reason: str,
+        guardrail: Optional[Mapping[str, Any]] = None,
+        reused: bool = True,
+        from_cache: bool = True,
+    ) -> None:
+        snapshot = self._session_snapshot
+        if snapshot is None:
+            return
+        payload: Dict[str, Any] = {
+            "status": "skipped",
+            "reused": reused,
+            "from_cache": from_cache,
+            "reason": reason,
+            "lane": lane,
+        }
+        if guardrail:
+            payload["guardrail"] = sanitize_for_json(dict(guardrail))
+        try:
+            snapshot.record_tool_receipt(tool_name, payload)
+        except Exception:
+            logger.debug("Failed to record skipped tool receipt for %s", tool_name, exc_info=True)
+
     def _build_agent_runtime(
         self,
         queue: "asyncio.Queue[Optional[Dict[str, Any]]]",
@@ -2379,13 +2450,92 @@ class SingleAgentController:
         self._agent_snapshot = snapshot
         self._agent_memory = memory
         self._flush_pending_guardrails()
+        allowlist: Optional[Set[str]] = None
+        guardrail_payload = self._follow_up_guardrail or {}
+        lane_refresh_flags: Dict[str, Any] = {}
+        ctx = getattr(self._sequencer_state, "ctx", None) if self._sequencer_state else None
+        if ctx is not None:
+            lane_refresh_flags = dict(getattr(ctx, "lane_refresh_required", {}) or {})
+        try:
+            registry_tools = {definition.name for definition in self._registry.list_tools()}
+            allowlist = set(registry_tools) | {"lane_decision", "apply_revision_lane"}
+            route = getattr(self, "follow_up_route", FollowUpRoute.FULL_PIPELINE)
+            if route == FollowUpRoute.STOCK_ONLY:
+                allowlist -= {
+                    "web_refresh",
+                    "chart_generation",
+                    "sql_generation",
+                    "sql_regeneration",
+                    "analysis_generation",
+                    "chart_revision",
+                }
+            elif route == FollowUpRoute.REUSE_SQL:
+                allowlist -= {"sql_generation", "sql_regeneration"}
+            blocked_tools = guardrail_payload.get("blocked_tools") if isinstance(guardrail_payload, Mapping) else None
+            if isinstance(blocked_tools, Iterable):
+                for tool_name in blocked_tools:
+                    if isinstance(tool_name, str) and tool_name.strip():
+                        allowlist.discard(tool_name.strip())
+                        self._record_skipped_tool_receipt(
+                            tool_name.strip(),
+                            lane="web" if "web" in tool_name else "market" if "market" in tool_name else "analysis",
+                            reason="follow_up_guardrail",
+                            guardrail=guardrail_payload,
+                            reused=False,
+                            from_cache=False,
+                        )
+            for lane_name, required in lane_refresh_flags.items():
+                if required is False:
+                    normalized = str(lane_name).strip().lower()
+                    if normalized == "web":
+                        if "web_refresh" in allowlist:
+                            allowlist.discard("web_refresh")
+                        self._record_skipped_tool_receipt(
+                            "web_refresh",
+                            lane="web",
+                            reason="lane_refresh_reused",
+                            guardrail=guardrail_payload,
+                            reused=True,
+                            from_cache=True,
+                        )
+                    if normalized in {"market", "stock"}:
+                        if "market_refresh" in allowlist:
+                            allowlist.discard("market_refresh")
+                        self._record_skipped_tool_receipt(
+                            "market_refresh",
+                            lane="market",
+                            reason="lane_refresh_reused",
+                            guardrail=guardrail_payload,
+                            reused=True,
+                            from_cache=True,
+                        )
+        except Exception:
+            allowlist = allowlist or None
+        agent_for_run = self._agent
+        if allowlist and self._agents_enabled and self._function_tools:
+            filtered_tools = [tool for tool in self._function_tools if getattr(tool, "name", "") in allowlist]
+            if filtered_tools:
+                try:
+                    agent_for_run = Agent(
+                        name=getattr(self._agent, "name", "analytics_single_agent"),
+                        instructions=getattr(self._agent, "instructions", ""),
+                        model=self._agent_model,
+                        tools=list(filtered_tools),
+                    )
+                except Exception:
+                    agent_for_run = self._agent
+        runtime_config = replace(
+            self._agent_runtime_config,
+            tool_allowlist=allowlist,
+            guardrail_payload=self._follow_up_guardrail,
+        )
         return AgentRuntime(
-            agent=self._agent,
+            agent=agent_for_run,
             memory=memory,
             queue=queue,
             flow_mode=self.flow_mode,
             logger=logger,
-            config=self._agent_runtime_config,
+            config=runtime_config,
         )
 
     def set_revision_directive(self, directive: Optional["RevisionDirective"]) -> None:
@@ -3229,6 +3379,117 @@ class SingleAgentController:
         normalized_key = self._normalize_tool_key(registry_name or definition.name) or definition.name
         tool_label = registry_name or definition.name
         lane = self._lane_for_tool(registry_name) or self._lane_for_tool(definition.name)
+        route = getattr(ctx, "follow_up_route", self.follow_up_route)
+        try:
+            route = FollowUpRoute(route)
+        except Exception:
+            route = FollowUpRoute.FULL_PIPELINE
+
+        if route == FollowUpRoute.STOCK_ONLY and lane in {"sql", "chart", "analysis", "web"}:
+            guardrail_payload = {
+                "route": route.value,
+                "action": "skip_tool",
+                "lane": lane,
+                "tool": tool_label,
+                "reason": "stock_only_route",
+            }
+            summary = f"{tool_label} skipped by follow-up route (stock_only)"
+            run_context.tool_retry_counts[normalized_key] = 0
+            run_context.tool_attempts[normalized_key] = 0
+            run_context.tool_receipts[normalized_key] = {"status": "skipped", "guardrail": guardrail_payload}
+            await self._emit_tool_event(
+                run_context,
+                event_name="tool_result",
+                tool=tool_label,
+                lane=lane,
+                status="skipped",
+                session_id=session_id,
+                attempt=0,
+                retry_count=0,
+                summary=summary,
+                extra={"guardrail": guardrail_payload, "from_cache": True},
+            )
+            telemetry.tool_iteration(
+                tool=tool_label,
+                status="skipped",
+                step=lane,
+                session_id=session_id,
+                flow=self.flow_label,
+                agents_run_id=run_context.run_id,
+                agent_role="single_agent",
+                details={"guardrail": guardrail_payload},
+            )
+            return {"status": "skipped", "summary": summary, "guardrail": guardrail_payload}
+        if route == FollowUpRoute.REUSE_SQL and lane == "sql":
+            guardrail_payload = {
+                "route": route.value,
+                "action": "skip_tool",
+                "lane": lane,
+                "tool": tool_label,
+                "reason": "reuse_sql_route",
+            }
+            summary = f"{tool_label} skipped by follow-up route (reuse_sql)"
+            run_context.tool_retry_counts[normalized_key] = 0
+            run_context.tool_attempts[normalized_key] = 0
+            run_context.tool_receipts[normalized_key] = {"status": "skipped", "guardrail": guardrail_payload}
+            await self._emit_tool_event(
+                run_context,
+                event_name="tool_result",
+                tool=tool_label,
+                lane=lane,
+                status="skipped",
+                session_id=session_id,
+                attempt=0,
+                retry_count=0,
+                summary=summary,
+                extra={"guardrail": guardrail_payload, "from_cache": True},
+            )
+            telemetry.tool_iteration(
+                tool=tool_label,
+                status="skipped",
+                step=lane,
+                session_id=session_id,
+                flow=self.flow_label,
+                agents_run_id=run_context.run_id,
+                agent_role="single_agent",
+                details={"guardrail": guardrail_payload},
+            )
+            return {"status": "skipped", "summary": summary, "guardrail": guardrail_payload}
+        if route == FollowUpRoute.CHART_ONLY and lane == "analysis":
+            guardrail_payload = {
+                "route": route.value,
+                "action": "skip_tool",
+                "lane": lane,
+                "tool": tool_label,
+                "reason": "chart_only_route",
+            }
+            summary = f"{tool_label} skipped by follow-up route (chart_only)"
+            run_context.tool_retry_counts[normalized_key] = 0
+            run_context.tool_attempts[normalized_key] = 0
+            run_context.tool_receipts[normalized_key] = {"status": "skipped", "guardrail": guardrail_payload}
+            await self._emit_tool_event(
+                run_context,
+                event_name="tool_result",
+                tool=tool_label,
+                lane=lane,
+                status="skipped",
+                session_id=session_id,
+                attempt=0,
+                retry_count=0,
+                summary=summary,
+                extra={"guardrail": guardrail_payload, "from_cache": True},
+            )
+            telemetry.tool_iteration(
+                tool=tool_label,
+                status="skipped",
+                step=lane,
+                session_id=session_id,
+                flow=self.flow_label,
+                agents_run_id=run_context.run_id,
+                agent_role="single_agent",
+                details={"guardrail": guardrail_payload},
+            )
+            return {"status": "skipped", "summary": summary, "guardrail": guardrail_payload}
         if registry_name == "clarification" and not self._clarification_required(ctx):
             summary = "Clarification skipped - slots already satisfied."
             await self._emit_tool_event(
@@ -4152,6 +4413,16 @@ class SingleAgentController:
         key_set: Set[str] = {"market", "stock"} if normalized == "market" else {normalized}
         if not key_set.intersection(targets):
             return False
+        route = getattr(self, "follow_up_route", FollowUpRoute.FULL_PIPELINE)
+        if route == FollowUpRoute.STOCK_ONLY and normalized == "web":
+            return False
+        guardrail_payload = self._follow_up_guardrail if isinstance(self._follow_up_guardrail, Mapping) else {}
+        blocked_tools = guardrail_payload.get("blocked_tools") if isinstance(guardrail_payload, Mapping) else None
+        if blocked_tools and isinstance(blocked_tools, Iterable):
+            if any(str(tool).strip() == "web_refresh" and normalized == "web" for tool in blocked_tools):
+                return False
+            if any(str(tool).strip() in {"market_refresh", "stock_tracker"} and normalized == "market" for tool in blocked_tools):
+                return False
         return self._needs_lane_refresh(state.ctx, normalized)
 
     def _build_lane_reuse_event(
@@ -4187,6 +4458,11 @@ class SingleAgentController:
             event.setdefault("data", {}).setdefault("message", message)
         data = event.setdefault("data", {})
         data["follow_up_route"] = getattr(ctx, "follow_up_route", FollowUpRoute.FULL_PIPELINE).value
+        if self._follow_up_guardrail:
+            try:
+                data["guardrail"] = sanitize_for_json(dict(self._follow_up_guardrail))
+            except Exception:
+                data["guardrail"] = self._follow_up_guardrail
         session_identifier = getattr(ctx, "session_id", None)
         if session_identifier:
             data["session_id"] = session_identifier
@@ -4205,6 +4481,7 @@ class SingleAgentController:
         lane: str,
         lane_states: Dict[str, str],
         reason: str,
+        guardrail: Optional[Mapping[str, Any]] = None,
     ) -> Optional[Dict[str, Any]]:
         attribute_map = {
             "sql": "reused_sql",
@@ -4220,6 +4497,18 @@ class SingleAgentController:
         refresh_flags[lane] = False
         ctx.lane_refresh_required = refresh_flags
         lane_states[lane] = "reused"
+        if self._session_snapshot:
+            try:
+                payload = {
+                    "status": "skipped",
+                    "reused": True,
+                    "from_cache": True,
+                    "guardrail": sanitize_for_json(dict(guardrail)) if guardrail else None,
+                    "lane": lane,
+                }
+                self._session_snapshot.record_tool_receipt(f"{lane}_refresh", payload)
+            except Exception:
+                logger.debug("Failed to record lane reuse receipt for %s", lane, exc_info=True)
         return self._build_lane_reuse_event(ctx, lane, reason=reason)
 
     def _prime_lane_reuse_events(self, ctx: PlannerPhaseContext) -> None:
@@ -4474,10 +4763,57 @@ class SingleAgentController:
         session_id: Optional[str] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         self._abort_stale_sequencer(reason="restart")
+        self._agent_turn_observed = False
+        self._last_agent_runtime_used = False
         hooks = _SingleAgentToolHooks(self, session_id=session_id)
         stream = self._agentic_event_stream(query, session_id=session_id)
-        async for event in self._forward_with_hooks(stream, hooks, session_id, ensure_session_event=True):
-            yield event
+        try:
+            async for event in self._forward_with_hooks(stream, hooks, session_id, ensure_session_event=True):
+                yield event
+        except ForbiddenToolCallError as exc:
+            redirect = self._workflow_redirect_event(
+                session_id=session_id,
+                reason="agent_tool_blocked",
+                guardrail=getattr(exc, "guardrail", None),
+            )
+            yield redirect
+            try:
+                async for direct_event in self._planner.events(
+                    query,
+                    session_id=session_id,
+                    revision_requested=False,
+                ):
+                    yield apply_mode_metadata(direct_event, FlowMode.DIRECT)
+                self._agent_turn_observed = True
+            except Exception as fallback_exc:
+                error_event = EventEmitter.error(
+                    "workflow_error",
+                    f"direct fallback failed: {fallback_exc}",
+                    code="direct_fallback_failed",
+                    details={"flow_mode": self.flow_mode.value if self.flow_mode else "single_agent"},
+                )
+                error_event["event"] = "workflow_error"
+                error_event.setdefault("data", {})
+                error_event["data"]["error_code"] = "direct_fallback_failed"
+                yield apply_mode_metadata(error_event, self.flow_mode)
+            return
+        if self._last_agent_runtime_used and not self._agent_turn_observed:
+            redirect = self._workflow_redirect_event(
+                session_id=session_id,
+                reason="agent_runtime_missing_agent_turns",
+                guardrail=self._follow_up_guardrail,
+            )
+            yield redirect
+            error_event = EventEmitter.error(
+                "workflow_error",
+                "agent runtime emitted no agent_turn telemetry; falling back to DIRECT",
+                code="agent_runtime_missing_agent_turns",
+                details={"flow_mode": self.flow_mode.value if self.flow_mode else "single_agent"},
+            )
+            error_event["event"] = "workflow_error"
+            error_event.setdefault("data", {})
+            error_event["data"]["error_code"] = "agent_runtime_missing_agent_turns"
+            yield apply_mode_metadata(error_event, self.flow_mode)
 
     async def _agentic_event_stream(
         self,
@@ -4491,12 +4827,35 @@ class SingleAgentController:
         emit_prefill_summary = bool(self._agentic_revision_mode and self._agentic_lane_targets)
 
         state = await self._prepare_sequencer_state(query, session_id=session_id)
-        use_agent_runtime = not self._agentic_revision_mode
+        # Route both fresh and revision traffic through the AgentRuntime whenever it is available;
+        # deterministic planner lanes are reserved for when agents are disabled or unavailable.
+        use_agent_runtime = self._should_use_agent_runtime()
+        if not use_agent_runtime and self._agent is not None:
+            # Force-enable AgentRuntime when an agent bundle exists; deterministic fallbacks happen via redirects.
+            use_agent_runtime = True
+        if not use_agent_runtime and self._agent is None:
+            # No agent available: emit a redirect immediately rather than silently running the planner sequencer.
+            redirect = self._workflow_redirect_event(
+                session_id=session_id or getattr(state.ctx, "session_id", None),
+                reason="agent_runtime_unavailable",
+                guardrail=self._follow_up_guardrail,
+            )
+            yield redirect
+            return
         setattr(state, "use_agent_runtime", use_agent_runtime)
+        self._last_agent_runtime_used = use_agent_runtime
         state.lane_states = lane_states  # type: ignore[attr-defined]
         self._sequencer_state = state
         summary_emitted = False
         try:
+            if not use_agent_runtime:
+                redirect = self._workflow_redirect_event(
+                    session_id=session_id or getattr(state.ctx, "session_id", None),
+                    reason="agent_runtime_disabled",
+                    guardrail=self._follow_up_guardrail,
+                )
+                yield redirect
+
             if emit_prefill_summary:
                 summary_event = self._emit_lane_summary(lane_states)
                 if summary_event:
@@ -4509,6 +4868,11 @@ class SingleAgentController:
                 revision_targets,
                 use_agent_runtime=use_agent_runtime,
             ):
+                if isinstance(event, Mapping) and event.get("event") in {
+                    "agent_turn_start",
+                    "agent_turn_end",
+                }:
+                    self._agent_turn_observed = True
                 if self._should_emit_lane_summary_before(event):
                     summary_event = self._emit_lane_summary(lane_states)
                     if summary_event:
@@ -4529,6 +4893,32 @@ class SingleAgentController:
                     yield summary_event
         finally:
             self._sequencer_state = None
+        if use_agent_runtime and not self._agent_turn_observed:
+            redirect = self._workflow_redirect_event(
+                session_id=session_id or getattr(state.ctx, "session_id", None),
+                reason="agent_runtime_missing_agent_turns",
+                guardrail=self._follow_up_guardrail,
+            )
+            yield redirect
+            try:
+                async for direct_event in self._planner.events(
+                    query,
+                    session_id=session_id,
+                    revision_requested=False,
+                ):
+                    yield apply_mode_metadata(direct_event, FlowMode.DIRECT)
+                self._agent_turn_observed = True
+            except Exception as exc:
+                fallback_error = EventEmitter.error(
+                    "workflow_error",
+                    f"direct fallback failed: {exc}",
+                    code="direct_fallback_failed",
+                    details={"flow_mode": self.flow_mode.value if self.flow_mode else "single_agent"},
+                )
+                fallback_error["event"] = "workflow_error"
+                fallback_error.setdefault("data", {})
+                fallback_error["data"]["error_code"] = "direct_fallback_failed"
+                yield apply_mode_metadata(fallback_error, self.flow_mode)
 
     async def _run_agentic_revision_loop(
         self,
@@ -4550,6 +4940,7 @@ class SingleAgentController:
             return
 
         try:
+            guardrail_payload = self._follow_up_guardrail if isinstance(self._follow_up_guardrail, Mapping) else {}
             if state.run_sql_lane:
                 async for event in self._sql_stage():
                     yield event
@@ -4572,6 +4963,7 @@ class SingleAgentController:
                     lane="web",
                     lane_states=lane_states,
                     reason="cached_web_artifacts",
+                    guardrail=guardrail_payload,
                 )
                 if reuse_web_event:
                     yield reuse_web_event
@@ -4585,6 +4977,7 @@ class SingleAgentController:
                     lane="market",
                     lane_states=lane_states,
                     reason="cached_market_artifacts",
+                    guardrail=guardrail_payload,
                 )
                 if reuse_market_event:
                     yield reuse_market_event

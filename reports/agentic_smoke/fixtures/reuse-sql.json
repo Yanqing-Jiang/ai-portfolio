@@ -1,4 +1,18 @@
-﻿[
+[
+    {
+        "event":  "session_started",
+        "data":  {
+                     "session_id":  "fixture-session"
+                 }
+    },
+    {
+        "event":  "agent_turn_start",
+        "data":  {
+                     "session_id":  "fixture-session",
+                     "agent_turn_id":  "turn-reuse-1",
+                     "role":  "planner_agent"
+                 }
+    },
     {
         "event":  "agent_tool_call",
         "data":  {
@@ -18,6 +32,14 @@
         "data":  {
                      "tool":  "web_retriever",
                      "lane":  "web"
+                 }
+    },
+    {
+        "event":  "agent_turn_end",
+        "data":  {
+                     "session_id":  "fixture-session",
+                     "agent_turn_id":  "turn-reuse-1",
+                     "role":  "planner_agent"
                  }
     },
     {

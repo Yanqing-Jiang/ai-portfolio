@@ -4100,6 +4100,50 @@ class PlannerPipeline:
         reason: Optional[str] = None,
         source: Optional[str] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
+        refresh_flags = dict(getattr(ctx, "lane_refresh_required", {}) or {})
+        force_live = bool(getattr(ctx, "force_revision_refresh", False))
+        if refresh_flags.get("web") is False and not force_live:
+            setattr(ctx, "reused_web", True)
+            refresh_flags["web"] = False
+            ctx.lane_refresh_required = refresh_flags
+            snapshot = getattr(ctx, "revision_snapshot", None)
+            age_seconds = None
+            if snapshot is not None and hasattr(snapshot, "lane_age_seconds"):
+                try:
+                    age_seconds = snapshot.lane_age_seconds("web")
+                except Exception:
+                    age_seconds = None
+            reuse_event = EventEmitter.status("web_refresh", "Web refresh skipped; using cached context.")
+            reuse_event.setdefault("data", {}).update(
+                {
+                    "lane": "web",
+                    "revision": True,
+                    "phase": "reused",
+                    "reused": True,
+                    "from_cache": True,
+                }
+            )
+            if age_seconds is not None:
+                reuse_event["data"]["age_seconds"] = age_seconds
+            yield self._apply_revision_metadata(reuse_event, reason=reason, source=source)
+
+            lane_reuse = self._build_lane_reuse_event(ctx, "web", reason=reason or "cached_web_ready")
+            if lane_reuse:
+                yield lane_reuse
+
+            web_payload = compose_web_ready_payload(ctx)
+            if web_payload:
+                web_payload.setdefault("lane", "web")
+                web_payload.setdefault("reused", True)
+                web_payload.setdefault("from_cache", True)
+                ready_event = EventEmitter.status("web_ready", "Web context ready (cache).")
+                ready_event["event"] = "web_ready"
+                ready_event.setdefault("data", {}).update(web_payload)
+                yield self._apply_revision_metadata(self._annotate_revision(ready_event, ctx), reason=reason, source=source)
+                setattr(ctx, "web_ready_emitted", True)
+            await self._persist_session_state(ctx, record_artifacts=True, record_web=True)
+            return
+
         _reset_revision_accessories(ctx, {"web"})
         adapter_lookup = {adapter.name: adapter for adapter in get_default_tool_adapters()}
         adapter_names = tuple(name for name in ("web_retriever", "web_retriever_cached", "web_retriever_live") if name in adapter_lookup)
@@ -4139,6 +4183,49 @@ class PlannerPipeline:
         reason: Optional[str] = None,
         source: Optional[str] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
+        refresh_flags = dict(getattr(ctx, "lane_refresh_required", {}) or {})
+        force_live = bool(getattr(ctx, "force_revision_refresh", False))
+        if refresh_flags.get("market") is False and not force_live:
+            setattr(ctx, "reused_stock", True)
+            refresh_flags["market"] = False
+            ctx.lane_refresh_required = refresh_flags
+            snapshot = getattr(ctx, "revision_snapshot", None)
+            age_seconds = None
+            if snapshot is not None and hasattr(snapshot, "lane_age_seconds"):
+                try:
+                    age_seconds = snapshot.lane_age_seconds("market")
+                except Exception:
+                    age_seconds = None
+            reuse_event = EventEmitter.status("market_refresh", "Market refresh skipped; using cached snapshot.")
+            reuse_event.setdefault("data", {}).update(
+                {
+                    "lane": "market",
+                    "revision": True,
+                    "phase": "reused",
+                    "reused": True,
+                    "from_cache": True,
+                }
+            )
+            if age_seconds is not None:
+                reuse_event["data"]["age_seconds"] = age_seconds
+            yield self._apply_revision_metadata(reuse_event, reason=reason, source=source)
+
+            lane_reuse = self._build_lane_reuse_event(ctx, "market", reason=reason or "cached_market_ready")
+            if lane_reuse:
+                yield lane_reuse
+
+            stock_payload = compose_stock_ready_payload(ctx)
+            if stock_payload:
+                stock_payload.setdefault("lane", "market")
+                stock_payload.setdefault("reused", True)
+                stock_payload.setdefault("from_cache", True)
+                ready_event = EventEmitter.status("stock_ready", "Stock context ready (cache).")
+                ready_event["event"] = "stock_ready"
+                ready_event.setdefault("data", {}).update(stock_payload)
+                yield self._apply_revision_metadata(self._annotate_revision(ready_event, ctx), reason=reason, source=source)
+            await self._persist_session_state(ctx, record_artifacts=True)
+            return
+
         _reset_revision_accessories(ctx, {"market"})
         adapter_lookup = {adapter.name: adapter for adapter in get_default_tool_adapters()}
         adapter_names = tuple(

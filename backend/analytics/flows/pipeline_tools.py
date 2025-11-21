@@ -24,10 +24,12 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass, field
-from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, Iterable, Optional, Sequence, Set
+from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, Iterable, Optional, Sequence, Set, Mapping
 import logging
 
 from .planner_executor import PlannerPipeline, PlannerPhaseContext
+from analytics.routing import FollowUpRoute
+from analytics.validators import sanitize_for_json
 
 from analytics.tools.definitions import TOOL_REGISTRY, ToolDefinition, ToolId
 
@@ -242,7 +244,9 @@ def _bootstrap_registry(registry: PlannerToolRegistry) -> None:
 
     async def _run_web_refresh(pipeline: PlannerPipeline, ctx: PlannerPhaseContext, kwargs: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
         lane_refresh_flags = dict(getattr(ctx, "lane_refresh_required", {}) or {})
-        if lane_refresh_flags.get("web") is False:
+        follow_up_route = getattr(ctx, "follow_up_route", FollowUpRoute.FULL_PIPELINE)
+        guardrail_payload = getattr(ctx, "follow_up_guardrail", None)
+        if follow_up_route == FollowUpRoute.STOCK_ONLY or lane_refresh_flags.get("web") is False:
             yield {
                 "event": "web_refresh",
                 "data": {
@@ -252,8 +256,23 @@ def _bootstrap_registry(registry: PlannerToolRegistry) -> None:
                     "from_cache": True,
                     "reason": kwargs.get("reason"),
                     "source": kwargs.get("source"),
+                    "guardrail": sanitize_for_json(dict(guardrail_payload)) if isinstance(guardrail_payload, Mapping) else guardrail_payload,
                 },
             }
+            if hasattr(ctx, "session_snapshot") and ctx.session_snapshot:
+                try:
+                    ctx.session_snapshot.record_tool_receipt(
+                        "web_refresh",
+                        {
+                            "status": "skipped",
+                            "reused": True,
+                            "from_cache": True,
+                            "guardrail": sanitize_for_json(dict(guardrail_payload)) if isinstance(guardrail_payload, Mapping) else guardrail_payload,
+                            "lane": "web",
+                        },
+                    )
+                except Exception:
+                    pass
             return
 
         async for event in pipeline.refresh_web_lane(
@@ -265,6 +284,7 @@ def _bootstrap_registry(registry: PlannerToolRegistry) -> None:
 
     async def _run_market_refresh(pipeline: PlannerPipeline, ctx: PlannerPhaseContext, kwargs: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
         lane_refresh_flags = dict(getattr(ctx, "lane_refresh_required", {}) or {})
+        guardrail_payload = getattr(ctx, "follow_up_guardrail", None)
         if lane_refresh_flags.get("market") is False:
             yield {
                 "event": "market_refresh",
@@ -275,8 +295,23 @@ def _bootstrap_registry(registry: PlannerToolRegistry) -> None:
                     "from_cache": True,
                     "reason": kwargs.get("reason"),
                     "source": kwargs.get("source"),
+                    "guardrail": sanitize_for_json(dict(guardrail_payload)) if isinstance(guardrail_payload, Mapping) else guardrail_payload,
                 },
             }
+            if hasattr(ctx, "session_snapshot") and ctx.session_snapshot:
+                try:
+                    ctx.session_snapshot.record_tool_receipt(
+                        "market_refresh",
+                        {
+                            "status": "skipped",
+                            "reused": True,
+                            "from_cache": True,
+                            "guardrail": sanitize_for_json(dict(guardrail_payload)) if isinstance(guardrail_payload, Mapping) else guardrail_payload,
+                            "lane": "market",
+                        },
+                    )
+                except Exception:
+                    pass
             return
 
         async for event in pipeline.refresh_market_lane(

@@ -191,6 +191,16 @@ class AgentMemory:
             return dict(self._lane_decisions[-1])
         return None
 
+    @property
+    def agent_cache(self) -> Dict[str, Any]:
+        """
+        Backward-compatible view of the agent cache for callers that still expect
+        the legacy `agent_cache` attribute. Returns a copy of the persisted state
+        so downstream components (AgentRuntime, tests) can read receipts, plan
+        state, and guardrails without mutating internal fields.
+        """
+        return self.to_dict()
+
     def to_dict(self) -> Dict[str, Any]:
         """Expose a copy of the agent cache for diagnostics or testing."""
         return {

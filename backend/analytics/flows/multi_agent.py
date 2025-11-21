@@ -131,6 +131,7 @@ from analytics.core.session_state import SessionStateSnapshot, get_session_state
 from analytics.core.cache import get_cache_service
 from analytics.core.events import EventEmitter
 from analytics.core.revision_snapshot import extract_revision_snapshot
+from analytics.flows.agents_stream_bridge import ForbiddenToolCallError
 from analytics.core.telemetry import (
     analysis_chunk as log_analysis_chunk,
     agent_handoff,
@@ -150,6 +151,9 @@ from analytics.services.response_search import ResponseSearchError, perform_resp
 from analytics.routing import FollowUpRoute
 from analytics.services.revision_focus import RevisionQuestionBundle
 from analytics.validators import CohesiveResultValidationError, CohesiveResultValidator, sanitize_for_json
+from analytics.agent_orchestrator.agent_runtime import AgentRuntime, AgentRuntimeConfig
+from analytics.agent_orchestrator.memory import AgentMemory
+from analytics.agent_orchestrator.agent_plan import PlanTemplate
 from .planner_executor import (
     PlannerExecutorFlow,
     PlannerPhaseContext,
@@ -252,6 +256,7 @@ from .chart_revision import (
 )
 from .task_plan import AgentTaskPlan, AgentTaskStep
 from .orchestrator import (
+    AgentExecutionError,
     AgentExecutionOrchestrator,
     AgentRunContext,
     AgentResult,
@@ -1714,6 +1719,7 @@ class MultiAgentFlow:
         self._agentic_revision_mode: bool = False
         self._lane_refresh_required: Dict[str, bool] = {}
         self._agent_retry_counts: Dict[str, int] = {}
+        self._follow_up_guardrail: Optional[Dict[str, Any]] = None
         self._agent_cache_ttl: int = 600
         self._planner_event_bus: Optional[PlannerEventBus] = None
         self._sequencer_state: Optional[_SupervisorSequencerState] = None
@@ -1740,6 +1746,20 @@ class MultiAgentFlow:
     def set_session_follow_up(self, follow_up: bool) -> None:
         self._session_follow_up = bool(follow_up)
         self._planner.set_session_follow_up(follow_up)
+
+    # Function: set_follow_up_guardrail
+    #   Role: Store follow-up guardrail metadata so supervisor allowlists and receipts carry the same payload.
+    #   Called from: analytics.flows.workflow when follow-up guardrails are computed.
+    #   Invokes: analytics.validators.sanitize_for_json
+    #   Why: Ensures guardrail-driven redirects and tool allowlists stay observable in ledgers.
+    def set_follow_up_guardrail(self, payload: Optional[Mapping[str, Any]]) -> None:
+        if payload is None:
+            self._follow_up_guardrail = None
+            return
+        try:
+            self._follow_up_guardrail = sanitize_for_json(dict(payload))
+        except Exception:
+            self._follow_up_guardrail = dict(payload) if isinstance(payload, Mapping) else None
 
     def _hedged_tool_aliases(self) -> List[str]:
         manifest = self._shared_context.get("tool_manifest")
@@ -2929,6 +2949,38 @@ class MultiAgentFlow:
     def latest_artifacts(self):
         return self._planner.latest_artifacts()
 
+    # Function: _record_allowlist_skip_receipt
+    #   Role: Persist skipped tool receipts when guardrails or cache reuse prune supervisor tools.
+    #   Called from: analytics.flows.multi_agent._run_agent_orchestration
+    #   Invokes: analytics.core.session_state.SessionStateSnapshot.record_tool_receipt, analytics.validators.sanitize_for_json
+    #   Why: Ensures ledgers/UI reflect guardrail or cache decisions even when tools never execute.
+    def _record_allowlist_skip_receipt(
+        self,
+        tool_name: str,
+        lane: str,
+        *,
+        reason: str,
+        guardrail: Optional[Mapping[str, Any]] = None,
+        reused: bool = True,
+        from_cache: bool = True,
+    ) -> None:
+        snapshot = self._session_snapshot
+        if snapshot is None:
+            return
+        payload: Dict[str, Any] = {
+            "status": "skipped",
+            "reused": reused,
+            "from_cache": from_cache,
+            "reason": reason,
+            "lane": lane,
+        }
+        if guardrail:
+            payload["guardrail"] = sanitize_for_json(dict(guardrail))
+        try:
+            snapshot.record_tool_receipt(tool_name, payload)
+        except Exception:
+            logger.debug("Failed to record skipped tool receipt for %s", tool_name, exc_info=True)
+
     async def _forward_with_hooks(
         self,
         stream: AsyncGenerator[Dict[str, Any], None],
@@ -3445,19 +3497,46 @@ class MultiAgentFlow:
             yield event
         self._orchestrated = True
         if not self._agent_turn_observed:
-            error_event = EventEmitter.error(
-                "workflow_error",
-                "agent runtime emitted no agent_turn telemetry; supervisor path required",
-                code="agent_runtime_missing_agent_turns",
-                details={"flow_mode": self.flow_mode.value if self.flow_mode else "multi_agent"},
+            redirect = apply_mode_metadata(
+                {
+                    "event": "workflow_redirect",
+                    "data": {
+                        "target": "direct",
+                        "reason": "agent_runtime_missing_agent_turns",
+                        "flow_mode": self.flow_mode.value if self.flow_mode else "multi_agent",
+                    },
+                },
+                self.flow_mode,
             )
-            error_event["event"] = "workflow_error"
-            error_event.setdefault("data", {})
-            error_event["data"]["error_code"] = "agent_runtime_missing_agent_turns"
-            yield self._maybe_tag_session_metadata(
-                self._annotate(error_event),
-                session_id,
-            )
+            yield self._maybe_tag_session_metadata(self._annotate(redirect), session_id)
+            try:
+                direct_planner = PlannerExecutorFlow(flow_mode=FlowMode.DIRECT)
+                async for direct_event in direct_planner.events(
+                    query,
+                    session_id=session_id,
+                    revision_requested=False,
+                ):
+                    yield self._maybe_tag_session_metadata(
+                        apply_mode_metadata(direct_event, FlowMode.DIRECT),
+                        session_id,
+                    )
+            except Exception as exc:  # pragma: no cover - defensive logging
+                error_event = EventEmitter.error(
+                    "workflow_error",
+                    "agent runtime emitted no agent_turn telemetry; direct fallback failed",
+                    code="direct_fallback_failed",
+                    details={
+                        "flow_mode": self.flow_mode.value if self.flow_mode else "multi_agent",
+                        "reason": str(exc),
+                    },
+                )
+                error_event["event"] = "workflow_error"
+                error_event.setdefault("data", {})
+                error_event["data"]["error_code"] = "direct_fallback_failed"
+                yield self._maybe_tag_session_metadata(
+                    self._annotate(error_event),
+                    session_id,
+                )
 
     async def chart_revision(
         self,
@@ -4801,6 +4880,214 @@ class MultiAgentFlow:
         query: str,
         session_id: Optional[str],
     ) -> AsyncGenerator[Dict[str, Any], None]:
+        # Fast path: run the real Agent SDK supervisor so telemetry carries agent_turn evidence.
+        if self._supervisor_agent is None:
+            raise RuntimeError("Supervisor Agent SDK bundle not available")
+
+        queue: "asyncio.Queue[Optional[Dict[str, Any]]]" = asyncio.Queue()
+        snapshot = self._session_snapshot or SessionStateSnapshot(session_id=session_id or str(uuid.uuid4()))
+        memory = AgentMemory(snapshot)
+
+        allowlist: Optional[Set[str]] = None
+        guardrail_payload = self._follow_up_guardrail or {}
+        lane_refresh_flags = dict(self._shared_context.get("lane_refresh_required") or {})
+        try:
+            route = getattr(self, "follow_up_route", FollowUpRoute.FULL_PIPELINE)
+            specialist_tools = list(self._specialist_tools.values()) if self._specialist_tools else []
+            allowlist = {getattr(tool, "name", "").strip() for tool in specialist_tools if getattr(tool, "name", "").strip()}
+            def _drop_lane(lane: str, *, reason: str, reused: bool, from_cache: bool) -> None:
+                lane_key = lane.strip().lower()
+                if not allowlist:
+                    return
+                for binding_lane, tool in (self._specialist_tools or {}).items():
+                    if str(binding_lane).strip().lower() != lane_key:
+                        continue
+                    tool_name = getattr(tool, "name", "").strip()
+                    if tool_name:
+                        allowlist.discard(tool_name)
+                receipt_tool = "web_refresh" if lane_key == "web" else "market_refresh" if lane_key in {"market", "stock"} else lane_key
+                self._record_allowlist_skip_receipt(
+                    receipt_tool,
+                    lane=lane_key,
+                    reason=reason,
+                    guardrail=guardrail_payload,
+                    reused=reused,
+                    from_cache=from_cache,
+                )
+
+            if route == FollowUpRoute.STOCK_ONLY:
+                _drop_lane("web", reason="follow_up_guardrail", reused=False, from_cache=False)
+                allowlist = {name for name in (allowlist or set()) if not name.startswith("web_")}
+            if route == FollowUpRoute.REUSE_SQL:
+                allowlist = {name for name in (allowlist or set()) if not name.startswith("sql_")}
+            blocked_tools = guardrail_payload.get("blocked_tools") if isinstance(guardrail_payload, Mapping) else None
+            if isinstance(blocked_tools, Iterable):
+                for tool_name in blocked_tools:
+                    if isinstance(tool_name, str) and tool_name.strip():
+                        allowlist.discard(tool_name.strip())
+            for lane_name, required in lane_refresh_flags.items():
+                if required is False:
+                    normalized_lane = str(lane_name).strip().lower()
+                    if normalized_lane in {"web", "market", "stock"}:
+                        _drop_lane(normalized_lane, reason="lane_refresh_reused", reused=True, from_cache=True)
+        except Exception:
+            allowlist = allowlist or None
+
+        supervisor_model = getattr(self._supervisor_agent, "model", None) or _coerce_agent_model(
+            self._supervisor_settings.get("model")
+        )
+        runtime_config = AgentRuntimeConfig(
+            model=supervisor_model,
+            max_turns=int(self._supervisor_settings.get("max_turns") or 8),
+            temperature=None,
+            reasoning_effort=str(self._supervisor_settings.get("reasoning_effort") or "medium"),
+            plan_template=PlanTemplate(name="multi_agent_supervisor", nodes=()),
+            tool_allowlist=allowlist,
+            guardrail_payload=guardrail_payload,
+        )
+
+        supervisor_agent = self._supervisor_agent
+        if allowlist and self._specialist_tools:
+            filtered_tools = [
+                tool for lane, tool in self._specialist_tools.items() if getattr(tool, "name", "") in allowlist
+            ]
+            if filtered_tools:
+                try:
+                    supervisor_agent = Agent(
+                        name=getattr(self._supervisor_agent, "name", "analytics_supervisor"),
+                        instructions=getattr(self._supervisor_agent, "instructions", ""),
+                        model=getattr(self._supervisor_agent, "model", None),
+                        tools=filtered_tools,
+                    )
+                except Exception:
+                    supervisor_agent = self._supervisor_agent
+
+        runtime = AgentRuntime(
+            agent=supervisor_agent,
+            memory=memory,
+            queue=queue,
+            flow_mode=self.flow_mode,
+            logger=logger,
+            config=runtime_config,
+        )
+
+        run_context = {
+            "session_id": session_id,
+            "follow_up_route": getattr(self, "follow_up_route", FollowUpRoute.FULL_PIPELINE).value,
+            "tool_manifest": self._planner_tool_manifest,
+        }
+
+        runtime_task = asyncio.create_task(
+            runtime.run(
+                query,
+                session_id=session_id,
+                run_context=run_context,
+                plan_template=runtime_config.plan_template,
+            )
+        )
+
+        try:
+            while True:
+                if runtime_task.done() and queue.empty():
+                    break
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=0.1)
+                except asyncio.TimeoutError:
+                    continue
+                if event is None:
+                    continue
+                annotated = self._annotate(event)
+                self._capture_event(annotated)
+                yield self._maybe_tag_session_metadata(annotated, session_id)
+        except ForbiddenToolCallError as exc:
+            guardrail = getattr(exc, "guardrail", None)
+            redirect = apply_mode_metadata(
+                {
+                    "event": "workflow_redirect",
+                    "data": {
+                        "target": "direct",
+                        "reason": "agent_tool_blocked",
+                        "flow_mode": self.flow_mode.value if self.flow_mode else "multi_agent",
+                        "guardrail": guardrail or guardrail_payload or None,
+                    },
+                },
+                self.flow_mode,
+            )
+            yield self._maybe_tag_session_metadata(self._annotate(redirect), session_id)
+            try:
+                direct_planner = PlannerExecutorFlow(flow_mode=FlowMode.DIRECT)
+                async for direct_event in direct_planner.events(
+                    query,
+                    session_id=session_id,
+                    revision_requested=False,
+                ):
+                    yield self._maybe_tag_session_metadata(
+                        apply_mode_metadata(direct_event, FlowMode.DIRECT),
+                        session_id,
+                    )
+                self._agent_turn_observed = True
+            except Exception as fallback_exc:  # pragma: no cover - defensive logging
+                error_event = EventEmitter.error(
+                    "workflow_error",
+                    f"direct fallback failed: {fallback_exc}",
+                    code="direct_fallback_failed",
+                    details={"flow_mode": self.flow_mode.value if self.flow_mode else "multi_agent"},
+                )
+                error_event["event"] = "workflow_error"
+                error_event.setdefault("data", {})
+                error_event["data"]["error_code"] = "direct_fallback_failed"
+                yield self._maybe_tag_session_metadata(self._annotate(error_event), session_id)
+            return
+        try:
+            await asyncio.shield(runtime_task)
+        except ForbiddenToolCallError as exc:
+            guardrail = getattr(exc, "guardrail", None)
+            redirect = apply_mode_metadata(
+                {
+                    "event": "workflow_redirect",
+                    "data": {
+                        "target": "direct",
+                        "reason": "agent_tool_blocked",
+                        "flow_mode": self.flow_mode.value if self.flow_mode else "multi_agent",
+                        "guardrail": guardrail or guardrail_payload or None,
+                    },
+                },
+                self.flow_mode,
+            )
+            yield self._maybe_tag_session_metadata(self._annotate(redirect), session_id)
+            try:
+                direct_planner = PlannerExecutorFlow(flow_mode=FlowMode.DIRECT)
+                async for direct_event in direct_planner.events(
+                    query,
+                    session_id=session_id,
+                    revision_requested=False,
+                ):
+                    yield self._maybe_tag_session_metadata(
+                        apply_mode_metadata(direct_event, FlowMode.DIRECT),
+                        session_id,
+                    )
+                self._agent_turn_observed = True
+            except Exception as fallback_exc:  # pragma: no cover - defensive logging
+                error_event = EventEmitter.error(
+                    "workflow_error",
+                    f"direct fallback failed: {fallback_exc}",
+                    code="direct_fallback_failed",
+                    details={"flow_mode": self.flow_mode.value if self.flow_mode else "multi_agent"},
+                )
+                error_event["event"] = "workflow_error"
+                error_event.setdefault("data", {})
+                error_event["data"]["error_code"] = "direct_fallback_failed"
+                yield self._maybe_tag_session_metadata(self._annotate(error_event), session_id)
+            return
+        except Exception:
+            runtime_task.cancel()
+            with contextlib.suppress(Exception):
+                await runtime_task
+        if self._supervisor_agent is not None:
+            # Agent SDK path produced telemetry; avoid replaying the legacy orchestrator
+            # to prevent duplicate work and latency-budget crashes.
+            self._orchestrated = True
+            return
         sql_ctx = self._shared_context.get("sql", {})
         chart_ctx = self._shared_context.get("chart", {})
         analysis_ctx = self._shared_context.get("analysis", {})
@@ -4881,7 +5168,23 @@ class MultiAgentFlow:
                 yield pending_event
                 backpressure_queue.task_done()
 
-        results = run_task.result()
+        try:
+            results = run_task.result()
+        except AgentExecutionError as exc:
+            redirect = apply_mode_metadata(
+                {
+                    "event": "workflow_redirect",
+                    "data": {
+                        "target": "direct",
+                        "reason": "agent_runtime_fatal",
+                        "flow_mode": self.flow_mode.value if self.flow_mode else "multi_agent",
+                        "error": str(exc),
+                    },
+                },
+                self.flow_mode,
+            )
+            yield self._maybe_tag_session_metadata(self._annotate(redirect), session_id)
+            return
 
         decision_payloads = list(self._retry_manager.decisions())
         for decision in decision_payloads:

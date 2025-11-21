@@ -212,188 +212,6 @@ class AnalyticsWorkflow:
         print(f"[INTENT DEBUG FINAL] Result: {result}")
         return result
 
-    def _build_market_share_sql(self, all_companies: bool, target_ticker: str, years_back: int = 4, granularity: str = 'annual') -> str:
-        """Return SQL for market share over the specified time period.
-        If all_companies is True, returns per-ticker market share vs total market.
-        Else returns target ticker vs market.
-        years_back: Number of years to look back (default 4 = 5 years total)
-        """
-        tickers = self._get_default_tickers()
-        ticker_list = "'" + "','".join(tickers) + "'"
-        
-        if granularity == 'quarterly':
-            if all_companies:
-                # Quarterly market share for all companies
-                return (
-                    "WITH market AS (\n"
-                    "  SELECT calendar_year, calendar_quarter_num, calendar_quarter, SUM(value) AS market_revenue\n"
-                    "  FROM comp_financials\n"
-                    "  WHERE metric = 'Revenue'\n"
-                    f"    AND ticker IN ({ticker_list})\n"
-                    "    AND calendar_quarter_num IS NOT NULL\n"
-                    f"    AND calendar_year >= EXTRACT(YEAR FROM CURRENT_DATE) - {years_back}\n"
-                    "  GROUP BY calendar_year, calendar_quarter_num, calendar_quarter\n"
-                    "), per AS (\n"
-                    "  SELECT ticker, calendar_year, calendar_quarter_num, calendar_quarter, SUM(value) AS ticker_revenue\n"
-                    "  FROM comp_financials\n"
-                    "  WHERE metric = 'Revenue'\n"
-                    f"    AND ticker IN ({ticker_list})\n"
-                    "    AND calendar_quarter_num IS NOT NULL\n"
-                    f"    AND calendar_year >= EXTRACT(YEAR FROM CURRENT_DATE) - {years_back}\n"
-                    "  GROUP BY ticker, calendar_year, calendar_quarter_num, calendar_quarter\n"
-                    ")\n"
-                    "SELECT\n"
-                    "  p.ticker, p.calendar_year, p.calendar_quarter_num, p.calendar_quarter, p.ticker_revenue, m.market_revenue,\n"
-                    "  p.ticker_revenue / NULLIF(m.market_revenue, 0) AS market_share\n"
-                    "FROM per p JOIN market m USING (calendar_year, calendar_quarter_num, calendar_quarter)\n"
-                    "ORDER BY p.ticker, p.calendar_year, p.calendar_quarter_num"
-                )
-            else:
-                # Quarterly market share for single company
-                ticker_lower = target_ticker.lower()
-                return (
-                    "WITH market AS (\n"
-                    "  SELECT calendar_year, calendar_quarter_num, calendar_quarter, SUM(value) AS market_revenue\n"
-                    "  FROM comp_financials\n"
-                    "  WHERE metric = 'Revenue'\n"
-                    f"    AND ticker IN ({ticker_list})\n"
-                    "    AND calendar_quarter_num IS NOT NULL\n"
-                    f"    AND calendar_year >= EXTRACT(YEAR FROM CURRENT_DATE) - {years_back}\n"
-                    "  GROUP BY calendar_year, calendar_quarter_num, calendar_quarter\n"
-                    "), t AS (\n"
-                    "  SELECT calendar_year, calendar_quarter_num, calendar_quarter, SUM(value) AS t_revenue\n"
-                    "  FROM comp_financials\n"
-                    f"  WHERE metric = 'Revenue' AND ticker = '{target_ticker}'\n"
-                    "    AND calendar_quarter_num IS NOT NULL\n"
-                    f"    AND calendar_year >= EXTRACT(YEAR FROM CURRENT_DATE) - {years_back}\n"
-                    "  GROUP BY calendar_year, calendar_quarter_num, calendar_quarter\n"
-                    ")\n"
-                    f"SELECT t.calendar_year, t.calendar_quarter_num, t.calendar_quarter, t.t_revenue AS {ticker_lower}_revenue, m.market_revenue,\n"
-                    f"       t.t_revenue / NULLIF(m.market_revenue, 0) AS {ticker_lower}_market_share\n"
-                    "FROM t JOIN market m USING (calendar_year, calendar_quarter_num, calendar_quarter)\n"
-                    "ORDER BY t.calendar_year, t.calendar_quarter_num"
-                )
-        else:
-            # Annual market share (original logic)
-            if all_companies:
-                return (
-                    "WITH market AS (\n"
-                    "  SELECT calendar_year, SUM(value) AS market_revenue\n"
-                    "  FROM comp_financials\n"
-                    "  WHERE metric = 'Revenue'\n"
-                    f"    AND ticker IN ({ticker_list})\n"
-                    "    AND calendar_quarter_num IS NOT NULL\n"
-                    f"    AND calendar_year >= EXTRACT(YEAR FROM CURRENT_DATE) - {years_back}\n"
-                    "  GROUP BY calendar_year\n"
-                    "), per AS (\n"
-                    "  SELECT ticker, calendar_year, SUM(value) AS ticker_revenue\n"
-                    "  FROM comp_financials\n"
-                    "  WHERE metric = 'Revenue'\n"
-                    f"    AND ticker IN ({ticker_list})\n"
-                    "    AND calendar_quarter_num IS NOT NULL\n"
-                    f"    AND calendar_year >= EXTRACT(YEAR FROM CURRENT_DATE) - {years_back}\n"
-                    "  GROUP BY ticker, calendar_year\n"
-                    ")\n"
-                    "SELECT\n"
-                    "  p.ticker, p.calendar_year, p.ticker_revenue, m.market_revenue,\n"
-                    "  p.ticker_revenue / NULLIF(m.market_revenue, 0) AS market_share\n"
-                    "FROM per p JOIN market m USING (calendar_year)\n"
-                    "ORDER BY p.ticker, p.calendar_year"
-                )
-            # single company
-            ticker_lower = target_ticker.lower()
-            return (
-                "WITH market AS (\n"
-                "  SELECT calendar_year, SUM(value) AS market_revenue\n"
-                "  FROM comp_financials\n"
-                "  WHERE metric = 'Revenue'\n"
-                f"    AND ticker IN ({ticker_list})\n"
-                "    AND calendar_quarter_num IS NOT NULL\n"
-                f"    AND calendar_year >= EXTRACT(YEAR FROM CURRENT_DATE) - {years_back}\n"
-                "  GROUP BY calendar_year\n"
-                "), t AS (\n"
-                "  SELECT calendar_year, SUM(value) AS t_revenue\n"
-                "  FROM comp_financials\n"
-                f"  WHERE metric = 'Revenue' AND ticker = '{target_ticker}'\n"
-                "    AND calendar_quarter_num IS NOT NULL\n"
-                f"    AND calendar_year >= EXTRACT(YEAR FROM CURRENT_DATE) - {years_back}\n"
-                "  GROUP BY calendar_year\n"
-                ")\n"
-                f"SELECT t.calendar_year, t.t_revenue AS {ticker_lower}_revenue, m.market_revenue,\n"
-                f"       t.t_revenue / NULLIF(m.market_revenue, 0) AS {ticker_lower}_market_share\n"
-                "FROM t JOIN market m USING (calendar_year)\n"
-                "ORDER BY t.calendar_year"
-            )
-
-    def _build_margins_sql(self, target_ticker: str, years_back: int = 4, granularity: str = 'annual') -> str:
-        ticker_lower = target_ticker.lower()
-        tickers = self._get_default_tickers()
-        ticker_list = "'" + "','".join(tickers) + "'"
-        
-        if granularity == 'quarterly':
-            # Quarterly margins analysis
-            return (
-                "WITH q AS (\n"
-                "  SELECT * FROM comp_financials\n"
-                "  WHERE calendar_quarter_num IS NOT NULL\n"
-                f"    AND ticker IN ({ticker_list})\n"
-                "    AND metric IN ('Revenue','Gross Profit','Operating Income','Net Income')\n"
-                f"    AND calendar_year >= EXTRACT(YEAR FROM CURRENT_DATE) - {years_back}\n"
-                "), qtr AS (\n"
-                "  SELECT ticker, calendar_year, calendar_quarter_num, calendar_quarter,\n"
-                "         SUM(CASE WHEN metric='Revenue' THEN value END) AS rev,\n"
-                "         SUM(CASE WHEN metric='Gross Profit' THEN value END) AS gp,\n"
-                "         SUM(CASE WHEN metric='Operating Income' THEN value END) AS op,\n"
-                "         SUM(CASE WHEN metric='Net Income' THEN value END) AS ni\n"
-                "  FROM q GROUP BY 1,2,3,4\n"
-                "), industry_avg AS (\n"
-                "  SELECT calendar_year, calendar_quarter_num,\n"
-                "         AVG(gp/NULLIF(rev,0)) AS industry_avg_gross_margin,\n"
-                "         AVG(op/NULLIF(rev,0)) AS industry_avg_operating_margin,\n"
-                "         AVG(ni/NULLIF(rev,0)) AS industry_avg_net_margin\n"
-                f"  FROM qtr WHERE ticker <> '{target_ticker}' GROUP BY 1,2\n"
-                ")\n"
-                "SELECT q.calendar_year, q.calendar_quarter_num, q.calendar_quarter,\n"
-                f"       q.gp/NULLIF(q.rev,0) AS {ticker_lower}_gross_margin,\n"
-                f"       q.op/NULLIF(q.rev,0) AS {ticker_lower}_operating_margin,\n"
-                f"       q.ni/NULLIF(q.rev,0) AS {ticker_lower}_net_margin,\n"
-                "       p.industry_avg_gross_margin, p.industry_avg_operating_margin, p.industry_avg_net_margin\n"
-                "FROM qtr q JOIN industry_avg p USING (calendar_year, calendar_quarter_num)\n"
-                f"WHERE q.ticker='{target_ticker}'\n"
-                "ORDER BY q.calendar_year, q.calendar_quarter_num"
-            )
-        else:
-            # Annual margins analysis (original logic)
-            return (
-                "WITH q AS (\n"
-                "  SELECT * FROM comp_financials\n"
-                "  WHERE calendar_quarter_num IS NOT NULL\n"
-                f"    AND ticker IN ({ticker_list})\n"
-                "    AND metric IN ('Revenue','Gross Profit','Operating Income','Net Income')\n"
-                "), yr AS (\n"
-                "  SELECT ticker, calendar_year,\n"
-                "         SUM(CASE WHEN metric='Revenue' THEN value END) AS rev,\n"
-                "         SUM(CASE WHEN metric='Gross Profit' THEN value END) AS gp,\n"
-                "         SUM(CASE WHEN metric='Operating Income' THEN value END) AS op,\n"
-                "         SUM(CASE WHEN metric='Net Income' THEN value END) AS ni\n"
-                "  FROM q GROUP BY 1,2\n"
-                "), industry_avg AS (\n"
-                "  SELECT calendar_year,\n"
-                "         AVG(gp/NULLIF(rev,0)) AS industry_avg_gross_margin,\n"
-                "         AVG(op/NULLIF(rev,0)) AS industry_avg_operating_margin,\n"
-                "         AVG(ni/NULLIF(rev,0)) AS industry_avg_net_margin\n"
-                f"  FROM yr WHERE ticker <> '{target_ticker}' GROUP BY 1\n"
-                ")\n"
-                "SELECT y.calendar_year,\n"
-                f"       y.gp/NULLIF(y.rev,0) AS {ticker_lower}_gross_margin,\n"
-                f"       y.op/NULLIF(y.rev,0) AS {ticker_lower}_operating_margin,\n"
-                f"       y.ni/NULLIF(y.rev,0) AS {ticker_lower}_net_margin,\n"
-                "       p.industry_avg_gross_margin, p.industry_avg_operating_margin, p.industry_avg_net_margin\n"
-                "FROM yr y JOIN industry_avg p USING (calendar_year)\n"
-                f"WHERE y.ticker='{target_ticker}' AND y.calendar_year >= EXTRACT(YEAR FROM CURRENT_DATE) - {years_back}\n"
-                "ORDER BY y.calendar_year"
-            )
-
     def _build_growth_sql(self, target_ticker: str, years_back: int = 4, granularity: str = 'annual') -> str:
         ticker_lower = target_ticker.lower()
         tickers = self._get_default_tickers()
@@ -466,61 +284,6 @@ class AnalyticsWorkflow:
                 "JOIN industry_avg ia ON g.calendar_year = ia.calendar_year\n"
                 f"WHERE g.ticker = '{target_ticker}' AND g.calendar_year >= EXTRACT(YEAR FROM CURRENT_DATE) - {years_back}\n"
                 "ORDER BY g.calendar_year"
-            )
-
-    def _build_rnd_sql(self, target_ticker: str, years_back: int = 4, granularity: str = 'annual') -> str:
-        ticker_lower = target_ticker.lower()
-        tickers = self._get_default_tickers()
-        ticker_list = "'" + "','".join(tickers) + "'"
-        
-        if granularity == 'quarterly':
-            # Quarterly R&D intensity analysis
-            return (
-                "WITH q AS (\n"
-                "  SELECT * FROM comp_financials\n"
-                "  WHERE calendar_quarter_num IS NOT NULL\n"
-                f"    AND ticker IN ({ticker_list})\n"
-                "    AND metric IN ('Revenue','R&D Expense')\n"
-                f"    AND calendar_year >= EXTRACT(YEAR FROM CURRENT_DATE) - {years_back}\n"
-                "), qtr AS (\n"
-                "  SELECT ticker, calendar_year, calendar_quarter_num, calendar_quarter,\n"
-                "         SUM(CASE WHEN metric='Revenue' THEN value END) AS rev,\n"
-                "         SUM(CASE WHEN metric='R&D Expense' THEN value END) AS rnd\n"
-                "  FROM q GROUP BY 1,2,3,4\n"
-                "), industry_avg AS (\n"
-                "  SELECT calendar_year, calendar_quarter_num, AVG(rnd/NULLIF(rev,0)) AS industry_avg_rnd_ratio\n"
-                f"  FROM qtr WHERE ticker <> '{target_ticker}' GROUP BY 1,2\n"
-                ")\n"
-                "SELECT q.calendar_year, q.calendar_quarter_num, q.calendar_quarter,\n"
-                f"       q.rnd/NULLIF(q.rev,0) AS {ticker_lower}_rnd_intensity,\n"
-                "       p.industry_avg_rnd_ratio\n"
-                "FROM qtr q JOIN industry_avg p USING (calendar_year, calendar_quarter_num)\n"
-                f"WHERE q.ticker='{target_ticker}'\n"
-                "ORDER BY q.calendar_year, q.calendar_quarter_num"
-            )
-        else:
-            # Annual R&D intensity analysis (original logic)
-            return (
-                "WITH q AS (\n"
-                "  SELECT * FROM comp_financials\n"
-                "  WHERE calendar_quarter_num IS NOT NULL\n"
-                f"    AND ticker IN ({ticker_list})\n"
-                "    AND metric IN ('Revenue','R&D Expense')\n"
-                "), yr AS (\n"
-                "  SELECT ticker, calendar_year,\n"
-                "         SUM(CASE WHEN metric='Revenue' THEN value END) AS rev,\n"
-                "         SUM(CASE WHEN metric='R&D Expense' THEN value END) AS rnd\n"
-                "  FROM q GROUP BY 1,2\n"
-                "), industry_avg AS (\n"
-                "  SELECT calendar_year, AVG(rnd/NULLIF(rev,0)) AS industry_avg_rnd_ratio\n"
-                f"  FROM yr WHERE ticker <> '{target_ticker}' GROUP BY 1\n"
-                ")\n"
-                "SELECT y.calendar_year,\n"
-                f"       y.rnd/NULLIF(y.rev,0) AS {ticker_lower}_rnd_intensity,\n"
-                "       p.industry_avg_rnd_ratio\n"
-                "FROM yr y JOIN industry_avg p USING (calendar_year)\n"
-                f"WHERE y.ticker='{target_ticker}' AND y.calendar_year >= EXTRACT(YEAR FROM CURRENT_DATE) - {years_back}\n"
-                "ORDER BY y.calendar_year"
             )
 
     def _get_company_mapping(self) -> Tuple[Dict[str, Tuple[str, str]], Tuple[str, str]]:
@@ -1048,11 +811,7 @@ class AnalyticsWorkflow:
             # Fallback to hardcoded SQL methods if no YAML template found
             if not handcrafted_sql:
                 
-                if intent['kind'] == 'market_share_all' or intent['kind'] == 'market_share' or intent['kind'] == 'market_share_single':
-                    handcrafted_sql = self._build_market_share_sql(all_companies=(intent['kind'] == 'market_share_all'), target_ticker=target_ticker, years_back=years_back, granularity=granularity)
-                elif intent['kind'] == 'margins_vs_peers':
-                    handcrafted_sql = self._build_margins_sql(target_ticker, years_back, granularity)
-                elif intent['kind'] == 'margin_growth_vs_peers':
+                if intent['kind'] == 'margin_growth_vs_peers':
                     # Prefer YAML template; if missing, derive via margins + LAG
                     template = self._get_sql_template('margin_growth_vs_peers')
                     if template:
@@ -1071,8 +830,6 @@ class AnalyticsWorkflow:
                         handcrafted_sql = None
                 elif intent['kind'] == 'growth_vs_peers' or intent['kind'] == 'revenue_growth_analysis':
                     handcrafted_sql = self._build_growth_sql(target_ticker, years_back, granularity)
-                elif intent['kind'] == 'rnd_intensity_vs_peers':
-                    handcrafted_sql = self._build_rnd_sql(target_ticker, years_back, granularity)
                 elif intent['kind'] == 'rnd_expense_vs_peers':
                     template = self._get_sql_template('rnd_expense_vs_peers')
                     if template:
@@ -1258,16 +1015,20 @@ Rules:
             years_back = state.get('years_back', 4)
             print(f"[ECHARTS AGENT] Using years_back: {years_back}")
             
-            # Generate ECharts specification (pass user query to guide column selection)
-            chart_spec = self._build_echarts_spec(
-                data,
-                chart_type,
-                unique_tickers,
-                unique_metrics,
-                has_time_data,
-                state.get('query', ''),
-                years_back
-            )
+            # Generate a minimal ECharts specification without legacy helpers
+            chart_spec = {
+                "title": {"text": state.get("query", "Financial chart"), "left": "center"},
+                "dataset": {"source": data},
+                "tooltip": {"trigger": "axis"},
+                "xAxis": {"type": "category"},
+                "yAxis": {"type": "value"},
+                "series": [
+                    {
+                        "type": "line" if has_time_data else "bar",
+                        "encode": {"x": "calendar_quarter" if has_time_data else "ticker", "y": unique_metrics[0] if unique_metrics else "value"},
+                    }
+                ],
+            }
             print(f"[ECHARTS AGENT] Generated chart spec with keys: {list(chart_spec.keys())}")
             
             return {
@@ -1406,15 +1167,6 @@ Important:
         if len(metrics) > 1 and len(tickers) == 1:
             return "bar"   # Compare metrics for single company
         return "bar"       # Default to bar chart
-    
-    def _build_echarts_spec(self, data: List[Dict], chart_type: str, tickers: List[str], metrics: List[str], has_time: bool, query: str, years_back: int = 4) -> Dict[str, Any]:
-        """Build deterministic ECharts specification"""
-        
-        if has_time:
-            series_type = 'bar' if chart_type == 'bar' else 'line'
-            return self._build_time_series_chart(data, tickers, metrics, query, series_type, years_back)
-        else:
-            return self._build_bar_chart(data, tickers, metrics, years_back)
     
     def _build_time_series_chart(self, data: List[Dict], tickers: List[str], metrics: List[str], query: str, series_type: str = 'line', years_back: int = 4) -> Dict[str, Any]:
         """Build time series chart (line or bar) for both traditional and derived metrics"""
