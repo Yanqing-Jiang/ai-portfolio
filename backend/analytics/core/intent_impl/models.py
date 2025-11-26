@@ -338,12 +338,7 @@ class LLMFollowUpModel(BaseModel):
 class LLMIntentResolutionModel(BaseModel):
     """Structured model returned by the unified slot resolver prompt."""
 
-    model_config = ConfigDict(
-        extra='forbid',
-        json_schema_extra={
-            "required": ["intent", "followups"],
-        },
-    )
+    model_config = ConfigDict(extra='forbid')
 
     intent: IntentSelectionModel = Field(default_factory=IntentSelectionModel)
     slots: Dict[str, LLMSlotStatusModel] = Field(default_factory=dict)

@@ -9,6 +9,26 @@
 #   Called from: analytics.flows.agents_stream_bridge.AgentsStreamBridge._record_turn_start/_record_turn_end
 #   Invokes: datetime.utcnow, analytics.flows.agents_stream_bridge.AgentsStreamBridge._clean_dict
 #   Why: Ensures SSE turn events expose canonical metadata for ProcessPanel/WorkflowCanvas.
+# Function: _flush_open_turns
+#   Role: Emits completion + turn_end telemetry for any tool calls that never received a done event before the stream closed.
+#   Called from: analytics.flows.agents_stream_bridge.AgentsStreamBridge.forward (finally block)
+#   Invokes: analytics.flows.agents_stream_bridge.AgentsStreamBridge._merge_tool_metadata/_enqueue_event/_record_turn_end
+#   Why: Prevents chart_designer, analysis_writer, agent_coordination and other tool turns from remaining in_progress in ledgers.
+# Function: _ensure_agent_turn_envelope
+#   Role: Emits a synthetic agent_turn_start/end pair when no turn telemetry was produced.
+#   Called from: analytics.flows.agents_stream_bridge.AgentsStreamBridge.forward (finally block)
+#   Invokes: analytics.flows.agents_stream_bridge.AgentsStreamBridge._agent_turn_payload/_enqueue_event
+#   Why: Guarantees ledgers always contain agent_turn events so controllers can enforce agent runtime health checks.
+# Function: _maybe_emit_lane_ready
+#   Role: Maps tool completions to lane-ready SSE events so ProcessPanel sees finished lanes.
+#   Called from: analytics.flows.agents_stream_bridge.AgentsStreamBridge._emit_tool_completion
+#   Invokes: analytics.flows.agents_stream_bridge.AgentsStreamBridge._enqueue_event
+#   Why: Keeps MULTI_AGENT agent-sdk runs aligned with planner lane telemetry for UI/ledger consumers.
+# Function: _ensure_workflow_complete
+#   Role: Emits a workflow_complete event when the Agent SDK stream omitted one.
+#   Called from: analytics.flows.agents_stream_bridge.AgentsStreamBridge.forward (finally block)
+#   Invokes: analytics.flows.agents_stream_bridge.AgentsStreamBridge._enqueue_event
+#   Why: Prevents ledger bubbles when AgentRuntime exits without closing the workflow.
 # Class: AgentsStreamBridge
 #   Role: Convert OpenAI Agents SDK streaming events into planner-style SSE payloads.
 #   Called from: analytics.agent_orchestrator.agent_runtime, tests.analytics.test_agents_stream_bridge
@@ -26,7 +46,8 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 import time
-from typing import Any, Dict, List, Optional, Mapping, Iterable
+import uuid
+from typing import Any, Dict, List, Optional, Mapping, Iterable, Set
 
 from agents.result import RunResultStreaming
 from agents.stream_events import (
@@ -53,8 +74,31 @@ from openai.types.responses.response_text_done_event import (
 
 from analytics.flows.planner_executor import _evaluate_latency_guardrail
 from analytics.flows.schedulers import FlowMode, apply_mode_metadata
-from analytics.tools import TOOL_REGISTRY
+from analytics.tools import DEFAULT_SCHEMA_VERSION, TOOL_REGISTRY
 from analytics.validators import sanitize_for_json
+
+LANE_EVENT_BY_TOOL = {
+    "sql_generation": ("sql_ready", "sql"),
+    "sql_generator": ("sql_ready", "sql"),
+    "chart_generation": ("chart_ready", "chart"),
+    "chart_revision": ("chart_ready", "chart"),
+    "chart_designer": ("chart_ready", "chart"),
+    "analysis_generation": ("analysis_ready", "analysis"),
+    "analysis_revision": ("analysis_ready", "analysis"),
+    "analysis_writer": ("analysis_ready", "analysis"),
+    "market_refresh": ("stock_ready", "market"),
+    "market_snapshot": ("stock_ready", "market"),
+    "stock_tracker": ("stock_ready", "market"),
+    "market_specialist": ("stock_ready", "market"),
+    "web_refresh": ("web_ready", "web"),
+    "web_retriever": ("web_ready", "web"),
+    "web_retriever_cached": ("web_ready", "web"),
+    "web_retriever_live": ("web_ready", "web"),
+    "web_research": ("web_ready", "web"),
+    # Ensure analysis completions trigger lane readiness when emitted by AgentRuntime
+    "analysis_complete": ("analysis_ready", "analysis"),
+    "analysis_writer_complete": ("analysis_ready", "analysis"),
+}
 
 
 class ForbiddenToolCallError(Exception):
@@ -105,6 +149,10 @@ class AgentsStreamBridge:
         self._definitions_by_name = {definition.name: definition for definition in TOOL_REGISTRY.values()}
         self._tool_metadata: Dict[str, Dict[str, Any]] = {}
         self._turn_state: Dict[str, Dict[str, Any]] = {}
+        self._turn_ids: Dict[str, str] = {}
+        self._turns_emitted: bool = False
+        self._lane_ready_emitted: Set[str] = set()
+        self._workflow_complete_seen: bool = False
 
     async def forward(self, result: RunResultStreaming) -> RunResultStreaming:
         """Translate streaming events into SSE payloads."""
@@ -112,7 +160,10 @@ class AgentsStreamBridge:
             async for event in result.stream_events():
                 await self._handle_stream_event(event)
         finally:
+            await self._flush_open_turns()
             await self._emit_supervisor_summary()
+            await self._ensure_agent_turn_envelope()
+            await self._ensure_workflow_complete()
         return result
 
     async def _handle_stream_event(self, event: StreamEvent) -> None:
@@ -192,7 +243,7 @@ class AgentsStreamBridge:
             tool_name=tool_name,
             runtime_metadata=getattr(raw_item, "metadata", None),
         )
-        await self._record_turn_start(tool_id=tool_id, tool_name=tool_name, metadata=metadata)
+        agent_turn_id = await self._record_turn_start(tool_id=tool_id, tool_name=tool_name, metadata=metadata)
         payload = {
             "tool_call": self._clean_dict(
                 {
@@ -200,9 +251,12 @@ class AgentsStreamBridge:
                     "name": tool_name,
                     "status": "running",
                     "metadata": metadata or None,
+                    "agent_turn_id": agent_turn_id,
                 }
             )
         }
+        if agent_turn_id:
+            payload["agent_turn_id"] = agent_turn_id
         await self._enqueue_event("agent_tool_call", payload)
 
     async def _handle_raw_response_event(self, payload: Any) -> None:
@@ -233,6 +287,9 @@ class AgentsStreamBridge:
         tool_id = str(payload.item_id)
         tool_name = self._tool_names.get(tool_id)
         metadata = self._merge_tool_metadata(tool_id=tool_id, tool_name=tool_name, runtime_metadata=None)
+        agent_turn_id = self._turn_ids.get(tool_id)
+        if agent_turn_id is None:
+            agent_turn_id = tool_id
         delta_payload = {
             "tool_call": self._clean_dict(
                 {
@@ -242,9 +299,12 @@ class AgentsStreamBridge:
                     "sequence_number": payload.sequence_number,
                     "output_index": payload.output_index,
                     "metadata": metadata or None,
+                    "agent_turn_id": agent_turn_id,
                 }
             )
         }
+        if agent_turn_id:
+            delta_payload["agent_turn_id"] = agent_turn_id
         await self._enqueue_event("tool_call_delta", delta_payload)
 
     async def _emit_tool_call_summary(
@@ -253,6 +313,9 @@ class AgentsStreamBridge:
         tool_id = str(payload.item_id)
         self._tool_names.setdefault(tool_id, payload.name)
         metadata = self._merge_tool_metadata(tool_id=tool_id, tool_name=payload.name, runtime_metadata=None)
+        agent_turn_id = self._turn_ids.get(tool_id)
+        if agent_turn_id is None:
+            agent_turn_id = tool_id
         summary_payload = {
             "tool_call": self._clean_dict(
                 {
@@ -262,9 +325,12 @@ class AgentsStreamBridge:
                     "sequence_number": payload.sequence_number,
                     "output_index": payload.output_index,
                     "metadata": metadata or None,
+                    "agent_turn_id": agent_turn_id,
                 }
             )
         }
+        if agent_turn_id:
+            summary_payload["agent_turn_id"] = agent_turn_id
         await self._enqueue_event("tool_call_arguments", summary_payload)
 
     async def _emit_reasoning_delta(self, thought: Optional[str]) -> None:
@@ -332,6 +398,13 @@ class AgentsStreamBridge:
             tool_name=tool_name,
             runtime_metadata=getattr(item, "metadata", None),
         )
+        turn_key = str(tool_id) if tool_id else (str(tool_name) if tool_name else None)
+        agent_turn_id = self._turn_ids.get(turn_key) if turn_key else None
+        if agent_turn_id is None:
+            agent_turn_id = tool_id or getattr(item, "id", None)
+        from_cache_flag = metadata.get("from_cache")
+        if from_cache_flag is None and metadata.get("reused") is True:
+            from_cache_flag = True
         elapsed_ms: Optional[int] = None
         if tool_id and tool_id in self._tool_start_times:
             try:
@@ -349,26 +422,119 @@ class AgentsStreamBridge:
                     "output_index": getattr(payload, "output_index", None),
                     "sequence_number": getattr(payload, "sequence_number", None),
                     "metadata": metadata or None,
+                    "agent_turn_id": agent_turn_id,
                 }
             )
         }
+        if agent_turn_id:
+            completion_payload["agent_turn_id"] = agent_turn_id
         if elapsed_ms is not None:
             completion_payload["elapsed_ms"] = elapsed_ms
             completion_payload["tool_call"]["elapsed_ms"] = elapsed_ms
             metadata.setdefault("elapsed_ms", elapsed_ms)
         if guardrail_payload:
             completion_payload["latency_guardrail"] = guardrail_payload
+            completion_payload["guardrail"] = guardrail_payload
             completion_payload["tool_call"]["metadata"] = metadata or {}
             completion_payload["tool_call"]["metadata"]["guardrail"] = guardrail_payload
+        if from_cache_flag is not None:
+            completion_payload["from_cache"] = bool(from_cache_flag)
+            completion_payload["tool_call"].setdefault("metadata", {})
+            completion_payload["tool_call"]["metadata"]["from_cache"] = bool(from_cache_flag)
         await self._enqueue_event("agent_tool_complete", completion_payload)
+        await self._maybe_emit_lane_ready(tool_name, metadata, from_cache_flag, elapsed_ms)
         if tool_id:
             self._tool_metadata.pop(tool_id, None)
             self._tool_start_times.pop(tool_id, None)
         await self._record_turn_end(tool_id=tool_id, tool_name=tool_name, metadata=metadata)
 
+    async def _maybe_emit_lane_ready(
+        self,
+        tool_name: Optional[str],
+        metadata: Mapping[str, Any],
+        from_cache_flag: Optional[bool],
+        elapsed_ms: Optional[int],
+    ) -> None:
+        """Map tool completions to lane-ready SSE events."""
+        normalized = (tool_name or "").strip()
+        if not normalized:
+            return
+        normalized = normalized.split(".")[-1]
+        lane_entry = LANE_EVENT_BY_TOOL.get(normalized)
+        if not lane_entry:
+            return
+        event_name, lane = lane_entry
+        if event_name in self._lane_ready_emitted:
+            return
+        reused = bool(from_cache_flag)
+        payload: Dict[str, Any] = {
+            "lane": lane,
+            "tool": normalized,
+            "reused": reused,
+            "source": "cached" if reused else "agent_runtime",
+            "ts": datetime.utcnow().isoformat(),
+            "schedule_stage": lane,
+        }
+        if elapsed_ms is not None:
+            payload["elapsed_ms"] = elapsed_ms
+        if isinstance(metadata, Mapping):
+            payload["tool_metadata"] = self._clean_dict(dict(metadata))
+            schema_version = payload["tool_metadata"].get("schema_version")
+            if schema_version:
+                payload["schema_version"] = schema_version
+        self._lane_ready_emitted.add(event_name)
+        await self._enqueue_event(event_name, payload)
+        # Also emit a synthetic planner-style ready event for analysis to keep sequencer parity.
+        if event_name == "analysis_ready":
+            ready_payload = {
+                "lane": "analysis",
+                "reused": reused,
+                "ts": datetime.utcnow().isoformat(),
+                "source": payload.get("source"),
+            }
+            await self._enqueue_event("analysis_ready", ready_payload)
+
+    async def _flush_open_turns(self) -> None:
+        """Emit completions + turn_end events for tools that never sent a done event."""
+        pending_keys = list(self._turn_state.keys())
+        for state_key in pending_keys:
+            turn_state = self._turn_state.pop(state_key, None)
+            if turn_state is None:
+                continue
+            tool_name = turn_state.get("tool_name")
+            tool_id = state_key if state_key in self._tool_names or state_key.startswith("agent_turn_") else None
+            if not tool_id and tool_name:
+                tool_id = next((key for key, val in self._tool_names.items() if val == tool_name), None)
+            metadata = turn_state.get("metadata") or {}
+            merged_metadata = self._merge_tool_metadata(
+                tool_id=tool_id,
+                tool_name=tool_name,
+                runtime_metadata=metadata,
+            )
+            agent_turn_id = turn_state.get("agent_turn_id") or tool_id
+            completion_payload = {
+                "tool_call": self._clean_dict(
+                    {
+                        "id": tool_id or state_key,
+                        "name": tool_name,
+                        "status": "completed",
+                        "metadata": merged_metadata or None,
+                        "agent_turn_id": agent_turn_id,
+                    }
+                )
+            }
+            if agent_turn_id:
+                completion_payload["agent_turn_id"] = agent_turn_id
+            await self._enqueue_event("agent_tool_complete", completion_payload)
+            self._tool_metadata.pop(tool_id, None)
+            self._tool_start_times.pop(tool_id, None)
+            await self._record_turn_end(tool_id=tool_id, tool_name=tool_name, metadata=merged_metadata)
+
     async def _enqueue_event(self, name: str, data: Dict[str, Any]) -> None:
         event = {"event": name, "data": sanitize_for_json(data)}
         annotated = apply_mode_metadata(event, self._flow_mode)
+        if name == "workflow_complete":
+            self._workflow_complete_seen = True
         await self._queue.put(annotated)
 
     @staticmethod
@@ -412,6 +578,14 @@ class AgentsStreamBridge:
             merged.update({key: value for key, value in runtime_metadata.items() if value is not None})
         for key, value in self._canonical_tool_metadata(tool_name).items():
             merged.setdefault(key, value)
+        if not merged:
+            fallback = {
+                "chart_designer": {"lane": "chart", "specialist_role": "chart_designer", "schema_version": DEFAULT_SCHEMA_VERSION},
+                "analysis_writer": {"lane": "analysis", "specialist_role": "analysis_specialist", "schema_version": DEFAULT_SCHEMA_VERSION},
+                "agent_coordination": {"lane": "analysis", "specialist_role": "planner_agent", "schema_version": DEFAULT_SCHEMA_VERSION},
+            }.get(str(tool_name or "").strip())
+            if fallback:
+                merged.update(fallback)
         if self._guardrail_metadata:
             merged.setdefault("guardrail", self._guardrail_metadata)
         clean = {key: value for key, value in merged.items() if value is not None}
@@ -462,14 +636,20 @@ class AgentsStreamBridge:
         metadata: Mapping[str, Any],
         status: str,
         elapsed_ms: Optional[int] = None,
+        agent_turn_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         role = self._agent_role_for_tool(tool_name, metadata)
         lane = metadata.get("lane") or metadata.get("telemetry_step")
+        guardrail_payload = metadata.get("guardrail")
+        from_cache_flag = metadata.get("from_cache")
+        if from_cache_flag is None and metadata.get("reused") is True:
+            from_cache_flag = True
         payload: Dict[str, Any] = {
             "role": role,
             "status": status,
             "tool": tool_name,
             "tool_call_id": tool_id,
+            "agent_turn_id": agent_turn_id or tool_id,
             "lane": lane,
             "schema_version": metadata.get("schema_version"),
             "specialist_role": metadata.get("specialist_role"),
@@ -477,6 +657,10 @@ class AgentsStreamBridge:
         }
         if elapsed_ms is not None:
             payload["elapsed_ms"] = elapsed_ms
+        if guardrail_payload:
+            payload["guardrail"] = guardrail_payload
+        if from_cache_flag is not None:
+            payload["from_cache"] = bool(from_cache_flag)
         for key in ("latency_budget_ms", "output_artifacts", "concurrency_limit"):
             if metadata.get(key) is not None:
                 payload[key] = metadata.get(key)
@@ -484,27 +668,37 @@ class AgentsStreamBridge:
 
     async def _record_turn_start(
         self, *, tool_id: Optional[str], tool_name: Optional[str], metadata: Mapping[str, Any]
-    ) -> None:
+    ) -> Optional[str]:
         if not tool_id and not tool_name:
-            return
+            return None
+        normalized_tool_id = str(tool_id) if tool_id else None
+        state_key = normalized_tool_id or (str(tool_name) if tool_name else f"agent_turn_{uuid.uuid4().hex}")
+        agent_turn_id = normalized_tool_id or f"agent_turn_{uuid.uuid4().hex}"
+        self._turn_ids[state_key] = agent_turn_id
         payload = self._agent_turn_payload(
-            tool_id=tool_id,
+            tool_id=normalized_tool_id,
             tool_name=tool_name,
             metadata=metadata,
             status="start",
+            agent_turn_id=agent_turn_id,
         )
-        if tool_id:
-            self._turn_state[tool_id] = {
-                "metadata": dict(metadata),
-                "started_at": time.monotonic(),
-                "tool_name": tool_name,
-            }
+        self._turn_state[state_key] = {
+            "metadata": dict(metadata),
+            "started_at": time.monotonic(),
+            "tool_name": tool_name,
+            "agent_turn_id": agent_turn_id,
+        }
         await self._enqueue_event("agent_turn_start", payload)
+        self._turns_emitted = True
+        return agent_turn_id
 
     async def _record_turn_end(
         self, *, tool_id: Optional[str], tool_name: Optional[str], metadata: Mapping[str, Any]
     ) -> None:
-        turn_state = self._turn_state.pop(str(tool_id), None) if tool_id else None
+        state_key = str(tool_id) if tool_id else (str(tool_name) if tool_name else None)
+        turn_state = self._turn_state.pop(state_key, None) if state_key else None
+        if turn_state is None and tool_id is None and tool_name:
+            turn_state = self._turn_state.pop(str(tool_name), None)
         started_at = turn_state.get("started_at") if isinstance(turn_state, Mapping) else None
         elapsed_ms: Optional[int] = None
         if started_at is not None:
@@ -517,15 +711,69 @@ class AgentsStreamBridge:
                 elapsed_ms = int(metadata.get("elapsed_ms"))  # type: ignore[arg-type]
             except (TypeError, ValueError):
                 elapsed_ms = None
+        agent_turn_id = None
+        if isinstance(turn_state, Mapping):
+            agent_turn_id = turn_state.get("agent_turn_id")
+        if agent_turn_id is None and state_key:
+            agent_turn_id = self._turn_ids.get(state_key)
+        combined_metadata: Dict[str, Any] = {}
+        if isinstance(turn_state, Mapping) and isinstance(turn_state.get("metadata"), Mapping):
+            combined_metadata.update(turn_state.get("metadata", {}))
+        if isinstance(metadata, Mapping):
+            combined_metadata.update(metadata)
         payload = self._agent_turn_payload(
             tool_id=tool_id,
             tool_name=tool_name or (turn_state or {}).get("tool_name"),
-            metadata=(turn_state or {}).get("metadata") or metadata,
+            metadata=combined_metadata,
             status="complete",
             elapsed_ms=elapsed_ms,
+            agent_turn_id=agent_turn_id,
         )
+        if state_key:
+            self._turn_ids.pop(state_key, None)
         if payload:
             await self._enqueue_event("agent_turn_end", payload)
+            self._turns_emitted = True
+
+    async def _ensure_agent_turn_envelope(self) -> None:
+        """Emit a synthetic agent_turn_start/end pair when no turn telemetry was produced."""
+        if self._turns_emitted:
+            return
+        synthetic_id = f"agent_turn_{uuid.uuid4().hex}"
+        start_payload = self._agent_turn_payload(
+            tool_id=None,
+            tool_name=None,
+            metadata={},
+            status="start",
+            agent_turn_id=synthetic_id,
+        )
+        if isinstance(start_payload, dict):
+            start_payload.setdefault("source", "agent_stream_bridge")
+        end_payload = self._agent_turn_payload(
+            tool_id=None,
+            tool_name=None,
+            metadata={},
+            status="complete",
+            agent_turn_id=synthetic_id,
+        )
+        if isinstance(end_payload, dict):
+            end_payload.setdefault("source", "agent_stream_bridge")
+        if start_payload:
+            await self._enqueue_event("agent_turn_start", start_payload)
+        if end_payload:
+            await self._enqueue_event("agent_turn_end", end_payload)
+        self._turns_emitted = True
+
+    async def _ensure_workflow_complete(self) -> None:
+        """Emit workflow_complete when AgentRuntime skipped it."""
+        if self._workflow_complete_seen:
+            return
+        payload = {
+            "ts": datetime.utcnow().isoformat(),
+            "mode": self._flow_mode.value,
+            "lane_events": sorted(self._lane_ready_emitted),
+        }
+        await self._enqueue_event("workflow_complete", payload)
 
     @staticmethod
     def _extract_tool_identifier(raw_item: Any) -> Optional[str]:

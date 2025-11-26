@@ -234,7 +234,8 @@ FLOW_FACTORIES: Dict[str, Callable[[], Any]] = {
     "multi-agent": MultiAgentFlow,
 }
 
-DEFAULT_FLOW = "planner-executor"
+# Force agentic runs by default; explicit query params can still override.
+DEFAULT_FLOW = "single-agent"
 
 
 _FOCUS_VARIANTS: List[tuple[str, str]] = [
@@ -1011,6 +1012,8 @@ async def _stream_revision_fast_path(
     revision_questions: Optional[RevisionQuestionBundle] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     revision_id = uuid.uuid4().hex
+    classifier = FollowUpClassifier()
+    lane_readiness = _lane_readiness(snapshot)
     status_step, status_message = _initial_revision_status(lanes)
     status_event = EventEmitter.status(status_step, status_message)
     status_event.setdefault("data", {})
@@ -1580,8 +1583,19 @@ async def analytics_memory_workflow(
     *,
     reset_session: bool = False,
 ) -> AsyncGenerator[Dict[str, Any], None]:
-    selected = flow or os.getenv("ANALYTICS_FLOW_MODE") or DEFAULT_FLOW
+    # Hard-code agentic runs unless the caller explicitly overrides via the query param.
+    selected = flow or DEFAULT_FLOW
     should_instrument = _env_flag("ANALYTICS_MEMORY_INSTRUMENT", default=True)
+    purge_on_complete = _env_flag("SESSION_STATE_PURGE_ON_COMPLETE", default=True)
+    reset_on_start = _env_flag("SESSION_STATE_RESET_ON_START", default=True)
+    workflow_complete_seen = False
+
+    async def _forward(stream: AsyncGenerator[Dict[str, Any], None]) -> AsyncGenerator[Dict[str, Any], None]:
+        nonlocal workflow_complete_seen
+        async for event in stream:
+            if isinstance(event, Mapping) and event.get("event") == "workflow_complete":
+                workflow_complete_seen = True
+            yield event
 
     # Compute chart patch first; only treat as a chart revision when a concrete
     # patch is inferable. This prevents a generic mention of "chart" from
@@ -1601,16 +1615,19 @@ async def analytics_memory_workflow(
     repository = get_session_state_repository() if session_id else None
     snapshot: Optional[SessionStateSnapshot] = None
     if repository and session_id:
+        # Hard reset before loading any cached data for a new run.
+        if reset_session or reset_on_start:
+            try:
+                await repository.delete(session_id)
+            except Exception:
+                logger.debug("Failed to purge snapshot at start of workflow", exc_info=True)
         snapshot = await repository.load(session_id)
         if snapshot is not None:
             snapshot_reset = False
             dataset_seeded = snapshot.ensure_dataset_preview_from_revision()
             analysis_seeded = snapshot.ensure_analysis_outputs_from_revision()
             snapshot_dirty = bool(dataset_seeded or analysis_seeded)
-            if reset_session:
-                snapshot.reset_agent_session()
-                snapshot_reset = True
-            elif _session_idle_expired(snapshot):
+            if _session_idle_expired(snapshot):
                 snapshot.reset_agent_session()
                 snapshot_reset = True
             try:
@@ -2327,7 +2344,7 @@ async def analytics_memory_workflow(
         if revision_requested and isinstance(flow_instance, PlannerExecutorFlow):
             event_kwargs["revision_requested"] = True
         stream = flow_instance.events(query, **event_kwargs)
-        async for event in stream:
+        async for event in _forward(stream):
             yield event
         # Deferred revisions after initial build
         if defer_chart_revision and chart_patch:
@@ -2338,7 +2355,7 @@ async def analytics_memory_workflow(
                 gen2 = flow_instance.chart_revision(session_id=session_id, patch=chart_patch, query=query, **revision_kwargs)
             else:
                 gen2 = flow_instance.emit_chart_patch(session_id=session_id, patch=chart_patch, **revision_kwargs)
-            async for evt in gen2:
+            async for evt in _forward(gen2):
                 yield evt
         if defer_analysis_revision and analysis_text:
             revision_kwargs = {"reason": "post_initial_build", "source": "analytics_memory_workflow"}
@@ -2348,5 +2365,12 @@ async def analytics_memory_workflow(
                 gen3 = flow_instance.analysis_revision(session_id=session_id, analysis=analysis_text, query=query, revision_directive=revision_directive, **revision_kwargs)
             else:
                 gen3 = flow_instance.emit_analysis_revision(session_id=session_id, analysis=analysis_text, **revision_kwargs)
-            async for evt in gen3:
+            async for evt in _forward(gen3):
                 yield evt
+
+    # Session snapshot purge once the workflow finishes (successfully or not)
+    if purge_on_complete and repository and session_id:
+        try:
+            await repository.delete(session_id)
+        except Exception:  # pragma: no cover - defensive cleanup
+            logger.debug("Failed to purge session snapshot after workflow", exc_info=True)

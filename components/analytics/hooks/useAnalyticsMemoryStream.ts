@@ -592,7 +592,7 @@ const formatClarificationEcho = (slot: string, value: any): string | undefined =
 };
 
 export const useAnalyticsMemoryStream = (
-  flow: 'planner-executor' | 'single-agent' | 'multi-agent' = 'planner-executor',
+  flow: 'planner-executor' | 'single-agent' | 'multi-agent' = 'single-agent',
 ) => {
   const [sessionId, setSessionId] = useState<string>('');
   const [pendingClarification, setPendingClarification] = useState<ClarifyRequest | null>(null);
@@ -5825,9 +5825,21 @@ export const useAnalyticsMemoryStream = (
 
         case 'workflow_redirect':
         case 'workflow_cancelled': {
+          const guardrailPayload =
+            (eventData.guardrail as Record<string, any> | undefined) ??
+            (eventData.metadata?.guardrail as Record<string, any> | undefined);
+          const guardrailName = guardrailPayload
+            ? coerceString(guardrailPayload.name ?? guardrailPayload.id)
+            : undefined;
+          const guardrailReason = guardrailPayload ? coerceString(guardrailPayload.reason) : undefined;
+          const eventReason = coerceString(eventData.reason ?? guardrailReason);
+          const explanationParts = [
+            eventReason,
+            guardrailName ? `guardrail ${guardrailName}` : undefined,
+          ].filter(Boolean);
           const redirectMessage =
             coerceString(eventData.message) ??
-            'Agent redirected this session. Start a new analysis run to continue.';
+            `Agent redirected this session${explanationParts.length ? ` (${explanationParts.join('; ')})` : ''}. Start a new analysis run to continue.`;
           clearSessionTracking();
           revisionContextRef.current = { id: undefined, lanes: [], focus: undefined };
           revisionModeRef.current = 'none';

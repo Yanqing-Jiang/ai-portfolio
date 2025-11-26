@@ -24,11 +24,11 @@ from typing import Dict, Iterable, Mapping, Optional
 from analytics.core.session_state import SessionStateSnapshot
 
 LANE_TTL_DEFAULTS: Dict[str, int] = {
-    "analysis": 300,
-    "web": 120,
-    "chart": 600,
-    "market": 300,
-    "sql": 600,
+    "analysis": 1800,
+    "web": 1800,
+    "chart": 1800,
+    "market": 1800,
+    "sql": 1800,
 }
 
 LANE_TTL_ENV_KEYS: Dict[str, str] = {

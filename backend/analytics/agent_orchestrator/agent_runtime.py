@@ -54,6 +54,9 @@ class AgentRuntimeConfig:
     plan_template: Optional[PlanTemplate] = None
     tool_allowlist: Optional[Iterable[str]] = None
     guardrail_payload: Optional[Mapping[str, Any]] = None
+    parallel_tool_calls: Optional[bool] = None
+    tool_choice: Optional[Any] = None
+    tool_choice_body: Optional[Mapping[str, Any]] = None
 
 
 @dataclass
@@ -127,8 +130,23 @@ class AgentRuntime:
             "session_id": session_id,
             "plan": plan_state.to_dict(),
         }
+        # If caller provided a mapping (preferred), use it as metadata; otherwise fall back to attrs on the run_context object.
         if isinstance(run_context, Mapping):
             context_payload["metadata"] = dict(run_context)
+        else:
+            metadata: Dict[str, Any] = {}
+            # Pull a nested agent_metadata payload if present (populated by SingleAgentController).
+            agent_meta = getattr(run_context, "agent_metadata", None)
+            if isinstance(agent_meta, Mapping):
+                metadata.update(dict(agent_meta))
+            # Also serialize any dataclass-like attributes the caller set.
+            for attr in ("intent", "plan", "provisional_plan", "template", "selected_template_id", "slot_statuses", "clarification_answers", "assumptions", "follow_up_route"):
+                if hasattr(run_context, attr):
+                    try:
+                        metadata[attr] = sanitize_for_json(copy.deepcopy(getattr(run_context, attr)))
+                    except Exception:
+                        metadata[attr] = getattr(run_context, attr)
+            context_payload["metadata"] = metadata
         if run_context is not None and hasattr(run_context, "__dict__"):
             try:
                 setattr(run_context, "agent_plan_snapshot", context_payload["plan"])
@@ -253,6 +271,17 @@ class AgentRuntime:
             settings_kwargs["temperature"] = self._config.temperature
         if self._config.reasoning_effort is not None:
             settings_kwargs["reasoning"] = Reasoning(effort=self._config.reasoning_effort)
+        if self._config.parallel_tool_calls is not None:
+            settings_kwargs["parallel_tool_calls"] = self._config.parallel_tool_calls
+        if self._config.tool_choice is not None:
+            settings_kwargs["tool_choice"] = self._config.tool_choice
+        extra_body: Dict[str, Any] = {}
+        if isinstance(self._config.tool_choice_body, Mapping) and self._config.tool_choice_body:
+            extra_body["tool_choice"] = dict(self._config.tool_choice_body)
+        if self._config.parallel_tool_calls is not None and "parallel_tool_calls" not in settings_kwargs:
+            extra_body["parallel_tool_calls"] = self._config.parallel_tool_calls
+        if extra_body:
+            settings_kwargs["extra_body"] = extra_body
         model_settings = ModelSettings(**settings_kwargs) if settings_kwargs else None
         trace_id = f"trace_{uuid.uuid4()}"
         return RunConfig(

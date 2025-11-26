@@ -13,8 +13,9 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, AsyncGenerator, Dict, Optional, Sequence, Set, TYPE_CHECKING
+from typing import Any, AsyncGenerator, Dict, List, Optional, Sequence, Set, TYPE_CHECKING
 
+from analytics.core.events import EventEmitter
 from analytics.core import telemetry
 from analytics.validators import sanitize_for_json
 
@@ -139,6 +140,41 @@ async def ensure_analysis_dependencies(
                 yield event
 
     ctx.accessories_prefetched = True
+    # Enforce accessory readiness before analysis/chart stages on fresh pipelines or when
+    # accessories are part of the critical path. If neither web nor market lanes are ready
+    # (fresh or cached) fail fast so downstream stages cannot proceed with missing context.
+    is_revision_follow_up = bool(getattr(ctx, "is_revision_follow_up", False))
+    require_accessories = bool(
+        getattr(ctx, "force_full_fresh_pipeline", False)
+        or (mode_config.accessories_in_critical_path and not is_revision_follow_up)
+    )
+    if require_accessories:
+        web_ready = bool(has_web_context or web_ready_entry or getattr(ctx, "web_search", None))
+        stock_ready = bool(has_cached_stock or stock_ready_entry or getattr(ctx, "stock_widget_seeded", False))
+        if not (web_ready and stock_ready):
+            missing: List[str] = []
+            if not web_ready:
+                missing.append("web")
+            if not stock_ready:
+                missing.append("market")
+            error_event = EventEmitter.error(
+                "workflow_error",
+                "Accessory lanes missing fresh data.",
+                code="accessories_missing",
+                details={
+                    "missing_lanes": missing,
+                    "session_id": getattr(ctx, "session_id", None),
+                    "force_full_fresh_pipeline": getattr(ctx, "force_full_fresh_pipeline", False),
+                },
+            )
+            error_event["event"] = "workflow_error"
+            error_event.setdefault("data", {})
+            error_event["data"]["error_code"] = "accessories_missing"
+            error_event["data"]["missing_lanes"] = missing
+            yield error_event
+            ctx.halted = True
+            ctx.halt_reason = "accessories_missing"
+            return
 
 
 async def stream_analysis_lane(

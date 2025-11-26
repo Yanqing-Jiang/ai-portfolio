@@ -211,7 +211,7 @@ def detect_missing_slots(
         comparison_request = None
     if comparison_request:
         requests.append(comparison_request)
-    
+
     # 5. Metrics slot detection (for ambiguous intents)
     margin_request = _detect_margin_metric_slot(intent, plan, configs)
     if margin_request:
@@ -220,6 +220,21 @@ def detect_missing_slots(
     metrics_request = _detect_metrics_slot(intent, plan, configs) if metrics_required else None
     if metrics_request:
         requests.append(metrics_request)
+
+    # 6. Additional cohort/statistic/gaap/output slots for margin growth templates
+    if intent.intent_key in {'margin_growth_vs_peers', 'margins_vs_peers'}:
+        cohort_req = _detect_cohort_slot(intent, plan, configs)
+        if cohort_req:
+            requests.append(cohort_req)
+        statistic_req = _detect_statistic_slot(intent, plan, configs)
+        if statistic_req:
+            requests.append(statistic_req)
+        gaap_req = _detect_gaap_basis_slot(intent, plan, configs)
+        if gaap_req:
+            requests.append(gaap_req)
+        output_req = _detect_output_mode_slot(intent, plan, configs)
+        if output_req:
+            requests.append(output_req)
 
     return requests
 
@@ -475,6 +490,98 @@ def _detect_margin_metric_slot(
         request_id=str(uuid.uuid4()),
         proposed=None,
         proposed_confidence=0.0,
+    )
+
+
+def _detect_cohort_slot(
+    intent: IntentModel,
+    plan: QueryPlanModel,
+    configs: Dict[str, Any],
+) -> Optional[ClarifyRequestModel]:
+    """Clarify peer cohort for margin growth comparisons."""
+    slots = intent.slots_detected or {}
+    if slots.get("industry_cohort"):
+        return None
+    options = [
+        "Semiconductor industry (broad)",
+        "GPU/AI accelerators (NVDA, AMD, INTC)",
+        "Custom peer list",
+    ]
+    return ClarifyRequestModel(
+        slot="industry_cohort",
+        question="Which industry peer set should we compare to?",
+        type="single",
+        options=options,
+        default=options[0],
+        reason="Peer cohort is required to compute industry averages.",
+        required=True,
+        request_id=str(uuid.uuid4()),
+    )
+
+
+def _detect_statistic_slot(
+    intent: IntentModel,
+    plan: QueryPlanModel,
+    configs: Dict[str, Any],
+) -> Optional[ClarifyRequestModel]:
+    """Clarify aggregation statistic."""
+    slots = intent.slots_detected or {}
+    if slots.get("statistic"):
+        return None
+    options = ["Median", "Mean"]
+    return ClarifyRequestModel(
+        slot="statistic",
+        question="How should the industry average be summarized?",
+        type="single",
+        options=options,
+        default="Median",
+        reason="Aggregation method affects peer average.",
+        required=True,
+        request_id=str(uuid.uuid4()),
+    )
+
+
+def _detect_gaap_basis_slot(
+    intent: IntentModel,
+    plan: QueryPlanModel,
+    configs: Dict[str, Any],
+) -> Optional[ClarifyRequestModel]:
+    """Clarify GAAP vs non-GAAP basis."""
+    slots = intent.slots_detected or {}
+    if slots.get("gaap_basis"):
+        return None
+    options = ["GAAP", "Non-GAAP"]
+    return ClarifyRequestModel(
+        slot="gaap_basis",
+        question="Use GAAP or non-GAAP (adjusted) margins?",
+        type="single",
+        options=options,
+        default="GAAP",
+        reason="Basis affects margin comparability.",
+        required=True,
+        request_id=str(uuid.uuid4()),
+    )
+
+
+def _detect_output_mode_slot(
+    intent: IntentModel,
+    plan: QueryPlanModel,
+    configs: Dict[str, Any],
+) -> Optional[ClarifyRequestModel]:
+    """Clarify output preference."""
+    slots = intent.slots_detected or {}
+    if slots.get("output_mode"):
+        return None
+    options = ["Chart + narrative", "Numeric only"]
+    return ClarifyRequestModel(
+        slot="output_mode",
+        question="Do you want a chart plus narrative, or just numbers?",
+        type="single",
+        options=options,
+        default="Chart + narrative",
+        reason="Output mode guides chart/analysis generation.",
+        required=True,
+        request_id=str(uuid.uuid4()),
     )
 
 

@@ -74,6 +74,61 @@
 #   Called from: analytics.flows.single_agent_tools._agent_run_stage
 #   Invokes: analytics.flows.single_agent_tools._is_sql_missing, analytics.flows.single_agent_tools._is_chart_missing, analytics.flows.single_agent_tools._is_analysis_missing, analytics.flows.single_agent_tools._is_market_missing
 #   Why: Surfaces agent runtime gaps as workflow errors instead of rerunning deterministic planner stages.
+# Function: _receipt_is_fresh
+#   Role: Determines whether a cached tool receipt is still within the lane TTL window.
+#   Called from: analytics.flows.single_agent_tools._should_reuse_web, analytics.flows.single_agent_tools._should_reuse_market
+#   Invokes: datetime.fromisoformat
+#   Why: Prevents stale cache hits from blocking necessary planner refreshes.
+# Function: _lane_receipts
+#   Role: Collects cached tool receipts relevant to a given lane (web/market/sql/chart).
+#   Called from: analytics.flows.single_agent_tools._should_reuse_web, analytics.flows.single_agent_tools._should_reuse_market
+#   Invokes: analytics.flows.planner_executor.ToolInvocationReceipt.from_dict
+#   Why: Normalizes lane-specific receipt lookups so TTL reuse checks stay consistent.
+# Function: _should_reuse_web
+#   Role: Decides whether the web lane can be reused from cached artifacts + receipts.
+#   Called from: analytics.flows.single_agent_tools._apply_receipt_ttl_overrides
+#   Invokes: analytics.flows.single_agent_tools._lane_receipts, analytics.flows.single_agent_tools._receipt_is_fresh
+#   Why: Lets SingleAgent skip web_refresh when fresh context is already present.
+# Function: _should_reuse_market
+#   Role: Decides whether the market lane can be reused from cached artifacts + receipts.
+#   Called from: analytics.flows.single_agent_tools._apply_receipt_ttl_overrides
+#   Invokes: analytics.flows.single_agent_tools._lane_receipts, analytics.flows.single_agent_tools._receipt_is_fresh
+#   Why: Avoids redundant market refreshes when cached snapshots are still within TTL.
+# Function: _should_reuse_sql
+#   Role: Decides whether the SQL lane can be reused from cached artifacts + receipts.
+#   Called from: analytics.flows.single_agent_tools._apply_receipt_ttl_overrides
+#   Invokes: analytics.flows.single_agent_tools._lane_receipts, analytics.flows.single_agent_tools._receipt_is_fresh
+#   Why: Skips plan/SQL tools when cached datasets are still within TTL.
+# Function: _should_reuse_chart
+#   Role: Decides whether the chart lane can be reused when SQL remains fresh.
+#   Called from: analytics.flows.single_agent_tools._apply_receipt_ttl_overrides
+#   Invokes: analytics.flows.single_agent_tools._lane_receipts, analytics.flows.single_agent_tools._receipt_is_fresh
+#   Why: Avoids regenerating chart specs when cached visuals remain valid with fresh SQL inputs.
+# Function: _apply_receipt_ttl_overrides
+#   Role: Applies TTL-based lane reuse overrides to lane_refresh_required so allowlists drop fresh lanes.
+#   Called from: analytics.flows.single_agent_tools._prepare_sequencer_state
+#   Invokes: analytics.flows.single_agent_tools._should_reuse_web, analytics.flows.single_agent_tools._should_reuse_market
+#   Why: Ensures SingleAgent honors cached accessory receipts before constructing the agent runtime tool allowlist.
+# Function: _record_cached_accessory_ready
+#   Role: Emits cached accessory ready events and marks lane reuse when TTL skips execution.
+#   Called from: analytics.flows.single_agent_tools._filter_fanout_adapters_for_ttl
+#   Invokes: analytics.flows.single_agent_tools._planner._annotate_revision, analytics.flows.planner.compose_web_ready_payload, analytics.flows.planner.compose_stock_ready_payload
+#   Why: Ensures TTL-pruned web/market lanes still stream ready events and reuse badges.
+# Function: _filter_fanout_adapters_for_ttl
+#   Role: Prunes accessory fan-out adapters when lane_refresh_required marks lanes as cached.
+#   Called from: analytics.flows.single_agent_tools._intent_stage
+#   Invokes: analytics.flows.single_agent_tools._record_cached_accessory_ready
+#   Why: Prevents duplicate stock/web tool calls when TTL reuse is available.
+# Function: _annotate_runtime_event
+#   Role: Normalizes agent runtime telemetry and drops duplicate web search events per search_id.
+#   Called from: analytics.flows.single_agent_tools._agent_run_stage
+#   Invokes: analytics.flows.single_agent_tools._planner._annotate_revision
+#   Why: Keeps agent SSE stream deduped and lane metadata coherent for UI consumers.
+# Function: _finalize_lane_states
+#   Role: Forces lingering lane states to completed/reused using cached artifacts and TTL hints after the agent runtime finishes.
+#   Called from: analytics.flows.single_agent_tools._agentic_event_stream
+#   Invokes: analytics.flows.single_agent_tools._is_sql_missing/_is_chart_missing/_is_analysis_missing/_is_market_missing/_is_web_missing
+#   Why: Prevents SQL/Chart/Analysis/Web/Market lanes from staying queued/pending when agent telemetry is missing lane-ready events.
 # --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
@@ -120,11 +175,13 @@ from .planner_executor import (
     _build_analysis_source_summaries,
     _build_planner_result_payload,
     _build_reused_analysis_event,
+    _hydrate_context_from_snapshot,
     FOLLOW_UP_BANNERS,
     ToolInvocationReceipt,
     _hash_payload,
     PlannerPhaseContext,
     PlannerExecutorFlow,
+    PlannerRevisionContext,
     _reset_revision_accessories,
     _INTENT_LANE_HINTS,
     _apply_revision_context_hints,
@@ -138,6 +195,8 @@ from .planner import (
     build_revision_request_event,
     derive_revision_targets,
     ensure_analysis_dependencies,
+    compose_stock_ready_payload,
+    compose_web_ready_payload,
     ToolParallelRuntime,
     stream_analysis_lane,
     stream_chart_lane,
@@ -160,10 +219,11 @@ logger = logging.getLogger(__name__)
 PINNED_AGENT_MODEL = "gpt-5-mini-2025-08-07"
 
 LANE_TTL_DEFAULTS: Dict[str, int] = {
-    "analysis": 300,
-    "web": 120,
-    "chart": 600,
-    "market": 300,
+    "analysis": 1800,
+    "web": 1800,
+    "chart": 1800,
+    "market": 1800,
+    "sql": 1800,
 }
 
 LANE_LABELS: Dict[str, str] = {
@@ -231,6 +291,17 @@ class _SingleAgentRunContext:
     execute_revision: bool = False
     analysis_focus: Optional[str] = None
     revision_questions: Optional[Dict[str, Any]] = None
+    # Preflight context for agent runtime
+    intent: Optional[Any] = None
+    plan: Optional[Any] = None
+    provisional_plan: Optional[Any] = None
+    template: Optional[Any] = None
+    selected_template_id: Optional[str] = None
+    slot_statuses: Optional[Dict[str, Any]] = None
+    clarification_answers: Optional[List[Dict[str, Any]]] = None
+    clarifications: Optional[List[Any]] = None
+    follow_up_route: Optional[Any] = None
+    assumptions: Optional[List[str]] = None
 
 
 @dataclass
@@ -786,6 +857,10 @@ class _SingleAgentToolHooks(AnalyticsFlowHooks):
             self._mark_accessory_lane("web")
         elif event_name in {"stock_ready", "stock_revision_ready"}:
             self._mark_accessory_lane("market")
+        elif event_name == "lane_reused":
+            lane_name = str((event.get("data") or {}).get("lane") or "").strip().lower()
+            if lane_name in {"web", "market"}:
+                self._mark_accessory_lane(lane_name)
 
         aliases = self._resolve_aliases_for_event(event_name)
         if aliases:
@@ -990,11 +1065,21 @@ class _SingleAgentToolHooks(AnalyticsFlowHooks):
             self._flow.follow_up_route == FollowUpRoute.REUSE_SQL
             and not self._chart_revision_missing_session
         )
+        chart_spec_missing = False
+        if self._flow.follow_up_route == FollowUpRoute.REUSE_SQL:
+            snapshot = self._session_snapshot
+            chart_spec_missing = not bool(snapshot and getattr(snapshot, "last_chart_spec", None))
         if self._chart_revision_missing_session:
             missing = ["sql", "stock", "web"]
             note = (
                 "I couldn't apply the chart update because the saved session expired. "
                 "Ask me to rerun the full analysis so I can rebuild fresh data and charts."
+            )
+        elif chart_spec_missing:
+            missing = ["chart_spec"]
+            note = (
+                "I need a saved chart specification to apply this revision. "
+                "Run a fresh FULL_PIPELINE to rebuild charts, then try the revision again."
             )
         elif reuse_scope:
             # For chart-only revisions we intentionally reuse the existing SQL, stock, and web context,
@@ -1329,8 +1414,9 @@ class SingleAgentController:
         self._agent_reasoning_effort = str(
             self._agent_settings.get("reasoning_effort") or "medium"
         )
-        self._max_turns = int(self._agent_settings.get("max_turns") or 10)
-        self._tool_retry_limit = int(self._agent_settings.get("max_tool_retries") or 2)
+        # Hard-cap agent turn and retry budgets to curb repeated classification loops.
+        self._max_turns = 3
+        self._tool_retry_limit = 3
         plan_template_cfg = self._agent_settings.get("plan_template") or {}
         if isinstance(plan_template_cfg, PlanTemplate):
             self._agent_plan_template = plan_template_cfg
@@ -1397,6 +1483,10 @@ class SingleAgentController:
                 "You are the Analytics Planner. Execute classification, planning, SQL, chart, "
                 "market, and analysis tools to fulfill the user's analytics request. Respect "
                 "cached receipts when provided, and only call tools necessary to refresh stale lanes. "
+                "Slots are pre-clarified; do NOT ask the user follow-up questions unless "
+                "clarifications_needed=true appears in context. Begin with plan_generation -> "
+                "sql_generation -> chart_generation -> analysis_generation when lanes are allowed. "
+                "Use web_refresh / market_refresh in parallel when both lanes are available. "
                 "During revision follow-ups, always call the lane_decision tool to pick a lane and "
                 "then invoke apply_revision_lane so the refreshed cards stream back to the user."
             ),
@@ -1420,6 +1510,10 @@ class SingleAgentController:
         self._pending_lane_reuse_events: Deque[Dict[str, Any]] = deque()
         self._follow_up_guardrail: Optional[Dict[str, Any]] = None
         self._pending_guardrails: Dict[str, Dict[str, Any]] = {}
+        self._seen_web_search_ids: Set[str] = set()
+        self._accessory_lane_hits: Set[str] = set()
+        self._cached_accessory_ready_lanes: Set[str] = set()
+        self._non_financial_decline: bool = False
         self._revision_inputs_plan: Dict[str, str] = {"lane": "narrative", "web": "refresh"}
         self._revision_inputs_outcome: Optional[Dict[str, str]] = None
         self._agent_turn_observed: bool = False
@@ -1436,15 +1530,23 @@ class SingleAgentController:
         session_id: Optional[str],
     ) -> _SequencerRunState:
         ctx = await self._planner.initialize_context(query or "", session_id=session_id)
+        ctx.blocking_clarification = True
+        ctx.clarification_timeout_seconds = 60.0
         # Ensure accessory fan-out runs with at least three concurrent adapters (web+web+stock)
         configs = getattr(ctx, "configs", {}) or {}
         tooling_cfg = configs.setdefault("tooling", {})
-        tooling_cfg.setdefault("concurrency_limit", 3)
+        current_tooling_limit = tooling_cfg.get("concurrency_limit")
+        if not isinstance(current_tooling_limit, int) or current_tooling_limit < 3:
+            tooling_cfg["concurrency_limit"] = 3
         analytics_cfg = configs.setdefault("analytics", {}).setdefault("tool_parallelism", {})
-        analytics_cfg.setdefault("concurrency_limit", 3)
+        current_analytics_limit = analytics_cfg.get("concurrency_limit")
+        if not isinstance(current_analytics_limit, int) or current_analytics_limit < 3:
+            analytics_cfg["concurrency_limit"] = 3
         ctx.configs = configs
         ctx.parallelism_enabled = True
-        ctx.tool_parallel_concurrency = 3
+        ctx.tool_parallel_concurrency = max(
+            3, int(tooling_cfg.get("concurrency_limit", 3)) if isinstance(tooling_cfg.get("concurrency_limit"), int) else 3
+        )
         registry = self._registry
         executed: Set[str] = set()
         mode_config = get_mode_config(self.flow_mode)
@@ -1462,6 +1564,13 @@ class SingleAgentController:
             if is_financial is not None:
                 ctx.is_financial_query = bool(is_financial)
         session_follow_up = bool(getattr(ctx, "session_follow_up", False) or self._session_follow_up)
+        fresh_run = not session_follow_up and ctx.follow_up_route == FollowUpRoute.FULL_PIPELINE
+        if fresh_run:
+            ctx.force_full_fresh_pipeline = True
+            refresh_flags = dict(getattr(ctx, "lane_refresh_required", {}) or {})
+            refresh_flags["web"] = True
+            refresh_flags["market"] = True
+            ctx.lane_refresh_required = refresh_flags
         state = _SequencerRunState(
             ctx=ctx,
             registry=registry,
@@ -1557,11 +1666,14 @@ class SingleAgentController:
                 details={"reason": intent_skip_reason},
             )
             ctx.intent_reused = reuse_intent
+            ctx.clarifications = []
+            ctx.clarifications_needed = False
             await self._planner._persist_session_state(
                 ctx,
                 record_artifacts=True,
                 **self._lane_persistence_flags(ctx),
             )
+        self._apply_receipt_ttl_overrides(ctx)
         self._sequencer_state = state
         self._prime_lane_reuse_events(ctx)
         return state
@@ -1592,6 +1704,23 @@ class SingleAgentController:
         if guardrail:
             payload["guardrail"] = sanitize_for_json(dict(guardrail))
         event = {"event": "workflow_redirect", "data": payload}
+        guardrail_id = None
+        if guardrail:
+            guardrail_id = str(
+                guardrail.get("id")
+                or guardrail.get("name")
+                or guardrail.get("reason")
+                or guardrail
+            )
+        logger.info(
+            "workflow_redirect_emitted",
+            extra={
+                "session_id": session_id,
+                "reason": reason,
+                "guardrail": guardrail_id,
+                "event": "workflow_redirect",
+            },
+        )
         annotated = apply_mode_metadata(event, self.flow_mode)
         if session_id:
             annotated["data"]["session_id"] = session_id
@@ -1673,11 +1802,13 @@ class SingleAgentController:
         ctx = state.ctx
         registry = state.registry
         executed = state.executed
+        lane_states = getattr(state, "lane_states", {}) or {}
         is_revision_follow_up = state.is_revision_follow_up
 
-        if (not is_revision_follow_up) or ("classification" not in executed):
+        if "classification" not in executed:
             async for event in registry.invoke("classification", self._planner, ctx, executed=executed):
                 yield event
+            executed.add("classification")
             await self._planner._persist_session_state(
                 ctx,
                 record_artifacts=True,
@@ -1698,11 +1829,21 @@ class SingleAgentController:
         if is_revision_follow_up:
             needs_intent = ctx.intent is None
             needs_plan = (ctx.plan or ctx.provisional_plan) is None
+            pending_clarifications = bool(getattr(ctx, "clarifications", None)) or bool(
+                getattr(getattr(ctx, "intent", None), "clarifications_needed", False)
+            ) or bool(getattr(ctx, "clarifications_needed", False))
+            # If plan/intent are missing but prior executions marked tools complete, allow rerun.
+            if needs_intent and "intent_detection" in executed:
+                executed.discard("intent_detection")
+            if needs_plan and "plan_generation" in executed:
+                executed.discard("plan_generation")
             if needs_intent:
                 tool_sequence = ("intent_detection",)
             else:
                 tool_sequence = ()
                 executed.add("intent_detection")
+            if pending_clarifications or needs_intent:
+                tool_sequence = tool_sequence + ("clarification",)
             if needs_plan:
                 tool_sequence = tool_sequence + ("plan_generation",)
             else:
@@ -1711,6 +1852,8 @@ class SingleAgentController:
             tool_sequence = ("intent_detection", "clarification", "plan_generation")
 
         for tool_name in tool_sequence:
+            if tool_name in executed:
+                continue
             async for event in registry.invoke(tool_name, self._planner, ctx, executed=executed):
                 yield event
             await self._planner._persist_session_state(
@@ -1720,11 +1863,26 @@ class SingleAgentController:
             )
             executed.add(tool_name)
 
+        # If clarification finished but no open requests remain, clear flags so the agent can proceed.
+        remaining_clarifications = getattr(ctx, "clarifications", None) or []
+        if not remaining_clarifications:
+            ctx.clarifications_needed = False
+            try:
+                intent_obj = getattr(ctx, "intent", None)
+                if intent_obj is not None:
+                    intent_obj.clarifications_needed = False
+            except Exception:
+                pass
+
         if ctx.intent is None or (ctx.plan or ctx.provisional_plan) is None:
             ctx.halted = True
             return
 
+        # Now that intent + plan are sealed, allow TTL-based reuse of core lanes.
+        self._apply_receipt_ttl_overrides(ctx, after_preflight=True)
+
         fanout_adapters: Tuple[Any, ...] = self._planner._fanout_adapters_for_context(ctx)
+        fanout_adapters = self._filter_fanout_adapters_for_ttl(ctx, fanout_adapters, lane_states)
         should_run_parallel = (
             ctx.parallelism_enabled
             and bool(fanout_adapters)
@@ -1733,15 +1891,27 @@ class SingleAgentController:
         if bool(getattr(state, "use_agent_runtime", False)):
             should_run_parallel = False
         if should_run_parallel:
+            ctx.tool_parallel_concurrency = len(fanout_adapters)
             runtime = self._planner._start_tool_parallelism(
                 ctx,
                 adapters=fanout_adapters,
-                concurrency_override=ctx.tool_parallel_concurrency,
+                concurrency_override=len(fanout_adapters),
             )
             state.tool_runtime = runtime
             state.tool_state = {"queue": runtime.queue, "active": True, "runtime": runtime}
             for tool_event in self._planner._collect_tool_deltas_now(state.tool_state, ctx):
                 yield tool_event
+        else:
+            # If fan-out was skipped because adapters were pruned, ensure accessories are marked reused.
+            for lane in ("web", "market"):
+                reuse_event = self._finalize_accessory_lane_if_blocked(
+                    lane,
+                    lane_states=lane_states,
+                    reason="accessory_pruned_by_ttl",
+                    ctx=ctx,
+                )
+                if reuse_event:
+                    yield reuse_event
 
         derived_targets = derive_revision_targets(ctx, intent_lane_map=_INTENT_LANE_HINTS)
         state.derived_targets = set(derived_targets or set())
@@ -1818,12 +1988,21 @@ class SingleAgentController:
         ctx = state.ctx
         if getattr(ctx, "halted", False):
             return
-        async for event in self._planner.refresh_web_lane(
-            ctx,
-            reason="sequencer_web_refresh",
-            source="single_agent_sequencer",
-        ):
-            yield event
+            async for event in self._planner.refresh_web_lane(
+                ctx,
+                reason="sequencer_web_refresh",
+                source="single_agent_sequencer",
+            ):
+                yield event
+        else:
+            reuse_event = self._finalize_accessory_lane_if_blocked(
+                "web",
+                lane_states=getattr(self._sequencer_state, "lane_states", {}) or {},
+                reason="web_backpressure_skipped",
+                ctx=ctx,
+            )
+            if reuse_event:
+                yield reuse_event
 
     async def _market_stage(self) -> AsyncGenerator[Dict[str, Any], None]:
         state = self._sequencer_state
@@ -1832,12 +2011,21 @@ class SingleAgentController:
         ctx = state.ctx
         if getattr(ctx, "halted", False):
             return
-        async for event in self._planner.refresh_market_lane(
-            ctx,
-            reason="sequencer_market_refresh",
-            source="single_agent_sequencer",
-        ):
-            yield event
+            async for event in self._planner.refresh_market_lane(
+                ctx,
+                reason="sequencer_market_refresh",
+                source="single_agent_sequencer",
+            ):
+                yield event
+        else:
+            reuse_event = self._finalize_accessory_lane_if_blocked(
+                "market",
+                lane_states=getattr(self._sequencer_state, "lane_states", {}) or {},
+                reason="market_backpressure_skipped",
+                ctx=ctx,
+            )
+            if reuse_event:
+                yield reuse_event
 
     async def _analysis_stage(self) -> AsyncGenerator[Dict[str, Any], None]:
         state = self._sequencer_state
@@ -1953,6 +2141,39 @@ class SingleAgentController:
             queue=queue,
             revision_directive=self._revision_directive if self._agentic_revision_mode else None,
         )
+        # Attach preflight context so the agent sees clarified slots and selected template.
+        run_context.intent = copy.deepcopy(getattr(ctx, "intent", None))
+        run_context.plan = copy.deepcopy(getattr(ctx, "plan", None) or getattr(ctx, "provisional_plan", None))
+        run_context.provisional_plan = copy.deepcopy(getattr(ctx, "provisional_plan", None))
+        run_context.template = copy.deepcopy(getattr(ctx, "template", None))
+        run_context.selected_template_id = getattr(ctx, "selected_template_id", None)
+        run_context.slot_statuses = copy.deepcopy(getattr(ctx, "slot_statuses", None))
+        run_context.clarification_answers = copy.deepcopy(getattr(ctx, "clarification_answers", None))
+        run_context.clarifications = copy.deepcopy(getattr(ctx, "clarifications", None))
+        run_context.follow_up_route = getattr(ctx, "follow_up_route", None)
+        run_context.assumptions = copy.deepcopy(getattr(ctx, "assumptions", None))
+        # Ensure clarified runs don’t re-trigger agent-side slot questions.
+        ctx.clarifications_needed = False
+        if getattr(ctx, "intent", None) is not None:
+            try:
+                ctx.intent.clarifications_needed = False
+            except Exception:
+                pass
+
+        # Build a lightweight metadata dict for the agent context so Runner sees structured slots/templates.
+        agent_metadata: Dict[str, Any] = {
+            "intent_key": getattr(getattr(ctx, "intent", None), "intent_key", None),
+            "selected_template_id": getattr(ctx, "selected_template_id", None),
+            "template": sanitize_for_json(copy.deepcopy(getattr(ctx, "template", None))),
+            "slot_statuses": sanitize_for_json(copy.deepcopy(getattr(ctx, "slot_statuses", None))),
+            "clarification_answers": sanitize_for_json(copy.deepcopy(getattr(ctx, "clarification_answers", None))),
+            "assumptions": sanitize_for_json(copy.deepcopy(getattr(ctx, "assumptions", None))),
+            "follow_up_route": getattr(getattr(ctx, "follow_up_route", None), "value", None)
+            or getattr(ctx, "follow_up_route", None),
+        }
+        # Attach to the run_context mapping that AgentRuntime.run will forward to the agent.
+        setattr(run_context, "agent_metadata", agent_metadata)
+
         runtime = self._build_agent_runtime(queue, session_id)
         runtime_task = asyncio.create_task(
             runtime.run(
@@ -1975,6 +2196,8 @@ class SingleAgentController:
                     if event is None:
                         continue
                     processed_event = self._annotate_runtime_event(event, ctx)
+                    if processed_event is None:
+                        continue
                     yield processed_event
             finally:
                 runtime_result: Optional[AgentRuntimeResult] = None
@@ -2003,40 +2226,117 @@ class SingleAgentController:
         async for evt in _drain_queue():
             yield evt
 
+        # If the agent produced no tool receipts, treat as a failure and fall back to deterministic planner.
+        if not run_context.tool_receipts:
+            error_event = EventEmitter.error(
+                "workflow_error",
+                "agent runtime produced no tool calls; falling back to planner",
+                code="agent_runtime_no_tool_calls",
+                details={"flow_mode": self.flow_mode.value if self.flow_mode else "single_agent"},
+            )
+            error_event["event"] = "workflow_error"
+            error_event.setdefault("data", {})["error_code"] = "agent_runtime_no_tool_calls"
+            yield apply_mode_metadata(error_event, self.flow_mode)
+            # Replay deterministic planner to complete lanes
+            async for direct_event in self._planner.events(query, session_id=session_id, revision_requested=False):
+                yield apply_mode_metadata(direct_event, FlowMode.DIRECT)
+            return
+
         await self._persist_agent_dataset_preview(ctx)
         await self._planner._persist_session_state(
             ctx,
             record_artifacts=True,
             **self._lane_persistence_flags(ctx),
         )
+        if self._session_snapshot:
+            try:
+                _hydrate_context_from_snapshot(ctx, self._session_snapshot, getattr(ctx, "artifacts", None))
+            except Exception:
+                logger.debug("Failed to hydrate planner context from agent snapshot after runtime", exc_info=True)
+        lane_states = getattr(state, "lane_states", {}) or {}
+        lane_refresh_flags = dict(getattr(ctx, "lane_refresh_required", {}) or {})
+        readiness_map = {
+            "sql": not self._is_sql_missing(ctx),
+            "chart": not self._is_chart_missing(ctx),
+            "analysis": not self._is_analysis_missing(ctx),
+            "market": not self._is_market_missing(ctx),
+            "web": not self._is_web_missing(ctx),
+        }
+        for lane_key, ready in readiness_map.items():
+            if lane_refresh_flags.get(lane_key) is False:
+                lane_states[lane_key] = "reused"
+            elif ready:
+                if lane_states.get(lane_key) not in {"completed", "reused"}:
+                    lane_states[lane_key] = "completed"
+        self._finalize_lane_states(lane_states, ctx)
         missing = self._missing_required_artifacts(ctx)
+        lane_states = getattr(state, "lane_states", {}) or {}
+        if missing and lane_states:
+            missing = {
+                lane for lane in missing if str(lane_states.get(lane) or "").strip().lower() not in {"completed", "reused"}
+            }
         if missing:
             missing_lanes = sorted(missing)
             follow_up_value = getattr(
                 ctx, "follow_up_route", FollowUpRoute.FULL_PIPELINE
             ).value
-            error_event = EventEmitter.error(
-                "workflow_error",
-                "agent runtime completed without required artifacts",
-                details={
-                    "missing_lanes": missing_lanes,
-                    "follow_up_route": follow_up_value,
-                },
-                code="agent_runtime_missing_required_artifacts",
-            )
-            error_event.setdefault("data", {})
-            error_event["data"]["error_code"] = "agent_runtime_missing_required_artifacts"
-            error_event["data"]["missing_lanes"] = missing_lanes
-            error_event["data"]["follow_up_route"] = follow_up_value
-            error_event["event"] = "workflow_error"
-            yield self._planner._annotate(error_event)
+            # If core lanes are missing, fall back to deterministic planner to finish them.
+            async for event in self._run_agent_runtime_fallback(state):
+                yield event
+            missing_after_fallback = self._missing_required_artifacts(ctx)
+            if missing_after_fallback:
+                error_event = EventEmitter.error(
+                    "workflow_error",
+                    "agent runtime completed without required artifacts",
+                    details={
+                        "missing_lanes": sorted(missing_after_fallback),
+                        "follow_up_route": follow_up_value,
+                    },
+                    code="agent_runtime_missing_required_artifacts",
+                )
+                error_event.setdefault("data", {})
+                error_event["data"]["error_code"] = "agent_runtime_missing_required_artifacts"
+                error_event["data"]["missing_lanes"] = sorted(missing_after_fallback)
+                error_event["data"]["follow_up_route"] = follow_up_value
+                error_event["event"] = "workflow_error"
+                yield self._planner._annotate(error_event)
+        # Emit a terminal workflow_complete to force-close any lingering ledger bubbles once analysis streaming ends.
+        total_elapsed = int((time.time() - ctx.workflow_start) * 1000)
+        workflow_complete = EventEmitter.result(
+            "workflow_complete",
+            {"total_elapsed_ms": total_elapsed, "flow_mode": self.flow_mode.value},
+        )
+        workflow_complete["event"] = "workflow_complete"
+        workflow_complete.setdefault("data", {})["ts"] = datetime.utcnow().isoformat()
+        workflow_complete["data"]["flow_mode"] = self.flow_mode.value
+        yield self._planner._annotate(workflow_complete)
 
     def _missing_required_artifacts(self, ctx: PlannerPhaseContext) -> Set[str]:
         route = getattr(ctx, "follow_up_route", FollowUpRoute.FULL_PIPELINE)
         missing: Set[str] = set()
+        lane_refresh = dict(getattr(ctx, "lane_refresh_required", {}) or {})
+        lane_states = {}
+        if self._sequencer_state is not None:
+            lane_states = getattr(self._sequencer_state, "lane_states", {}) or {}
+
+        def _satisfied(lane: str) -> bool:
+            if lane_refresh.get(lane) is False:
+                # Only satisfied if the artifact truly exists; cached/TTL skips must not hide missing outputs.
+                if lane == "sql":
+                    return not self._is_sql_missing(ctx)
+                if lane == "chart":
+                    return not self._is_chart_missing(ctx)
+                if lane == "analysis":
+                    return not self._is_analysis_missing(ctx)
+                if lane == "market":
+                    return not self._is_market_missing(ctx)
+                if lane == "web":
+                    return not self._is_web_missing(ctx)
+            state = str(lane_states.get(lane) or "").strip().lower()
+            return state in {"completed", "reused"}
 
         if route != FollowUpRoute.STOCK_ONLY and route != FollowUpRoute.CHART_ONLY:
-            if self._is_sql_missing(ctx):
+            if not _satisfied("sql") and self._is_sql_missing(ctx):
                 missing.add("sql")
 
         if route in (
@@ -2045,7 +2345,7 @@ class SingleAgentController:
             FollowUpRoute.NARRATIVE_ONLY,
             FollowUpRoute.CHART_ONLY,
         ):
-            if self._is_analysis_missing(ctx):
+            if not _satisfied("analysis") and self._is_analysis_missing(ctx):
                 missing.add("analysis")
 
         if route in (
@@ -2053,11 +2353,11 @@ class SingleAgentController:
             FollowUpRoute.REUSE_SQL,
             FollowUpRoute.CHART_ONLY,
         ):
-            if self._is_chart_missing(ctx):
+            if not _satisfied("chart") and self._is_chart_missing(ctx):
                 missing.add("chart")
 
         if route == FollowUpRoute.STOCK_ONLY:
-            if self._is_market_missing(ctx):
+            if not _satisfied("market") and self._is_market_missing(ctx):
                 missing.add("market")
 
         return missing
@@ -2303,6 +2603,15 @@ class SingleAgentController:
             )
         except Exception:  # pragma: no cover - defensive logging
             logger.debug("Failed to record agent run snapshot", exc_info=True)
+        try:
+            ctx.tool_receipts = dict(run_context.tool_receipts)
+        except Exception:
+            ctx.tool_receipts = getattr(ctx, "tool_receipts", {}) or {}
+        try:
+            for tool_name, receipt_payload in run_context.tool_receipts.items():
+                snapshot.record_tool_receipt(tool_name, receipt_payload)
+        except Exception:  # pragma: no cover - defensive logging
+            logger.debug("Failed to persist tool receipts from agent runtime", exc_info=True)
         self._record_lane_outputs(snapshot, ctx)
         if repository is not None:
             await repository.save(snapshot)
@@ -2339,10 +2648,26 @@ class SingleAgentController:
         self,
         event: Dict[str, Any],
         ctx: PlannerPhaseContext,
-    ) -> Dict[str, Any]:
+    ) -> Optional[Dict[str, Any]]:
         if not isinstance(event, dict):
             return event
         name = event.get("event")
+        if name in {"agent_turn_start", "agent_turn_end"}:
+            return event
+        if name in {"web_ready", "web_revision_ready", "web_lane", "web_research_agent"}:
+            data = event.setdefault("data", {})
+            if isinstance(data, dict):
+                search_id = data.get("search_id") or data.get("searchId")
+                if not search_id:
+                    web_context = data.get("web_context")
+                    if isinstance(web_context, Mapping):
+                        search_id = web_context.get("search_id") or web_context.get("searchId")
+                if search_id:
+                    normalized_search_id = str(search_id).strip()
+                    if normalized_search_id:
+                        if normalized_search_id in self._seen_web_search_ids:
+                            return None
+                        self._seen_web_search_ids.add(normalized_search_id)
         if name == "workflow_complete":
             try:
                 return self._planner._annotate_revision(event, ctx)
@@ -2426,6 +2751,24 @@ class SingleAgentController:
         except Exception:
             logger.debug("Failed to record skipped tool receipt for %s", tool_name, exc_info=True)
 
+    # Function: _hydrate_agent_snapshot
+    #   Role: Loads the latest SessionStateSnapshot for the active session so AgentRuntime inherits preflight intent/plan artifacts.
+    #   Called from: analytics.flows.single_agent_tools._agentic_event_stream before launching the AgentRuntime.
+    #   Invokes: analytics.core.session_state.get_session_state_repository, analytics.agent_orchestrator.AgentMemory
+    #   Why: Ensures deterministic preflight outputs (intent, clarifications, plan) are available to the agent without rerunning them.
+    async def _hydrate_agent_snapshot(self, ctx: PlannerPhaseContext) -> None:
+        repository = get_session_state_repository()
+        session_id = getattr(ctx, "session_id", None)
+        if repository is None or session_id is None:
+            return
+        snapshot = await repository.load(session_id)
+        if snapshot is None:
+            snapshot = SessionStateSnapshot(session_id=session_id)
+            await repository.save(snapshot)
+        self._session_snapshot = snapshot
+        self._agent_snapshot = snapshot
+        self._agent_memory = AgentMemory(snapshot)
+
     def _build_agent_runtime(
         self,
         queue: "asyncio.Queue[Optional[Dict[str, Any]]]",
@@ -2451,6 +2794,9 @@ class SingleAgentController:
         self._agent_memory = memory
         self._flush_pending_guardrails()
         allowlist: Optional[Set[str]] = None
+        tool_choice_body: Optional[Dict[str, Any]] = None
+        tool_choice_setting: Optional[Any] = None
+        parallel_tool_calls: Optional[bool] = None
         guardrail_payload = self._follow_up_guardrail or {}
         lane_refresh_flags: Dict[str, Any] = {}
         ctx = getattr(self._sequencer_state, "ctx", None) if self._sequencer_state else None
@@ -2459,56 +2805,109 @@ class SingleAgentController:
         try:
             registry_tools = {definition.name for definition in self._registry.list_tools()}
             allowlist = set(registry_tools) | {"lane_decision", "apply_revision_lane"}
+
+            def _drop_tools(
+                tool_names: Iterable[str],
+                lane: Optional[str],
+                *,
+                reason: str,
+                reused: bool,
+                from_cache: bool,
+            ) -> None:
+                nonlocal allowlist
+                if not allowlist:
+                    return
+                removed = False
+                for tool_name in tool_names:
+                    normalized_tool = str(tool_name or "").strip()
+                    if not normalized_tool:
+                        continue
+                    if normalized_tool in allowlist:
+                        allowlist.discard(normalized_tool)
+                        removed = True
+                if removed and lane:
+                    primary_tool = next((str(name).strip() for name in tool_names if str(name).strip()), None)
+                    if primary_tool:
+                        self._record_skipped_tool_receipt(
+                            primary_tool,
+                            lane=lane,
+                            reason=reason,
+                            guardrail=guardrail_payload,
+                            reused=reused,
+                            from_cache=from_cache,
+                        )
+
             route = getattr(self, "follow_up_route", FollowUpRoute.FULL_PIPELINE)
             if route == FollowUpRoute.STOCK_ONLY:
-                allowlist -= {
-                    "web_refresh",
-                    "chart_generation",
-                    "sql_generation",
-                    "sql_regeneration",
-                    "analysis_generation",
-                    "chart_revision",
-                }
+                _drop_tools(["web_refresh"], "web", reason="follow_up_route", reused=False, from_cache=False)
+                _drop_tools(
+                    ["chart_generation", "chart_revision"],
+                    "chart",
+                    reason="follow_up_route",
+                    reused=False,
+                    from_cache=False,
+                )
+                _drop_tools(
+                    ["plan_generation", "sql_generation", "sql_regeneration"],
+                    "sql",
+                    reason="follow_up_route",
+                    reused=False,
+                    from_cache=False,
+                )
             elif route == FollowUpRoute.REUSE_SQL:
-                allowlist -= {"sql_generation", "sql_regeneration"}
+                _drop_tools(
+                    ["plan_generation", "sql_generation", "sql_regeneration"],
+                    "sql",
+                    reason="follow_up_route",
+                    reused=True,
+                    from_cache=True,
+                )
+                _drop_tools(["chart_generation"], "chart", reason="follow_up_route", reused=True, from_cache=True)
             blocked_tools = guardrail_payload.get("blocked_tools") if isinstance(guardrail_payload, Mapping) else None
             if isinstance(blocked_tools, Iterable):
                 for tool_name in blocked_tools:
                     if isinstance(tool_name, str) and tool_name.strip():
-                        allowlist.discard(tool_name.strip())
-                        self._record_skipped_tool_receipt(
-                            tool_name.strip(),
-                            lane="web" if "web" in tool_name else "market" if "market" in tool_name else "analysis",
+                        lane_value = self._lane_for_tool(tool_name) or (
+                            "web" if "web" in tool_name else "market" if "market" in tool_name else None
+                        )
+                        _drop_tools(
+                            [tool_name.strip()],
+                            lane_value or "analysis",
                             reason="follow_up_guardrail",
-                            guardrail=guardrail_payload,
                             reused=False,
                             from_cache=False,
                         )
+            lane_drop_map = {
+                "web": ["web_refresh"],
+                "market": ["market_refresh"],
+                "stock": ["market_refresh"],
+                "chart": ["chart_generation", "chart_revision"],
+                "analysis": ["analysis_generation", "analysis_revision"],
+                "sql": ["plan_generation", "sql_generation", "sql_regeneration"],
+            }
             for lane_name, required in lane_refresh_flags.items():
                 if required is False:
                     normalized = str(lane_name).strip().lower()
-                    if normalized == "web":
-                        if "web_refresh" in allowlist:
-                            allowlist.discard("web_refresh")
-                        self._record_skipped_tool_receipt(
-                            "web_refresh",
-                            lane="web",
+                    tools_for_lane = lane_drop_map.get(normalized)
+                    if tools_for_lane:
+                        lane_key = "market" if normalized == "stock" else normalized
+                        _drop_tools(
+                            tools_for_lane,
+                            lane_key,
                             reason="lane_refresh_reused",
-                            guardrail=guardrail_payload,
                             reused=True,
                             from_cache=True,
                         )
-                    if normalized in {"market", "stock"}:
-                        if "market_refresh" in allowlist:
-                            allowlist.discard("market_refresh")
-                        self._record_skipped_tool_receipt(
-                            "market_refresh",
-                            lane="market",
-                            reason="lane_refresh_reused",
-                            guardrail=guardrail_payload,
-                            reused=True,
-                            from_cache=True,
-                        )
+            intent_ready = bool(ctx and getattr(ctx, "intent", None))
+            plan_ready = bool(ctx and (getattr(ctx, "plan", None) or getattr(ctx, "provisional_plan", None)))
+            if intent_ready and plan_ready:
+                _drop_tools(
+                    ["classification", "intent_detection", "clarification", "plan_generation"],
+                    "intent",
+                    reason="preflight_intent_ready",
+                    reused=True,
+                    from_cache=True,
+                )
         except Exception:
             allowlist = allowlist or None
         agent_for_run = self._agent
@@ -2524,11 +2923,34 @@ class SingleAgentController:
                     )
                 except Exception:
                     agent_for_run = self._agent
+        allowed_tools_sorted: List[str] = sorted(allowlist) if allowlist else []
+        clarifications_pending = False
+        if ctx is not None:
+            clarifications_pending = bool(getattr(ctx, "clarifications", None))
+        # OpenAI Responses rejects the legacy `tool_choice.allowed_tools` payload. Rely on the
+        # AgentsStreamBridge allowlist to block forbidden tool calls instead of sending tool_choice.
+        if parallel_tool_calls is None and allowed_tools_sorted:
+            planning_tools = {"classification", "intent_detection", "clarification", "plan_generation"}
+            parallel_tool_calls = not set(allowed_tools_sorted).issubset(planning_tools)
+        route = getattr(self, "follow_up_route", FollowUpRoute.FULL_PIPELINE)
+        if tool_choice_setting is None and allowed_tools_sorted:
+            try:
+                route_value = FollowUpRoute(route)
+            except Exception:
+                route_value = FollowUpRoute.FULL_PIPELINE
+            if route_value == FollowUpRoute.FULL_PIPELINE and not clarifications_pending:
+                # Force at least one tool call so the agent cannot respond with text only.
+                tool_choice_setting = "required"
         runtime_config = replace(
             self._agent_runtime_config,
             tool_allowlist=allowlist,
             guardrail_payload=self._follow_up_guardrail,
+            tool_choice=tool_choice_setting,
+            tool_choice_body=tool_choice_body,
+            parallel_tool_calls=parallel_tool_calls,
         )
+        # Ensure the agent sees preflight context when the run_context is a mapping.
+        # The actual payload is assembled in _agent_run_stage; this hook only enables downstream consumption.
         return AgentRuntime(
             agent=agent_for_run,
             memory=memory,
@@ -3375,6 +3797,15 @@ class SingleAgentController:
         if run_context.analysis_focus and not getattr(ctx, "revision_focus", None):
             ctx.revision_focus = run_context.analysis_focus
 
+        # Seed the planner context with the clarified intent/template from the preflight phase so
+        # agent-invoked planner tools operate on the same inputs as DIRECT.
+        self._seed_planner_context_from_preflight(ctx)
+        if (getattr(ctx, "intent", None) is None or getattr(ctx, "plan", None) is None) and self._agent_snapshot:
+            try:
+                _hydrate_context_from_snapshot(ctx, self._agent_snapshot, getattr(ctx, "artifacts", None))
+            except Exception:
+                logger.debug("Failed to hydrate planner context from agent snapshot", exc_info=True)
+
         registry_name = self._resolve_registry_name(definition.name)
         normalized_key = self._normalize_tool_key(registry_name or definition.name) or definition.name
         tool_label = registry_name or definition.name
@@ -3836,26 +4267,374 @@ class SingleAgentController:
 
     @staticmethod
     def _receipt_age_seconds(receipt: Optional[ToolInvocationReceipt]) -> Optional[float]:
-        if not receipt or not getattr(receipt, "timestamp", None):
+        timestamp = None
+        if isinstance(receipt, Mapping):
+            timestamp = receipt.get("timestamp") or receipt.get("completed_at")
+        elif receipt is not None:
+            timestamp = getattr(receipt, "timestamp", None) or getattr(receipt, "completed_at", None)
+        if not timestamp:
             return None
+        ts_text = str(timestamp).strip()
+        if not ts_text:
+            return None
+        if ts_text.endswith("Z"):
+            ts_text = f"{ts_text[:-1]}+00:00"
         try:
-            recorded = datetime.fromisoformat(receipt.timestamp)
+            recorded = datetime.fromisoformat(ts_text)
         except ValueError:
             return None
-        delta = datetime.utcnow() - recorded
-        return max(delta.total_seconds(), 0.0)
+        if recorded.tzinfo is None:
+            recorded = recorded.replace(tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        try:
+            delta = now - recorded
+            return max(delta.total_seconds(), 0.0)
+        except Exception:
+            return None
 
-    def _receipt_is_fresh(self, receipt: Optional[ToolInvocationReceipt]) -> bool:
-        if not receipt:
+    def _receipt_is_fresh(
+        self,
+        receipt: Optional[ToolInvocationReceipt],
+        *,
+        ttl_seconds: Optional[int] = None,
+    ) -> bool:
+        materialized = receipt
+        if isinstance(receipt, Mapping) and not isinstance(receipt, ToolInvocationReceipt):
+            try:
+                materialized = ToolInvocationReceipt.from_dict(receipt)
+            except Exception:
+                materialized = None
+        if materialized is None:
             return False
-        if str(getattr(receipt, "status", "")).lower() not in {"completed", "reused"}:
+        status = str(getattr(materialized, "status", "")).strip().lower()
+        if status not in {"completed", "complete", "success", "reused"}:
             return False
-        if getattr(receipt, "error", None):
+        if getattr(materialized, "error", None):
             return False
-        age_seconds = self._receipt_age_seconds(receipt)
+        age_seconds = self._receipt_age_seconds(materialized)
         if age_seconds is None:
             return False
-        return age_seconds <= self.LANE_CACHE_TTL_SECONDS
+        ttl = ttl_seconds
+        if ttl is None:
+            ttl = self.LANE_CACHE_TTL_SECONDS if isinstance(self.LANE_CACHE_TTL_SECONDS, int) else 300
+        return age_seconds <= ttl
+
+    def _lane_receipts(self, ctx: PlannerPhaseContext, lane: str) -> List[ToolInvocationReceipt]:
+        lane_key = (lane or "").strip().lower()
+        if not lane_key:
+            return []
+        tool_receipts = getattr(ctx, "tool_receipts", {}) or {}
+        candidates = self.LANE_TOOL_MAP.get(lane_key, ())
+        resolved: Dict[str, ToolInvocationReceipt] = {}
+        for tool_name, payload in tool_receipts.items():
+            normalized = str(tool_name or "").strip().lower()
+            if not normalized:
+                continue
+            if normalized in candidates or any(normalized.startswith(candidate) for candidate in candidates):
+                if isinstance(payload, ToolInvocationReceipt):
+                    resolved[normalized] = payload
+                elif isinstance(payload, Mapping):
+                    try:
+                        resolved[normalized] = ToolInvocationReceipt.from_dict(payload)
+                    except Exception:
+                        continue
+        return list(resolved.values())
+
+    def _should_reuse_web(self, ctx: PlannerPhaseContext) -> bool:
+        artifacts = getattr(ctx, "artifacts", None)
+        web_art = getattr(artifacts, "web", None) if artifacts else None
+        summary = getattr(web_art, "summary", None) if web_art else None
+        snippets = getattr(web_art, "snippets", None) if web_art else None
+        has_web_artifacts = bool(
+            (isinstance(summary, str) and summary.strip())
+            or (isinstance(snippets, (list, tuple)) and any(snippets))
+        )
+        if not has_web_artifacts:
+            return False
+        snapshot_age = getattr(ctx, "snapshot_age_seconds", None)
+        ttl_seconds = (
+            self.LANE_CACHE_TTL_SECONDS if isinstance(self.LANE_CACHE_TTL_SECONDS, int) else 300
+        )
+        if snapshot_age is not None and snapshot_age > ttl_seconds:
+            return False
+        receipts = self._lane_receipts(ctx, "web")
+        if not receipts:
+            return False
+        fresh = [self._receipt_is_fresh(receipt, ttl_seconds=ttl_seconds) for receipt in receipts]
+        if not fresh or not all(fresh):
+            return False
+        return True
+
+    def _should_reuse_market(self, ctx: PlannerPhaseContext) -> bool:
+        artifacts = getattr(ctx, "artifacts", None)
+        market_art = getattr(artifacts, "market", None) if artifacts else None
+        has_snapshot = bool(getattr(market_art, "snapshot", None))
+        if not has_snapshot:
+            return False
+        snapshot_age = getattr(ctx, "snapshot_age_seconds", None)
+        ttl_seconds = (
+            self.LANE_CACHE_TTL_SECONDS if isinstance(self.LANE_CACHE_TTL_SECONDS, int) else 300
+        )
+        if snapshot_age is not None and snapshot_age > ttl_seconds:
+            return False
+        receipts = self._lane_receipts(ctx, "market")
+        if not receipts:
+            return False
+        fresh = [self._receipt_is_fresh(receipt, ttl_seconds=ttl_seconds) for receipt in receipts]
+        if not fresh or not all(fresh):
+            return False
+        return True
+
+    def _should_reuse_sql(self, ctx: PlannerPhaseContext) -> bool:
+        artifacts = getattr(ctx, "artifacts", None)
+        sql_art = getattr(artifacts, "sql_generation", None) if artifacts else None
+        sql_text = getattr(sql_art, "sql", None) if sql_art else None
+        sql_exec = getattr(artifacts, "sql_execution", None) if artifacts else None
+        sql_error = getattr(sql_exec, "error", None) if sql_exec else None
+        sql_error_code = getattr(sql_exec, "error_code", None) if sql_exec else None
+        if not sql_text or sql_error or sql_error_code:
+            return False
+        ttl_seconds = LANE_TTL_DEFAULTS.get(
+            "sql",
+            self.LANE_CACHE_TTL_SECONDS if isinstance(self.LANE_CACHE_TTL_SECONDS, int) else 300,
+        )
+        snapshot_age = getattr(ctx, "snapshot_age_seconds", None)
+        if snapshot_age is not None and snapshot_age > ttl_seconds:
+            return False
+        receipts = self._lane_receipts(ctx, "sql")
+        if not receipts:
+            return False
+        fresh = [self._receipt_is_fresh(receipt, ttl_seconds=ttl_seconds) for receipt in receipts]
+        if not fresh or not all(fresh):
+            return False
+        return True
+
+    def _should_reuse_chart(self, ctx: PlannerPhaseContext, *, sql_refresh_required: bool) -> bool:
+        if sql_refresh_required:
+            return False
+        artifacts = getattr(ctx, "artifacts", None)
+        chart_art = getattr(artifacts, "chart", None) if artifacts else None
+        chart_spec = getattr(chart_art, "spec", None) if chart_art else None
+        if not chart_spec:
+            return False
+        ttl_seconds = LANE_TTL_DEFAULTS.get(
+            "chart",
+            self.LANE_CACHE_TTL_SECONDS if isinstance(self.LANE_CACHE_TTL_SECONDS, int) else 300,
+        )
+        snapshot_age = getattr(ctx, "snapshot_age_seconds", None)
+        if snapshot_age is not None and snapshot_age > ttl_seconds:
+            return False
+        receipts = self._lane_receipts(ctx, "chart")
+        if not receipts:
+            return False
+        fresh = [self._receipt_is_fresh(receipt, ttl_seconds=ttl_seconds) for receipt in receipts]
+        if not fresh or not all(fresh):
+            return False
+        return True
+
+    def _apply_receipt_ttl_overrides(self, ctx: PlannerPhaseContext, *, after_preflight: bool = False) -> None:
+        """
+        Apply lane TTL reuse hints to the context. Accessory lanes (web/market) can be pruned
+        before pre-flight, but core lanes (sql/chart) should only be marked reusable after
+        intent + plan are sealed to avoid skipping the first fresh run.
+        """
+        refresh_flags = dict(getattr(ctx, "lane_refresh_required", {}) or {})
+
+        # Accessories are safe to reuse early.
+        if refresh_flags.get("web") is not True and self._should_reuse_web(ctx):
+            refresh_flags["web"] = False
+            setattr(ctx, "reused_web", True)
+        if refresh_flags.get("market") is not True and self._should_reuse_market(ctx):
+            refresh_flags["market"] = False
+            setattr(ctx, "reused_stock", True)
+            setattr(ctx, "reused_market", True)
+
+        if not after_preflight:
+            ctx.lane_refresh_required = refresh_flags
+            return
+
+        # Core lanes require a sealed intent/plan before reuse.
+        intent_ready = bool(getattr(ctx, "intent", None))
+        plan_ready = bool(getattr(ctx, "plan", None) or getattr(ctx, "provisional_plan", None))
+        clarifications_needed = bool(
+            getattr(ctx, "clarifications_needed", False)
+            or getattr(getattr(ctx, "intent", None), "clarifications_needed", False)
+        )
+        pending_followups = 0
+        intent_resolution = getattr(ctx, "intent_resolution", None)
+        if intent_resolution is not None:
+            followups = getattr(intent_resolution, "followups", None) or []
+            try:
+                pending_followups = len(followups)
+            except TypeError:
+                pending_followups = 1
+        if not (intent_ready and plan_ready and not clarifications_needed and pending_followups == 0):
+            ctx.lane_refresh_required = refresh_flags
+            return
+
+        reuse_sql = refresh_flags.get("sql") is False
+        if refresh_flags.get("sql") is not True and self._should_reuse_sql(ctx):
+            refresh_flags["sql"] = False
+            setattr(ctx, "reused_sql", True)
+            reuse_sql = True
+        sql_refresh_required = not reuse_sql or refresh_flags.get("sql") is True
+        if refresh_flags.get("chart") is not True and self._should_reuse_chart(
+            ctx, sql_refresh_required=sql_refresh_required
+        ):
+            refresh_flags["chart"] = False
+            setattr(ctx, "reused_chart", True)
+
+        ctx.lane_refresh_required = refresh_flags
+
+    def _seed_planner_context_from_preflight(self, target: PlannerPhaseContext) -> None:
+        """
+        Copy preflight intent/plan/template state from the sequencer context so agent-invoked
+        planner tools operate on clarified slots and the selected template.
+        """
+        source_state = getattr(self, "_sequencer_state", None)
+        source_ctx = getattr(source_state, "ctx", None) if source_state else None
+        if source_ctx is None:
+            return
+
+        fields_to_copy: Tuple[str, ...] = (
+            "intent",
+            "intent_resolution",
+            "slot_statuses",
+            "slot_followups",
+            "clarifications",
+            "clarification_answers",
+            "clarification_rounds",
+            "clarifications_needed",
+            "assumptions",
+            "plan",
+            "provisional_plan",
+            "template",
+            "selected_template_id",
+            "intent_signature",
+            "prior_intent_signature",
+            "lane_refresh_required",
+            "configs",
+            "classification",
+            "is_financial_query",
+        )
+
+        for attr in fields_to_copy:
+            if hasattr(source_ctx, attr):
+                setattr(target, attr, copy.deepcopy(getattr(source_ctx, attr)))
+
+        target.follow_up_route = getattr(source_ctx, "follow_up_route", getattr(target, "follow_up_route", FollowUpRoute.FULL_PIPELINE))
+        target.parallelism_enabled = getattr(source_ctx, "parallelism_enabled", getattr(target, "parallelism_enabled", False))
+        target.tool_parallel_concurrency = getattr(
+            source_ctx, "tool_parallel_concurrency", getattr(target, "tool_parallel_concurrency", None)
+        )
+        target.reuse_sql = getattr(source_ctx, "reuse_sql", getattr(target, "reuse_sql", False))
+        target.stock_only = getattr(source_ctx, "stock_only", getattr(target, "stock_only", False))
+        target.session_follow_up = getattr(source_ctx, "session_follow_up", getattr(target, "session_follow_up", False))
+        target.clarifications_needed = bool(
+            getattr(source_ctx, "clarifications_needed", False)
+            or getattr(getattr(source_ctx, "intent", None), "clarifications_needed", False)
+        )
+
+    def _record_cached_accessory_ready(
+        self,
+        lane: str,
+        ctx: PlannerPhaseContext,
+        lane_states: Dict[str, str],
+    ) -> None:
+        normalized_lane = lane.strip().lower()
+        lane_states[normalized_lane] = "reused"
+        if normalized_lane in self._cached_accessory_ready_lanes:
+            return
+        self._cached_accessory_ready_lanes.add(normalized_lane)
+
+        if normalized_lane == "web":
+            payload = compose_web_ready_payload(ctx)
+            if not payload:
+                return
+            payload.setdefault("lane", "web")
+            payload.setdefault("reused", True)
+            payload.setdefault("from_cache", True)
+            ready_event = EventEmitter.status("web_ready", "Web context ready (cache).")
+            ready_event["event"] = "web_ready"
+            ready_event.setdefault("data", {}).update(payload)
+            annotated = self._planner._annotate_revision(ready_event, ctx)
+            search_id = payload.get("search_id") or payload.get("searchId")
+            if not search_id:
+                web_context = payload.get("web_context")
+                if isinstance(web_context, Mapping):
+                    search_id = web_context.get("search_id") or web_context.get("searchId")
+            if search_id:
+                normalized_search_id = str(search_id).strip()
+                if normalized_search_id:
+                    self._seen_web_search_ids.add(normalized_search_id)
+            if annotated:
+                self._pending_lane_reuse_events.append(annotated)
+            setattr(ctx, "web_ready_emitted", True)
+            self._accessory_lane_hits.add("web")
+            return
+
+        if normalized_lane == "market":
+            payload = compose_stock_ready_payload(ctx)
+            if not payload:
+                return
+            payload.setdefault("lane", "market")
+            payload.setdefault("reused", True)
+            payload.setdefault("from_cache", True)
+            ready_event = EventEmitter.status("stock_ready", "Stock context ready (cache).")
+            ready_event["event"] = "stock_ready"
+            ready_event.setdefault("data", {}).update(payload)
+            annotated = self._planner._annotate_revision(ready_event, ctx)
+            if annotated:
+                self._pending_lane_reuse_events.append(annotated)
+            setattr(ctx, "stock_ready_emitted", True)
+            self._accessory_lane_hits.add("market")
+
+    def _filter_fanout_adapters_for_ttl(
+        self,
+        ctx: PlannerPhaseContext,
+        adapters: Tuple[Any, ...],
+        lane_states: Dict[str, str],
+    ) -> Tuple[Any, ...]:
+        refresh_flags = dict(getattr(ctx, "lane_refresh_required", {}) or {})
+        skip_web = refresh_flags.get("web") is False
+        skip_market = refresh_flags.get("market") is False
+
+        if skip_web:
+            self._record_cached_accessory_ready("web", ctx, lane_states)
+        if skip_market:
+            self._record_cached_accessory_ready("market", ctx, lane_states)
+
+        filtered: List[Any] = []
+        for adapter in adapters:
+            name = str(getattr(adapter, "name", "") or "")
+            if skip_web and name.startswith("web_retriever"):
+                continue
+            if skip_market and (name == "stock_tracker" or name.startswith("market_question")):
+                continue
+            filtered.append(adapter)
+        return tuple(filtered)
+
+    def _finalize_accessory_lane_if_blocked(
+        self,
+        lane: str,
+        *,
+        lane_states: Dict[str, str],
+        reason: str,
+        ctx: PlannerPhaseContext,
+    ) -> Optional[Dict[str, Any]]:
+        """If an accessory lane is queued/blocked (e.g., backpressure), mark it reused to avoid hanging the run."""
+        current = lane_states.get(lane)
+        if current in {"completed", "reused"}:
+            return None
+        reuse_event = self._handle_lane_reuse(
+            ctx,
+            lane=lane,
+            lane_states=lane_states,
+            reason=reason,
+        )
+        if reuse_event:
+            self._accessory_lane_hits.add(lane)
+        return reuse_event
 
     def _build_receipt_input_payload(
         self,
@@ -4201,6 +4980,9 @@ class SingleAgentController:
                 "analysis": "queued" if "analysis" in targets else "reused",
                 "market": "queued" if "market" in targets else "reused",
                 "web": "queued" if "web" in targets else "reused",
+                "agent_coordination": "queued",
+                "chart_designer": "queued",
+                "analysis_writer": "queued",
             }
         if self.follow_up_route == FollowUpRoute.REUSE_SQL:
             return {
@@ -4209,6 +4991,9 @@ class SingleAgentController:
                 "analysis": "reused",
                 "market": "skipped",
                 "web": "skipped",
+                "agent_coordination": "queued",
+                "chart_designer": "queued",
+                "analysis_writer": "queued",
             }
         if self.follow_up_route == FollowUpRoute.STOCK_ONLY:
             return {
@@ -4217,6 +5002,9 @@ class SingleAgentController:
                 "analysis": "reused",
                 "market": "pending",
                 "web": "reused",
+                "agent_coordination": "queued",
+                "chart_designer": "queued",
+                "analysis_writer": "queued",
             }
         return {
             "sql": "pending",
@@ -4224,6 +5012,9 @@ class SingleAgentController:
             "analysis": "queued",
             "market": "pending",
             "web": "pending",
+            "agent_coordination": "queued",
+            "chart_designer": "queued",
+            "analysis_writer": "queued",
         }
 
     def _apply_lane_transition_event(
@@ -4277,10 +5068,21 @@ class SingleAgentController:
                     self.follow_up_route = FollowUpRoute(route_value)
                 except ValueError:
                     pass
+        elif name in {"classification_complete", "classification_declined"}:
+            is_financial = bool(data.get("is_financial", True))
+            if not is_financial:
+                self._non_financial_decline = True
+                return
         elif name == "revision_request":
             lanes = data.get("lanes") or []
             revision_targets.clear()
             revision_targets.update(str(l).strip().lower() for l in lanes if l)
+        elif name == "agent_coordination":
+            lane_states["agent_coordination"] = "completed"
+        elif name == "chart_designer":
+            lane_states["chart_designer"] = "completed"
+        elif name == "analysis_writer":
+            lane_states["analysis_writer"] = "completed"
         elif name in {"sql_ready", "sql_revision_ready"}:
             lane_states["sql"] = "reused" if reused else "completed"
         elif name in {"chart_ready", "chart_revision_ready"}:
@@ -4303,12 +5105,34 @@ class SingleAgentController:
             reused_lane = str(data.get("lane") or "").strip().lower()
             if reused_lane and reused_lane in lane_states:
                 lane_states[reused_lane] = "reused"
+        elif name in {"agent_tool_call", "agent_tool_complete"}:
+            tool_call = data.get("tool_call") or {}
+            tool_name = data.get("tool") or tool_call.get("name") or tool_call.get("tool")
+            lane_value = data.get("lane") or self._lane_for_tool(tool_name)
+            status_value = str(tool_call.get("status") or data.get("status") or "").strip().lower()
+            metadata = tool_call.get("metadata") if isinstance(tool_call, Mapping) else {}
+            reuse_hint = reused or bool(
+                data.get("from_cache")
+                or data.get("reused")
+                or (metadata.get("from_cache") if isinstance(metadata, Mapping) else False)
+                or (metadata.get("reused") if isinstance(metadata, Mapping) else False)
+            )
+            if lane_value and lane_value in lane_states:
+                if name == "agent_tool_call" and status_value in {"running", "start", "started"}:
+                    lane_states[lane_value] = "running"
+                elif name == "agent_tool_complete":
+                    if status_value in {"completed", "succeeded", "done"}:
+                        lane_states[lane_value] = "reused" if reuse_hint else "completed"
+                    elif status_value in {"failed", "error"}:
+                        lane_states[lane_value] = "error"
         elif lane in lane_states and schedule_stage in {"hedged_accessories"}:
             lane_states[str(lane)] = "reused"
 
         self._check_for_lane_telemetry_gaps(lane_states, name)
 
     def _check_for_lane_telemetry_gaps(self, lane_states: Mapping[str, str], event_name: Optional[str]) -> None:
+        if getattr(self, "_non_financial_decline", False):
+            return
         if event_name not in {
             "analysis_ready",
             "analysis_revision_ready",
@@ -4361,6 +5185,44 @@ class SingleAgentController:
         while self._lane_warning_events:
             yield self._lane_warning_events.popleft()
 
+    def _finalize_lane_states(self, lane_states: Dict[str, str], ctx: PlannerPhaseContext) -> bool:
+        """Force lingering lanes to completed/reused using artifacts + TTL hints when telemetry is missing."""
+        changed = False
+        lane_refresh_required = getattr(ctx, "lane_refresh_required", {}) or {}
+
+        def _reused_hint(lane: str) -> bool:
+            lane_key = "market" if lane == "stock" else lane
+            return bool(
+                getattr(ctx, f"reused_{lane_key}", False)
+                or lane_refresh_required.get(lane_key) is False
+            )
+
+        lane_ready_map = {
+            "sql": not self._is_sql_missing(ctx),
+            "chart": not self._is_chart_missing(ctx),
+            "analysis": not self._is_analysis_missing(ctx),
+            "market": not self._is_market_missing(ctx),
+            "web": not self._is_web_missing(ctx),
+        }
+        lane_ready_map["agent_coordination"] = lane_ready_map["chart"] and lane_ready_map["analysis"]
+        lane_ready_map["chart_designer"] = lane_ready_map["chart"]
+        lane_ready_map["analysis_writer"] = lane_ready_map["analysis"]
+        for lane, status in list(lane_states.items()):
+            normalized_lane = str(lane or "").strip().lower()
+            if normalized_lane not in lane_ready_map:
+                continue
+            normalized_status = str(status or "").strip().lower()
+            if normalized_status not in {"pending", "queued", "running", "missing"}:
+                continue
+            reuse_flag = _reused_hint(normalized_lane)
+            if lane_ready_map.get(normalized_lane, False):
+                lane_states[normalized_lane] = "reused" if reuse_flag else "completed"
+                changed = True
+            elif reuse_flag:
+                lane_states[normalized_lane] = "reused"
+                changed = True
+        return changed
+
     def _should_emit_lane_summary_before(self, event: Dict[str, Any]) -> bool:
         name = event.get("event") or ""
         if name in {
@@ -4410,6 +5272,9 @@ class SingleAgentController:
             return False
         targets = set(revision_plan.targets or set())
         normalized = lane.strip().lower()
+        refresh_flags = dict(getattr(state.ctx, "lane_refresh_required", {}) or {})
+        if refresh_flags.get(normalized) is False:
+            return False
         key_set: Set[str] = {"market", "stock"} if normalized == "market" else {normalized}
         if not key_set.intersection(targets):
             return False
@@ -4439,6 +5304,11 @@ class SingleAgentController:
         for tool_name, receipt in tool_receipts.items():
             if isinstance(receipt, ToolInvocationReceipt):
                 receipts_payload[tool_name] = receipt.to_dict()
+        revision_ctx = getattr(ctx, "revision_context", None)
+        if not receipts_payload and revision_ctx and isinstance(revision_ctx, PlannerRevisionContext):
+            accessory_payload = revision_ctx.accessories.get(lane)
+            if accessory_payload:
+                receipts_payload[f"{lane}_accessory"] = {"reused": True, "payload": accessory_payload}
         base_payload = {
             "lane": lane,
             "reused": True,
@@ -4447,15 +5317,10 @@ class SingleAgentController:
             "source": "agentic_revision",
             "revision": True,
         }
-        event = None
-        if receipts_payload:
-            event = build_lane_reuse_event(lane, base_payload, receipts=receipts_payload)
-        if event is None:
-            event = EventEmitter.status("lane_reused", message)
-            data = event.setdefault("data", {})
-            data.update(base_payload)
-        else:
-            event.setdefault("data", {}).setdefault("message", message)
+        if not receipts_payload:
+            return None
+        event = build_lane_reuse_event(lane, base_payload, receipts=receipts_payload)
+        event.setdefault("data", {}).setdefault("message", message)
         data = event.setdefault("data", {})
         data["follow_up_route"] = getattr(ctx, "follow_up_route", FollowUpRoute.FULL_PIPELINE).value
         if self._follow_up_guardrail:
@@ -4490,13 +5355,31 @@ class SingleAgentController:
             "web": "reused_web",
             "market": "reused_stock",
         }
-        attr = attribute_map.get(lane)
+        normalized_lane = lane.strip().lower()
+        tool_receipts = getattr(ctx, "tool_receipts", {}) or {}
+        lane_receipts: Dict[str, ToolInvocationReceipt] = {}
+        for tool_name, receipt in tool_receipts.items():
+            if not isinstance(receipt, ToolInvocationReceipt):
+                continue
+            lane_for_tool = SEQUENCER_LANE_TOOL_LOOKUP.get(str(tool_name).strip().lower())
+            if lane_for_tool == normalized_lane:
+                lane_receipts[tool_name] = receipt
+        has_receipt = bool(lane_receipts)
+        revision_ctx = getattr(ctx, "revision_context", None)
+        if not has_receipt and revision_ctx and isinstance(revision_ctx, PlannerRevisionContext):
+            if revision_ctx.receipts or revision_ctx.accessories.get(normalized_lane):
+                has_receipt = True
+        # Block reuse events on fresh runs without cached receipts.
+        if not has_receipt and not bool(getattr(ctx, "session_follow_up", False)):
+            return None
+        attr = attribute_map.get(normalized_lane)
         if attr:
             setattr(ctx, attr, True)
         refresh_flags = dict(getattr(ctx, "lane_refresh_required", {}) or {})
-        refresh_flags[lane] = False
+        refresh_flags[normalized_lane] = False
         ctx.lane_refresh_required = refresh_flags
-        lane_states[lane] = "reused"
+        already_reused = lane_states.get(normalized_lane) == "reused"
+        lane_states[normalized_lane] = "reused"
         if self._session_snapshot:
             try:
                 payload = {
@@ -4504,12 +5387,17 @@ class SingleAgentController:
                     "reused": True,
                     "from_cache": True,
                     "guardrail": sanitize_for_json(dict(guardrail)) if guardrail else None,
-                    "lane": lane,
+                    "lane": normalized_lane,
                 }
-                self._session_snapshot.record_tool_receipt(f"{lane}_refresh", payload)
+                self._session_snapshot.record_tool_receipt(f"{normalized_lane}_refresh", payload)
             except Exception:
-                logger.debug("Failed to record lane reuse receipt for %s", lane, exc_info=True)
-        return self._build_lane_reuse_event(ctx, lane, reason=reason)
+                logger.debug("Failed to record lane reuse receipt for %s", normalized_lane, exc_info=True)
+        if already_reused:
+            return None
+        reuse_event = self._build_lane_reuse_event(ctx, normalized_lane, reason=reason)
+        if reuse_event and normalized_lane in {"web", "market"}:
+            self._mark_accessory_lane(normalized_lane)
+        return reuse_event
 
     def _prime_lane_reuse_events(self, ctx: PlannerPhaseContext) -> None:
         candidate_reasons: Dict[str, str] = {
@@ -4636,6 +5524,8 @@ class SingleAgentController:
                         hook_ctx["session_id"] = fallback_session
                 async for session_event in _maybe_emit_session_event():
                     yield session_event
+                for reuse_event in self._drain_lane_reuse_events(hook_ctx):
+                    yield reuse_event
                 if event.get("event") == "workflow_complete":
                     workflow_complete_seen = True
                 async for post_event in hooks.after_event(hook_ctx, event):
@@ -4765,6 +5655,9 @@ class SingleAgentController:
         self._abort_stale_sequencer(reason="restart")
         self._agent_turn_observed = False
         self._last_agent_runtime_used = False
+        self._seen_web_search_ids.clear()
+        self._cached_accessory_ready_lanes.clear()
+        self._non_financial_decline = False
         hooks = _SingleAgentToolHooks(self, session_id=session_id)
         stream = self._agentic_event_stream(query, session_id=session_id)
         try:
@@ -4797,6 +5690,43 @@ class SingleAgentController:
                 error_event["data"]["error_code"] = "direct_fallback_failed"
                 yield apply_mode_metadata(error_event, self.flow_mode)
             return
+        except Exception as exc:
+            redirect = self._workflow_redirect_event(
+                session_id=session_id,
+                reason="agent_runtime_fatal",
+                guardrail=self._follow_up_guardrail,
+            )
+            yield redirect
+            error_event = EventEmitter.error(
+                "workflow_error",
+                f"agent runtime fatal error: {exc}",
+                code="agent_runtime_fatal",
+                details={"flow_mode": self.flow_mode.value if self.flow_mode else "single_agent"},
+            )
+            error_event["event"] = "workflow_error"
+            error_event.setdefault("data", {})
+            error_event["data"]["error_code"] = "agent_runtime_fatal"
+            yield apply_mode_metadata(error_event, self.flow_mode)
+            try:
+                async for direct_event in self._planner.events(
+                    query,
+                    session_id=session_id,
+                    revision_requested=False,
+                ):
+                    yield apply_mode_metadata(direct_event, FlowMode.DIRECT)
+                self._agent_turn_observed = True
+            except Exception as fallback_exc:
+                fallback_error = EventEmitter.error(
+                    "workflow_error",
+                    f"direct fallback failed: {fallback_exc}",
+                    code="direct_fallback_failed",
+                    details={"flow_mode": self.flow_mode.value if self.flow_mode else "single_agent"},
+                )
+                fallback_error["event"] = "workflow_error"
+                fallback_error.setdefault("data", {})
+                fallback_error["data"]["error_code"] = "direct_fallback_failed"
+                yield apply_mode_metadata(fallback_error, self.flow_mode)
+            return
         if self._last_agent_runtime_used and not self._agent_turn_observed:
             redirect = self._workflow_redirect_event(
                 session_id=session_id,
@@ -4827,13 +5757,9 @@ class SingleAgentController:
         emit_prefill_summary = bool(self._agentic_revision_mode and self._agentic_lane_targets)
 
         state = await self._prepare_sequencer_state(query, session_id=session_id)
-        # Route both fresh and revision traffic through the AgentRuntime whenever it is available;
-        # deterministic planner lanes are reserved for when agents are disabled or unavailable.
-        use_agent_runtime = self._should_use_agent_runtime()
-        if not use_agent_runtime and self._agent is not None:
-            # Force-enable AgentRuntime when an agent bundle exists; deterministic fallbacks happen via redirects.
-            use_agent_runtime = True
-        if not use_agent_runtime and self._agent is None:
+        # Route revision traffic through the AgentRuntime; keep fresh runs on the deterministic planner.
+        use_agent_runtime = bool(getattr(state, "is_revision_follow_up", False))
+        if self._agent is None:
             # No agent available: emit a redirect immediately rather than silently running the planner sequencer.
             redirect = self._workflow_redirect_event(
                 session_id=session_id or getattr(state.ctx, "session_id", None),
@@ -4844,10 +5770,72 @@ class SingleAgentController:
             return
         setattr(state, "use_agent_runtime", use_agent_runtime)
         self._last_agent_runtime_used = use_agent_runtime
+        if not use_agent_runtime:
+            async for event in self._planner.events(
+                query,
+                session_id=session_id,
+                revision_requested=False,
+            ):
+                yield apply_mode_metadata(event, self.flow_mode)
+            return
         state.lane_states = lane_states  # type: ignore[attr-defined]
         self._sequencer_state = state
         summary_emitted = False
         try:
+            if use_agent_runtime:
+                async for event in self._intent_stage():
+                    yield event
+                if getattr(state.ctx, "halted", False):
+                    error_event = EventEmitter.error(
+                        "workflow_error",
+                        "intent not ready for agent runtime",
+                        code="intent_not_ready",
+                        details={
+                            "flow_mode": self.flow_mode.value if self.flow_mode else "single_agent",
+                            "halt_reason": getattr(state.ctx, "halt_reason", None),
+                        },
+                    )
+                    error_event["event"] = "workflow_error"
+                    error_event.setdefault("data", {})
+                    error_event["data"]["error_code"] = "intent_not_ready"
+                    error_event["data"]["halt_reason"] = getattr(state.ctx, "halt_reason", None)
+                    yield apply_mode_metadata(error_event, self.flow_mode)
+                    return
+                await self._hydrate_agent_snapshot(state.ctx)
+                intent_ready = bool(getattr(state.ctx, "intent", None)) and bool(
+                    getattr(state.ctx, "plan", None) or getattr(state.ctx, "provisional_plan", None)
+                )
+                clarifications_needed = bool(
+                    getattr(state.ctx, "clarifications_needed", False)
+                    or getattr(getattr(state.ctx, "intent", None), "clarifications_needed", False)
+                )
+                pending_followups = 0
+                intent_resolution = getattr(state.ctx, "intent_resolution", None)
+                if intent_resolution is not None:
+                    followups = getattr(intent_resolution, "followups", None) or []
+                    try:
+                        pending_followups = len(followups)
+                    except TypeError:
+                        pending_followups = 1
+                if not intent_ready or clarifications_needed or pending_followups > 0:
+                    error_event = EventEmitter.error(
+                        "workflow_error",
+                        "intent not ready for agent runtime",
+                        code="intent_not_ready",
+                        details={
+                            "flow_mode": self.flow_mode.value if self.flow_mode else "single_agent",
+                            "clarifications_needed": clarifications_needed,
+                            "pending_followups": pending_followups,
+                        },
+                    )
+                    error_event["event"] = "workflow_error"
+                    error_event.setdefault("data", {})
+                    error_event["data"]["error_code"] = "intent_not_ready"
+                    error_event["data"]["clarifications_needed"] = clarifications_needed
+                    error_event["data"]["pending_followups"] = pending_followups
+                    yield apply_mode_metadata(error_event, self.flow_mode)
+                    return
+
             if not use_agent_runtime:
                 redirect = self._workflow_redirect_event(
                     session_id=session_id or getattr(state.ctx, "session_id", None),
@@ -4887,6 +5875,11 @@ class SingleAgentController:
                 for warning_event in self._drain_lane_warning_events():
                     yield warning_event
 
+            if self._finalize_lane_states(lane_states, state.ctx):
+                summary_emitted = False
+                for warning_event in self._drain_lane_warning_events():
+                    yield warning_event
+
             if not summary_emitted:
                 summary_event = self._emit_lane_summary(lane_states)
                 if summary_event:
@@ -4894,32 +5887,30 @@ class SingleAgentController:
         finally:
             self._sequencer_state = None
         if use_agent_runtime and not self._agent_turn_observed:
+            # Do not run planner analysis; emit hard error and stop.
             redirect = self._workflow_redirect_event(
                 session_id=session_id or getattr(state.ctx, "session_id", None),
                 reason="agent_runtime_missing_agent_turns",
                 guardrail=self._follow_up_guardrail,
             )
             yield redirect
-            try:
-                async for direct_event in self._planner.events(
-                    query,
-                    session_id=session_id,
-                    revision_requested=False,
-                ):
-                    yield apply_mode_metadata(direct_event, FlowMode.DIRECT)
-                self._agent_turn_observed = True
-            except Exception as exc:
-                fallback_error = EventEmitter.error(
-                    "workflow_error",
-                    f"direct fallback failed: {exc}",
-                    code="direct_fallback_failed",
-                    details={"flow_mode": self.flow_mode.value if self.flow_mode else "single_agent"},
-                )
-                fallback_error["event"] = "workflow_error"
-                fallback_error.setdefault("data", {})
-                fallback_error["data"]["error_code"] = "direct_fallback_failed"
-                yield apply_mode_metadata(fallback_error, self.flow_mode)
+            error_event = EventEmitter.error(
+                "workflow_error",
+                "agent runtime emitted no agent_turn telemetry; halting without planner fallback",
+                code="agent_runtime_missing_agent_turns",
+                details={"flow_mode": self.flow_mode.value if self.flow_mode else "single_agent"},
+            )
+            error_event["event"] = "workflow_error"
+            error_event.setdefault("data", {})
+            error_event["data"]["error_code"] = "agent_runtime_missing_agent_turns"
+            yield apply_mode_metadata(error_event, self.flow_mode)
+            return
 
+    # Function: _run_agentic_revision_loop
+    #   Role: Routes SingleAgent execution through either the AgentRuntime path or the deterministic planner lanes while streaming SSE telemetry.
+    #   Called from: analytics.flows.single_agent_tools._agentic_event_stream to execute a single end-to-end run.
+    #   Invokes: _agent_run_stage when agents are enabled; otherwise _intent_stage, _sql_stage, _web_stage, _market_stage, _analysis_stage.
+    #   Why: Centralizes branching between agentic and planner flows so ledger replays and telemetry stay consistent across modes.
     async def _run_agentic_revision_loop(
         self,
         state: "_SequencerRunState",
@@ -4929,14 +5920,14 @@ class SingleAgentController:
         use_agent_runtime: bool,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         ctx = state.ctx
-        async for event in self._intent_stage():
-            yield event
-        if getattr(ctx, "halted", False):
-            return
-
         if use_agent_runtime:
             async for event in self._agent_run_stage():
                 yield event
+            return
+
+        async for event in self._intent_stage():
+            yield event
+        if getattr(ctx, "halted", False):
             return
 
         try:
@@ -5000,6 +5991,32 @@ class SingleAgentController:
         query: Optional[str] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         self.set_follow_up_route(FollowUpRoute.REUSE_SQL)
+        snapshot = self._session_snapshot
+        if snapshot is None:
+            try:
+                repository = get_session_state_repository()
+                snapshot = await repository.load(session_id)
+                self._session_snapshot = snapshot
+            except Exception:
+                snapshot = None
+        chart_ready = bool(getattr(snapshot, "last_chart_spec", None)) if snapshot else False
+        if not chart_ready:
+            redirect = self._workflow_redirect_event(
+                session_id=session_id,
+                reason="missing_chart_spec",
+                guardrail=self._follow_up_guardrail,
+            )
+            yield redirect
+            error_event = EventEmitter.error(
+                "workflow_error",
+                "Chart revision requires a stored chart spec; rerun a fresh analysis first.",
+                code="CHART_REVISION_MISSING_SPEC",
+                details={"session_id": session_id},
+            )
+            error_event["event"] = "workflow_error"
+            error_event.setdefault("data", {})["error_code"] = "CHART_REVISION_MISSING_SPEC"
+            yield apply_mode_metadata(error_event, self.flow_mode)
+            return
         hooks = _SingleAgentToolHooks(self, session_id=session_id)
         async for event in self._invoke_planner_tool(
             "chart_revision",
@@ -5237,6 +6254,14 @@ class SingleAgentController:
         agent_turn_end["data"]["session_id"] = session_id
         agent_turn_end["data"]["revision"] = True
         yield apply_mode_metadata(agent_turn_end, self.flow_mode)
+        coordination_complete = {
+            "event": "agent_coordination",
+            "data": dict(coordination_event["data"]),
+        }
+        coordination_complete["data"]["status"] = "completed"
+        coordination_complete["data"]["elapsed_ms"] = elapsed_ms
+        self._record_agent_coordination_event(coordination_complete["data"])
+        yield apply_mode_metadata(coordination_complete, self.flow_mode)
         if agentic_lane_entry is None:
             raise AgentRevisionLaneMissing("Agent lane decision missing; cannot continue revision.")
         lane_from_agent = str(agentic_lane_entry.get("lane") or "").strip().lower()

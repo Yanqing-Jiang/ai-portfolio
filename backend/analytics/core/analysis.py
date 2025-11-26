@@ -128,17 +128,23 @@ def _build_analysis_prompt(
     focus_block = ""
     if focus:
         focus_block = f"\nFollow-up emphasis: {focus}"
+    # Post-clarification guardrail: the user-facing questions were already asked upstream.
+    no_more_questions = (
+        "\nDo NOT ask the user any more questions. Assume the provided inputs and defaults are final; "
+        "deliver the analysis with the data you have."
+    )
     return f"""
 User question: {query}
 SQL query executed:
 {sql}
-Sample of result rows:
+SQL result:
 {data_preview}
 Chart summary:
 {chart_summary}
 Headline summary (ordered for references):
 {news_summary}
 {focus_block}
+{no_more_questions}
 {_PROMPT_INSTRUCTIONS}
 """.strip()
 async def stream_insights_llm(

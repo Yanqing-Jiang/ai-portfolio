@@ -1413,7 +1413,24 @@ async def analytics_memory_stream_endpoint(
     """Stream analytics memory results with conversational clarifications"""
     legacy_mode = request.query_params.get('mode')
     requested_flow_raw = (flow or legacy_mode or '').strip() if (flow or legacy_mode) else ''
-    selected_flow = requested_flow_raw.lower() or None
+
+    # Respect explicit flow selection from the client while keeping single-agent as the default.
+    allowed_flows = {
+        "planner-executor",
+        "single-agent",
+        "multi-agent",
+        "single-agent-legacy",
+        "multi-agent-legacy",
+    }
+    if requested_flow_raw in allowed_flows:
+        selected_flow = "single-agent" if requested_flow_raw.endswith("single-agent-legacy") else requested_flow_raw
+        # Normalize legacy aliases to their modern equivalents
+        if selected_flow == "single-agent-legacy":
+            selected_flow = "single-agent"
+        elif selected_flow == "multi-agent-legacy":
+            selected_flow = "multi-agent"
+    else:
+        selected_flow = "single-agent"
 
     normalized_session = (session_id or "").strip()
     revision_requested = bool(infer_chart_patch_from_query(query)) or bool(is_analysis_revision_query(query))

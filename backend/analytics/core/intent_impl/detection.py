@@ -191,7 +191,7 @@ from ..slot_catalog import get_slot_catalog, IntentSlotDefinition, SlotOption
 
 logger = logging.getLogger(__name__)
 
-_CLASSIFIER_PROVIDER_ENV = (os.getenv("ANALYTICS_CLASSIFIER_PROVIDER") or "gemini").strip().lower()
+_CLASSIFIER_PROVIDER_ENV = (os.getenv("ANALYTICS_CLASSIFIER_PROVIDER") or "openai").strip().lower()
 _DEFAULT_OPENAI_CLASSIFIER_MODEL = os.getenv("OPENAI_CLASSIFIER_MODEL", "gpt-5-nano-2025-08-07")
 _DEFAULT_GEMINI_CLASSIFIER_MODEL = os.getenv("GEMINI_CLASSIFIER_MODEL", "gemini-2.5-flash-lite")
 
@@ -1311,9 +1311,10 @@ def _llm_to_runtime_intent(llm_res: LLMIntentModel) -> IntentModel:
 
 
 def _resolve_classifier_provider(provider: Optional[str]) -> str:
-    candidate = (provider or _CLASSIFIER_PROVIDER_ENV or "gemini").strip().lower()
-    if candidate not in {"gemini", "openai"}:
-        candidate = "gemini"
+    # Gemini classifier is disabled; normalize everything to OpenAI.
+    candidate = (provider or _CLASSIFIER_PROVIDER_ENV or "openai").strip().lower()
+    if candidate != "openai":
+        return "openai"
     return candidate
 
 
@@ -1443,27 +1444,11 @@ async def classify_query_async(
     reasoning_effort: str = "low",
     provider: Optional[str] = None,
 ) -> OffTopicClassifierSchema:
-    """Async helper that routes between Gemini (default) and OpenAI classifiers."""
+    """Async helper that always uses the OpenAI classifier (Gemini disabled)."""
 
-    resolved_provider = _resolve_classifier_provider(provider)
+    # Force OpenAI classifier regardless of caller/provider/env to avoid Gemini validation errors.
+    resolved_provider = "openai"
     target_model = _resolve_classifier_model(resolved_provider, model)
-
-    if resolved_provider == "gemini":
-        try:
-            return await _classify_with_gemini(
-                query,
-                session_id=session_id,
-                model=target_model,
-                reasoning_effort=reasoning_effort,
-            )
-        except Exception as exc:
-            logger.warning(
-                "Gemini classifier failed (%s); falling back to OpenAI for session %s",
-                exc,
-                session_id,
-            )
-            resolved_provider = "openai"
-            target_model = _resolve_classifier_model(resolved_provider, None)
 
     return await _classify_with_openai(
         query,

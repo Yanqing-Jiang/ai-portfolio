@@ -515,6 +515,9 @@ CONFIGS = get_configs()
 CONFIG_STORE = get_config_store()
 SUPERVISOR_TOOLS = SupervisorTools()
 logger = logging.getLogger(__name__)
+PRIMARY_CLASSIFIER_MODEL = os.getenv("OPENAI_CLASSIFIER_MODEL", "gpt-5-nano-2025-08-07")
+SECONDARY_CLASSIFIER_MODEL = os.getenv("OPENAI_SECONDARY_CLASSIFIER_MODEL", "gpt-4o-mini")
+ 
 
 _TOOL_TO_ANALYSIS_LANE: Dict[str, str] = {
     "sql_generator": "sql",
@@ -931,6 +934,10 @@ class PlannerPhaseContext:
     follow_up_route: FollowUpRoute = FollowUpRoute.FULL_PIPELINE
     reuse_sql: bool = False
     stock_only: bool = False
+    blocking_clarification: bool = False
+    clarification_timeout_seconds: float = 60.0
+    clarification_answers: List[Dict[str, Any]] = field(default_factory=list)
+    clarifications_needed: Optional[bool] = None
     artifacts: PipelineArtifacts = field(default_factory=PipelineArtifacts)
     snapshot_artifacts: Optional[PipelineArtifacts] = None
     revision_snapshot: Optional[Dict[str, Any]] = None
@@ -1006,7 +1013,11 @@ SNAPSHOT_MAX_AGE_SECONDS = int(os.getenv("ANALYTICS_SNAPSHOT_MAX_AGE_SECONDS", "
 _WEB_TOOL_NAMES = {"web_retriever", "web_retriever_cached", "web_retriever_live"}
 _MARKET_TOOL_NAMES = {"stock_tracker", "market_question_a", "market_question_b"}
 FRESH_RUN_REASONING_EFFORT = "minimal"
-CLASSIFIER_TIMEOUT_SECONDS = float(os.getenv("ANALYTICS_CLASSIFIER_TIMEOUT_SECONDS", "2.5"))
+CLASSIFIER_TIMEOUT_SECONDS = float(os.getenv("ANALYTICS_CLASSIFIER_TIMEOUT_SECONDS", "6.0"))
+
+# Helper: classifier models (OpenAI-only; Gemini disabled)
+PRIMARY_CLASSIFIER_MODEL = os.getenv("OPENAI_CLASSIFIER_MODEL", "gpt-5-nano-2025-08-07")
+SECONDARY_CLASSIFIER_MODEL = os.getenv("OPENAI_SECONDARY_CLASSIFIER_MODEL", "gpt-4o-mini")
 
 FOLLOW_UP_BANNERS: Dict[FollowUpRoute, Dict[str, str]] = {
     FollowUpRoute.FULL_PIPELINE: {
@@ -1159,10 +1170,28 @@ async def _run_classifier_with_timeout(
             CLASSIFIER_TIMEOUT_SECONDS,
             ctx.session_id,
         )
-        return _build_classifier_fallback("timeout")
-    except Exception as exc:
-        logger.exception("[CLASSIFICATION] Model error; using fallback: %s", exc)
-        return _build_classifier_fallback(str(exc))
+        raise
+    except Exception:
+        logger.exception("[CLASSIFICATION] Model error; propagating")
+        raise
+
+
+async def _run_classifier_with_fallback(
+    ctx: "PlannerPhaseContext",
+    primary_model: str = PRIMARY_CLASSIFIER_MODEL,
+    secondary_model: str = SECONDARY_CLASSIFIER_MODEL,
+) -> OffTopicClassifierSchema:
+    """
+    Use OpenAI classifier; on timeout/error fall back to the secondary OpenAI model.
+    """
+    try:
+        return await _run_classifier_with_timeout(ctx, primary_model, "openai")
+    except Exception as exc:  # pragma: no cover - fallback path validated separately
+        logger.warning(
+            "[CLASSIFICATION] Primary classifier failed; falling back to secondary OpenAI model: %s",
+            exc,
+        )
+        return await _run_classifier_with_timeout(ctx, secondary_model, "openai")
 
 
 def _set_sql_generation_artifact(
@@ -2538,6 +2567,23 @@ def _hydrate_context_from_snapshot(
                 topic=web_payload.get("topic"),
                 latency_stats=web_payload.get("latency_stats"),
             )
+    if artifacts.web is None and snapshot is not None and hasattr(snapshot, "tool_cache"):
+        tool_cache = snapshot.tool_cache if isinstance(snapshot.tool_cache, Mapping) else {}
+        web_cache = tool_cache.get("web_search") if isinstance(tool_cache, Mapping) else None
+        if isinstance(web_cache, Mapping) and web_cache:
+            sanitized = sanitize_for_json(dict(web_cache)) or {}
+            if isinstance(sanitized, Mapping) and sanitized:
+                artifacts.web = WebContextArtifact(
+                    query=ctx.query,
+                    summary=sanitized.get("summary"),
+                    snippets=list(sanitized.get("snippets") or sanitized.get("articles") or []),
+                    search_id=sanitized.get("search_id") or sanitized.get("searchId"),
+                    from_cache=sanitized.get("from_cache") or True,
+                    metadata=copy.deepcopy(sanitized.get("metadata") or {}),
+                    topic=sanitized.get("topic") or sanitized.get("search_topic"),
+                    latency_stats=sanitized.get("latency_stats"),
+                )
+                setattr(ctx, "web_search_seeded", True)
 
     cached_tool_results: List[Dict[str, Any]] = []
     if ctx.revision_snapshot:
@@ -3218,6 +3264,22 @@ class PlannerPipeline:
         if planner_meta.get("follow_up_route") != route_value:
             planner_meta["follow_up_route"] = route_value
             snapshot.tool_cache["planner_metadata"] = planner_meta
+            updated = True
+        clar_answers = getattr(ctx, "clarification_answers", None)
+        if clar_answers:
+            try:
+                answers_payload = sanitize_for_json(list(clar_answers))
+            except Exception:
+                answers_payload = list(clar_answers)
+            try:
+                snapshot.agents_clarifications = answers_payload if isinstance(answers_payload, list) else list(clar_answers)
+            except Exception:
+                snapshot.agents_clarifications = list(clar_answers)
+            snapshot.routing["clarifications_needed"] = False
+            updated = True
+        clar_needed_flag = getattr(ctx, "clarifications_needed", None)
+        if clar_needed_flag is not None:
+            snapshot.routing["clarifications_needed"] = bool(clar_needed_flag)
             updated = True
         receipts = getattr(ctx, "tool_receipts", None)
         if receipts:
@@ -5095,6 +5157,26 @@ class PlannerPipeline:
         analysis_start = time.time()
         full_analysis = ""
         fragments: List[str] = []
+        # If the pipeline already resolved clarifications, seed the analysis stream with a short summary
+        # of resolved slots to discourage downstream prompts from re-asking.
+        if (
+            getattr(ctx, "clarifications_needed", None) is False
+            and getattr(getattr(ctx, "intent", None), "clarifications_needed", None) is False
+        ):
+            resolved_slots: List[str] = []
+            slot_statuses = getattr(ctx, "slot_statuses", {}) or {}
+            for slot_name, status_obj in slot_statuses.items():
+                value = None
+                if isinstance(status_obj, Mapping):
+                    value = status_obj.get("value")
+                else:
+                    value = getattr(status_obj, "value", None)
+                if value:
+                    resolved_slots.append(f"{slot_name}: {value}")
+            if resolved_slots:
+                seed_line = f"Using clarified inputs ({'; '.join(resolved_slots)}). "
+                full_analysis += seed_line
+                fragments.append(seed_line)
         async for text_chunk in stream_insights_llm(
             data,
             sql,
@@ -5833,13 +5915,8 @@ async def _classification_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerato
     timed_emitter = ctx.timed_emitter
     timed_emitter.start_step("classification")
     classification_started_ts = datetime.utcnow().isoformat()
-    classifier_provider = (os.getenv("ANALYTICS_CLASSIFIER_PROVIDER") or "gemini").strip().lower()
-    if classifier_provider not in {"gemini", "openai"}:
-        classifier_provider = "gemini"
-    if classifier_provider == "gemini":
-        model_name = os.getenv("GEMINI_CLASSIFIER_MODEL", "gemini-2.5-flash-lite")
-    else:
-        model_name = os.getenv("OPENAI_CLASSIFIER_MODEL", "gpt-5-nano-2025-08-07")
+    classifier_provider = "gemini"
+    model_name = PRIMARY_CLASSIFIER_MODEL
     yield {
         "event": "classification_started",
         "data": {
@@ -5868,7 +5945,7 @@ async def _classification_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerato
         name=f"intent-slots::{ctx.session_id}",
     )
     classifier_task = asyncio.create_task(
-        _run_classifier_with_timeout(ctx, model_name, classifier_provider),
+        _run_classifier_with_fallback(ctx, PRIMARY_CLASSIFIER_MODEL, SECONDARY_CLASSIFIER_MODEL),
         name=f"classifier::{ctx.session_id}",
     )
     try:
@@ -6170,7 +6247,7 @@ async def _intent_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[s
     )
     self._capture_artifacts(ctx)
     clarifications_needed = bool(deduped_requests)
-    confidence_sufficient = (intent.confidence or 0.0) >= 0.8
+    confidence_sufficient = (intent.confidence or 0.0) >= 0.75
 
     log_intent_resolution(
         intent_key=intent.intent_key,
@@ -6240,6 +6317,10 @@ async def _clarification_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator
     official_clarifications = list(ctx.clarifications)
     assumptions = list(ctx.assumptions)
     rounds = ctx.clarification_rounds
+    blocking_mode = bool(getattr(ctx, "blocking_clarification", False))
+    timeout_seconds = float(getattr(ctx, "clarification_timeout_seconds", 60.0) or 60.0)
+    clar_answers: List[Dict[str, Any]] = list(getattr(ctx, "clarification_answers", []))
+    ctx.clarifications_needed = bool(official_clarifications)
     all_answered_slots: set[str] = set()
     history_entries: List[Dict[str, Any]] = []
     _refresh_followups(ctx, official_clarifications)
@@ -6291,9 +6372,33 @@ async def _clarification_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator
             try:
                 answer = await asyncio.wait_for(
                     wait_for_answer_blocking(session_id, slot_request.request_id),
-                    timeout=60.0,
+                    timeout=timeout_seconds,
                 )
             except asyncio.TimeoutError:
+                if blocking_mode:
+                    timeout_payload = {
+                        "session_id": session_id,
+                        "request_id": slot_request.request_id,
+                        "slot": slot_request.slot,
+                        "ts": datetime.utcnow().isoformat(),
+                    }
+                    follow_up_route = getattr(ctx, "follow_up_route", None)
+                    if follow_up_route is not None:
+                        timeout_payload["follow_up_route"] = getattr(follow_up_route, "value", None)
+                    timeout_event = EventEmitter.error(
+                        "workflow_error",
+                        f"Timeout waiting for {slot_request.slot} clarification.",
+                        details=timeout_payload,
+                        code="clarification_timeout",
+                    )
+                    timeout_event["event"] = "workflow_error"
+                    timeout_event.setdefault("data", {}).update(timeout_payload)
+                    timeout_event["data"]["error_code"] = "clarification_timeout"
+                    yield timeout_event
+                    ctx.halted = True
+                    ctx.halt_reason = "clarification_timeout"
+                    ctx.clarifications_needed = True
+                    return
                 timeout_event = EventEmitter.progress(
                     "clarification_timeout",
                     f"Timeout waiting for {slot_request.slot} clarification. Using default value.",
@@ -6359,6 +6464,14 @@ async def _clarification_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator
                         "slot": answer.slot,
                         "value": answer.value,
                     }
+                    clar_answers.append(
+                        {
+                            "slot": answer.slot,
+                            "value": answer.value,
+                            "request_id": slot_request.request_id,
+                            "ts": answer.ts or datetime.utcnow().isoformat(),
+                        }
+                    )
                     template = choose_template(
                         intent, provisional_plan, CONFIGS.__dict__
                     )
@@ -6463,10 +6576,16 @@ async def _clarification_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator
     ctx.provisional_plan = provisional_plan
     ctx.template = template
     ctx.assumptions = assumptions
+    ctx.clarification_answers = clar_answers
+    ctx.clarifications_needed = bool(official_clarifications)
     ctx.clarification_rounds = rounds
     ctx.clarifications = official_clarifications
 
-    remaining_missing = _auto_fill_missing_slots(ctx, assumptions)
+    remaining_missing: List[str]
+    if blocking_mode:
+        remaining_missing = []
+    else:
+        remaining_missing = _auto_fill_missing_slots(ctx, assumptions)
     if remaining_missing:
         regenerated_requests: List[ClarifyRequestModel] = []
         for slot_name in remaining_missing:

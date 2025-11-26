@@ -158,7 +158,9 @@ def derive_accessory_events(
             if stock_payload:
                 stock_payload.setdefault("reused", bool(getattr(ctx, "reused_stock", False)))
                 event = _base_event("stock_ready", stock_payload, lane="market")
-                if event and (not getattr(ctx, "stock_ready_emitted", False) or stock_payload.get("reused")):
+                already_emitted = bool(getattr(ctx, "stock_ready_emitted", False))
+                reuse_flag = bool(stock_payload.get("reused"))
+                if event and (not already_emitted or not reuse_flag):
                     derived.append(mark_delta_event(event, ctx))
                     ctx.stock_ready_emitted = True  # type: ignore[attr-defined]
 
@@ -170,6 +172,17 @@ def derive_accessory_events(
                 web_payload["reused"] = bool(payload.get("from_cache") or data.get("reused"))
             if web_payload:
                 web_payload.setdefault("reused", bool(getattr(ctx, "reused_web", False)))
+                search_id = web_payload.get("search_id") or web_payload.get("searchId")
+                if not search_id and isinstance(web_payload.get("web_context"), Mapping):
+                    context_payload = web_payload.get("web_context") or {}
+                    search_id = context_payload.get("search_id") or context_payload.get("searchId")
+                normalized_search_id = str(search_id).strip() if search_id else ""
+                seen_search_ids: set[str] = getattr(ctx, "_fanout_search_ids", set())
+                if normalized_search_id:
+                    if normalized_search_id in seen_search_ids:
+                        return derived
+                    seen_search_ids.add(normalized_search_id)
+                    setattr(ctx, "_fanout_search_ids", seen_search_ids)
                 event = _base_event("web_ready", web_payload, lane="web")
                 if event and (not getattr(ctx, "web_ready_emitted", False) or web_payload.get("reused")):
                     derived.append(mark_delta_event(event, ctx))

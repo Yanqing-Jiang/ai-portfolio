@@ -75,7 +75,7 @@
 #   Invokes: os.getenv
 #   Why: Keeps analytics.flows.tooling from duplicating resolve concurrency limit behavior across flows.
 # Function: run_tool_parallelism
-#   Role: Execute the registered tool adapters and yield telemetry events.
+#   Role: Execute the registered tool adapters with concurrency pinned to the adapter count and yield telemetry events.
 #   Called from: analytics.flows.planner.analysis_lane, analytics.flows.planner.fanout, analytics.flows.planner_executor, tests.analytics.test_planner_executor_sql
 #   Invokes: analytics.flows.tooling.ToolExecutionContext, analytics.core.telemetry.tool_parallelism, analytics.flows.tooling.ToolTaskGroup, asyncio.Queue, +2 more
 #   Why: Supports downstream analytics workflows that rely on run_tool_parallelism.
@@ -1630,12 +1630,25 @@ async def run_tool_parallelism(
 
     tool_manifests = [adapter.get_metadata() for adapter in selected_adapters]
 
-    default_concurrency = len(selected_adapters)
-    concurrency_limit = concurrency_override or _resolve_concurrency_limit(
-        ctx,
-        default=default_concurrency,
-        max_size=len(selected_adapters),
-    )
+    tool_count = len(selected_adapters)
+    default_concurrency = tool_count
+    if concurrency_override is not None:
+        try:
+            concurrency_limit = int(concurrency_override)
+        except (TypeError, ValueError):
+            concurrency_limit = tool_count
+    elif hasattr(ctx, "tool_parallel_concurrency") and isinstance(
+        getattr(ctx, "tool_parallel_concurrency", None), (int, float)
+    ):
+        concurrency_limit = max(1, int(getattr(ctx, "tool_parallel_concurrency")))
+    else:
+        concurrency_limit = _resolve_concurrency_limit(
+            ctx,
+            default=default_concurrency,
+            max_size=None,
+        )
+    if concurrency_limit < tool_count:
+        concurrency_limit = tool_count
     if adapters is None:
         ctx.tool_parallel_manifest = tool_manifests
         ctx.tool_parallel_results = []

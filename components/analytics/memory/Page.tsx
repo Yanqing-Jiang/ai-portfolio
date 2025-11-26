@@ -94,7 +94,7 @@ const MemoryAnalyticsPage: React.FC = () => {
   const [useAltChart, setUseAltChart] = useState(false);
   const [hasStartedChat, setHasStartedChat] = useState(false);
   const [isHeaderCollapsed, setIsHeaderCollapsed] = useState(false);
-  const [selectedFlow, setSelectedFlow] = useState<FlowOption>('planner-executor');
+  const [selectedFlow, setSelectedFlow] = useState<FlowOption>('single-agent');
   const [promptRotationKey, setPromptRotationKey] = useState(0);
 
   // Reset header to expanded state when component mounts (project navigation)
@@ -567,9 +567,9 @@ Multi-Agent: workload delegation & orchestration, fastest speed
                       : 'Select an analytics workflow before starting a chat.'
                   }
                 >
-                  <option value="planner-executor">Direct Workflow</option>
                   <option value="single-agent">Single Agent</option>
                   <option value="multi-agent">Multi-Agent</option>
+                  <option value="planner-executor">Direct Workflow</option>
                 </select>
                 <span
                   className={"px-2 py-1 text-xs rounded-full border transition-colors duration-200 " + FLOW_META[selectedFlow].chipClass}

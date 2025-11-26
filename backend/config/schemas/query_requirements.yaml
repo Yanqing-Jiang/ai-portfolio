@@ -12,6 +12,10 @@
     - company
     - timeframe
     - metric
+    - industry_cohort
+    - statistic
+    - gaap_basis
+    - output_mode
   revenue_growth_vs_avg:
     - company
     - timeframe

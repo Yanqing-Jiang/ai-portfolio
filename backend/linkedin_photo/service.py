@@ -1,5 +1,88 @@
 from __future__ import annotations
 
+# --- Function/Class Map ---
+# Function: _normalize_variation_value
+#   Role: Normalize variation directives from form fields to either cleaned strings or None.
+#   Called from: LinkedInPhotoService.generate_variation
+#   Invokes: None
+#   Why: Prevents empty or placeholder directives from polluting variation prompts.
+# Dataclass: ValidatedImage
+#   Role: Container for validated upload bytes and dimensions.
+#   Called from: LinkedInPhotoService._read_and_validate_image
+#   Invokes: None
+#   Why: Carries validated image metadata through generation steps.
+# Dataclass: VariationDirectives
+#   Role: Holds optional variation tweaks (background, expression, pose, prop).
+#   Called from: LinkedInPhotoService.generate_variation
+#   Invokes: None
+#   Why: Keeps variation inputs organized for prompt assembly.
+# Class: LinkedInPhotoService
+#   Role: Orchestrates prompt expansion and image generation for LinkedIn headshots.
+#   Called from: backend.linkedin_photo.router via module-level service instance.
+#   Invokes: gemini_service, google.genai Client, Pillow helpers.
+#   Why: Central service layer behind /api/linkedin-photo endpoints.
+# Method: __init__
+#   Role: Initialize Gemini image client cache and model selection.
+#   Called from: LinkedInPhotoService instantiation in router.
+#   Invokes: None
+#   Why: Capture chosen image model and logger once per process.
+# Method: generate
+#   Role: Main generation flow from upload -> prompt expansion -> single variation.
+#   Called from: router.generate_linkedin_photo
+#   Invokes: _read_and_validate_image, _expand_prompt, _generate_single_variation
+#   Why: Provide first-try LinkedIn-ready portrait output.
+# Method: generate_variation
+#   Role: Variation flow reusing prior prompt with guided tweaks.
+#   Called from: router.generate_linkedin_photo_variation
+#   Invokes: _read_and_validate_image, _build_variation_prompt, _generate_single_variation
+#   Why: Support iterative nudges without recreating prompts.
+# Method: _generate_single_variation
+#   Role: Convert prompt + reference into one image and package metadata.
+#   Called from: generate, generate_variation
+#   Invokes: _generate_image, _measure_dimensions
+#   Why: Standardize single-output assembly and IDs.
+# Method: _build_variation_prompt
+#   Role: Merge base prompt with variation directives.
+#   Called from: generate_variation
+#   Invokes: None
+#   Why: Keep variation prompt construction consistent and logged.
+# Method: _read_and_validate_image
+#   Role: Load, verify, and enforce policy on uploaded portraits.
+#   Called from: generate, generate_variation
+#   Invokes: Pillow verification, ValidatedImage creation
+#   Why: Protect downstream model calls from invalid or oversized files.
+# Method: _expand_prompt
+#   Role: Call Gemini text model to expand user style guidance.
+#   Called from: generate
+#   Invokes: gemini_service chat session, _summarize_photo
+#   Why: Produce detailed prompt the image model needs.
+# Method: _generate_image
+#   Role: Run Gemini image model with prompt + reference portrait.
+#   Called from: _generate_single_variation
+#   Invokes: _ensure_image_client, client.models.generate_content, _extract_image_bytes
+#   Why: Bridge expanded prompt to actual rendered image bytes.
+# Method: _ensure_image_client
+#   Role: Create or reuse the google.genai client.
+#   Called from: _generate_image
+#   Invokes: google_genai.Client
+#   Why: Hold a single client instance and enforce API key presence.
+# Method: _extract_image_bytes
+#   Role: Pull inline image data from Gemini response parts.
+#   Called from: _generate_image
+#   Invokes: base64 decoding
+#   Why: Convert API response into usable bytes/mime for the frontend.
+# Method: _measure_dimensions
+#   Role: Determine width/height of generated image bytes.
+#   Called from: _generate_single_variation
+#   Invokes: PIL.Image.open
+#   Why: Send dimensions to the frontend for layout hints.
+# Method: _summarize_photo
+#   Role: Describe uploaded portrait for prompt expansion context.
+#   Called from: _expand_prompt
+#   Invokes: None
+#   Why: Give the text model structured photo cues.
+# --- End Function/Class Map ---
+
 import asyncio
 import base64
 import logging
@@ -33,7 +116,7 @@ ALLOWED_CONTENT_TYPES = {"image/jpeg", "image/png"}
 ALLOWED_IMAGE_FORMATS = {"JPEG", "PNG"}
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-DEFAULT_IMAGE_MODEL = os.getenv("LINKEDIN_PHOTO_IMAGE_MODEL", "gemini-2.5-flash-image")
+DEFAULT_IMAGE_MODEL = os.getenv("LINKEDIN_PHOTO_IMAGE_MODEL", "gemini-3-pro-image-preview")
 
 
 def _normalize_variation_value(value: Optional[str]) -> Optional[str]:
@@ -516,6 +599,9 @@ class LinkedInPhotoService:
                 return client.models.generate_content(
                     model=self._image_model,
                     contents=[expanded_prompt, pil_image],
+                    config=genai_types.GenerateContentConfig(
+                        response_modalities=["IMAGE"],
+                    ),
                 )
 
         try:
