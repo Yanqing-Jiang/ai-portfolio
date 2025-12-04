@@ -160,7 +160,7 @@ def derive_accessory_events(
                 event = _base_event("stock_ready", stock_payload, lane="market")
                 already_emitted = bool(getattr(ctx, "stock_ready_emitted", False))
                 reuse_flag = bool(stock_payload.get("reused"))
-                if event and (not already_emitted or not reuse_flag):
+                if event and (not already_emitted or reuse_flag):
                     derived.append(mark_delta_event(event, ctx))
                     ctx.stock_ready_emitted = True  # type: ignore[attr-defined]
 

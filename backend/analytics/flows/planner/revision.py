@@ -131,8 +131,6 @@ def derive_revision_targets(
     explicit_targets = set(getattr(ctx, "revision_targets", set()) or set())
     revision_snapshot = getattr(ctx, "revision_snapshot", None)
     if explicit_targets:
-        if not revision_snapshot:
-            return set()
         return explicit_targets
 
     if not revision_snapshot:

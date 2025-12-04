@@ -48,7 +48,7 @@ from typing import (
     Mapping,
 )
 
-from .orchestrator_protocol import FlowOrchestrator
+from .orchestrator_types import FlowOrchestrator
 
 logger = logging.getLogger(__name__)
 

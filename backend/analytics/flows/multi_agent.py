@@ -147,6 +147,8 @@ from datetime import datetime, date, timezone
 from dataclasses import dataclass, field
 from typing import Any, AsyncGenerator, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple, TYPE_CHECKING
 
+from pydantic import ValidationError
+
 from analytics.core.session_state import SessionStateSnapshot, get_session_state_repository
 from analytics.core.cache import get_cache_service
 from analytics.core.events import EventEmitter
@@ -165,6 +167,12 @@ from analytics.accessory_receipts import (
     build_lane_reuse_event,
 )
 from analytics.core.config_store import get_config_store
+TERMINAL_EVENTS: Set[str] = {
+    "workflow_complete",
+    "workflow_error",
+    "workflow_redirect",
+    "workflow_cancelled",
+}
 from analytics.policies.delegation_policy import DelegationPolicy
 from analytics.services.polygon import PolygonMarketDataClient, PolygonError, fetch_daily_snapshot
 from analytics.services.response_search import ResponseSearchError, perform_response_search
@@ -193,7 +201,13 @@ from .pipeline_tools import (
     PlannerToolRegistry,
     get_planner_tool_registry,
 )
-from .orchestrator_adapter import PlannerOrchestratorAdapter, LaneCompleteCallback
+from .orchestrator_types import PlannerOrchestratorAdapter, LaneCompleteCallback
+from .lane_executors import (
+    SqlLaneExecutor,
+    ChartLaneExecutor,
+    AnalysisLaneExecutor,
+    wrap_sequencer_with_lane_executors,
+)
 from .schedulers import FlowMode, apply_mode_metadata, get_mode_config
 from .sequencer import (
     PlannerEventBus,
@@ -208,6 +222,7 @@ from .supervisor_orchestrator import (
     SupervisorSpecialistConfig,
     build_supervisor_bundle,
 )
+from .supervisor_v2 import SupervisorPoolsFlow
 from .planner import (
     annotate_revision_event,
     apply_revision_plan,
@@ -276,7 +291,7 @@ from .chart_revision import (
     is_chart_revision_query,
 )
 from .task_plan import AgentTaskPlan, AgentTaskStep
-from .orchestrator import (
+from .orchestrator_types import (
     AgentExecutionError,
     AgentExecutionOrchestrator,
     AgentRunContext,
@@ -1617,6 +1632,18 @@ class MultiAgentFlow:
         "web_research_agent": "web",
         "insight_reviewer": "analysis",
     }
+    LANE_TO_TASK_MAP: Dict[str, str] = {
+        "sql_lane": "query_phase",
+        "web_lane": "web_research_phase",
+        "market_lane": "market_phase",
+        "chart_lane": "chart_phase",
+    }
+    DEFAULT_ANALYSIS_DEPENDENCIES: Tuple[str, ...] = (
+        "sql_lane",
+        "web_lane",
+        "market_lane",
+        "chart_lane",
+    )
     ROLE_TOOL_ALIAS: Dict[str, str] = {
         "planner_agent": "planner",
         "intent_analyst": "intent_classifier",
@@ -1682,6 +1709,15 @@ class MultiAgentFlow:
     def __init__(self) -> None:
         self._config_store = get_config_store()
         self._supervisor_settings = self._config_store.get_agent_mode_config("supervisor")
+        try:
+            feature_flags = dict(self._config_store.get_agent_feature_flags() or {})
+        except Exception:
+            feature_flags = {}
+        env_supervisor_v2 = os.getenv("USE_SUPERVISOR_V2")
+        if env_supervisor_v2 is None:
+            self._use_supervisor_v2 = bool(feature_flags.get("use_supervisor_v2", False))
+        else:
+            self._use_supervisor_v2 = env_supervisor_v2.strip().lower() not in {"0", "false", "no"}
         policy_version = os.getenv("AGENTS_DELEGATION_POLICY_VERSION", "baseline")
         agents_yaml = getattr(self._config_store, "yaml_configs", {})
         self._delegation_policy = DelegationPolicy.load(
@@ -1764,6 +1800,7 @@ class MultiAgentFlow:
             retry_decider=self._retry_manager.should_retry,
         )
         self._base_plan = _build_default_plan()
+        self._apply_analysis_dependencies()
         self._market_client = PolygonMarketDataClient()
         self._market_fetcher = fetch_daily_snapshot
         self._session_snapshot: Optional[SessionStateSnapshot] = None
@@ -1827,6 +1864,57 @@ class MultiAgentFlow:
             self._follow_up_guardrail = sanitize_for_json(dict(payload))
         except Exception:
             self._follow_up_guardrail = dict(payload) if isinstance(payload, Mapping) else None
+
+    def _get_analysis_dependencies(self) -> List[str]:
+        """
+        Function: _get_analysis_dependencies
+          Role: Read agents.yaml plan template to determine required lanes before analysis runs.
+          Called from: MultiAgentFlow.__init__
+          Invokes: analytics.core.config_store.get_config_store
+          Why: Keeps supervisor orchestration in sync with declarative dependency graphs.
+        """
+        configs = getattr(self._config_store, "yaml_configs", {}) or {}
+        plan_defaults = configs.get("agents", {}).get("defaults", {})
+        plan_template = plan_defaults.get("plan_template") if isinstance(plan_defaults, Mapping) else {}
+        nodes = plan_template.get("nodes") if isinstance(plan_template, Mapping) else None
+        dependencies: List[str] = []
+        if isinstance(nodes, Iterable):
+            for node in nodes:
+                if not isinstance(node, Mapping):
+                    continue
+                if str(node.get("name") or "").strip() != "analysis_lane":
+                    continue
+                raw_depends = node.get("depends_on")
+                if isinstance(raw_depends, (list, tuple, set)):
+                    for entry in raw_depends:
+                        normalized = str(entry or "").strip()
+                        if normalized:
+                            dependencies.append(normalized)
+                break
+        if dependencies:
+            return dependencies
+        return list(self.DEFAULT_ANALYSIS_DEPENDENCIES)
+
+    def _apply_analysis_dependencies(self) -> None:
+        """
+        Function: _apply_analysis_dependencies
+          Role: Mirror declarative agent dependencies into the runtime AgentTask DAG.
+          Called from: MultiAgentFlow.__init__
+          Invokes: MultiAgentFlow._get_analysis_dependencies
+          Why: Prevents analysis agents from running before required specialist lanes finish.
+        """
+        lane_dependencies = self._get_analysis_dependencies()
+        phase_dependencies: List[str] = []
+        for lane_name in lane_dependencies:
+            phase_name = self.LANE_TO_TASK_MAP.get(lane_name)
+            if phase_name and phase_name not in phase_dependencies:
+                phase_dependencies.append(phase_name)
+        if not phase_dependencies:
+            return
+        for task in self._base_plan:
+            if task.name == "analyst_phase":
+                task.depends_on = tuple(phase_dependencies)
+                break
 
     def _hedged_tool_aliases(self) -> List[str]:
         manifest = self._shared_context.get("tool_manifest")
@@ -3512,6 +3600,8 @@ class MultiAgentFlow:
         state.lane_states = working_lane_states
         self._latest_lane_states = dict(working_lane_states)
 
+        wrap_sequencer_with_lane_executors(sequencer)
+
         session_identifier = session_id or getattr(state.ctx, "session_id", None)
         if session_identifier:
             synthetic = EventEmitter.session_started(session_identifier)
@@ -3581,23 +3671,61 @@ class MultiAgentFlow:
         if self._agentic_revision_mode:
             sequencer_state = None
         hooks = _MultiAgentHooks(self, query, session_id=session_id)
+        terminal_emitted = False
+
+        def _mark_terminal(event: Optional[Dict[str, Any]]) -> None:
+            nonlocal terminal_emitted
+            if event and event.get("event") in TERMINAL_EVENTS:
+                terminal_emitted = True
+
+        async def _emit_fallback_if_needed(
+            fallback_session: Optional[str],
+        ) -> AsyncGenerator[Dict[str, Any], None]:
+            nonlocal terminal_emitted
+            if terminal_emitted:
+                if False:
+                    yield {}
+                return
+            fallback_event = EventEmitter.error(
+                "workflow_error",
+                "workflow ended without a terminal event",
+                code="workflow_incomplete",
+                details={"flow_mode": self.flow_mode.value if self.flow_mode else "multi_agent"},
+            )
+            fallback_event["event"] = "workflow_error"
+            data = fallback_event.setdefault("data", {})
+            data["error_code"] = "workflow_incomplete"
+            data["flow_mode"] = self.flow_mode.value if self.flow_mode else "multi_agent"
+            if fallback_session:
+                data["session_id"] = fallback_session
+            annotated = self._maybe_tag_session_metadata(self._annotate(fallback_event), fallback_session)
+            _mark_terminal(annotated)
+            yield annotated
 
         self._prepare_context(query)
         if session_id:
             self._shared_context["session_id"] = session_id
-        current_orchestration = getattr(self, "_run_agent_orchestration")
-        original_orchestration = _ORIGINAL_RUN_ORCHESTRATION or MultiAgentFlow._run_agent_orchestration
-        patched_orchestration = getattr(current_orchestration, "__func__", current_orchestration) is not original_orchestration
+        if self._use_supervisor_v2:
+            current_orchestration = self._run_supervisor_v2_orchestration
+            patched_orchestration = True
+        else:
+            current_orchestration = getattr(self, "_run_agent_orchestration")
+            original_orchestration = _ORIGINAL_RUN_ORCHESTRATION or MultiAgentFlow._run_agent_orchestration
+            patched_orchestration = getattr(current_orchestration, "__func__", current_orchestration) is not original_orchestration
         if patched_orchestration:
             session_identifier = session_id or str(uuid.uuid4())
             session_event = EventEmitter.session_started(session_identifier)
-            yield self._maybe_tag_session_metadata(self._annotate(session_event), session_identifier)
+            annotated_session = self._maybe_tag_session_metadata(self._annotate(session_event), session_identifier)
+            _mark_terminal(annotated_session)
+            yield annotated_session
             async for event in current_orchestration(query, session_id):
                 self._capture_event(event)
-                yield self._maybe_tag_session_metadata(
+                annotated_event = self._maybe_tag_session_metadata(
                     self._annotate(event),
                     session_identifier,
                 )
+                _mark_terminal(annotated_event)
+                yield annotated_event
             if not self._agent_turn_observed:
                 redirect = apply_mode_metadata(
                     {
@@ -3610,7 +3738,9 @@ class MultiAgentFlow:
                     },
                     self.flow_mode,
                 )
-                yield self._maybe_tag_session_metadata(self._annotate(redirect), session_identifier)
+                annotated_redirect = self._maybe_tag_session_metadata(self._annotate(redirect), session_identifier)
+                _mark_terminal(annotated_redirect)
+                yield annotated_redirect
                 try:
                     direct_planner = PlannerExecutorFlow(flow_mode=FlowMode.DIRECT)
                     async for direct_event in direct_planner.events(
@@ -3618,10 +3748,12 @@ class MultiAgentFlow:
                         session_id=session_identifier,
                         revision_requested=False,
                     ):
-                        yield self._maybe_tag_session_metadata(
+                        annotated_direct = self._maybe_tag_session_metadata(
                             apply_mode_metadata(direct_event, FlowMode.DIRECT),
                             session_identifier,
                         )
+                        _mark_terminal(annotated_direct)
+                        yield annotated_direct
                     self._agent_turn_observed = True
                 except Exception as exc:  # pragma: no cover - defensive logging
                     error_event = EventEmitter.error(
@@ -3636,10 +3768,14 @@ class MultiAgentFlow:
                     error_event["event"] = "workflow_error"
                     error_event.setdefault("data", {})
                     error_event["data"]["error_code"] = "direct_fallback_failed"
-                    yield self._maybe_tag_session_metadata(
+                    annotated_error = self._maybe_tag_session_metadata(
                         self._annotate(error_event),
                         session_identifier,
                     )
+                    _mark_terminal(annotated_error)
+                    yield annotated_error
+            async for fallback in _emit_fallback_if_needed(session_identifier):
+                yield fallback
             return
         preflight_stream = self._preflight_stage(query, session_id)
         async for event in self._forward_with_hooks(
@@ -3649,6 +3785,7 @@ class MultiAgentFlow:
             session_id,
             ensure_session_event=True,
         ):
+            _mark_terminal(event)
             yield event
         outcome = self._preflight_outcome or "ok"
         if outcome == "redirect":
@@ -3659,10 +3796,12 @@ class MultiAgentFlow:
                     session_id=session_id,
                     revision_requested=False,
                 ):
-                    yield self._maybe_tag_session_metadata(
+                    annotated_direct = self._maybe_tag_session_metadata(
                         apply_mode_metadata(direct_event, FlowMode.DIRECT),
                         session_id,
                     )
+                    _mark_terminal(annotated_direct)
+                    yield annotated_direct
                 self._agent_turn_observed = True
             except Exception as exc:  # pragma: no cover - defensive logging
                 error_event = EventEmitter.error(
@@ -3677,12 +3816,18 @@ class MultiAgentFlow:
                 error_event["event"] = "workflow_error"
                 error_event.setdefault("data", {})
                 error_event["data"]["error_code"] = "direct_fallback_failed"
-                yield self._maybe_tag_session_metadata(
+                annotated_error = self._maybe_tag_session_metadata(
                     self._annotate(error_event),
                     session_id,
                 )
+                _mark_terminal(annotated_error)
+                yield annotated_error
+            async for fallback in _emit_fallback_if_needed(session_id):
+                yield fallback
             return
         if outcome == "halt":
+            async for fallback in _emit_fallback_if_needed(session_id):
+                yield fallback
             return
 
         orchestrated_stream = self._run_agent_orchestration(query, session_id)
@@ -3701,20 +3846,25 @@ class MultiAgentFlow:
                 synthetic_start = self._format_agent_turn("planner_agent", "start")
                 synthetic_end = self._format_agent_turn("planner_agent", "end")
                 for synthetic in (synthetic_start, synthetic_end):
-                    yield self._maybe_tag_session_metadata(
+                    annotated_synth = self._maybe_tag_session_metadata(
                         self._annotate(synthetic),
                         session_id,
                     )
+                    _mark_terminal(annotated_synth)
+                    yield annotated_synth
                 self._agent_turn_observed = True
+            _mark_terminal(event)
             yield event
         if (not self._agent_turn_observed) and os.getenv("PYTEST_CURRENT_TEST"):
             synthetic_start = self._format_agent_turn("planner_agent", "start")
             synthetic_end = self._format_agent_turn("planner_agent", "end")
             for synthetic in (synthetic_start, synthetic_end):
-                yield self._maybe_tag_session_metadata(
+                annotated_synth = self._maybe_tag_session_metadata(
                     self._annotate(synthetic),
                     session_id,
                 )
+                _mark_terminal(annotated_synth)
+                yield annotated_synth
             self._agent_turn_observed = True
         self._orchestrated = True
         if not self._agent_turn_observed:
@@ -3729,7 +3879,9 @@ class MultiAgentFlow:
                 },
                 self.flow_mode,
             )
-            yield self._maybe_tag_session_metadata(self._annotate(redirect), session_id)
+            annotated_redirect = self._maybe_tag_session_metadata(self._annotate(redirect), session_id)
+            _mark_terminal(annotated_redirect)
+            yield annotated_redirect
             try:
                 direct_planner = PlannerExecutorFlow(flow_mode=FlowMode.DIRECT)
                 async for direct_event in direct_planner.events(
@@ -3737,10 +3889,12 @@ class MultiAgentFlow:
                     session_id=session_id,
                     revision_requested=False,
                 ):
-                    yield self._maybe_tag_session_metadata(
+                    annotated_direct = self._maybe_tag_session_metadata(
                         apply_mode_metadata(direct_event, FlowMode.DIRECT),
                         session_id,
                     )
+                    _mark_terminal(annotated_direct)
+                    yield annotated_direct
             except Exception as exc:  # pragma: no cover - defensive logging
                 error_event = EventEmitter.error(
                     "workflow_error",
@@ -3754,11 +3908,15 @@ class MultiAgentFlow:
                 error_event["event"] = "workflow_error"
                 error_event.setdefault("data", {})
                 error_event["data"]["error_code"] = "direct_fallback_failed"
-                yield self._maybe_tag_session_metadata(
+                annotated_error = self._maybe_tag_session_metadata(
                     self._annotate(error_event),
                     session_id,
                 )
+                _mark_terminal(annotated_error)
+                yield annotated_error
 
+        async for fallback in _emit_fallback_if_needed(session_id):
+            yield fallback
     async def chart_revision(
         self,
         query: str,
@@ -4853,6 +5011,22 @@ class MultiAgentFlow:
         )
         state.is_revision_follow_up = is_revision_follow_up
         setattr(ctx, "is_revision_follow_up", is_revision_follow_up)
+        
+        # Revision runs bypass entire preflight - load session state and execute revision tools
+        if agentic_revision_mode:
+            ctx.is_financial_query = True
+            executed.update({"classification", "intent_detection", "clarification", "plan_generation"})
+            log_tool_iteration(
+                tool="intent_classifier",
+                status="skipped",
+                step="classification",
+                session_id=ctx.session_id,
+                flow=self.flow_label,
+                details={"reason": "agentic_revision_mode"},
+            )
+            state.executed = executed
+            return state
+        
         if is_revision_follow_up:
             confidence = 0.0
             if isinstance(cached_classification, Mapping):
@@ -5285,6 +5459,40 @@ class MultiAgentFlow:
         self._maybe_queue_stock_ready()
         self._maybe_queue_web_ready()
 
+    # Function: _run_supervisor_v2_orchestration
+    #   Called from: analytics.flows.multi_agent.events when USE_SUPERVISOR_V2 flag is enabled
+    #   Invokes: analytics.flows.supervisor_v2.SupervisorPoolsFlow.execute
+    #   Why: Streams Specialist Pools (Supervisor V2) events to replace legacy supervisor orchestration.
+    async def _run_supervisor_v2_orchestration(
+        self,
+        query: str,
+        session_id: Optional[str],
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        session_identifier = session_id or str(uuid.uuid4())
+        ctx = await self._planner.initialize_context(query, session_identifier)
+        supervisor_flow = SupervisorPoolsFlow(session_id=session_identifier, enable_parallelism=True)
+        # Mark as observed to avoid planner fallback error handling
+        self._agent_turn_observed = True
+        async for event in supervisor_flow.execute(
+            query,
+            ctx,
+            follow_up_route=getattr(self, "follow_up_route", FollowUpRoute.FULL_PIPELINE).value,
+        ):
+            annotated = self._maybe_tag_session_metadata(
+                self._annotate(apply_mode_metadata(event, self.flow_mode)),
+                session_identifier,
+            )
+            yield annotated
+        # Persist the planner context snapshot if available to keep parity with legacy flow
+        try:
+            repository = get_session_state_repository()
+            if repository and getattr(ctx, "session_id", None):
+                snapshot = getattr(ctx, "session_snapshot", None)
+                if snapshot is not None:
+                    await repository.save(snapshot)
+        except Exception:
+            logger.debug("Supervisor V2 persistence skipped", exc_info=True)
+
     async def _run_agent_orchestration(
         self,
         query: str,
@@ -5296,6 +5504,16 @@ class MultiAgentFlow:
             and not bool(os.getenv("DISABLE_AGENT_RUNTIME"))
             and not bool(os.getenv("PYTEST_CURRENT_TEST"))
         )
+
+        repository: Optional["SessionStateRepository"] = None
+        try:
+            repository = get_session_state_repository()
+        except Exception:  # pragma: no cover - defensive guard
+            repository = None
+        if repository and getattr(repository, "is_memory_only", False):
+            logger.warning(
+                "Session state repository running in memory-only mode; cross-request persistence disabled."
+            )
 
         queue: "asyncio.Queue[Optional[Dict[str, Any]]]" = asyncio.Queue()
         snapshot = self._session_snapshot or SessionStateSnapshot(session_id=session_id or str(uuid.uuid4()))
@@ -5617,6 +5835,23 @@ class MultiAgentFlow:
             )
             yield self._maybe_tag_session_metadata(self._annotate(redirect), session_id)
             return
+        except ValidationError as exc:
+            # Pydantic validation errors are non-retryable fatal errors
+            error_event = apply_mode_metadata(
+                {
+                    "event": "workflow_error",
+                    "data": {
+                        "code": "validation_fatal",
+                        "reason": "schema_validation_failed",
+                        "flow_mode": self.flow_mode.value if self.flow_mode else "multi_agent",
+                        "error": str(exc),
+                        "ts": datetime.utcnow().isoformat(),
+                    },
+                },
+                self.flow_mode,
+            )
+            yield self._maybe_tag_session_metadata(self._annotate(error_event), session_id)
+            return
 
         decision_payloads = list(self._retry_manager.decisions())
         for decision in decision_payloads:
@@ -5766,7 +6001,8 @@ class MultiAgentFlow:
                     if isinstance(tool_name, str):
                         receipts_map[tool_name] = entry
 
-        repository = get_session_state_repository()
+        if repository is None:
+            repository = get_session_state_repository()
         if repository and session_id:
             snapshot = await repository.load(session_id)
             if snapshot is None:

@@ -20,6 +20,30 @@ import type {
   WebSearchTopicProgress,
 } from '../types';
 
+/**
+ * CacheMetadata: Receipt-driven cache state for an artifact lane.
+ * Part of Phase 3.4: Surface from_cache and age_seconds for cached artifacts.
+ */
+interface CacheMetadata {
+  /** Whether the artifact was served from cache */
+  from_cache?: boolean;
+  /** Cache age in seconds */
+  age_seconds?: number;
+  /** Cache source (e.g., 'session_state', 'memory') */
+  cache_source?: string;
+}
+
+/**
+ * LanesCacheState: Cache metadata for each artifact lane.
+ */
+interface LanesCacheState {
+  sql?: CacheMetadata;
+  chart?: CacheMetadata;
+  analysis?: CacheMetadata;
+  web?: CacheMetadata;
+  market?: CacheMetadata;
+}
+
 interface LiveArtifactsProps {
   analysisSources?: AnalysisSources | null;
   chartSpec: any;
@@ -38,7 +62,54 @@ interface LiveArtifactsProps {
   latencyGuardrail?: LatencyGuardrail | null;
   agentEvidence?: AgentEvidence | null;
   topicProgress?: WebSearchTopicProgress;
+  /** Phase 3.4: Cache metadata for each lane */
+  lanesCacheState?: LanesCacheState | null;
 }
+
+/**
+ * Function: formatCacheAge — Formats cache age in human-readable form.
+ * Called from: CacheIndicator component
+ * Why: Provides user-friendly cache age display per Phase 3.4.
+ */
+const formatCacheAge = (ageSeconds?: number): string => {
+  if (ageSeconds == null || !Number.isFinite(ageSeconds)) {
+    return 'cached';
+  }
+  if (ageSeconds < 60) {
+    return `~${Math.round(ageSeconds)}s ago`;
+  }
+  if (ageSeconds < 3600) {
+    return `~${Math.round(ageSeconds / 60)}m ago`;
+  }
+  return `~${Math.round(ageSeconds / 3600)}h ago`;
+};
+
+/**
+ * Component: CacheIndicator — Visual badge for cached artifacts.
+ * Called from: LiveArtifacts cards
+ * Why: Part of Phase 3.4 - Add visual indicator for cached vs fresh data.
+ */
+const CacheIndicator: React.FC<{ cache?: CacheMetadata; lane: string }> = ({ cache, lane }) => {
+  if (!cache?.from_cache) {
+    return null;
+  }
+  
+  const ageLabel = formatCacheAge(cache.age_seconds);
+  const sourceLabel = cache.cache_source ? ` · ${cache.cache_source}` : '';
+  
+  return (
+    <span 
+      className="inline-flex items-center gap-1 rounded-full border border-emerald-400/50 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-200"
+      title={`${lane} lane served from cache${sourceLabel}`}
+    >
+      <svg className="h-3 w-3" viewBox="0 0 20 20" fill="currentColor">
+        <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+      </svg>
+      <span>Cached</span>
+      <span className="text-emerald-300/70">{ageLabel}</span>
+    </span>
+  );
+};
 
 const FLOW_PRESENTATION: Record<
   FlowMode,
@@ -99,6 +170,7 @@ export const LiveArtifacts: React.FC<LiveArtifactsProps> = ({
   latencyGuardrail = null,
   agentEvidence = null,
   topicProgress,
+  lanesCacheState = null,
 }) => {
   const hasChart = chartSpec && isValidChartSpec(chartSpec);
   const hasSql = Boolean(sqlQuery?.trim()) || (Array.isArray(dataSample) && dataSample.length > 0);
@@ -171,6 +243,11 @@ export const LiveArtifacts: React.FC<LiveArtifactsProps> = ({
   if (hasStock && stockWidget && allowArtifacts) {
     cards.push(
       <div key="stock" className="rounded-xl border border-gray-700 bg-gray-900/50 p-3 sm:p-4 overflow-hidden">
+        {lanesCacheState?.market && (
+          <div className="mb-2 flex justify-end">
+            <CacheIndicator cache={lanesCacheState.market} lane="Market" />
+          </div>
+        )}
         <TradingViewSymbolOverview config={stockWidget} height={480} />
       </div>,
     );
@@ -183,6 +260,7 @@ export const LiveArtifacts: React.FC<LiveArtifactsProps> = ({
         title="Market Research"
         defaultOpen={false}
         className="bg-gray-800/50"
+        headerExtra={lanesCacheState?.web ? <CacheIndicator cache={lanesCacheState.web} lane="Web" /> : undefined}
       >
         {webSearch.latencyStats ? (
           <div className="mb-3 flex flex-wrap gap-3 text-xs text-emerald-200">
@@ -219,9 +297,10 @@ export const LiveArtifacts: React.FC<LiveArtifactsProps> = ({
     cards.push(
       <div key="analysis" className={`rounded-xl overflow-hidden border ${flowTheme.analysisContainer}`}>
         <div
-          className={`border-b px-4 py-2 text-[11px] font-semibold uppercase tracking-wide ${flowTheme.analysisHeader}`}
+          className={`border-b px-4 py-2 text-[11px] font-semibold uppercase tracking-wide ${flowTheme.analysisHeader} flex items-center justify-between`}
         >
-          {analysisHeading}
+          <span>{analysisHeading}</span>
+          {lanesCacheState?.analysis && <CacheIndicator cache={lanesCacheState.analysis} lane="Analysis" />}
         </div>
         {showingFinalAnalysis && analysisOverview ? (
           <div
@@ -324,6 +403,11 @@ export const LiveArtifacts: React.FC<LiveArtifactsProps> = ({
         key="sql-chart"
         className="rounded-xl border border-gray-700 bg-gray-900/40 p-3 sm:p-4 md:p-5"
       >
+        {lanesCacheState?.chart && (
+          <div className="mb-2 flex justify-end">
+            <CacheIndicator cache={lanesCacheState.chart} lane="Chart" />
+          </div>
+        )}
         <ChartCard chartSpec={chartSpec} dataSample={dataSample} enableDropdown enableCsvDownload />
       </div>,
     );
@@ -336,6 +420,7 @@ export const LiveArtifacts: React.FC<LiveArtifactsProps> = ({
         title="Generated SQL Query"
         defaultOpen={false}
         className="bg-gray-800/50"
+        headerExtra={lanesCacheState?.sql ? <CacheIndicator cache={lanesCacheState.sql} lane="SQL" /> : undefined}
       >
         <SqlCard sqlQuery={sqlQuery} compact />
       </CollapsibleSection>,

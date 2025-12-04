@@ -129,6 +129,11 @@
 #   Called from: analytics.flows.single_agent_tools._agentic_event_stream
 #   Invokes: analytics.flows.single_agent_tools._is_sql_missing/_is_chart_missing/_is_analysis_missing/_is_market_missing/_is_web_missing
 #   Why: Prevents SQL/Chart/Analysis/Web/Market lanes from staying queued/pending when agent telemetry is missing lane-ready events.
+# Function: _sanitize_user_message
+#   Role: Strips internal-only sections (e.g., “Tool outputs…”) from user-facing narratives.
+#   Called from: analytics.flows.single_agent_tools._analysis_text
+#   Invokes: str.find
+#   Why: Ensures execution receipts stay internal while user copy remains clean.
 # --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
@@ -187,6 +192,13 @@ from .planner_executor import (
     _apply_revision_context_hints,
 )
 from .pipeline_tools import PlannerToolDefinition, PlannerToolRegistry, get_planner_tool_registry
+
+TERMINAL_EVENTS: Set[str] = {
+    "workflow_complete",
+    "workflow_error",
+    "workflow_redirect",
+    "workflow_cancelled",
+}
 from .schedulers import FlowMode, apply_mode_metadata, get_mode_config
 from .planner import (
     annotate_revision_event,
@@ -481,6 +493,8 @@ class _SingleAgentToolHooks(AnalyticsFlowHooks):
         self._tool_active_counts: Dict[str, int] = {}
         self._sql_compile_details: Dict[str, Any] = {}
         self._session_id: Optional[str] = session_id
+        # Ensure hooks always expose a snapshot slot so follow-up runs don't crash when planner reuse skips hydration.
+        self._session_snapshot: Optional["SessionStateSnapshot"] = getattr(flow, "_session_snapshot", None)
         self._emitted_cohesive = False
         self._last_analysis_payload: Optional[Dict[str, Any]] = None
         self._final_answer_emitted = False
@@ -953,13 +967,26 @@ class _SingleAgentToolHooks(AnalyticsFlowHooks):
         analysis_field = self._last_analysis_payload.get("analysis")
         if isinstance(analysis_field, str):
             stripped = analysis_field.strip()
-            return stripped or None
+            return self._sanitize_user_message(stripped) or None
         if isinstance(analysis_field, Mapping):
             nested = analysis_field.get("analysis")
             if isinstance(nested, str):
                 stripped = nested.strip()
-                return stripped or None
+                return self._sanitize_user_message(stripped) or None
         return None
+
+    @staticmethod
+    def _sanitize_user_message(text: str) -> str:
+        """
+        Remove internal-only blocks (e.g., 'Tool outputs') from user-visible narrative.
+        Keeps everything before the marker and trims trailing whitespace.
+        """
+        if not isinstance(text, str):
+            return text
+        marker = text.lower().find("tool outputs")
+        if marker != -1:
+            return text[:marker].rstrip()
+        return text
 
     @staticmethod
     def _web_payload_has_content(payload: Any) -> bool:
@@ -1065,10 +1092,22 @@ class _SingleAgentToolHooks(AnalyticsFlowHooks):
             self._flow.follow_up_route == FollowUpRoute.REUSE_SQL
             and not self._chart_revision_missing_session
         )
+        if self._session_snapshot is None:
+            try:
+                logger.error(
+                    "AGENT_SESSION_SNAPSHOT_MISSING",
+                    extra={
+                        "session_id": self._session_id,
+                        "follow_up_route": getattr(self._flow, "follow_up_route", None),
+                    },
+                )
+            except Exception:
+                # Defensive: avoid masking downstream final_answer generation.
+                pass
         chart_spec_missing = False
         if self._flow.follow_up_route == FollowUpRoute.REUSE_SQL:
             snapshot = self._session_snapshot
-            chart_spec_missing = not bool(snapshot and getattr(snapshot, "last_chart_spec", None))
+            chart_spec_missing = bool(snapshot) and not bool(getattr(snapshot, "last_chart_spec", None))
         if self._chart_revision_missing_session:
             missing = ["sql", "stock", "web"]
             note = (
@@ -1458,6 +1497,7 @@ class SingleAgentController:
         self._session_snapshot: Optional[SessionStateSnapshot] = None
         self._agent_memory: Optional[AgentMemory] = None
         self._revision_question_bundle: Optional[RevisionQuestionBundle] = None
+        self._chart_revision_missing_session = False
 
         self._registry = get_planner_tool_registry()
         self.planner_tool_manifest = self._registry.describe_tools()
@@ -1592,6 +1632,22 @@ class SingleAgentController:
         state.is_revision_follow_up = is_revision_follow_up
         setattr(ctx, "is_revision_follow_up", is_revision_follow_up)
         state.session_id = ctx.session_id
+        
+        # Revision runs bypass entire preflight - load session state and execute revision tools
+        if agentic_revision_mode:
+            ctx.is_financial_query = True
+            executed.update({"classification", "intent_detection", "clarification", "plan_generation"})
+            log_tool_iteration(
+                tool="intent_classifier",
+                status="skipped",
+                step="classification",
+                session_id=ctx.session_id,
+                flow=self.flow_label,
+                details={"reason": "agentic_revision_mode"},
+            )
+            state.executed = executed
+            return state
+        
         reuse_intent = False
         if is_revision_follow_up:
             confidence = (
@@ -2355,6 +2411,12 @@ class SingleAgentController:
         ):
             if not _satisfied("chart") and self._is_chart_missing(ctx):
                 missing.add("chart")
+
+        if route == FollowUpRoute.FULL_PIPELINE:
+            if not _satisfied("market") and self._is_market_missing(ctx):
+                missing.add("market")
+            if not _satisfied("web") and self._is_web_missing(ctx):
+                missing.add("web")
 
         if route == FollowUpRoute.STOCK_ONLY:
             if not _satisfied("market") and self._is_market_missing(ctx):
@@ -3141,6 +3203,20 @@ class SingleAgentController:
             code="ANALYSIS_REVISION_MISSING_ANALYSIS",
         )
         tagged_error = self._maybe_tag_session_metadata(error_event, session_id)
+        # Emit workflow_error so frontend can show persistent error banner
+        workflow_error_event = EventEmitter.error(
+            "workflow_error",
+            "Run a fresh analysis first before revising. The baseline chart and narrative are required.",
+            details={
+                "session_id": session_id,
+                "code": "revision_baseline_missing",
+                "reason": reason or "missing_analysis",
+                "source": source or "missing_analysis_guard",
+            },
+            code="revision_baseline_missing",
+        )
+        workflow_error_event = apply_mode_metadata(workflow_error_event, self.flow_mode)
+        workflow_error_event = self._maybe_tag_session_metadata(workflow_error_event, session_id)
         result_payload = {
             "analysis": "",
             "analysis_length": 0,
@@ -3157,7 +3233,7 @@ class SingleAgentController:
         skip_data.setdefault("lane", "analysis")
         skip_data["revision"] = True
         skip_data["revision_event"] = True
-        return [tagged_error, skip_event]
+        return [workflow_error_event, tagged_error, skip_event]
 
     @classmethod
     def _lane_for_tool(cls, tool_name: Optional[str]) -> Optional[str]:
@@ -4486,6 +4562,25 @@ class SingleAgentController:
 
         ctx.lane_refresh_required = refresh_flags
 
+    def _missing_required_slots(self, ctx: PlannerPhaseContext) -> List[str]:
+        slot_statuses = getattr(ctx, "slot_statuses", None)
+        missing: List[str] = []
+        if isinstance(slot_statuses, Mapping):
+            for slot_name, slot_payload in slot_statuses.items():
+                if not isinstance(slot_payload, Mapping):
+                    continue
+                status = str(slot_payload.get("status", "")).strip().lower()
+                if status in {"missing", "required"}:
+                    missing.append(str(slot_name))
+        intent_resolution = getattr(ctx, "intent_resolution", None)
+        if intent_resolution is not None:
+            resolution_missing = getattr(intent_resolution, "missing_slots", None)
+            if isinstance(resolution_missing, (list, tuple, set)):
+                for slot_name in resolution_missing:
+                    if slot_name:
+                        missing.append(str(slot_name))
+        return sorted({slot for slot in missing if slot})
+
     def _seed_planner_context_from_preflight(self, target: PlannerPhaseContext) -> None:
         """
         Copy preflight intent/plan/template state from the sequencer context so agent-invoked
@@ -5534,6 +5629,8 @@ class SingleAgentController:
             if not workflow_complete_seen:
                 workflow_complete_seen = True
                 reason = "client_cancelled" if isinstance(exc, asyncio.CancelledError) else exc.__class__.__name__
+                hook_ctx["cancellation_lane_snapshot"] = self._collect_cancellation_lane_snapshot()
+                self._abort_stale_sequencer(reason=reason)
                 async for cancel_event in self._emit_cancellation_event(
                     hooks,
                     hook_ctx,
@@ -5546,6 +5643,8 @@ class SingleAgentController:
         else:
             if not workflow_complete_seen:
                 workflow_complete_seen = True
+                hook_ctx["cancellation_lane_snapshot"] = self._collect_cancellation_lane_snapshot()
+                self._abort_stale_sequencer(reason="stream_disconnected")
                 async for cancel_event in self._emit_cancellation_event(
                     hooks,
                     hook_ctx,
@@ -5568,8 +5667,11 @@ class SingleAgentController:
         reason: str,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         state = getattr(self, "_sequencer_state", None)
-        snapshot = getattr(state, "lane_states", None) if state else None
-        lane_snapshot: Dict[str, Any] = dict(snapshot) if isinstance(snapshot, dict) else {}
+        override_snapshot = hook_ctx.pop("cancellation_lane_snapshot", None)
+        if isinstance(override_snapshot, dict) and override_snapshot:
+            lane_snapshot = dict(override_snapshot)
+        else:
+            lane_snapshot = self._collect_cancellation_lane_snapshot()
         cancelled_lanes: List[str] = []
         if lane_snapshot:
             for lane, status in lane_snapshot.items():
@@ -5595,7 +5697,31 @@ class SingleAgentController:
         async for post_event in hooks.after_event(hook_ctx, annotated):
             yield post_event
 
+    def _collect_cancellation_lane_snapshot(self) -> Dict[str, Any]:
+        state = getattr(self, "_sequencer_state", None)
+        snapshot = getattr(state, "lane_states", None) if state else None
+        lane_snapshot = dict(snapshot) if isinstance(snapshot, dict) else {}
+        if lane_snapshot:
+            return lane_snapshot
+        active_sequencer = getattr(self, "_active_sequencer", None)
+        lane_presentations = getattr(active_sequencer, "lane_presentations", None)
+        if callable(lane_presentations):
+            try:
+                return dict(lane_presentations() or {})
+            except Exception:
+                return {}
+        return {}
+
     def _abort_stale_sequencer(self, *, reason: str = "restart") -> None:
+        active_sequencer = getattr(self, "_active_sequencer", None)
+        if active_sequencer is not None:
+            try:
+                active_sequencer.abort_pending_lanes(reason=reason)
+            except Exception:
+                logger.debug("Failed to abort active sequencer during %s", reason, exc_info=True)
+            finally:
+                self._active_sequencer = None
+
         state = getattr(self, "_sequencer_state", None)
         if state is None:
             return
@@ -5660,8 +5786,35 @@ class SingleAgentController:
         self._non_financial_decline = False
         hooks = _SingleAgentToolHooks(self, session_id=session_id)
         stream = self._agentic_event_stream(query, session_id=session_id)
+        terminal_emitted = False
+
+        def _mark_terminal(event: Optional[Dict[str, Any]]) -> None:
+            nonlocal terminal_emitted
+            if event and event.get("event") in TERMINAL_EVENTS:
+                terminal_emitted = True
+
+        async def _emit_fallback_if_needed() -> AsyncGenerator[Dict[str, Any], None]:
+            nonlocal terminal_emitted
+            if terminal_emitted:
+                if False:
+                    yield {}
+                return
+            fallback_event = EventEmitter.error(
+                "workflow_error",
+                "workflow ended without a terminal event",
+                code="workflow_incomplete",
+                details={"flow_mode": self.flow_mode.value if self.flow_mode else "single_agent"},
+            )
+            fallback_event["event"] = "workflow_error"
+            data = fallback_event.setdefault("data", {})
+            data["error_code"] = "workflow_incomplete"
+            data["flow_mode"] = self.flow_mode.value if self.flow_mode else "single_agent"
+            annotated = apply_mode_metadata(fallback_event, self.flow_mode)
+            _mark_terminal(annotated)
+            yield annotated
         try:
             async for event in self._forward_with_hooks(stream, hooks, session_id, ensure_session_event=True):
+                _mark_terminal(event)
                 yield event
         except ForbiddenToolCallError as exc:
             redirect = self._workflow_redirect_event(
@@ -5669,6 +5822,7 @@ class SingleAgentController:
                 reason="agent_tool_blocked",
                 guardrail=getattr(exc, "guardrail", None),
             )
+            _mark_terminal(redirect)
             yield redirect
             try:
                 async for direct_event in self._planner.events(
@@ -5676,7 +5830,9 @@ class SingleAgentController:
                     session_id=session_id,
                     revision_requested=False,
                 ):
-                    yield apply_mode_metadata(direct_event, FlowMode.DIRECT)
+                    annotated_direct = apply_mode_metadata(direct_event, FlowMode.DIRECT)
+                    _mark_terminal(annotated_direct)
+                    yield annotated_direct
                 self._agent_turn_observed = True
             except Exception as fallback_exc:
                 error_event = EventEmitter.error(
@@ -5688,7 +5844,11 @@ class SingleAgentController:
                 error_event["event"] = "workflow_error"
                 error_event.setdefault("data", {})
                 error_event["data"]["error_code"] = "direct_fallback_failed"
-                yield apply_mode_metadata(error_event, self.flow_mode)
+                annotated_error = apply_mode_metadata(error_event, self.flow_mode)
+                _mark_terminal(annotated_error)
+                yield annotated_error
+            async for fallback in _emit_fallback_if_needed():
+                yield fallback
             return
         except Exception as exc:
             redirect = self._workflow_redirect_event(
@@ -5696,6 +5856,7 @@ class SingleAgentController:
                 reason="agent_runtime_fatal",
                 guardrail=self._follow_up_guardrail,
             )
+            _mark_terminal(redirect)
             yield redirect
             error_event = EventEmitter.error(
                 "workflow_error",
@@ -5706,14 +5867,18 @@ class SingleAgentController:
             error_event["event"] = "workflow_error"
             error_event.setdefault("data", {})
             error_event["data"]["error_code"] = "agent_runtime_fatal"
-            yield apply_mode_metadata(error_event, self.flow_mode)
+            fatal_annotated = apply_mode_metadata(error_event, self.flow_mode)
+            _mark_terminal(fatal_annotated)
+            yield fatal_annotated
             try:
                 async for direct_event in self._planner.events(
                     query,
                     session_id=session_id,
                     revision_requested=False,
                 ):
-                    yield apply_mode_metadata(direct_event, FlowMode.DIRECT)
+                    annotated_direct = apply_mode_metadata(direct_event, FlowMode.DIRECT)
+                    _mark_terminal(annotated_direct)
+                    yield annotated_direct
                 self._agent_turn_observed = True
             except Exception as fallback_exc:
                 fallback_error = EventEmitter.error(
@@ -5725,7 +5890,11 @@ class SingleAgentController:
                 fallback_error["event"] = "workflow_error"
                 fallback_error.setdefault("data", {})
                 fallback_error["data"]["error_code"] = "direct_fallback_failed"
-                yield apply_mode_metadata(fallback_error, self.flow_mode)
+                annotated_fallback = apply_mode_metadata(fallback_error, self.flow_mode)
+                _mark_terminal(annotated_fallback)
+                yield annotated_fallback
+            async for fallback in _emit_fallback_if_needed():
+                yield fallback
             return
         if self._last_agent_runtime_used and not self._agent_turn_observed:
             redirect = self._workflow_redirect_event(
@@ -5733,6 +5902,7 @@ class SingleAgentController:
                 reason="agent_runtime_missing_agent_turns",
                 guardrail=self._follow_up_guardrail,
             )
+            _mark_terminal(redirect)
             yield redirect
             error_event = EventEmitter.error(
                 "workflow_error",
@@ -5743,7 +5913,12 @@ class SingleAgentController:
             error_event["event"] = "workflow_error"
             error_event.setdefault("data", {})
             error_event["data"]["error_code"] = "agent_runtime_missing_agent_turns"
-            yield apply_mode_metadata(error_event, self.flow_mode)
+            missing_annotated = apply_mode_metadata(error_event, self.flow_mode)
+            _mark_terminal(missing_annotated)
+            yield missing_annotated
+
+        async for fallback in _emit_fallback_if_needed():
+            yield fallback
 
     async def _agentic_event_stream(
         self,
@@ -5758,7 +5933,8 @@ class SingleAgentController:
 
         state = await self._prepare_sequencer_state(query, session_id=session_id)
         # Route revision traffic through the AgentRuntime; keep fresh runs on the deterministic planner.
-        use_agent_runtime = bool(getattr(state, "is_revision_follow_up", False))
+        # Force fresh SINGLE_AGENT runs onto AgentRuntime so snapshots always persist to Redis.
+        use_agent_runtime = True
         if self._agent is None:
             # No agent available: emit a redirect immediately rather than silently running the planner sequencer.
             redirect = self._workflow_redirect_event(
@@ -5802,6 +5978,23 @@ class SingleAgentController:
                     yield apply_mode_metadata(error_event, self.flow_mode)
                     return
                 await self._hydrate_agent_snapshot(state.ctx)
+                missing_slots = self._missing_required_slots(state.ctx)
+                if missing_slots:
+                    error_event = EventEmitter.error(
+                        "workflow_error",
+                        "Required information is missing. Please answer the clarification questions.",
+                        code="clarification_incomplete",
+                        details={
+                            "flow_mode": self.flow_mode.value if self.flow_mode else "single_agent",
+                            "missing_slots": missing_slots,
+                        },
+                    )
+                    error_event["event"] = "workflow_error"
+                    data = error_event.setdefault("data", {})
+                    data["error_code"] = "clarification_incomplete"
+                    data["missing_slots"] = missing_slots
+                    yield apply_mode_metadata(error_event, self.flow_mode)
+                    return
                 intent_ready = bool(getattr(state.ctx, "intent", None)) and bool(
                     getattr(state.ctx, "plan", None) or getattr(state.ctx, "provisional_plan", None)
                 )
@@ -6001,21 +6194,59 @@ class SingleAgentController:
                 snapshot = None
         chart_ready = bool(getattr(snapshot, "last_chart_spec", None)) if snapshot else False
         if not chart_ready:
+            missing_session = snapshot is None
+            if missing_session:
+                self._chart_revision_missing_session = True
+                self.set_follow_up_route(FollowUpRoute.FULL_PIPELINE)
+                redirect_reason = "missing_session"
+                error_code = "CHART_REVISION_MISSING_SESSION"
+                error_message = (
+                    "Chart revision requires a saved session; rerun a full pipeline so I can rebuild charts."
+                )
+            else:
+                redirect_reason = "missing_chart_spec"
+                error_code = "CHART_REVISION_MISSING_SPEC"
+                error_message = "Chart revision requires a stored chart spec; rerun a fresh analysis first."
             redirect = self._workflow_redirect_event(
                 session_id=session_id,
-                reason="missing_chart_spec",
+                reason=redirect_reason,
                 guardrail=self._follow_up_guardrail,
             )
             yield redirect
-            error_event = EventEmitter.error(
+            workflow_error = EventEmitter.error(
                 "workflow_error",
-                "Chart revision requires a stored chart spec; rerun a fresh analysis first.",
-                code="CHART_REVISION_MISSING_SPEC",
+                error_message,
+                code=error_code,
                 details={"session_id": session_id},
             )
-            error_event["event"] = "workflow_error"
-            error_event.setdefault("data", {})["error_code"] = "CHART_REVISION_MISSING_SPEC"
+            workflow_error["event"] = "workflow_error"
+            workflow_error.setdefault("data", {})["error_code"] = error_code
+            yield apply_mode_metadata(workflow_error, self.flow_mode)
+            error_event = EventEmitter.error(
+                "error",
+                error_message,
+                code=error_code,
+                details={"session_id": session_id},
+            )
             yield apply_mode_metadata(error_event, self.flow_mode)
+            hooks = _SingleAgentToolHooks(self, session_id=session_id)
+            hooks._chart_revision_missing_session = self._chart_revision_missing_session
+            final_payload = hooks._build_final_answer_payload()
+            if final_payload:
+                final_event = {
+                    "event": "final_answer",
+                    "data": {
+                        "message": final_payload["message"],
+                        "missing_components": final_payload["missing_components"],
+                        "analysis_available": final_payload["analysis_available"],
+                        "final_answer_only": True,
+                        "ts": datetime.utcnow().isoformat(),
+                        "flow_mode": self.flow_mode.value,
+                        "follow_up_route": self.follow_up_route.value if self.follow_up_route else None,
+                    },
+                }
+                yield apply_mode_metadata(final_event, self.flow_mode)
+                self._final_answer_emitted = True
             return
         hooks = _SingleAgentToolHooks(self, session_id=session_id)
         async for event in self._invoke_planner_tool(

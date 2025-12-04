@@ -42,6 +42,23 @@ export const STEP_NAME: Record<string, string> = {
   sql_regeneration: 'SQL Regeneration',
   follow_up_route: 'Follow-Up Guidance',
   finalization: 'Workflow Finalization',
+  // Phase 4: *_ready events for lane completion
+  sql_ready: 'SQL Complete',
+  chart_ready: 'Chart Complete',
+  analysis_ready: 'Analysis Complete',
+  web_ready: 'Web Research Complete',
+  stock_ready: 'Market Data Complete',
+  market_ready: 'Market Data Complete',
+  workflow_complete: 'Workflow Complete',
+  // Phase 3: Specialist pool events
+  sql_pool_complete: 'SQL Pool Complete',
+  chart_pool_complete: 'Chart Pool Complete',
+  analysis_pool_complete: 'Analysis Pool Complete',
+  web_pool_complete: 'Web Pool Complete',
+  market_pool_complete: 'Market Pool Complete',
+  // Error and redirect events
+  workflow_error: 'Workflow Error',
+  workflow_redirect: 'Workflow Redirect',
 };
 
 export const STEP_ORDER = [
@@ -72,19 +89,33 @@ export const STEP_ORDER = [
   'sql_execution',
   'sql_result_bridge',
   'sql_lane',
+  'sql_ready',
+  'sql_pool_complete',
   'market_lane',
+  'market_ready',
+  'stock_ready',
+  'market_pool_complete',
   'web_lane',
   'web_refresh',
+  'web_ready',
+  'web_pool_complete',
   'chart_designer',
   'chart_generation',
   'chart_revision',
+  'chart_ready',
+  'chart_pool_complete',
   'analysis_writer',
   'analysis_generation',
   'analysis_revision',
+  'analysis_ready',
+  'analysis_pool_complete',
   'market_refresh',
   'sql_regeneration',
   'follow_up_route',
   'finalization',
+  'workflow_error',
+  'workflow_redirect',
+  'workflow_complete',
 ];
 
 // SQL pipeline steps (direct workflow)
@@ -121,6 +152,15 @@ export const STEP_NAME_SQL: Record<string, string> = {
   analysis_revision: 'Analysis Revision',
   follow_up_route: 'Follow-Up Guidance',
   workflow_complete: 'Workflow Summary',
+  // Lane completion events
+  sql_ready: 'SQL Complete',
+  chart_ready: 'Chart Complete',
+  analysis_ready: 'Analysis Complete',
+  web_ready: 'Web Research Complete',
+  stock_ready: 'Market Data Complete',
+  // Error events
+  workflow_error: 'Workflow Error',
+  workflow_redirect: 'Workflow Redirect',
 };
 
 export const STEP_ORDER_SQL = [
@@ -144,16 +184,23 @@ export const STEP_ORDER_SQL = [
   'sql_executor',
   'sql_execution',
   'sql_result_bridge',
+  'sql_ready',
   'data_retrieval',
   'chart',
   'chart_designer',
   'chart_generation',
   'chart_revision',
+  'chart_ready',
+  'web_ready',
+  'stock_ready',
   'analysis',
   'analysis_writer',
   'analysis_generation',
   'analysis_revision',
+  'analysis_ready',
   'follow_up_route',
+  'workflow_error',
+  'workflow_redirect',
   'workflow_complete',
 ];
 

@@ -1,1 +1,1 @@
-# Marks the backend directory as a Python package so relative imports work 
+# Marks backend as a package for imports in tests and application code.

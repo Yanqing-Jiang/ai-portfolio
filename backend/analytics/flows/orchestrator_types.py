@@ -1,55 +1,50 @@
-# --- Analytics Function/Class Map ---
-# Class: AgentExecutionError
-#   Role: Raised when the orchestrator encounters an invalid plan or agent failure.
-#   Called from: Internal to analytics.flows.orchestrator
-#   Collaborators: Internal helpers only
-#   Why: Supports downstream analytics workflows that rely on AgentExecutionError.
-# Class: AgentResult
-#   Role: Handles AgentResult logic for analytics.flows.orchestrator.
-#   Called from: analytics.flows.multi_agent, tests.analytics.test_multi_agent_flow
-#   Collaborators: dataclasses.field
-#   Why: Keeps analytics.flows.orchestrator from duplicating AgentResult behavior across flows.
-# Class: AgentRunContext
-#   Role: Handles AgentRunContext logic for analytics.flows.orchestrator.
-#   Called from: analytics.flows.multi_agent, tests.analytics.test_multi_agent_flow, tests.analytics.test_web_research
-#   Collaborators: Internal helpers only
-#   Why: Keeps analytics.flows.orchestrator from duplicating AgentRunContext behavior across flows.
-# Class: AgentSpec
-#   Role: Handles AgentSpec logic for analytics.flows.orchestrator.
-#   Called from: analytics.flows.multi_agent
-#   Collaborators: dataclasses.dataclass
-#   Why: Keeps analytics.flows.orchestrator from duplicating AgentSpec behavior across flows.
-# Class: AgentTask
-#   Role: Handles AgentTask logic for analytics.flows.orchestrator.
-#   Called from: analytics.flows.multi_agent
-#   Collaborators: dataclasses.field
-#   Why: Keeps analytics.flows.orchestrator from duplicating AgentTask behavior across flows.
-# Class: OrchestratorContext
-#   Role: Handles OrchestratorContext logic for analytics.flows.orchestrator.
-#   Called from: analytics.flows.multi_agent
-#   Collaborators: dataclasses.field
-#   Why: Keeps analytics.flows.orchestrator from duplicating OrchestratorContext behavior across flows.
-# Class: AgentExecutionOrchestrator
-#   Role: Executes agent DAGs with shallow depth constraints and TaskGroup fan-out.
-#   Called from: analytics.flows.multi_agent
-#   Collaborators: collections.defaultdict, time.perf_counter, analytics.flows.orchestrator.AgentExecutionError, asyncio.TaskGroup, +2 more
-#   Why: Supports downstream analytics workflows that rely on AgentExecutionOrchestrator.
-# Class: AgentToolRetryableError
-#   Role: Raised by specialist agents to request a retry without aborting the workflow.
-#   Called from: Internal to analytics.flows.orchestrator
-#   Collaborators: Internal helpers only
-#   Why: Supports downstream analytics workflows that rely on AgentToolRetryableError.
-# --- End Analytics Function/Class Map ---
+"""
+Module: orchestrator_types.py
+Purpose: Unified types for analytics flow orchestration.
+Called from: analytics.flows.multi_agent, analytics.flows.lane_executors, analytics.flows.sequencer,
+             tests.analytics.test_multi_agent_flow, tests.analytics.test_web_research
+Why: Consolidates orchestrator-related types that were previously split across
+     orchestrator.py, orchestrator_protocol.py, and orchestrator_adapter.py.
+
+This module is the canonical source for:
+- FlowOrchestrator protocol (defines lane execution contract)
+- AgentResult, AgentRunContext (agent execution context and results)
+- AgentSpec, AgentTask, OrchestratorContext (agent configuration)
+- AgentExecutionOrchestrator (DAG executor)
+- PlannerOrchestratorAdapter (adapter for PlannerSequencer)
+
+Part of Phase 1 cleanup - migrating away from legacy orchestrator files.
+"""
+
 from __future__ import annotations
 
+import abc
 import asyncio
 import inspect
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Tuple
+from typing import (
+    Any,
+    AsyncGenerator,
+    Awaitable,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Mapping,
+    MutableMapping,
+    Optional,
+    Protocol,
+    Sequence,
+    Tuple,
+    runtime_checkable,
+)
 
 __all__ = [
+    # Protocol
+    "FlowOrchestrator",
+    # Agent types
     "AgentExecutionError",
     "AgentResult",
     "AgentRunContext",
@@ -58,15 +53,114 @@ __all__ = [
     "OrchestratorContext",
     "AgentExecutionOrchestrator",
     "AgentToolRetryableError",
+    # Adapter
+    "PlannerOrchestratorAdapter",
+    "AsyncGenFactory",
+    "LaneCompleteCallback",
 ]
 
 
+# =============================================================================
+# FlowOrchestrator Protocol (from orchestrator_protocol.py)
+# =============================================================================
+
+
+@runtime_checkable
+class FlowOrchestrator(Protocol):
+    """
+    Class: FlowOrchestrator
+    Role: Defines the contract between the planner sequencer and concrete flow controllers.
+    Called from: analytics.flows.lane_executors, analytics.flows.sequencer
+    Why: Implementations (single-agent or supervisor-led multi-agent) supply the actual
+         execution strategy for each lane while the sequencer enforces ordering.
+    """
+
+    @abc.abstractmethod
+    async def run_intent_stage(self) -> AsyncGenerator[Dict[str, Any], None]:
+        """Execute intent classification / clarification before any tool fan-out."""
+
+    @abc.abstractmethod
+    async def run_sql_stage(self) -> AsyncGenerator[Dict[str, Any], None]:
+        """Produce SQL plan + execution events, including chart synthesis as needed."""
+
+    @abc.abstractmethod
+    async def run_web_stage(self) -> AsyncGenerator[Dict[str, Any], None]:
+        """Refresh web research artifacts for current revision lanes."""
+
+    @abc.abstractmethod
+    async def run_market_stage(self) -> AsyncGenerator[Dict[str, Any], None]:
+        """Refresh market / stock lane artifacts."""
+
+    @abc.abstractmethod
+    async def run_analysis_stage(self) -> AsyncGenerator[Dict[str, Any], None]:
+        """Generate the final analysis once upstream lanes complete."""
+
+    @abc.abstractmethod
+    def pending_lanes(self) -> Iterable[str]:
+        """Return lane identifiers still outstanding (for telemetry / guardrails)."""
+
+    @abc.abstractmethod
+    def lane_complete(
+        self,
+        lane: str,
+        *,
+        success: bool,
+        reused: bool = False,
+        reason: Optional[str] = None,
+    ) -> None:
+        """
+        Notify the orchestrator that a lane finished. Success indicates whether
+        downstream analysis can proceed without retries.
+        """
+
+    @abc.abstractmethod
+    def event_metadata(self) -> Dict[str, Any]:
+        """Expose metadata that should accompany sequencer-produced events."""
+
+
+# =============================================================================
+# Agent Types (from orchestrator.py)
+# =============================================================================
+
+
 class AgentExecutionError(RuntimeError):
-    """Raised when the orchestrator encounters an invalid plan or agent failure."""
+    """
+    Class: AgentExecutionError
+    Role: Raised when the orchestrator encounters an invalid plan or agent failure.
+    Called from: AgentExecutionOrchestrator
+    Why: Supports downstream analytics workflows that rely on AgentExecutionError.
+    """
+
+
+class AgentToolRetryableError(RuntimeError):
+    """
+    Class: AgentToolRetryableError
+    Role: Raised by specialist agents to request a retry without aborting the workflow.
+    Called from: Agent implementations
+    Why: Supports retry logic in AgentExecutionOrchestrator.
+    """
+
+    def __init__(
+        self,
+        code: str,
+        message: str | None = None,
+        *,
+        metadata: Optional[Mapping[str, Any]] = None,
+    ) -> None:
+        self.code = code
+        self.metadata = dict(metadata or {})
+        super().__init__(message or code)
 
 
 @dataclass
 class AgentResult:
+    """
+    Class: AgentResult
+    Role: Represents the output of an agent execution.
+    Called from: analytics.flows.multi_agent, tests
+    Why: Standardizes agent output format for the orchestrator.
+    """
+
     name: str
     output: Dict[str, Any] = field(default_factory=dict)
     events: Sequence[Dict[str, Any]] = field(default_factory=tuple)
@@ -81,7 +175,9 @@ class AgentResult:
         retry_count: Optional[int] = None,
         extra: Optional[Mapping[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
-        base_events: List[Dict[str, Any]] = [dict(event) for event in self.events] if self.events else []
+        base_events: List[Dict[str, Any]] = (
+            [dict(event) for event in self.events] if self.events else []
+        )
         if not base_events:
             base_events = [{"event": "agent_result", "data": {}}]
         enriched: List[Dict[str, Any]] = []
@@ -115,6 +211,13 @@ class AgentResult:
 
 @dataclass
 class AgentRunContext:
+    """
+    Class: AgentRunContext
+    Role: Provides context for an agent execution.
+    Called from: analytics.flows.multi_agent, tests
+    Why: Standardizes the input context for agent entrypoints.
+    """
+
     query: str
     session_id: Optional[str]
     shared: MutableMapping[str, Any]
@@ -124,6 +227,13 @@ class AgentRunContext:
 
 @dataclass(frozen=True)
 class AgentSpec:
+    """
+    Class: AgentSpec
+    Role: Defines an agent's configuration.
+    Called from: analytics.flows.multi_agent
+    Why: Encapsulates agent metadata for the orchestrator registry.
+    """
+
     name: str
     system_prompt: str
     capabilities: Sequence[str]
@@ -134,6 +244,13 @@ class AgentSpec:
 
 @dataclass
 class AgentTask:
+    """
+    Class: AgentTask
+    Role: Represents a task in the agent execution plan.
+    Called from: analytics.flows.multi_agent
+    Why: Defines dependencies and inputs for DAG execution.
+    """
+
     name: str
     agent: str
     depends_on: Sequence[str] = field(default_factory=tuple)
@@ -145,13 +262,25 @@ class AgentTask:
 
 @dataclass
 class OrchestratorContext:
+    """
+    Class: OrchestratorContext
+    Role: Top-level context for orchestrator execution.
+    Called from: analytics.flows.multi_agent
+    Why: Provides query and session info for the DAG run.
+    """
+
     query: str
     session_id: Optional[str] = None
     shared: Dict[str, Any] = field(default_factory=dict)
 
 
 class AgentExecutionOrchestrator:
-    """Executes agent DAGs with shallow depth constraints and TaskGroup fan-out."""
+    """
+    Class: AgentExecutionOrchestrator
+    Role: Executes agent DAGs with shallow depth constraints and TaskGroup fan-out.
+    Called from: analytics.flows.multi_agent
+    Why: Supports downstream analytics workflows that rely on AgentExecutionOrchestrator.
+    """
 
     BackpressureCallback = Callable[[str, Mapping[str, Any]], None]
 
@@ -162,7 +291,10 @@ class AgentExecutionOrchestrator:
         max_depth: int = 3,
         max_retries: int = 0,
         retry_decider: Optional[
-            Callable[[str, AgentSpec, int, AgentRunContext, Mapping[str, Any]], Tuple[bool, Optional[Dict[str, Any]]]]
+            Callable[
+                [str, AgentSpec, int, AgentRunContext, Mapping[str, Any]],
+                Tuple[bool, Optional[Dict[str, Any]]],
+            ]
         ] = None,
     ) -> None:
         if max_depth < 1:
@@ -237,7 +369,11 @@ class AgentExecutionOrchestrator:
         completed: Dict[str, AgentResult] = {}
 
         while pending:
-            ready = [name for name in pending if all(dep in completed for dep in task_map[name].depends_on)]
+            ready = [
+                name
+                for name in pending
+                if all(dep in completed for dep in task_map[name].depends_on)
+            ]
             if not ready:
                 unresolved = ", ".join(sorted(pending))
                 raise AgentExecutionError(
@@ -294,7 +430,10 @@ class AgentExecutionOrchestrator:
                             query=context.query,
                             session_id=context.session_id,
                             shared=context.shared,
-                            dependencies={dep: completed[dep] for dep in task_map[task_name].depends_on},
+                            dependencies={
+                                dep: completed[dep]
+                                for dep in task_map[task_name].depends_on
+                            },
                             inputs=dict(task_map[task_name].inputs),
                         )
                         tasks[task_name] = group.create_task(
@@ -420,10 +559,105 @@ class AgentExecutionOrchestrator:
                 raise AgentExecutionError(
                     f"Agent '{spec.name}' failed during execution"
                 ) from exc
-class AgentToolRetryableError(RuntimeError):
-    """Raised by specialist agents to request a retry without aborting the workflow."""
 
-    def __init__(self, code: str, message: str | None = None, *, metadata: Optional[Mapping[str, Any]] = None) -> None:
-        self.code = code
-        self.metadata = dict(metadata or {})
-        super().__init__(message or code)
+
+# =============================================================================
+# PlannerOrchestratorAdapter (from orchestrator_adapter.py)
+# =============================================================================
+
+AsyncGenFactory = Callable[[], AsyncGenerator[Dict[str, Any], None]]
+LaneCompleteCallback = Callable[[str, bool, bool, Optional[str]], None]
+
+
+class PlannerOrchestratorAdapter(FlowOrchestrator):
+    """
+    Class: PlannerOrchestratorAdapter
+    Role: Wraps a set of stage runners (intent, sql, web, market, analysis) so the
+          PlannerSequencer can operate without depending on a specific controller.
+    Called from: analytics.flows.multi_agent, analytics.flows.lane_executors
+    Why: Metadata is merged into every emitted event.
+    """
+
+    def __init__(
+        self,
+        *,
+        intent_runner: AsyncGenFactory,
+        sql_runner: AsyncGenFactory,
+        web_runner: AsyncGenFactory,
+        market_runner: AsyncGenFactory,
+        analysis_runner: AsyncGenFactory,
+        metadata: Optional[Dict[str, Any]] = None,
+        optional_lanes: Optional[Iterable[str]] = None,
+        lane_complete_callback: Optional[LaneCompleteCallback] = None,
+    ) -> None:
+        self._intent_runner = intent_runner
+        self._sql_runner = sql_runner
+        self._web_runner = web_runner
+        self._market_runner = market_runner
+        self._analysis_runner = analysis_runner
+        self._metadata = dict(metadata or {})
+        self.optional_lanes = tuple(optional_lanes or ("web", "market"))
+        self._lane_complete_callback = lane_complete_callback
+        self._pending: Dict[str, bool] = {
+            "intent": True,
+            "sql": True,
+            "web": True,
+            "market": True,
+            "analysis": True,
+        }
+
+    async def run_intent_stage(self) -> AsyncGenerator[Dict[str, Any], None]:
+        async for event in self._intent_runner():
+            yield self._decorate(event)
+
+    async def run_sql_stage(self) -> AsyncGenerator[Dict[str, Any], None]:
+        async for event in self._sql_runner():
+            yield self._decorate(event)
+
+    async def run_web_stage(self) -> AsyncGenerator[Dict[str, Any], None]:
+        async for event in self._web_runner():
+            yield self._decorate(event)
+
+    async def run_market_stage(self) -> AsyncGenerator[Dict[str, Any], None]:
+        async for event in self._market_runner():
+            yield self._decorate(event)
+
+    async def run_analysis_stage(self) -> AsyncGenerator[Dict[str, Any], None]:
+        async for event in self._analysis_runner():
+            yield self._decorate(event)
+
+    def pending_lanes(self) -> Iterable[str]:
+        return tuple(lane for lane, pending in self._pending.items() if pending)
+
+    def lane_complete(
+        self,
+        lane: str,
+        *,
+        success: bool,
+        reused: bool = False,
+        reason: Optional[str] = None,
+    ) -> None:
+        self._pending[lane] = False
+        status_map = self._metadata.setdefault("lane_status", {})
+        if isinstance(status_map, dict):
+            status_map[lane] = "success" if success else "error"
+        if self._lane_complete_callback:
+            try:
+                self._lane_complete_callback(lane, success, reused, reason)
+            except Exception:  # pragma: no cover - defensive logging
+                pass
+
+    def event_metadata(self) -> Dict[str, Any]:
+        enriched = dict(self._metadata)
+        enriched["pending_lanes"] = list(self.pending_lanes())
+        return enriched
+
+    def _decorate(self, event: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(event, dict):
+            return event
+        data = event.setdefault("data", {})
+        if isinstance(data, dict):
+            for key, value in self._metadata.items():
+                data.setdefault(key, value)
+        return event
+

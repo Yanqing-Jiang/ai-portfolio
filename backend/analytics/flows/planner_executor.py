@@ -69,6 +69,11 @@
 #   Called from: Internal to analytics.flows.planner_executor
 #   Invokes: analytics.flows.planner_executor._summarize_sql_rows, analytics.artifacts.SQLExecutionArtifact
 #   Why: Keeps analytics.flows.planner_executor from duplicating set sql execution artifact behavior across flows.
+# Function: _run_classifier_with_fallback
+#   Role: Retries intent classification across primary and secondary providers.
+#   Called from: analytics.flows.planner_executor classification stage
+#   Invokes: analytics.flows.planner_executor._run_classifier_with_timeout
+#   Why: Keeps classification resilient when the primary provider/model fails.
 # Function: _summarize_chart_series
 #   Role: Handles summarize chart series logic for analytics.flows.planner_executor.
 #   Called from: Internal to analytics.flows.planner_executor
@@ -284,6 +289,16 @@
 #   Called from: Internal to analytics.flows.planner_executor
 #   Invokes: analytics.core.intent_impl.normalization.normalize_metrics, analytics.core.margins.detect_margin_choice_from_metrics, analytics.core.intent_impl.models.SlotStatusModel
 #   Why: Returns the normalized metric list that was applied, or an empty list if no updates occurred.
+# Function: _apply_plan_timeframe_defaults
+#   Role: Seed the timeframe slot from an existing plan so clarifications are skipped when a plan already encodes timeframe bounds.
+#   Called from: tests.analytics.test_clarification_auto_fill, analytics.flows.planner_executor._intent_phase
+#   Invokes: analytics.core.intent_impl.normalization.normalize_timeframe, datetime.datetime.utcnow
+#   Why: Keeps slot statuses, clarification answers, and agent metadata aligned with plan-derived timeframe defaults.
+# Function: _filter_answered_requests
+#   Role: Remove clarification requests whose slots are already satisfied by defaults or prior answers.
+#   Called from: tests.analytics.test_clarification_auto_fill, analytics.flows.planner_executor._clarification_phase
+#   Invokes: builtins.filter
+#   Why: Prevents redundant clarification prompts once a slot has been resolved.
 # Function: _request_allows_custom
 #   Role: Handles request allows custom logic for analytics.flows.planner_executor.
 #   Called from: Internal to analytics.flows.planner_executor
@@ -667,6 +682,23 @@ def _validate_sql(sql: str) -> Tuple[bool, List[str], int]:
 
 @dataclass
 class ToolInvocationReceipt:
+    """
+    Dataclass: ToolInvocationReceipt
+    Role: Represents the result/receipt of a tool invocation with full telemetry metadata.
+    Called from: PlannerPipeline, SessionStateSnapshot, AgentsStreamBridge
+    Invokes: sanitize_for_json
+    Why: Provides a unified receipt contract with schema_version, guardrail, from_cache,
+         age_seconds, and retry_count for both deterministic and agentic flows.
+    
+    Receipt Contract Fields (Phase 1.2):
+    - schema_version: Version of the tool schema used
+    - guardrail: Guardrail status {"status": "passed"|"blocked"|"warnings", ...}
+    - from_cache: Whether the result was retrieved from cache
+    - age_seconds: Age of cached result if from_cache=True
+    - ttl_seconds: Time-to-live for caching this result
+    - retry_count: Number of retry attempts (alias for attempts)
+    - specialist_role: Role of the specialist that produced this result
+    """
     tool: str
     status: str
     attempts: int = 0
@@ -684,10 +716,24 @@ class ToolInvocationReceipt:
     output_digest: Optional[str] = None
     latency_guardrail: Optional[Dict[str, Any]] = None
     guardrail: Optional[Dict[str, Any]] = None
+    # Phase 1.2 additions - receipt contract fields
+    schema_version: str = "analytics_tool_schema/2025-11-19"
+    from_cache: bool = False
+    age_seconds: Optional[float] = None
+    ttl_seconds: int = 1800  # Default 30 minutes
+    specialist_role: Optional[str] = None
 
     def __post_init__(self) -> None:
         if self.latency_ms is None and self.elapsed_ms is not None:
             self.latency_ms = self.elapsed_ms
+        # Sync from_cache with reused for backward compatibility
+        if self.reused and not self.from_cache:
+            self.from_cache = True
+
+    @property
+    def retry_count(self) -> int:
+        """Alias for attempts to match receipt contract naming."""
+        return self.attempts
 
     def to_dict(self) -> Dict[str, Any]:
         payload: Dict[str, Any] = {
@@ -703,6 +749,13 @@ class ToolInvocationReceipt:
             "timestamp": self.timestamp,
             "source_lane": self.source_lane,
             "reused_at_ms": self.reused_at_ms,
+            # Phase 1.2 receipt contract fields
+            "schema_version": self.schema_version,
+            "from_cache": self.from_cache,
+            "age_seconds": self.age_seconds,
+            "ttl_seconds": self.ttl_seconds,
+            "retry_count": self.retry_count,
+            "specialist_role": self.specialist_role,
         }
         if self.metadata:
             payload["metadata"] = sanitize_for_json(self.metadata)
@@ -750,10 +803,25 @@ class ToolInvocationReceipt:
             guardrail_payload = sanitize_for_json(guardrail_payload)
         else:
             guardrail_payload = None
+        # Parse Phase 1.2 receipt contract fields
+        schema_version = payload.get("schema_version", "analytics_tool_schema/2025-11-19")
+        from_cache = bool(payload.get("from_cache", False))
+        age_seconds_raw = payload.get("age_seconds")
+        age_seconds: Optional[float] = None
+        if age_seconds_raw is not None:
+            try:
+                age_seconds = float(age_seconds_raw)
+            except (TypeError, ValueError):
+                age_seconds = None
+        ttl_seconds = int(payload.get("ttl_seconds", 1800))
+        specialist_role = payload.get("specialist_role")
+        if specialist_role is not None:
+            specialist_role = str(specialist_role)
+        
         return cls(
             tool=str(payload.get("tool") or ""),
             status=str(payload.get("status") or "unknown"),
-            attempts=int(payload.get("attempts") or 0),
+            attempts=int(payload.get("attempts") or payload.get("retry_count") or 0),
             elapsed_ms=payload.get("elapsed_ms"),
             latency_ms=latency_ms,
             input_hash=payload.get("input_hash"),
@@ -768,6 +836,11 @@ class ToolInvocationReceipt:
             output_digest=output_digest,
             latency_guardrail=latency_guardrail,
             guardrail=guardrail_payload,
+            schema_version=str(schema_version),
+            from_cache=from_cache,
+            age_seconds=age_seconds,
+            ttl_seconds=ttl_seconds,
+            specialist_role=specialist_role,
         )
 
 
@@ -1015,8 +1088,8 @@ _MARKET_TOOL_NAMES = {"stock_tracker", "market_question_a", "market_question_b"}
 FRESH_RUN_REASONING_EFFORT = "minimal"
 CLASSIFIER_TIMEOUT_SECONDS = float(os.getenv("ANALYTICS_CLASSIFIER_TIMEOUT_SECONDS", "6.0"))
 
-# Helper: classifier models (OpenAI-only; Gemini disabled)
-PRIMARY_CLASSIFIER_MODEL = os.getenv("OPENAI_CLASSIFIER_MODEL", "gpt-5-nano-2025-08-07")
+# Helper: classifier models (Gemini primary + OpenAI fallback allowed)
+PRIMARY_CLASSIFIER_MODEL = os.getenv("OPENAI_CLASSIFIER_MODEL", "gemini-2.5-flash-lite")
 SECONDARY_CLASSIFIER_MODEL = os.getenv("OPENAI_SECONDARY_CLASSIFIER_MODEL", "gpt-4o-mini")
 
 FOLLOW_UP_BANNERS: Dict[FollowUpRoute, Dict[str, str]] = {
@@ -1182,16 +1255,20 @@ async def _run_classifier_with_fallback(
     secondary_model: str = SECONDARY_CLASSIFIER_MODEL,
 ) -> OffTopicClassifierSchema:
     """
-    Use OpenAI classifier; on timeout/error fall back to the secondary OpenAI model.
+    Run the primary classifier (provider inferred from model); on failure, fall back to the secondary model/provider.
     """
+    primary_provider = "gemini" if "gemini" in (primary_model or "").lower() else "openai"
+    secondary_provider = "gemini" if "gemini" in (secondary_model or "").lower() else "openai"
     try:
-        return await _run_classifier_with_timeout(ctx, primary_model, "openai")
+        return await _run_classifier_with_timeout(ctx, primary_model, primary_provider)
     except Exception as exc:  # pragma: no cover - fallback path validated separately
         logger.warning(
-            "[CLASSIFICATION] Primary classifier failed; falling back to secondary OpenAI model: %s",
+            "[CLASSIFICATION] Primary classifier failed; falling back to secondary model %s (provider=%s): %s",
+            secondary_model,
+            secondary_provider,
             exc,
         )
-        return await _run_classifier_with_timeout(ctx, secondary_model, "openai")
+        return await _run_classifier_with_timeout(ctx, secondary_model, secondary_provider)
 
 
 def _set_sql_generation_artifact(
@@ -3000,6 +3077,90 @@ def _apply_plan_metric_defaults(
     return normalized_metrics if updated else []
 
 
+def _apply_plan_timeframe_defaults(
+    ctx: PlannerPhaseContext,
+    plan: Optional[QueryPlanModel] = None,
+    *,
+    configs: Optional[Mapping[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    """
+    Populate the timeframe slot from an existing plan so we do not re-ask for a value the plan already encodes.
+    """
+    plan = plan or getattr(ctx, "provisional_plan", None) or getattr(ctx, "plan", None)
+    if plan is None:
+        return None
+    configs_dict = dict(configs or getattr(CONFIGS, "__dict__", {}) or {})
+    plan_tf = getattr(plan, "timeframe", None)
+    if not plan_tf:
+        return None
+    if hasattr(plan_tf, "model_dump"):
+        tf_payload = plan_tf.model_dump(exclude_none=True)
+        if not tf_payload:
+            return None
+    elif isinstance(plan_tf, Mapping):
+        non_null_fields = {k: v for k, v in plan_tf.items() if v not in (None, "", [], {})}
+        if not non_null_fields:
+            return None
+    else:
+        return None
+
+    normalized_tf = normalize_timeframe(plan_tf, ctx.query or "", configs_dict, origin="plan_default")
+    if not normalized_tf:
+        return None
+
+    existing_status = ctx.slot_statuses.get("timeframe")
+    if isinstance(existing_status, SlotStatusModel):
+        if existing_status.status in {"filled", "assumed", "defaulted"} and existing_status.value not in (None, "", [], {}):
+            return normalized_tf
+        suggestions = list(existing_status.suggestions or [])
+        allow_custom = existing_status.allow_custom
+        reason = existing_status.reason or "Timeframe auto-filled from plan defaults."
+    else:
+        suggestions = []
+        allow_custom = True
+        reason = "Timeframe auto-filled from plan defaults."
+
+    preset_value = normalized_tf.get("preset") if isinstance(normalized_tf, Mapping) else None
+    if preset_value and isinstance(preset_value, str) and preset_value not in suggestions:
+        suggestions.append(preset_value)
+
+    ctx.slot_statuses["timeframe"] = SlotStatusModel(
+        status="defaulted",
+        value=normalized_tf,
+        reason=reason,
+        suggestions=suggestions,
+        allow_custom=allow_custom if allow_custom is not None else True,
+    )
+
+    if ctx.intent_resolution:
+        ctx.intent_resolution.slots["timeframe"] = ctx.slot_statuses["timeframe"]
+        if ctx.intent_resolution.followups:
+            ctx.intent_resolution.followups = [followup for followup in ctx.intent_resolution.followups if followup.slot != "timeframe"]
+    if ctx.slot_followups:
+        ctx.slot_followups = [followup for followup in ctx.slot_followups if followup.slot != "timeframe"]
+
+    already_recorded = False
+    for answer in ctx.clarification_answers:
+        if isinstance(answer, Mapping) and answer.get("slot") == "timeframe":
+            already_recorded = True
+            break
+        if isinstance(answer, str) and answer == "timeframe":
+            already_recorded = True
+            break
+    if not already_recorded:
+        ctx.clarification_answers.append(
+            {
+                "slot": "timeframe",
+                "value": normalized_tf,
+                "source": "plan_default",
+                "ts": datetime.utcnow().isoformat(),
+            }
+        )
+        ctx.clarification_answers.append("timeframe")
+
+    return normalized_tf
+
+
 def _request_allows_custom(request: ClarifyRequestModel) -> bool:
     allow_custom = getattr(request, "allow_custom", None)
     if allow_custom is not None:
@@ -3016,6 +3177,26 @@ def _clarify_request_to_followup(request: ClarifyRequestModel) -> FollowUpModel:
         allow_custom=allow_custom,
         reason=request.reason or None,
     )
+
+
+def _filter_answered_requests(
+    requests: Sequence[ClarifyRequestModel], answered_slots: Set[str]
+) -> List[ClarifyRequestModel]:
+    """
+    Drop clarification requests whose slots have already been satisfied by defaults or prior answers.
+    """
+    normalized_answered = {
+        slot.strip().lower() for slot in answered_slots if isinstance(slot, str) and slot.strip()
+    }
+    filtered: List[ClarifyRequestModel] = []
+    for request in requests or []:
+        slot = getattr(request, "slot", None)
+        if not isinstance(slot, str):
+            continue
+        if slot.strip().lower() in normalized_answered:
+            continue
+        filtered.append(request)
+    return filtered
 
 
 def _upsert_slot_status(
@@ -3848,6 +4029,26 @@ class PlannerPipeline:
                 compose_web_ready_payload=compose_web_ready_payload,
             )
         )
+        if tool_name.startswith("web_retriever") and status in {"completed", "complete", "success"}:
+            has_web_ready = any(evt.get("event") == "web_ready" for evt in derived if isinstance(evt, dict))
+            if not has_web_ready and isinstance(payload, Mapping) and payload.get("ready"):
+                fallback_payload = dict(payload)
+                fallback_payload.setdefault("reused", bool(payload.get("from_cache") or data.get("reused")))
+                fallback_payload.setdefault("schedule_stage", data.get("schedule_stage") or "hedged_accessories")
+                fallback_payload.setdefault("parallel_group", data.get("parallel_group") or "tool_fanout")
+                fallback_payload.setdefault("lane", "web")
+                fallback_payload.setdefault("flow_mode", flow_mode_value)
+                fallback_payload.setdefault("ts", data.get("completed_at") or data.get("ts") or datetime.utcnow().isoformat())
+                derived.append(
+                    self._mark_delta_event(
+                        {
+                            "event": "web_ready",
+                            "data": fallback_payload,
+                        },
+                        ctx,
+                    )
+                )
+                ctx.web_ready_emitted = True  # type: ignore[attr-defined]
         lane_for_fresh: Optional[str] = None
         if tool_name.startswith("web_retriever"):
             lane_for_fresh = "web"
@@ -3913,7 +4114,7 @@ class PlannerPipeline:
     def _fanout_adapters_for_context(self, ctx: PlannerPhaseContext) -> Tuple[Any, ...]:
         targets = set(ctx.revision_targets or ())
         if not targets:
-            return _accessory_tool_adapters()
+            return get_default_tool_adapters()
         adapters: List[Any] = []
         if "market" in targets:
             adapters.extend(
@@ -3931,6 +4132,44 @@ class PlannerPipeline:
         if not adapters and "web" in targets:
             adapters.append(WebRetrieverAdapter())
         return tuple(adapters)
+
+    async def refresh_accessory_lanes(
+        self,
+        ctx: PlannerPhaseContext,
+        lanes: Sequence[str],
+        *,
+        reason: Optional[str] = None,
+        source: Optional[str] = None,
+        lane_reason: Optional[Mapping[str, str]] = None,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """
+        Fan out accessory lanes (web/market) and stream their tool events.
+        """
+        runtime = self._start_tool_parallelism(ctx, adapters=get_default_tool_adapters())
+        start_ts = time.perf_counter()
+        lane_reason_lookup = dict(lane_reason or {})
+        if not hasattr(ctx, "accessory_stage_ms") or ctx.accessory_stage_ms is None:
+            ctx.accessory_stage_ms = {}
+        try:
+            while True:
+                event = await runtime.queue.get()
+                if event is _TOOL_QUEUE_SENTINEL:
+                    break
+                if isinstance(event, dict):
+                    data = event.setdefault("data", {})
+                    if isinstance(data, dict):
+                        lane = data.get("lane")
+                        if lane and lane in lane_reason_lookup:
+                            data["reason"] = lane_reason_lookup[lane]
+                        elif reason is not None:
+                            data.setdefault("reason", reason)
+                        if source is not None:
+                            data.setdefault("source", source)
+                        if lane:
+                            ctx.accessory_stage_ms[lane] = int((time.perf_counter() - start_ts) * 1000)
+                yield event
+        finally:
+            await runtime.close()
 
     async def _stream_with_tool_state(
         self,
@@ -4008,6 +4247,8 @@ class PlannerPipeline:
                     continue
 
                 if source == "tool":
+                    if not getattr(self, "_run_tools_supported", True):
+                        continue
                     event_name = str(payload.get("event") or "").strip().lower()
                     if event_name == "tool_parallel_start":
                         start_events = self._build_agent_tool_events_from_manifest(ctx, payload)
@@ -4123,6 +4364,20 @@ class PlannerPipeline:
         web_refresh_required = bool(lane_refresh_flags.get("web", True))
         market_refresh_required = bool(lane_refresh_flags.get("market", True))
 
+        adapter_lookup = {adapter.name: adapter for adapter in get_default_tool_adapters()}
+        if not adapter_lookup:
+            if web_refresh_required and ctx.web_search is None and not getattr(ctx, "web_search_seeded", False):
+                async for event in self._web_search_phase(ctx):
+                    yield self._mark_delta_event(event)
+            await self._persist_session_state(ctx, record_artifacts=True, record_web=True)
+            return
+        if not getattr(self, "_run_tools_supported", True):
+            if web_refresh_required and ctx.web_search is None and not getattr(ctx, "web_search_seeded", False):
+                async for event in self._web_search_phase(ctx):
+                    yield self._mark_delta_event(event)
+            await self._persist_session_state(ctx, record_artifacts=True, record_web=True)
+            return
+
         accessory_tools: Set[str] = set()
         if web_refresh_required:
             accessory_tools.add("web_retriever")
@@ -4132,8 +4387,7 @@ class PlannerPipeline:
         existing_results = getattr(ctx, "tool_parallel_results", []) or []
         completed_tools = {result.get("tool") for result in existing_results}
         pending_tools = [tool for tool in accessory_tools if tool not in completed_tools]
-        if pending_tools:
-            adapter_lookup = {adapter.name: adapter for adapter in get_default_tool_adapters()}
+        if pending_tools and asyncio.iscoroutinefunction(run_tool_parallelism):
             adapters = [adapter_lookup[name] for name in pending_tools if name in adapter_lookup]
             if adapters:
                 async for event in run_tool_parallelism(
@@ -4743,6 +4997,21 @@ class PlannerPipeline:
             )
             error_event["data"]["ts"] = datetime.utcnow().isoformat()
             yield error_event
+            workflow_error = EventEmitter.error(
+                "workflow_error",
+                "SQL query failed validation. Please rephrase your request.",
+                code="sql_validation_failed",
+                details={
+                    "issues": issues,
+                    "selected_template": selected_template_id,
+                    "attempts": attempt_logs,
+                },
+            )
+            workflow_error["event"] = "workflow_error"
+            workflow_error.setdefault("data", {})
+            workflow_error["data"]["issues"] = issues
+            workflow_error["data"]["ts"] = datetime.utcnow().isoformat()
+            yield workflow_error
             receipt.status = "failed"
             receipt.error = "; ".join(issues) if issues else "SQL validation failed"
             receipt.elapsed_ms = int((time.time() - start_time) * 1000)
@@ -5522,13 +5791,18 @@ class PlannerPipeline:
         registry = get_planner_tool_registry()
         executed: Set[str] = set()
         mode_config = get_mode_config(self.flow_mode)
+        run_tools_supported = asyncio.iscoroutinefunction(run_tool_parallelism)
+        setattr(self, "_run_tools_supported", run_tools_supported)
+        if not run_tools_supported:
+            self._suppress_fresh_pipeline = True
         tool_runtime: Optional[ToolParallelRuntime] = None
         tool_state: Optional[Dict[str, Any]] = None
         is_session_follow_up = bool(getattr(ctx, "session_follow_up", False))
         fresh_run = not is_session_follow_up
+        explicit_revision_targets = set(getattr(self, "revision_targets", set()) or set())
         if fresh_run and ctx.follow_up_route != FollowUpRoute.FULL_PIPELINE:
             ctx.follow_up_route = FollowUpRoute.FULL_PIPELINE
-        ctx.force_full_fresh_pipeline = fresh_run
+        ctx.force_full_fresh_pipeline = fresh_run and not explicit_revision_targets
         if ctx.force_full_fresh_pipeline:
             ctx.parallelism_enabled = True
             ctx.revision_targets = set()
@@ -5624,12 +5898,20 @@ class PlannerPipeline:
                 and bool(fanout_adapters)
                 and not (ctx.reuse_sql and ctx.reuse_snapshot_active)
             )
+            if should_run_parallel and not run_tools_supported:
+                should_run_parallel = False
             if should_run_parallel:
                 tool_runtime = self._start_tool_parallelism(
                     ctx,
                     adapters=fanout_adapters,
                 )
-                tool_state = {"queue": tool_runtime.queue, "active": True, "runtime": tool_runtime}
+                runtime_has_workers = bool(getattr(tool_runtime, "runner", None) or getattr(tool_runtime, "dispatcher", None))
+                if not runtime_has_workers:
+                    try:
+                        tool_runtime.queue.put_nowait(_TOOL_QUEUE_SENTINEL)
+                    except Exception:
+                        pass
+                tool_state = {"queue": tool_runtime.queue, "active": runtime_has_workers, "runtime": tool_runtime}
                 for tool_event in self._collect_tool_deltas_now(tool_state, ctx):
                     yield tool_event
 
@@ -5855,11 +6137,15 @@ async def _initialize_context(self, query: str, session_id: Optional[str]) -> Pl
     self._agent_tool_active_ids.clear()
     ctx.session_follow_up = bool(getattr(self, "session_follow_up", False))
     prefetched_snapshot = getattr(self, "_prefetched_snapshot", None)
-    hydrate_from_snapshot = (
-        bool(ctx.session_follow_up)
-        or self.follow_up_route != FollowUpRoute.FULL_PIPELINE
-        or prefetched_snapshot is not None
-    )
+    snapshot_has_lanes = False
+    if isinstance(prefetched_snapshot, SessionStateSnapshot):
+        receipts = (prefetched_snapshot.tool_cache or {}).get("tool_receipts") if hasattr(prefetched_snapshot, "tool_cache") else None
+        snapshot_has_lanes = bool(
+            (getattr(prefetched_snapshot, "lane_timestamps", None) or {})
+            or (getattr(prefetched_snapshot, "lane_refresh_overrides", None) or {})
+            or (receipts or {})
+        )
+    hydrate_from_snapshot = bool(ctx.session_follow_up) or self.follow_up_route != FollowUpRoute.FULL_PIPELINE or snapshot_has_lanes
     snapshot = prefetched_snapshot if hydrate_from_snapshot else None
     snapshot_artifacts = _artifacts_from_snapshot(snapshot)
     revision_snapshot = extract_revision_snapshot(snapshot)
@@ -5880,12 +6166,8 @@ async def _initialize_context(self, query: str, session_id: Optional[str]) -> Pl
         ctx.snapshot_artifacts = copy.deepcopy(cloned_artifacts)
     revision_targets = set(getattr(self, "revision_targets", set()) or set())
     hint_active = bool(getattr(self, "revision_hint_active", False) and revision_targets)
-    if not ctx.revision_snapshot:
-        ctx.revision_targets = set()
-        ctx.revision_hint_active = False
-    else:
-        ctx.revision_targets = set(revision_targets)
-        ctx.revision_hint_active = hint_active
+    ctx.revision_targets = set(revision_targets)
+    ctx.revision_hint_active = hint_active if revision_targets else False
     if ctx.revision_targets:
         ctx.revision_id = str(uuid.uuid4())
         ctx.parallelism_enabled = True
@@ -5905,6 +6187,23 @@ async def _initialize_context(self, query: str, session_id: Optional[str]) -> Pl
         )
     else:
         ctx.revision_context = None
+    if snapshot is not None and self.follow_up_route == FollowUpRoute.FULL_PIPELINE and ctx.revision_context is not None:
+        lane_refresh_flags = dict(getattr(ctx, "lane_refresh_required", {}) or {})
+        lane_refresh_flags.setdefault("web", True)
+        lane_refresh_flags.setdefault("market", True)
+        ctx.lane_refresh_required = lane_refresh_flags
+        overrides = dict(getattr(ctx.revision_context, "lane_refresh_overrides", {}) or {})
+        overrides["web"] = True
+        overrides["market"] = True
+        ctx.revision_context.lane_refresh_overrides = overrides
+        if getattr(snapshot, "lane_timestamps", None) is not None:
+            snapshot.lane_timestamps.pop("web", None)
+            snapshot.lane_timestamps.pop("market", None)
+        if getattr(snapshot, "tool_cache", None):
+            receipts = snapshot.tool_cache.get("tool_receipts") or {}
+            receipts.pop("web_retriever", None)
+            receipts.pop("stock_tracker", None)
+            snapshot.tool_cache["tool_receipts"] = receipts
     if ctx.revision_context and ctx.revision_context.receipts:
         ctx.tool_receipts.update(ctx.revision_context.receipts)
     _apply_revision_context_hints(ctx)
@@ -5915,8 +6214,8 @@ async def _classification_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerato
     timed_emitter = ctx.timed_emitter
     timed_emitter.start_step("classification")
     classification_started_ts = datetime.utcnow().isoformat()
-    classifier_provider = "gemini"
     model_name = PRIMARY_CLASSIFIER_MODEL
+    classifier_provider = "gemini" if "gemini" in model_name.lower() else "openai"
     yield {
         "event": "classification_started",
         "data": {
@@ -6091,6 +6390,22 @@ async def _intent_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[s
     ctx.provisional_plan = build_query_plan(intent, CONFIGS.__dict__)
     ctx.template = choose_template(intent, ctx.provisional_plan, CONFIGS.__dict__)
 
+    plan_timeframe_defaults = _apply_plan_timeframe_defaults(
+        ctx,
+        ctx.provisional_plan,
+        configs=CONFIGS.__dict__,
+    )
+    if plan_timeframe_defaults:
+        slot_assumptions = _build_slot_assumptions(ctx.slot_statuses)
+        intent = _compose_intent_from_resolution(
+            ctx.query,
+            CONFIGS.__dict__,
+            ctx.intent_resolution,
+            assumptions=slot_assumptions,
+        )
+        ctx.intent = intent
+        ctx.assumptions = list(intent.assumptions or [])
+
     plan_metric_defaults = _apply_plan_metric_defaults(
         ctx,
         ctx.provisional_plan,
@@ -6181,7 +6496,7 @@ async def _intent_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[s
         )
         if official_clarifications:
             clarification_sources.add("structured_resolver")
-        if schema_decision and schema_decision.action == "clarify":
+        if schema_decision and schema_decision.action == "clarify" and not official_clarifications and not ctx.slot_followups:
             clarifier_request = _build_schema_clarifier_request(schema_decision, ctx.session_id)
             if clarifier_request:
                 official_clarifications = [clarifier_request] + [
@@ -6320,8 +6635,20 @@ async def _clarification_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator
     blocking_mode = bool(getattr(ctx, "blocking_clarification", False))
     timeout_seconds = float(getattr(ctx, "clarification_timeout_seconds", 60.0) or 60.0)
     clar_answers: List[Dict[str, Any]] = list(getattr(ctx, "clarification_answers", []))
+    answered_slots: set[str] = set()
+    for slot_name, status in (ctx.slot_statuses or {}).items():
+        if isinstance(status, SlotStatusModel) and status.status != "missing":
+            answered_slots.add(slot_name)
+    for answer in clar_answers:
+        if isinstance(answer, Mapping) and isinstance(answer.get("slot"), str):
+            answered_slots.add(answer["slot"])
+        elif isinstance(answer, str):
+            answered_slots.add(answer)
+
+    official_clarifications = _filter_answered_requests(official_clarifications, answered_slots)
+    ctx.clarifications = list(official_clarifications)
     ctx.clarifications_needed = bool(official_clarifications)
-    all_answered_slots: set[str] = set()
+    all_answered_slots: set[str] = set(answered_slots)
     history_entries: List[Dict[str, Any]] = []
     _refresh_followups(ctx, official_clarifications)
     if official_clarifications:
@@ -6576,16 +6903,19 @@ async def _clarification_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator
     ctx.provisional_plan = provisional_plan
     ctx.template = template
     ctx.assumptions = assumptions
-    ctx.clarification_answers = clar_answers
     ctx.clarifications_needed = bool(official_clarifications)
     ctx.clarification_rounds = rounds
     ctx.clarifications = official_clarifications
 
     remaining_missing: List[str]
+    auto_answers: List[ClarifyAnswerModel]
     if blocking_mode:
-        remaining_missing = []
+        remaining_missing, auto_answers = [], []
     else:
-        remaining_missing = _auto_fill_missing_slots(ctx, assumptions)
+        remaining_missing, auto_answers = _auto_fill_missing_slots(ctx, assumptions)
+    if auto_answers:
+        clar_answers.extend([answer.model_dump(exclude_none=True) for answer in auto_answers])
+    ctx.clarification_answers = clar_answers
     if remaining_missing:
         regenerated_requests: List[ClarifyRequestModel] = []
         for slot_name in remaining_missing:
@@ -7129,7 +7459,7 @@ async def run_planner_executor(
         yield event
 
 
-def _auto_fill_missing_slots(ctx: PlannerPhaseContext, assumptions: List[str]) -> List[str]:
+def _auto_fill_missing_slots(ctx: PlannerPhaseContext, assumptions: List[str]) -> Tuple[List[str], List[ClarifyAnswerModel]]:
     assumption_lookup: Dict[str, str] = {}
     for assumption in assumptions:
         if not isinstance(assumption, str):
@@ -7141,6 +7471,7 @@ def _auto_fill_missing_slots(ctx: PlannerPhaseContext, assumptions: List[str]) -
         assumption_lookup[key.strip().lower()] = value.strip()
 
     remaining_missing: List[str] = []
+    auto_answers: List[ClarifyAnswerModel] = []
     for slot_name, status in (ctx.slot_statuses or {}).items():
         if not isinstance(status, SlotStatusModel):
             continue
@@ -7155,6 +7486,15 @@ def _auto_fill_missing_slots(ctx: PlannerPhaseContext, assumptions: List[str]) -
             if not status.reason:
                 status.reason = "Auto-filled from existing assumptions."
             ctx.slot_statuses[slot_name] = status
+            auto_answers.append(
+                ClarifyAnswerModel(
+                    value=assumed_value,
+                    request_id=f"auto-{slot_name}",
+                    slot=slot_name,
+                    session_id=ctx.session_id,
+                    ts=datetime.utcnow().isoformat(),
+                )
+            )
             continue
         default_value: Optional[str] = None
         if slot_name == "timeframe":
@@ -7187,9 +7527,18 @@ def _auto_fill_missing_slots(ctx: PlannerPhaseContext, assumptions: List[str]) -
             assumptions.append(f"Using {slot_label}: {default_value}")
             if ctx.intent and isinstance(ctx.intent.slots_detected, dict):
                 ctx.intent.slots_detected[slot_name] = default_value
+            auto_answers.append(
+                ClarifyAnswerModel(
+                    value=default_value,
+                    request_id=f"auto-{slot_name}",
+                    slot=slot_name,
+                    session_id=ctx.session_id,
+                    ts=datetime.utcnow().isoformat(),
+                )
+            )
             continue
         remaining_missing.append(slot_name)
-    return remaining_missing
+    return remaining_missing, auto_answers
 
 
 

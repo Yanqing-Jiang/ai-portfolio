@@ -123,7 +123,7 @@ class TimeframeModel(BaseModel):
     end_year: Optional[int] = None
     preset: Optional[str] = None
     year_to_date: Optional[bool] = None
-    source: Optional[Literal['query', 'clarification', 'default', 'fallback', 'heuristic']] = None
+    source: Optional[Literal['query', 'clarification', 'default', 'fallback', 'heuristic', 'plan_default']] = None
 
 
 ComparisonLiteral = Literal['single', 'all', 'vs_avg', 'vs_peers', 'leaderboard']
@@ -298,7 +298,7 @@ class TimeframeSlotValue(BaseModel):
     end_year: Optional[int] = None
     preset: Optional[str] = None
     year_to_date: Optional[bool] = None
-    source: Optional[Literal['query', 'clarification', 'default', 'fallback', 'heuristic']] = None
+    source: Optional[Literal['query', 'clarification', 'default', 'fallback', 'heuristic', 'plan_default']] = None
 
 
 SlotValueType = Union[
@@ -380,15 +380,17 @@ class OffTopicClassifierSchema(BaseModel):
 
     is_financial_query: bool = Field(..., description="Whether the query is about financial analytics")
     confidence: float = Field(..., ge=0.0, le=1.0, description="Confidence in the classification")
-    topic_category: Literal[
-        'financial_analytics',
-        'general_conversation',
-        'technical_support',
-        'personal_questions',
-        'other'
-    ] = Field(..., description="Detected topic category")
+    topic_category: Optional[str] = Field(
+        default=None, 
+        description="Optional category for logging; auto-derived from is_financial_query if not provided"
+    )
     polite_decline_message: Optional[str] = Field(default=None, description="Polite decline message for off-topic queries")
     suggested_rephrase: Optional[str] = Field(default=None, description="Suggested rephrase to make the query on-topic")
+    
+    def model_post_init(self, __context) -> None:
+        """Derive topic_category from is_financial_query if not provided."""
+        if self.topic_category is None:
+            self.topic_category = 'financial_analytics' if self.is_financial_query else 'other'
 
 
 

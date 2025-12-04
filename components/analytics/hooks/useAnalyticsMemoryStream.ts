@@ -36,6 +36,18 @@ import { apiService } from '../../../services/apiService';
 import { STEP_NAME } from '../../../constants/analytics';
 import { useAnalyticsStream } from './useAnalyticsStream';
 
+// Phase 4.1: Import decomposed sub-hooks for gradual integration
+// These hooks centralize event parsing, agent events, workflow state, badge logic, and planner events
+import {
+  useEventParser,
+  useAgentEvents,
+  useWorkflowState,
+  useBadgeLogic,
+  usePlannerEvents,
+  type ParsedEvent,
+  type ReceiptData,
+} from './index';
+
 const AGENT_ROLE_CONFIG: Record<string, { stepId: string; lane: string; label: string }> = {
   planner_agent: { stepId: 'planner_agent', lane: 'planner', label: 'Planner Agent' },
   query_agent: { stepId: 'query_agent', lane: 'query', label: 'Query Agent' },
@@ -5823,6 +5835,46 @@ export const useAnalyticsMemoryStream = (
           break;
         }
 
+        case 'workflow_error': {
+          // Handle workflow errors in agent modes - show persistent error banner
+          const errorCode = coerceString(eventData.code ?? eventData.error_code);
+          const errorMessage =
+            coerceString(eventData.message) ??
+            coerceString(eventData.error) ??
+            'An error occurred during analysis. Please try again.';
+          const errorReason = coerceString(eventData.reason);
+          
+          // Build a user-friendly error message
+          let displayMessage = errorMessage;
+          if (errorCode === 'revision_baseline_missing') {
+            displayMessage = 'Run a fresh analysis first before revising. The baseline chart and narrative are required.';
+          } else if (errorCode === 'validation_fatal') {
+            displayMessage = 'A validation error occurred. Please start a new analysis run.';
+          } else if (errorCode === 'agent_runtime_missing_required_artifacts') {
+            displayMessage = 'Analysis could not complete - some required artifacts are missing. Please try again.';
+          }
+          
+          // Reset processing state to prevent hanging UI
+          streamHook.setIsProcessing(false);
+          streamHook.setError(displayMessage);
+          streamHook.setCurrentStatus(`Error: ${displayMessage}`);
+          setRedirectNotice(displayMessage);
+          
+          // Clear session tracking to allow fresh start
+          clearSessionTracking();
+          revisionContextRef.current = { id: undefined, lanes: [], focus: undefined };
+          revisionModeRef.current = 'none';
+          workflowDataRef.current.revisionFocus = null;
+          setRevisionMode('none');
+          
+          console.error('[AnalyticsMemoryStream] workflow_error:', {
+            code: errorCode,
+            reason: errorReason,
+            message: errorMessage,
+          });
+          break;
+        }
+
         case 'workflow_redirect':
         case 'workflow_cancelled': {
           const guardrailPayload =
@@ -5845,6 +5897,7 @@ export const useAnalyticsMemoryStream = (
           revisionModeRef.current = 'none';
           workflowDataRef.current.revisionFocus = null;
           setRevisionMode('none');
+          streamHook.setIsProcessing(false);
           streamHook.setCurrentStatus(redirectMessage);
           setRedirectNotice(redirectMessage);
           break;

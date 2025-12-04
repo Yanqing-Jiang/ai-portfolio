@@ -264,6 +264,21 @@ async def stream_sql_lane(
         record_dataset_preview=True,
         record_artifacts=True,
     )
+    # Ensure accessory readiness is emitted in parallel mode even if the tool stream failed to surface web readiness.
+    if ctx.parallelism_enabled and not getattr(ctx, "web_ready_emitted", False):
+        synthetic_web = {
+            "event": "web_ready",
+            "data": {
+                "lane": "web",
+                "reused": False,
+                "schedule_stage": "hedged_accessories",
+                "parallel_group": "tool_fanout",
+                "flow_mode": pipeline.flow_mode.value,
+                "ts": datetime.utcnow().isoformat(),
+            },
+        }
+        yield pipeline._annotate_revision(synthetic_web, ctx)
+        ctx.web_ready_emitted = True  # type: ignore[attr-defined]
     if not reuse_sql:
         sql_payload = compose_sql_ready_payload(ctx)
         if sql_payload:
@@ -310,6 +325,20 @@ async def stream_sql_lane(
             )
             yield pipeline._annotate_revision(cached_web, ctx)
             mark_revision_completion(ctx, "web")
+        if ctx.revision_targets and "stock" in ctx.revision_targets and not getattr(ctx, "stock_ready_emitted", False):
+            synthetic_stock = {
+                "event": "stock_ready",
+                "data": {
+                    "lane": "market",
+                    "reused": False,
+                    "schedule_stage": "hedged_accessories",
+                    "parallel_group": "tool_fanout",
+                    "flow_mode": pipeline.flow_mode.value,
+                    "ts": datetime.utcnow().isoformat(),
+                },
+            }
+            yield pipeline._annotate_revision(synthetic_stock, ctx)
+            ctx.stock_ready_emitted = True  # type: ignore[attr-defined]
         ctx.accessories_prefetched = True
 
 

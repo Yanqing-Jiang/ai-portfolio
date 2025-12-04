@@ -1,3 +1,40 @@
+# --- Gemini Service Function/Class Map ---
+# Class: GeminiChatService
+#   Role: Manages Gemini chat/search sessions with async streaming and sync helpers.
+#   Called from: backend/main.py (HTTP chat endpoints), backend/linkedin_photo/service.py (captioning), analytics.core.intent_impl.detection (indirect via _GenerativeModel).
+#   Invokes: _genai_configure, _GenerativeModel, _generate_content_stream.
+#   Why: Centralizes Gemini bootstrap and request routing so downstream features avoid SDK coupling.
+# Function: _prepare_messages
+#   Role: Builds Gemini-friendly message payloads with optional system priming.
+#   Called from: GeminiChatService.send_message_stream, GeminiChatService.send_message_sync.
+#   Invokes: None.
+#   Why: Keeps message formatting consistent between streaming and sync flows.
+# Function: _get_client_cls
+#   Role: Lazily discover google.genai.Client without hard dependency failures.
+#   Called from: GeminiChatService.__init__, _ensure_client, _genai_configure.
+#   Invokes: getattr on google.genai.
+#   Why: Allows imports to succeed when google-genai is stubbed or absent.
+# Function: _ensure_client
+#   Role: Instantiate and cache the Gemini client when available.
+#   Called from: _GenerativeModel.generate_content, _generate_content_stream.
+#   Invokes: _get_client_cls.
+#   Why: Defers client creation until first use so optional dependency stays optional.
+# Function: _genai_configure
+#   Role: Configure the Gemini client with an API key when the SDK is present.
+#   Called from: GeminiChatService.__init__, tests.analytics.test_classification_latency, analytics.core.intent_impl.detection._classify_with_gemini.
+#   Invokes: _get_client_cls.
+#   Why: Provides explicit configuration hook without requiring google-genai at import time.
+# Class: _GenerativeModel
+#   Role: Minimal wrapper that mirrors google.genai.GenerativeModel.generate_content.
+#   Called from: GeminiChatService.__init__/send_message_sync/search, analytics services/tests that bypass GeminiChatService.
+#   Invokes: _ensure_client.
+#   Why: Keeps SDK usage localized and mockable for tests.
+# Function: _generate_content_stream
+#   Role: Yield streaming text chunks from Gemini models.
+#   Called from: GeminiChatService.send_message_stream.
+#   Invokes: _ensure_client.
+#   Why: Enables SSE-style streaming without binding callers to google-genai types.
+
 import os
 import asyncio
 import json
@@ -30,7 +67,7 @@ class GeminiChatService:
     def __init__(self):
         # Use the latest Gemini 2.5 Flash model as per current best practices
         self.model = None
-        if GEMINI_API_KEY:
+        if GEMINI_API_KEY and _get_client_cls() is not None:
             _genai_configure(api_key=GEMINI_API_KEY)
             self.model = _GenerativeModel('gemini-2.5-flash')
         self.chats = {}  # Store chat sessions by session_id
@@ -256,19 +293,31 @@ class GeminiChatService:
         return data
 
 # --- Inline shim for google-genai (local to this module) ---
-_client: Optional[google_genai.Client] = None
+_client: Optional[Any] = None
 
 
-def _ensure_client() -> google_genai.Client:
+def _get_client_cls() -> Optional[type[Any]]:
+    if google_genai is None:
+        return None
+    return getattr(google_genai, "Client", None)
+
+
+def _ensure_client() -> Any:
     global _client
     if _client is None:
-        _client = google_genai.Client()
+        client_cls = _get_client_cls()
+        if client_cls is None:
+            raise RuntimeError("Gemini client unavailable; install google-genai or provide GEMINI_API_KEY")
+        _client = client_cls()
     return _client
 
 
 def _genai_configure(*, api_key: str) -> None:
     global _client
-    _client = google_genai.Client(api_key=api_key)
+    client_cls = _get_client_cls()
+    if client_cls is None:
+        raise RuntimeError("Gemini client unavailable; install google-genai before configuring")
+    _client = client_cls(api_key=api_key)
 
 
 class _GenerativeModel:

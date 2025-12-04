@@ -57,7 +57,24 @@ class SupervisorTools:
         self.config_store = config_store or get_config_store()
     @staticmethod
     def get_tool_schemas() -> List[Dict[str, Any]]:
-        """Return all tool schemas for OpenAI function calling"""
+        """Return all tool schemas for OpenAI function calling.
+        
+        DEPRECATED (2025-12-03): Use CanonicalToolRegistry.get_tool_schemas() instead.
+        This function returns inline schemas that may drift from the canonical registry.
+        See backend/analytics/tools/canonical_registry.py for the single source of truth.
+        
+        Migration: Replace calls with:
+            from analytics.tools.canonical_registry import get_canonical_registry
+            registry = get_canonical_registry()
+            schemas = registry.get_openai_function_schemas()
+        """
+        import warnings
+        warnings.warn(
+            "SupervisorTools.get_tool_schemas() is deprecated. "
+            "Use CanonicalToolRegistry.get_openai_function_schemas() instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         return [
             {
                 "type": "function",

@@ -20,7 +20,52 @@ import {
   AgentEvidence,
 } from '../types';
 import { isValidChartSpec } from '../utils';
+import { ReceiptBadge, LegacyBadge } from './ReceiptBadge';
+import type { ReceiptData } from '../hooks/useEventParser';
 const ChartCardLazy = React.lazy(() => import('./ChartCard').then((module) => ({ default: module.ChartCard })));
+
+/**
+ * Function: stepToReceiptData — Converts ProcessStep to ReceiptData for ReceiptBadge rendering.
+ * Called from: ProcessPanel ledger row rendering
+ * Invokes: None
+ * Why: Enables receipt-driven badge rendering per Phase 3.2 of the analytics refactor plan.
+ */
+const stepToReceiptData = (step: ProcessStep): ReceiptData | undefined => {
+  // Only create receipt data if step has receipt-relevant fields
+  const hasReceiptData = step.reused || step.cacheAgeSeconds != null || 
+    step.fastPathLatencyMs != null || step.retryCount != null || 
+    step.guardrail != null || step.specialistRole != null || step.schemaVersion != null;
+  
+  if (!hasReceiptData) {
+    return undefined;
+  }
+  
+  // Convert guardrail object to receipt guardrail type
+  let guardrail: ReceiptData['guardrail'] = undefined;
+  if (step.guardrail) {
+    const guardrailType = step.guardrail.type?.toLowerCase();
+    const guardrailStatus = step.guardrail.status?.toLowerCase();
+    if (guardrailType === 'blocked' || guardrailStatus === 'blocked') {
+      guardrail = 'blocked';
+    } else if (guardrailType === 'warnings' || guardrailStatus === 'warnings' || guardrailType === 'warning') {
+      guardrail = 'warnings';
+    } else if (guardrailType === 'passed' || guardrailStatus === 'passed' || guardrailStatus === 'ok') {
+      guardrail = 'passed';
+    }
+  }
+  
+  return {
+    tool: step.id,
+    status: step.reused ? 'reused' : (step.status === 'completed' ? 'completed' : step.status === 'error' ? 'failed' : 'pending'),
+    from_cache: step.reused,
+    age_seconds: step.cacheAgeSeconds,
+    latency_ms: step.fastPathLatencyMs,
+    retry_count: step.retryCount,
+    guardrail,
+    specialist_role: step.specialistRole,
+    schema_version: step.schemaVersion,
+  };
+};
 
 
 interface ProcessPanelProps {
@@ -2658,16 +2703,36 @@ export const ProcessPanel: React.FC<ProcessPanelProps> = ({
                                     Schema {schemaBadgeLabel}
                                   </span>
                                 )}
-                                {guardrailBadge && (
-                                  <span className={`rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide ${guardrailBadge.className}`}>
-                                    {guardrailBadge.label}
-                                  </span>
-                                )}
-                                {reuseBadgeLabel && (
-                                  <span className="rounded-full border border-emerald-400/60 bg-emerald-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-emerald-200">
-                                    {reuseBadgeLabel}
-                                  </span>
-                                )}
+                                {/* Phase 3.2: Receipt-driven badge rendering */}
+                                {(() => {
+                                  const receiptData = stepToReceiptData(step);
+                                  if (receiptData) {
+                                    return (
+                                      <ReceiptBadge
+                                        receipt={receiptData}
+                                        maxBadges={3}
+                                        size="sm"
+                                        showIcons={false}
+                                        showTooltips={true}
+                                      />
+                                    );
+                                  }
+                                  // Fallback to legacy badges if no receipt data
+                                  return (
+                                    <>
+                                      {guardrailBadge && (
+                                        <span className={`rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide ${guardrailBadge.className}`}>
+                                          {guardrailBadge.label}
+                                        </span>
+                                      )}
+                                      {reuseBadgeLabel && (
+                                        <span className="rounded-full border border-emerald-400/60 bg-emerald-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-emerald-200">
+                                          {reuseBadgeLabel}
+                                        </span>
+                                      )}
+                                    </>
+                                  );
+                                })()}
                                 {step.finalAnswerOnly && (
                                   <span className="rounded-full border border-amber-400/60 bg-amber-500/15 px-2 py-0.5 text-[10px] uppercase tracking-wide text-amber-200">
                                     Final Answer Only

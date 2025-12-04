@@ -177,6 +177,14 @@ def _hash_arguments(payload: Any) -> str:
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()[:16]
 
 
+def _env_flag(name: str, *, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    normalized = value.strip().lower()
+    return normalized in {"1", "true", "t", "yes", "on"}
+
+
 def digest_tool_payload(payload: Any, *, limit: int = 512) -> Optional[str]:
     if payload is None:
         return None
@@ -1714,6 +1722,9 @@ class SessionStateRepository:
         self._redis_retry_backoff = 30.0
         self._last_failure_ts = 0.0
         self._fallback_store: Dict[str, Tuple[float, str]] = {}
+        # Force lenient mode: always allow in-memory fallback regardless of env.
+        self._redis_strict_mode = False
+        self._memory_only_warning_emitted = False
 
         ttl_env = ttl_minutes or _read_ttl_from_env()
         self._ttl_seconds = max(MIN_TTL_MINUTES, min(MAX_TTL_MINUTES, ttl_env)) * 60
@@ -1742,10 +1753,16 @@ class SessionStateRepository:
                 )
                 self._redis = None
                 self._record_failure()
+        self._maybe_raise_or_warn_memory_only()
 
     @property
     def ttl_seconds(self) -> int:
         return self._ttl_seconds
+
+    @property
+    def is_memory_only(self) -> bool:
+        """Return True when falling back to in-memory storage only."""
+        return self._redis is None
 
     def _deserialize_snapshot(self, payload: str, session_id: str) -> Optional[SessionStateSnapshot]:
         try:
@@ -1841,10 +1858,32 @@ class SessionStateRepository:
             self._redis = None
 
     async def _ensure_redis(self) -> Optional["redis.Redis"]:
+        if os.getenv("DISABLE_REDIS_FOR_TESTS") == "1":
+            logger.warning(
+                "SESSION_STATE_REDIS_FALLBACK",
+                extra={"reason": "disabled_for_tests", "redis_url": self._redis_url},
+            )
+            self._maybe_raise_or_warn_memory_only()
+            return None
         if redis is None:
+            logger.warning(
+                "SESSION_STATE_REDIS_FALLBACK",
+                extra={"reason": "redis_import_missing", "redis_url": self._redis_url},
+            )
+            self._maybe_raise_or_warn_memory_only()
             return None
         if self._redis is None:
             if time.time() - self._last_failure_ts < self._redis_retry_backoff:
+                logger.warning(
+                    "SESSION_STATE_REDIS_FALLBACK",
+                    extra={
+                        "reason": "retry_backoff",
+                        "redis_url": self._redis_url,
+                        "backoff_seconds": self._redis_retry_backoff,
+                        "seconds_since_failure": time.time() - self._last_failure_ts,
+                    },
+                )
+                self._maybe_raise_or_warn_memory_only()
                 return None
             try:
                 client = redis.from_url(  # type: ignore[call-arg]
@@ -1867,6 +1906,19 @@ class SessionStateRepository:
     def _record_failure(self) -> None:
         self._redis = None
         self._last_failure_ts = time.time()
+        self._maybe_raise_or_warn_memory_only()
+
+    def _maybe_raise_or_warn_memory_only(self) -> None:
+        if self._redis is not None or self._memory_only_warning_emitted:
+            return
+        if self._redis_strict_mode:
+            raise RuntimeError(
+                "REDIS_STRICT_MODE is enabled but Redis persistence is unavailable."
+            )
+        logger.warning(
+            "Session state Redis unavailable; running in memory-only mode — cross-request persistence disabled."
+        )
+        self._memory_only_warning_emitted = True
 
     def _cleanup_fallback(self) -> None:
         now = time.time()

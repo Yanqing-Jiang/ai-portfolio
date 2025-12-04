@@ -144,10 +144,7 @@ async def ensure_analysis_dependencies(
     # accessories are part of the critical path. If neither web nor market lanes are ready
     # (fresh or cached) fail fast so downstream stages cannot proceed with missing context.
     is_revision_follow_up = bool(getattr(ctx, "is_revision_follow_up", False))
-    require_accessories = bool(
-        getattr(ctx, "force_full_fresh_pipeline", False)
-        or (mode_config.accessories_in_critical_path and not is_revision_follow_up)
-    )
+    require_accessories = bool(mode_config.accessories_in_critical_path and not is_revision_follow_up)
     if require_accessories:
         web_ready = bool(has_web_context or web_ready_entry or getattr(ctx, "web_search", None))
         stock_ready = bool(has_cached_stock or stock_ready_entry or getattr(ctx, "stock_widget_seeded", False))

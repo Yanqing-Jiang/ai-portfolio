@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass, field
-from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, Iterable, Optional, Sequence, Set, Mapping
+from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, Iterable, Optional, Sequence, Set, Mapping, List
 import logging
 
 from .planner_executor import PlannerPipeline, PlannerPhaseContext
@@ -106,6 +106,11 @@ class PlannerToolRegistry:
         return tuple(self._tools.values())
 
     def describe_tools(self) -> Sequence[Dict[str, Any]]:
+        filtered: List[PlannerToolDefinition] = []
+        for definition in self.list_tools():
+            if definition.telemetry_step in {"web_refresh", "market_refresh"}:
+                continue
+            filtered.append(definition)
         return tuple(
             {
                 "name": definition.name,
@@ -123,7 +128,7 @@ class PlannerToolRegistry:
                 "error_severity": definition.error_severity,
                 "schema_version": definition.schema_version,
             }
-            for definition in self.list_tools()
+            for definition in filtered
         )
 
 
@@ -247,17 +252,21 @@ def _bootstrap_registry(registry: PlannerToolRegistry) -> None:
         follow_up_route = getattr(ctx, "follow_up_route", FollowUpRoute.FULL_PIPELINE)
         guardrail_payload = getattr(ctx, "follow_up_guardrail", None)
         if follow_up_route == FollowUpRoute.STOCK_ONLY or lane_refresh_flags.get("web") is False:
+            web_refresh_data = {
+                "lane": "web",
+                "revision": True,
+                "phase": "reused",
+                "from_cache": True,
+                "reason": kwargs.get("reason"),
+                "source": kwargs.get("source"),
+            }
+            if guardrail_payload is not None:
+                web_refresh_data["guardrail"] = (
+                    sanitize_for_json(dict(guardrail_payload)) if isinstance(guardrail_payload, Mapping) else guardrail_payload
+                )
             yield {
                 "event": "web_refresh",
-                "data": {
-                    "lane": "web",
-                    "revision": True,
-                    "phase": "reused",
-                    "from_cache": True,
-                    "reason": kwargs.get("reason"),
-                    "source": kwargs.get("source"),
-                    "guardrail": sanitize_for_json(dict(guardrail_payload)) if isinstance(guardrail_payload, Mapping) else guardrail_payload,
-                },
+                "data": web_refresh_data,
             }
             if hasattr(ctx, "session_snapshot") and ctx.session_snapshot:
                 try:
@@ -267,7 +276,6 @@ def _bootstrap_registry(registry: PlannerToolRegistry) -> None:
                             "status": "skipped",
                             "reused": True,
                             "from_cache": True,
-                            "guardrail": sanitize_for_json(dict(guardrail_payload)) if isinstance(guardrail_payload, Mapping) else guardrail_payload,
                             "lane": "web",
                         },
                     )
@@ -286,17 +294,21 @@ def _bootstrap_registry(registry: PlannerToolRegistry) -> None:
         lane_refresh_flags = dict(getattr(ctx, "lane_refresh_required", {}) or {})
         guardrail_payload = getattr(ctx, "follow_up_guardrail", None)
         if lane_refresh_flags.get("market") is False:
+            market_refresh_data = {
+                "lane": "market",
+                "revision": True,
+                "phase": "reused",
+                "from_cache": True,
+                "reason": kwargs.get("reason"),
+                "source": kwargs.get("source"),
+            }
+            if guardrail_payload is not None:
+                market_refresh_data["guardrail"] = (
+                    sanitize_for_json(dict(guardrail_payload)) if isinstance(guardrail_payload, Mapping) else guardrail_payload
+                )
             yield {
                 "event": "market_refresh",
-                "data": {
-                    "lane": "market",
-                    "revision": True,
-                    "phase": "reused",
-                    "from_cache": True,
-                    "reason": kwargs.get("reason"),
-                    "source": kwargs.get("source"),
-                    "guardrail": sanitize_for_json(dict(guardrail_payload)) if isinstance(guardrail_payload, Mapping) else guardrail_payload,
-                },
+                "data": market_refresh_data,
             }
             if hasattr(ctx, "session_snapshot") and ctx.session_snapshot:
                 try:
@@ -306,7 +318,6 @@ def _bootstrap_registry(registry: PlannerToolRegistry) -> None:
                             "status": "skipped",
                             "reused": True,
                             "from_cache": True,
-                            "guardrail": sanitize_for_json(dict(guardrail_payload)) if isinstance(guardrail_payload, Mapping) else guardrail_payload,
                             "lane": "market",
                         },
                     )

@@ -5,13 +5,16 @@ interface CollapsibleSectionProps {
   children: React.ReactNode;
   defaultOpen?: boolean;
   className?: string;
+  /** Extra content to render in the header (e.g., cache indicator) */
+  headerExtra?: React.ReactNode;
 }
 
 export const CollapsibleSection: React.FC<CollapsibleSectionProps> = ({ 
   title, 
   children, 
   defaultOpen = false,
-  className = ""
+  className = "",
+  headerExtra,
 }) => {
   const [isOpen, setIsOpen] = useState(defaultOpen);
 
@@ -21,7 +24,10 @@ export const CollapsibleSection: React.FC<CollapsibleSectionProps> = ({
         onClick={() => setIsOpen(!isOpen)}
         className="w-full px-4 py-3 text-left bg-gray-800 hover:bg-gray-750 transition-colors duration-200 flex items-center justify-between"
       >
-        <span className="text-gray-200 font-medium text-sm">{title}</span>
+        <div className="flex items-center gap-2">
+          <span className="text-gray-200 font-medium text-sm">{title}</span>
+          {headerExtra}
+        </div>
         <svg
           className={`w-4 h-4 text-gray-400 transition-transform duration-200 ${
             isOpen ? 'rotate-180' : 'rotate-0'

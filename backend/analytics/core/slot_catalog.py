@@ -276,6 +276,9 @@ def _build_global_slot_options(configs: Configs) -> Dict[str, SlotOption]:
 
 DEFAULT_OPTIONAL_SLOTS: Iterable[str] = ("timeframe", "metric", "granularity", "comparison")
 
+MARGIN_INTENT_KEYS = {"margins_vs_peers", "margin_growth_vs_peers"}
+MARGIN_METRIC_SUGGESTIONS = ["Gross Margin", "Operating Margin", "Net Margin"]
+
 
 class SlotCatalog:
     """Materialised view of intent slots derived from YAML configs."""
@@ -310,6 +313,15 @@ class SlotCatalog:
                         allow_custom=option.allow_custom,
                         description=option.description,
                     )
+
+            if intent_key in MARGIN_INTENT_KEYS and "metric" in slot_options:
+                margin_option = slot_options["metric"]
+                slot_options["metric"] = SlotOption(
+                    suggestions=list(MARGIN_METRIC_SUGGESTIONS),
+                    presets=list(margin_option.presets),
+                    allow_custom=False,
+                    description=margin_option.description,
+                )
 
             optional_slots = [slot for slot in DEFAULT_OPTIONAL_SLOTS if slot not in normalized_required]
 

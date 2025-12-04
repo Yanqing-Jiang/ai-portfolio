@@ -80,12 +80,15 @@ from analytics.validators import sanitize_for_json
 LANE_EVENT_BY_TOOL = {
     "sql_generation": ("sql_ready", "sql"),
     "sql_generator": ("sql_ready", "sql"),
+    "sql_specialist": ("sql_ready", "sql"),
     "chart_generation": ("chart_ready", "chart"),
     "chart_revision": ("chart_ready", "chart"),
     "chart_designer": ("chart_ready", "chart"),
+    "chart_specialist": ("chart_ready", "chart"),
     "analysis_generation": ("analysis_ready", "analysis"),
     "analysis_revision": ("analysis_ready", "analysis"),
     "analysis_writer": ("analysis_ready", "analysis"),
+    "analysis_specialist": ("analysis_ready", "analysis"),
     "market_refresh": ("stock_ready", "market"),
     "market_snapshot": ("stock_ready", "market"),
     "stock_tracker": ("stock_ready", "market"),
@@ -95,6 +98,7 @@ LANE_EVENT_BY_TOOL = {
     "web_retriever_cached": ("web_ready", "web"),
     "web_retriever_live": ("web_ready", "web"),
     "web_research": ("web_ready", "web"),
+    "web_specialist": ("web_ready", "web"),
     # Ensure analysis completions trigger lane readiness when emitted by AgentRuntime
     "analysis_complete": ("analysis_ready", "analysis"),
     "analysis_writer_complete": ("analysis_ready", "analysis"),
@@ -163,6 +167,7 @@ class AgentsStreamBridge:
             await self._flush_open_turns()
             await self._emit_supervisor_summary()
             await self._ensure_agent_turn_envelope()
+            await self._ensure_missing_lane_ready()
             await self._ensure_workflow_complete()
         return result
 
@@ -442,11 +447,11 @@ class AgentsStreamBridge:
             completion_payload["tool_call"].setdefault("metadata", {})
             completion_payload["tool_call"]["metadata"]["from_cache"] = bool(from_cache_flag)
         await self._enqueue_event("agent_tool_complete", completion_payload)
+        await self._record_turn_end(tool_id=tool_id, tool_name=tool_name, metadata=metadata)
         await self._maybe_emit_lane_ready(tool_name, metadata, from_cache_flag, elapsed_ms)
         if tool_id:
             self._tool_metadata.pop(tool_id, None)
             self._tool_start_times.pop(tool_id, None)
-        await self._record_turn_end(tool_id=tool_id, tool_name=tool_name, metadata=metadata)
 
     async def _maybe_emit_lane_ready(
         self,
@@ -763,6 +768,43 @@ class AgentsStreamBridge:
         if end_payload:
             await self._enqueue_event("agent_turn_end", end_payload)
         self._turns_emitted = True
+
+    async def _ensure_missing_lane_ready(self) -> None:
+        """Force-emit any lane-ready events that weren't emitted during the stream.
+        
+        This ensures the frontend receives *_ready events for all lanes that had
+        tools called, even if the tool completion events didn't trigger lane-ready
+        emission due to timing or event ordering issues.
+        """
+        # Build a map of which lanes had tools called based on tool names seen
+        lanes_with_tools: Set[str] = set()
+        for tool_name in self._tool_names.values():
+            normalized = tool_name.strip().split(".")[-1]
+            lane_entry = LANE_EVENT_BY_TOOL.get(normalized)
+            if lane_entry:
+                event_name, lane = lane_entry
+                lanes_with_tools.add(event_name)
+        
+        # Emit any lane-ready events that weren't already emitted
+        for event_name in lanes_with_tools:
+            if event_name not in self._lane_ready_emitted:
+                lane = event_name.replace("_ready", "")
+                payload = {
+                    "lane": lane,
+                    "tool": "synthetic",
+                    "reused": False,
+                    "source": "agent_stream_bridge_fallback",
+                    "ts": datetime.utcnow().isoformat(),
+                    "schedule_stage": lane,
+                    "synthetic": True,
+                }
+                self._lane_ready_emitted.add(event_name)
+                await self._enqueue_event(event_name, payload)
+                self._logger.debug(
+                    "Emitted synthetic %s event for lane %s",
+                    event_name,
+                    lane,
+                )
 
     async def _ensure_workflow_complete(self) -> None:
         """Emit workflow_complete when AgentRuntime skipped it."""

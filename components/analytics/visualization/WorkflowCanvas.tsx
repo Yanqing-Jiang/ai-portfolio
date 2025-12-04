@@ -30,6 +30,49 @@ import {
 const LANE_ORDER = ['overview', 'coordination', 'planner', 'sql', 'market', 'web', 'chart', 'analysis', 'fanout'] as const;
 type LaneKey = (typeof LANE_ORDER)[number];
 
+/**
+ * PLANNER_LANE_STEP_IDS: Step IDs that belong to the planner lane.
+ * In agent modes (single-agent, multi-agent), these steps are hidden
+ * since the supervisor/agent coordination handles them internally.
+ * Part of Phase 3.3: Hide planner nodes in agent modes.
+ */
+const PLANNER_LANE_STEP_IDS = new Set([
+  'planner_agent',
+  'planner_phase',
+  'initializing',
+  'classification',
+  'intent_classifier',
+  'intent_detection',
+  'schema_clarifier',
+  'clarification_manager',
+  'clarification',
+  'schema_validation',
+  'plan_and_select_template',
+  'template_selection',
+  'plan_generation',
+]);
+
+/**
+ * Function: shouldShowStepInMode — determines if a step should be visible for the given flow mode.
+ * Called from: processedSteps useMemo
+ * Why: Hides planner-specific nodes in agent modes per Phase 3.3 of the refactor plan.
+ */
+const shouldShowStepInMode = (step: ProcessStep, flowMode: FlowMode): boolean => {
+  // In planner-executor mode, show all steps
+  if (flowMode === 'planner-executor') {
+    return true;
+  }
+  // In agent modes, hide planner lane steps (handled by agent coordination)
+  if (PLANNER_LANE_STEP_IDS.has(step.id)) {
+    return false;
+  }
+  // Also hide any step explicitly in the planner lane
+  if (step.lane === 'planner' || step.parallelGroup === 'planner') {
+    return false;
+  }
+  return true;
+};
+
 const LANE_LABELS: Record<LaneKey, string> = {
   overview: 'Overview',
   coordination: 'Supervisor Hub',
@@ -912,17 +955,20 @@ const WorkflowCanvasInner: React.FC<WorkflowCanvasProps> = ({
   const showFreshLanePills = !agenticRevision && freshLanePills.length > 0;
 
   const processedSteps = useMemo(() => {
+    // Phase 3.3: Filter out planner nodes in agent modes
+    const filteredSteps = steps.filter((step) => shouldShowStepInMode(step, flowMode));
+    
     const prioritizedSteps = flowMode === 'multi-agent'
       ? (() => {
-          const targetIndex = steps.findIndex((step) => step.id === 'tool_fanout');
+          const targetIndex = filteredSteps.findIndex((step) => step.id === 'tool_fanout');
           if (targetIndex <= 0) {
-            return steps;
+            return filteredSteps;
           }
-          const clone = [...steps];
+          const clone = [...filteredSteps];
           const [fanoutStep] = clone.splice(targetIndex, 1);
           return [fanoutStep, ...clone];
         })()
-      : steps;
+      : filteredSteps;
 
     const total = prioritizedSteps.length || 1;
     const useLaneLayout = flowMode !== 'planner-executor';

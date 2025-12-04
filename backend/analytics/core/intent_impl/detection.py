@@ -961,8 +961,20 @@ def _fallback_intent_resolution(
                 reason = None
                 status = "defaulted"
                 if normalized == "timeframe":
-                    status = "defaulted"
-                    reason = "Using heuristic timeframe default."
+                    explicit_timeframe = True
+                    if isinstance(value, dict):
+                        source = value.get("source")
+                        explicit_timeframe = any(
+                            value.get(bound) is not None for bound in ("start_year", "end_year", "years_back", "quarters_back")
+                        )
+                        if isinstance(source, str) and source.strip():
+                            explicit_timeframe = explicit_timeframe or source.strip().lower() != "default"
+                    if fallback_reason:
+                        status = "filled" if explicit_timeframe else "defaulted"
+                        reason = None if status == "filled" else "Using heuristic timeframe default."
+                    else:
+                        status = "defaulted"
+                        reason = "Using heuristic timeframe default."
                 elif normalized in {"metric", "metrics"}:
                     reason = "Using heuristic metric default."
                 elif normalized == "comparison":
@@ -1132,6 +1144,7 @@ async def resolve_intent_slots_async(
         definition
         and heuristic.intent_key
         and heuristic.confidence >= HEURISTIC_CONFIDENCE_THRESHOLD
+        and bool(getattr(definition, "required_slots", None))
         and all(_slot_has_value(slot) for slot in definition.required_slots)
     ):
         logger.info(

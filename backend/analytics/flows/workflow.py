@@ -1616,7 +1616,7 @@ async def analytics_memory_workflow(
     snapshot: Optional[SessionStateSnapshot] = None
     if repository and session_id:
         # Hard reset before loading any cached data for a new run.
-        if reset_session or reset_on_start:
+        if reset_session or (reset_on_start and not revision_requested):
             try:
                 await repository.delete(session_id)
             except Exception:
