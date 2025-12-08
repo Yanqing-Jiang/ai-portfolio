@@ -80,6 +80,8 @@ from analytics.core.telemetry import responses_call, intent_resolution_schema_er
 
 logger = logging.getLogger(__name__)
 
+SAFE_DEFAULT_MODEL = "gpt-5-mini-2025-08-07"
+
 T = TypeVar('T', bound=BaseModel)
 
 
@@ -110,7 +112,7 @@ def _normalize_schema_for_responses(schema: Dict[str, Any]) -> Dict[str, Any]:
             node.pop("default", None)
 
         properties = node.get("properties")
-        if isinstance(properties, dict) and properties:
+        if isinstance(properties, dict):
             cleaned_props: Dict[str, Any] = {}
             for prop_name, prop_schema in properties.items():
                 if isinstance(prop_schema, dict):
@@ -118,47 +120,8 @@ def _normalize_schema_for_responses(schema: Dict[str, Any]) -> Dict[str, Any]:
                     _visit(prop_schema)
                 cleaned_props[prop_name] = prop_schema
             node["properties"] = cleaned_props
-
-            explicit_required: Optional[List[str]] = None
-            schema_extra = node.get("json_schema_extra")
-            if isinstance(schema_extra, dict):
-                raw_required = schema_extra.get("required")
-                if isinstance(raw_required, (list, tuple, set)):
-                    explicit_required = [
-                        str(value).strip()
-                        for value in raw_required
-                        if isinstance(value, str) and value.strip()
-                    ]
-            if explicit_required is None:
-                existing_required = node.get("required")
-                if isinstance(existing_required, (list, tuple)):
-                    explicit_required = [
-                        str(value).strip()
-                        for value in existing_required
-                        if isinstance(value, str) and value.strip()
-                    ]
-
-            if explicit_required is not None:
-                filtered_required = [
-                    prop_name
-                    for prop_name in explicit_required
-                    if prop_name in cleaned_props and _should_require_property(cleaned_props[prop_name])
-                ]
-                if filtered_required:
-                    node["required"] = filtered_required
-                else:
-                    node.pop("required", None)
-            else:
-                computed_required = [
-                    prop_name
-                    for prop_name, prop_schema in cleaned_props.items()
-                    if _should_require_property(prop_schema)
-                ]
-                if computed_required:
-                    node["required"] = computed_required
-                else:
-                    node.pop("required", None)
-
+            # Responses now requires `required` to list every property key.
+            node["required"] = list(cleaned_props.keys())
             node.setdefault("additionalProperties", False)
         else:
             node.setdefault("additionalProperties", False)
@@ -265,15 +228,25 @@ class UnifiedResponsesClient:
         self.session_contexts: Dict[str, str] = {}  # session_id -> previous_response_id
 
     def _get_model_name(self, model: Optional[str] = None) -> str:
-        if model:
-            return model
+        candidate = (
+            (model or "").strip()
+            or (os.getenv("OPENAI_MODEL") or "").strip()
+            or SAFE_DEFAULT_MODEL
+        )
 
-        env_model = os.getenv("OPENAI_MODEL")
-        if env_model:
-            return env_model
+        # Guard against non-OpenAI model names (e.g., gemini-* values accidentally
+        # passed through) to prevent 400s from the Responses API.
+        lowered = candidate.lower()
+        if "gemini" in lowered or "flash" in lowered:
+            logger.warning(
+                "Non-OpenAI model '%s' provided to UnifiedResponsesClient; "
+                "using safe default '%s' instead.",
+                candidate,
+                SAFE_DEFAULT_MODEL,
+            )
+            return SAFE_DEFAULT_MODEL
 
-        # Default to GPT-5 mini as documented in CLAUDE.md
-        return "gpt-5-mini-2025-08-07"
+        return candidate
 
     def _get_previous_response_id(self, session_id: Optional[str] = None) -> Optional[str]:
         if session_id:

@@ -302,6 +302,7 @@ export interface FollowUpBanner {
     industry?: string | null;
   };
   guardrail?: Record<string, any>;
+  lanes?: string[];
 }
 
 export interface SpecialistCard {

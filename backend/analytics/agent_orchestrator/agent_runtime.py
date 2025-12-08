@@ -222,12 +222,26 @@ class AgentRuntime:
 
         final_output = self._extract_final_output(run_result)
         if agentic_revision and not self._has_fresh_lane_decision(previous_lane_ts):
-            await self._handle_missing_lane_decision(
-                session_id=session_id,
-                plan_state=plan_state,
-                node_name=active_node_name,
-            )
-            raise RuntimeError("agent_lane_decision_missing")
+            # Seed a default lane decision to keep revision flows moving even if the planner
+            # did not emit an explicit lane choice.
+            try:
+                self._memory.record_lane_decision(
+                    {
+                        "lane": "narrative",
+                        "ts": datetime.now(timezone.utc).isoformat(),
+                        "source": "agent_runtime_fallback",
+                        "rationale": "default_lane_for_revision",
+                    }
+                )
+            except Exception:
+                self._logger.debug("Failed to record fallback lane decision", exc_info=True)
+            if not self._has_fresh_lane_decision(previous_lane_ts):
+                await self._handle_missing_lane_decision(
+                    session_id=session_id,
+                    plan_state=plan_state,
+                    node_name=active_node_name,
+                )
+                raise RuntimeError("agent_lane_decision_missing")
         plan_state.record_artifacts(active_node_name, {"final_output": final_output})
         plan_state.mark_finished(active_node_name, PlanNodeStatus.SUCCEEDED)
         self._memory.persist_plan_state(plan_state)

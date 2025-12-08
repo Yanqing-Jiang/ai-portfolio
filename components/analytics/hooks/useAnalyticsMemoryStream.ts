@@ -48,17 +48,6 @@ import {
   type ReceiptData,
 } from './index';
 
-const AGENT_ROLE_CONFIG: Record<string, { stepId: string; lane: string; label: string }> = {
-  planner_agent: { stepId: 'planner_agent', lane: 'planner', label: 'Planner Agent' },
-  query_agent: { stepId: 'query_agent', lane: 'query', label: 'Query Agent' },
-  analyst_agent: { stepId: 'analyst_agent', lane: 'analyst', label: 'Analyst Agent' },
-  chart_agent: { stepId: 'chart_agent', lane: 'chart', label: 'Chart Agent' },
-  market_agent: { stepId: 'market_agent', lane: 'market', label: 'Market Agent' },
-  web_research_agent: { stepId: 'web_research_agent', lane: 'web', label: 'Web Research Agent' },
-};
-
-const DEFAULT_AGENT_ROLE = { stepId: 'agent_coordination', lane: 'coordination', label: 'Agent Coordination' };
-
 import { useProcessSteps } from './useProcessSteps';
 import {
   resolveChartSpecOption,
@@ -66,210 +55,10 @@ import {
   sanitizeStructuredText,
   sanitizeStructuredList,
 } from '../utils';
+import * as analyticsUtils from './useAnalyticsUtils';
+import type { ChartGranularity } from './useAnalyticsUtils';
 
-const FOLLOW_UP_BANNER_COPY: Record<string, { title: string; message: string }> = {
-  full_pipeline: {
-    title: 'Fresh Run Scheduled',
-    message: 'Running SQL, charts, and narrative again to deliver a fully refreshed answer.',
-  },
-  reuse_sql: {
-    title: 'Reusing Last Dataset',
-    message: 'Skipping the SQL rerun - updating visuals and narrative on top of the validated table.',
-  },
-  stock_only: {
-    title: 'Market Snapshot Only',
-    message: 'Pulling fresh price data while charts and analysis stay pinned to the prior run.',
-  },
-  chart_revision: {
-    title: 'Chart Update Requested',
-    message: 'Applying the cached dataset to refresh the chart.',
-  },
-  chart_only: {
-    title: 'Chart Revision',
-    message: 'Applying the cached dataset to refresh the chart visuals.',
-  },
-  analysis_only: {
-    title: 'Narrative Refresh',
-    message: 'Refreshing the analysis narrative and citations without replanning or rerunning SQL.',
-  },
-  narrative_only: {
-    title: 'Narrative Revision',
-    message: 'Refreshing the analysis narrative and citations without replanning or rerunning SQL.',
-  },
-  market_only: {
-    title: 'Market Refresh',
-    message: 'Updating market context while preserving the previous chart and narrative.',
-  },
-  mixed_revision: {
-    title: 'Targeted Revision',
-    message: 'Applying the requested updates without replaying the full pipeline.',
-  },
-  cannot_revise: {
-    title: 'Revision Not Available',
-    message: 'Start a new question to rebuild missing results before revising again.',
-  },
-  missing_analysis: {
-    title: 'Baseline Missing',
-    message: 'Run a fresh analysis to capture the initial chart and narrative before revising.',
-  },
-};
-
-const formatLaneName = (lane?: string) => {
-  if (!lane) return 'Lane';
-  return lane
-    .split(/[_-]/g)
-    .filter(Boolean)
-    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
-    .join(' ');
-};
-
-const SPECIALIST_LANE_PRIORITY: Record<string, number> = {
-  chart: 0,
-  analysis: 1,
-  market: 2,
-  web: 3,
-  sql: 4,
-};
-
-const SPECIALIST_TYPE_TO_LANE: Record<string, string> = {
-  chart_builder: 'chart',
-  sql_executor: 'sql',
-  sql_generator: 'sql',
-  sql_validator: 'sql',
-  sql_result_bridge: 'sql',
-  stock_widget: 'market',
-  web_context: 'web',
-  analysis_summary: 'analysis',
-  analysis_writer: 'analysis',
-  chart_designer: 'chart',
-  revision_questions: 'analysis',
-};
-
-const REVISION_EVENT_ALIASES: Record<string, string> = {
-  stock_revision_ready: 'stock_ready',
-  web_revision_ready: 'web_ready',
-  sql_revision_ready: 'sql_ready',
-  chart_revision_ready: 'chart_ready',
-  analysis_revision_ready: 'analysis_ready',
-};
-const FLOW_MODE_ALIASES: Record<string, FlowMode> = {
-  'planner-executor': 'planner-executor',
-  'planner_executor': 'planner-executor',
-  planner: 'planner-executor',
-  'single-agent': 'single-agent',
-  'single_agent': 'single-agent',
-  'multi-agent': 'multi-agent',
-  'multi_agent': 'multi-agent',
-  supervisor: 'multi-agent',
-};
-
-/*
-Function: coerceFlowMode  called from useAnalyticsMemoryStream's telemetry parser to normalize
-backend `mode`/`flow_mode` values before the ProcessPanel consumes them. It maps scheduler
-aliases (planner_executor, supervisor, etc.), invokes FLOW_MODE_ALIASES for lookups, and keeps
-the UI visualization aligned with whichever agent runtime actually executed the run.
-*/
-const coerceFlowMode = (raw: unknown): FlowMode | undefined => {
-  if (typeof raw !== 'string') {
-    return undefined;
-  }
-  const normalized = raw.trim().toLowerCase();
-  if (!normalized) {
-    return undefined;
-  }
-  return FLOW_MODE_ALIASES[normalized];
-};
-
-/*
-Function: formatSpecialistRoleLabel — called from resolveToolDisplayName and
-agent tool SSE handlers to convert snake/slug specialist roles into a title
-case badge label so ProcessPanel and WorkflowCanvas surface consistent human
-labels for each tool call.
-*/
-const formatSpecialistRoleLabel = (role?: string): string | undefined => {
-  if (!role) {
-    return undefined;
-  }
-  const trimmed = role.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  return trimmed
-    .split(/[_-]/g)
-    .filter(Boolean)
-    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
-    .join(' ');
-};
-
-/*
-Function: resolveToolDisplayName — called from agent tool SSE handlers to
-merge specialist labels with canonical STEP_NAME entries so ledger steps
-render `Specialist · Friendly Tool` strings for badge rows.
-*/
-const resolveToolDisplayName = (toolName?: string, specialistLabel?: string): string => {
-  const normalizedTool = toolName?.trim();
-  const friendlyTool = normalizedTool
-    ? STEP_NAME[normalizedTool] ?? formatLaneName(normalizedTool)
-    : 'Agent Tool';
-  return specialistLabel ? `${specialistLabel} · ${friendlyTool}` : friendlyTool;
-};
-
-/*
-Function: resolveToolStatusLabel — called from agent tool SSE handlers to
-map event types into succinct status copy (“started”, “completed”, etc.)
-before pushing thought summaries into ProcessPanel.
-*/
-const resolveToolStatusLabel = (eventType: string, toolStatus?: string): string => {
-  switch (eventType) {
-    case 'agent_tool_call':
-      return 'started';
-    case 'tool_call_delta':
-      return 'streaming arguments';
-    case 'tool_call_arguments':
-      return 'arguments finalized';
-    case 'agent_tool_complete':
-      return toolStatus ? toolStatus : 'completed';
-    default:
-      return toolStatus || 'update';
-  }
-};
-
-/*
-Function: mapToolCompletionStatus — called from agent_tool_complete events to
-translate free-form completion status strings into canonical ProcessStep
-statuses so ledger entries align with the rest of the workflow.
-*/
-const mapToolCompletionStatus = (raw?: string): ProcessStep['status'] => {
-  if (!raw) {
-    return 'completed';
-  }
-  const normalized = raw.toLowerCase();
-  if (normalized.includes('fail') || normalized.includes('error')) {
-    return 'error';
-  }
-  if (normalized === 'skipped' || normalized === 'cancelled' || normalized === 'stopped') {
-    return 'stopped';
-  }
-  return 'completed';
-};
-
-const computeCardPayloadHash = (entry: SpecialistCard): string | undefined => {
-  try {
-    const fingerprint = {
-      type: entry.type ?? '',
-      lane: entry.lane ?? '',
-      title: entry.title ?? '',
-      topic: entry.topic ?? '',
-      summary: entry.summary ?? '',
-      snippets: entry.snippets ?? [],
-      symbols: entry.symbols ?? [],
-      meta: entry.meta ?? null,
-    };
-    return JSON.stringify(fingerprint);
-  } catch {
-    return undefined;
-  }
-};
+ 
 
 type SnapshotReuseInfo = {
   reusedSql?: boolean;
@@ -282,326 +71,25 @@ type SnapshotReuseInfo = {
   followUpRoute?: string | null;
 };
 
-type ChartGranularity = 'annual' | 'quarterly';
+ 
 
-const SLOT_LABEL_CACHE = new Map<string, string>();
+const formatTimeframeDisplay = analyticsUtils.formatTimeframeDisplay;
 
-const formatSlotLabel = (slot: string): string => {
-  if (!slot) {
-    return 'Answer';
-  }
-  const cached = SLOT_LABEL_CACHE.get(slot);
-  if (cached) {
-    return cached;
-  }
-  const label = slot
-    .split(/[_\s]+/)
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(' ');
-  const finalLabel = label || 'Answer';
-  SLOT_LABEL_CACHE.set(slot, finalLabel);
-  return finalLabel;
-};
+const coerceFlowMode = analyticsUtils.coerceFlowMode;
 
-const formatTimeframeDisplay = (raw: any): string | undefined => {
-  if (raw == null) {
-    return undefined;
-  }
-  if (typeof raw === 'string') {
-    const trimmed = raw.trim();
-    return trimmed || undefined;
-  }
-  if (Array.isArray(raw)) {
-    const parts = raw
-      .map((entry) => {
-        if (typeof entry === 'string') {
-          return entry.trim();
-        }
-        if (typeof entry === 'number') {
-          return String(entry);
-        }
-        return formatTimeframeDisplay(entry);
-      })
-      .filter((entry): entry is string => Boolean(entry && entry.length));
-    return parts.length ? parts.join(', ') : undefined;
-  }
-  if (typeof raw === 'object') {
-    const preset =
-      typeof raw.preset === 'string' ? raw.preset.replace(/_/g, ' ').trim() : undefined;
-    if (preset) {
-      return preset;
-    }
-    const label = typeof raw.label === 'string' ? raw.label.trim() : undefined;
-    if (label) {
-      return label;
-    }
-    const value = typeof raw.value === 'string' ? raw.value.trim() : undefined;
-    if (value) {
-      return value;
-    }
-    if (raw.year_to_date === true) {
-      return 'year to date';
-    }
-    const quartersBack = (raw as any).quarters_back;
-    if (typeof quartersBack === 'number' && Number.isFinite(quartersBack)) {
-      const q = Math.max(0, Math.round(quartersBack));
-      if (q > 0) {
-        return `last ${q} quarter${q === 1 ? '' : 's'}`;
-      }
-    }
-    const yearsBack = (raw as any).years_back;
-    if (typeof yearsBack === 'number' && Number.isFinite(yearsBack)) {
-      const y = Math.max(0, Math.round(yearsBack));
-      if (y > 0) {
-        return `last ${y} year${y === 1 ? '' : 's'}`;
-      }
-    }
-    if (
-      typeof (raw as any).start_year === 'number' &&
-      typeof (raw as any).end_year === 'number'
-    ) {
-      return `${(raw as any).start_year} - ${(raw as any).end_year}`;
-    }
-  }
-  return undefined;
-};
+const extractAnalysisFocus = analyticsUtils.extractAnalysisFocus;
 
-const extractAnalysisFocus = (raw: string): string | undefined => {
-  if (!raw) {
-    return undefined;
-  }
-  const normalized = raw.trim();
-  if (!normalized) {
-    return undefined;
-  }
+const detectGranularityFromText = analyticsUtils.detectGranularityFromText;
 
-  const cleanFocus = (value?: string | null): string | undefined => {
-    if (!value) {
-      return undefined;
-    }
-    let result = value.trim();
-    if (!result) {
-      return undefined;
-    }
-    result = result.replace(/^[\s:,\-ââ]+/, '').trim();
-    result = result.replace(/\s*(?:please|pls)\.?$/i, '').trim();
-    result = result.replace(/\s*(?:thanks?|thank you)\.?$/i, '').trim();
-    result = result.replace(/^to\s+/, '').trim();
-    result = result.replace(/^(?:focus|highlight|emphasize)\s+(?:on\s+)?/i, '').trim();
-    result = result.replace(/["']+$/g, '').trim();
-    if (!result) {
-      return undefined;
-    }
-    const MAX_LENGTH = 160;
-    if (result.length > MAX_LENGTH) {
-      result = result.slice(0, MAX_LENGTH).trimEnd();
-    }
-    return result || undefined;
-  };
+const normalizeGranularityValue = analyticsUtils.normalizeGranularityValue;
 
-  const direct = normalized.match(/analysis\s*[:\-ââ]\s*(.+)$/i);
-  const directFocus = cleanFocus(direct?.[1]);
-  if (directFocus) {
-    return directFocus;
-  }
+const extractGranularityFromTimeframe = analyticsUtils.extractGranularityFromTimeframe;
 
-  const rewrite = normalized.match(
-    /analysis(?:\s+revision|\s+update|\s+refresh|\s+rewrite|\s+redo)?\s*(?:to\s+)?(?:focus|highlight|emphasize)\s+(.*)$/i,
-  );
-  const rewriteFocus = cleanFocus(rewrite?.[1]);
-  if (rewriteFocus) {
-    return rewriteFocus;
-  }
+const resolveGranularityCandidate = analyticsUtils.resolveGranularityCandidate;
 
-  if (/analysis/i.test(normalized)) {
-    const generic = normalized.match(/(?:focus|highlight|emphasize)\s+(?:on\s+)?(.+)/i);
-    const genericFocus = cleanFocus(generic?.[1]);
-    if (genericFocus) {
-      return genericFocus;
-    }
-  }
+const coerceClarificationValue = analyticsUtils.coerceClarificationValue;
 
-  return undefined;
-};
-
-const detectGranularityFromText = (value: string): ChartGranularity | null => {
-  const normalized = value.trim().toLowerCase();
-  if (!normalized) {
-    return null;
-  }
-  if (/\bquarter(?:s|ly)?\b/.test(normalized) || /\bq[1-4]\b/.test(normalized) || /\bq\d{1}\s*\d{4}\b/.test(normalized)) {
-    return 'quarterly';
-  }
-  if (/\bannual(?:ly)?\b/.test(normalized) || /\byearly\b/.test(normalized)) {
-    return 'annual';
-  }
-  return null;
-};
-
-const normalizeGranularityValue = (value: unknown): ChartGranularity | null => {
-  if (value == null) {
-    return null;
-  }
-  if (typeof value === 'string') {
-    const trimmed = value.trim().toLowerCase();
-    if (!trimmed) {
-      return null;
-    }
-    if (trimmed === 'quarterly' || trimmed === 'quarter') {
-      return 'quarterly';
-    }
-    if (trimmed === 'annual' || trimmed === 'yearly' || trimmed === 'year') {
-      return 'annual';
-    }
-    return detectGranularityFromText(trimmed);
-  }
-  if (typeof value === 'object' && !Array.isArray(value)) {
-    const explicit = (value as Record<string, unknown>).granularity;
-    const normalized = normalizeGranularityValue(explicit);
-    if (normalized) {
-      return normalized;
-    }
-  }
-  return null;
-};
-
-const extractGranularityFromTimeframe = (timeframe: unknown): ChartGranularity | null => {
-  if (!timeframe || typeof timeframe !== 'object') {
-    return null;
-  }
-  const tf = timeframe as Record<string, unknown>;
-  const direct = normalizeGranularityValue(tf.granularity);
-  if (direct) {
-    return direct;
-  }
-  const textualHints: Array<unknown> = [
-    tf.label,
-    tf.value,
-    tf.display,
-    tf.raw,
-    tf.original,
-    tf.title,
-    tf.description,
-  ];
-  for (const hint of textualHints) {
-    if (typeof hint === 'string') {
-      const detected = detectGranularityFromText(hint);
-      if (detected) {
-        return detected;
-      }
-    }
-  }
-  if (typeof tf.quarters_back === 'number' && Number.isFinite(tf.quarters_back) && tf.quarters_back > 0) {
-    return 'quarterly';
-  }
-  if (typeof tf.years_back === 'number' && Number.isFinite(tf.years_back) && tf.years_back > 0) {
-    const detected = detectGranularityFromText(`last ${tf.years_back} years`);
-    if (detected) {
-      return detected;
-    }
-  }
-  return null;
-};
-
-const resolveGranularityCandidate = (payload: unknown): ChartGranularity | null => {
-  if (payload == null) {
-    return null;
-  }
-  if (typeof payload === 'string') {
-    return normalizeGranularityValue(payload);
-  }
-  if (typeof payload === 'object') {
-    if (Array.isArray(payload)) {
-      for (const entry of payload) {
-        const candidate = resolveGranularityCandidate(entry);
-        if (candidate) {
-          return candidate;
-        }
-      }
-      return null;
-    }
-    const direct = normalizeGranularityValue(payload);
-    if (direct) {
-      return direct;
-    }
-    const timeframeCandidate = extractGranularityFromTimeframe(payload);
-    if (timeframeCandidate) {
-      return timeframeCandidate;
-    }
-    const textual = (() => {
-      try {
-        return JSON.stringify(payload);
-      } catch {
-        return undefined;
-      }
-    })();
-    if (textual) {
-      return detectGranularityFromText(textual);
-    }
-    return null;
-  }
-  return null;
-};
-
-const coerceClarificationValue = (value: any): string | undefined => {
-  if (value == null) {
-    return undefined;
-  }
-  if (typeof value === 'string') {
-    const trimmed = value.trim();
-    return trimmed || undefined;
-  }
-  if (typeof value === 'number' || typeof value === 'boolean') {
-    return String(value);
-  }
-  if (Array.isArray(value)) {
-    const entries = value
-      .map((entry) => coerceClarificationValue(entry))
-      .filter((entry): entry is string => Boolean(entry && entry.length));
-    return entries.length ? entries.join(', ') : undefined;
-  }
-  if (typeof value === 'object') {
-    const timeframe = formatTimeframeDisplay(value);
-    if (timeframe) {
-      return timeframe;
-    }
-    const label = typeof (value as any).label === 'string' ? (value as any).label.trim() : undefined;
-    if (label) {
-      return label;
-    }
-    const rawValue = typeof (value as any).value === 'string' ? (value as any).value.trim() : undefined;
-    if (rawValue) {
-      return rawValue;
-    }
-    const title = typeof (value as any).title === 'string' ? (value as any).title.trim() : undefined;
-    if (title) {
-      return title;
-    }
-    try {
-      return JSON.stringify(value);
-    } catch {
-      return String(value);
-    }
-  }
-  return String(value);
-};
-
-const formatClarificationEcho = (slot: string, value: any): string | undefined => {
-  const label = formatSlotLabel(slot);
-  const baseValue =
-    slot === 'timeframe'
-      ? formatTimeframeDisplay(value) ?? coerceClarificationValue(value)
-      : coerceClarificationValue(value);
-  const trimmed = baseValue?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  if (trimmed.toLowerCase().startsWith(label.toLowerCase())) {
-    return trimmed;
-  }
-  return `${label}: ${trimmed}`;
-};
+const formatClarificationEcho = analyticsUtils.formatClarificationEcho;
 
 export const useAnalyticsMemoryStream = (
   flow: 'planner-executor' | 'single-agent' | 'multi-agent' = 'single-agent',
@@ -658,6 +146,8 @@ export const useAnalyticsMemoryStream = (
   const pendingRevisionFocusRef = useRef<string | undefined>(undefined);
   const revisionModeRef = useRef<'none' | 'chart' | 'analysis' | 'market' | 'mixed'>('none');
   const lastClarificationEchoRef = useRef<{ slot: string; content: string } | null>(null);
+  const lastClarificationRequestIdRef = useRef<string | null>(null);
+  const lastClarificationMissingRef = useRef<string | null>(null);
   const resultSentRef = useRef<boolean>(false);
   const summarySentRef = useRef<boolean>(false);
   const lastSessionIdRef = useRef<string>('');
@@ -975,6 +465,10 @@ export const useAnalyticsMemoryStream = (
       if (detailsLane) {
         return detailsLane;
       }
+      const telemetryLane = coerceString((source as any).telemetry_step);
+      if (telemetryLane) {
+        return telemetryLane;
+      }
     }
     return undefined;
   };
@@ -1126,7 +620,7 @@ export const useAnalyticsMemoryStream = (
       if (!rawValue || typeof rawValue !== 'object') {
         continue;
       }
-      const lane = resolveLane(rawValue, (rawValue as any).lane, rawKey) ?? rawKey;
+      const lane = resolveLane(rawValue, (rawValue as any).lane, (rawValue as any).telemetry_step, rawKey) ?? rawKey;
       const id = coerceString((rawValue as any).id) ?? coerceString((rawValue as any).lane) ?? coerceString(rawKey) ?? rawKey;
       const label =
         coerceString((rawValue as any).label) ??
@@ -1721,9 +1215,11 @@ export const useAnalyticsMemoryStream = (
       ts: coerceString(raw.ts) ?? timestamp ?? new Date().toISOString(),
       meta: typeof raw.meta === 'object' && raw.meta !== null ? raw.meta : undefined,
     };
-    let lane = resolveLane(raw, raw.meta);
+    let lane = resolveLane(raw, raw.meta, raw.telemetry_step);
     if (!lane && card.type) {
-      const fallbackLane = SPECIALIST_TYPE_TO_LANE[card.type] ?? SPECIALIST_TYPE_TO_LANE[card.type.toLowerCase()];
+      const fallbackLane =
+        analyticsUtils.SPECIALIST_TYPE_TO_LANE[card.type] ??
+        analyticsUtils.SPECIALIST_TYPE_TO_LANE[card.type.toLowerCase()];
       if (fallbackLane) {
         lane = fallbackLane;
       }
@@ -1761,7 +1257,7 @@ export const useAnalyticsMemoryStream = (
       card.revisionEvent = revisionEventFlag;
     }
     const providedPayloadHash = coerceString(raw.payload_hash ?? raw.payloadHash ?? raw.meta?.payload_hash);
-    card.payloadHash = providedPayloadHash ?? computeCardPayloadHash(card);
+    card.payloadHash = providedPayloadHash ?? analyticsUtils.computeCardPayloadHash(card);
 
     return card;
   };
@@ -2062,6 +1558,7 @@ export const useAnalyticsMemoryStream = (
     analysisSources: AnalysisSources | null;
     analysisBundle: Record<string, any> | null;
     followUpBanner: FollowUpBanner | null;
+    followUpLanes?: string[];
     specialistCards: SpecialistCard[];
     latencyGuardrail: LatencyGuardrail | null;
     snapshotReuse: SnapshotReuseInfo | null;
@@ -2088,6 +1585,7 @@ export const useAnalyticsMemoryStream = (
     analysisSources: null,
     analysisBundle: null,
     followUpBanner: null,
+    followUpLanes: [],
     specialistCards: [],
     latencyGuardrail: null,
     snapshotReuse: null,
@@ -2176,7 +1674,7 @@ export const useAnalyticsMemoryStream = (
       if (!candidate.sessionId && sessionId) {
         candidate.sessionId = sessionId;
       }
-      candidate.payloadHash = candidate.payloadHash ?? computeCardPayloadHash(candidate);
+      candidate.payloadHash = candidate.payloadHash ?? analyticsUtils.computeCardPayloadHash(candidate);
       const keyFor = (entry: SpecialistCard) => {
         const meta = entry.meta ?? {};
         const questionKey =
@@ -2228,10 +1726,10 @@ export const useAnalyticsMemoryStream = (
       }
       const priorityForCard = (entry: SpecialistCard) => {
         const typeKey = typeof entry.type === 'string' ? entry.type.toLowerCase() : '';
-        const laneKeyRaw = entry.lane ?? (typeKey ? SPECIALIST_TYPE_TO_LANE[typeKey] : undefined);
+        const laneKeyRaw = entry.lane ?? (typeKey ? analyticsUtils.SPECIALIST_TYPE_TO_LANE[typeKey] : undefined);
         const laneKey = laneKeyRaw ? laneKeyRaw.toLowerCase() : '';
-        if (laneKey && Object.prototype.hasOwnProperty.call(SPECIALIST_LANE_PRIORITY, laneKey)) {
-          return SPECIALIST_LANE_PRIORITY[laneKey];
+        if (laneKey && Object.prototype.hasOwnProperty.call(analyticsUtils.SPECIALIST_LANE_PRIORITY, laneKey)) {
+          return analyticsUtils.SPECIALIST_LANE_PRIORITY[laneKey];
         }
         return 100;
       };
@@ -2404,7 +1902,7 @@ export const useAnalyticsMemoryStream = (
     });
   }, []);
 
-  const resolveAgentConfig = (role: string) => AGENT_ROLE_CONFIG[role] ?? DEFAULT_AGENT_ROLE;
+  const resolveAgentConfig = (role: string) => analyticsUtils.AGENT_ROLE_CONFIG[role] ?? analyticsUtils.DEFAULT_AGENT_ROLE;
 
   const computeAggregateStatus = (fallback: ProcessStep['status'] = 'pending'): ProcessStep['status'] => {
     const laneStates = Object.values(agentLaneStateRef.current);
@@ -2426,7 +1924,8 @@ export const useAnalyticsMemoryStream = (
       return ['Awaiting agent activity'];
     }
     return entries.map(([stepId, status]) => {
-      const roleConfig = Object.values(AGENT_ROLE_CONFIG).find((config) => config.stepId === stepId) ?? DEFAULT_AGENT_ROLE;
+      const roleConfig =
+        Object.values(analyticsUtils.AGENT_ROLE_CONFIG).find((config) => config.stepId === stepId) ?? analyticsUtils.DEFAULT_AGENT_ROLE;
       const statusLabel = status.replace('_', ' ');
       return `${roleConfig.label}: ${statusLabel}`;
     });
@@ -2495,7 +1994,7 @@ export const useAnalyticsMemoryStream = (
     }
     const specialistLabel =
       coerceString(metadata.specialist_label ?? (payload as any).specialist_label) ??
-      formatSpecialistRoleLabel(specialistRole);
+      analyticsUtils.formatSpecialistRoleLabel(specialistRole);
     if (specialistLabel) {
       entry.specialistLabel = specialistLabel;
     }
@@ -2820,6 +2319,7 @@ export const useAnalyticsMemoryStream = (
       banner?: FollowUpBanner | null;
       specialistCards?: SpecialistCard[];
       replacePriorResult?: boolean;
+      pruneFreshResults?: boolean;
       revisionId?: string | null;
       revisionFocus?: string | null;
     },
@@ -2874,7 +2374,9 @@ export const useAnalyticsMemoryStream = (
         return -1;
       })();
 
-      const filtered = options.replacePriorResult
+      const filtered = options.pruneFreshResults
+        ? prev.filter((message) => message.type !== 'result')
+        : options.replacePriorResult
         ? prev.filter((message, index) => {
           if (message.type !== 'result') {
             return true;
@@ -3078,6 +2580,8 @@ export const useAnalyticsMemoryStream = (
     workflowDataRef.current.latencyGuardrail = null;
     setPendingClarification(null);
     clearClarificationState();
+    lastClarificationMissingRef.current = null;
+    lastClarificationRequestIdRef.current = null;
     setCriteria(null);
     stepsHook.resetSteps();
 
@@ -3100,10 +2604,22 @@ export const useAnalyticsMemoryStream = (
     finalizationMessageRef.current = null;
 
     const baseEndpoint = `/api/analytics/memory/stream`;
+    const ensureSessionToken = () => {
+      if (activeSessionId) {
+        return activeSessionId;
+      }
+      const generated =
+        (typeof crypto !== 'undefined' && (crypto as any)?.randomUUID
+          ? (crypto as any).randomUUID()
+          : undefined) || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+      persistSessionId(generated);
+      return generated;
+    };
+    const sessionTokenForRun = ensureSessionToken();
 
     const params = new URLSearchParams({ query: trimmed });
-    if (activeSessionId) {
-      params.append('session_id', activeSessionId);
+    if (sessionTokenForRun) {
+      params.append('session_id', sessionTokenForRun);
     }
     if (flow) {
       params.append('flow', flow);
@@ -3114,7 +2630,9 @@ export const useAnalyticsMemoryStream = (
     await streamHook.startStream(endpoint, (data) => {
       const rawEventType = data.event || data.type;
       const eventType =
-        typeof rawEventType === 'string' ? REVISION_EVENT_ALIASES[rawEventType] ?? rawEventType : rawEventType;
+        typeof rawEventType === 'string'
+          ? analyticsUtils.REVISION_EVENT_ALIASES[rawEventType] ?? rawEventType
+          : rawEventType;
       // Handle both old (heavy) and new (lightweight) event formats
       const eventData = data.data || data;
       const rawThoughtId = coerceString(eventData.thought_id ?? data.thought_id);
@@ -3143,7 +2661,8 @@ export const useAnalyticsMemoryStream = (
       const revisionFlag = coerceBoolean(data.revision ?? eventData.revision);
       const revisionEventFlag =
         coerceBoolean(data.revision_event ?? eventData.revision_event) ||
-        (typeof rawEventType === 'string' && Object.prototype.hasOwnProperty.call(REVISION_EVENT_ALIASES, rawEventType));
+        (typeof rawEventType === 'string' &&
+          Object.prototype.hasOwnProperty.call(analyticsUtils.REVISION_EVENT_ALIASES, rawEventType));
       const isRevisionEvent = Boolean(revisionFlag || revisionEventFlag || revisionId);
       const effectiveRevisionId = revisionId ?? revisionContextRef.current.id;
       const effectiveRevisionLanes = revisionContextRef.current.lanes ?? [];
@@ -3233,7 +2752,13 @@ export const useAnalyticsMemoryStream = (
           : typeof eventData.tool_group === 'string'
             ? eventData.tool_group
             : undefined;
-      const laneFromEvent = resolveLane(eventData, eventData?.metadata, eventData?.details, data);
+      const laneFromEvent = resolveLane(
+        eventData,
+        eventData?.metadata,
+        eventData?.details,
+        data,
+        (eventData as any)?.telemetry_step,
+      );
       const reusedFlag = resolveReusedFlag(eventData, eventData?.metadata, eventData?.details, data);
 
       const suppressedRevisionSteps = new Set([
@@ -3386,7 +2911,7 @@ export const useAnalyticsMemoryStream = (
             revisionEvent: normalizedCard.revisionEvent ?? isRevisionEvent,
             lane: normalizedCard.lane ?? laneFromEvent ?? normalizedCard.lane,
           };
-          mergedCard.payloadHash = mergedCard.payloadHash ?? computeCardPayloadHash(mergedCard);
+          mergedCard.payloadHash = mergedCard.payloadHash ?? analyticsUtils.computeCardPayloadHash(mergedCard);
           upsertSpecialistCard(mergedCard);
         }
       }
@@ -3441,10 +2966,11 @@ export const useAnalyticsMemoryStream = (
           const statusMessage = deltaSnippet ?? eventData.message ?? data.message ?? '';
           const bannerPayload = eventData.banner || data.banner;
           if (stepInfo.step === 'follow_up_route' || bannerPayload) {
-            const route = coerceString(bannerPayload?.route) ?? 'full_pipeline';
+            const route = coerceString(bannerPayload?.route ?? eventData.route ?? data.route) ?? 'full_pipeline';
             const reasonKey = coerceString(bannerPayload?.reason ?? eventData.reason);
-            const copyKey = reasonKey && FOLLOW_UP_BANNER_COPY[reasonKey] ? reasonKey : route;
-            const copy = FOLLOW_UP_BANNER_COPY[copyKey] ?? FOLLOW_UP_BANNER_COPY.full_pipeline;
+            const copyKey = reasonKey && analyticsUtils.FOLLOW_UP_BANNER_COPY[reasonKey] ? reasonKey : route;
+            const copy =
+              analyticsUtils.FOLLOW_UP_BANNER_COPY[copyKey] ?? analyticsUtils.FOLLOW_UP_BANNER_COPY.full_pipeline;
             const finalAnswerOnly = coerceBoolean(bannerPayload?.final_answer_only);
             const missingComponents = Array.isArray(bannerPayload?.missing_components)
               ? (bannerPayload.missing_components as unknown[])
@@ -3623,26 +3149,32 @@ export const useAnalyticsMemoryStream = (
           if (guardrailPayload) {
             workflowDataRef.current.followUpGuardrail = guardrailPayload;
           }
-          const reasonKey =
-            coerceString((eventData.banner as any)?.reason ?? eventData.reason) ?? undefined;
+          const bannerPayload = (eventData.banner as Record<string, any> | undefined) ?? undefined;
+          const reasonKey = coerceString(bannerPayload?.reason ?? eventData.reason) ?? undefined;
           const bannerKey =
-            reasonKey && FOLLOW_UP_BANNER_COPY[reasonKey] ? reasonKey : route;
-          const copy = FOLLOW_UP_BANNER_COPY[bannerKey] ?? FOLLOW_UP_BANNER_COPY.full_pipeline;
+            reasonKey && analyticsUtils.FOLLOW_UP_BANNER_COPY[reasonKey] ? reasonKey : route;
+          const copy =
+            (bannerPayload?.title && bannerPayload?.message
+              ? { title: bannerPayload.title, message: bannerPayload.message }
+              : analyticsUtils.FOLLOW_UP_BANNER_COPY[bannerKey]) ?? analyticsUtils.FOLLOW_UP_BANNER_COPY.full_pipeline;
+          const normalizedLanes = Array.isArray(eventData.lanes)
+            ? (eventData.lanes as unknown[])
+              .map((lane) => (typeof lane === 'string' ? lane.toLowerCase() : ''))
+              .filter((lane): lane is string => Boolean(lane))
+            : undefined;
           const banner: FollowUpBanner = {
             title: copy.title,
             message: copy.message,
             route,
             reason: reasonKey ?? undefined,
+            lanes: normalizedLanes,
           };
           if (guardrailPayload) {
             banner.guardrail = guardrailPayload;
           }
-          const normalizedLanes = Array.isArray(eventData.lanes)
-            ? (eventData.lanes as unknown[])
-              .map((lane) => (typeof lane === 'string' ? lane.toLowerCase() : ''))
-              .filter((lane): lane is string => lane.length > 0)
-            : undefined;
-
+          if (normalizedLanes && normalizedLanes.length) {
+            workflowDataRef.current.followUpLanes = normalizedLanes;
+          }
           const questionBundle =
             normalizeQuestionBundle(
               eventData.revision_questions ?? eventData.questions ?? (eventData.banner as any)?.questions,
@@ -3763,6 +3295,9 @@ export const useAnalyticsMemoryStream = (
           if (guardrailPayload) {
             stepDetails.guardrail = guardrailPayload;
           }
+          if (normalizedLanes && normalizedLanes.length) {
+            stepDetails.lanes = normalizedLanes;
+          }
           updateStep(
             'follow_up_route',
             'in_progress',
@@ -3777,6 +3312,10 @@ export const useAnalyticsMemoryStream = (
 
         case 'clarification_request': {
           const request = eventData as ClarifyRequest;
+          if (request.request_id && request.request_id === lastClarificationRequestIdRef.current) {
+            break;
+          }
+          lastClarificationRequestIdRef.current = request.request_id ?? null;
           console.log('?? [DEBUG] Received clarification_request:', request);
           setPendingClarification(request);
           upsertSlotStatus(request.slot, {
@@ -3804,6 +3343,8 @@ export const useAnalyticsMemoryStream = (
         case 'clarification_ack': {
           setPendingClarification(null);
           setSlotFollowups((prev) => prev.filter((item) => item.request_id !== eventData.request_id));
+          lastClarificationMissingRef.current = null;
+          lastClarificationRequestIdRef.current = null;
           if (eventData.slot) {
             if (eventData.slot_status) {
               const ackStatus = normalizeSlotStatuses({ [eventData.slot]: eventData.slot_status });
@@ -3846,7 +3387,7 @@ export const useAnalyticsMemoryStream = (
               const fallback = coerceClarificationValue(eventData.answer);
               const trimmedFallback = fallback?.trim();
               if (trimmedFallback) {
-                const label = formatSlotLabel(ackSlot);
+                const label = analyticsUtils.formatSlotLabel(ackSlot);
                 const display = trimmedFallback.toLowerCase().startsWith(label.toLowerCase())
                   ? trimmedFallback
                   : `${label}: ${trimmedFallback}`;
@@ -4095,6 +3636,21 @@ export const useAnalyticsMemoryStream = (
           );
           if (isRevisionEvent) {
             markRevisionMode('chart');
+            appendResultSnapshot({
+              content: 'Revision: Chart updated',
+              analysis: null,
+              chartSpec: normalizedChartSpec ?? workflowDataRef.current.chartSpec ?? null,
+              sqlQuery: workflowDataRef.current.sqlQuery ?? null,
+              dataSample: null,
+              stockWidgetConfig: null,
+              toolFanoutManifest: [],
+              toolFanoutResults: [],
+              webSearch: null,
+              replacePriorResult: true,
+              pruneFreshResults: true,
+              revisionId: revisionContextRef.current.id ?? null,
+              revisionFocus: workflowDataRef.current.revisionFocus ?? revisionContextRef.current.focus ?? null,
+            });
           }
           emitResultOnce();
           refreshResultMessage();
@@ -4206,7 +3762,7 @@ export const useAnalyticsMemoryStream = (
         }
 
         case 'revision_agent_disabled': {
-          const laneLabel = formatLaneName(coerceString(eventData.lane) || 'analysis');
+          const laneLabel = analyticsUtils.formatLaneName(coerceString(eventData.lane) || 'analysis');
           const reasonText = coerceString(eventData.reason) || 'agent runtime unavailable';
           updateAgentCoordination(
             [`${laneLabel}: ${reasonText}`],
@@ -4234,7 +3790,7 @@ export const useAnalyticsMemoryStream = (
         }
 
         case 'agent_coordination': {
-          const laneLabel = formatLaneName(coerceString(eventData.lane) || 'analysis');
+          const laneLabel = analyticsUtils.formatLaneName(coerceString(eventData.lane) || 'analysis');
           const reasonText = coerceString(eventData.reason);
           const summaryMessages = reasonText
             ? [`${laneLabel}: ${reasonText}`]
@@ -4659,6 +4215,7 @@ export const useAnalyticsMemoryStream = (
                 toolFanoutResults: [],
                 specialistCards: [],
                 replacePriorResult: true,
+                pruneFreshResults: true,
                 revisionId: revisionIdForSnapshot ?? null,
                 revisionFocus:
                   workflowDataRef.current.revisionFocus ?? revisionContextRef.current.focus ?? null,
@@ -4985,7 +4542,8 @@ export const useAnalyticsMemoryStream = (
             if (bundle.banner) {
               const bannerData = bundle.banner as Record<string, any>;
               const route = coerceString(bannerData.route) ?? followUpBanner?.route ?? 'full_pipeline';
-              const copy = FOLLOW_UP_BANNER_COPY[route] ?? FOLLOW_UP_BANNER_COPY.full_pipeline;
+              const copy =
+                analyticsUtils.FOLLOW_UP_BANNER_COPY[route] ?? analyticsUtils.FOLLOW_UP_BANNER_COPY.full_pipeline;
               const banner: FollowUpBanner = {
                 title: coerceString(bannerData.title) ?? copy.title,
                 message: coerceString(bannerData.message) ?? followUpBanner?.message ?? copy.message,
@@ -5244,8 +4802,8 @@ export const useAnalyticsMemoryStream = (
           const toolMetadata = (toolCall.metadata ?? {}) as Record<string, any>;
           const specialistRole = coerceString(toolMetadata.specialist_role);
           const specialistLabel =
-            coerceString(toolMetadata.specialist_label) ?? formatSpecialistRoleLabel(specialistRole);
-          const displayName = resolveToolDisplayName(coerceString(toolCall.name), specialistLabel);
+            coerceString(toolMetadata.specialist_label) ?? analyticsUtils.formatSpecialistRoleLabel(specialistRole);
+          const displayName = analyticsUtils.resolveToolDisplayName(coerceString(toolCall.name), specialistLabel);
           const toolCallId =
             coerceString(toolCall.id) ??
             coerceString((toolCall as any).tool_call_id) ??
@@ -5260,17 +4818,20 @@ export const useAnalyticsMemoryStream = (
           const cacheSource = coerceString(toolMetadata.cache_source);
           const schemaVersion = coerceString(toolMetadata.schema_version);
           const fastPathLatencyMs = coerceNumber(toolMetadata.fast_path_latency_ms);
-          const statusLabel = resolveToolStatusLabel(eventType, coerceString(toolCall.status));
+          const statusLabel = analyticsUtils.resolveToolStatusLabel(eventType, coerceString(toolCall.status));
           const summaryMessages = [`${displayName}: ${statusLabel}`];
           if (retryCount && retryCount > 0) {
             summaryMessages.push(`Retry ${retryCount}`);
           }
-          if (cacheAgeSeconds && cacheAgeSeconds > 0) {
-            summaryMessages.push(`Cache age ~${Math.round(cacheAgeSeconds)}s`);
+          if (cacheAgeSeconds !== undefined && cacheAgeSeconds !== null) {
+            const ageNumber = Number(cacheAgeSeconds);
+            if (Number.isFinite(ageNumber)) {
+              summaryMessages.push(`Cache age ~${Math.round(ageNumber)}s`);
+            }
           }
           const toolStepStatus =
             eventType === 'agent_tool_complete'
-              ? mapToolCompletionStatus(coerceString(toolCall.status))
+              ? analyticsUtils.mapToolCompletionStatus(coerceString(toolCall.status))
               : 'in_progress';
           const detailOverrides: Record<string, any> = {
             arguments: toolCall.arguments,
@@ -5319,6 +4880,10 @@ export const useAnalyticsMemoryStream = (
           }
           if (typeof toolCall.status === 'string') {
             syntheticMetadata.status = toolCall.status;
+          }
+          const cacheAge = toolMetadata.cache_age_seconds ?? toolMetadata.age_seconds ?? eventData.age_seconds;
+          if (cacheAge !== undefined) {
+            syntheticMetadata.cache_age_seconds = cacheAge;
           }
           const syntheticPayload = {
             tool: coerceString(toolCall.name) ?? coerceString(toolCall.tool) ?? toolCallId ?? 'agent_tool',
@@ -5710,14 +5275,22 @@ export const useAnalyticsMemoryStream = (
           streamHook.setCurrentStatus('SQL criteria locked in.');
           break;
 
-        case 'clarification_needed':
-          stepsHook.updateStepStatus('clarification', 'in_progress', [`Missing fields: ${eventData.missing_fields?.join(', ')}`], { missing_fields: eventData.missing_fields }, undefined, eventData.ts);
+        case 'clarification_needed': {
+          const missingText = `Missing fields: ${eventData.missing_fields?.join(', ')}`;
+          if (lastClarificationMissingRef.current === missingText) {
+            break;
+          }
+          lastClarificationMissingRef.current = missingText;
+          stepsHook.updateStepStatus('clarification', 'in_progress', [missingText], { missing_fields: eventData.missing_fields }, undefined, eventData.ts);
           break;
+        }
 
         case 'clarification_skipped':
           stepsHook.updateStepStatus('clarification', 'completed', [eventData.reason || 'Clarification not needed'], undefined, undefined, eventData.ts);
           setPendingClarification(null);
           setSlotFollowups((prev) => prev.filter((item) => item.slot !== eventData.slot));
+          lastClarificationMissingRef.current = null;
+          lastClarificationRequestIdRef.current = null;
           if (eventData.slot) {
             upsertSlotStatus(eventData.slot, { status: 'filled' });
           }
@@ -5911,7 +5484,7 @@ export const useAnalyticsMemoryStream = (
                 ? eventData.age_seconds
                 : undefined;
             const baseMessage = coerceString(eventData.message);
-            const friendlyLane = formatLaneName(laneName);
+            const friendlyLane = analyticsUtils.formatLaneName(laneName);
             const message =
               baseMessage ??
               `${friendlyLane} lane reused${ageSeconds !== undefined ? ` (cache age ~${Math.round(ageSeconds)}s)` : ''}`;

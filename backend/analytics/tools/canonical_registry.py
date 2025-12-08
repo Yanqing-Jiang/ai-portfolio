@@ -14,7 +14,7 @@ from __future__ import annotations
 import copy
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, FrozenSet, List, Mapping, Optional, Set, Tuple, TYPE_CHECKING
+from typing import Any, Callable, Dict, FrozenSet, List, Mapping, Optional, Set, Tuple, TYPE_CHECKING
 
 from .definitions import (
     DEFAULT_SCHEMA_VERSION,
@@ -71,6 +71,7 @@ class ToolSchema:
     latency_budget_ms: Optional[int]
     retryable_errors: Tuple[str, ...]
     allowed_modes: FrozenSet[FlowMode] = field(default_factory=lambda: frozenset(FlowMode))
+    executor_factory: Optional[Callable[..., Any]] = None
 
     def to_openai_function(self) -> Dict[str, Any]:
         """
@@ -108,9 +109,11 @@ class ToolSchema:
 # These define which tools are available for each follow-up route
 _ROUTE_ALLOWLISTS: Dict[str, Tuple[ToolId, ...]] = {
     "full_pipeline": (
+        ToolId.FOLLOW_UP_ROUTE,
         ToolId.CLASSIFICATION,
         ToolId.INTENT_DETECTION,
         ToolId.CLARIFICATION,
+        ToolId.LANE_DECISION,
         ToolId.PLAN_GENERATION,
         ToolId.SQL_GENERATION,
         ToolId.CHART_GENERATION,
@@ -119,28 +122,42 @@ _ROUTE_ALLOWLISTS: Dict[str, Tuple[ToolId, ...]] = {
         ToolId.MARKET_REFRESH,
     ),
     "reuse_sql": (
+        ToolId.FOLLOW_UP_ROUTE,
+        ToolId.LANE_DECISION,
         ToolId.CHART_GENERATION,
         ToolId.ANALYSIS_GENERATION,
     ),
     "stock_only": (
+        ToolId.FOLLOW_UP_ROUTE,
+        ToolId.LANE_DECISION,
         ToolId.MARKET_REFRESH,
     ),
     "chart_revision": (
+        ToolId.FOLLOW_UP_ROUTE,
+        ToolId.LANE_DECISION,
         ToolId.CHART_REVISION,
     ),
     "analysis_revision": (
+        ToolId.FOLLOW_UP_ROUTE,
+        ToolId.LANE_DECISION,
         ToolId.ANALYSIS_REVISION,
     ),
     "sql_regeneration": (
+        ToolId.FOLLOW_UP_ROUTE,
+        ToolId.LANE_DECISION,
         ToolId.SQL_REGENERATION,
         ToolId.CHART_GENERATION,
         ToolId.ANALYSIS_GENERATION,
     ),
     "web_refresh": (
+        ToolId.FOLLOW_UP_ROUTE,
+        ToolId.LANE_DECISION,
         ToolId.WEB_REFRESH,
         ToolId.ANALYSIS_GENERATION,
     ),
     "market_refresh": (
+        ToolId.FOLLOW_UP_ROUTE,
+        ToolId.LANE_DECISION,
         ToolId.MARKET_REFRESH,
         ToolId.ANALYSIS_GENERATION,
     ),
@@ -188,6 +205,20 @@ class CanonicalToolRegistry:
                 allowed_modes=all_modes,  # All tools available in all modes by default
             )
             self._schemas[tool_id] = schema
+
+    def bind_executor_factory(
+        self,
+        tool_id: ToolId,
+        executor_factory: Callable[..., Any],
+    ) -> None:
+        """
+        Method: bind_executor_factory
+        Called from: analytics.flows.pipeline_tools
+        Why: Attaches lane executor factories so all modes share the same implementations.
+        """
+        schema = self._schemas.get(tool_id)
+        if schema is not None:
+            schema.executor_factory = executor_factory
 
     def get_tool_schema(
         self,

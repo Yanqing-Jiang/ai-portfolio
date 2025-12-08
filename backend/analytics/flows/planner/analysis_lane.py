@@ -193,7 +193,7 @@ async def stream_analysis_lane(
         await pipeline._persist_session_state(ctx, record_artifacts=True)
 
     async for event in pipeline._stream_with_tool_state(
-        registry.invoke("analysis_generation", pipeline, ctx, executed=executed),
+        registry.invoke("analysis_generation", pipeline, ctx, executed=executed, use_executor=False),
         tool_state,
         ctx,
     ):

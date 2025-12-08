@@ -436,7 +436,7 @@ from analytics.artifacts import (
     AnalysisArtifact,
     MarketArtifact,
 )
-from analytics.routing import FollowUpRoute
+from analytics.routing import FollowUpRoute, FOLLOW_UP_BANNERS
 from analytics.validators import sanitize_for_json
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -496,7 +496,21 @@ from .planner import (
     stream_analysis_lane,
     stream_chart_lane,
     stream_sql_lane,
+    hash_payload,
+    normalize_metric_slots,
+    build_slot_assumptions,
+    ensure_tool_receipt,
+    run_classification_stage,
+    run_intent_stage,
+    run_clarification_stage,
+    run_sql_stage,
+    run_chart_stage,
+    run_analysis_stage,
+    maybe_emit_fresh_lane_event,
+    collect_tool_deltas_now,
+    drain_tool_state_async,
 )
+from .pipeline_orchestrator import build_pipeline_lane_executors
 from analytics.services.response_search import (
     ResponseSearchError,
     perform_response_search,
@@ -948,21 +962,7 @@ class PlannerRevisionContext:
         return copy.deepcopy(payload)
 
 
-def _hash_payload(payload: Any) -> str:
-    try:
-        normalized = sanitize_for_json(payload)
-    except Exception:
-        normalized = payload
-    try:
-        encoded = json.dumps(
-            normalized,
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=False,
-        ).encode("utf-8")
-    except TypeError:
-        encoded = json.dumps(str(normalized), sort_keys=True).encode("utf-8")
-    return hashlib.sha1(encoded).hexdigest()
+_hash_payload = hash_payload
 
 
 def _accessory_tool_adapters() -> Tuple[Any, ...]:
@@ -1088,25 +1088,10 @@ _MARKET_TOOL_NAMES = {"stock_tracker", "market_question_a", "market_question_b"}
 FRESH_RUN_REASONING_EFFORT = "minimal"
 CLASSIFIER_TIMEOUT_SECONDS = float(os.getenv("ANALYTICS_CLASSIFIER_TIMEOUT_SECONDS", "6.0"))
 
-# Helper: classifier models (Gemini primary + OpenAI fallback allowed)
-PRIMARY_CLASSIFIER_MODEL = os.getenv("OPENAI_CLASSIFIER_MODEL", "gemini-2.5-flash-lite")
-SECONDARY_CLASSIFIER_MODEL = os.getenv("OPENAI_SECONDARY_CLASSIFIER_MODEL", "gpt-4o-mini")
-
-FOLLOW_UP_BANNERS: Dict[FollowUpRoute, Dict[str, str]] = {
-    FollowUpRoute.FULL_PIPELINE: {
-        "title": "Fresh Run Scheduled",
-        "message": "Running SQL, charts, and narrative again to deliver a fully refreshed answer.",
-    },
-    FollowUpRoute.REUSE_SQL: {
-        "title": "Reusing Last Dataset",
-        "message": "Skipping the SQL rerun - updating visuals and narrative on top of the validated table.",
-    },
-    FollowUpRoute.STOCK_ONLY: {
-        "title": "Market Snapshot Only",
-        "message": "Pulling fresh price data while charts and analysis stay pinned to the prior run.",
-    },
-}
-
+# Helper: classifier models (OpenAI-only to avoid Gemini schema mismatches)
+# Primary stays on the nano tier for cost/latency; fallback is the mandated mini.
+PRIMARY_CLASSIFIER_MODEL = os.getenv("OPENAI_CLASSIFIER_MODEL", "gpt-5-nano-2025-08-07")
+SECONDARY_CLASSIFIER_MODEL = os.getenv("OPENAI_SECONDARY_CLASSIFIER_MODEL", "gpt-5-mini-2025-08-07")
 
 def _normalize_calendar_filters(sql: str) -> str:
     if not sql:
@@ -1257,8 +1242,9 @@ async def _run_classifier_with_fallback(
     """
     Run the primary classifier (provider inferred from model); on failure, fall back to the secondary model/provider.
     """
-    primary_provider = "gemini" if "gemini" in (primary_model or "").lower() else "openai"
-    secondary_provider = "gemini" if "gemini" in (secondary_model or "").lower() else "openai"
+    # Force OpenAI providers to avoid Gemini classifier 400s seen in ledger runs.
+    primary_provider = "openai"
+    secondary_provider = "openai"
     try:
         return await _run_classifier_with_timeout(ctx, primary_model, primary_provider)
     except Exception as exc:  # pragma: no cover - fallback path validated separately
@@ -2937,44 +2923,10 @@ def _compose_intent_from_resolution(
     )
 
 
-def _normalize_metric_slots(resolution: IntentResolutionModel) -> None:
-    if not isinstance(resolution, IntentResolutionModel):
-        return
-
-    def _normalize(slot_name: str) -> None:
-        slot_state = resolution.slots.get(slot_name)
-        if slot_state is None:
-            return
-        value = slot_state.value
-        has_value = False
-        if isinstance(value, (list, tuple, set)):
-            has_value = any(item is not None for item in value)
-        elif value not in (None, "", []):
-            has_value = True
-        if slot_state.status == "missing" and has_value:
-            resolution.slots[slot_name] = slot_state.model_copy(update={"status": "defaulted"})
-        updated = resolution.slots.get(slot_name)
-        if updated and updated.status != "missing":
-            resolution.followups = [
-                followup
-                for followup in list(resolution.followups or [])
-                if getattr(followup, "slot", None) != slot_name
-            ]
-
-    _normalize("metric")
-    _normalize("metrics")
+_normalize_metric_slots = normalize_metric_slots
 
 
-def _build_slot_assumptions(slots: Mapping[str, SlotStatusModel]) -> List[str]:
-    assumptions: List[str] = []
-    for slot_name, status in (slots or {}).items():
-        if not isinstance(status, SlotStatusModel):
-            continue
-        if status.status == "defaulted" and status.value is not None:
-            assumptions.append(f"{slot_name} defaulted to {status.value}")
-        elif status.status == "assumed":
-            assumptions.append(f"{slot_name} assumed ({status.status})")
-    return assumptions
+_build_slot_assumptions = build_slot_assumptions
 
 
 def _apply_plan_metric_defaults(
@@ -3144,9 +3096,6 @@ def _apply_plan_timeframe_defaults(
         if isinstance(answer, Mapping) and answer.get("slot") == "timeframe":
             already_recorded = True
             break
-        if isinstance(answer, str) and answer == "timeframe":
-            already_recorded = True
-            break
     if not already_recorded:
         ctx.clarification_answers.append(
             {
@@ -3156,7 +3105,6 @@ def _apply_plan_timeframe_defaults(
                 "ts": datetime.utcnow().isoformat(),
             }
         )
-        ctx.clarification_answers.append("timeframe")
 
     return normalized_tf
 
@@ -3448,16 +3396,19 @@ class PlannerPipeline:
             updated = True
         clar_answers = getattr(ctx, "clarification_answers", None)
         if clar_answers:
-            try:
-                answers_payload = sanitize_for_json(list(clar_answers))
-            except Exception:
-                answers_payload = list(clar_answers)
-            try:
-                snapshot.agents_clarifications = answers_payload if isinstance(answers_payload, list) else list(clar_answers)
-            except Exception:
-                snapshot.agents_clarifications = list(clar_answers)
-            snapshot.routing["clarifications_needed"] = False
-            updated = True
+            cleaned_answers: List[Mapping[str, Any]] = [
+                ans for ans in clar_answers if isinstance(ans, Mapping)
+            ]
+            if cleaned_answers:
+                try:
+                    answers_payload = sanitize_for_json(list(cleaned_answers))
+                except Exception:
+                    answers_payload = list(cleaned_answers)
+                snapshot.agents_clarifications = (
+                    answers_payload if isinstance(answers_payload, list) else list(cleaned_answers)
+                )
+                snapshot.routing["clarifications_needed"] = False
+                updated = True
         clar_needed_flag = getattr(ctx, "clarifications_needed", None)
         if clar_needed_flag is not None:
             snapshot.routing["clarifications_needed"] = bool(clar_needed_flag)
@@ -3903,48 +3854,6 @@ class PlannerPipeline:
         data.setdefault("parallel_group", "accessory_delta")
         return self._annotate_revision(event, ctx)
 
-    def _maybe_emit_fresh_lane_event(
-        self,
-        ctx: PlannerPhaseContext,
-        lane: str,
-        status: str,
-        *,
-        reason: Optional[str] = None,
-    ) -> Optional[Dict[str, Any]]:
-        if self._suppress_fresh_pipeline:
-            return None
-        if not getattr(ctx, "force_full_fresh_pipeline", False):
-            return None
-        status_map: Dict[str, str] = getattr(ctx, "_fresh_lane_status", {})
-        if not hasattr(ctx, "_fresh_lane_status"):
-            setattr(ctx, "_fresh_lane_status", status_map)
-        previous = status_map.get(lane)
-        if previous == status:
-            return None
-        if status == "started" and previous in {"started", "completed"}:
-            return None
-        if previous == "completed" and status == "failed":
-            return None
-        status_map[lane] = status
-        message = f"{lane.title()} lane {status}"
-        event = EventEmitter.progress(f"fresh_{lane}_{status}", message)
-        data = event.setdefault("data", {})
-        data["lane"] = lane
-        data["status"] = status
-        data["fresh_pipeline"] = True
-        data["reasoning_effort"] = FRESH_RUN_REASONING_EFFORT
-        data["ts"] = datetime.utcnow().isoformat()
-        if reason:
-            data["reason"] = reason
-        telemetry.fresh_pipeline_lane(
-            lane=lane,
-            status=status,
-            session_id=getattr(ctx, "session_id", None),
-            flow=getattr(self, "flow_label", None),
-            reasoning_effort=FRESH_RUN_REASONING_EFFORT,
-        )
-        return event
-
     @staticmethod
     def _apply_revision_metadata(
         event: Dict[str, Any],
@@ -4056,9 +3965,9 @@ class PlannerPipeline:
             lane_for_fresh = "stock"
         if lane_for_fresh:
             if status in {"completed", "complete", "success"}:
-                marker = self._maybe_emit_fresh_lane_event(ctx, lane_for_fresh, "completed")
+                marker = maybe_emit_fresh_lane_event(self, ctx, lane_for_fresh, "completed")
             elif status in {"failed", "error", "cancelled"}:
-                marker = self._maybe_emit_fresh_lane_event(ctx, lane_for_fresh, "failed")
+                marker = maybe_emit_fresh_lane_event(self, ctx, lane_for_fresh, "failed")
             else:
                 marker = None
             if marker:
@@ -4316,44 +4225,6 @@ class PlannerPipeline:
             queue.put_nowait(_TOOL_QUEUE_SENTINEL)
         return flushed
 
-    def _collect_tool_deltas_now(self, tool_state: Optional[Dict[str, Any]], ctx: Optional[PlannerPhaseContext] = None) -> List[Dict[str, Any]]:
-        deltas: List[Dict[str, Any]] = []
-        if not tool_state or not tool_state.get("active", False):
-            return deltas
-        queue: asyncio.Queue = tool_state["queue"]
-        while True:
-            try:
-                event = queue.get_nowait()
-            except QueueEmpty:
-                break
-            if event is _TOOL_QUEUE_SENTINEL:
-                tool_state["active"] = False
-                runtime = tool_state.get("runtime")
-                if isinstance(runtime, ToolParallelRuntime):
-                    runtime.active = False
-                break
-            deltas.append(self._mark_delta_event(event, ctx))
-        return deltas
-
-    async def _drain_tool_state_async(
-        self,
-        tool_state: Optional[Dict[str, Any]],
-        ctx: Optional[PlannerPhaseContext] = None,
-    ) -> AsyncGenerator[Dict[str, Any], None]:
-        if not tool_state or not tool_state.get("active", False):
-            return
-        queue: asyncio.Queue = tool_state["queue"]
-        while tool_state.get("active", False):
-            event = await queue.get()
-            if event is _TOOL_QUEUE_SENTINEL:
-                tool_state["active"] = False
-                runtime = tool_state.get("runtime")
-                if isinstance(runtime, ToolParallelRuntime):
-                    runtime.active = False
-                break
-            yield self._mark_delta_event(event, ctx)
-        for pending in self._collect_tool_deltas_now(tool_state, ctx):
-            yield pending
 
     async def _emit_post_analysis_accessories(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[str, Any], None]:
         mode_config = get_mode_config(ctx.flow_mode)
@@ -4622,15 +4493,15 @@ class PlannerPipeline:
 
 
     async def run_classification(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[str, Any], None]:
-        async for event in _classification_phase(self, ctx):
+        async for event in run_classification_stage(self, ctx):
             yield event
 
     async def run_intent(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[str, Any], None]:
-        async for event in _intent_phase(self, ctx):
+        async for event in run_intent_stage(self, ctx):
             yield event
 
     async def run_clarification(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[str, Any], None]:
-        async for event in _clarification_phase(self, ctx):
+        async for event in run_clarification_stage(self, ctx):
             yield event
 
     async def run_plan(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[str, Any], None]:
@@ -4663,24 +4534,15 @@ class PlannerPipeline:
             "plan": plan_payload,
             "selected_template_id": selected_template_id,
         }
-        receipt = ctx.tool_receipts.get("sql_chain")
-        if receipt:
-            receipt.status = "running"
-            receipt.reused = False
-            if not receipt.input_hash:
-                receipt.input_hash = _hash_payload(input_payload)
-            receipt.attempts = 0
-            receipt.error = None
-            receipt.output_hash = None
-        else:
-            receipt = ToolInvocationReceipt(
-                tool="sql_chain",
-                status="running",
-                attempts=0,
-                input_hash=_hash_payload(input_payload),
-            )
+        receipt = ensure_tool_receipt(
+            ctx,
+            "sql_chain",
+            status="running",
+            reused=False,
+            attempts=0,
+            input_hash=_hash_payload(input_payload),
+        )
         start_time = time.time()
-        ctx.tool_receipts["sql_chain"] = receipt
 
         sql = ""
         llm_used = False
@@ -5194,21 +5056,15 @@ class PlannerPipeline:
             "intent": getattr(intent, "intent_key", None),
             "plan": plan_payload,
         }
-        receipt = ctx.tool_receipts.get("chart_builder")
+        receipt = ensure_tool_receipt(
+            ctx,
+            "chart_builder",
+            status="reused" if ctx.reused_chart else "running",
+            reused=bool(ctx.reused_chart),
+            attempts=0,
+            input_hash=_hash_payload(input_payload),
+        )
         if ctx.reused_chart:
-            if receipt:
-                receipt.status = "reused"
-                receipt.reused = True
-                receipt.error = None
-            else:
-                receipt = ToolInvocationReceipt(
-                    tool="chart_builder",
-                    status="reused",
-                    attempts=0,
-                    input_hash=_hash_payload(input_payload),
-                    reused=True,
-                )
-            ctx.tool_receipts["chart_builder"] = receipt
             cached_payload = compose_chart_ready_payload(ctx)
             if cached_payload:
                 cached_chart = _cached_event(
@@ -5221,21 +5077,7 @@ class PlannerPipeline:
                 )
                 yield self._annotate_revision(cached_chart, ctx)
             return
-        if receipt:
-            receipt.status = "running"
-            receipt.reused = False
-            receipt.error = None
-            if not receipt.input_hash:
-                receipt.input_hash = _hash_payload(input_payload)
-        else:
-            receipt = ToolInvocationReceipt(
-                tool="chart_builder",
-                status="running",
-                attempts=0,
-                input_hash=_hash_payload(input_payload),
-            )
         chart_start = time.time()
-        ctx.tool_receipts["chart_builder"] = receipt
         data = _get_sql_dataset(ctx)
         if not data:
             receipt.status = "skipped"
@@ -5343,23 +5185,17 @@ class PlannerPipeline:
 
     async def run_analysis_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[str, Any], None]:
         mode_config = get_mode_config(ctx.flow_mode)
-        receipt = ctx.tool_receipts.get("analysis_synthesis")
         refresh_mode = getattr(ctx, "analysis_refresh_mode", "full")
+        receipt = ctx.tool_receipts.get("analysis_synthesis")
         if refresh_mode == "light":
-            if receipt:
-                receipt.status = "reused"
-                receipt.reused = True
-                receipt.error = None
-                receipt.metadata["refresh_mode"] = "light"
-            else:
-                receipt = ToolInvocationReceipt(
-                    tool="analysis_synthesis",
-                    status="reused",
-                    attempts=0,
-                    reused=True,
-                    metadata={"refresh_mode": "light"},
-                )
-                ctx.tool_receipts["analysis_synthesis"] = receipt
+            receipt = ensure_tool_receipt(
+                ctx,
+                "analysis_synthesis",
+                status="reused",
+                reused=True,
+                attempts=0,
+                metadata={"refresh_mode": "light"},
+            )
             ctx.reused_analysis = True
             event = _build_reused_analysis_event(self.flow_mode, ctx)
             if event:
@@ -5367,33 +5203,32 @@ class PlannerPipeline:
                 yield self._annotate_revision(event, ctx)
             return
         if ctx.reused_analysis:
-            if receipt:
-                receipt.status = "reused"
-                receipt.reused = True
-                receipt.error = None
-            else:
-                receipt = ToolInvocationReceipt(
-                    tool="analysis_synthesis",
-                    status="reused",
-                    attempts=0,
-                    reused=True,
-                )
-            ctx.tool_receipts["analysis_synthesis"] = receipt
+            receipt = ensure_tool_receipt(
+                ctx,
+                "analysis_synthesis",
+                status="reused",
+                reused=True,
+                attempts=0,
+            )
             return
         if receipt:
-            receipt.status = "running"
-            receipt.reused = False
-            receipt.error = None
-            receipt.output_hash = None
-            receipt.metadata["refresh_mode"] = refresh_mode
-        else:
-            receipt = ToolInvocationReceipt(
-                tool="analysis_synthesis",
+            receipt = ensure_tool_receipt(
+                ctx,
+                "analysis_synthesis",
                 status="running",
+                reused=False,
                 attempts=0,
                 metadata={"refresh_mode": refresh_mode},
             )
-        ctx.tool_receipts["analysis_synthesis"] = receipt
+        else:
+            receipt = ensure_tool_receipt(
+                ctx,
+                "analysis_synthesis",
+                status="running",
+                reused=False,
+                attempts=0,
+                metadata={"refresh_mode": refresh_mode},
+            )
         data = _get_sql_dataset(ctx)
         if data:
             async for dependency_event in ensure_analysis_dependencies(self, ctx, mode_config=mode_config):
@@ -5800,9 +5635,15 @@ class PlannerPipeline:
         is_session_follow_up = bool(getattr(ctx, "session_follow_up", False))
         fresh_run = not is_session_follow_up
         explicit_revision_targets = set(getattr(self, "revision_targets", set()) or set())
-        if fresh_run and ctx.follow_up_route != FollowUpRoute.FULL_PIPELINE:
-            ctx.follow_up_route = FollowUpRoute.FULL_PIPELINE
-        ctx.force_full_fresh_pipeline = fresh_run and not explicit_revision_targets
+        ctx.force_full_fresh_pipeline = (
+            fresh_run and ctx.follow_up_route == FollowUpRoute.FULL_PIPELINE and not explicit_revision_targets
+        )
+        forced_refresh = dict(getattr(ctx, "lane_refresh_required", {}) or {})
+        if fresh_run:
+            # Always refresh market/web on fresh runs; other lanes honor follow-up route.
+            forced_refresh["web"] = True
+            forced_refresh["market"] = True
+            ctx.lane_refresh_required = forced_refresh
         if ctx.force_full_fresh_pipeline:
             ctx.parallelism_enabled = True
             ctx.revision_targets = set()
@@ -5815,10 +5656,6 @@ class PlannerPipeline:
             ctx.reused_web = False
             ctx.reused_stock = False
             ctx.reuse_snapshot_active = False
-            forced_refresh = dict(getattr(ctx, "lane_refresh_required", {}) or {})
-            forced_refresh["web"] = True
-            forced_refresh["market"] = True
-            ctx.lane_refresh_required = forced_refresh
         skip_deterministic = bool(revision_requested)
         ctx.revision_requested = skip_deterministic
         is_revision_follow_up = (
@@ -5912,7 +5749,7 @@ class PlannerPipeline:
                     except Exception:
                         pass
                 tool_state = {"queue": tool_runtime.queue, "active": runtime_has_workers, "runtime": tool_runtime}
-                for tool_event in self._collect_tool_deltas_now(tool_state, ctx):
+                for tool_event in collect_tool_deltas_now(self, tool_state, ctx):
                     yield tool_event
 
             if ctx.force_full_fresh_pipeline:
@@ -5942,6 +5779,17 @@ class PlannerPipeline:
                 stock_only=stock_only_run,
                 follow_up_route=(ctx.follow_up_route.value if getattr(ctx, 'follow_up_route', None) else None),
                 revision_id=getattr(ctx, 'revision_id', None),
+            )
+
+            lane_executors = build_pipeline_lane_executors(
+                self,
+                ctx=ctx,
+                registry=registry,
+                executed=executed,
+                tool_state=tool_state,
+                mode_config=mode_config,
+                run_sql_lane=run_sql_lane,
+                run_chart_lane=run_chart_lane,
             )
 
             if revision_targets:
@@ -5981,26 +5829,19 @@ class PlannerPipeline:
                 yield rebuild_event
                 lane_rebuild_notice_emitted = True
 
-            start_sql = self._maybe_emit_fresh_lane_event(ctx, "sql", "started")
+            start_sql = maybe_emit_fresh_lane_event(self, ctx, "sql", "started")
             if start_sql:
                 yield start_sql
             try:
-                async for event in stream_sql_lane(
-                    self,
-                    ctx=ctx,
-                    registry=registry,
-                    executed=executed,
-                    tool_state=tool_state,
-                    run_sql_lane=run_sql_lane,
-                ):
+                async for event in lane_executors.sql.run():
                     yield event
             except Exception:
-                fail_sql = self._maybe_emit_fresh_lane_event(ctx, "sql", "failed")
+                fail_sql = maybe_emit_fresh_lane_event(self, ctx, "sql", "failed")
                 if fail_sql:
                     yield fail_sql
                 raise
             else:
-                complete_sql = self._maybe_emit_fresh_lane_event(ctx, "sql", "completed")
+                complete_sql = maybe_emit_fresh_lane_event(self, ctx, "sql", "completed")
                 if complete_sql:
                     yield complete_sql
 
@@ -6008,7 +5849,7 @@ class PlannerPipeline:
             if ctx.force_full_fresh_pipeline:
                 accessory_lanes = ("web", "stock")
                 for lane in accessory_lanes:
-                    start_lane = self._maybe_emit_fresh_lane_event(ctx, lane, "started")
+                    start_lane = maybe_emit_fresh_lane_event(self, ctx, lane, "started")
                     if start_lane:
                         yield start_lane
 
@@ -6021,7 +5862,7 @@ class PlannerPipeline:
                     yield event
             except Exception:
                 for lane in accessory_lanes:
-                    fail_lane = self._maybe_emit_fresh_lane_event(ctx, lane, "failed")
+                    fail_lane = maybe_emit_fresh_lane_event(self, ctx, lane, "failed")
                     if fail_lane:
                         yield fail_lane
                 raise
@@ -6029,7 +5870,7 @@ class PlannerPipeline:
             if stock_only_run:
                 ctx.reused_stock = False
                 if tool_state and tool_state.get("active", False):
-                    async for tool_event in self._drain_tool_state_async(tool_state, ctx):
+                    async for tool_event in drain_tool_state_async(self, tool_state, ctx):
                         yield tool_event
                 else:
                     ad_hoc_runtime = self._start_tool_parallelism(
@@ -6039,7 +5880,7 @@ class PlannerPipeline:
                     )
                     ad_hoc_state = {"queue": ad_hoc_runtime.queue, "active": True, "runtime": ad_hoc_runtime}
                     try:
-                        async for tool_event in self._drain_tool_state_async(ad_hoc_state, ctx):
+                        async for tool_event in drain_tool_state_async(self, ad_hoc_state, ctx):
                             yield tool_event
                     finally:
                         await ad_hoc_runtime.close()
@@ -6067,49 +5908,35 @@ class PlannerPipeline:
             if ctx.halted:
                 return
 
-            start_chart = self._maybe_emit_fresh_lane_event(ctx, "chart", "started")
+            start_chart = maybe_emit_fresh_lane_event(self, ctx, "chart", "started")
             if start_chart:
                 yield start_chart
             try:
-                async for event in stream_chart_lane(
-                    self,
-                    ctx=ctx,
-                    registry=registry,
-                    executed=executed,
-                    tool_state=tool_state,
-                    run_chart_lane=run_chart_lane,
-                ):
+                async for event in lane_executors.chart.run():
                     yield event
             except Exception:
-                fail_chart = self._maybe_emit_fresh_lane_event(ctx, "chart", "failed")
+                fail_chart = maybe_emit_fresh_lane_event(self, ctx, "chart", "failed")
                 if fail_chart:
                     yield fail_chart
                 raise
             else:
-                complete_chart = self._maybe_emit_fresh_lane_event(ctx, "chart", "completed")
+                complete_chart = maybe_emit_fresh_lane_event(self, ctx, "chart", "completed")
                 if complete_chart:
                     yield complete_chart
 
-            start_analysis = self._maybe_emit_fresh_lane_event(ctx, "analysis", "started")
+            start_analysis = maybe_emit_fresh_lane_event(self, ctx, "analysis", "started")
             if start_analysis:
                 yield start_analysis
             try:
-                async for event in stream_analysis_lane(
-                    self,
-                    ctx=ctx,
-                    registry=registry,
-                    executed=executed,
-                    tool_state=tool_state,
-                    mode_config=mode_config,
-                ):
+                async for event in lane_executors.analysis.run():
                     yield event
             except Exception:
-                fail_analysis = self._maybe_emit_fresh_lane_event(ctx, "analysis", "failed")
+                fail_analysis = maybe_emit_fresh_lane_event(self, ctx, "analysis", "failed")
                 if fail_analysis:
                     yield fail_analysis
                 raise
             else:
-                complete_analysis = self._maybe_emit_fresh_lane_event(ctx, "analysis", "completed")
+                complete_analysis = maybe_emit_fresh_lane_event(self, ctx, "analysis", "completed")
                 if complete_analysis:
                     yield complete_analysis
         finally:
@@ -6211,6 +6038,20 @@ async def _initialize_context(self, query: str, session_id: Optional[str]) -> Pl
 
 
 async def _classification_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[str, Any], None]:
+    # Reuse previously computed classification/slot resolution when the planner is re-entered
+    # (e.g., revision reruns or retries) to avoid duplicating UI status lines.
+    if ctx.classification is not None and ctx.intent_resolution is not None:
+        yield {
+            "event": "classification_reused",
+            "data": {
+                "message": "Reusing cached classification and slot resolution.",
+                "category": getattr(ctx.classification, "topic_category", None),
+                "confidence": getattr(ctx.classification, "confidence", None),
+                "ts": datetime.utcnow().isoformat(),
+            },
+        }
+        return
+
     timed_emitter = ctx.timed_emitter
     timed_emitter.start_step("classification")
     classification_started_ts = datetime.utcnow().isoformat()

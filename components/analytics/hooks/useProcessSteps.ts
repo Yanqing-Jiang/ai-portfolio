@@ -101,6 +101,23 @@ export const useProcessSteps = (config?: StepConfig) => {
       replaceDetails?: boolean;
     },
   ) => {
+    const dedupeSteps = (steps: ProcessStep[]): ProcessStep[] => {
+      return steps.reduce<ProcessStep[]>((acc, step) => {
+        const idx = acc.findIndex((item) => item.id === step.id);
+        if (idx === -1) {
+          acc.push(step);
+          return acc;
+        }
+        const current = acc[idx];
+        const prefersIncoming =
+          (step.sequence ?? 0) > (current.sequence ?? 0) ||
+          (!!step.timestamp && !current.timestamp) ||
+          (step.status && current.status === 'pending');
+        acc[idx] = prefersIncoming ? step : current;
+        return acc;
+      }, []);
+    };
+
     setProcessSteps((prev) => {
       const existing = prev.find((s) => s.id === stepId);
 
@@ -111,7 +128,7 @@ export const useProcessSteps = (config?: StepConfig) => {
             ? { ...(existing.details ?? {}), ...details }
             : existing.details;
 
-        return prev.map((step) => {
+        const updatedList = prev.map((step) => {
           if (step.id !== stepId) {
             return step;
           }
@@ -187,6 +204,7 @@ export const useProcessSteps = (config?: StepConfig) => {
 
           return updated;
         });
+        return dedupeSteps(updatedList);
       }
 
       const next: ProcessStep[] = [
@@ -234,7 +252,7 @@ export const useProcessSteps = (config?: StepConfig) => {
         return (a.timestamp || '').localeCompare(b.timestamp || '');
       });
 
-      return next;
+      return dedupeSteps(next);
     });
   };
 

@@ -204,7 +204,7 @@ from analytics.core.session_state import (
 )
 from analytics.core.lane_refresh import compute_lane_refresh_requirements, resolve_lane_ttls
 from analytics.core.telemetry import analysis_inputs_missing
-from analytics.routing import FollowUpClassifier, FollowUpRoute
+from analytics.routing import FollowUpRoute
 from .planner_executor import PlannerExecutorFlow
 from .single_agent_tools import SingleAgentController
 from .multi_agent import MultiAgentFlow
@@ -1012,7 +1012,6 @@ async def _stream_revision_fast_path(
     revision_questions: Optional[RevisionQuestionBundle] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     revision_id = uuid.uuid4().hex
-    classifier = FollowUpClassifier()
     lane_readiness = _lane_readiness(snapshot)
     status_step, status_message = _initial_revision_status(lanes)
     status_event = EventEmitter.status(status_step, status_message)
@@ -1238,13 +1237,17 @@ async def _stream_revision_fast_path(
             follow_up_route = FollowUpRoute.CHART_ONLY
         else:
             follow_up_route = FollowUpRoute.NARRATIVE_ONLY
-    revision_guardrail = classifier.build_guardrail_payload(
-        route=follow_up_route,
-        query=combined_query or "",
-        snapshot=snapshot,
-        lane_readiness=lane_readiness,
-        session_follow_up=True,
-    )
+    revision_guardrail = {
+        "id": "agentic_follow_up",
+        "name": "Agentic Follow-Up",
+        "status": "agent_selected",
+        "route": follow_up_route.value,
+        "reason": "agent_runtime_lane_selection",
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "session_follow_up": True,
+        "lanes_ready": sorted([lane for lane, ready in lane_readiness.items() if ready]),
+        "query_hint": combined_query,
+    }
     follow_up_event = {
         "event": "follow_up_route",
         "data": {
@@ -1586,7 +1589,7 @@ async def analytics_memory_workflow(
     # Hard-code agentic runs unless the caller explicitly overrides via the query param.
     selected = flow or DEFAULT_FLOW
     should_instrument = _env_flag("ANALYTICS_MEMORY_INSTRUMENT", default=True)
-    purge_on_complete = _env_flag("SESSION_STATE_PURGE_ON_COMPLETE", default=True)
+    purge_on_complete = _env_flag("SESSION_STATE_PURGE_ON_COMPLETE", default=False)
     reset_on_start = _env_flag("SESSION_STATE_RESET_ON_START", default=True)
     workflow_complete_seen = False
 
@@ -1658,16 +1661,39 @@ async def analytics_memory_workflow(
     baseline_ready = _baseline_ready(snapshot, lane_readiness=lane_readiness)
     session_follow_up = bool(session_id and baseline_ready)
 
-    classifier = FollowUpClassifier()
-    route = classifier.classify(query, snapshot, lane_readiness=lane_readiness)
-    follow_up_guardrail = classifier.build_guardrail_payload(
-        route=route,
-        query=query or "",
-        snapshot=snapshot,
-        lane_readiness=lane_readiness,
-        session_follow_up=session_follow_up,
-    )
-    detected_targets = classifier.detect_revision_targets(query, snapshot, lane_readiness=lane_readiness)
+    if session_follow_up:
+        # Session revisions skip pre-flight classification/intent; route will be refined by agent lanes.
+        route = FollowUpRoute.NARRATIVE_ONLY if analysis_revision_requested or has_analysis else FollowUpRoute.CHART_ONLY if chart_revision_requested else FollowUpRoute.REUSE_SQL
+    else:
+        route = FollowUpRoute.FULL_PIPELINE
+    follow_up_guardrail = {
+        "id": "agentic_follow_up",
+        "name": "Agentic Follow-Up",
+        "status": "agent_selected" if session_follow_up else "default_full_pipeline",
+        "route": route.value,
+        "reason": "agent_runtime_lane_selection" if session_follow_up else "fresh_full_pipeline",
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "session_follow_up": session_follow_up,
+        "lanes_ready": sorted([lane for lane, ready in lane_readiness.items() if ready]),
+        "query_hint": query,
+    }
+    factory = _get_flow_factory(selected)
+    flow_instance = factory()
+    if not session_follow_up and isinstance(flow_instance, MultiAgentFlow):
+        try:
+            planned_route, guardrail_payload = flow_instance.plan_follow_up_route(
+                query=query, lane_readiness=lane_readiness
+            )
+            route = planned_route
+            follow_up_guardrail = guardrail_payload
+        except Exception:  # pragma: no cover - defensive logging
+            logger.debug("Multi-agent follow-up planning failed; defaulting to full pipeline", exc_info=True)
+    if chart_revision_requested:
+        detected_targets = {"chart"}
+    elif analysis_revision_requested:
+        detected_targets = {"analysis"}
+    else:
+        detected_targets = set()
 
     chart_patch = patch_probe if chart_revision_requested else None
     analysis_text = (
@@ -1806,9 +1832,6 @@ async def analytics_memory_workflow(
             return
     analysis_focus = bool(analysis_revision_requested or analysis_text)
 
-    factory = _get_flow_factory(selected)
-    flow_instance = factory()
-
     if hasattr(flow_instance, "set_session_follow_up"):
         try:
             flow_instance.set_session_follow_up(session_follow_up)
@@ -1861,6 +1884,9 @@ async def analytics_memory_workflow(
         and not needs_sql_lane
         and (route != FollowUpRoute.FULL_PIPELINE or explicit_revision)
     )
+    # Prefer the targeted revision fast-path whenever the session is a follow-up with cached artifacts.
+    if session_follow_up and revision_requested and session_id and not needs_sql_lane:
+        should_take_revision = True
 
     lane_refresh_required: Dict[str, bool] = {}
     analysis_refresh_mode = "full"
@@ -2130,7 +2156,7 @@ async def analytics_memory_workflow(
 
     agentic_revision_flag = _resolve_agentic_revision_flag(
         flow_instance,
-        prefer_agentic_revision,
+        prefer_agentic_revision or revision_requested,
         revision_directive,
     )
     if agentic_revision_flag:

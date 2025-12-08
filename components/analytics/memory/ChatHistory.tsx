@@ -258,6 +258,7 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
         {messages.map((message, idx) => {
           const isUser = message.type === 'user';
           const isResult = message.type === 'result';
+          const isRevision = message.revision === true;
           const combinedAnalysis = isResult ? buildCombinedAnalysis(message) : undefined;
           const isAnalysisRevisionResult =
             isResult && message.banner?.route === 'analysis_only';
@@ -436,13 +437,13 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
                             </div>
                           ) : null}
 
-                          {showTradingView && message.stockWidgetConfig && (
+                          {!isRevision && showTradingView && message.stockWidgetConfig && (
                             <div className="rounded-xl border border-gray-700 bg-gray-900/50 p-3 sm:p-4 overflow-hidden">
                               <TradingViewSymbolOverview config={message.stockWidgetConfig} height={480} />
                             </div>
                           )}
 
-                          {resolvedWebSearch ? (
+                          {!isRevision && resolvedWebSearch ? (
                             <CollapsibleSection title="Market Research" defaultOpen={false} className="bg-gray-800/50">
                               <WebSearchCard
                                 result={resolvedWebSearch}
@@ -452,7 +453,7 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
                             </CollapsibleSection>
                           ) : null}
 
-                          {message.sqlQuery && (
+                          {!isRevision && message.sqlQuery && (
                             <CollapsibleSection
                               title="Generated SQL Query"
                               defaultOpen={false}

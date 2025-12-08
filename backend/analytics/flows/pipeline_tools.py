@@ -19,6 +19,11 @@
 #   Called from: Internal to analytics.flows.pipeline_tools
 #   Invokes: analytics.flows.pipeline_tools.PlannerToolDefinition
 #   Why: Keeps analytics.flows.pipeline_tools from duplicating bootstrap registry behavior across flows.
+# Function: executor_factory_map
+#   Role: Maps tool ids to lane executor factories for planner, single-agent, and multi-agent parity.
+#   Called from: analytics.flows.pipeline_tools._bootstrap_registry
+#   Invokes: analytics.flows.lane_executors factory helpers
+#   Why: Binds canonical tool schemas to the shared lane executors.
 # --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
@@ -32,6 +37,14 @@ from analytics.routing import FollowUpRoute
 from analytics.validators import sanitize_for_json
 
 from analytics.tools.definitions import TOOL_REGISTRY, ToolDefinition, ToolId
+from analytics.tools.canonical_registry import get_canonical_registry
+from .schedulers import get_mode_config, FlowMode
+from .lane_executors import (
+    create_analysis_executor,
+    create_chart_executor,
+    create_sql_executor,
+    create_accessory_executor,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -50,6 +63,7 @@ class PlannerToolDefinition:
     name: str
     description: str
     handler: PlannerToolHandler
+    executor_factory: Optional[Callable[..., Any]] = None
     prerequisites: Sequence[str] = field(default_factory=tuple)
     telemetry_step: Optional[str] = None
     inputs: Sequence[str] = field(default_factory=tuple)
@@ -87,6 +101,7 @@ class PlannerToolRegistry:
         ctx: PlannerPhaseContext,
         *,
         executed: Optional[Set[str]] = None,
+        use_executor: bool = True,
         **kwargs: Any,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         if executed is None:
@@ -96,9 +111,40 @@ class PlannerToolRegistry:
 
         definition = self.get(name)
         for prerequisite in definition.prerequisites:
-            async for event in self.invoke(prerequisite, pipeline, ctx, executed=executed, **kwargs):
+            async for event in self.invoke(
+                prerequisite,
+                pipeline,
+                ctx,
+                executed=executed,
+                use_executor=use_executor,
+                **kwargs,
+            ):
                 yield event
         executed.add(name)
+        executor_factory = definition.executor_factory if use_executor else None
+        if executor_factory is not None:
+            mode_config = kwargs.get("mode_config")
+            if mode_config is None:
+                try:
+                    flow_mode = getattr(ctx, "flow_mode", getattr(pipeline, "flow_mode", FlowMode.DIRECT))
+                    mode_config = get_mode_config(flow_mode)
+                except Exception:
+                    mode_config = None
+            factory_kwargs = {
+                "registry": kwargs.get("registry") or self,
+                "executed": executed,
+                "tool_state": kwargs.get("tool_state") or getattr(ctx, "tool_state", None),
+                "mode_config": mode_config,
+                "run_sql_lane": kwargs.get("run_sql_lane", True),
+                "run_chart_lane": kwargs.get("run_chart_lane", True),
+                "reason": kwargs.get("reason"),
+                "source": kwargs.get("source"),
+            }
+            executor = executor_factory(pipeline, ctx, **factory_kwargs)
+            async for event in executor.run():
+                yield event
+            return
+
         async for event in definition.handler(pipeline, ctx, dict(kwargs)):
             yield event
 
@@ -347,18 +393,81 @@ def _bootstrap_registry(registry: PlannerToolRegistry) -> None:
         ToolId.SQL_REGENERATION: _run_sql,
     }
 
+    executor_factory_map: Dict[ToolId, Callable[..., Any]] = {
+        ToolId.SQL_GENERATION: lambda pipeline, ctx, **kw: create_sql_executor(
+            pipeline=pipeline,
+            ctx=ctx,
+            registry=kw.get("registry"),
+            executed=kw.get("executed", set()),
+            tool_state=kw.get("tool_state"),
+            run_sql_lane=kw.get("run_sql_lane", True),
+        ),
+        ToolId.SQL_REGENERATION: lambda pipeline, ctx, **kw: create_sql_executor(
+            pipeline=pipeline,
+            ctx=ctx,
+            registry=kw.get("registry"),
+            executed=kw.get("executed", set()),
+            tool_state=kw.get("tool_state"),
+            run_sql_lane=kw.get("run_sql_lane", True),
+        ),
+        ToolId.CHART_GENERATION: lambda pipeline, ctx, **kw: create_chart_executor(
+            pipeline=pipeline,
+            ctx=ctx,
+            registry=kw.get("registry"),
+            executed=kw.get("executed", set()),
+            tool_state=kw.get("tool_state"),
+            run_chart_lane=kw.get("run_chart_lane", True),
+        ),
+        ToolId.ANALYSIS_GENERATION: lambda pipeline, ctx, **kw: create_analysis_executor(
+            pipeline=pipeline,
+            ctx=ctx,
+            registry=kw.get("registry"),
+            executed=kw.get("executed", set()),
+            tool_state=kw.get("tool_state"),
+            mode_config=kw.get("mode_config"),
+        ),
+        ToolId.WEB_REFRESH: lambda pipeline, ctx, **kw: create_accessory_executor(
+            pipeline=pipeline,
+            ctx=ctx,
+            lane="web",
+            reason=kw.get("reason"),
+            source=kw.get("source"),
+        ),
+        ToolId.MARKET_REFRESH: lambda pipeline, ctx, **kw: create_accessory_executor(
+            pipeline=pipeline,
+            ctx=ctx,
+            lane="market",
+            reason=kw.get("reason"),
+            source=kw.get("source"),
+        ),
+    }
+
+    canonical_registry = get_canonical_registry()
+
     for tool_id, handler in handler_map.items():
-        registry.register(_build_planner_definition(tool_id, handler))
+        executor_factory = executor_factory_map.get(tool_id)
+        if executor_factory is not None:
+            try:
+                canonical_registry.bind_executor_factory(tool_id, executor_factory)
+            except Exception:
+                logger.debug("Failed to bind executor factory for %s", tool_id.value, exc_info=True)
+        registry.register(_build_planner_definition(tool_id, handler, executor_factory=executor_factory))
 
     _assert_tool_parity(registry)
 
 
-def _build_planner_definition(tool_id: ToolId, handler: PlannerToolHandler) -> PlannerToolDefinition:
+def _build_planner_definition(
+    tool_id: ToolId,
+    handler: PlannerToolHandler,
+    *,
+    executor_factory: Optional[Callable[..., Any]] = None,
+) -> PlannerToolDefinition:
     canonical: ToolDefinition = TOOL_REGISTRY[tool_id]
     return PlannerToolDefinition(
         name=canonical.name,
         description=canonical.description,
         handler=handler,
+        executor_factory=executor_factory,
         prerequisites=tuple(dep.value for dep in canonical.depends_on),
         telemetry_step=canonical.telemetry_step,
         inputs=tuple(canonical.inputs),

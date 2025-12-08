@@ -84,16 +84,6 @@
 #   Called from: Internal to analytics.flows.multi_agent
 #   Invokes: analytics.flows.multi_agent._task_status, analytics.flows.orchestrator.AgentResult
 #   Why: Keeps analytics.flows.multi_agent from duplicating chart agent behavior across flows.
-# Function: _market_agent
-#   Role: Handles market agent logic for analytics.flows.multi_agent.
-#   Called from: tests.analytics.test_multi_agent_flow
-#   Invokes: analytics.flows.multi_agent._task_status, analytics.flows.orchestrator.AgentResult, analytics.core.telemetry.policy_decision, asyncio.wait_for
-#   Why: Keeps analytics.flows.multi_agent from duplicating market agent behavior across flows.
-# Function: _web_research_agent
-#   Role: Handles web research agent logic for analytics.flows.multi_agent.
-#   Called from: tests.analytics.test_multi_agent_flow, tests.analytics.test_web_research
-#   Invokes: analytics.flows.multi_agent._task_status, analytics.core.session_state.get_session_state_repository, analytics.flows.orchestrator.AgentResult, analytics.flows.planner_executor._evaluate_latency_guardrail, +2 more
-#   Why: Keeps analytics.flows.multi_agent from duplicating web research agent behavior across flows.
 # Function: _build_default_agent_registry
 #   Role: Handles build default agent registry logic for analytics.flows.multi_agent.
 #   Called from: Internal to analytics.flows.multi_agent
@@ -149,6 +139,10 @@ from typing import Any, AsyncGenerator, Dict, Iterable, List, Mapping, Optional,
 
 from pydantic import ValidationError
 
+from agents import Agent
+from agents.tool import FunctionTool
+from agents.tool_context import ToolContext
+
 from analytics.core.session_state import SessionStateSnapshot, get_session_state_repository
 from analytics.core.cache import get_cache_service
 from analytics.core.events import EventEmitter
@@ -161,6 +155,12 @@ from analytics.core.telemetry import (
     backpressure_event,
     tool_iteration as log_tool_iteration,
     policy_decision,
+)
+from analytics.tools.canonical_registry import (
+    FlowMode as ToolFlowMode,
+    ToolId as CanonicalToolId,
+    ToolSchema,
+    get_canonical_registry,
 )
 from analytics.accessory_receipts import (
     enrich_accessory_payload,
@@ -176,7 +176,7 @@ TERMINAL_EVENTS: Set[str] = {
 from analytics.policies.delegation_policy import DelegationPolicy
 from analytics.services.polygon import PolygonMarketDataClient, PolygonError, fetch_daily_snapshot
 from analytics.services.response_search import ResponseSearchError, perform_response_search
-from analytics.routing import FollowUpRoute
+from analytics.routing import FollowUpRoute, FOLLOW_UP_BANNERS, route_requires_market_web
 from analytics.services.revision_focus import RevisionQuestionBundle
 from analytics.validators import CohesiveResultValidationError, CohesiveResultValidator, sanitize_for_json
 from analytics.agent_orchestrator.agent_runtime import AgentRuntime, AgentRuntimeConfig
@@ -186,7 +186,6 @@ from .planner_executor import (
     PlannerExecutorFlow,
     PlannerPhaseContext,
     run_planner_executor,
-    FOLLOW_UP_BANNERS,
     _build_planner_result_payload,
     _build_reused_analysis_event,
     _evaluate_latency_guardrail,
@@ -218,11 +217,12 @@ from .sequencer import (
     LANE_STATUS_PENDING,
     LANE_STATUS_SKIPPED,
 )
-from .supervisor_orchestrator import (
-    SupervisorSpecialistConfig,
-    build_supervisor_bundle,
+from analytics.tools.canonical_registry import (
+    FlowMode as ToolFlowMode,
+    ToolId as CanonicalToolId,
+    ToolSchema,
+    get_canonical_registry,
 )
-from .supervisor_v2 import SupervisorPoolsFlow
 from .planner import (
     annotate_revision_event,
     apply_revision_plan,
@@ -296,7 +296,6 @@ from .orchestrator_types import (
     AgentExecutionOrchestrator,
     AgentRunContext,
     AgentResult,
-    AgentSpec,
     AgentTask,
     OrchestratorContext,
 )
@@ -366,6 +365,13 @@ class _MultiAgentHooks(AnalyticsFlowHooks):
         if False:
             yield {}
         name = event.get("event")
+        # Guard against premature workflow_complete emitted before agent orchestration.
+        if (
+            name == "workflow_complete"
+            and not self._flow._orchestrated
+            and not self._flow._agent_turn_observed
+        ):
+            return
         if name == "session_started":
             data = event.get("data") or {}
             self._active_session = data.get("session_id") or ctx.get("session_id")
@@ -905,592 +911,91 @@ def _create_planner_bundle(
     return sanitized_bundle
 
 
+# Legacy agent stubs (_market_agent, _web_research_agent) removed.
+# Supervisor AgentRuntime handles market/web refresh via lane executors.
 
 
+def _lane_sequence_for_route(route: FollowUpRoute, *, require_market_web: bool = True) -> List[str]:
+    """
+    Determine the ordered lane list for a given follow-up route.
 
-async def _planner_agent(context: AgentRunContext) -> AgentResult:
-    shared = context.shared
-    planner_ctx = shared.setdefault('planner', {})
-    sql_ctx = shared.setdefault('sql', {})
-    chart_ctx = shared.setdefault('chart', {})
-    analysis_ctx = shared.setdefault('analysis', {})
-    market_ctx = shared.setdefault('market', {})
-
-    shared.setdefault('query', context.query)
-
-    plan = _derive_tasks(
-        planner_ctx,
-        sql_ctx,
-        analysis_ctx,
-        chart_ctx,
-        market_ctx,
-        shared.get('query', context.query),
-        web_ctx=shared.setdefault('web', {}),
-        revision_completed=shared.get('revision_completed_lanes'),
-        lane_refresh_required=shared.get('lane_refresh_required'),
-    )
-    tasks = plan.to_dicts()
-    bundle = _create_planner_bundle(
-        context.session_id,
-        context.query,
-        planner_ctx,
-        sql_ctx,
-        chart_ctx,
-        analysis_ctx,
-        tasks,
-        tool_manifest=shared.get('tool_manifest'),
-        tool_results=shared.get('tool_results'),
-        stock_widget=shared.get('stock_widget'),
-        web_context=shared.get('web'),
-    )
-    agent_handoff(
-        role='planner_agent',
-        status='planned',
-        metadata={'tasks': tasks},
-        session_id=context.session_id,
-        flow=shared.get('_meta', {}).get('flow_label'),
-    )
-    planner_ctx['tasks'] = tasks
-    planner_ctx['task_plan'] = tasks
-    planner_ctx['bundle'] = bundle
-    return AgentResult(
-        name='planner',
-        output={
-            'status': 'planned',
-            'tasks': tasks,
-            'task_plan': tasks,
-            'bundle_id': bundle['id'],
-            'bundle': bundle,
-            'planner_result': planner_ctx.get('result'),
-        },
-    )
-
-
-
-async def _query_agent(context: AgentRunContext) -> AgentResult:
-    planner_output = context.dependencies.get('planner_phase')
-    tasks = planner_output.output.get('tasks', []) if planner_output else []
-    status = _task_status(tasks, 'query')
-    sql_ctx = context.shared.get('sql', {})
-    attempts = sql_ctx.get('attempts') or []
-    last_attempt = attempts[-1] if attempts else None
-    summary_attempts: List[Dict[str, Any]] = []
-    for attempt in attempts[-3:]:
-        summary_attempts.append(
-            {
-                'attempt': attempt.get('attempt'),
-                'source': attempt.get('source'),
-                'status': attempt.get('status'),
-                'error_code': attempt.get('error_code'),
-                'error_detail': attempt.get('error_detail'),
-            }
-        )
-    output = {
-        'status': status,
-        'attempt_count': len(attempts),
-        'summary': summary_attempts,
-    }
-    if last_attempt:
-        output['last_status'] = last_attempt.get('status')
-        output['last_error_code'] = last_attempt.get('error_code')
-    return AgentResult(name='query', output=output)
-
-
-async def _analyst_agent(context: AgentRunContext) -> AgentResult:
-    planner_output = context.dependencies.get("planner_phase")
-    tasks = planner_output.output.get("tasks", []) if planner_output else []
-    status = _task_status(tasks, "analyst")
-    analysis_ctx = context.shared.get("analysis", {})
-    final_text: Optional[str] = analysis_ctx.get("final")
-    summary = None
-    if status in {"run", "reuse"} and final_text:
-        summary = final_text
-        if len(summary) > 280:
-            summary = summary[:277].rstrip() + "..."
-    return AgentResult(
-        name="analyst",
-        output={
-            "status": status,
-            "summary": summary,
-            "word_count": len(final_text.split()) if final_text else 0,
-        },
-    )
-
-
-async def _chart_agent(context: AgentRunContext) -> AgentResult:
-    planner_output = context.dependencies.get("planner_phase")
-    tasks = planner_output.output.get("tasks", []) if planner_output else []
-    status = _task_status(tasks, "chart")
-    chart_ctx = context.shared.get("chart", {})
-    summary = chart_ctx.get("spec_summary") or {}
-    spec_id = chart_ctx.get("spec_id")
-    payload: Dict[str, Any] = {"status": status}
-    if summary or spec_id:
-        payload["chart"] = {
-            "chart_type": summary.get("chart_type"),
-            "series_count": summary.get("series_count"),
-            "spec_id": spec_id,
-        }
-    return AgentResult(name="chart", output=payload)
-
-
-async def _market_agent(context: AgentRunContext) -> AgentResult:
-    lane_flags: Dict[str, bool] = {}
-    shared_flags = context.shared.get('lane_refresh_required')
-    if isinstance(shared_flags, Mapping):
-        lane_flags.update({str(k).strip().lower(): bool(v) for k, v in shared_flags.items()})
-    ctx_flags = getattr(context, 'lane_refresh_required', None)
-    if isinstance(ctx_flags, Mapping):
-        lane_flags.update({str(k).strip().lower(): bool(v) for k, v in ctx_flags.items()})
-    if lane_flags.get('market') is False:
-        tickers = context.shared.get('planner', {}).get('tickers', [])
-        return AgentResult(
-            name='market',
-            output={
-                'status': 'skip',
-                'tickers': tickers,
-                'refresh': False,
-            },
-        )
-
-    gate = context.shared.get('_runtime', {}).get('accessories_ready')
-    if isinstance(gate, asyncio.Event) and not gate.is_set():
-        try:
-            await asyncio.wait_for(gate.wait(), 1.5)
-        except asyncio.TimeoutError:
-            logger.debug("Market agent proceeding without accessories_ready signal after timeout.")
-    planner_output = context.dependencies.get('planner_phase')
-    tasks = planner_output.output.get('tasks', []) if planner_output else []
-    status = _task_status(tasks, 'market')
-    tickers = context.shared.get('planner', {}).get('tickers', [])
-    market_ctx = context.shared.setdefault('market', {})
-    runtime = context.shared.get('_runtime', {})
-    snapshot_payload: Optional[Dict[str, Any]] = market_ctx.get('snapshot')
-    error_reason: Optional[str] = None
-    error_code: Optional[str] = None
-    receipts = context.shared.get('tool_receipts') or {}
-    receipt_candidates = [
-        receipts.get('market_question_a'),
-        receipts.get('market_question_b'),
-        receipts.get('stock_tracker'),
-    ]
-    if status == 'run' and any(
-        MultiAgentFlow._receipt_is_fresh(receipt, MultiAgentFlow.RECEIPT_TTL_SECONDS)
-        for receipt in receipt_candidates
-    ):
-        status = 'reuse'
-        market_ctx.setdefault('source', market_ctx.get('source') or 'cached')
-
-    if status == 'run' and tickers:
-        fetcher = runtime.get('market_fetcher')
-        client = runtime.get('market_client')
-        retries = market_ctx.get('retry_count', 0)
-        planner_confidence = float(context.shared.get('planner', {}).get('confidence') or 0.0)
-        flow_label = context.shared.get('_meta', {}).get('flow_label')
-        if retries:
-            threshold = 0.55 if retries == 1 else 0.7
-            allowed = planner_confidence >= threshold
-            policy_decision(
-                policy='market_refresh_retry',
-                score=planner_confidence,
-                threshold=threshold,
-                action='allow_retry' if allowed else 'skip_retry',
-                reason=f'{retries} prior retries',
-                session_id=context.session_id,
-                flow=flow_label,
-                metadata={'retries': retries, 'tickers': tickers},
-            )
-            if not allowed:
-                status = 'skip'
-                error_reason = 'market refresh blocked by policy'
-                error_code = 'POLICY_BLOCKED'
-                market_ctx['error'] = error_reason
-                market_ctx['error_code'] = error_code
-                market_ctx['policy_blocked'] = True
-                output = {
-                    'status': status,
-                    'tickers': tickers,
-                    'refresh': False,
-                    'error': error_reason,
-                    'error_code': error_code,
-                    'policy_score': planner_confidence,
-                    'policy_threshold': threshold,
-                }
-                return AgentResult(name='market', output=output)
-        if fetcher and client and getattr(client, 'is_configured', False):
-            try:
-                snapshot = await fetcher(tickers[0], client=client)
-                bars = snapshot.bars[-30:]
-                snapshot_payload = {
-                    'symbol': snapshot.symbol,
-                    'latest_close': snapshot.latest_close,
-                    'change_percent': snapshot.change_percent,
-                    'bars': [{'time': bar.time, 'close': bar.close} for bar in bars],
-                }
-                market_ctx['snapshot'] = snapshot_payload
-                market_ctx['source'] = 'market_agent'
-                market_ctx['retry_count'] = 0
-                market_ctx.pop('error', None)
-                market_ctx.pop('error_code', None)
-            except Exception as exc:
-                error_reason = str(exc)
-                error_code = 'POLYGON_API_ERROR' if isinstance(exc, PolygonError) else 'MARKET_FETCH_ERROR'
-                market_ctx['error'] = error_reason
-                market_ctx['error_code'] = error_code
-                market_ctx['retry_count'] = retries + 1
-        else:
-            error_reason = 'polygon_client_unconfigured'
-            error_code = 'POLYGON_CLIENT_UNCONFIGURED'
-            market_ctx['error'] = error_reason
-            market_ctx['error_code'] = error_code
-            market_ctx['retry_count'] = retries + 1
-    elif status == 'reuse':
-        snapshot_payload = market_ctx.get('snapshot')
-        error_code = market_ctx.get('error_code')
-        error_reason = market_ctx.get('error')
+    Fresh runs default to the full pipeline; reuse/stock/chart/narrative routes
+    trim lanes accordingly. Market/web can be toggled via require_market_web.
+    """
+    if route == FollowUpRoute.REUSE_SQL:
+        lanes = ["chart", "analysis"]
+        if require_market_web:
+            lanes.extend(["market", "web"])
+    elif route == FollowUpRoute.STOCK_ONLY:
+        lanes = ["market"]
+    elif route == FollowUpRoute.CHART_ONLY:
+        lanes = ["chart"]
+        if require_market_web:
+            lanes.extend(["market", "web"])
+    elif route == FollowUpRoute.NARRATIVE_ONLY:
+        lanes = ["analysis"]
+        if require_market_web:
+            lanes.extend(["market", "web"])
     else:
-        market_ctx.pop('snapshot', None)
-        market_ctx.pop('error', None)
-        market_ctx.pop('error_code', None)
-        market_ctx.pop('source', None)
-        snapshot_payload = None
-    market_ctx['status'] = status
+        lanes = ["sql", "chart", "analysis"]
+        if require_market_web:
+            lanes.extend(["market", "web"])
 
-    output: Dict[str, Any] = {
-        'status': status,
-        'tickers': tickers,
-        'refresh': status == 'run',
-    }
-    if snapshot_payload:
-        output['insights'] = snapshot_payload
-    if market_ctx.get('source'):
-        output['source'] = market_ctx.get('source')
-    if error_reason:
-        output['error'] = error_reason
-        output['error_code'] = error_code or 'UNKNOWN_MARKET_ERROR'
-    return AgentResult(name='market', output=output)
+    ordered: List[str] = []
+    seen: Set[str] = set()
+    for lane in lanes:
+        if lane in seen:
+            continue
+        ordered.append(lane)
+        seen.add(lane)
+    return ordered
 
 
+def _build_plan_from_lanes(lanes: Sequence[str]) -> List[AgentTask]:
+    """
+    Build the AgentTask DAG for the requested lanes.
 
+    Planner runs first; chart depends on sql when present; analysis depends on
+    any upstream lanes that produce artifacts (chart/market/web).
+    """
+    lane_set = {str(lane).strip().lower() for lane in lanes if isinstance(lane, str)}
+    has_sql = "sql" in lane_set
+    has_chart = "chart" in lane_set
+    has_market = "market" in lane_set
+    has_web = "web" in lane_set
+    has_analysis = "analysis" in lane_set
 
-
-
-async def _web_research_agent(context: AgentRunContext) -> AgentResult:
-    gate = context.shared.get('_runtime', {}).get('accessories_ready')
-    if isinstance(gate, asyncio.Event) and not gate.is_set():
-        try:
-            await asyncio.wait_for(gate.wait(), 1.5)
-        except asyncio.TimeoutError:
-            logger.debug("Web research agent proceeding without accessories_ready signal after timeout.")
-    web_ctx = context.shared.setdefault('web', {})
-    query = context.shared.get('query', context.query)
-    session_id = context.session_id
-    lane_flags: Dict[str, bool] = {}
-    shared_flags = context.shared.get('lane_refresh_required')
-    if isinstance(shared_flags, Mapping):
-        lane_flags.update({str(k).strip().lower(): bool(v) for k, v in shared_flags.items() if k})
-    ctx_flags = getattr(context, 'lane_refresh_required', None)
-    if isinstance(ctx_flags, Mapping):
-        lane_flags.update({str(k).strip().lower(): bool(v) for k, v in ctx_flags.items() if k})
-    force_refresh = lane_flags.get('web') is True
-    force_skip = lane_flags.get('web') is False
-
-    planner_output = context.dependencies.get('planner_phase')
-    tasks = planner_output.output.get('tasks', []) if planner_output else []
-    status_hint = _task_status(tasks, 'web_research')
-    receipts = context.shared.get('tool_receipts') or {}
-    receipt = receipts.get('web_retriever')
-    attempts_meta: List[Dict[str, Any]] = []
-
-    repository = get_session_state_repository()
-    snapshot = await repository.load(session_id) if session_id else None
-    cached_payload: Optional[Dict[str, Any]] = None
-    manifest: Optional[Dict[str, Any]] = None
-    lane_age_seconds: Optional[float] = None
-    if snapshot:
-        try:
-            snapshot.refresh_analysis_inputs_manifest(persist=False)
-        except Exception:
-            pass
-        manifest_candidate = snapshot.analysis_inputs_manifest if isinstance(snapshot.analysis_inputs_manifest, dict) else None
-        if manifest_candidate:
-            manifest = manifest_candidate
-        lane_age_seconds = snapshot.lane_age_seconds("web")
-        cache = snapshot.tool_cache.get('web_search')
-        if cache and str(cache.get('query') or '').strip().lower() == query.strip().lower():
-            cached_payload = cache
-
-    receipt_fresh = MultiAgentFlow._receipt_is_fresh(receipt, MultiAgentFlow.RECEIPT_TTL_SECONDS)
-    heuristic_refresh = _needs_web_refresh(
-        query,
-        web_ctx,
-        manifest=manifest,
-        lane_age_seconds=lane_age_seconds,
-    )
-    if force_refresh and not heuristic_refresh:
-        logger.info(
-            "multi_agent.web_refresh_skipped",
-            extra={
-                "session_id": session_id,
-                "reason": "heuristic_declined_refresh",
-                "lane_age_seconds": lane_age_seconds,
-                "status_hint": status_hint,
-            },
+    tasks: List[AgentTask] = [AgentTask(name="planner_phase", agent="planner")]
+    if has_sql:
+        tasks.append(AgentTask(name="query_phase", agent="query", depends_on=("planner_phase",)))
+    if has_chart:
+        chart_deps: List[str] = []
+        if has_sql:
+            chart_deps.append("query_phase")
+        else:
+            chart_deps.append("planner_phase")
+        tasks.append(AgentTask(name="chart_phase", agent="chart", depends_on=tuple(chart_deps)))
+    if has_market:
+        tasks.append(AgentTask(name="market_phase", agent="market", depends_on=("planner_phase",)))
+    if has_web:
+        tasks.append(
+            AgentTask(name="web_research_phase", agent="web_research", depends_on=("planner_phase",))
         )
-        heuristic_refresh = True
-    if force_skip:
-        heuristic_refresh = False
-
-    if force_skip or (status_hint == 'skip' and not heuristic_refresh and not force_refresh):
-        web_ctx['status'] = 'skip'
-        web_ctx.pop('error', None)
-        web_ctx['attempts'] = []
-        return AgentResult(
-            name='web_research',
-            output={
-                'status': 'skip',
-                'from_cache': False,
-                'attempts': [],
-                'attempt_count': 0,
-            },
-        )
-
-    should_reuse = False
-    if not heuristic_refresh and not force_refresh:
-        should_reuse = (status_hint != 'run') or receipt_fresh or bool(cached_payload)
-
-    if should_reuse:
-        reuse_source: Dict[str, Any] = {}
-        if isinstance(cached_payload, dict):
-            reuse_source = copy.deepcopy(cached_payload)
-        elif web_ctx:
-            reuse_source = dict(web_ctx)
-        if reuse_source:
-            web_ctx.update(reuse_source)
-            web_ctx['ready'] = True
-            web_ctx['from_cache'] = True
-            attempts_meta = list(reuse_source.get('attempts', []))
-            web_ctx['attempts'] = attempts_meta
-            web_ctx.setdefault('source', web_ctx.get('source') or 'cached')
-            web_ctx['status'] = 'reuse'
-            return AgentResult(
-                name='web_research',
-                output={
-                    'status': 'reuse',
-                    'summary': web_ctx.get('summary'),
-                    'snippets': web_ctx.get('snippets'),
-                    'from_cache': True,
-                    'attempts': attempts_meta,
-                    'attempt_count': len(attempts_meta),
-                },
-            )
-
-    last_error: Optional[Exception] = None
-    search_result = None
-    for attempt in range(1, WEB_SEARCH_MAX_ATTEMPTS + 1):
-        try:
-            search_result = await perform_response_search(
-                query,
-                session_id=session_id,
-            )
-            attempts_meta.append({
-                'attempt': attempt,
-                'status': 'success',
-                'latency_ms': search_result.latency_ms,
-            })
-            break
-        except ResponseSearchError as exc:
-            last_error = exc
-            attempts_meta.append({
-                'attempt': attempt,
-                'status': 'error',
-                'error': str(exc),
-            })
-            if attempt >= WEB_SEARCH_MAX_ATTEMPTS:
-                web_ctx['error'] = str(exc)
-                web_ctx['attempts'] = attempts_meta
-                return AgentResult(
-                    name='web_research',
-                    output={
-                        'status': 'error',
-                        'error': str(exc),
-                        'attempts': attempts_meta,
-                        'attempt_count': len(attempts_meta),
-                    },
-                )
-            await asyncio.sleep(min(WEB_SEARCH_BACKOFF_SECONDS * attempt, 2.0))
-
-    if not search_result:
-        error_message = str(last_error) if last_error else 'web_search_failed'
-        web_ctx['error'] = error_message
-        web_ctx['attempts'] = attempts_meta
-        return AgentResult(
-            name='web_research',
-            output={
-                'status': 'error',
-                'error': error_message,
-                'attempts': attempts_meta,
-                'attempt_count': len(attempts_meta),
-            },
-        )
-
-    payload = search_result.to_payload()
-    payload['query'] = query
-    payload['ready'] = True
-    payload['from_cache'] = False
-    payload['attempts'] = attempts_meta
-    questions_payload = getattr(search_result, "questions", None)
-    if snapshot and isinstance(questions_payload, Mapping):
-        try:
-            snapshot.record_web_research_questions(questions_payload)
-        except Exception:
-            logger.debug("Failed to persist multi-agent web question bundle", exc_info=True)
-    web_ctx.update(payload)
-    web_ctx['status'] = 'run'
-
-    topic_latencies = [
-        topic.latency_ms
-        for topic in (search_result.topics or [])
-        if topic.latency_ms is not None
-    ]
-
-    latency_stats: Optional[Dict[str, Any]] = None
-    if search_result.latency_ms is not None or topic_latencies:
-        latency_stats = {
-            'total_ms': search_result.latency_ms,
-            'per_topic_ms': topic_latencies,
-            'samples': len(topic_latencies) or None,
-        }
-        if topic_latencies:
-            p50 = statistics.median(topic_latencies)
-            latency_stats.update(
-                {
-                    'p50_ms': int(round(p50)),
-                    'max_ms': max(topic_latencies),
-                    'min_ms': min(topic_latencies),
-                }
-            )
-
-    guardrail_payload: Optional[Dict[str, Any]] = None
-    if latency_stats:
-        payload['latency_stats'] = latency_stats
-        guardrail_payload = _evaluate_latency_guardrail(
-            {
-                "total_ms": latency_stats.get("total_ms"),
-                "p50_ms": latency_stats.get("p50_ms"),
-                "p95_ms": latency_stats.get("p95_ms") or latency_stats.get("max_ms"),
-                "max_ms": latency_stats.get("max_ms"),
-                "min_ms": latency_stats.get("min_ms"),
-                "samples": latency_stats.get("samples"),
-            }
-        )
-        if guardrail_payload:
-            payload['latency_guardrail'] = guardrail_payload
-
-    if snapshot:
-        snapshot.record_tool_result('web_search', payload)
-        await repository.save(snapshot)
-
-    web_ctx['attempts'] = attempts_meta
-    if latency_stats:
-        web_ctx['latency_stats'] = latency_stats
-    if guardrail_payload:
-        web_ctx['latency_guardrail'] = guardrail_payload
-
-    metrics: Dict[str, Any] = {'latency_ms': search_result.latency_ms}
-    if topic_latencies:
-        median_latency = statistics.median(topic_latencies)
-        metrics.update(
-            {
-                'latency_p50_ms': int(round(median_latency)),
-                'latency_max_ms': max(topic_latencies),
-                'latency_min_ms': min(topic_latencies),
-                'latency_samples': len(topic_latencies),
-            }
-        )
-    if guardrail_payload:
-        metrics['latency_guardrail_status'] = guardrail_payload['status']
-
-    return AgentResult(
-        name='web_research',
-        output={
-            'status': 'run',
-            'summary': payload.get('summary'),
-            'snippets': payload.get('snippets'),
-            'search_id': payload.get('search_id'),
-            'from_cache': False,
-            'attempts': attempts_meta,
-            'attempt_count': len(attempts_meta),
-            'latency_guardrail': guardrail_payload,
-        },
-        metrics=metrics,
-    )
-
-
-
-def _build_default_agent_registry() -> Dict[str, AgentSpec]:
-    return {
-        'planner': AgentSpec(
-            name='planner',
-            system_prompt=SUPERVISOR_AGENT_SYSTEM_PROMPTS['planner'],
-            capabilities=('task_planning', 'sql_routing'),
-            latency_budget_ms=400,
-            entrypoint=_planner_agent,
-        ),
-        'query': AgentSpec(
-            name='query',
-            system_prompt=SUPERVISOR_AGENT_SYSTEM_PROMPTS['query'],
-            capabilities=('sql_diagnostics',),
-            latency_budget_ms=300,
-            entrypoint=_query_agent,
-        ),
-        'analyst': AgentSpec(
-            name='analyst',
-            system_prompt=SUPERVISOR_AGENT_SYSTEM_PROMPTS['analyst'],
-            capabilities=('narrative', 'context_blending'),
-            latency_budget_ms=500,
-            entrypoint=_analyst_agent,
-        ),
-        'chart': AgentSpec(
-            name='chart',
-            system_prompt=SUPERVISOR_AGENT_SYSTEM_PROMPTS['chart'],
-            capabilities=('visualization', 'vega_lite'),
-            latency_budget_ms=400,
-            entrypoint=_chart_agent,
-        ),
-        'market': AgentSpec(
-            name='market',
-            system_prompt=SUPERVISOR_AGENT_SYSTEM_PROMPTS['market'],
-            capabilities=('market_data', 'ticker_updates'),
-            latency_budget_ms=1500,
-            entrypoint=_market_agent,
-        ),
-        'web_research': AgentSpec(
-            name='web_research',
-            system_prompt=SUPERVISOR_AGENT_SYSTEM_PROMPTS['web_research'],
-            capabilities=('web_search', 'context_enrichment'),
-            latency_budget_ms=2000,
-            entrypoint=_web_research_agent,
-        ),
-    }
-
-
-
+    if has_analysis:
+        analysis_deps: List[str] = []
+        if has_chart:
+            analysis_deps.append("chart_phase")
+        if has_market:
+            analysis_deps.append("market_phase")
+        if has_web:
+            analysis_deps.append("web_research_phase")
+        tasks.append(AgentTask(name="analyst_phase", agent="analyst", depends_on=tuple(analysis_deps)))
+    return tasks
 
 
 def _build_default_plan() -> List[AgentTask]:
-    return [
-        AgentTask(name='planner_phase', agent='planner'),
-        AgentTask(name='query_phase', agent='query', depends_on=('planner_phase',)),
-        AgentTask(name='market_phase', agent='market', depends_on=('planner_phase',)),
-        AgentTask(name='web_research_phase', agent='web_research', depends_on=('planner_phase',)),
-        AgentTask(name='chart_phase', agent='chart', depends_on=('query_phase',)),
-        AgentTask(
-            name='analyst_phase',
-            agent='analyst',
-            depends_on=('chart_phase', 'market_phase', 'web_research_phase'),
-        ),
-    ]
+    lanes = _lane_sequence_for_route(FollowUpRoute.FULL_PIPELINE, require_market_web=True)
+    return _build_plan_from_lanes(lanes)
 
 
 
@@ -1543,7 +1048,7 @@ class MultiAgentFlow:
         "analysis_generation": "insight_reviewer",
         "analysis_revision": "insight_reviewer",
         "web_refresh": "insight_reviewer",
-        "market_refresh": "market_agent",
+        "market_refresh": "market_refresh",  # Tool-based naming (agent stub removed)
     }
 
     AGENT_END_EVENTS = {
@@ -1560,7 +1065,7 @@ class MultiAgentFlow:
         "analysis_revision": "insight_reviewer",
         "analysis_complete": "insight_reviewer",
         "web_ready": "insight_reviewer",
-        "stock_ready": "market_agent",
+        "stock_ready": "market_refresh",  # Tool-based naming (agent stub removed)
     }
 
     TOOL_METADATA_STEP_MAP = {
@@ -1594,8 +1099,11 @@ class MultiAgentFlow:
         "stock_ready": "market_refresh",
     }
 
+    # Maps role names to tool registry names for metadata lookups.
+    # Legacy agent names kept for backward compatibility; market_agent/web_research_agent removed.
     TOOL_METADATA_ROLE_MAP = {
-        "planner_agent": "plan_generation",
+        "plan_generation": "plan_generation",
+        "planner_agent": "plan_generation",  # Legacy alias
         "intent_analyst": "intent_detection",
         "user_liaison": "clarification",
         "sql_specialist": "sql_generation",
@@ -1605,32 +1113,37 @@ class MultiAgentFlow:
         "analyst_agent": "analysis_generation",
         "insight_reviewer": "analysis_generation",
         "query_agent": "sql_generation",
-        "market_agent": "chart_generation",
+        "market_refresh": "market_refresh",  # Tool-based naming
+        "web_refresh": "web_refresh",  # Tool-based naming
     }
 
+    # Maps execution phases to tool names for orchestration.
+    # Updated to use tool-based naming; legacy agent stubs removed.
     ORCHESTRATION_ROLES: Dict[str, str] = {
-        "planner_phase": "planner_agent",
-        "query_phase": "sql_specialist",
-        "chart_phase": "viz_designer",
-        "market_phase": "market_agent",
-        "web_research_phase": "web_research_agent",
-        "analyst_phase": "insight_reviewer",
+        "planner_phase": "plan_generation",
+        "query_phase": "sql_generation",
+        "chart_phase": "chart_generation",
+        "market_phase": "market_refresh",
+        "web_research_phase": "web_refresh",
+        "analyst_phase": "analysis_generation",
     }
+    # Maps tool names to parallel execution groups.
     ROLE_PARALLEL_GROUPS: Dict[str, str] = {
-        "planner_agent": "supervisor_intent",
-        "sql_specialist": "sql_web",
-        "viz_designer": "chart_parallel",
-        "market_agent": "sql_web",
-        "web_research_agent": "sql_web",
-        "insight_reviewer": "supervisor_summary",
+        "plan_generation": "supervisor_intent",
+        "sql_generation": "sql_web",
+        "chart_generation": "chart_parallel",
+        "market_refresh": "sql_web",
+        "web_refresh": "sql_web",
+        "analysis_generation": "supervisor_summary",
     }
+    # Maps tool names to lane identifiers.
     ROLE_LANES: Dict[str, str] = {
-        "planner_agent": "intent",
-        "sql_specialist": "sql",
-        "viz_designer": "chart",
-        "market_agent": "market",
-        "web_research_agent": "web",
-        "insight_reviewer": "analysis",
+        "plan_generation": "intent",
+        "sql_generation": "sql",
+        "chart_generation": "chart",
+        "market_refresh": "market",
+        "web_refresh": "web",
+        "analysis_generation": "analysis",
     }
     LANE_TO_TASK_MAP: Dict[str, str] = {
         "sql_lane": "query_phase",
@@ -1644,18 +1157,17 @@ class MultiAgentFlow:
         "market_lane",
         "chart_lane",
     )
+    # Maps tool names to shorter display aliases (used in telemetry/logging).
+    # Deprecated agent names removed; use tool names as primary keys.
     ROLE_TOOL_ALIAS: Dict[str, str] = {
-        "planner_agent": "planner",
-        "intent_analyst": "intent_classifier",
-        "user_liaison": "clarification_manager",
-        "sql_specialist": "sql_generator",
-        "risk_controller": "sql_validator",
-        "data_engineer": "sql_executor",
-        "viz_designer": "chart_designer",
-        "insight_reviewer": "analysis_writer",
-        "analyst_agent": "analysis_writer",
-        "market_agent": "stock_tracker",
-        "web_research_agent": "web_retriever",
+        "plan_generation": "planner",
+        "intent_detection": "intent_classifier",
+        "clarification": "clarification_manager",
+        "sql_generation": "sql_generator",
+        "chart_generation": "chart_designer",
+        "analysis_generation": "analysis_writer",
+        "market_refresh": "stock_tracker",
+        "web_refresh": "web_retriever",
     }
     ARTIFACT_LANE_MAP: Dict[str, str] = {
         "sql_ready": "sql",
@@ -1672,6 +1184,13 @@ class MultiAgentFlow:
         "analysis_ready": "supervisor_summary",
     }
     DEFAULT_PARALLEL_GROUP = "sql_web"
+    LANE_TOOL_NAME_MAP: Dict[str, str] = {
+        "sql": "sql_generation",
+        "chart": "chart_generation",
+        "analysis": "analysis_generation",
+        "market": "market_refresh",
+        "web": "web_refresh",
+    }
     SUPERVISOR_PARALLEL_LIMITS: Dict[str, int] = {
         "supervisor_intent": 1,
         "sql_web": 2,
@@ -1713,11 +1232,7 @@ class MultiAgentFlow:
             feature_flags = dict(self._config_store.get_agent_feature_flags() or {})
         except Exception:
             feature_flags = {}
-        env_supervisor_v2 = os.getenv("USE_SUPERVISOR_V2")
-        if env_supervisor_v2 is None:
-            self._use_supervisor_v2 = bool(feature_flags.get("use_supervisor_v2", False))
-        else:
-            self._use_supervisor_v2 = env_supervisor_v2.strip().lower() not in {"0", "false", "no"}
+        self._use_supervisor_v2 = False
         policy_version = os.getenv("AGENTS_DELEGATION_POLICY_VERSION", "baseline")
         agents_yaml = getattr(self._config_store, "yaml_configs", {})
         self._delegation_policy = DelegationPolicy.load(
@@ -1736,41 +1251,21 @@ class MultiAgentFlow:
         supervisor_reasoning = self._supervisor_settings.get("reasoning_effort")
         supervisor_max_turns = self._supervisor_settings.get("max_turns")
 
-        specialist_configs: List[SupervisorSpecialistConfig] = []
-        for entry in self._supervisor_settings.get("specialists", []) or []:
-            lane = str(entry.get("lane") or "").strip()
-            if not lane:
-                continue
-            specialist_configs.append(
-                SupervisorSpecialistConfig(
-                    lane=lane,
-                    name=str(entry.get("name") or f"{lane}_specialist"),
-                    instructions=str(entry.get("instructions") or supervisor_instructions),
-                    description=entry.get("description"),
-                    model=_coerce_agent_model(entry.get("model")),
-                    reasoning_effort=entry.get("reasoning_effort"),
-                    max_turns=entry.get("max_turns"),
-                )
-            )
-
-        self._supervisor_bundle = (
-            build_supervisor_bundle(
-                supervisor_name=supervisor_name,
-                supervisor_instructions=supervisor_instructions,
-                model=supervisor_model,
-                reasoning_effort=supervisor_reasoning,
-                max_turns=supervisor_max_turns,
-                specialist_configs=specialist_configs,
-            )
-            if specialist_configs
-            else None
+        # Build supervisor Agent + tool set directly from CanonicalToolRegistry definitions.
+        registry = get_canonical_registry()
+        allowed_tool_ids: Set[CanonicalToolId] = set(registry.get_tool_allowlist(FollowUpRoute.FULL_PIPELINE.value))
+        self._tool_schemas: Dict[str, ToolSchema] = {
+            schema.name: schema for schema in registry.get_all_schemas(mode=ToolFlowMode.MULTI_AGENT) if schema.tool_id in allowed_tool_ids
+        }
+        supervisor_tools = self._build_supervisor_tools(list(self._tool_schemas.values()))
+        self._supervisor_agent = Agent(
+            name=supervisor_name,
+            instructions=supervisor_instructions,
+            model=supervisor_model,
+            tools=supervisor_tools,
+            reasoning_effort=supervisor_reasoning,
         )
-        self._supervisor_agent = self._supervisor_bundle.supervisor if self._supervisor_bundle else None
-        self._specialist_tools = (
-            {binding.lane: binding.tool for binding in self._supervisor_bundle.bindings}
-            if self._supervisor_bundle
-            else {}
-        )
+        self._specialist_tools: Dict[str, Any] = {}
 
         self._planner = PlannerExecutorFlow(flow_mode=FlowMode.MULTI_AGENT)
         self.follow_up_route = FollowUpRoute.FULL_PIPELINE
@@ -1781,8 +1276,8 @@ class MultiAgentFlow:
         self._prompt_versions = dict(self._PROMPT_VERSIONS)
         self._web_topic_branch_states: Dict[str, str] = {}
         self._web_topic_pending = 0
-        registry = get_planner_tool_registry()
-        self._planner_tool_manifest = registry.describe_tools()
+        planner_registry = get_planner_tool_registry()
+        self._planner_tool_manifest = planner_registry.describe_tools()
         self._tool_metadata_by_registry = _build_tool_metadata(self._planner_tool_manifest)
         self._tool_metadata_by_role = {
             role: self._tool_metadata_by_registry.get(registry_name)
@@ -1791,15 +1286,11 @@ class MultiAgentFlow:
         }
         self._timers: Dict[str, float] = {}
         self._latest_lane_states: Dict[str, str] = {}
-        self._agent_registry = _build_default_agent_registry()
-        # Analyst orchestration traverses supervisor -> specialists -> reviewer which requires a deeper DAG budget.
-        self._orchestrator = AgentExecutionOrchestrator(
-            self._agent_registry,
-            max_depth=4,
-            max_retries=self._max_tool_retries,
-            retry_decider=self._retry_manager.should_retry,
-        )
-        self._base_plan = _build_default_plan()
+        # Legacy orchestrator/agent_registry removed in favor of supervisor AgentRuntime tool calls.
+        self._agent_registry = {}
+        self._orchestrator = None
+        self._planned_lanes = _lane_sequence_for_route(self.follow_up_route, require_market_web=True)
+        self._base_plan = _build_plan_from_lanes(self._planned_lanes)
         self._apply_analysis_dependencies()
         self._market_client = PolygonMarketDataClient()
         self._market_fetcher = fetch_daily_snapshot
@@ -1903,11 +1394,14 @@ class MultiAgentFlow:
           Invokes: MultiAgentFlow._get_analysis_dependencies
           Why: Prevents analysis agents from running before required specialist lanes finish.
         """
+        existing_tasks = {task.name for task in getattr(self, "_base_plan", []) or []}
         lane_dependencies = self._get_analysis_dependencies()
         phase_dependencies: List[str] = []
         for lane_name in lane_dependencies:
             phase_name = self.LANE_TO_TASK_MAP.get(lane_name)
-            if phase_name and phase_name not in phase_dependencies:
+            if phase_name == "query_phase":
+                continue
+            if phase_name and phase_name in existing_tasks and phase_name not in phase_dependencies:
                 phase_dependencies.append(phase_name)
         if not phase_dependencies:
             return
@@ -2137,6 +1631,7 @@ class MultiAgentFlow:
         receipts_map = self._shared_context.setdefault("tool_receipts", {})
         if lane:
             enrich_accessory_payload(lane, enriched_payload, receipts=receipts_map)
+            self._record_lane_receipt(lane, enriched_payload)
         artifact_meta.setdefault("latest_payloads", {})[event_name] = enriched_payload
         if lane:
             artifact_meta.setdefault("latest_sources", {})[lane] = enriched_payload.get("source")
@@ -2160,6 +1655,41 @@ class MultiAgentFlow:
         except Exception:
             pass
 
+    def _record_lane_receipt(self, lane: str, payload: Mapping[str, Any]) -> None:
+        """
+        Persist lane-level tool receipts to shared context and session snapshot for TTL reuse.
+        """
+        tool_name = self.LANE_TOOL_NAME_MAP.get(str(lane).strip().lower())
+        if not tool_name:
+            return
+        timestamp = payload.get("ts") or datetime.utcnow().isoformat()
+        receipt: Dict[str, Any] = {
+            "tool": tool_name,
+            "lane": lane,
+            "status": "completed",
+            "timestamp": timestamp,
+            "completed_at": timestamp,
+            "reused": bool(payload.get("reused")),
+            "from_cache": bool(payload.get("reused")),
+            "source": payload.get("source"),
+            "guardrail": payload.get("latency_guardrail") or payload.get("guardrail"),
+            "age_seconds": payload.get("age_seconds"),
+            "fast_path_latency_ms": payload.get("fast_path_latency_ms"),
+            "schema_version": None,
+            "ttl_seconds": self.RECEIPT_TTL_SECONDS,
+        }
+        schema = self._tool_schemas.get(tool_name)
+        if schema:
+            receipt["schema_version"] = schema.schema_version
+        receipts_map = self._shared_context.setdefault("tool_receipts", {})
+        receipts_map[tool_name] = {k: v for k, v in receipt.items() if v is not None}
+        snapshot = self._session_snapshot
+        if snapshot:
+            tool_cache = snapshot.tool_cache.setdefault("tool_receipts", {})
+            tool_cache[tool_name] = receipts_map[tool_name]
+            snapshot.touch_lane(lane)
+            snapshot.touch()
+
     def _queue_supervisor_event(self, event_name: str, payload: Dict[str, Any]) -> None:
         event = apply_mode_metadata({"event": event_name, "data": payload}, self.flow_mode)
         self._pending_artifact_events.append(event)
@@ -2169,6 +1699,118 @@ class MultiAgentFlow:
         pending = self._pending_artifact_events
         self._pending_artifact_events = []
         return pending
+
+    def _record_tool_receipt_from_event(self, tool_event: Mapping[str, Any]) -> None:
+        """
+        Persist agent_tool_complete events into SessionStateSnapshot and shared context.
+        Called from: _capture_event when supervisor AgentRuntime emits tool completions.
+        Invokes: SessionStateSnapshot.record_tool_receipt
+        Why: Keeps snapshot/tool_cache receipts aligned with bridge telemetry for TTL/reuse.
+        """
+        snapshot = self._session_snapshot
+        if snapshot is None:
+            return
+        tool_call = tool_event.get("tool_call") if isinstance(tool_event, Mapping) else None
+        raw_source = tool_call if isinstance(tool_call, Mapping) else tool_event if isinstance(tool_event, Mapping) else {}
+        tool_name = raw_source.get("name") or raw_source.get("tool") or raw_source.get("id")
+        if not tool_name:
+            return
+        metadata = raw_source.get("metadata") if isinstance(raw_source.get("metadata"), Mapping) else {}
+        lane = raw_source.get("lane") or metadata.get("lane") or metadata.get("telemetry_step")
+        status = raw_source.get("status") or tool_event.get("status")
+        guardrail = (
+            tool_event.get("latency_guardrail")
+            or tool_event.get("guardrail")
+            or metadata.get("guardrail")
+        )
+        from_cache_flag = tool_event.get("from_cache")
+        if from_cache_flag is None:
+            from_cache_flag = metadata.get("from_cache")
+        elapsed_ms = tool_event.get("elapsed_ms") or metadata.get("elapsed_ms")
+        timestamp = raw_source.get("timestamp") or datetime.utcnow().isoformat()
+        receipt_payload: Dict[str, Any] = {
+            "tool": tool_name,
+            "status": status or "completed",
+            "lane": lane,
+            "metadata": sanitize_for_json(dict(metadata)) if metadata else None,
+            "from_cache": from_cache_flag,
+            "reused": bool(from_cache_flag),
+            "elapsed_ms": elapsed_ms,
+            "agent_turn_id": raw_source.get("agent_turn_id"),
+            "schema_version": metadata.get("schema_version"),
+            "guardrail": sanitize_for_json(guardrail) if guardrail else None,
+            "timestamp": timestamp,
+        }
+        age_seconds = None
+        if lane:
+            age_seconds = snapshot.lane_age_seconds(str(lane))
+            receipt_payload["age_seconds"] = age_seconds
+            if metadata is not None:
+                try:
+                    metadata = dict(metadata)
+                    metadata.setdefault("cache_age_seconds", age_seconds)
+                    receipt_payload["metadata"] = sanitize_for_json(metadata)
+                except Exception:
+                    pass
+        try:
+            snapshot.record_tool_receipt(tool_name, {k: v for k, v in receipt_payload.items() if v is not None})
+            if lane:
+                snapshot.touch_lane(str(lane))
+        except Exception:
+            logger.debug("Failed to persist tool receipt for %s", tool_name, exc_info=True)
+        receipts_cache = self._shared_context.setdefault("tool_receipts", {})
+        receipts_cache[tool_name] = {k: v for k, v in receipt_payload.items() if v is not None}
+
+    def _record_cached_preflight_receipts(self, snapshot: SessionStateSnapshot) -> None:
+        """
+        Normalize cached classification/intent/clarification receipts so TTL + lane ages
+        are refreshed before the supervisor run.
+        """
+        if snapshot is None:
+            return
+        tool_cache = snapshot.tool_cache if isinstance(snapshot.tool_cache, dict) else {}
+        receipts = tool_cache.get("tool_receipts") if isinstance(tool_cache.get("tool_receipts"), Mapping) else {}
+        for tool_name in ("classification", "intent_detection", "clarification"):
+            payload = receipts.get(tool_name)
+            if not isinstance(payload, Mapping):
+                continue
+            normalized = dict(payload)
+            normalized.setdefault("tool", tool_name)
+            normalized.setdefault("status", normalized.get("status") or "completed")
+            normalized.setdefault("timestamp", datetime.utcnow().isoformat())
+            lane_hint = normalized.get("lane") or ( "intent" if tool_name != "clarification" else "clarification" )
+            if lane_hint:
+                normalized.setdefault("lane", lane_hint)
+                try:
+                    snapshot.touch_lane(lane_hint)
+                except Exception:
+                    logger.debug("Failed to touch lane for cached receipt %s", lane_hint, exc_info=True)
+            try:
+                snapshot.record_tool_receipt(tool_name, normalized)
+            except Exception:
+                logger.debug("Failed to persist cached preflight receipt %s", tool_name, exc_info=True)
+
+    def _compute_lane_refresh_from_snapshot(self, snapshot: SessionStateSnapshot) -> Dict[str, bool]:
+        """
+        Derive lane refresh requirements from cached receipts and TTL freshness.
+        """
+        refresh: Dict[str, bool] = {}
+        lanes = ("sql", "chart", "analysis", "market", "web")
+        for lane in lanes:
+            refresh[lane] = snapshot._is_lane_reuse_stale(lane)  # noqa: SLF001
+        return refresh
+
+    @staticmethod
+    def _lane_age_seconds_from_snapshot(snapshot: Optional[SessionStateSnapshot]) -> Dict[str, Optional[float]]:
+        """
+        Build lane_age_seconds map from snapshot lane timestamps for AgentRuntime context.
+        """
+        if snapshot is None:
+            return {}
+        ages: Dict[str, Optional[float]] = {}
+        for lane in ("sql", "chart", "analysis", "market", "web"):
+            ages[lane] = snapshot.lane_age_seconds(lane)
+        return ages
 
     def _sql_preview(self, sql_ctx: Dict[str, Any]) -> Dict[str, Any]:
         sample = sql_ctx.get("sample_data")
@@ -2818,14 +2460,94 @@ class MultiAgentFlow:
         self._session_snapshot = snapshot
         self._planner.prime_with_snapshot(snapshot)
 
+    def _lane_readiness_from_snapshot(self) -> Dict[str, bool]:
+        snapshot = getattr(self, "_session_snapshot", None)
+        readiness: Dict[str, bool] = {
+            "sql": False,
+            "chart": False,
+            "analysis": False,
+            "market": False,
+            "web": False,
+        }
+        if snapshot is None:
+            return readiness
+        artifacts = ((snapshot.tool_cache or {}).get("analytics") or {}).get("artifacts") or {}
+        readiness["sql"] = bool(getattr(snapshot, "last_sql", None) or artifacts.get("sql_generation"))
+        readiness["chart"] = bool(getattr(snapshot, "last_chart_spec", None) or artifacts.get("chart"))
+        readiness["analysis"] = bool(getattr(snapshot, "last_analysis", None) or artifacts.get("analysis"))
+        readiness["market"] = bool(artifacts.get("market"))
+        readiness["web"] = bool(artifacts.get("web"))
+        return readiness
+
+    def plan_follow_up_route(
+        self,
+        *,
+        query: str,
+        lane_readiness: Optional[Mapping[str, bool]] = None,
+    ) -> Tuple[FollowUpRoute, Dict[str, Any]]:
+        readiness = dict(self._lane_readiness_from_snapshot())
+        if lane_readiness:
+            readiness.update({k: bool(v) for k, v in lane_readiness.items()})
+        route = FollowUpRoute.FULL_PIPELINE
+        reason = "fresh_full_pipeline"
+        if readiness.get("sql") and readiness.get("chart"):
+            route = FollowUpRoute.REUSE_SQL
+            reason = "reuse_sql_with_cached_dataset"
+        elif readiness.get("market") and not readiness.get("sql") and not readiness.get("chart") and not readiness.get("analysis"):
+            route = FollowUpRoute.STOCK_ONLY
+            reason = "market_only_cached"
+
+        require_market_web = route_requires_market_web(route, is_revision=False)
+        planned_lanes = _lane_sequence_for_route(route, require_market_web=require_market_web)
+        self._planned_lanes = planned_lanes
+        self._base_plan = _build_plan_from_lanes(planned_lanes)
+        self._apply_analysis_dependencies()
+
+        guardrail = {
+            "id": "follow_up_route",
+            "name": "Follow-Up Route",
+            "status": "agent_selected" if route != FollowUpRoute.FULL_PIPELINE else "default_full_pipeline",
+            "route": route.value,
+            "reason": reason,
+            "ts": datetime.utcnow().isoformat(),
+            "session_follow_up": False,
+            "lanes_ready": [lane for lane, ready in readiness.items() if ready],
+            "lanes": planned_lanes,
+            "query_hint": (query or "").strip()[:160],
+        }
+        self.set_follow_up_route(route, lane_readiness=readiness)
+        return route, guardrail
+
     def set_revision_directive(self, directive: Optional["RevisionDirective"]) -> None:
         self._revision_directive = directive
         self._agentic_revision_mode = bool(directive.agentic if directive else False)
         self._planner.set_revision_directive(directive)
 
-    def set_follow_up_route(self, route: FollowUpRoute) -> None:
+    def set_follow_up_route(
+        self,
+        route: FollowUpRoute,
+        lane_readiness: Optional[Mapping[str, bool]] = None,
+    ) -> None:
         self.follow_up_route = route
         self._planner.set_follow_up_route(route)
+        readiness = dict(self._lane_readiness_from_snapshot())
+        if lane_readiness:
+            readiness.update({k: bool(v) for k, v in lane_readiness.items()})
+        require_market_web = route_requires_market_web(route, is_revision=bool(self._session_follow_up))
+        self._planned_lanes = _lane_sequence_for_route(route, require_market_web=require_market_web)
+        self._base_plan = _build_plan_from_lanes(self._planned_lanes)
+        self._apply_analysis_dependencies()
+
+    @staticmethod
+    def _route_from_lane_decision(lane: Optional[str]) -> FollowUpRoute:
+        normalized = str(lane or "").strip().lower()
+        if normalized == "chart":
+            return FollowUpRoute.CHART_ONLY
+        if normalized == "market":
+            return FollowUpRoute.STOCK_ONLY
+        if normalized == "sql":
+            return FollowUpRoute.REUSE_SQL
+        return FollowUpRoute.NARRATIVE_ONLY
 
     def set_revision_targets(self, targets: Iterable[str]) -> None:
         self._planner.set_revision_targets(targets)
@@ -3501,6 +3223,9 @@ class MultiAgentFlow:
                 banner_event = EventEmitter.progress("follow_up_route", banner_config["message"])
                 banner_event["data"]["route"] = ctx.follow_up_route.value
                 banner_event["data"]["ts"] = datetime.utcnow().isoformat()
+                lanes_payload = getattr(self, "_planned_lanes", None)
+                if lanes_payload:
+                    banner_event["data"]["lanes"] = list(lanes_payload)
                 session_identifier = getattr(ctx, "session_id", None)
                 if session_identifier:
                     banner_event["data"]["session_id"] = session_identifier
@@ -3705,13 +3430,9 @@ class MultiAgentFlow:
         self._prepare_context(query)
         if session_id:
             self._shared_context["session_id"] = session_id
-        if self._use_supervisor_v2:
-            current_orchestration = self._run_supervisor_v2_orchestration
-            patched_orchestration = True
-        else:
-            current_orchestration = getattr(self, "_run_agent_orchestration")
-            original_orchestration = _ORIGINAL_RUN_ORCHESTRATION or MultiAgentFlow._run_agent_orchestration
-            patched_orchestration = getattr(current_orchestration, "__func__", current_orchestration) is not original_orchestration
+        current_orchestration = getattr(self, "_run_agent_orchestration")
+        original_orchestration = _ORIGINAL_RUN_ORCHESTRATION or MultiAgentFlow._run_agent_orchestration
+        patched_orchestration = getattr(current_orchestration, "__func__", current_orchestration) is not original_orchestration
         if patched_orchestration:
             session_identifier = session_id or str(uuid.uuid4())
             session_event = EventEmitter.session_started(session_identifier)
@@ -3843,8 +3564,8 @@ class MultiAgentFlow:
                 and (not self._agent_turn_observed)
                 and event.get("event") == "workflow_complete"
             ):
-                synthetic_start = self._format_agent_turn("planner_agent", "start")
-                synthetic_end = self._format_agent_turn("planner_agent", "end")
+                synthetic_start = self._format_agent_turn("plan_generation", "start")
+                synthetic_end = self._format_agent_turn("plan_generation", "end")
                 for synthetic in (synthetic_start, synthetic_end):
                     annotated_synth = self._maybe_tag_session_metadata(
                         self._annotate(synthetic),
@@ -3856,8 +3577,8 @@ class MultiAgentFlow:
             _mark_terminal(event)
             yield event
         if (not self._agent_turn_observed) and os.getenv("PYTEST_CURRENT_TEST"):
-            synthetic_start = self._format_agent_turn("planner_agent", "start")
-            synthetic_end = self._format_agent_turn("planner_agent", "end")
+            synthetic_start = self._format_agent_turn("plan_generation", "start")
+            synthetic_end = self._format_agent_turn("plan_generation", "end")
             for synthetic in (synthetic_start, synthetic_end):
                 annotated_synth = self._maybe_tag_session_metadata(
                     self._annotate(synthetic),
@@ -4193,6 +3914,7 @@ class MultiAgentFlow:
         if selected_lane == "chart" and not chart_patch:
             selected_lane = "narrative"
 
+        self.set_follow_up_route(self._route_from_lane_decision(selected_lane))
         self._record_lane_decision(
             lane=selected_lane,
             planned_lane=lane_hint if isinstance(lane_hint, str) else "narrative",
@@ -4534,6 +4256,8 @@ class MultiAgentFlow:
     ) -> AsyncGenerator[Dict[str, Any], None]:
         normalized_lane = lane if lane in {"chart", "narrative"} else "narrative"
         normalized_web = "refresh" if web_action == "refresh" else "reuse"
+        chosen_route = self._route_from_lane_decision(normalized_lane)
+        self.set_follow_up_route(chosen_route)
         if not self._supervisor_agent or self._orchestrator is None:
             logger.warning(
                 "Agentic multi-agent revision requested but supervisor runtime unavailable; emitting guardrail.",
@@ -4562,6 +4286,21 @@ class MultiAgentFlow:
         annotated_session = self._annotate(session_event)
         annotated_session = self._maybe_tag_session_metadata(annotated_session, session_id)
         yield annotated_session
+
+        follow_up_event = {
+            "event": "follow_up_route",
+            "data": {
+                "route": chosen_route.value,
+                "flow": self.flow_label,
+                "lanes": [normalized_lane],
+                "revision": True,
+                "session_id": session_id,
+                "banner": FOLLOW_UP_BANNERS.get(chosen_route),
+            },
+        }
+        annotated_follow_up = self._annotate(follow_up_event)
+        annotated_follow_up = self._maybe_tag_session_metadata(annotated_follow_up, session_id)
+        yield annotated_follow_up
 
         coordination_payload: Dict[str, Any] = {
             "session_id": session_id,
@@ -4696,9 +4435,12 @@ class MultiAgentFlow:
         runtime_state = self._shared_context.setdefault('_runtime', {})
         runtime_state['accessories_ready'] = asyncio.Event()
         receipts_cache: Dict[str, Any] = {}
+        lane_age_seconds: Dict[str, Optional[float]] = {}
         if self._prefetched_snapshot and isinstance(self._prefetched_snapshot.tool_cache, dict):
             receipts_cache = copy.deepcopy(self._prefetched_snapshot.tool_cache.get("tool_receipts") or {})
+            lane_age_seconds = self._lane_age_seconds_from_snapshot(self._prefetched_snapshot)
         self._shared_context["tool_receipts"] = receipts_cache
+        self._shared_context.setdefault("_meta", {})["lane_age_seconds"] = lane_age_seconds
         revision_snapshot = extract_revision_snapshot(self._prefetched_snapshot)
         if isinstance(revision_snapshot, dict):
             self._shared_context['revision_snapshot'] = copy.deepcopy(revision_snapshot)
@@ -4773,6 +4515,11 @@ class MultiAgentFlow:
             meta['prior_intent_signature'] = revision_snapshot.get('intent_signature')
         else:
             self._shared_context.pop('revision_snapshot', None)
+        if self._prefetched_snapshot:
+            lane_refresh_required = self._shared_context.setdefault("lane_refresh_required", {})
+            for lane in ("sql", "chart", "analysis", "market", "web"):
+                if self._prefetched_snapshot._is_lane_reuse_stale(lane):
+                    lane_refresh_required[lane] = True
         self._orchestrated = False
 
     def _should_skip_preflight(self, snapshot: Optional[SessionStateSnapshot]) -> Optional[str]:
@@ -4794,6 +4541,14 @@ class MultiAgentFlow:
                 break
         intent_fresh = self._receipt_is_fresh(intent_receipt, self.RECEIPT_TTL_SECONDS)
         clarification_fresh = self._receipt_is_fresh(clarification_receipt, self.RECEIPT_TTL_SECONDS)
+        if not clarification_fresh:
+            try:
+                clar_answers = snapshot.agents_clarifications if isinstance(snapshot.agents_clarifications, list) else []
+                routing_flags = snapshot.routing if isinstance(snapshot.routing, dict) else {}
+                clarifications_cleared = routing_flags.get("clarifications_needed") is False
+                clarification_fresh = bool(clar_answers) and clarifications_cleared
+            except Exception:
+                clarification_fresh = clarification_fresh
         slot_statuses = intent_receipt.get("slot_statuses") if isinstance(intent_receipt, Mapping) else None
         if isinstance(slot_statuses, Mapping):
             missing_slots = [
@@ -4835,6 +4590,47 @@ class MultiAgentFlow:
                 except Exception:  # pragma: no cover - planner stubs may omit priming
                     logger.debug("Planner prime_with_snapshot unavailable in preflight", exc_info=True)
             self._session_snapshot = snapshot
+            self.set_lane_refresh_requirements(self._compute_lane_refresh_from_snapshot(snapshot))
+            lane_age_seconds = self._lane_age_seconds_from_snapshot(snapshot)
+            self._shared_context.setdefault("_meta", {})["lane_age_seconds"] = lane_age_seconds
+            self._shared_context.setdefault("tool_receipts", snapshot.tool_cache.get("tool_receipts", {}) if isinstance(snapshot.tool_cache, dict) else {})
+
+        planned_route, follow_up_guardrail = self.plan_follow_up_route(
+            query=query,
+            lane_readiness=self._lane_readiness_from_snapshot(),
+        )
+        self.set_follow_up_guardrail(follow_up_guardrail)
+        follow_up_event = {
+            "event": "follow_up_route",
+            "data": {
+                "route": planned_route.value,
+                "flow": self.flow_label,
+                "lanes": list(self._planned_lanes),
+                "banner": FOLLOW_UP_BANNERS.get(planned_route),
+                "guardrail": follow_up_guardrail,
+                "session_id": session_id,
+            },
+        }
+        annotated_follow_up = self._annotate(follow_up_event)
+        yield self._maybe_tag_session_metadata(annotated_follow_up, session_id)
+        if snapshot:
+            routing_meta = snapshot.routing if isinstance(snapshot.routing, dict) else {}
+            routing_meta.update(
+                {
+                    "follow_up_route": planned_route.value,
+                    "lanes": list(self._planned_lanes),
+                    "guardrail": follow_up_guardrail,
+                }
+            )
+            snapshot.routing = routing_meta
+            if repository:
+                with contextlib.suppress(Exception):
+                    await repository.save(snapshot)
+
+        # Supervisor-first preflight: emit routing/metadata then hand off to AgentRuntime.
+        if self._supervisor_agent is not None:
+            self._preflight_outcome = "ok"
+            return
 
         if not hasattr(self._planner, "initialize_context"):
             self._preflight_outcome = "skip"
@@ -4912,6 +4708,7 @@ class MultiAgentFlow:
                     await repository.save(snapshot)
                 except Exception:
                     logger.debug("Failed to persist cached preflight snapshot", exc_info=True)
+            self._record_cached_preflight_receipts(snapshot)
             reuse_event = EventEmitter.status(
                 "clarification_skipped",
                 "Reused cached intent and clarification.",
@@ -5142,6 +4939,9 @@ class MultiAgentFlow:
             self._mark_accessories_ready()
         elif name == "clarification_resolved":
             self._mark_accessories_ready()
+        # Persist tool receipts from supervisor AgentRuntime so snapshot TTL/reuse stays in sync.
+        if name == "agent_tool_complete":
+            self._record_tool_receipt_from_event(data)
         if name == "session_started":
             session_identifier = data.get("session_id")
             if session_identifier:
@@ -5459,40 +5259,6 @@ class MultiAgentFlow:
         self._maybe_queue_stock_ready()
         self._maybe_queue_web_ready()
 
-    # Function: _run_supervisor_v2_orchestration
-    #   Called from: analytics.flows.multi_agent.events when USE_SUPERVISOR_V2 flag is enabled
-    #   Invokes: analytics.flows.supervisor_v2.SupervisorPoolsFlow.execute
-    #   Why: Streams Specialist Pools (Supervisor V2) events to replace legacy supervisor orchestration.
-    async def _run_supervisor_v2_orchestration(
-        self,
-        query: str,
-        session_id: Optional[str],
-    ) -> AsyncGenerator[Dict[str, Any], None]:
-        session_identifier = session_id or str(uuid.uuid4())
-        ctx = await self._planner.initialize_context(query, session_identifier)
-        supervisor_flow = SupervisorPoolsFlow(session_id=session_identifier, enable_parallelism=True)
-        # Mark as observed to avoid planner fallback error handling
-        self._agent_turn_observed = True
-        async for event in supervisor_flow.execute(
-            query,
-            ctx,
-            follow_up_route=getattr(self, "follow_up_route", FollowUpRoute.FULL_PIPELINE).value,
-        ):
-            annotated = self._maybe_tag_session_metadata(
-                self._annotate(apply_mode_metadata(event, self.flow_mode)),
-                session_identifier,
-            )
-            yield annotated
-        # Persist the planner context snapshot if available to keep parity with legacy flow
-        try:
-            repository = get_session_state_repository()
-            if repository and getattr(ctx, "session_id", None):
-                snapshot = getattr(ctx, "session_snapshot", None)
-                if snapshot is not None:
-                    await repository.save(snapshot)
-        except Exception:
-            logger.debug("Supervisor V2 persistence skipped", exc_info=True)
-
     async def _run_agent_orchestration(
         self,
         query: str,
@@ -5519,24 +5285,39 @@ class MultiAgentFlow:
         snapshot = self._session_snapshot or SessionStateSnapshot(session_id=session_id or str(uuid.uuid4()))
         memory = AgentMemory(snapshot)
 
-        allowlist: Optional[Set[str]] = None
         guardrail_payload = self._follow_up_guardrail or {}
         lane_refresh_flags = dict(self._shared_context.get("lane_refresh_required") or {})
+        allowlist: Optional[Set[str]] = None
         try:
+            registry = get_canonical_registry()
             route = getattr(self, "follow_up_route", FollowUpRoute.FULL_PIPELINE)
-            specialist_tools = list(self._specialist_tools.values()) if self._specialist_tools else []
-            allowlist = {getattr(tool, "name", "").strip() for tool in specialist_tools if getattr(tool, "name", "").strip()}
-            def _drop_lane(lane: str, *, reason: str, reused: bool, from_cache: bool) -> None:
+            allowed_tool_ids = registry.get_tool_allowlist(route.value)
+            def _schema_for(tool_id: CanonicalToolId) -> Optional[ToolSchema]:
+                try:
+                    return registry.get_tool_schema(tool_id, mode=ToolFlowMode.MULTI_AGENT)
+                except Exception:
+                    return registry.get_tool_schema(tool_id)
+            schemas_for_route = [schema for tool_id in allowed_tool_ids if (schema := _schema_for(tool_id))]
+            lane_to_tools: Dict[str, Set[str]] = {}
+            for schema in schemas_for_route:
+                lane_to_tools.setdefault(schema.lane, set()).add(schema.name)
+            allowlist = {schema.name for schema in schemas_for_route}
+
+            def _drop_lane_tools(lane: str, *, reason: str, reused: bool, from_cache: bool) -> None:
                 lane_key = lane.strip().lower()
                 if not allowlist:
                     return
-                for binding_lane, tool in (self._specialist_tools or {}).items():
-                    if str(binding_lane).strip().lower() != lane_key:
-                        continue
-                    tool_name = getattr(tool, "name", "").strip()
-                    if tool_name:
+                for tool_name in list(allowlist):
+                    schema = next((s for s in schemas_for_route if s.name == tool_name), None)
+                    if schema and str(schema.lane).strip().lower() == lane_key:
                         allowlist.discard(tool_name)
-                receipt_tool = "web_refresh" if lane_key == "web" else "market_refresh" if lane_key in {"market", "stock"} else lane_key
+                receipt_tool = (
+                    "web_refresh"
+                    if lane_key == "web"
+                    else "market_refresh"
+                    if lane_key in {"market", "stock"}
+                    else lane_key
+                )
                 self._record_allowlist_skip_receipt(
                     receipt_tool,
                     lane=lane_key,
@@ -5547,20 +5328,28 @@ class MultiAgentFlow:
                 )
 
             if route == FollowUpRoute.STOCK_ONLY:
-                _drop_lane("web", reason="follow_up_guardrail", reused=False, from_cache=False)
-                allowlist = {name for name in (allowlist or set()) if not name.startswith("web_")}
+                _drop_lane_tools("web", reason="follow_up_guardrail", reused=False, from_cache=False)
             if route == FollowUpRoute.REUSE_SQL:
-                allowlist = {name for name in (allowlist or set()) if not name.startswith("sql_")}
+                _drop_lane_tools("sql", reason="follow_up_guardrail", reused=True, from_cache=True)
+
             blocked_tools = guardrail_payload.get("blocked_tools") if isinstance(guardrail_payload, Mapping) else None
             if isinstance(blocked_tools, Iterable):
                 for tool_name in blocked_tools:
                     if isinstance(tool_name, str) and tool_name.strip():
                         allowlist.discard(tool_name.strip())
+
             for lane_name, required in lane_refresh_flags.items():
                 if required is False:
                     normalized_lane = str(lane_name).strip().lower()
-                    if normalized_lane in {"web", "market", "stock"}:
-                        _drop_lane(normalized_lane, reason="lane_refresh_reused", reused=True, from_cache=True)
+                    if normalized_lane in {"web", "market", "stock", "sql", "chart", "analysis"}:
+                        _drop_lane_tools(
+                            normalized_lane,
+                            reason="lane_refresh_reused",
+                            reused=True,
+                            from_cache=True,
+                        )
+            if allowlist is not None and not allowlist:
+                allowlist = None
         except Exception:
             allowlist = allowlist or None
 
@@ -5579,9 +5368,11 @@ class MultiAgentFlow:
             )
 
             supervisor_agent = self._supervisor_agent
-            if allowlist and self._specialist_tools:
+            if allowlist:
                 filtered_tools = [
-                    tool for lane, tool in self._specialist_tools.items() if getattr(tool, "name", "") in allowlist
+                    tool
+                    for tool in getattr(self._supervisor_agent, "tools", []) or []
+                    if getattr(tool, "name", "").strip() in allowlist
                 ]
                 if filtered_tools:
                     try:
@@ -5607,6 +5398,10 @@ class MultiAgentFlow:
                 "session_id": session_id,
                 "follow_up_route": getattr(self, "follow_up_route", FollowUpRoute.FULL_PIPELINE).value,
                 "tool_manifest": self._planner_tool_manifest,
+                "tool_receipts": copy.deepcopy(self._shared_context.get("tool_receipts") or {}),
+                "lane_refresh_required": dict(lane_refresh_flags),
+                "lane_age_seconds": dict(self._shared_context.get("_meta", {}).get("lane_age_seconds") or {}),
+                "follow_up_guardrail": guardrail_payload,
             }
 
             # Pass resolved slots and previews to analyst-specialist context to reduce re-prompts.
@@ -6427,10 +6222,11 @@ class MultiAgentFlow:
             payload["parallel_group"] = parallel_group
         if lane:
             payload["lane"] = lane
-            tool_obj = self._specialist_tools.get(lane)
-            if tool_obj:
-                payload["tool"] = getattr(tool_obj, "name", f"{lane}_specialist")
-                payload.setdefault("specialist", getattr(tool_obj, "name", f"{lane}_specialist"))
+            schema = next((s for s in self._tool_schemas.values() if s.lane == lane), None)
+            tool_name = schema.name if schema else f"{lane}_specialist"
+            payload["tool"] = tool_name
+            if schema and schema.specialist_role:
+                payload["specialist"] = schema.specialist_role
         if summary:
             payload["summary"] = summary
         if elapsed is not None:
@@ -6445,9 +6241,13 @@ class MultiAgentFlow:
         return annotated
 
     def _format_reasoning(self, role: str, result: AgentResult) -> Optional[Dict[str, Any]]:
+        """Format reasoning output for agent events.
+        
+        Uses tool-based role names (plan_generation, sql_generation, etc.).
+        """
         output = result.output or {}
         thought: Optional[str] = None
-        if role == "planner_agent":
+        if role == "plan_generation":
             tasks = output.get("tasks") or []
             bundle_id = output.get("bundle_id")
             descriptors = [f"{item['name']}={item['status']}" for item in tasks if isinstance(item, dict)]
@@ -6457,7 +6257,7 @@ class MultiAgentFlow:
             if descriptors:
                 pieces.append(", ".join(descriptors))
             thought = " | ".join(pieces)
-        elif role == "query_agent":
+        elif role == "sql_generation":
             attempts = output.get('attempt_count')
             last_status = output.get('last_status')
             last_error = output.get('last_error_code')
@@ -6469,30 +6269,30 @@ class MultiAgentFlow:
             if last_error:
                 parts.append(f"error={last_error}")
             thought = " | ".join(parts) if parts else None
-        elif role == "analyst_agent":
+        elif role == "analysis_generation":
             status = output.get("status")
             summary = output.get("summary")
-            thought = f"Analyst status: {status}"
+            thought = f"Analysis status: {status}"
             if summary:
-                thought = f"Analyst ({status}) summary: {summary[:120]}"
-        elif role == "chart_agent":
+                thought = f"Analysis ({status}) summary: {summary[:120]}"
+        elif role == "chart_generation":
             status = output.get("status")
             chart = output.get("chart") or {}
             if chart.get("chart_type"):
-                thought = f"Chart agent ({status}) prepared {chart['chart_type']}"
+                thought = f"Chart ({status}) prepared {chart['chart_type']}"
             else:
-                thought = f"Chart agent status: {status}"
-        elif role == "market_agent":
+                thought = f"Chart status: {status}"
+        elif role == "market_refresh":
             status = output.get("status")
             tickers = output.get("tickers") or []
             insights = output.get("insights") or {}
             change = insights.get("change_percent")
             if change is not None and tickers:
-                thought = f"Market agent ({status}) {tickers[0]} change {change:.2f}%"
+                thought = f"Market ({status}) {tickers[0]} change {change:.2f}%"
             elif tickers:
-                thought = f"Market agent ({status}) monitoring {', '.join(tickers[:3])}"
+                thought = f"Market ({status}) monitoring {', '.join(tickers[:3])}"
             else:
-                thought = f"Market agent status: {status}"
+                thought = f"Market status: {status}"
         if not thought:
             return None
         return {

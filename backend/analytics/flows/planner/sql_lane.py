@@ -222,7 +222,7 @@ async def stream_sql_lane(
 
     if not reuse_sql:
         async for event in pipeline._stream_with_tool_state(
-            registry.invoke("sql_generation", pipeline, ctx, executed=executed),
+            registry.invoke("sql_generation", pipeline, ctx, executed=executed, use_executor=False),
             tool_state,
             ctx,
         ):
@@ -367,7 +367,7 @@ async def stream_chart_lane(
         return
 
     async for event in pipeline._stream_with_tool_state(
-        registry.invoke("chart_generation", pipeline, ctx, executed=executed),
+        registry.invoke("chart_generation", pipeline, ctx, executed=executed, use_executor=False),
         tool_state,
         ctx,
     ):

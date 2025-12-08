@@ -357,25 +357,6 @@ SINGLE_AGENT_SCHEDULE = FlowSchedule(
             description="Intent, clarifications, and SQL template choice remain sequential.",
         ),
         FlowStage(
-            key="sql",
-            label="SQL Build & Execute",
-            parallel_group="core_sequential",
-            allows_parallel=False,
-            steps=("sql_compilation", "sql_execution"),
-            emits=(
-                "sql_compilation",
-                "sql_execution",
-                "sql_validation",
-                "sql_compilation_started",
-                "sql_compiled",
-                "sql_generated",
-                "sql_validated",
-                "execution_stats",
-                "sql_ready",
-            ),
-            description="SQL stages run sequentially before tool fan-out.",
-        ),
-        FlowStage(
             key="accessories_pre_analysis",
             label="Accessories (Pre Analysis Fan-out)",
             parallel_group="tool_fanout",
@@ -393,7 +374,26 @@ SINGLE_AGENT_SCHEDULE = FlowSchedule(
                 "stock_ready",
                 "web_ready",
             ),
-            description="Agent fan-out for accessories occurs in parallel before analysis.",
+            description="Agent fan-out for accessories occurs in parallel before analysis and can overlap SQL warm-up.",
+        ),
+        FlowStage(
+            key="sql",
+            label="SQL Build & Execute",
+            parallel_group="core_sequential",
+            allows_parallel=False,
+            steps=("sql_compilation", "sql_execution"),
+            emits=(
+                "sql_compilation",
+                "sql_execution",
+                "sql_validation",
+                "sql_compilation_started",
+                "sql_compiled",
+                "sql_generated",
+                "sql_validated",
+                "execution_stats",
+                "sql_ready",
+            ),
+            description="SQL stages run sequentially before tool fan-out.",
         ),
         FlowStage(
             key="chart",
@@ -614,13 +614,20 @@ def _merge_schedule_badges(
 
 def _inject_schedule(event: Dict[str, Any], schedule: FlowSchedule) -> None:
     data = event.setdefault("data", {})
+    event_name = event.get("event")
     schedule_key = data.setdefault("schedule", {})
+    # Emit full schedule only for initial status-style events; later payloads get a compact
+    # summary to avoid duplicating classification/intent metadata on every telemetry record.
+    full_schedule_allowed = event_name in {"initializing", "follow_up_route", "revision_request", "revision_inputs_plan"}
     if not isinstance(schedule_key, dict):
-        data["schedule"] = schedule.summary()
+        data["schedule"] = schedule.summary() if full_schedule_allowed else {"mode": schedule.mode.value}
         return
     if "mode" not in schedule_key:
-        schedule_key.update(schedule.summary())
-    else:
+        if full_schedule_allowed:
+            schedule_key.update(schedule.summary())
+        else:
+            schedule_key.update({"mode": schedule.mode.value})
+    elif full_schedule_allowed:
         schedule_key.setdefault("stages", schedule.summary().get("stages", []))
     badges = data.setdefault("badges", {})
     if isinstance(badges, dict):

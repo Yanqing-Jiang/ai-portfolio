@@ -167,12 +167,17 @@ from analytics.core.events import EventEmitter
 from analytics.core import telemetry
 from analytics.core.telemetry import tool_iteration as log_tool_iteration
 from analytics.core.intent import OffTopicClassifierSchema
-from analytics.core.session_state import SessionStateSnapshot, get_session_state_repository, normalize_row_count
+from analytics.core.session_state import (
+    SessionStateSnapshot,
+    get_session_state_repository,
+    normalize_row_count,
+    chart_spec_has_numeric_payload,
+)
 from analytics.flows.agents_stream_bridge import ForbiddenToolCallError
 from analytics.accessory_receipts import build_lane_reuse_event
 from analytics.core.cache import get_cache_service
 from analytics.validators import sanitize_for_json
-from analytics.routing import FollowUpRoute
+from analytics.routing import FollowUpRoute, FOLLOW_UP_BANNERS
 from analytics.services.revision_focus import RevisionQuestionBundle
 from .exceptions import AgentRevisionLaneMissing
 from .hooks import AnalyticsFlowHooks
@@ -181,7 +186,6 @@ from .planner_executor import (
     _build_planner_result_payload,
     _build_reused_analysis_event,
     _hydrate_context_from_snapshot,
-    FOLLOW_UP_BANNERS,
     ToolInvocationReceipt,
     _hash_payload,
     PlannerPhaseContext,
@@ -192,6 +196,7 @@ from .planner_executor import (
     _apply_revision_context_hints,
 )
 from .pipeline_tools import PlannerToolDefinition, PlannerToolRegistry, get_planner_tool_registry
+from .pipeline_orchestrator import build_pipeline_lane_executors
 
 TERMINAL_EVENTS: Set[str] = {
     "workflow_complete",
@@ -348,7 +353,9 @@ def _build_single_agent_cohesive_payload(
 
     analysis_text = analysis_payload.get("analysis")
     if isinstance(analysis_text, str) and analysis_text.strip():
-        payload["analysis"] = analysis_text
+        sanitized_text = SingleAgentToolCoordinator._sanitize_user_message(analysis_text.strip())
+        if sanitized_text:
+            payload["analysis"] = sanitized_text
 
     length_value = analysis_payload.get("analysis_length")
     if isinstance(length_value, (int, float)):
@@ -401,9 +408,11 @@ def _build_single_agent_cohesive_payload(
         analysis_art = artifacts.analysis
         if analysis_art:
             if ("analysis" not in payload or not payload.get("analysis")) and analysis_art.analysis_text:
-                payload["analysis"] = analysis_art.analysis_text
-                if analysis_art.length is not None and "analysis_length" not in payload:
-                    payload["analysis_length"] = analysis_art.length
+                sanitized_text = SingleAgentToolCoordinator._sanitize_user_message(analysis_art.analysis_text)
+                if sanitized_text:
+                    payload["analysis"] = sanitized_text
+                    if analysis_art.length is not None and "analysis_length" not in payload:
+                        payload["analysis_length"] = analysis_art.length
             if ("stock_widget" not in payload or not payload.get("stock_widget")) and analysis_art.stock_widget:
                 payload["stock_widget"] = copy.deepcopy(analysis_art.stock_widget)
             if ("web_context" not in payload or not payload.get("web_context")) and analysis_art.web_context:
@@ -534,6 +543,8 @@ class _SingleAgentToolHooks(AnalyticsFlowHooks):
         elif route == FollowUpRoute.STOCK_ONLY:
             required = {"market"}
         elif route == FollowUpRoute.REUSE_SQL:
+            required = set()
+        elif route in {FollowUpRoute.NARRATIVE_ONLY, FollowUpRoute.CHART_ONLY}:
             required = set()
         self._accessory_lane_requirements = required
         if required:
@@ -978,14 +989,27 @@ class _SingleAgentToolHooks(AnalyticsFlowHooks):
     @staticmethod
     def _sanitize_user_message(text: str) -> str:
         """
-        Remove internal-only blocks (e.g., 'Tool outputs') from user-visible narrative.
-        Keeps everything before the marker and trims trailing whitespace.
+        Remove internal-only blocks and CTA add-ons (e.g., 'Tool outputs', 'Would you like...') from
+        user-visible narrative. Keeps everything before the marker and trims trailing whitespace.
         """
         if not isinstance(text, str):
             return text
-        marker = text.lower().find("tool outputs")
-        if marker != -1:
-            return text[:marker].rstrip()
+        lower = text.lower()
+        markers = (
+            "tool outputs",
+            "would you like",
+            "additional metrics",
+            "chart_generation:",
+            "sql used:",
+            "elapsed_ms",
+        )
+        cutoff = len(text)
+        for marker in markers:
+            idx = lower.find(marker)
+            if idx != -1 and idx < cutoff:
+                cutoff = idx
+        if cutoff != len(text):
+            return text[:cutoff].rstrip()
         return text
 
     @staticmethod
@@ -1455,7 +1479,7 @@ class SingleAgentController:
         )
         # Hard-cap agent turn and retry budgets to curb repeated classification loops.
         self._max_turns = 3
-        self._tool_retry_limit = 3
+        self._tool_retry_limit = 1
         plan_template_cfg = self._agent_settings.get("plan_template") or {}
         if isinstance(plan_template_cfg, PlanTemplate):
             self._agent_plan_template = plan_template_cfg
@@ -1604,7 +1628,7 @@ class SingleAgentController:
             if is_financial is not None:
                 ctx.is_financial_query = bool(is_financial)
         session_follow_up = bool(getattr(ctx, "session_follow_up", False) or self._session_follow_up)
-        fresh_run = not session_follow_up and ctx.follow_up_route == FollowUpRoute.FULL_PIPELINE
+        fresh_run = not session_follow_up
         if fresh_run:
             ctx.force_full_fresh_pipeline = True
             refresh_flags = dict(getattr(ctx, "lane_refresh_required", {}) or {})
@@ -1622,9 +1646,8 @@ class SingleAgentController:
         revision_directive_active = bool(self._revision_directive or getattr(ctx, "revision_directive", None))
         has_revision_targets = bool(getattr(ctx, "revision_targets", None))
         agentic_revision_mode = bool(getattr(ctx, "agentic_revision_mode", False))
-        is_revision_follow_up = (
+        is_revision_follow_up = bool(
             session_follow_up
-            or ctx.follow_up_route != FollowUpRoute.FULL_PIPELINE
             or revision_directive_active
             or has_revision_targets
             or agentic_revision_mode
@@ -3839,6 +3862,51 @@ class SingleAgentController:
         delta = datetime.now(timezone.utc) - recorded
         return max(delta.total_seconds(), 0.0) <= ttl_seconds
 
+    async def _invoke_lane_executor_tool(
+        self,
+        *,
+        tool_name: str,
+        lane: Optional[str],
+        ctx: PlannerPhaseContext,
+        tool_args: Mapping[str, Any],
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """
+        Execute lane tools through lane executors to align Single Agent tool calls
+        with the shared executor abstraction (SQL/Chart/Analysis/Web/Market).
+        Falls back to planner registry when the lane is not supported.
+        """
+
+        if lane not in {"sql", "chart", "analysis", "web", "market"}:
+            return
+
+        try:
+            executors = build_pipeline_lane_executors(
+                self._planner._pipeline,
+                ctx=ctx,
+                registry=self._registry,
+                executed=set(getattr(ctx, "executed", set()) or set()),
+                tool_state=getattr(ctx, "tool_state", None),
+                mode_config=get_mode_config(self.flow_mode),
+                run_sql_lane=True,
+                run_chart_lane=True,
+            )
+        except Exception:
+            return
+
+        lane_map = {
+            "sql": getattr(executors, "sql", None),
+            "chart": getattr(executors, "chart", None),
+            "analysis": getattr(executors, "analysis", None),
+            "web": getattr(executors, "web", None),
+            "market": getattr(executors, "market", None),
+        }
+        executor = lane_map.get(lane)
+        if executor is None:
+            return
+
+        async for event in executor.run():
+            yield event
+
     async def _execute_planner_tool_for_agent(
         self,
         *,
@@ -4126,6 +4194,20 @@ class SingleAgentController:
         )
 
         async def _stream() -> AsyncGenerator[Dict[str, Any], None]:
+            # Prefer lane executors for lane tools to keep Single Agent aligned with executor abstractions.
+            if lane in {"sql", "chart", "analysis", "web", "market"}:
+                emitted = False
+                async for event in self._invoke_lane_executor_tool(
+                    tool_name=definition.name,
+                    lane=lane,
+                    ctx=ctx,
+                    tool_args=tool_args,
+                ):
+                    emitted = True
+                    yield event
+                if emitted:
+                    return
+
             async for event in self._registry.invoke(
                 definition.name,
                 self._planner._pipeline,
@@ -5285,6 +5367,14 @@ class SingleAgentController:
         changed = False
         lane_refresh_required = getattr(ctx, "lane_refresh_required", {}) or {}
 
+        def _receipts_ok(lane: str) -> bool:
+            receipts = self._lane_receipts(ctx, lane)
+            if not receipts:
+                return True
+            statuses = {str(getattr(r, "status", "") or "").lower() for r in receipts}
+            # Guard against null/empty statuses that led to premature "completed" in ledgers.
+            return any(status in {"completed", "reused", "ready"} for status in statuses)
+
         def _reused_hint(lane: str) -> bool:
             lane_key = "market" if lane == "stock" else lane
             return bool(
@@ -5293,11 +5383,11 @@ class SingleAgentController:
             )
 
         lane_ready_map = {
-            "sql": not self._is_sql_missing(ctx),
-            "chart": not self._is_chart_missing(ctx),
-            "analysis": not self._is_analysis_missing(ctx),
-            "market": not self._is_market_missing(ctx),
-            "web": not self._is_web_missing(ctx),
+            "sql": (not self._is_sql_missing(ctx)) and _receipts_ok("sql"),
+            "chart": (not self._is_chart_missing(ctx)) and _receipts_ok("chart"),
+            "analysis": (not self._is_analysis_missing(ctx)) and _receipts_ok("analysis"),
+            "market": (not self._is_market_missing(ctx)) and _receipts_ok("market"),
+            "web": (not self._is_web_missing(ctx)) and _receipts_ok("web"),
         }
         lane_ready_map["agent_coordination"] = lane_ready_map["chart"] and lane_ready_map["analysis"]
         lane_ready_map["chart_designer"] = lane_ready_map["chart"]
@@ -5346,6 +5436,17 @@ class SingleAgentController:
         if self._agentic_lane_targets == {"market"}:
             return FollowUpRoute.STOCK_ONLY
         return FollowUpRoute.REUSE_SQL
+
+    @staticmethod
+    def _route_from_lane_decision(lane: Optional[str]) -> FollowUpRoute:
+        normalized = str(lane or "").strip().lower()
+        if normalized == "chart":
+            return FollowUpRoute.CHART_ONLY
+        if normalized == "market":
+            return FollowUpRoute.STOCK_ONLY
+        if normalized == "sql":
+            return FollowUpRoute.REUSE_SQL
+        return FollowUpRoute.NARRATIVE_ONLY
 
     def _needs_lane_refresh(self, ctx: PlannerPhaseContext, lane: str) -> bool:
         refresh_flags = dict(getattr(ctx, "lane_refresh_required", {}) or {})
@@ -5530,15 +5631,69 @@ class SingleAgentController:
     def set_follow_up_guardrail(self, payload: Optional[Mapping[str, Any]]) -> None:
         if payload is None:
             self._follow_up_guardrail = None
-            self._pending_guardrails.pop("follow_up_classifier", None)
+            self._pending_guardrails.pop("follow_up_route", None)
             return
         try:
             sanitized = sanitize_for_json(dict(payload))
         except Exception:
             sanitized = dict(payload)
         self._follow_up_guardrail = sanitized
-        self._pending_guardrails["follow_up_classifier"] = sanitized
+        self._pending_guardrails["follow_up_route"] = sanitized
         self._flush_pending_guardrails()
+
+    def _lane_readiness_from_snapshot(self) -> Dict[str, bool]:
+        snapshot = self._session_snapshot
+        readiness: Dict[str, bool] = {
+            "sql": False,
+            "chart": False,
+            "analysis": False,
+            "market": False,
+            "web": False,
+        }
+        if snapshot is None:
+            return readiness
+        artifacts = ((snapshot.tool_cache or {}).get("analytics") or {}).get("artifacts") or {}
+        readiness["sql"] = bool(snapshot.last_sql or artifacts.get("sql_generation"))
+
+        chart_candidate = snapshot.last_chart_spec
+        if not chart_spec_has_numeric_payload(chart_candidate):
+            chart_artifact = artifacts.get("chart")
+            if isinstance(chart_artifact, Mapping):
+                chart_candidate = (
+                    chart_artifact.get("chart_spec")
+                    or chart_artifact.get("spec")
+                    or chart_artifact
+                )
+        readiness["chart"] = chart_spec_has_numeric_payload(chart_candidate)
+
+        readiness["analysis"] = bool(snapshot.last_analysis or artifacts.get("analysis"))
+        readiness["market"] = bool(artifacts.get("market"))
+        readiness["web"] = bool(artifacts.get("web"))
+        return readiness
+
+    def _plan_fresh_follow_up_route(self, query: str) -> Tuple[FollowUpRoute, Dict[str, Any]]:
+        readiness = self._lane_readiness_from_snapshot()
+        route = FollowUpRoute.FULL_PIPELINE
+        reason = "fresh_full_pipeline"
+        if readiness.get("sql") and readiness.get("chart"):
+            route = FollowUpRoute.REUSE_SQL
+            reason = "reuse_sql_with_cached_dataset"
+        elif readiness.get("market") and not readiness.get("sql") and not readiness.get("chart") and not readiness.get("analysis"):
+            route = FollowUpRoute.STOCK_ONLY
+            reason = "market_only_cached"
+
+        guardrail = {
+            "id": "follow_up_route",
+            "name": "Follow-Up Route",
+            "status": "agent_selected" if route != FollowUpRoute.FULL_PIPELINE else "default_full_pipeline",
+            "route": route.value,
+            "reason": reason,
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "session_follow_up": False,
+            "lanes_ready": [lane for lane, ready in readiness.items() if ready],
+            "query_hint": (query or "").strip()[:160],
+        }
+        return route, guardrail
 
     def _flush_pending_guardrails(self) -> None:
         if not self._pending_guardrails or self._agent_memory is None:
@@ -5685,6 +5840,8 @@ class SingleAgentController:
             "lane_states": lane_snapshot,
             "ts": datetime.utcnow().isoformat(),
         }
+        payload["error"] = reason
+        payload["message"] = f"Run cancelled due to {reason.replace('_', ' ')}"
         session_identifier = hook_ctx.get("session_id")
         if session_identifier:
             payload["session_id"] = session_identifier
@@ -5930,6 +6087,21 @@ class SingleAgentController:
             set(self._agentic_lane_targets) if self._agentic_revision_mode else set()
         )
         emit_prefill_summary = bool(self._agentic_revision_mode and self._agentic_lane_targets)
+
+        if not self._session_follow_up:
+            planned_route, guardrail_payload = self._plan_fresh_follow_up_route(query)
+            self.set_follow_up_route(planned_route)
+            self.set_follow_up_guardrail(guardrail_payload)
+            banner_config = FOLLOW_UP_BANNERS.get(
+                planned_route, FOLLOW_UP_BANNERS[FollowUpRoute.FULL_PIPELINE]
+            )
+            route_event = EventEmitter.progress("follow_up_route", banner_config["message"])
+            route_event["data"]["route"] = planned_route.value
+            route_event["data"]["banner"] = banner_config
+            route_event["data"]["lanes"] = []
+            if session_id:
+                route_event["data"]["session_id"] = session_id
+            yield apply_mode_metadata(route_event, self.flow_mode)
 
         state = await self._prepare_sequencer_state(query, session_id=session_id)
         # Route revision traffic through the AgentRuntime; keep fresh runs on the deterministic planner.
@@ -6514,6 +6686,20 @@ class SingleAgentController:
         if questions_bundle:
             updated_plan["questions"] = questions_bundle.to_dict()
         self._revision_inputs_plan = updated_plan
+        chosen_route = self._route_from_lane_decision(lane_hint)
+        self.set_follow_up_route(chosen_route)
+        follow_up_event = {
+            "event": "follow_up_route",
+            "data": {
+                "route": chosen_route.value,
+                "flow": self.flow_label,
+                "lanes": [lane_hint],
+                "revision": True,
+                "session_id": session_id,
+                "banner": FOLLOW_UP_BANNERS.get(chosen_route),
+            },
+        }
+        yield apply_mode_metadata(follow_up_event, self.flow_mode)
         if not self._revision_inputs_outcome:
             raise AgentRevisionLaneMissing("Revision lane execution missing from agent runtime.")
 
@@ -6654,6 +6840,7 @@ class SingleAgentController:
             revision_directive.selected_lane = selected_lane  # type: ignore[attr-defined]
 
         try:
+            self.set_follow_up_route(self._route_from_lane_decision(selected_lane))
             self._record_lane_decision(
                 lane=selected_lane,
                 planned_lane=lane_hint if isinstance(lane_hint, str) else "narrative",
