@@ -44,21 +44,6 @@
 #   Called from: Internal to analytics.flows.planner_executor
 #   Invokes: re.sub
 #   Why: Keeps analytics.flows.planner_executor from duplicating normalize calendar filters behavior across flows.
-# Function: _safe_year
-#   Role: Handles safe year logic for analytics.flows.planner_executor.
-#   Called from: Internal to analytics.flows.planner_executor
-#   Invokes: Internal helpers only
-#   Why: Keeps analytics.flows.planner_executor from duplicating safe year behavior across flows.
-# Function: _safe_date
-#   Role: Handles safe date logic for analytics.flows.planner_executor.
-#   Called from: Internal to analytics.flows.planner_executor
-#   Invokes: Internal helpers only
-#   Why: Keeps analytics.flows.planner_executor from duplicating safe date behavior across flows.
-# Function: _summarize_sql_rows
-#   Role: Handles summarize sql rows logic for analytics.flows.planner_executor.
-#   Called from: Internal to analytics.flows.planner_executor
-#   Invokes: analytics.flows.planner_executor._safe_year, analytics.flows.planner_executor._safe_date
-#   Why: Keeps analytics.flows.planner_executor from duplicating summarize sql rows behavior across flows.
 # Function: _set_sql_generation_artifact
 #   Role: Handles set sql generation artifact logic for analytics.flows.planner_executor.
 #   Called from: Internal to analytics.flows.planner_executor
@@ -259,66 +244,6 @@
 #   Called from: analytics.flows.planner_executor._apply_revision_context_hints, analytics.flows.planner_executor.PlannerPipeline.events
 #   Invokes: analytics.core.types.IntentModel, analytics.core.intent_impl.models.IntentResolutionModel, analytics.core.types.ClarifyRequestModel
 #   Why: Keeps analytics.flows.planner_executor from duplicating revision payload hydration behavior across flows.
-# Function: _build_schema_clarifier_request
-#   Role: Handles build schema clarifier request logic for analytics.flows.planner_executor.
-#   Called from: Internal to analytics.flows.planner_executor
-#   Invokes: analytics.core.types.ClarifyRequestModel, uuid.uuid4
-#   Why: Keeps analytics.flows.planner_executor from duplicating build schema clarifier request behavior across flows.
-# Function: _followup_to_clarify_request
-#   Role: Handles followup to clarify request logic for analytics.flows.planner_executor.
-#   Called from: Internal to analytics.flows.planner_executor
-#   Invokes: analytics.core.types.ClarifyRequestModel, uuid.uuid4
-#   Why: Keeps analytics.flows.planner_executor from duplicating followup to clarify request behavior across flows.
-# Function: _compose_intent_from_resolution
-#   Role: Merge structured slot resolution output with heuristic signals into a runtime IntentModel.
-#   Called from: Internal to analytics.flows.planner_executor
-#   Invokes: analytics.core.intent.detect_intent, analytics.core.intent.post_process_slots, analytics.core.types.IntentModel
-#   Why: Supports downstream analytics workflows that rely on _compose_intent_from_resolution.
-# Function: _normalize_metric_slots
-#   Role: Handles normalize metric slots logic for analytics.flows.planner_executor.
-#   Called from: Internal to analytics.flows.planner_executor
-#   Invokes: Internal helpers only
-#   Why: Keeps analytics.flows.planner_executor from duplicating normalize metric slots behavior across flows.
-# Function: _build_slot_assumptions
-#   Role: Handles build slot assumptions logic for analytics.flows.planner_executor.
-#   Called from: Internal to analytics.flows.planner_executor
-#   Invokes: Internal helpers only
-#   Why: Keeps analytics.flows.planner_executor from duplicating build slot assumptions behavior across flows.
-# Function: _apply_plan_metric_defaults
-#   Role: Ensure metric slots are populated when the query plan already specifies concrete metrics.
-#   Called from: Internal to analytics.flows.planner_executor
-#   Invokes: analytics.core.intent_impl.normalization.normalize_metrics, analytics.core.margins.detect_margin_choice_from_metrics, analytics.core.intent_impl.models.SlotStatusModel
-#   Why: Returns the normalized metric list that was applied, or an empty list if no updates occurred.
-# Function: _apply_plan_timeframe_defaults
-#   Role: Seed the timeframe slot from an existing plan so clarifications are skipped when a plan already encodes timeframe bounds.
-#   Called from: tests.analytics.test_clarification_auto_fill, analytics.flows.planner_executor._intent_phase
-#   Invokes: analytics.core.intent_impl.normalization.normalize_timeframe, datetime.datetime.utcnow
-#   Why: Keeps slot statuses, clarification answers, and agent metadata aligned with plan-derived timeframe defaults.
-# Function: _filter_answered_requests
-#   Role: Remove clarification requests whose slots are already satisfied by defaults or prior answers.
-#   Called from: tests.analytics.test_clarification_auto_fill, analytics.flows.planner_executor._clarification_phase
-#   Invokes: builtins.filter
-#   Why: Prevents redundant clarification prompts once a slot has been resolved.
-# Function: _request_allows_custom
-#   Role: Handles request allows custom logic for analytics.flows.planner_executor.
-#   Called from: Internal to analytics.flows.planner_executor
-#   Invokes: Internal helpers only
-#   Why: Keeps analytics.flows.planner_executor from duplicating request allows custom behavior across flows.
-# Function: _clarify_request_to_followup
-#   Role: Handles clarify request to followup logic for analytics.flows.planner_executor.
-#   Called from: Internal to analytics.flows.planner_executor
-#   Invokes: analytics.flows.planner_executor._request_allows_custom, analytics.core.intent_impl.models.FollowUpModel
-#   Why: Keeps analytics.flows.planner_executor from duplicating clarify request to followup behavior across flows.
-# Function: _upsert_slot_status
-#   Role: Handles upsert slot status logic for analytics.flows.planner_executor.
-#   Called from: Internal to analytics.flows.planner_executor
-#   Invokes: analytics.core.intent_impl.models.SlotStatusModel, analytics.core.intent_impl.normalization.normalize_timeframe, analytics.core.intent_impl.normalization.normalize_metrics
-#   Why: Keeps analytics.flows.planner_executor from duplicating upsert slot status behavior across flows.
-# Function: _refresh_followups
-#   Role: Handles refresh followups logic for analytics.flows.planner_executor.
-#   Called from: Internal to analytics.flows.planner_executor
-#   Invokes: analytics.flows.planner_executor._clarify_request_to_followup
-#   Why: Keeps analytics.flows.planner_executor from duplicating refresh followups behavior across flows.
 # Class: PlannerPipeline
 #   Role: Phase 2 workflow that emits SSE-friendly events for the memory pipeline.
 #   Called from: analytics.flows.pipeline_tools, analytics.flows.planner.analysis_lane, analytics.flows.planner.sql_lane, tests.analytics.test_pipeline_analysis_offtopic, +3 more
@@ -337,12 +262,12 @@
 # Function: _intent_phase
 #   Role: Handles intent phase logic for analytics.flows.planner_executor.
 #   Called from: tests.analytics.test_intent_resolution_telemetry
-#   Invokes: time.time, analytics.flows.planner_executor._normalize_metric_slots, analytics.flows.planner_executor._build_slot_assumptions, analytics.flows.planner_executor._compose_intent_from_resolution, +2 more
+#   Invokes: time.time, analytics.flows.planner.normalize_metric_slots, analytics.flows.planner.build_slot_assumptions, analytics.flows.planner._compose_intent_from_resolution, +2 more
 #   Why: Keeps analytics.flows.planner_executor from duplicating intent phase behavior across flows.
 # Function: _clarification_phase
 #   Role: Handles clarification phase logic for analytics.flows.planner_executor.
 #   Called from: Internal to analytics.flows.planner_executor
-#   Invokes: analytics.flows.planner_executor._refresh_followups, analytics.flows.planner_executor._auto_fill_missing_slots, analytics.artifacts.ClarificationArtifact, analytics.core.clarify.validate_clarification_answer, +2 more
+#   Invokes: analytics.flows.planner.run_clarification_stage
 #   Why: Keeps analytics.flows.planner_executor from duplicating clarification phase behavior across flows.
 # Function: _plan_phase
 #   Role: Handles plan phase logic for analytics.flows.planner_executor.
@@ -359,11 +284,6 @@
 #   Called from: analytics.flows.instrumentation, analytics.flows.multi_agent
 #   Invokes: analytics.flows.planner_executor.PlannerExecutorFlow
 #   Why: Supports downstream analytics workflows that rely on run_planner_executor.
-# Function: _auto_fill_missing_slots
-#   Role: Handles auto fill missing slots logic for analytics.flows.planner_executor.
-#   Called from: tests.analytics.test_clarification_auto_fill, tests.analytics.test_planner_executor_sql
-#   Invokes: Internal helpers only
-#   Why: Keeps analytics.flows.planner_executor from duplicating auto fill missing slots behavior across flows.
 # --- End Analytics Function/Class Map ---
 from __future__ import annotations
 import json
@@ -479,36 +399,73 @@ from .planner import (
     TOOL_QUEUE_SENTINEL,
     ToolParallelRuntime,
     _cached_event,
+    _safe_date,
+    _safe_year,
+    _summarize_sql_rows,
+    annotate_revision_event,
+    apply_revision_plan,
+    build_revision_plan,
+    build_revision_request_event,
+    build_slot_assumptions,
+    collect_tool_deltas_now,
     compose_chart_ready_payload,
     compose_sql_ready_payload,
     compose_stock_ready_payload,
     compose_web_ready_payload,
-    limit_sample_rows,
     derive_accessory_events,
-    ensure_analysis_dependencies,
-    annotate_revision_event,
-    build_revision_request_event,
-    build_revision_plan,
-    apply_revision_plan,
     derive_revision_targets,
+    drain_tool_state_async,
+    ensure_analysis_dependencies,
+    ensure_tool_receipt,
+    hash_payload,
+    limit_sample_rows,
+    maybe_emit_fresh_lane_event,
+    normalize_metric_slots,
     normalize_revision_targets,
+    run_analysis_stage,
+    run_chart_stage,
+    run_chart_pipeline_stage,
+    run_clarification_stage,
+    run_classification_stage,
+    run_sql_pipeline_stage,
+    run_intent_stage,
+    run_sql_stage,
     start_tool_parallelism,
     stream_analysis_lane,
     stream_chart_lane,
     stream_sql_lane,
-    hash_payload,
-    normalize_metric_slots,
-    build_slot_assumptions,
-    ensure_tool_receipt,
-    run_classification_stage,
-    run_intent_stage,
-    run_clarification_stage,
-    run_sql_stage,
-    run_chart_stage,
-    run_analysis_stage,
-    maybe_emit_fresh_lane_event,
-    collect_tool_deltas_now,
-    drain_tool_state_async,
+    _apply_plan_metric_defaults,
+    _apply_plan_timeframe_defaults,
+    _build_schema_clarifier_request,
+    _clarify_request_to_followup,
+    _compose_intent_from_resolution,
+    _filter_answered_requests,
+    _followup_to_clarify_request,
+    _refresh_followups,
+    _request_allows_custom,
+    _upsert_slot_status,
+    _auto_fill_missing_slots,
+    SCHEMA_CLARIFIER_ENABLED,
+    _normalize_calendar_filters,
+    _set_sql_generation_artifact,
+    _set_sql_execution_artifact,
+    # Text extraction helpers (moved to stage_helpers.py)
+    _extract_tldr,
+    _extract_bullets,
+    _split_line,
+    _normalize_sentence,
+    _collect_sentences,
+    _extract_key_numbers,
+    _extract_risk_watch,
+    _extract_next_steps,
+    _evaluate_latency_guardrail,
+    _build_evidence_entries,
+    # Snapshot helpers (moved to stage_helpers.py)
+    SNAPSHOT_MAX_AGE_SECONDS,
+    _artifacts_from_snapshot,
+    _dataset_preview_from_snapshot,
+    _snapshot_age_seconds_from_snapshot,
+    _is_snapshot_fresh,
 )
 from .pipeline_orchestrator import build_pipeline_lane_executors
 from analytics.services.response_search import (
@@ -531,22 +488,11 @@ DEFAULT_RESPONSE_SEARCH = ResponseSearchDependencies(
     generate_topic=generate_search_topic,
     perform_search=perform_response_search,
 )
-from analytics.core.clarify import (
-    detect_missing_slots,
-    merge_answers,
-    wait_for_answer_blocking,
-    compute_required_clarifications,
-    validate_clarification_answer,
-    get_validation_error_message,
-)
 from unified_responses_client import get_unified_client
 CONFIGS = get_configs()
 CONFIG_STORE = get_config_store()
 SUPERVISOR_TOOLS = SupervisorTools()
 logger = logging.getLogger(__name__)
-PRIMARY_CLASSIFIER_MODEL = os.getenv("OPENAI_CLASSIFIER_MODEL", "gpt-5-nano-2025-08-07")
-SECONDARY_CLASSIFIER_MODEL = os.getenv("OPENAI_SECONDARY_CLASSIFIER_MODEL", "gpt-4o-mini")
- 
 
 _TOOL_TO_ANALYSIS_LANE: Dict[str, str] = {
     "sql_generator": "sql",
@@ -567,12 +513,6 @@ _TOOL_TO_ANALYSIS_LANE: Dict[str, str] = {
     "web_research": "web",
 }
 
-_FLOW_MODE_TO_RESOLVER_MODE: Dict[FlowMode, str] = {
-    FlowMode.DIRECT: "single_agent",
-    FlowMode.SINGLE_AGENT: "fanout",
-    FlowMode.MULTI_AGENT: "multi_agent",
-}
-
 _INTENT_LANE_HINTS: Dict[str, Tuple[str, ...]] = {
     "market_share": ("sql", "chart", "analysis"),
     "ranking": ("sql", "chart", "analysis"),
@@ -589,9 +529,6 @@ _INTENT_LANE_HINTS: Dict[str, Tuple[str, ...]] = {
 }
 
 _TOOL_QUEUE_SENTINEL = TOOL_QUEUE_SENTINEL
-
-# Schema clarifier is now always enabled (legacy env flag removed)
-SCHEMA_CLARIFIER_ENABLED = True
 
 def _generate_chart_design(intent_key: Optional[str], plan: QueryPlanModel, data: List[Dict[str, Any]], spec: Dict[str, Any]) -> Dict[str, Any]:
     """Generate smart chart design metadata for frontend optimization."""
@@ -1040,276 +977,10 @@ class PlannerPhaseContext:
     revision_context: Optional[PlannerRevisionContext] = None
     revision_reasoning: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
-AGGREGATE_METRIC_MARKERS = (
-    "'r&d expense'",
-    "'revenue'",
-    "'operating cash flow'",
-    "'capex'",
-    "'capital expenditures'",
-    "'operating income'",
-    "'net income'",
-)
-
-SQL_DATASET_PREVIEW_LIMIT = 200
-_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
-_DEFAULT_GUARDRAIL_P50 = int(os.getenv("WEB_SEARCH_GUARDRAIL_P50_MS", "1200"))
-_DEFAULT_GUARDRAIL_P95 = int(os.getenv("WEB_SEARCH_GUARDRAIL_P95_MS", "2500"))
-_RISK_TERMS = (
-    "risk",
-    "headwind",
-    "concern",
-    "pressure",
-    "downside",
-    "volatility",
-    "slowdown",
-    "uncertain",
-    "watchlist",
-    "caution",
-)
-_ACTION_TERMS = (
-    "consider",
-    "monitor",
-    "focus",
-    "plan to",
-    "plan for",
-    "watch",
-    "track",
-    "follow up",
-    "prepare",
-    "should",
-    "next step",
-    "next steps",
-    "keep an eye",
-)
-_NUMERIC_HINTS = ("%", "bps", "basis point", "million", "billion", "m$", "bn")
-SNAPSHOT_MAX_AGE_SECONDS = int(os.getenv("ANALYTICS_SNAPSHOT_MAX_AGE_SECONDS", "600"))
+# Text extraction constants and snapshot helpers moved to planner/stage_helpers.py
 _WEB_TOOL_NAMES = {"web_retriever", "web_retriever_cached", "web_retriever_live"}
 _MARKET_TOOL_NAMES = {"stock_tracker", "market_question_a", "market_question_b"}
 FRESH_RUN_REASONING_EFFORT = "minimal"
-CLASSIFIER_TIMEOUT_SECONDS = float(os.getenv("ANALYTICS_CLASSIFIER_TIMEOUT_SECONDS", "6.0"))
-
-# Helper: classifier models (OpenAI-only to avoid Gemini schema mismatches)
-# Primary stays on the nano tier for cost/latency; fallback is the mandated mini.
-PRIMARY_CLASSIFIER_MODEL = os.getenv("OPENAI_CLASSIFIER_MODEL", "gpt-5-nano-2025-08-07")
-SECONDARY_CLASSIFIER_MODEL = os.getenv("OPENAI_SECONDARY_CLASSIFIER_MODEL", "gpt-5-mini-2025-08-07")
-
-def _normalize_calendar_filters(sql: str) -> str:
-    if not sql:
-        return sql
-    lower_sql = sql.lower()
-    if "calendar_quarter_num is null" not in lower_sql:
-        return sql
-    if "sum(" not in lower_sql:
-        return sql
-    if not any(marker in lower_sql for marker in AGGREGATE_METRIC_MARKERS):
-        return sql
-    return re.sub(r"calendar_quarter_num\s+IS\s+NULL", "calendar_quarter_num IS NOT NULL", sql, flags=re.IGNORECASE)
-
-
-def _safe_year(value: Any) -> Optional[int]:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, (int, float)):
-        return int(value)
-    if isinstance(value, str):
-        stripped = value.strip()
-        if stripped.isdigit() and len(stripped) <= 4:
-            return int(stripped)
-    return None
-
-
-def _safe_date(value: Any) -> Optional[date]:
-    if isinstance(value, date) and not isinstance(value, datetime):
-        return value
-    if isinstance(value, datetime):
-        return value.date()
-    if isinstance(value, str):
-        stripped = value.strip()
-        if not stripped:
-            return None
-        cleaned = stripped.rstrip("Z")
-        try:
-            return datetime.fromisoformat(cleaned).date()
-        except ValueError:
-            return None
-    return None
-
-
-def _summarize_sql_rows(data: Optional[List[Dict[str, Any]]]) -> Dict[str, Any]:
-    if not isinstance(data, list):
-        data = []
-    columns: List[str] = sorted({key for row in data if isinstance(row, dict) for key in row.keys()})
-    sample_rows: List[Dict[str, Any]] = []
-    for row in data[:5]:
-        if isinstance(row, dict):
-            sample_rows.append({column: row.get(column) for column in columns})
-    tickers = sorted(
-        {
-            str(row.get("ticker")).strip()
-            for row in data
-            if isinstance(row, dict) and row.get("ticker")
-        }
-    )
-    metric_keys = ("metric", "metric_name", "series", "measure", "line_item")
-    metrics = sorted(
-        {
-            str(row.get(key)).strip()
-            for row in data
-            if isinstance(row, dict)
-            for key in metric_keys
-            if row.get(key)
-        }
-    )
-    years: List[int] = []
-    dates: List[date] = []
-    for row in data:
-        if not isinstance(row, dict):
-            continue
-        for key, value in row.items():
-            lower = key.lower()
-            if "year" in lower:
-                maybe_year = _safe_year(value)
-                if maybe_year is not None:
-                    years.append(maybe_year)
-            if "date" in lower or "period" in lower:
-                maybe_date = _safe_date(value)
-                if maybe_date is not None:
-                    dates.append(maybe_date)
-    timeframe: Dict[str, Any] = {}
-    if years:
-        timeframe["years"] = {"min": min(years), "max": max(years)}
-    if dates:
-        timeframe["dates"] = {
-            "start": min(dates).isoformat(),
-            "end": max(dates).isoformat(),
-        }
-    return {
-        "columns": columns,
-        "sample_rows": sample_rows,
-        "tickers": tickers,
-        "metrics": metrics,
-        "timeframe": timeframe,
-    }
-
-
-def _build_classifier_fallback(reason: str) -> OffTopicClassifierSchema:
-    logger.warning("Classifier fallback engaged: %s", reason)
-    polite_message = (
-        "I'm focused on financial analytics questions. Please include a company, ticker, or metric if you need help."
-    )
-    return OffTopicClassifierSchema(
-        is_financial_query=True,
-        confidence=0.55,
-        topic_category="financial_analytics",
-        polite_decline_message=None,
-        suggested_rephrase=polite_message,
-    )
-
-
-async def _run_classifier_with_timeout(
-    ctx: "PlannerPhaseContext",
-    model_name: str,
-    provider: Optional[str],
-) -> OffTopicClassifierSchema:
-    try:
-        return await asyncio.wait_for(
-            classify_query_async(
-                ctx.query,
-                session_id=ctx.session_id,
-                model=model_name,
-                reasoning_effort="low",
-                provider=provider,
-            ),
-            timeout=CLASSIFIER_TIMEOUT_SECONDS,
-        )
-    except asyncio.TimeoutError:
-        logger.warning(
-            "[CLASSIFICATION] Model timeout after %.2fs (session=%s)",
-            CLASSIFIER_TIMEOUT_SECONDS,
-            ctx.session_id,
-        )
-        raise
-    except Exception:
-        logger.exception("[CLASSIFICATION] Model error; propagating")
-        raise
-
-
-async def _run_classifier_with_fallback(
-    ctx: "PlannerPhaseContext",
-    primary_model: str = PRIMARY_CLASSIFIER_MODEL,
-    secondary_model: str = SECONDARY_CLASSIFIER_MODEL,
-) -> OffTopicClassifierSchema:
-    """
-    Run the primary classifier (provider inferred from model); on failure, fall back to the secondary model/provider.
-    """
-    # Force OpenAI providers to avoid Gemini classifier 400s seen in ledger runs.
-    primary_provider = "openai"
-    secondary_provider = "openai"
-    try:
-        return await _run_classifier_with_timeout(ctx, primary_model, primary_provider)
-    except Exception as exc:  # pragma: no cover - fallback path validated separately
-        logger.warning(
-            "[CLASSIFICATION] Primary classifier failed; falling back to secondary model %s (provider=%s): %s",
-            secondary_model,
-            secondary_provider,
-            exc,
-        )
-        return await _run_classifier_with_timeout(ctx, secondary_model, secondary_provider)
-
-
-def _set_sql_generation_artifact(
-    ctx: PlannerPhaseContext,
-    *,
-    sql: Optional[str],
-    template_id: Optional[str],
-    attempts: Sequence[Dict[str, Any]],
-    llm_used: bool,
-    last_error_code: Optional[str],
-    last_error_detail: Optional[str],
-    status: str,
-) -> None:
-    ctx.artifacts.sql_generation = SQLGenerationArtifact(
-        query=ctx.query,
-        sql=sql,
-        template_id=template_id,
-        attempts=list(attempts),
-        llm_used=llm_used,
-        last_error=last_error_detail,
-        last_error_code=last_error_code,
-        last_error_detail=last_error_detail,
-        status=status,
-    )
-
-
-def _set_sql_execution_artifact(
-    ctx: PlannerPhaseContext,
-    *,
-    data: Optional[List[Dict[str, Any]]],
-    elapsed_ms: Optional[int],
-    status: str,
-    error: Optional[str] = None,
-    error_code: Optional[str] = None,
-) -> None:
-    dataset: List[Dict[str, Any]] = list(data or [])
-    summary = _summarize_sql_rows(dataset)
-    row_count = len(dataset) if dataset else None
-    dataset_preview = dataset[:SQL_DATASET_PREVIEW_LIMIT] if dataset else []
-    ctx.artifacts.sql_execution = SQLExecutionArtifact(
-        query=ctx.query,
-        row_count=row_count,
-        columns=summary["columns"],
-        tickers=summary["tickers"],
-        metrics=summary["metrics"],
-        timeframe=summary["timeframe"],
-        sample_rows=summary["sample_rows"],
-        dataset_preview=dataset_preview,
-        dataset=dataset,
-        elapsed_ms=elapsed_ms,
-        status=status,
-        error=error,
-        error_code=error_code,
-    )
-
 
 def _summarize_chart_series(plan: Any, spec: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
     series_summary: List[Dict[str, Any]] = []
@@ -1348,6 +1019,7 @@ def _summarize_chart_series(plan: Any, spec: Optional[Dict[str, Any]]) -> List[D
 
 
 def _get_sql_dataset(ctx: PlannerPhaseContext) -> List[Dict[str, Any]]:
+    """Get SQL dataset from context artifacts."""
     execution_artifact = getattr(ctx.artifacts, "sql_execution", None)
     if execution_artifact is None:
         return []
@@ -1360,210 +1032,10 @@ def _get_sql_dataset(ctx: PlannerPhaseContext) -> List[Dict[str, Any]]:
     return list(execution_artifact.sample_rows)
 
 
-def _extract_tldr(text: str) -> Optional[str]:
-    stripped = (text or "").strip()
-    if not stripped:
-        return None
-    first_paragraph = stripped.split("\n\n", 1)[0].strip()
-    first_sentence = first_paragraph.split(". ", 1)[0].strip()
-    return first_sentence[:240] if first_sentence else None
-
-
-def _extract_bullets(text: str, limit: int = 3) -> List[str]:
-    bullets: List[str] = []
-    for line in (text or "").splitlines():
-        stripped = line.strip()
-        if not stripped:
-            continue
-        if stripped[0] in {"-", "*", "\u2022"}:
-            content = stripped.lstrip("-* \u2022").strip()
-            if content:
-                bullets.append(content)
-        if len(bullets) >= limit:
-            break
-    return bullets
-
-
-def _split_line(line: str) -> List[str]:
-    stripped = line.strip()
-    if not stripped:
-        return []
-    if stripped[0] in {"-", "*", "\u2022"}:
-        cleaned = stripped.lstrip("-*\u2022 ").strip()
-        return [cleaned] if cleaned else []
-    return _SENTENCE_SPLIT.split(stripped)
-
-
-def _normalize_sentence(sentence: str) -> Optional[str]:
-    cleaned = re.sub(r"\s+", " ", sentence or "").strip()
-    return cleaned or None
-
-
-def _collect_sentences(text: str) -> List[str]:
-    sentences: List[str] = []
-    seen: set[str] = set()
-    for raw_line in (text or "").splitlines():
-        for fragment in _split_line(raw_line):
-            normalized = _normalize_sentence(fragment)
-            if not normalized:
-                continue
-            lowered = normalized.lower()
-            if lowered in seen:
-                continue
-            seen.add(lowered)
-            sentences.append(normalized)
-    return sentences
-
-
-def _extract_key_numbers(text: str, limit: int = 3) -> List[str]:
-    sentences = _collect_sentences(text)
-    key_numbers: List[str] = []
-    for sentence in sentences:
-        lowered = sentence.lower()
-        has_numeric = any(char.isdigit() for char in sentence)
-        if not has_numeric and not any(hint in lowered for hint in _NUMERIC_HINTS):
-            continue
-        key_numbers.append(sentence[:240])
-        if len(key_numbers) >= limit:
-            break
-    return key_numbers
-
-
-def _extract_risk_watch(text: str, limit: int = 2) -> List[str]:
-    sentences = _collect_sentences(text)
-    risks: List[str] = []
-    for sentence in sentences:
-        lowered = sentence.lower()
-        if any(term in lowered for term in _RISK_TERMS):
-            risks.append(sentence[:240])
-        if len(risks) >= limit:
-            break
-    return risks
-
-
-def _extract_next_steps(text: str, limit: int = 2) -> List[str]:
-    sentences = _collect_sentences(text)
-    next_steps: List[str] = []
-    for sentence in sentences:
-        lowered = sentence.lower()
-        if any(term in lowered for term in _ACTION_TERMS):
-            next_steps.append(sentence[:240])
-        if len(next_steps) >= limit:
-            break
-    return next_steps
-
-
-def _build_evidence_entries(
-    *,
-    web_context: Optional[Dict[str, Any]],
-    highlights: Optional[List[str]],
-    summary: Optional[str],
-    max_items: int = 5,
-) -> List[Dict[str, Any]]:
-    if not web_context or not isinstance(web_context, dict):
-        return []
-
-    snippets = web_context.get("snippets") or []
-    if not isinstance(snippets, list):
-        return []
-
-    claims: List[str] = []
-    if summary:
-        claims.append(summary)
-    if highlights:
-        claims.extend(highlights)
-
-    evidence: List[Dict[str, Any]] = []
-    seen_urls: set[str] = set()
-
-    for index, raw_snippet in enumerate(snippets):
-        if not isinstance(raw_snippet, dict):
-            continue
-        url = raw_snippet.get("url") or raw_snippet.get("source_url")
-        if not isinstance(url, str) or not url.strip():
-            continue
-        normalized_url = url.strip()
-        if normalized_url in seen_urls:
-            continue
-        title = raw_snippet.get("title") or raw_snippet.get("display_url")
-        snippet_text = raw_snippet.get("snippet") or raw_snippet.get("summary")
-
-        entry: Dict[str, Any] = {
-            "source_url": normalized_url,
-        }
-        if isinstance(title, str) and title.strip():
-            entry["title"] = title.strip()
-        display_url = raw_snippet.get("display_url")
-        if isinstance(display_url, str) and display_url.strip():
-            entry["display_url"] = display_url.strip()
-        if isinstance(snippet_text, str) and snippet_text.strip():
-            excerpt = snippet_text.strip()
-            if len(excerpt) > 260:
-                excerpt = excerpt[:257].rstrip() + "..."
-            entry["snippet"] = excerpt
-        published_at = raw_snippet.get("published_at")
-        if isinstance(published_at, str) and published_at.strip():
-            entry["published_at"] = published_at.strip()
-        if claims:
-            claim_idx = index if index < len(claims) else -1
-            if claim_idx >= 0:
-                entry["claim"] = claims[claim_idx]
-        annotation = raw_snippet.get("annotation") or {}
-        confidence = annotation.get("confidence")
-        if not isinstance(confidence, (int, float)):
-            derived = 1.0 - (0.15 * index)
-            confidence = max(0.1, round(derived, 2))
-        else:
-            confidence = round(max(0.0, min(float(confidence), 1.0)), 2)
-        entry["confidence"] = confidence
-        evidence.append(entry)
-        seen_urls.add(normalized_url)
-        if len(evidence) >= max_items:
-            break
-
-    return evidence
-
-
-def _evaluate_latency_guardrail(
-    stats: Optional[Dict[str, Any]],
-    *,
-    p50_threshold: Optional[int] = None,
-    p95_threshold: Optional[int] = None,
-) -> Optional[Dict[str, Any]]:
-    if not stats or not isinstance(stats, dict):
-        return None
-
-    observed_p50 = stats.get("p50_ms")
-    observed_p95 = stats.get("p95_ms") or stats.get("max_ms")
-    observed_total = stats.get("total_ms")
-    thresholds = {
-        "p50_ms": p50_threshold if p50_threshold is not None else _DEFAULT_GUARDRAIL_P50,
-        "p95_ms": p95_threshold if p95_threshold is not None else _DEFAULT_GUARDRAIL_P95,
-    }
-
-    violations: List[str] = []
-    if isinstance(observed_p50, (int, float)) and observed_p50 > thresholds["p50_ms"]:
-        violations.append("p50_ms")
-    if isinstance(observed_p95, (int, float)) and observed_p95 > thresholds["p95_ms"]:
-        violations.append("p95_ms")
-
-    status = "ok"
-    if violations:
-        status = "violation"
-
-    guardrail_payload: Dict[str, Any] = {
-        "status": status,
-        "violations": violations,
-        "observed": {
-            key: stats.get(key)
-            for key in ("total_ms", "p50_ms", "p95_ms", "max_ms", "samples")
-            if stats.get(key) is not None
-        },
-        "thresholds": thresholds,
-    }
-    if observed_total is not None and guardrail_payload["observed"].get("total_ms") is None:
-        guardrail_payload["observed"]["total_ms"] = observed_total
-    return guardrail_payload
+# Text extraction helpers moved to planner/stage_helpers.py:
+# _extract_tldr, _extract_bullets, _split_line, _normalize_sentence,
+# _collect_sentences, _extract_key_numbers, _extract_risk_watch,
+# _extract_next_steps, _build_evidence_entries, _evaluate_latency_guardrail
 
 
 def _derive_scope_banner(ctx: PlannerPhaseContext, spec: Dict[str, Any]) -> Optional[str]:
@@ -1928,52 +1400,9 @@ def _build_planner_result_payload(ctx: PlannerPhaseContext) -> Dict[str, Any]:
     return planner_result_model.model_dump()
 
 
-def _artifacts_from_snapshot(snapshot: Optional[SessionStateSnapshot]) -> Optional[PipelineArtifacts]:
-    if snapshot is None:
-        return None
-    analytics_cache = snapshot.tool_cache.get("analytics", {}) if hasattr(snapshot, "tool_cache") else {}
-    artifacts_payload = analytics_cache.get("artifacts")
-    if isinstance(artifacts_payload, dict):
-        try:
-            return PipelineArtifacts.from_dict(artifacts_payload)
-        except Exception:
-            return None
-    return None
+# _artifacts_from_snapshot, _dataset_preview_from_snapshot, _snapshot_age_seconds_from_snapshot,
+# _is_snapshot_fresh moved to planner/stage_helpers.py (P0.3 decomposition)
 
-
-def _dataset_preview_from_snapshot(snapshot: Optional[SessionStateSnapshot]) -> Optional[Dict[str, Any]]:
-    if snapshot is None or not hasattr(snapshot, "tool_cache"):
-        return None
-    preview_payload = snapshot.tool_cache.get("planner_dataset_preview")
-    if isinstance(preview_payload, dict):
-        rows = preview_payload.get("rows")
-        if isinstance(rows, list):
-            return preview_payload
-    return None
-
-
-def _snapshot_age_seconds_from_snapshot(snapshot: Dict[str, Any]) -> Optional[float]:
-    updated_at = snapshot.get("updated_at")
-    if not isinstance(updated_at, str):
-        return None
-    try:
-        stamp = datetime.fromisoformat(updated_at)
-    except ValueError:
-        return None
-    if stamp.tzinfo is None:
-        delta = datetime.utcnow() - stamp
-    else:
-        delta = datetime.now(stamp.tzinfo) - stamp
-    return max(delta.total_seconds(), 0.0)
-
-
-def _is_snapshot_fresh(snapshot: Optional[Dict[str, Any]]) -> bool:
-    if not isinstance(snapshot, dict):
-        return False
-    age_seconds = _snapshot_age_seconds_from_snapshot(snapshot)
-    if age_seconds is None:
-        return False
-    return age_seconds <= SNAPSHOT_MAX_AGE_SECONDS
 
 def _clear_tool_state(
     ctx: PlannerPhaseContext,
@@ -2829,386 +2258,6 @@ def _hydrate_revision_payload(ctx: PlannerPhaseContext, payload: Mapping[str, An
         ctx.assumptions = [str(item) for item in assumptions_payload if item not in (None, "")]
     elif hydrated_intent and getattr(hydrated_intent, "assumptions", None) and not ctx.assumptions:
         ctx.assumptions = list(hydrated_intent.assumptions or [])
-
-def _build_schema_clarifier_request(decision: ClarifierDecision, session_id: str) -> Optional[ClarifyRequestModel]:
-    if not decision.slot or not decision.question:
-        return None
-    options = decision.options or []
-    default_option = options[0] if options else None
-    input_type = "single" if options else "free"
-    return ClarifyRequestModel(
-        slot=decision.slot,
-        question=decision.question,
-        type=input_type,
-        options=options,
-        default=default_option,
-        reason=decision.reason or "Required by the schema clarifier.",
-        required=True,
-        request_id=str(uuid.uuid4()),
-        proposed=None,
-        proposed_confidence=None,
-        session_id=session_id,
-    )
-
-
-def _followup_to_clarify_request(followup: FollowUpModel, session_id: str) -> ClarifyRequestModel:
-    options = list(followup.suggestions or [])
-    allow_custom = followup.allow_custom if followup.allow_custom is not None else True
-    if options:
-        input_type = "single"
-    else:
-        input_type = "free"
-    default_option = options[0] if options else None
-    reason = followup.reason or "Additional information is required to continue."
-    return ClarifyRequestModel(
-        slot=followup.slot,
-        question=followup.prompt,
-        type=input_type,
-        options=options,
-        default=default_option if not allow_custom else None,
-        reason=reason,
-        required=True,
-        request_id=str(uuid.uuid4()),
-        proposed=default_option if allow_custom and default_option else None,
-        proposed_confidence=None,
-        session_id=session_id,
-        allow_custom=allow_custom,
-    )
-
-
-def _compose_intent_from_resolution(
-    query: str,
-    configs: Mapping[str, Any],
-    resolution: IntentResolutionModel,
-    *,
-    assumptions: Sequence[str] = (),
-) -> IntentModel:
-    """Merge structured slot resolution output with heuristic signals into a runtime IntentModel."""
-    heuristic_model = detect_intent(query, configs)
-
-    selection = getattr(resolution, "intent", None)
-    intent_key = getattr(selection, "key", None)
-    if not intent_key:
-        intent_key = heuristic_model.intent_key
-    confidence = getattr(selection, "confidence", None)
-    if confidence is None:
-        confidence = heuristic_model.confidence
-
-    slots_detected: Dict[str, Any] = {}
-    for slot_name, status in (resolution.slots or {}).items():
-        if not isinstance(status, SlotStatusModel):
-            continue
-        if status.value is None:
-            continue
-        slots_detected[slot_name] = status.value
-
-    slots_detected["original_query"] = query
-    normalized_slots = post_process_slots(slots_detected, query, configs)
-
-    reasoning = resolution.notes or heuristic_model.intent_reasoning or ""
-
-    combined_assumptions = list(heuristic_model.assumptions or [])
-    for assumption in assumptions:
-        if assumption not in combined_assumptions:
-            combined_assumptions.append(assumption)
-
-    return IntentModel(
-        intent_key=intent_key,
-        confidence=confidence or 0.0,
-        slots_detected=normalized_slots,
-        assumptions=combined_assumptions,
-        clarifications_suggested=list(heuristic_model.clarifications_suggested or []),
-        possible_intents=list(heuristic_model.possible_intents or []),
-        intent_reasoning=reasoning,
-    )
-
-
-_normalize_metric_slots = normalize_metric_slots
-
-
-_build_slot_assumptions = build_slot_assumptions
-
-
-def _apply_plan_metric_defaults(
-    ctx: PlannerPhaseContext,
-    plan: Optional[QueryPlanModel],
-    *,
-    configs: Mapping[str, Any],
-) -> List[str]:
-    """
-    Ensure metric slots are populated when the query plan already specifies concrete metrics.
-
-    Returns the normalized metric list that was applied, or an empty list if no updates occurred.
-    """
-    if plan is None:
-        return []
-    plan_metrics = list(getattr(plan, "metrics", []) or [])
-    if not plan_metrics:
-        return []
-
-    normalized_metrics = normalize_metrics(plan_metrics, configs)
-    if not normalized_metrics:
-        return []
-
-    intent_key = getattr(getattr(ctx, "intent", None), "intent_key", None)
-    if intent_key in {"margins_vs_peers", "margin_growth_vs_peers"}:
-        margin_choice = detect_margin_choice_from_metrics(normalized_metrics)
-        if margin_choice is None:
-            return []
-
-    updated = False
-    metric_status = ctx.slot_statuses.get("metric")
-    metric_value_missing = True
-    if isinstance(metric_status, SlotStatusModel):
-        value = metric_status.value
-        if isinstance(value, str) and value.strip():
-            metric_value_missing = False
-        elif isinstance(value, (list, tuple, set)) and any(v for v in value):
-            metric_value_missing = False
-        elif value is not None and not isinstance(value, (list, tuple, set, str)):
-            metric_value_missing = False
-
-    if metric_value_missing:
-        suggestions = list(metric_status.suggestions or []) if isinstance(metric_status, SlotStatusModel) else []
-        if not suggestions:
-            suggestions = normalized_metrics
-        reason = None
-        allow_custom = True
-        if isinstance(metric_status, SlotStatusModel):
-            reason = metric_status.reason
-            if metric_status.allow_custom is not None:
-                allow_custom = metric_status.allow_custom
-        ctx.slot_statuses["metric"] = SlotStatusModel(
-            status="defaulted",
-            value=normalized_metrics[0],
-            reason=reason or "Metric auto-filled from plan defaults.",
-            suggestions=suggestions,
-            allow_custom=allow_custom,
-        )
-        ctx.intent_resolution.slots["metric"] = ctx.slot_statuses["metric"]
-        updated = True
-
-    metrics_status = ctx.slot_statuses.get("metrics")
-    metrics_value_missing = True
-    if isinstance(metrics_status, SlotStatusModel):
-        value = metrics_status.value
-        if isinstance(value, (list, tuple, set)) and any(value):
-            metrics_value_missing = False
-        elif isinstance(value, str) and value.strip():
-            metrics_value_missing = False
-        elif value not in (None, "", []):
-            metrics_value_missing = False
-
-    if metrics_value_missing:
-        suggestions = list(metrics_status.suggestions or []) if isinstance(metrics_status, SlotStatusModel) else []
-        if not suggestions:
-            suggestions = normalized_metrics
-        reason = None
-        allow_custom = True
-        if isinstance(metrics_status, SlotStatusModel):
-            reason = metrics_status.reason
-            if metrics_status.allow_custom is not None:
-                allow_custom = metrics_status.allow_custom
-        ctx.slot_statuses["metrics"] = SlotStatusModel(
-            status="defaulted",
-            value=normalized_metrics,
-            reason=reason or "Metrics auto-filled from plan defaults.",
-            suggestions=suggestions,
-            allow_custom=allow_custom,
-        )
-        ctx.intent_resolution.slots["metrics"] = ctx.slot_statuses["metrics"]
-        updated = True
-
-    if updated:
-        if ctx.intent_resolution.followups:
-            ctx.intent_resolution.followups = [
-                followup for followup in ctx.intent_resolution.followups if followup.slot not in {"metric", "metrics"}
-            ]
-        ctx.slot_followups = [followup for followup in ctx.slot_followups if followup.slot not in {"metric", "metrics"}]
-
-    return normalized_metrics if updated else []
-
-
-def _apply_plan_timeframe_defaults(
-    ctx: PlannerPhaseContext,
-    plan: Optional[QueryPlanModel] = None,
-    *,
-    configs: Optional[Mapping[str, Any]] = None,
-) -> Optional[Dict[str, Any]]:
-    """
-    Populate the timeframe slot from an existing plan so we do not re-ask for a value the plan already encodes.
-    """
-    plan = plan or getattr(ctx, "provisional_plan", None) or getattr(ctx, "plan", None)
-    if plan is None:
-        return None
-    configs_dict = dict(configs or getattr(CONFIGS, "__dict__", {}) or {})
-    plan_tf = getattr(plan, "timeframe", None)
-    if not plan_tf:
-        return None
-    if hasattr(plan_tf, "model_dump"):
-        tf_payload = plan_tf.model_dump(exclude_none=True)
-        if not tf_payload:
-            return None
-    elif isinstance(plan_tf, Mapping):
-        non_null_fields = {k: v for k, v in plan_tf.items() if v not in (None, "", [], {})}
-        if not non_null_fields:
-            return None
-    else:
-        return None
-
-    normalized_tf = normalize_timeframe(plan_tf, ctx.query or "", configs_dict, origin="plan_default")
-    if not normalized_tf:
-        return None
-
-    existing_status = ctx.slot_statuses.get("timeframe")
-    if isinstance(existing_status, SlotStatusModel):
-        if existing_status.status in {"filled", "assumed", "defaulted"} and existing_status.value not in (None, "", [], {}):
-            return normalized_tf
-        suggestions = list(existing_status.suggestions or [])
-        allow_custom = existing_status.allow_custom
-        reason = existing_status.reason or "Timeframe auto-filled from plan defaults."
-    else:
-        suggestions = []
-        allow_custom = True
-        reason = "Timeframe auto-filled from plan defaults."
-
-    preset_value = normalized_tf.get("preset") if isinstance(normalized_tf, Mapping) else None
-    if preset_value and isinstance(preset_value, str) and preset_value not in suggestions:
-        suggestions.append(preset_value)
-
-    ctx.slot_statuses["timeframe"] = SlotStatusModel(
-        status="defaulted",
-        value=normalized_tf,
-        reason=reason,
-        suggestions=suggestions,
-        allow_custom=allow_custom if allow_custom is not None else True,
-    )
-
-    if ctx.intent_resolution:
-        ctx.intent_resolution.slots["timeframe"] = ctx.slot_statuses["timeframe"]
-        if ctx.intent_resolution.followups:
-            ctx.intent_resolution.followups = [followup for followup in ctx.intent_resolution.followups if followup.slot != "timeframe"]
-    if ctx.slot_followups:
-        ctx.slot_followups = [followup for followup in ctx.slot_followups if followup.slot != "timeframe"]
-
-    already_recorded = False
-    for answer in ctx.clarification_answers:
-        if isinstance(answer, Mapping) and answer.get("slot") == "timeframe":
-            already_recorded = True
-            break
-    if not already_recorded:
-        ctx.clarification_answers.append(
-            {
-                "slot": "timeframe",
-                "value": normalized_tf,
-                "source": "plan_default",
-                "ts": datetime.utcnow().isoformat(),
-            }
-        )
-
-    return normalized_tf
-
-
-def _request_allows_custom(request: ClarifyRequestModel) -> bool:
-    allow_custom = getattr(request, "allow_custom", None)
-    if allow_custom is not None:
-        return bool(allow_custom)
-    return not (request.type == "single" and request.options)
-
-
-def _clarify_request_to_followup(request: ClarifyRequestModel) -> FollowUpModel:
-    allow_custom = _request_allows_custom(request)
-    return FollowUpModel(
-        slot=request.slot,
-        prompt=request.question,
-        suggestions=list(request.options or []),
-        allow_custom=allow_custom,
-        reason=request.reason or None,
-    )
-
-
-def _filter_answered_requests(
-    requests: Sequence[ClarifyRequestModel], answered_slots: Set[str]
-) -> List[ClarifyRequestModel]:
-    """
-    Drop clarification requests whose slots have already been satisfied by defaults or prior answers.
-    """
-    normalized_answered = {
-        slot.strip().lower() for slot in answered_slots if isinstance(slot, str) and slot.strip()
-    }
-    filtered: List[ClarifyRequestModel] = []
-    for request in requests or []:
-        slot = getattr(request, "slot", None)
-        if not isinstance(slot, str):
-            continue
-        if slot.strip().lower() in normalized_answered:
-            continue
-        filtered.append(request)
-    return filtered
-
-
-def _upsert_slot_status(
-    ctx: PlannerPhaseContext,
-    slot: str,
-    *,
-    status: str,
-    value: Any,
-    reason: Optional[str] = None,
-    suggestions: Optional[Sequence[str]] = None,
-    allow_custom: Optional[bool] = None,
-) -> SlotStatusModel:
-    normalized_value = value
-    if status == "filled":
-        if slot == "timeframe":
-            normalized_tf = normalize_timeframe(value, '', CONFIGS.__dict__, origin='clarification')
-            if normalized_tf:
-                normalized_value = normalized_tf
-        elif slot in {"metric", "metrics"}:
-            normalized_metrics = normalize_metrics(value, CONFIGS.__dict__)
-            if slot == "metric":
-                if normalized_metrics:
-                    normalized_value = normalized_metrics[0]
-            else:
-                if normalized_metrics:
-                    normalized_value = normalized_metrics
-
-    existing = ctx.slot_statuses.get(slot)
-    merged_suggestions: List[str] = []
-    if existing and existing.suggestions:
-        merged_suggestions.extend(existing.suggestions)
-    if suggestions:
-        for item in suggestions:
-            if item not in merged_suggestions:
-                merged_suggestions.append(item)
-    resolved_reason = (
-        reason
-        if reason is not None
-        else (existing.reason if existing else None)
-    )
-    resolved_allow_custom = (
-        allow_custom
-        if allow_custom is not None
-        else (existing.allow_custom if existing is not None else None)
-    )
-    slot_model = SlotStatusModel(
-        status=status,  # type: ignore[arg-type]
-        value=normalized_value,
-        reason=resolved_reason,
-        suggestions=merged_suggestions,
-        allow_custom=resolved_allow_custom,
-    )
-    ctx.slot_statuses[slot] = slot_model
-    if ctx.intent_resolution is not None:
-        ctx.intent_resolution.slots[slot] = slot_model
-    return slot_model
-
-
-def _refresh_followups(ctx: PlannerPhaseContext, requests: Sequence[ClarifyRequestModel]) -> None:
-    followups = [_clarify_request_to_followup(request) for request in requests]
-    ctx.slot_followups = list(followups)
-    if ctx.intent_resolution is not None:
-        ctx.intent_resolution.followups = list(followups)
-
 
 class PlannerPipeline:
     """Phase 2 workflow that emits SSE-friendly events for the memory pipeline."""
@@ -4488,9 +3537,30 @@ class PlannerPipeline:
                 yield end_event
 
 
+    def _get_sql_dataset(self, ctx: PlannerPhaseContext) -> List[Dict[str, Any]]:
+        """Get SQL dataset from context - wrapper for module-level function."""
+        return _get_sql_dataset(ctx)
 
+    def _generate_chart_design(
+        self,
+        intent_key: Optional[str],
+        plan: QueryPlanModel,
+        data: List[Dict[str, Any]],
+        spec: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Generate chart design metadata - wrapper for module-level function."""
+        return _generate_chart_design(intent_key, plan, data, spec)
 
-
+    def _set_chart_artifact(
+        self,
+        ctx: PlannerPhaseContext,
+        *,
+        spec: Dict[str, Any],
+        chart_plan: Any,
+        chart_design: Dict[str, Any],
+    ) -> None:
+        """Set chart artifact on context - wrapper for module-level function."""
+        return _set_chart_artifact(ctx, spec=spec, chart_plan=chart_plan, chart_design=chart_design)
 
     async def run_classification(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[str, Any], None]:
         async for event in run_classification_stage(self, ctx):
@@ -4508,6 +3578,40 @@ class PlannerPipeline:
         async for event in _plan_phase(self, ctx):
             yield event
 
+    async def _maybe_run_deterministic_sql(
+        self,
+        ctx: PlannerPhaseContext,
+        *,
+        plan: Any,
+        templates: List[Dict[str, Any]],
+    ) -> Tuple[Optional[Dict[str, Any]], Optional[int]]:
+        """
+        Attempt deterministic SQL generation using template matching.
+
+        This method wraps SUPERVISOR_TOOLS.plan_and_select_template for use by
+        the sql_stage module, enabling both inline and staged SQL generation
+        to share the same deterministic logic.
+
+        Returns:
+            Tuple of (result dict with 'sql' and 'template' keys, elapsed_ms) or (None, None)
+        """
+        import time as time_module
+        intent = ctx.intent
+        if not intent:
+            return None, None
+        deterministic_start = time_module.time()
+        try:
+            result = SUPERVISOR_TOOLS.plan_and_select_template(intent)
+            elapsed_ms = int((time_module.time() - deterministic_start) * 1000)
+            return result, elapsed_ms
+        except Exception as exc:
+            logger.debug(
+                "[PlannerPipeline] Deterministic SQL generation failed: %s",
+                exc,
+                exc_info=True,
+            )
+            return None, None
+
     async def run_sql_pipeline(
         self,
         ctx: PlannerPhaseContext,
@@ -4517,6 +3621,32 @@ class PlannerPipeline:
         candidate_templates: List[Dict[str, Any]],
         selected_template_id: Optional[str],
     ) -> AsyncGenerator[Dict[str, Any], None]:
+        """
+        Execute the SQL pipeline (generation, validation, execution).
+
+        This method delegates to run_sql_pipeline_stage in the planner/sql_stage module,
+        which centralizes SQL lane logic for reuse across DIRECT, SINGLE_AGENT, and MULTI_AGENT modes.
+        """
+        async for event in run_sql_pipeline_stage(
+            self,
+            ctx,
+            intent=intent,
+            plan=plan,
+            candidate_templates=candidate_templates,
+            selected_template_id=selected_template_id,
+        ):
+            yield event
+
+    async def _legacy_run_sql_pipeline(
+        self,
+        ctx: PlannerPhaseContext,
+        *,
+        intent: IntentModel,
+        plan: QueryPlanModel,
+        candidate_templates: List[Dict[str, Any]],
+        selected_template_id: Optional[str],
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """Legacy inline SQL pipeline - preserved for reference during refactor transition."""
         timed_emitter = ctx.timed_emitter
         workflow_start = ctx.workflow_start
         session_id = ctx.session_id
@@ -5046,6 +4176,22 @@ class PlannerPipeline:
             return
 
     async def run_chart_phase(self, ctx: PlannerPhaseContext, *, intent: IntentModel, plan: QueryPlanModel) -> AsyncGenerator[Dict[str, Any], None]:
+        """
+        Execute the chart phase (planning, building, emitting events).
+
+        This method delegates to run_chart_pipeline_stage in the planner/chart_stage module,
+        which centralizes chart lane logic for reuse across DIRECT, SINGLE_AGENT, and MULTI_AGENT modes.
+        """
+        async for event in run_chart_pipeline_stage(
+            self,
+            ctx,
+            intent=intent,
+            plan=plan,
+        ):
+            yield event
+
+    async def _legacy_run_chart_phase(self, ctx: PlannerPhaseContext, *, intent: IntentModel, plan: QueryPlanModel) -> AsyncGenerator[Dict[str, Any], None]:
+        """Legacy inline chart phase - preserved for reference during refactor transition."""
         plan_payload: Optional[Dict[str, Any]] = None
         if hasattr(plan, "model_dump"):
             plan_payload = plan.model_dump()
@@ -6038,846 +5184,16 @@ async def _initialize_context(self, query: str, session_id: Optional[str]) -> Pl
 
 
 async def _classification_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[str, Any], None]:
-    # Reuse previously computed classification/slot resolution when the planner is re-entered
-    # (e.g., revision reruns or retries) to avoid duplicating UI status lines.
-    if ctx.classification is not None and ctx.intent_resolution is not None:
-        yield {
-            "event": "classification_reused",
-            "data": {
-                "message": "Reusing cached classification and slot resolution.",
-                "category": getattr(ctx.classification, "topic_category", None),
-                "confidence": getattr(ctx.classification, "confidence", None),
-                "ts": datetime.utcnow().isoformat(),
-            },
-        }
-        return
-
-    timed_emitter = ctx.timed_emitter
-    timed_emitter.start_step("classification")
-    classification_started_ts = datetime.utcnow().isoformat()
-    model_name = PRIMARY_CLASSIFIER_MODEL
-    classifier_provider = "gemini" if "gemini" in model_name.lower() else "openai"
-    yield {
-        "event": "classification_started",
-        "data": {
-            "message": "Starting query classification...",
-            "model": model_name,
-            "provider": classifier_provider,
-            "step": "classification",
-            "ts": classification_started_ts,
-        },
-    }
-
-    resolver_mode = _FLOW_MODE_TO_RESOLVER_MODE.get(ctx.flow_mode, "single_agent")
-    prior_slot_values = {
-        slot: status.value
-        for slot, status in (ctx.slot_statuses or {}).items()
-        if isinstance(status, SlotStatusModel) and status.value is not None
-    }
-    slot_task = asyncio.create_task(
-        resolve_intent_slots_async(
-            ctx.query,
-            CONFIGS.__dict__,
-            mode=resolver_mode,
-            context_slots=prior_slot_values or None,
-            session_id=ctx.session_id,
-        ),
-        name=f"intent-slots::{ctx.session_id}",
-    )
-    classifier_task = asyncio.create_task(
-        _run_classifier_with_fallback(ctx, PRIMARY_CLASSIFIER_MODEL, SECONDARY_CLASSIFIER_MODEL),
-        name=f"classifier::{ctx.session_id}",
-    )
-    try:
-        classification, slot_resolution = await asyncio.gather(classifier_task, slot_task)
-    except Exception:
-        classifier_task.cancel()
-        slot_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await classifier_task
-            await slot_task
-        raise
-
-    ctx.intent_resolution = slot_resolution
-    ctx.classification = classification
-    ctx.is_financial_query = bool(getattr(classification, "is_financial_query", False))
-    ctx.artifacts.classification = ClassificationArtifactModel(
-        query=ctx.query,
-        category=getattr(classification, "topic_category", None),
-        confidence=getattr(classification, "confidence", None),
-        is_financial=getattr(classification, "is_financial_query", None),
-        model=model_name,
-        raw=classification.model_dump(),
-    )
-    self._capture_artifacts(ctx)
-    reasoning_message = f"LLM classified topic '{classification.topic_category}'"
-    yield {
-        "event": "classification_reasoning",
-        "data": {
-            "thinking": reasoning_message,
-            "confidence": classification.confidence,
-            "category": classification.topic_category,
-            "step": "classification",
-            "ts": datetime.utcnow().isoformat(),
-        },
-    }
-    classification_elapsed = timed_emitter.end_step("classification")
-    classification_complete = {
-        "event": "classification_complete",
-        "data": {
-            "is_financial": ctx.is_financial_query,
-            "category": classification.topic_category,
-            "confidence": classification.confidence,
-            "ts": datetime.utcnow().isoformat(),
-        },
-    }
-    if classification_elapsed:
-        classification_complete["data"]["elapsed_ms"] = classification_elapsed
-    yield classification_complete
-    if not ctx.is_financial_query and not getattr(ctx, "is_revision_follow_up", False):
-        polite_default = (
-            "I'm focused on financial analytics questions. Please rephrase with a company, metric, or ticker so I can help."
-        )
-        decline_message = classification.polite_decline_message or polite_default
-        if len(decline_message) > 200:
-            decline_message = decline_message[:197] + "..."
-        decline_notice = {
-            "event": "classification_declined",
-            "data": {
-                "message": decline_message,
-                "category": classification.topic_category,
-                "confidence": classification.confidence,
-                "ts": datetime.utcnow().isoformat(),
-            },
-        }
-        yield decline_notice
-        final_event = {
-            "event": "final_answer",
-            "data": {
-                "message": decline_message,
-                "confidence": classification.confidence,
-                "category": classification.topic_category,
-                "ts": datetime.utcnow().isoformat(),
-            },
-        }
-        if getattr(classification, "suggested_rephrase", None):
-            final_event["data"]["suggested_rephrase"] = classification.suggested_rephrase
-        yield final_event
-        planner_payload = _build_planner_result_payload(ctx)
-        result_event = EventEmitter.result("planner_result", planner_payload)
-        result_event["event"] = "planner_result"
-        result_event["data"]["ts"] = datetime.utcnow().isoformat()
-        yield result_event
-        workflow_summary = {
-            "status": "off_topic",
-            "category": classification.topic_category,
-            "total_elapsed_ms": int((time.time() - ctx.workflow_start) * 1000),
-        }
-        workflow_complete = EventEmitter.result("workflow_complete", workflow_summary)
-        workflow_complete["event"] = "workflow_complete"
-        workflow_complete["data"]["ts"] = datetime.utcnow().isoformat()
-        yield workflow_complete
+    async for event in run_classification_stage(self, ctx):
+        yield event
 
 async def _intent_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[str, Any], None]:
-    timed_emitter = ctx.timed_emitter
-    intent_progress = EventEmitter.progress("intent_detection", "Detecting intent...")
-    intent_progress["data"]["ts"] = datetime.utcnow().isoformat()
-    yield intent_progress
-    timed_emitter.start_step("intent_detection")
-    yield {
-        "event": "intent_detection_started",
-        "data": {
-            "message": "Analyzing query intent...",
-            "ts": datetime.utcnow().isoformat(),
-        },
-    }
-    intent_start = time.time()
-    slot_resolution = ctx.intent_resolution
-    if slot_resolution is None:
-        resolver_mode = _FLOW_MODE_TO_RESOLVER_MODE.get(ctx.flow_mode, "single_agent")
-        prior_slot_values = {
-            slot: status.value
-            for slot, status in (ctx.slot_statuses or {}).items()
-            if isinstance(status, SlotStatusModel) and status.value is not None
-        }
-        slot_resolution = await resolve_intent_slots_async(
-            ctx.query,
-            CONFIGS.__dict__,
-            mode=resolver_mode,
-            context_slots=prior_slot_values or None,
-            session_id=ctx.session_id,
-        )
-    ctx.intent_resolution = slot_resolution
-    _normalize_metric_slots(slot_resolution)
-    ctx.intent_resolution = slot_resolution
-    ctx.slot_statuses = slot_resolution.slots
-    ctx.slot_followups = list(slot_resolution.followups or [])
-
-    slot_assumptions = _build_slot_assumptions(ctx.slot_statuses)
-    intent = _compose_intent_from_resolution(
-        ctx.query,
-        CONFIGS.__dict__,
-        slot_resolution,
-        assumptions=slot_assumptions,
-    )
-    ctx.intent = intent
-    ctx.assumptions = list(intent.assumptions or [])
-
-    intent_elapsed = timed_emitter.end_step("intent_detection")
-    resolver_status = "structured"
-    if isinstance(slot_resolution.notes, str) and "fell back" in slot_resolution.notes.lower():
-        resolver_status = "fallback"
-
-    ctx.provisional_plan = build_query_plan(intent, CONFIGS.__dict__)
-    ctx.template = choose_template(intent, ctx.provisional_plan, CONFIGS.__dict__)
-
-    plan_timeframe_defaults = _apply_plan_timeframe_defaults(
-        ctx,
-        ctx.provisional_plan,
-        configs=CONFIGS.__dict__,
-    )
-    if plan_timeframe_defaults:
-        slot_assumptions = _build_slot_assumptions(ctx.slot_statuses)
-        intent = _compose_intent_from_resolution(
-            ctx.query,
-            CONFIGS.__dict__,
-            ctx.intent_resolution,
-            assumptions=slot_assumptions,
-        )
-        ctx.intent = intent
-        ctx.assumptions = list(intent.assumptions or [])
-
-    plan_metric_defaults = _apply_plan_metric_defaults(
-        ctx,
-        ctx.provisional_plan,
-        configs=CONFIGS.__dict__,
-    )
-    if plan_metric_defaults:
-        slot_assumptions = _build_slot_assumptions(ctx.slot_statuses)
-        intent = _compose_intent_from_resolution(
-            ctx.query,
-            CONFIGS.__dict__,
-            ctx.intent_resolution,
-            assumptions=slot_assumptions,
-        )
-        ctx.intent = intent
-        ctx.assumptions = list(intent.assumptions or [])
-
-    slot_status_payload = {
-        slot: {
-            "status": status.status,
-            "value": status.value,
-            "reason": status.reason,
-            "suggestions": list(status.suggestions or []),
-            "allow_custom": status.allow_custom,
-        }
-        for slot, status in ctx.slot_statuses.items()
-    }
-
-    clarification_sources: Set[str] = set()
-    if ctx.slot_followups:
-        clarification_sources.add("structured_resolver")
-    if resolver_status == "fallback":
-        clarification_sources.add("heuristic_fallback")
-
-    schema_decision: Optional[ClarifierDecision] = None
-    if SCHEMA_CLARIFIER_ENABLED and ctx.template is not None:
-        try:
-            schema_decision = await asyncio.to_thread(
-                decide_schema_clarification,
-                intent,
-                ctx.provisional_plan,
-                session_id=ctx.session_id,
-                template_id=intent.intent_key or (ctx.template.get("name") if isinstance(ctx.template, dict) else None),
-                slot_statuses=ctx.slot_statuses,
-            )
-        except Exception as exc:
-            logger.exception("[SCHEMA_CLARIFIER] decision failed: %s", exc)
-            schema_decision = ClarifierDecision(action="fallback", missing_slots=[])
-    elif SCHEMA_CLARIFIER_ENABLED:
-        schema_decision = ClarifierDecision(action="fallback", missing_slots=[])
-
-    ctx.clarifier_agent_invoked = bool(schema_decision)
-    ctx.schema_clarifier_decision = schema_decision
-    intent_raw = intent.model_dump()
-    try:
-        intent_raw["slot_resolution"] = slot_resolution.model_dump()
-    except Exception:  # pragma: no cover - defensive
-        intent_raw["slot_resolution"] = {}
-    schema_requires_clarification = bool(schema_decision and getattr(schema_decision, "action", None) == "request")
-    if SCHEMA_CLARIFIER_ENABLED:
-        clarifier_event = EventEmitter.progress(
-            "schema_clarifier",
-            f"Schema clarifier decision: {(schema_decision.action if schema_decision else 'disabled')}",
-        )
-        clarifier_event["data"].update(
-            {
-                "action": schema_decision.action if schema_decision else "disabled",
-                "missing_slots": schema_decision.missing_slots if schema_decision else [],
-                "enabled": True,
-                "ts": datetime.utcnow().isoformat(),
-            }
-        )
-        if schema_decision and schema_decision.slot:
-            clarifier_event["data"]["slot"] = schema_decision.slot
-        yield clarifier_event
-        completion_action = schema_decision.action if schema_decision else "disabled"
-        if completion_action in {"skip", "fallback", "disabled"}:
-            yield EventEmitter.complete(
-                "schema_clarifier",
-                f"Schema clarifier {completion_action}",
-            )
-
-    clarifier_request: Optional[ClarifyRequestModel] = None
-    if schema_decision and schema_decision.action == "skip":
-        official_clarifications: List[ClarifyRequestModel] = []
-    else:
-        official_clarifications = compute_required_clarifications(
-            intent, ctx.provisional_plan, ctx.template, CONFIGS.__dict__
-        )
-        if official_clarifications:
-            clarification_sources.add("structured_resolver")
-        if schema_decision and schema_decision.action == "clarify" and not official_clarifications and not ctx.slot_followups:
-            clarifier_request = _build_schema_clarifier_request(schema_decision, ctx.session_id)
-            if clarifier_request:
-                official_clarifications = [clarifier_request] + [
-                    request for request in official_clarifications if request.slot != clarifier_request.slot
-                ]
-                clarification_sources.add("schema_clarifier")
-    slot_followup_requests: List[ClarifyRequestModel] = [
-        _followup_to_clarify_request(followup, ctx.session_id) for followup in ctx.slot_followups
-    ]
-    if slot_followup_requests:
-        clarification_sources.add("structured_resolver")
-    if slot_followup_requests:
-        existing_slots = {request.slot for request in slot_followup_requests}
-        remaining_requests = [
-            request for request in official_clarifications if request.slot not in existing_slots
-        ]
-        official_clarifications = slot_followup_requests + remaining_requests
-    deduped_requests: List[ClarifyRequestModel] = []
-    seen_slots: set[str] = set()
-    for request in official_clarifications:
-        if request.slot in seen_slots:
-            continue
-        seen_slots.add(request.slot)
-        deduped_requests.append(request)
-    for request in deduped_requests:
-        existing_status = ctx.slot_statuses.get(request.slot)
-        allow_custom_flag = _request_allows_custom(request)
-        status_name = existing_status.status if existing_status else "missing"
-        value = existing_status.value if existing_status else None
-        _upsert_slot_status(
-            ctx,
-            request.slot,
-            status=status_name,
-            value=value,
-            reason=request.reason,
-            suggestions=request.options,
-            allow_custom=allow_custom_flag,
-        )
-    _refresh_followups(ctx, deduped_requests)
-    slot_followup_payload = [
-        {
-            "slot": followup.slot,
-            "prompt": followup.prompt,
-            "suggestions": list(followup.suggestions or []),
-            "allow_custom": followup.allow_custom,
-            "reason": followup.reason,
-        }
-        for followup in ctx.slot_followups
-    ]
-    ctx.clarifications = deduped_requests
-    ctx.assumptions = list(ctx.assumptions or [])
-    ctx.clarification_sources = clarification_sources
-    ctx.clarification_rounds = 0
-    clarifications_required_flag = bool(deduped_requests) or schema_requires_clarification
-    ctx.artifacts.intent = IntentArtifactModel(
-        query=ctx.query,
-        intent_key=getattr(intent, "intent_key", None),
-        confidence=getattr(intent, "confidence", None),
-        slots=dict(getattr(intent, "slots_detected", {}) or {}),
-        clarifications_needed=clarifications_required_flag,
-        low_confidence=getattr(intent, "low_confidence", None),
-        raw=intent_raw,
-    )
-    self._capture_artifacts(ctx)
-    clarifications_needed = bool(deduped_requests)
-    confidence_sufficient = (intent.confidence or 0.0) >= 0.75
-
-    log_intent_resolution(
-        intent_key=intent.intent_key,
-        confidence=intent.confidence,
-        slot_statuses=slot_status_payload,
-        slot_followups=slot_followup_payload,
-        elapsed_ms=intent_elapsed or int((time.time() - intent_start) * 1000),
-        session_id=ctx.session_id,
-        flow=ctx.flow_mode.value if isinstance(ctx.flow_mode, FlowMode) else str(ctx.flow_mode),
-        resolver_status=resolver_status,
-        clarification_sources=sorted(clarification_sources),
-    )
-
-    intent_complete = {
-        "event": "intent_detection_complete",
-        "data": {
-            "intent_key": intent.intent_key,
-            "confidence": intent.confidence,
-            "slots_detected": intent.slots_detected,
-            "slot_statuses": slot_status_payload,
-            "slot_followups": slot_followup_payload,
-            "clarification_sources": sorted(clarification_sources),
-            "resolver_notes": slot_resolution.notes,
-            "ts": datetime.utcnow().isoformat(),
-            "elapsed_ms": int((time.time() - intent_start) * 1000),
-        },
-    }
-    if intent_elapsed:
-        intent_complete["data"]["elapsed_ms"] = intent_elapsed
-    yield intent_complete
-
-    if clarifications_needed:
-        intent_status_event = EventEmitter.intent_draft(
-            confidence=intent.confidence,
-            clarifications_needed=True,
-            clarifications_count=len(deduped_requests),
-        )
-    else:
-        intent_status_event = EventEmitter.intent_decided(
-            key=intent.intent_key,
-            confidence=intent.confidence,
-            clarifications_needed=False,
-        )
-        if not confidence_sufficient:
-            intent_status_event["data"]["low_confidence"] = True
-        if schema_decision:
-            intent_status_event["data"]["schema_clarifier_action"] = schema_decision.action
-            if schema_decision.missing_slots:
-                intent_status_event["data"]["schema_clarifier_missing"] = schema_decision.missing_slots
-
-    intent_status_event["data"]["slot_statuses"] = slot_status_payload
-    intent_status_event["data"]["slot_followups"] = slot_followup_payload
-    intent_status_event["data"]["clarification_sources"] = sorted(clarification_sources)
-    intent_status_event["data"]["ts"] = datetime.utcnow().isoformat()
-    if intent_elapsed:
-        intent_status_event["data"]["elapsed_ms"] = intent_elapsed
-    yield intent_status_event
+    async for event in run_intent_stage(self, ctx):
+        yield event
 
 async def _clarification_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[str, Any], None]:
-    intent = ctx.intent
-    provisional_plan = ctx.provisional_plan
-    template = ctx.template
-    if intent is None or provisional_plan is None or ctx.halted:
-        return
-    timed_emitter = ctx.timed_emitter
-    session_id = ctx.session_id
-    official_clarifications = list(ctx.clarifications)
-    assumptions = list(ctx.assumptions)
-    rounds = ctx.clarification_rounds
-    blocking_mode = bool(getattr(ctx, "blocking_clarification", False))
-    timeout_seconds = float(getattr(ctx, "clarification_timeout_seconds", 60.0) or 60.0)
-    clar_answers: List[Dict[str, Any]] = list(getattr(ctx, "clarification_answers", []))
-    answered_slots: set[str] = set()
-    for slot_name, status in (ctx.slot_statuses or {}).items():
-        if isinstance(status, SlotStatusModel) and status.status != "missing":
-            answered_slots.add(slot_name)
-    for answer in clar_answers:
-        if isinstance(answer, Mapping) and isinstance(answer.get("slot"), str):
-            answered_slots.add(answer["slot"])
-        elif isinstance(answer, str):
-            answered_slots.add(answer)
-
-    official_clarifications = _filter_answered_requests(official_clarifications, answered_slots)
-    ctx.clarifications = list(official_clarifications)
-    ctx.clarifications_needed = bool(official_clarifications)
-    all_answered_slots: set[str] = set(answered_slots)
-    history_entries: List[Dict[str, Any]] = []
-    _refresh_followups(ctx, official_clarifications)
-    if official_clarifications:
-        timed_emitter.start_step("clarification")
-        missing_slots = [req.slot for req in official_clarifications]
-        yield {
-            "event": "clarification_needed",
-            "data": {
-                "missing_fields": missing_slots,
-                "ts": datetime.utcnow().isoformat(),
-            },
-        }
-        clarification_progress = EventEmitter.progress(
-            "clarification", "Clarifying requirements..."
-        )
-        clarification_progress["data"]["ts"] = datetime.utcnow().isoformat()
-        yield clarification_progress
-        yield {
-            "event": "clarification_loop_start",
-            "data": {
-                "total_clarifications": len(official_clarifications),
-                "missing_slots": missing_slots,
-                "ts": datetime.utcnow().isoformat(),
-            },
-        }
-        while official_clarifications and rounds < 3:
-            slot_request = official_clarifications[0]
-            request_payload = {
-                "request_id": slot_request.request_id,
-                "slot": slot_request.slot,
-                "question": slot_request.question,
-                "type": slot_request.type,
-                "options": slot_request.options,
-                "default": slot_request.default,
-                "proposed": slot_request.proposed,
-                "proposed_confidence": slot_request.proposed_confidence,
-                "reason": slot_request.reason,
-                "required": slot_request.required,
-                "round": rounds + 1,
-                "remaining": len(official_clarifications),
-            }
-            clarification_event = EventEmitter.clarification_request(
-                session_id, request_payload
-            )
-            clarification_event["data"]["ts"] = datetime.utcnow().isoformat()
-            yield clarification_event
-            history_entry: Dict[str, Any] = {"request": dict(request_payload)}
-            try:
-                answer = await asyncio.wait_for(
-                    wait_for_answer_blocking(session_id, slot_request.request_id),
-                    timeout=timeout_seconds,
-                )
-            except asyncio.TimeoutError:
-                if blocking_mode:
-                    timeout_payload = {
-                        "session_id": session_id,
-                        "request_id": slot_request.request_id,
-                        "slot": slot_request.slot,
-                        "ts": datetime.utcnow().isoformat(),
-                    }
-                    follow_up_route = getattr(ctx, "follow_up_route", None)
-                    if follow_up_route is not None:
-                        timeout_payload["follow_up_route"] = getattr(follow_up_route, "value", None)
-                    timeout_event = EventEmitter.error(
-                        "workflow_error",
-                        f"Timeout waiting for {slot_request.slot} clarification.",
-                        details=timeout_payload,
-                        code="clarification_timeout",
-                    )
-                    timeout_event["event"] = "workflow_error"
-                    timeout_event.setdefault("data", {}).update(timeout_payload)
-                    timeout_event["data"]["error_code"] = "clarification_timeout"
-                    yield timeout_event
-                    ctx.halted = True
-                    ctx.halt_reason = "clarification_timeout"
-                    ctx.clarifications_needed = True
-                    return
-                timeout_event = EventEmitter.progress(
-                    "clarification_timeout",
-                    f"Timeout waiting for {slot_request.slot} clarification. Using default value.",
-                )
-                timeout_event["data"]["ts"] = datetime.utcnow().isoformat()
-                yield timeout_event
-                if slot_request.default:
-                    from analytics.core.types import ClarifyAnswerModel
-                    answer = ClarifyAnswerModel(
-                        session_id=session_id,
-                        request_id=slot_request.request_id,
-                        slot=slot_request.slot,
-                        value=slot_request.default,
-                        ts=datetime.utcnow().isoformat(),
-                    )
-                else:
-                    official_clarifications.pop(0)
-                    history_entry["response"] = {
-                        "status": "timeout_no_value",
-                        "slot": slot_request.slot,
-                    }
-                    _upsert_slot_status(
-                        ctx,
-                        slot_request.slot,
-                        status="missing",
-                        value=None,
-                        reason=slot_request.reason,
-                        suggestions=slot_request.options,
-                        allow_custom=_request_allows_custom(slot_request),
-                    )
-                    _refresh_followups(ctx, official_clarifications)
-                    history_entries.append(history_entry)
-                    continue
-            if answer:
-                is_valid = validate_clarification_answer(answer, slot_request)
-                if is_valid:
-                    ack_event = EventEmitter.clarification_ack(
-                        session_id, slot_request.request_id, answer.value
-                    )
-                    ack_event["data"].update(
-                        {
-                            "slot": slot_request.slot,
-                            "ts": datetime.utcnow().isoformat(),
-                        }
-                    )
-                    slot_status = _upsert_slot_status(
-                        ctx,
-                        slot_request.slot,
-                        status="filled",
-                        value=answer.value,
-                        reason=slot_request.reason,
-                        suggestions=slot_request.options,
-                        allow_custom=_request_allows_custom(slot_request),
-                    )
-                    ack_event["data"]["slot_status"] = slot_status.model_dump()
-                    yield ack_event
-                    intent, provisional_plan, merge_assumptions = await merge_answers(
-                        intent, provisional_plan, [answer], CONFIGS.__dict__
-                    )
-                    assumptions.extend(merge_assumptions)
-                    history_entry["response"] = {
-                        "status": "accepted",
-                        "slot": answer.slot,
-                        "value": answer.value,
-                    }
-                    clar_answers.append(
-                        {
-                            "slot": answer.slot,
-                            "value": answer.value,
-                            "request_id": slot_request.request_id,
-                            "ts": answer.ts or datetime.utcnow().isoformat(),
-                        }
-                    )
-                    template = choose_template(
-                        intent, provisional_plan, CONFIGS.__dict__
-                    )
-                    new_clarifications = compute_required_clarifications(
-                        intent, provisional_plan, template, CONFIGS.__dict__
-                    )
-                    remaining_original = official_clarifications[1:]
-                    all_answered_slots.add(answer.slot)
-                    combined_requests: List[ClarifyRequestModel] = []
-                    for new_req in new_clarifications:
-                        if new_req.slot not in all_answered_slots and all(
-                            new_req.slot != existing.slot for existing in combined_requests
-                        ):
-                            combined_requests.append(new_req)
-                    for orig_req in remaining_original:
-                        if (
-                            orig_req.slot not in all_answered_slots
-                            and all(orig_req.slot != existing.slot for existing in combined_requests)
-                        ):
-                            combined_requests.append(orig_req)
-                    official_clarifications = combined_requests
-                    _refresh_followups(ctx, official_clarifications)
-                    rounds += 1
-                else:
-                    error_message = get_validation_error_message(answer, slot_request)
-                    error_event = EventEmitter.progress(
-                        "clarification_error",
-                        error_message or f"Invalid value for {slot_request.slot}: {answer.value}",
-                    )
-                    error_event["data"]["ts"] = datetime.utcnow().isoformat()
-                    yield error_event
-                    official_clarifications = official_clarifications[1:]
-                    _upsert_slot_status(
-                        ctx,
-                        slot_request.slot,
-                        status="missing",
-                        value=None,
-                        reason=error_message or slot_request.reason,
-                        suggestions=slot_request.options,
-                        allow_custom=_request_allows_custom(slot_request),
-                    )
-                    _refresh_followups(ctx, official_clarifications)
-                    history_entry["response"] = {
-                        "status": "rejected",
-                        "slot": answer.slot,
-                        "value": answer.value,
-                        "error": error_message,
-                    }
-            else:
-                official_clarifications = official_clarifications[1:]
-                history_entry["response"] = {
-                    "status": "no_answer",
-                    "slot": slot_request.slot,
-                }
-                _upsert_slot_status(
-                    ctx,
-                    slot_request.slot,
-                    status="missing",
-                    value=None,
-                    reason=slot_request.reason,
-                    suggestions=slot_request.options,
-                    allow_custom=_request_allows_custom(slot_request),
-                )
-                _refresh_followups(ctx, official_clarifications)
-            if history_entry not in history_entries:
-                history_entries.append(history_entry)
-        clarification_elapsed = timed_emitter.end_step("clarification")
-        resolved_event = EventEmitter.intent_resolved(
-            key=intent.intent_key,
-            confidence=intent.confidence,
-            rounds=rounds,
-        )
-        resolved_event["data"].update(
-            {
-                "assumptions": assumptions,
-                "ts": datetime.utcnow().isoformat(),
-            }
-        )
-        if clarification_elapsed:
-            resolved_event["data"]["elapsed_ms"] = clarification_elapsed
-        yield resolved_event
-        pending_slots = sorted(
-            {req.slot for req in official_clarifications if getattr(req, "slot", None)}
-        )
-        yield {
-            "event": "clarification_complete",
-            "data": {
-                "rounds": rounds,
-                "missing_slots": pending_slots,
-                "ts": datetime.utcnow().isoformat(),
-            },
-        }
-    else:
-        yield {
-            "event": "clarification_skipped",
-            "data": {
-                "reason": "All required slots satisfied",
-                "ts": datetime.utcnow().isoformat(),
-            },
-        }
-    ctx.intent = intent
-    ctx.provisional_plan = provisional_plan
-    ctx.template = template
-    ctx.assumptions = assumptions
-    ctx.clarifications_needed = bool(official_clarifications)
-    ctx.clarification_rounds = rounds
-    ctx.clarifications = official_clarifications
-
-    remaining_missing: List[str]
-    auto_answers: List[ClarifyAnswerModel]
-    if blocking_mode:
-        remaining_missing, auto_answers = [], []
-    else:
-        remaining_missing, auto_answers = _auto_fill_missing_slots(ctx, assumptions)
-    if auto_answers:
-        clar_answers.extend([answer.model_dump(exclude_none=True) for answer in auto_answers])
-    ctx.clarification_answers = clar_answers
-    if remaining_missing:
-        regenerated_requests: List[ClarifyRequestModel] = []
-        for slot_name in remaining_missing:
-            status_model = ctx.slot_statuses.get(slot_name)
-            suggestions = list(status_model.suggestions or []) if status_model else []
-            allow_custom = True
-            if status_model and status_model.allow_custom is not None:
-                allow_custom = status_model.allow_custom
-            elif suggestions:
-                allow_custom = False
-            input_type = "single" if suggestions and not allow_custom else "free"
-            default_option = suggestions[0] if suggestions and not allow_custom else None
-            question_text = (
-                status_model.reason
-                if status_model and status_model.reason and status_model.reason.endswith("?")
-                else f"Which {slot_name.replace('_', ' ')} should we use?"
-            )
-            regenerated_requests.append(
-                ClarifyRequestModel(
-                    slot=slot_name,
-                    question=question_text,
-                    type=input_type,
-                    options=suggestions,
-                    default=default_option,
-                    reason=(
-                        status_model.reason
-                        if status_model and status_model.reason
-                        else "This slot is required to continue the analysis."
-                    ),
-                    required=True,
-                    request_id=str(uuid.uuid4()),
-                    proposed=(
-                        status_model.value
-                        if status_model and status_model.value is not None and status_model.status in {"assumed", "defaulted"}
-                        else None
-                    ),
-                    proposed_confidence=None,
-                    session_id=ctx.session_id,
-                )
-            )
-        ctx.clarifications = regenerated_requests
-        _refresh_followups(ctx, regenerated_requests)
-        ctx.halted = True
-        ctx.halt_reason = "clarification_missing_slots"
-        halt_event = EventEmitter.error(
-            "clarification",
-            "Missing required information to continue.",
-            details={"missing_slots": remaining_missing},
-            code="SLOTS_MISSING",
-        )
-        halt_event["data"]["ts"] = datetime.utcnow().isoformat()
-        yield halt_event
-        workflow_summary = {
-            "status": "clarification_missing_slots",
-            "missing_slots": remaining_missing,
-            "total_elapsed_ms": int((time.time() - ctx.workflow_start) * 1000),
-        }
-        workflow_complete = EventEmitter.result("workflow_complete", workflow_summary)
-        workflow_complete["event"] = "workflow_complete"
-        workflow_complete["data"]["ts"] = datetime.utcnow().isoformat()
-        yield workflow_complete
-        yield {
-            "event": "clarification_failed",
-            "data": {
-                "rounds": rounds,
-                "missing_slots": remaining_missing,
-                "ts": datetime.utcnow().isoformat(),
-            },
-        }
-        decision = ctx.schema_clarifier_decision
-        clarifier_action = None
-        clarifier_missing = []
-        clarifier_slot = None
-        if decision is not None:
-            clarifier_action = getattr(decision, "action", None)
-            clarifier_missing = list(getattr(decision, "missing_slots", []) or [])
-            clarifier_slot = getattr(decision, "slot", None)
-        else:
-            clarifier_action = "request"
-        ctx.artifacts.clarification = ClarificationArtifact(
-            query=ctx.query,
-            clarifier_action=clarifier_action,
-            clarifier_missing_slots=clarifier_missing,
-            clarifier_slot=clarifier_slot,
-            pending=[req.model_dump() for req in regenerated_requests],
-            assumptions=list(assumptions),
-            resolved=False,
-            rounds=rounds,
-            answered_slots=sorted(all_answered_slots),
-            history=history_entries,
-        )
-        self._capture_artifacts(ctx)
-        return
-
-    if not official_clarifications:
-        _refresh_followups(ctx, [])
-    decision = ctx.schema_clarifier_decision
-    clarifier_action = None
-    clarifier_missing = []
-    clarifier_slot = None
-    if decision is not None:
-        clarifier_action = getattr(decision, "action", None)
-        clarifier_missing = list(getattr(decision, "missing_slots", []) or [])
-        clarifier_slot = getattr(decision, "slot", None)
-    elif official_clarifications:
-        clarifier_action = "request"
-    else:
-        clarifier_action = "not_required"
-    ctx.artifacts.clarification = ClarificationArtifact(
-        query=ctx.query,
-        clarifier_action=clarifier_action,
-        clarifier_missing_slots=clarifier_missing,
-        clarifier_slot=clarifier_slot,
-        pending=[req.model_dump() for req in official_clarifications],
-        assumptions=list(assumptions),
-        resolved=not official_clarifications,
-        rounds=rounds,
-        answered_slots=sorted(all_answered_slots),
-        history=history_entries,
-    )
-    self._capture_artifacts(ctx)
+    async for event in run_clarification_stage(self, ctx):
+        yield event
 
 async def _plan_phase(self, ctx: PlannerPhaseContext) -> AsyncGenerator[Dict[str, Any], None]:
     intent = ctx.intent
@@ -7298,101 +5614,6 @@ async def run_planner_executor(
     workflow_instance = PlannerExecutorFlow()
     async for event in workflow_instance.events(query, session_id, revision_requested=revision_requested):
         yield event
-
-
-def _auto_fill_missing_slots(ctx: PlannerPhaseContext, assumptions: List[str]) -> Tuple[List[str], List[ClarifyAnswerModel]]:
-    assumption_lookup: Dict[str, str] = {}
-    for assumption in assumptions:
-        if not isinstance(assumption, str):
-            continue
-        parts = assumption.split(":", 1)
-        if len(parts) != 2:
-            continue
-        key, value = parts
-        assumption_lookup[key.strip().lower()] = value.strip()
-
-    remaining_missing: List[str] = []
-    auto_answers: List[ClarifyAnswerModel] = []
-    for slot_name, status in (ctx.slot_statuses or {}).items():
-        if not isinstance(status, SlotStatusModel):
-            continue
-        if status.status != "missing":
-            continue
-        slot_label = slot_name.replace("_", " ")
-        assumption_key = f"using {slot_label}".lower()
-        assumed_value = assumption_lookup.get(assumption_key)
-        if assumed_value:
-            status.status = "assumed"
-            status.value = assumed_value
-            if not status.reason:
-                status.reason = "Auto-filled from existing assumptions."
-            ctx.slot_statuses[slot_name] = status
-            auto_answers.append(
-                ClarifyAnswerModel(
-                    value=assumed_value,
-                    request_id=f"auto-{slot_name}",
-                    slot=slot_name,
-                    session_id=ctx.session_id,
-                    ts=datetime.utcnow().isoformat(),
-                )
-            )
-            continue
-        default_value: Optional[str] = None
-        if slot_name == "timeframe":
-            if status.suggestions:
-                default_value = status.suggestions[0]
-            else:
-                default_value = "last_5_years"
-        elif slot_name == "metric":
-            if status.suggestions:
-                default_value = status.suggestions[0]
-        elif slot_name == "comparison":
-            intent_tickers: List[str] = []
-            if ctx.intent and isinstance(ctx.intent.slots_detected, dict):
-                intent_raw_tickers = ctx.intent.slots_detected.get("tickers")
-                if isinstance(intent_raw_tickers, (list, tuple, set)):
-                    for value in intent_raw_tickers:
-                        symbol = str(value).strip().upper()
-                        if symbol and symbol not in intent_tickers and symbol != "ALL":
-                            intent_tickers.append(symbol)
-            if intent_tickers and len(intent_tickers) >= 2:
-                default_value = "all"
-            elif status.suggestions:
-                default_value = status.suggestions[0]
-        if default_value:
-            status.status = "defaulted"
-            status.value = default_value
-            if not status.reason:
-                status.reason = "Auto-filled due to missing clarification."
-            ctx.slot_statuses[slot_name] = status
-            assumptions.append(f"Using {slot_label}: {default_value}")
-            if ctx.intent and isinstance(ctx.intent.slots_detected, dict):
-                ctx.intent.slots_detected[slot_name] = default_value
-            auto_answers.append(
-                ClarifyAnswerModel(
-                    value=default_value,
-                    request_id=f"auto-{slot_name}",
-                    slot=slot_name,
-                    session_id=ctx.session_id,
-                    ts=datetime.utcnow().isoformat(),
-                )
-            )
-            continue
-        remaining_missing.append(slot_name)
-    return remaining_missing, auto_answers
-
-
-
-
-
-
-
-
-
-
-
-
-from analytics.core.intent_impl.normalization import normalize_timeframe, normalize_metrics
 
 
 

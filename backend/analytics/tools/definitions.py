@@ -87,6 +87,7 @@ class ToolId(str, Enum):
     SQL_REGENERATION = "sql_regeneration"
     FOLLOW_UP_ROUTE = "follow_up_route"
     LANE_DECISION = "lane_decision"
+    SEARCH_TOOLS = "search_tools"
 
 
 @dataclass(frozen=True)
@@ -220,6 +221,46 @@ TOOL_REGISTRY: "OrderedDict[ToolId, ToolDefinition]" = OrderedDict(
                     },
                     required=(),
                     allow_extra=True,
+                ),
+                response_schema=_response_schema_copy(),
+                retryable_errors=RETRYABLE_DEFAULT,
+            ),
+        ),
+        (
+            ToolId.SEARCH_TOOLS,
+            ToolDefinition(
+                id=ToolId.SEARCH_TOOLS,
+                description="Discover available analytics tools for the current route/entities.",
+                telemetry_step="tool_discovery",
+                lane="routing",
+                specialist_role="plan_generation",
+                inputs=(),
+                outputs=("tools",),
+                output_artifacts=(),
+                latency_budget_ms=300,
+                concurrency_limit=1,
+                parameters_schema=_schema(
+                    {
+                        "query": {
+                            "type": "string",
+                            "description": "Optional search string to match tool names/descriptions.",
+                        },
+                        "route": {
+                            "type": "string",
+                            "description": "Optional follow-up route to scope results.",
+                        },
+                        "entities": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Optional lane or specialist hints (e.g., 'sql','chart','analysis').",
+                        },
+                        "mode": {
+                            "type": "string",
+                            "description": "Optional flow mode to filter tools (direct/single-agent/multi-agent).",
+                        },
+                    },
+                    required=(),
+                    allow_extra=False,
                 ),
                 response_schema=_response_schema_copy(),
                 retryable_errors=RETRYABLE_DEFAULT,

@@ -6,7 +6,7 @@
 from .agent_plan import PlanNodeStatus, PlanNode, PlanTemplate, PlanState, AGENTIC_REVISION_PLAN
 from .event_bus import AgentEventBus
 from .memory import AgentMemory
-from .agent_runtime import AgentRuntime, AgentRuntimeConfig, AgentRuntimeResult
+from .agent_runtime import AgentRuntime, AgentRuntimeConfig, AgentRuntimeResult, HandoffConfig
 
 __all__ = [
     "PlanNodeStatus",
@@ -19,4 +19,5 @@ __all__ = [
     "AgentRuntime",
     "AgentRuntimeResult",
     "AgentRuntimeConfig",
+    "HandoffConfig",
 ]

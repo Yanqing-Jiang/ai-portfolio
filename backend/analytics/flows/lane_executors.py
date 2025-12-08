@@ -4,6 +4,11 @@
 #   Called from: analytics.flows.multi_agent.MultiAgentFlow.sequencer_stream, tests.analytics.test_lane_executors
 #   Collaborators: analytics.flows.orchestrator_types.PlannerOrchestratorAdapter, analytics.flows.planner.sql_stage
 #   Why: Moves lane behavior toward self-contained executors while keeping legacy adapter compatibility.
+# Class: PlanLaneExecutor
+#   Role: Runs the plan stage without relying on planner_executor internals.
+#   Called from: analytics.tools.lanes.wrappers, analytics.flows.pipeline_tools
+#   Collaborators: analytics.flows.planner.plan_stage.run_plan_stage
+#   Why: Exposes plan generation as a reusable lane executor for all modes.
 # Class: ChartLaneExecutor
 #   Role: Executes the chart lane using either a dedicated runner or the PlannerOrchestratorAdapter.
 #   Called from: analytics.flows.multi_agent.MultiAgentFlow.sequencer_stream, tests.analytics.test_lane_executors
@@ -15,10 +20,10 @@
 #   Collaborators: analytics.flows.orchestrator_types.PlannerOrchestratorAdapter, analytics.flows.planner.analysis_stage
 #   Why: Centralizes analysis execution so AgentRuntime and Sequencer share the same lane behavior.
 # Class: AccessoryLaneExecutor
-#   Role: Executes accessory lanes (web/market) with dedicated runners or legacy adapter methods.
-#   Called from: analytics.flows.multi_agent.MultiAgentFlow.sequencer_stream, future single-agent tool wrappers
-#   Collaborators: analytics.flows.orchestrator_types.PlannerOrchestratorAdapter, analytics.flows.planner.sql_lane
-#   Why: Removes bespoke accessory handling from specialist coroutines and prepares toolized accessory lanes.
+#   Role: Executes accessory lanes (web/market) with dedicated runners; prefers accessory_stage helpers over orchestrator proxying.
+#   Called from: analytics.flows.multi_agent.MultiAgentFlow.sequencer_stream, analytics.flows.pipeline_orchestrator.build_pipeline_lane_executors
+#   Collaborators: analytics.flows.planner.accessory_stage.run_web_stage/run_market_stage
+#   Why: Makes accessory lane execution self-contained so sequencers and tool factories no longer rely on orchestrator passthroughs.
 # Class: LaneExecutorOrchestratorProxy
 #   Role: Wraps a FlowOrchestrator so PlannerSequencer lanes execute through lane executors while keeping metadata/pass-through behavior intact.
 #   Called from: analytics.flows.multi_agent.MultiAgentFlow.sequencer_stream via wrap_sequencer_with_lane_executors
@@ -34,6 +39,11 @@
 #   Called from: analytics.flows.pipeline_tools
 #   Invokes: analytics.flows.planner.chart_stage.run_chart_stage
 #   Why: Aligns chart execution across planner and agent tool calls.
+# Function: create_plan_executor
+#   Role: Factory that wires PlanLaneExecutor to the shared plan stage runner.
+#   Called from: analytics.flows.pipeline_tools, analytics.tools.lanes.wrappers
+#   Invokes: analytics.flows.planner.plan_stage.run_plan_stage
+#   Why: Makes planning callable as a tool for DIRECT, SINGLE_AGENT, and MULTI_AGENT flows.
 # Function: create_analysis_executor
 #   Role: Factory that wires AnalysisLaneExecutor to the shared analysis stage runner.
 #   Called from: analytics.flows.pipeline_tools
@@ -52,12 +62,14 @@
 # --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
-from typing import Any, AsyncGenerator, Callable, Iterable, Mapping, Optional
+from typing import Any, AsyncGenerator, Callable, Iterable, Mapping, Optional, Set
 
 from .orchestrator_types import PlannerOrchestratorAdapter, FlowOrchestrator
 from .planner.sql_stage import run_sql_stage
 from .planner.chart_stage import run_chart_stage
+from .planner.plan_stage import run_plan_stage
 from .planner.analysis_stage import run_analysis_stage
+from .planner.accessory_stage import run_web_stage, run_market_stage
 
 LaneRunner = Callable[[], AsyncGenerator[Mapping[str, Any], None]]
 
@@ -70,9 +82,21 @@ class SqlLaneExecutor:
         orchestrator: Optional[PlannerOrchestratorAdapter] = None,
         *,
         runner: Optional[LaneRunner] = None,
+        pipeline: Any = None,
+        ctx: Any = None,
+        registry: Any = None,
+        executed: Optional[Iterable[str]] = None,
+        tool_state: Optional[Mapping[str, Any]] = None,
+        run_sql_lane: bool = True,
     ) -> None:
         self._orchestrator = orchestrator
         self._runner = runner
+        self._pipeline = pipeline
+        self._ctx = ctx
+        self._registry = registry
+        self._executed: Set[str] = set(executed or ())
+        self._tool_state = dict(tool_state) if tool_state is not None else None
+        self._run_sql_lane = run_sql_lane
 
     async def run(self) -> AsyncGenerator[Mapping[str, Any], None]:
         runner = self._runner
@@ -80,9 +104,56 @@ class SqlLaneExecutor:
             async for event in runner():
                 yield event
             return
+        if self._pipeline is not None:
+            if self._ctx is None or self._registry is None:
+                raise RuntimeError("SqlLaneExecutor missing ctx/registry for pipeline-backed run")
+            async for event in run_sql_stage(
+                self._pipeline,
+                ctx=self._ctx,
+                registry=self._registry,
+                executed=set(self._executed),
+                tool_state=self._tool_state,
+                run_sql_lane=self._run_sql_lane,
+            ):
+                yield event
+            return
         if self._orchestrator is None:
             raise RuntimeError("SqlLaneExecutor missing runner")
         async for event in self._orchestrator.run_sql_stage():
+            yield event
+
+
+class PlanLaneExecutor:
+    """Executes the plan lane via a dedicated runner or legacy adapter."""
+
+    def __init__(
+        self,
+        orchestrator: Optional[PlannerOrchestratorAdapter] = None,
+        *,
+        runner: Optional[LaneRunner] = None,
+        pipeline: Any = None,
+        ctx: Any = None,
+    ) -> None:
+        self._orchestrator = orchestrator
+        self._runner = runner
+        self._pipeline = pipeline
+        self._ctx = ctx
+
+    async def run(self) -> AsyncGenerator[Mapping[str, Any], None]:
+        runner = self._runner
+        if runner is not None:
+            async for event in runner():
+                yield event
+            return
+        if self._pipeline is not None:
+            if self._ctx is None:
+                raise RuntimeError("PlanLaneExecutor missing ctx for pipeline-backed run")
+            async for event in run_plan_stage(self._pipeline, ctx=self._ctx):
+                yield event
+            return
+        if self._orchestrator is None:
+            raise RuntimeError("PlanLaneExecutor missing runner")
+        async for event in self._orchestrator.run_plan_stage():  # type: ignore[attr-defined]
             yield event
 
 
@@ -94,14 +165,39 @@ class ChartLaneExecutor:
         orchestrator: Optional[PlannerOrchestratorAdapter] = None,
         *,
         runner: Optional[LaneRunner] = None,
+        pipeline: Any = None,
+        ctx: Any = None,
+        registry: Any = None,
+        executed: Optional[Iterable[str]] = None,
+        tool_state: Optional[Mapping[str, Any]] = None,
+        run_chart_lane: bool = True,
     ) -> None:
         self._orchestrator = orchestrator
         self._runner = runner
+        self._pipeline = pipeline
+        self._ctx = ctx
+        self._registry = registry
+        self._executed: Set[str] = set(executed or ())
+        self._tool_state = dict(tool_state) if tool_state is not None else None
+        self._run_chart_lane = run_chart_lane
 
     async def run(self) -> AsyncGenerator[Mapping[str, Any], None]:
         runner = self._runner
         if runner is not None:
             async for event in runner():
+                yield event
+            return
+        if self._pipeline is not None:
+            if self._ctx is None or self._registry is None:
+                raise RuntimeError("ChartLaneExecutor missing ctx/registry for pipeline-backed run")
+            async for event in run_chart_stage(
+                self._pipeline,
+                ctx=self._ctx,
+                registry=self._registry,
+                executed=set(self._executed),
+                tool_state=self._tool_state,
+                run_chart_lane=self._run_chart_lane,
+            ):
                 yield event
             return
         if self._orchestrator is None:
@@ -118,14 +214,39 @@ class AnalysisLaneExecutor:
         orchestrator: Optional[PlannerOrchestratorAdapter] = None,
         *,
         runner: Optional[LaneRunner] = None,
+        pipeline: Any = None,
+        ctx: Any = None,
+        registry: Any = None,
+        executed: Optional[Iterable[str]] = None,
+        tool_state: Optional[Mapping[str, Any]] = None,
+        mode_config: Any = None,
     ) -> None:
         self._orchestrator = orchestrator
         self._runner = runner
+        self._pipeline = pipeline
+        self._ctx = ctx
+        self._registry = registry
+        self._executed: Set[str] = set(executed or ())
+        self._tool_state = dict(tool_state) if tool_state is not None else None
+        self._mode_config = mode_config
 
     async def run(self) -> AsyncGenerator[Mapping[str, Any], None]:
         runner = self._runner
         if runner is not None:
             async for event in runner():
+                yield event
+            return
+        if self._pipeline is not None:
+            if self._ctx is None or self._registry is None:
+                raise RuntimeError("AnalysisLaneExecutor missing ctx/registry for pipeline-backed run")
+            async for event in run_analysis_stage(
+                self._pipeline,
+                ctx=self._ctx,
+                registry=self._registry,
+                executed=set(self._executed),
+                tool_state=self._tool_state,
+                mode_config=self._mode_config,
+            ):
                 yield event
             return
         if self._orchestrator is None:
@@ -135,36 +256,52 @@ class AnalysisLaneExecutor:
 
 
 class AccessoryLaneExecutor:
-    """Executes accessory (web/market) lanes via dedicated runners or legacy adapter."""
+    """Executes accessory (web/market) lanes via dedicated runners."""
 
     def __init__(
         self,
-        orchestrator: Optional[PlannerOrchestratorAdapter] = None,
         *,
-        runner: Optional[LaneRunner] = None,
+        runner: Optional[LaneRunner],
         lane: str,
+        pipeline: Any = None,
+        ctx: Any = None,
+        reason: Optional[str] = None,
+        source: Optional[str] = None,
     ) -> None:
-        self._orchestrator = orchestrator
         self._runner = runner
         self._lane = lane
+        self._pipeline = pipeline
+        self._ctx = ctx
+        self._reason = reason
+        self._source = source
 
     async def run(self) -> AsyncGenerator[Mapping[str, Any], None]:
         runner = self._runner
-        if runner is not None:
+        if runner is None:
+            if self._pipeline is None or self._ctx is None:
+                raise RuntimeError(f"{self._lane.capitalize()}LaneExecutor missing runner")
+            if self._lane == "web":
+                async for event in run_web_stage(
+                    self._pipeline,
+                    ctx=self._ctx,
+                    reason=self._reason,
+                    source=self._source,
+                ):
+                    yield event
+                return
+            if self._lane == "market":
+                async for event in run_market_stage(
+                    self._pipeline,
+                    ctx=self._ctx,
+                    reason=self._reason,
+                    source=self._source,
+                ):
+                    yield event
+                return
+            raise AttributeError(f"Unsupported accessory lane: {self._lane}")
+        else:
             async for event in runner():
                 yield event
-            return
-        if self._orchestrator is None:
-            raise RuntimeError(f"{self._lane.capitalize()}LaneExecutor missing runner")
-        if self._lane == "web":
-            async for event in self._orchestrator.run_web_stage():
-                yield event
-            return
-        if self._lane == "market":
-            async for event in self._orchestrator.run_market_stage():
-                yield event
-            return
-        raise AttributeError(f"Unsupported accessory lane: {self._lane}")
 
 
 def create_sql_executor(
@@ -178,18 +315,27 @@ def create_sql_executor(
 ) -> SqlLaneExecutor:
     """Factory to build a SqlLaneExecutor backed by the shared SQL stage."""
 
-    async def _runner() -> AsyncGenerator[Mapping[str, Any], None]:
-        async for event in run_sql_stage(
-            pipeline,
-            ctx=ctx,
-            registry=registry,
-            executed=set(executed),
-            tool_state=dict(tool_state) if tool_state else None,
-            run_sql_lane=run_sql_lane,
-        ):
-            yield event
+    return SqlLaneExecutor(
+        pipeline=pipeline,
+        ctx=ctx,
+        registry=registry,
+        executed=executed,
+        tool_state=tool_state,
+        run_sql_lane=run_sql_lane,
+    )
 
-    return SqlLaneExecutor(runner=_runner)
+
+def create_plan_executor(
+    *,
+    pipeline: Any,
+    ctx: Any,
+) -> PlanLaneExecutor:
+    """Factory to build a PlanLaneExecutor backed by the plan stage."""
+
+    return PlanLaneExecutor(
+        pipeline=pipeline,
+        ctx=ctx,
+    )
 
 
 def create_chart_executor(
@@ -203,18 +349,14 @@ def create_chart_executor(
 ) -> ChartLaneExecutor:
     """Factory to build a ChartLaneExecutor backed by the shared chart stage."""
 
-    async def _runner() -> AsyncGenerator[Mapping[str, Any], None]:
-        async for event in run_chart_stage(
-            pipeline,
-            ctx=ctx,
-            registry=registry,
-            executed=set(executed),
-            tool_state=dict(tool_state) if tool_state else None,
-            run_chart_lane=run_chart_lane,
-        ):
-            yield event
-
-    return ChartLaneExecutor(runner=_runner)
+    return ChartLaneExecutor(
+        pipeline=pipeline,
+        ctx=ctx,
+        registry=registry,
+        executed=executed,
+        tool_state=tool_state,
+        run_chart_lane=run_chart_lane,
+    )
 
 
 def create_analysis_executor(
@@ -228,18 +370,14 @@ def create_analysis_executor(
 ) -> AnalysisLaneExecutor:
     """Factory to build an AnalysisLaneExecutor backed by the shared analysis stage."""
 
-    async def _runner() -> AsyncGenerator[Mapping[str, Any], None]:
-        async for event in run_analysis_stage(
-            pipeline,
-            ctx=ctx,
-            registry=registry,
-            executed=set(executed),
-            tool_state=dict(tool_state) if tool_state else None,
-            mode_config=mode_config,
-        ):
-            yield event
-
-    return AnalysisLaneExecutor(runner=_runner)
+    return AnalysisLaneExecutor(
+        pipeline=pipeline,
+        ctx=ctx,
+        registry=registry,
+        executed=executed,
+        tool_state=tool_state,
+        mode_config=mode_config,
+    )
 
 
 def create_accessory_executor(
@@ -252,26 +390,14 @@ def create_accessory_executor(
 ) -> AccessoryLaneExecutor:
     """Factory to build an AccessoryLaneExecutor backed by planner accessory refreshers."""
 
-    async def _runner() -> AsyncGenerator[Mapping[str, Any], None]:
-        if lane == "web":
-            async for event in pipeline.refresh_web_lane(
-                ctx,
-                reason=reason or "executor_factory",
-                source=source or "planner_pipeline",
-            ):
-                yield event
-            return
-        if lane == "market":
-            async for event in pipeline.refresh_market_lane(
-                ctx,
-                reason=reason or "executor_factory",
-                source=source or "planner_pipeline",
-            ):
-                yield event
-            return
-        raise AttributeError(f"Unsupported accessory lane: {lane}")
-
-    return AccessoryLaneExecutor(runner=_runner, lane=lane)
+    return AccessoryLaneExecutor(
+        runner=None,
+        lane=lane,
+        pipeline=pipeline,
+        ctx=ctx,
+        reason=reason or "executor_factory",
+        source=source or "planner_pipeline",
+    )
 
 
 class LaneExecutorOrchestratorProxy:
@@ -370,9 +496,9 @@ def wrap_sequencer_with_lane_executors(sequencer: Any) -> None:
     if hasattr(orchestrator, "run_chart_stage"):
         chart_executor = ChartLaneExecutor(orchestrator)
     if hasattr(orchestrator, "run_web_stage"):
-        web_executor = AccessoryLaneExecutor(orchestrator, lane="web")
+        web_executor = AccessoryLaneExecutor(runner=orchestrator.run_web_stage, lane="web")
     if hasattr(orchestrator, "run_market_stage"):
-        market_executor = AccessoryLaneExecutor(orchestrator, lane="market")
+        market_executor = AccessoryLaneExecutor(runner=orchestrator.run_market_stage, lane="market")
     proxy = LaneExecutorOrchestratorProxy(
         orchestrator,
         sql_executor=sql_executor,

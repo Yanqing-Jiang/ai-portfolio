@@ -30,7 +30,7 @@ from __future__ import annotations
 from typing import Any, Dict, Iterable, Mapping, Optional
 
 from analytics.tools import DEFAULT_SCHEMA_VERSION
-from analytics.flows.planner_executor import _evaluate_latency_guardrail
+from analytics.flows.planner import _evaluate_latency_guardrail
 
 LANE_EVENT_BY_TOOL: Dict[str, tuple[str, str]] = {
     "sql_generation": ("sql_ready", "sql"),

@@ -157,6 +157,13 @@ logging.basicConfig(
 app = FastAPI()
 app.include_router(linkedin_photo_router)
 
+# Conversational Analytics router
+try:
+    from conversational_analytics.routes import router as conv_analytics_router
+    app.include_router(conv_analytics_router)
+except ImportError as e:
+    logger.warning("[STARTUP] Conversational Analytics not available: %s", e)
+
 
 def _match_ai_crawlers(user_agent: str) -> List[str]:
     if not user_agent:

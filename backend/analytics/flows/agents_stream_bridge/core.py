@@ -9,6 +9,11 @@
 #   Called from: AgentsStreamBridge._handle_tool_called_event
 #   Invokes: Exception base class only
 #   Why: Surfaces guardrail-enforced tool blocking as a hard failure to keep telemetry honest when agents ignore allowlists.
+# Method: AgentsStreamBridge._maybe_emit_specialist_handoff
+#   Role: Emit specialist_handoff event when a lane tool is called for supervisor-to-specialist delegation.
+#   Called from: _handle_tool_called_event
+#   Invokes: _enqueue_event with handoff payload
+#   Why: Provides explicit handoff tracking for P2 handoff wiring in multi-agent flows.
 # --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
@@ -186,6 +191,10 @@ class AgentsStreamBridge:
             tool_metadata_store=self._tool_metadata,
         )
         agent_turn_id = await self._record_turn_start(tool_id=tool_id, tool_name=tool_name, metadata=metadata)
+
+        # Emit specialist_handoff for lane tools (P2: handoff wiring)
+        await self._maybe_emit_specialist_handoff(tool_name, tool_id, metadata)
+
         payload = {
             "tool_call": self._clean_dict(
                 {
@@ -400,6 +409,40 @@ class AgentsStreamBridge:
         if tool_id:
             self._tool_metadata.pop(tool_id, None)
             self._tool_start_times.pop(tool_id, None)
+
+    async def _maybe_emit_specialist_handoff(
+        self,
+        tool_name: Optional[str],
+        tool_id: Optional[str],
+        metadata: Optional[Mapping[str, Any]],
+    ) -> None:
+        """
+        Emit specialist_handoff event when a lane tool is called.
+
+        Method: _maybe_emit_specialist_handoff
+        Called from: _handle_tool_called_event
+        Why: Provides explicit handoff tracking for supervisor-to-specialist delegation (P2 wiring).
+        """
+        normalized = (tool_name or "").strip()
+        if not normalized:
+            return
+        normalized = normalized.split(".")[-1]
+        lane_entry = LANE_EVENT_BY_TOOL.get(normalized)
+        if not lane_entry:
+            return
+        _, lane = lane_entry
+        handoff_payload: Dict[str, Any] = {
+            "specialist": normalized,
+            "lane": lane,
+            "tool_call_id": tool_id,
+            "ts": datetime.utcnow().isoformat(),
+        }
+        if isinstance(metadata, Mapping):
+            if metadata.get("specialist_role"):
+                handoff_payload["role"] = metadata["specialist_role"]
+            if metadata.get("schema_version"):
+                handoff_payload["schema_version"] = metadata["schema_version"]
+        await self._enqueue_event("specialist_handoff", handoff_payload)
 
     async def _maybe_emit_lane_ready(
         self,

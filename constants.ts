@@ -6,6 +6,24 @@ export const PROJECT_DATA: ProjectYear[] = [
     subtitle: '(Agentic AI & Autonomous Trading)',
     projects: [
       {
+        id: 'conversational-analytics',
+        title: 'Conversational Analytics',
+        description: 'Claude-powered analytics agent for semiconductor company financials with streaming SSE responses.',
+        cardDescription: 'Claude-powered analytics with streaming responses and visualizations.',
+        technologies: ['Claude Agent SDK', 'SSE Streaming', 'ECharts', 'TradingView'],
+        systemInstruction: 'You are the AI assistant for Conversational Analytics.',
+        defaultPrompts: ['Show me NVDA revenue trends', 'Compare AMD and Intel margins'],
+        coverUrl: 'https://yanqinghot.blob.core.windows.net/public-access/next-gen-sql.png',
+        imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/next-gen-sql.png',
+        seoTitle: 'Conversational Analytics | Claude Agent',
+        seoDescription: 'Claude-powered analytics agent with streaming responses.',
+        seoKeywords: ['Claude agent', 'conversational analytics'],
+        datePublished: '2025-12-07',
+        dateModified: '2025-12-07',
+        serviceTags: ['AI Agents', 'Analytics'],
+        statHighlights: ['Real-time streaming with thinking process', 'ECharts and TradingView'],
+      },
+      {
         id: 'linkedin-photo',
         title: 'LinkedIn Photo Generator',
         description: `Three-step UX flow that turns a casual portrait into a LinkedIn-ready headshot.\nStep 1 �?" Upload: validate JPEG or PNG up to 8 MB, show an inline preview, and prep metadata.\nStep 2 �?" Describe: capture a single style sentence and expand it with Gemini into a photography-grade brief (lighting, background, wardrobe) that preserves identity.\nStep 3 �?" Generate: FastAPI validates the file, expands the prompt, calls Gemini Nano Banana image editing, and returns the professional headshot alongside the transparent prompt display with download/share actions.`,
@@ -272,9 +290,9 @@ This production-grade web application automates the invoice validation and match
 • Built for scalability with multi-upload sessions and cloud export.
 +--------------------`,
         defaultPrompts: [
-            'How does the invoice matching logic handle multi-source inconsistencies?',
-            'Explain the impact of this tool on manual validation efforts.',
-            'What technologies power the PDF extraction and data matching?',
+          'How does the invoice matching logic handle multi-source inconsistencies?',
+          'Explain the impact of this tool on manual validation efforts.',
+          'What technologies power the PDF extraction and data matching?',
         ],
         coverUrl: 'https://yanqinghot.blob.core.windows.net/public-access/Deal%20Matching%20Cover',
         gifUrl: 'https://yanqinghot.blob.core.windows.net/public-access/Deal%20Matching%20GIF',
@@ -316,8 +334,8 @@ This production-grade web application automates the invoice validation and match
         technologies: ['RAG', 'Vector Search', 'FAISS', 'Agent'],
         systemInstruction: "Hello, I am Yanqing's AI assistant. I have access to his resume data. Please ask me any questions you would have as a hiring manager.",
         defaultPrompts: [
-            "How have you used advanced analytics to drive measurable business outcomes in your recent roles?",
-            "Can you share an example where you led a cross-functional team to solve a complex business problem using data",
+          "How have you used advanced analytics to drive measurable business outcomes in your recent roles?",
+          "Can you share an example where you led a cross-functional team to solve a complex business problem using data",
           "What's your approach to developing scalable data or AI solutions that align with business goals?",
         ],
         imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/Yanqing%20Exp%20Retrival.png',
@@ -353,9 +371,9 @@ This production-grade web application automates the invoice validation and match
         technologies: ['Gemini API', 'Prompt Engineering', 'ElevenLabs', 'State Management'],
         systemInstruction: `You created “Goggins GPT”. You'll answer as "I".  Provide clear, concise answers about: \n• Architecture & tech stack – React&nbsp;+ Tailwind&nbsp;+ Framer-Motion on the client, FastAPI backend, Gemini Flash LLM via Google GenAI SDK, and ElevenLabs multilingual-v2 TTS for the voice. \n• Data flow – chat → Gemini → FastAPI /api/tts → audio stream to browser. \n• Motivation – born from the trend of "AI girlfriends"/Character AI, but pivoted to embody David Goggins’ mindset so users get hardcore motivation instead of coddling. \n• Features – toggleable Goggins Mode (system prompt swap), real-time speech, animated UI, message history. \nWhen asked, emphasise how Goggins Mode loads a different system instruction and triggers TTS playback.`,
         defaultPrompts: [
-            "Tell me about what inspired you to create this project.",
-            "What is 'Goggins Mode' and how is it implemented?",
-            "Who is David Goggins?",
+          "Tell me about what inspired you to create this project.",
+          "What is 'Goggins Mode' and how is it implemented?",
+          "Who is David Goggins?",
         ],
         imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/David%20Goggins.png',
         coverUrl: 'https://yanqinghot.blob.core.windows.net/public-access/Goggins%20GPT%20Diagram',
@@ -384,47 +402,47 @@ This production-grade web application automates the invoice validation and match
       },
     ],
   },
-    {
+  {
     year: 2022,
     subtitle: '(GPT-3.5 & Foundational Agent Logic)',
     projects: [
-        {
-            id: 'research-gpt',
-            title: 'Research GPT',
-            description: `Equip GPT 3.5 (2022) with web browsing capabilities (before Perplexity)\n  • Search Tool: Sends the query to Serper API to retrieve current links & articles.\n  • Scraping Tool: Fetches and parses content from URLs using Browserless.\n  • Summary Loop: LangChainAgent agent & memoery chain`,
-            cardDescription: 'Pre-Perplexity (2022) web research agent pairing Serper search with Browserless scraping for live briefs.',
-            technologies: ['Serper API', 'Browserless Scraping', 'Lang Chain Agent', 'Memory Chain', 'OpenAI API'],
-            systemInstruction: 'You are the "Research GPT" AI. You are a powerful research agent connected to a live backend. When a user gives you a research topic, you will use your tools to browse the internet, gather information, and provide a comprehensive, fact-based answer. Your capabilities are powered by LangChain and the OpenAI API, running on a custom FastAPI server. Start by asking the user what they would like to research.',
-            defaultPrompts: [
-                "What is the best reasoning large language model right now?",
-                "Make some suggestions for vibe coding.",
-                "What are some of the latest trends in LLMs?"
-            ],
-            coverUrl: 'https://yanqinghot.blob.core.windows.net/public-access/research%20GPT%20Diagram.png',
-            imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/research%20GPT%20Diagram.png',
-            seoTitle: 'Research GPT | Early LangChain Web Research Agent',
-            seoDescription:
-              'LangChain research agent (pre-Perplexity) combining Serper search, Browserless scraping, and summarization loops for timely briefs.',
-            seoKeywords: [
-              'LangChain research agent',
-              'Serper API search',
-              'Browserless scraping',
-              'LLM memoization',
-              'research copilot',
-            ],
-            datePublished: '2022-10-05',
-            dateModified: '2025-07-10',
-            serviceTags: ['Research Automation', 'Web Browsing', 'LangChain'],
-            statHighlights: [
-              'Automates Serper search + Browserless scraping with summarization loops',
-              'Captures memoized context for iterative research conversations',
-            ],
-            primaryMetricValue: {
-              label: 'Sources summarized per query',
-              value: 8,
-              unitText: 'Articles',
-            },
-        }
+      {
+        id: 'research-gpt',
+        title: 'Research GPT',
+        description: `Equip GPT 3.5 (2022) with web browsing capabilities (before Perplexity)\n  • Search Tool: Sends the query to Serper API to retrieve current links & articles.\n  • Scraping Tool: Fetches and parses content from URLs using Browserless.\n  • Summary Loop: LangChainAgent agent & memoery chain`,
+        cardDescription: 'Pre-Perplexity (2022) web research agent pairing Serper search with Browserless scraping for live briefs.',
+        technologies: ['Serper API', 'Browserless Scraping', 'Lang Chain Agent', 'Memory Chain', 'OpenAI API'],
+        systemInstruction: 'You are the "Research GPT" AI. You are a powerful research agent connected to a live backend. When a user gives you a research topic, you will use your tools to browse the internet, gather information, and provide a comprehensive, fact-based answer. Your capabilities are powered by LangChain and the OpenAI API, running on a custom FastAPI server. Start by asking the user what they would like to research.',
+        defaultPrompts: [
+          "What is the best reasoning large language model right now?",
+          "Make some suggestions for vibe coding.",
+          "What are some of the latest trends in LLMs?"
+        ],
+        coverUrl: 'https://yanqinghot.blob.core.windows.net/public-access/research%20GPT%20Diagram.png',
+        imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/research%20GPT%20Diagram.png',
+        seoTitle: 'Research GPT | Early LangChain Web Research Agent',
+        seoDescription:
+          'LangChain research agent (pre-Perplexity) combining Serper search, Browserless scraping, and summarization loops for timely briefs.',
+        seoKeywords: [
+          'LangChain research agent',
+          'Serper API search',
+          'Browserless scraping',
+          'LLM memoization',
+          'research copilot',
+        ],
+        datePublished: '2022-10-05',
+        dateModified: '2025-07-10',
+        serviceTags: ['Research Automation', 'Web Browsing', 'LangChain'],
+        statHighlights: [
+          'Automates Serper search + Browserless scraping with summarization loops',
+          'Captures memoized context for iterative research conversations',
+        ],
+        primaryMetricValue: {
+          label: 'Sources summarized per query',
+          value: 8,
+          unitText: 'Articles',
+        },
+      }
     ]
   },
   {

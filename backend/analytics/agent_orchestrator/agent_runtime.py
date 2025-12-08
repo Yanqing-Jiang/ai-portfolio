@@ -14,6 +14,11 @@
 #   Called from: analytics.agent_orchestrator, analytics.flows.single_agent_tools, tests.analytics.test_agent_orchestrator
 #   Collaborators: analytics.agent_orchestrator.event_bus.AgentEventBus, time.time, analytics.core.telemetry.tool_iteration, analytics.agent_orchestrator.agent_runtime.AgentRuntimeResult, +2 more
 #   Why: Supports downstream analytics workflows that rely on AgentRuntime.
+# Dataclass: HandoffConfig
+#   Role: Defines handoff parameters for specialist child runtimes.
+#   Called from: analytics.agent_orchestrator.agent_runtime.AgentRuntime.handoff_to_specialist
+#   Invokes: n/a
+#   Why: Enables supervisor flows to invoke scoped child runtimes while preserving receipts.
 # --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
@@ -57,6 +62,7 @@ class AgentRuntimeConfig:
     parallel_tool_calls: Optional[bool] = None
     tool_choice: Optional[Any] = None
     tool_choice_body: Optional[Mapping[str, Any]] = None
+    force_tool_calls: bool = False
 
 
 @dataclass
@@ -68,6 +74,15 @@ class AgentRuntimeResult:
     final_output: Dict[str, Any]
     run_id: Optional[str]
     trace_id: Optional[str]
+
+
+@dataclass
+class HandoffConfig:
+    """Parameters for spawning a specialist child runtime."""
+
+    specialist: str
+    tool_allowlist: Optional[Iterable[str]] = None
+    context: Optional[Mapping[str, Any]] = None
 
 
 class AgentRuntime:
@@ -279,6 +294,74 @@ class AgentRuntime:
             trace_id=str(trace_id) if trace_id else str(getattr(run_config, "trace_id", "")),
         )
 
+    async def force_call_tool(
+        self,
+        tool_name: str,
+        payload: Optional[Mapping[str, Any]] = None,
+        *,
+        emit_event: bool = True,
+    ) -> None:
+        """Programmatically emit a tool receipt and (optionally) an SSE event without model initiation."""
+
+        if not getattr(self._config, "force_tool_calls", False):
+            return
+        safe_payload = {}
+        if isinstance(payload, Mapping):
+            try:
+                safe_payload = sanitize_for_json(dict(payload))
+            except Exception:
+                safe_payload = dict(payload)
+
+        receipt = {
+            "status": "completed",
+            "tool": tool_name,
+            "forced": True,
+            "payload": safe_payload,
+        }
+
+        try:
+            self._memory.record_tool_receipt(tool_name, receipt)
+        except Exception:
+            self._logger.debug("Failed to record forced tool receipt for %s", tool_name, exc_info=True)
+
+        if not emit_event:
+            return
+
+        event = EventEmitter.status(tool_name, "forced_tool_call")
+        event["event"] = tool_name
+        event.setdefault("data", {}).update(receipt)
+        event = apply_mode_metadata(event, self._flow_mode)
+        await self._queue.put(event)
+
+    async def handoff_to_specialist(
+        self,
+        config: HandoffConfig,
+        *,
+        payload: Mapping[str, Any],
+    ) -> Dict[str, Any]:
+        """Spawn a specialist handoff by emitting a scoped receipt and SSE event."""
+
+        handoff_payload = {
+            "specialist": config.specialist,
+            "tool_allowlist": list(config.tool_allowlist or ()),
+            "payload": sanitize_for_json(dict(payload)) if isinstance(payload, Mapping) else {},
+        }
+        if isinstance(config.context, Mapping):
+            handoff_payload["context"] = sanitize_for_json(dict(config.context))
+
+        receipt = {"status": "completed", **handoff_payload}
+        try:
+            self._memory.record_tool_receipt("agent_handoff", receipt)
+        except Exception:
+            self._logger.debug("Failed to record specialist handoff receipt", exc_info=True)
+
+        event = EventEmitter.status("agent_handoff", "specialist handoff")
+        event["event"] = "agent_handoff"
+        event.setdefault("data", {}).update(receipt)
+        event = apply_mode_metadata(event, self._flow_mode)
+        await self._queue.put(event)
+        return receipt
+
     def _build_run_config(self) -> RunConfig:
         settings_kwargs: Dict[str, Any] = {}
         if self._config.temperature is not None:
@@ -352,6 +435,15 @@ class AgentRuntime:
         event["event"] = "workflow_complete"
         event["data"]["ts"] = datetime.now(timezone.utc).isoformat()
         event = apply_mode_metadata(event, self._flow_mode)
+        if getattr(self._config, "force_tool_calls", False):
+            try:
+                await self.force_call_tool(
+                    "workflow_complete",
+                    {"total_elapsed_ms": total_elapsed_ms},
+                    emit_event=False,
+                )
+            except Exception:
+                self._logger.debug("Failed to record forced workflow_complete receipt", exc_info=True)
         await self._queue.put(event)
 
     def _extract_final_output(self, result: RunResultStreaming) -> Dict[str, Any]:

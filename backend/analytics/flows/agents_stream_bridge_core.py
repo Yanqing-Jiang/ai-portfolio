@@ -72,7 +72,7 @@ from openai.types.responses.response_text_done_event import (
     ResponseTextDoneEvent,
 )
 
-from analytics.flows.planner_executor import _evaluate_latency_guardrail
+from analytics.flows.planner import _evaluate_latency_guardrail
 from analytics.flows.schedulers import FlowMode, apply_mode_metadata
 from analytics.tools import DEFAULT_SCHEMA_VERSION, TOOL_REGISTRY
 from analytics.validators import sanitize_for_json

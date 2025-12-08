@@ -109,6 +109,7 @@ class ToolSchema:
 # These define which tools are available for each follow-up route
 _ROUTE_ALLOWLISTS: Dict[str, Tuple[ToolId, ...]] = {
     "full_pipeline": (
+        ToolId.SEARCH_TOOLS,
         ToolId.FOLLOW_UP_ROUTE,
         ToolId.CLASSIFICATION,
         ToolId.INTENT_DETECTION,
@@ -122,27 +123,32 @@ _ROUTE_ALLOWLISTS: Dict[str, Tuple[ToolId, ...]] = {
         ToolId.MARKET_REFRESH,
     ),
     "reuse_sql": (
+        ToolId.SEARCH_TOOLS,
         ToolId.FOLLOW_UP_ROUTE,
         ToolId.LANE_DECISION,
         ToolId.CHART_GENERATION,
         ToolId.ANALYSIS_GENERATION,
     ),
     "stock_only": (
+        ToolId.SEARCH_TOOLS,
         ToolId.FOLLOW_UP_ROUTE,
         ToolId.LANE_DECISION,
         ToolId.MARKET_REFRESH,
     ),
     "chart_revision": (
+        ToolId.SEARCH_TOOLS,
         ToolId.FOLLOW_UP_ROUTE,
         ToolId.LANE_DECISION,
         ToolId.CHART_REVISION,
     ),
     "analysis_revision": (
+        ToolId.SEARCH_TOOLS,
         ToolId.FOLLOW_UP_ROUTE,
         ToolId.LANE_DECISION,
         ToolId.ANALYSIS_REVISION,
     ),
     "sql_regeneration": (
+        ToolId.SEARCH_TOOLS,
         ToolId.FOLLOW_UP_ROUTE,
         ToolId.LANE_DECISION,
         ToolId.SQL_REGENERATION,
@@ -150,12 +156,14 @@ _ROUTE_ALLOWLISTS: Dict[str, Tuple[ToolId, ...]] = {
         ToolId.ANALYSIS_GENERATION,
     ),
     "web_refresh": (
+        ToolId.SEARCH_TOOLS,
         ToolId.FOLLOW_UP_ROUTE,
         ToolId.LANE_DECISION,
         ToolId.WEB_REFRESH,
         ToolId.ANALYSIS_GENERATION,
     ),
     "market_refresh": (
+        ToolId.SEARCH_TOOLS,
         ToolId.FOLLOW_UP_ROUTE,
         ToolId.LANE_DECISION,
         ToolId.MARKET_REFRESH,

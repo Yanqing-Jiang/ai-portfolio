@@ -35,6 +35,7 @@ import logging
 from .planner_executor import PlannerPipeline, PlannerPhaseContext
 from analytics.routing import FollowUpRoute
 from analytics.validators import sanitize_for_json
+from analytics.tools.search_tools import search_tools
 
 from analytics.tools.definitions import TOOL_REGISTRY, ToolDefinition, ToolId
 from analytics.tools.canonical_registry import get_canonical_registry
@@ -378,14 +379,69 @@ def _bootstrap_registry(registry: PlannerToolRegistry) -> None:
         ):
             yield event
 
+    async def _run_search_tools(
+        pipeline: PlannerPipeline,
+        ctx: PlannerPhaseContext,
+        kwargs: Dict[str, Any],
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        route_hint = kwargs.get("route") or getattr(getattr(ctx, "follow_up_route", None), "value", None)
+        mode_value = getattr(ctx, "flow_mode", FlowMode.DIRECT)
+        results = search_tools(
+            query=kwargs.get("query"),
+            route=route_hint,
+            entities=kwargs.get("entities"),
+            mode=mode_value,
+        )
+        yield {
+            "event": "search_tools",
+            "data": {
+                "tools": results.get("tools", []),
+                "count": results.get("count"),
+                "route": results.get("route") or route_hint,
+                "mode": results.get("mode") or getattr(mode_value, "value", None),
+            },
+        }
+
+    async def _run_follow_up_route(
+        pipeline: PlannerPipeline,
+        ctx: PlannerPhaseContext,
+        kwargs: Dict[str, Any],
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        route_value = kwargs.get("route") or getattr(getattr(ctx, "follow_up_route", None), "value", None)
+        route_value = route_value or FollowUpRoute.FULL_PIPELINE.value
+        yield {
+            "event": "follow_up_route",
+            "data": {
+                "route": route_value,
+            },
+        }
+
+    async def _run_lane_decision(
+        pipeline: PlannerPipeline,
+        ctx: PlannerPhaseContext,
+        kwargs: Dict[str, Any],
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        lane_value = kwargs.get("lane") or kwargs.get("lane_decision") or "narrative"
+        payload = {
+            "lane": lane_value,
+            "revision": True,
+        }
+        yield {
+            "event": "lane_decision",
+            "data": payload,
+        }
+
     handler_map: Dict[ToolId, PlannerToolHandler] = {
         ToolId.CLASSIFICATION: _run_classification,
         ToolId.INTENT_DETECTION: _run_intent,
         ToolId.CLARIFICATION: _run_clarification,
+        ToolId.FOLLOW_UP_ROUTE: _run_follow_up_route,
+        ToolId.SEARCH_TOOLS: _run_search_tools,
         ToolId.PLAN_GENERATION: _run_plan,
         ToolId.SQL_GENERATION: _run_sql,
         ToolId.CHART_GENERATION: _run_chart,
         ToolId.ANALYSIS_GENERATION: _run_analysis,
+        ToolId.LANE_DECISION: _run_lane_decision,
         ToolId.CHART_REVISION: _run_chart_revision,
         ToolId.ANALYSIS_REVISION: _run_analysis_revision,
         ToolId.WEB_REFRESH: _run_web_refresh,

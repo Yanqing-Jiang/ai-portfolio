@@ -1503,6 +1503,7 @@ class SingleAgentController:
             reasoning_effort=self._agent_reasoning_effort,
             plan_template=self._agent_plan_template,
             retry_policy=dict(self._agent_settings.get("retry_policy") or {}),
+            force_tool_calls=True,
         )
         runtime_flag = self._agent_settings.get("enable_runtime")
         if runtime_flag is False:
@@ -2262,6 +2263,18 @@ class SingleAgentController:
                 plan_template=self._agent_plan_template,
             )
         )
+
+        follow_up_value = getattr(getattr(ctx, "follow_up_route", None), "value", None) or FollowUpRoute.FULL_PIPELINE.value
+        try:
+            await runtime.force_call_tool("follow_up_route", {"route": follow_up_value})
+        except Exception:
+            logger.debug("Failed to emit forced follow_up_route tool", exc_info=True)
+        lane_hint = getattr(ctx, "revision_lane", None) or getattr(getattr(ctx, "revision_directive", None), "lane", None)
+        lane_value = lane_hint or "narrative"
+        try:
+            await runtime.force_call_tool("lane_decision", {"lane": lane_value, "source": "forced_runtime"})
+        except Exception:
+            logger.debug("Failed to emit forced lane_decision tool", exc_info=True)
 
         async def _drain_queue() -> AsyncGenerator[Dict[str, Any], None]:
             try:

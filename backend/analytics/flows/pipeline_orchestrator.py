@@ -19,6 +19,7 @@ from .lane_executors import AnalysisLaneExecutor, ChartLaneExecutor, SqlLaneExec
 from .planner.analysis_stage import run_analysis_stage
 from .planner.chart_stage import run_chart_stage
 from .planner.sql_stage import run_sql_stage
+from .planner.accessory_stage import run_web_stage, run_market_stage
 
 
 @dataclass
@@ -75,16 +76,18 @@ def build_pipeline_lane_executors(
             yield event
 
     async def _web_runner():
-        async for event in pipeline.refresh_web_lane(  # type: ignore[attr-defined]
-            ctx,
+        async for event in run_web_stage(
+            pipeline,
+            ctx=ctx,
             reason="pipeline_orchestrator",
             source="planner_pipeline",
         ):
             yield event
 
     async def _market_runner():
-        async for event in pipeline.refresh_market_lane(  # type: ignore[attr-defined]
-            ctx,
+        async for event in run_market_stage(
+            pipeline,
+            ctx=ctx,
             reason="pipeline_orchestrator",
             source="planner_pipeline",
         ):
