@@ -182,53 +182,70 @@ const enhanceEChartsConfig = (config: Record<string, unknown>): Record<string, u
   return option;
 };
 
-// TradingView Widget Component
+// Function: TradingViewWidget — called when chartConfig.widget_type === 'tradingview' to render the Advanced Chart widget.
+// Called from: MessageBubble render path inside ConversationalAnalyticsPage message list.
+// Purpose: Mounts TradingView's latest advanced-chart embed with the required container structure to avoid blank renders.
 const TradingViewWidget: React.FC<{ config: Record<string, unknown> }> = ({ config }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const widgetId = useRef(`tradingview_${Date.now()}`);
+  const rawHeight = Number((config as any).height);
+  const widgetHeight = Number.isFinite(rawHeight) ? rawHeight : 380;
 
   useEffect(() => {
     if (!containerRef.current) return;
 
+    const container = containerRef.current;
+    container.innerHTML = '';
+
+    const widgetContainer = document.createElement('div');
+    widgetContainer.className = 'tradingview-widget-container';
+    widgetContainer.style.height = `${widgetHeight}px`;
+    widgetContainer.style.width = '100%';
+
+    const innerDiv = document.createElement('div');
+    innerDiv.id = widgetId.current;
+    innerDiv.className = 'tradingview-widget-container__widget';
+    innerDiv.style.height = 'calc(100% - 32px)';
+    innerDiv.style.width = '100%';
+
+    const copyright = document.createElement('div');
+    copyright.className = 'tradingview-widget-copyright';
+    copyright.style.fontSize = '10px';
+    copyright.innerHTML =
+      '<span>Quotes by <a href="https://www.tradingview.com" rel="noopener nofollow" target="_blank">TradingView</a></span>';
+
     const script = document.createElement('script');
     script.src = 'https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js';
+    script.type = 'text/javascript';
     script.async = true;
     script.innerHTML = JSON.stringify({
       autosize: true,
       symbol: config.symbol || 'NASDAQ:NVDA',
       interval: config.interval || 'D',
-      timezone: config.timezone || 'America/New_York',
-      theme: 'dark',
-      style: config.style || '1',
-      locale: 'en',
-      toolbar_bg: theme.colors.bg.secondary,
-      enable_publishing: false,
-      hide_side_toolbar: false,
+      timezone: config.timezone || 'Etc/UTC',
+      theme: (config.theme as string) || 'dark',
+      style: String(config.style || '1'),
+      locale: (config.locale as string) || 'en',
+      hide_top_toolbar: Boolean((config as any).hide_top_toolbar ?? false),
+      hide_side_toolbar: Boolean((config as any).hide_side_toolbar ?? false),
       allow_symbol_change: true,
-      container_id: widgetId.current,
+      withdateranges: (config as any).withdateranges ?? true,
+      save_image: (config as any).save_image ?? false,
+      studies: Array.isArray((config as any).studies) ? (config as any).studies : [],
+      support_host: 'https://www.tradingview.com',
     });
 
-    containerRef.current.innerHTML = '';
-    const widgetContainer = document.createElement('div');
-    widgetContainer.className = 'tradingview-widget-container';
-    widgetContainer.style.height = '380px';
-    widgetContainer.style.width = '100%';
-
-    const innerDiv = document.createElement('div');
-    innerDiv.id = widgetId.current;
-    innerDiv.style.height = '100%';
-    innerDiv.style.width = '100%';
-
     widgetContainer.appendChild(innerDiv);
+    widgetContainer.appendChild(copyright);
     widgetContainer.appendChild(script);
-    containerRef.current.appendChild(widgetContainer);
+    container.appendChild(widgetContainer);
 
     return () => {
-      if (containerRef.current) {
-        containerRef.current.innerHTML = '';
+      if (container) {
+        container.innerHTML = '';
       }
     };
-  }, [config]);
+  }, [config, widgetHeight]);
 
   return (
     <motion.div
