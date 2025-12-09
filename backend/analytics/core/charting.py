@@ -9,6 +9,16 @@
 #   Called from: Internal to analytics.core.charting
 #   Invokes: Internal helpers only
 #   Why: Keeps analytics.core.charting from duplicating derive metric label behavior across flows.
+# Function: compose_series_column_key
+#   Role: Public wrapper around compose-series key helper for legacy analytics_agent callers.
+#   Called from: analytics_agent, analytics.core.charting
+#   Invokes: analytics.core.charting._compose_series_column
+#   Why: Keeps series key formatting consistent across modules during deprecation.
+# Function: metric_label_from_series
+#   Role: Public wrapper for deriving metric labels from combined display names.
+#   Called from: analytics_agent
+#   Invokes: analytics.core.charting._derive_metric_label
+#   Why: Prevents duplicate label heuristics across modules during analytics_agent deprecation.
 # Function: _sort_axis_values
 #   Role: Return axis labels sorted ascending using date/quarter heuristics.
 #   Called from: Internal to analytics.core.charting
@@ -87,6 +97,16 @@ def _derive_metric_label(display_name: str, metric: str) -> str:
         if tail:
             return tail
     return metric.replace('_', ' ').title()
+
+
+def compose_series_column_key(ticker: Optional[str], metric: str) -> str:
+    """Public wrapper that mirrors legacy analytics_agent series key helper."""
+    return _compose_series_column(ticker, metric)
+
+
+def metric_label_from_series(series_name: str, metric: str) -> str:
+    """Public wrapper that mirrors legacy analytics_agent metric label helper."""
+    return _derive_metric_label(series_name, metric)
 
 
 def _sort_axis_values(values: List[str], x_field: str) -> List[str]:

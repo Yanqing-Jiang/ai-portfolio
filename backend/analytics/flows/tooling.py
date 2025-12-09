@@ -262,7 +262,7 @@ def _lane_ttl_remaining(
 
 
 if TYPE_CHECKING:  # pragma: no cover - import guard for typing only
-    from .planner_executor import PlannerPhaseContext
+    from analytics.flows.planner.context import PlannerPhaseContext
 
 
 @dataclass(frozen=True)

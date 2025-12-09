@@ -18,6 +18,8 @@ from .streaming import (
     content_event,
     chart_event,
     data_event,
+    plan_event,
+    plan_update_event,
     done_event,
     error_event,
 )
@@ -44,6 +46,12 @@ Workflow:
 2. Then use generate_echarts to visualize if appropriate
 3. Provide analysis and insights in your response
 4. Use web_search for current news or real-time context
+
+Multi-turn guidance:
+- Always reuse prior query results when the user follows up (e.g., “focus on margins”, “compare to last quarter”, “rerun for AMD”). Avoid re-querying unless data is missing.
+- Cite which earlier turn the reused data came from.
+- When comparing tickers or periods, minimize redundant SQL by batching queries.
+- Avoid deterministic scripted steps; choose tools dynamically based on the latest user intent.
 
 Format numbers as: $1.2B (billions), $150M (millions), 15.3% (percentages)
 
@@ -78,47 +86,77 @@ class ConversationalAnalyticsAgent:
         session.add_message("user", message)
         
         yield status_event("Connecting to Claude...")
+        plan_steps = [
+            {"id": "understand", "label": "Understand question", "status": "running"},
+            {"id": "sql", "label": "Query comp_financials", "status": "pending"},
+            {"id": "visualize", "label": "Build chart", "status": "pending"},
+            {"id": "analysis", "label": "Summarize insights", "status": "pending"},
+        ]
+        yield plan_event(plan_steps)
         yield thinking_event("query_analysis", "running", "Analyzing your question...")
         
         try:
             # Build messages with history
             messages = session.get_history_for_claude()
             
-            # Initial call to Claude with all tools
-            response = self.client.messages.create(
-                model=self.model,
-                max_tokens=4096,
-                system=SYSTEM_PROMPT,
-                tools=ALL_TOOLS,
-                messages=messages
-            )
-            
-            yield thinking_event("query_analysis", "completed", "Question understood")
-            
             # Process response in a loop (for tool use)
             max_iterations = 10  # Safety limit
             iteration = 0
+            final_content = ""
             
             while iteration < max_iterations:
                 iteration += 1
                 
+                # Stream the response for this iteration
+                streamed_text: List[str] = []
+                with self.client.messages.stream(
+                    model=self.model,
+                    max_tokens=4096,
+                    system=SYSTEM_PROMPT,
+                    tools=ALL_TOOLS,
+                    messages=messages
+                ) as stream:
+                    for event in stream:
+                        # Stream text deltas as they arrive
+                        if getattr(event, "type", None) == "content_block_delta":
+                            delta_text = getattr(event.delta, "text", None)
+                            if delta_text:
+                                streamed_text.append(delta_text)
+                                yield content_event(delta_text)
+                    response = stream.get_final_response()
+                
+                yield thinking_event("query_analysis", "completed", "Question understood")
+                yield plan_update_event("understand", "completed", "Question understood")
+                
                 # Check stop reason
                 if response.stop_reason == "end_turn":
-                    # Final response - extract and stream content
-                    for block in response.content:
-                        if hasattr(block, 'text'):
-                            yield content_event(block.text)
+                    # Final response - add to session
+                    final_content = "".join(streamed_text)
+                    if not final_content:
+                        for block in response.content:
+                            if hasattr(block, 'text'):
+                                final_content += block.text
                     break
                     
                 elif response.stop_reason == "tool_use":
                     # Process tool calls
                     tool_results = []
+                    tool_call_records = []
                     
                     for block in response.content:
                         if block.type == "tool_use":
                             tool_name = block.name
                             tool_input = block.input
                             tool_use_id = block.id
+                            
+                            if tool_name == "query_database":
+                                yield plan_update_event("sql", "running", "Executing SQL query")
+                            
+                            tool_call_records.append({
+                                "id": tool_use_id,
+                                "name": tool_name,
+                                "input": tool_input,
+                            })
                             
                             yield thinking_event(
                                 f"tool_{tool_name}",
@@ -143,13 +181,26 @@ class ConversationalAnalyticsAgent:
                             
                             # Send chart or data events if applicable
                             if tool_name == "generate_echarts" and result.get("success"):
+                                yield plan_update_event("visualize", "running", "Preparing chart")
                                 yield chart_event(result.get("config", {}))
+                                yield plan_update_event(
+                                    "visualize",
+                                    "completed",
+                                    result.get("chart_type", "chart"),
+                                )
                             elif tool_name == "create_tradingview_chart" and result.get("success"):
+                                yield plan_update_event("visualize", "running", "Preparing TradingView chart")
                                 yield chart_event(result.get("config", {}))
+                                yield plan_update_event("visualize", "completed", "TradingView chart ready")
                             elif tool_name == "query_database" and result.get("success"):
                                 yield data_event(
                                     result.get("rows", [])[:50],  # Limit rows sent
                                     result.get("columns", [])
+                                )
+                                yield plan_update_event(
+                                    "sql",
+                                    "completed",
+                                    f"Rows: {len(result.get('rows', []))}",
                                 )
                             
                             tool_results.append({
@@ -162,29 +213,31 @@ class ConversationalAnalyticsAgent:
                     messages.append({"role": "assistant", "content": response.content})
                     messages.append({"role": "user", "content": tool_results})
                     
-                    yield thinking_event("generating_response", "running", "Generating response...")
-                    
-                    response = self.client.messages.create(
-                        model=self.model,
-                        max_tokens=4096,
-                        system=SYSTEM_PROMPT,
-                        tools=ALL_TOOLS,
-                        messages=messages
+                    # Persist tool calls/results for future turns
+                    session.add_message(
+                        "assistant",
+                        "",
+                        tool_calls=tool_call_records,
                     )
+                    session.add_message(
+                        "user",
+                        "",
+                        tool_results=tool_results,
+                    )
+                    
+                    yield thinking_event("generating_response", "running", "Generating response...")
+                    continue
                 else:
                     # Unknown stop reason
                     logger.warning("Unknown stop reason: %s", response.stop_reason)
                     break
             
             # Add assistant response to history
-            final_content = ""
-            for block in response.content:
-                if hasattr(block, 'text'):
-                    final_content += block.text
             if final_content:
                 session.add_message("assistant", final_content)
             
             yield thinking_event("generating_response", "completed", "Response ready")
+            yield plan_update_event("analysis", "completed", "Answer ready")
             yield done_event()
             
         except anthropic.APIError as e:

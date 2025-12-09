@@ -32,10 +32,12 @@ from dataclasses import dataclass, field
 from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, Iterable, Optional, Sequence, Set, Mapping, List
 import logging
 
-from .planner_executor import PlannerPipeline, PlannerPhaseContext
+from analytics.flows.planner.context import PlannerPhaseContext
+from .planner_executor import PlannerPipeline
 from analytics.routing import FollowUpRoute
 from analytics.validators import sanitize_for_json
 from analytics.tools.search_tools import search_tools
+from analytics.flows.receipt_helpers import input_guardrail
 
 from analytics.tools.definitions import TOOL_REGISTRY, ToolDefinition, ToolId
 from analytics.tools.canonical_registry import get_canonical_registry
@@ -109,6 +111,11 @@ class PlannerToolRegistry:
             executed = set()
         if name in executed:
             return
+        guardrail = input_guardrail(kwargs)
+        if guardrail:
+            raise ValueError(
+                f"Planner tool '{name}' blocked by input guardrail: {guardrail.get('reason')}"
+            )
 
         definition = self.get(name)
         for prerequisite in definition.prerequisites:
@@ -202,6 +209,28 @@ def _bootstrap_registry(registry: PlannerToolRegistry) -> None:
     async def _run_clarification(pipeline: PlannerPipeline, ctx: PlannerPhaseContext, _: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
         async for event in pipeline.run_clarification(ctx):
             yield event
+
+    async def _run_plan_analysis(
+        pipeline: PlannerPipeline,
+        ctx: PlannerPhaseContext,
+        kwargs: Dict[str, Any],
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        executed = kwargs.get("executed") or set()
+        # Reuse existing registry to run prereqs deterministically
+        for tool_name in (
+            ToolId.CLASSIFICATION.value,
+            ToolId.INTENT_DETECTION.value,
+            ToolId.CLARIFICATION.value,
+            ToolId.PLAN_GENERATION.value,
+        ):
+            async for event in registry.invoke(
+                tool_name,
+                pipeline,
+                ctx,
+                executed=executed,
+                use_executor=kwargs.get("use_executor", True),
+            ):
+                yield event
 
     async def _run_plan(pipeline: PlannerPipeline, ctx: PlannerPhaseContext, _: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
         async for event in pipeline.run_plan(ctx):
@@ -435,6 +464,7 @@ def _bootstrap_registry(registry: PlannerToolRegistry) -> None:
         ToolId.CLASSIFICATION: _run_classification,
         ToolId.INTENT_DETECTION: _run_intent,
         ToolId.CLARIFICATION: _run_clarification,
+        ToolId.PLAN_ANALYSIS: _run_plan_analysis,
         ToolId.FOLLOW_UP_ROUTE: _run_follow_up_route,
         ToolId.SEARCH_TOOLS: _run_search_tools,
         ToolId.PLAN_GENERATION: _run_plan,

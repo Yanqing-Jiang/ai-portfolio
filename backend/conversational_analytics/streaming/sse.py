@@ -72,6 +72,16 @@ def data_event(rows: list, columns: list) -> str:
     return format_sse_event("data", {"rows": rows, "columns": columns})
 
 
+def plan_event(steps: list[dict]) -> str:
+    """Create a plan event with ordered steps."""
+    return format_sse_event("plan", {"steps": steps})
+
+
+def plan_update_event(step_id: str, status: str, summary: str = "") -> str:
+    """Update a specific plan step status."""
+    return format_sse_event("plan_update", {"step_id": step_id, "status": status, "summary": summary})
+
+
 def done_event() -> str:
     """Create a stream completion event."""
     return format_sse_event("done", {})

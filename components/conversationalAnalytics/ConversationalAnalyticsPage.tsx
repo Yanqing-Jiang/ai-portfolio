@@ -1,7 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { useSSEStream, ThinkingStep } from './hooks/useSSEStream';
+import { useSSEStream, ThinkingStep, PlanStep } from './hooks/useSSEStream';
+import ThinkingProcessBar from './ThinkingProcessBar';
 
 // Thinking Process Panel Component
+// Function: ThinkingPanel — rendered inside MessageBubble when assistant is speaking; summarizes thinking steps from useSSEStream so users see Claude’s plan trace.
 const ThinkingPanel: React.FC<{ steps: ThinkingStep[]; isExpanded: boolean; onToggle: () => void }> = ({
     steps,
     isExpanded,
@@ -51,13 +53,15 @@ const ThinkingPanel: React.FC<{ steps: ThinkingStep[]; isExpanded: boolean; onTo
 };
 
 // Message Bubble Component
+// Function: MessageBubble — used by ConversationalAnalyticsPage to show user and assistant turns plus charts/data; displays live streaming caret while Claude is generating.
 const MessageBubble: React.FC<{
     role: 'user' | 'assistant';
     content: string;
     thinkingSteps?: ThinkingStep[];
     chartConfig?: Record<string, unknown> | null;
+    dataResult?: { rows: unknown[]; columns: string[] } | null;
     isStreaming?: boolean;
-}> = ({ role, content, thinkingSteps, chartConfig, isStreaming }) => {
+}> = ({ role, content, thinkingSteps, chartConfig, dataResult, isStreaming }) => {
     const [thinkingExpanded, setThinkingExpanded] = useState(true);
     const isUser = role === 'user';
 
@@ -81,8 +85,36 @@ const MessageBubble: React.FC<{
                 {chartConfig && (
                     <div className="mb-3 p-4 bg-gray-900 rounded-lg border border-gray-700">
                         <div className="text-sm text-gray-400 mb-2">📊 Chart Generated</div>
-                        <div className="text-xs text-gray-500">
-                            {JSON.stringify(chartConfig).slice(0, 100)}...
+                        <pre className="text-xs text-gray-400 whitespace-pre-wrap overflow-x-auto max-h-48">
+                            {JSON.stringify(chartConfig, null, 2)}
+                        </pre>
+                    </div>
+                )}
+
+                {dataResult && dataResult.rows && dataResult.rows.length > 0 && (
+                    <div className="mb-3 p-4 bg-gray-900 rounded-lg border border-gray-700">
+                        <div className="text-sm text-gray-400 mb-2">📑 Data Preview</div>
+                        <div className="overflow-x-auto">
+                            <table className="text-xs text-gray-200 w-full">
+                                <thead>
+                                    <tr>
+                                        {dataResult.columns.map(col => (
+                                            <th key={col} className="text-left pr-4 pb-1 text-gray-400">{col}</th>
+                                        ))}
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {dataResult.rows.slice(0, 5).map((row: any, idx) => (
+                                        <tr key={idx} className="border-t border-gray-800">
+                                            {dataResult.columns.map(col => (
+                                                <td key={col} className="pr-4 py-1">
+                                                    {row[col] as any}
+                                                </td>
+                                            ))}
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
                         </div>
                     </div>
                 )}
@@ -95,6 +127,7 @@ const MessageBubble: React.FC<{
 };
 
 // Status Bar Component
+// Function: StatusBar — lightweight indicator displayed beneath the header to show connection readiness for the Claude SSE stream.
 const StatusBar: React.FC<{ status: string; isConnected: boolean }> = ({ status, isConnected }) => (
     <div className="flex items-center gap-2 px-4 py-2 bg-gray-800 border-b border-gray-700 text-sm">
         <span className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500' : 'bg-gray-500'}`} />
@@ -103,22 +136,28 @@ const StatusBar: React.FC<{ status: string; isConnected: boolean }> = ({ status,
 );
 
 // Main Page Component
+// Function: ConversationalAnalyticsPage — mounted by ProjectView for the conversational-analytics project; drives the Claude SSE hook and renders messages, plan bar, and controls.
 const ConversationalAnalyticsPage: React.FC = () => {
     const [messages, setMessages] = useState<Array<{
         role: 'user' | 'assistant';
         content: string;
         thinkingSteps?: ThinkingStep[];
         chartConfig?: Record<string, unknown> | null;
+        dataResult?: { rows: unknown[]; columns: string[] } | null;
     }>>([]);
     const [inputValue, setInputValue] = useState('');
     const [sessionId] = useState(() => `session-${Date.now()}`);
     const messagesEndRef = useRef<HTMLDivElement>(null);
+    const [isPlanExpanded, setIsPlanExpanded] = useState(false);
 
     const {
         isStreaming,
         content,
         thinkingSteps,
         chartConfig,
+        dataResult,
+        planSteps,
+        currentStepId,
         error,
         sendMessage,
         reset,
@@ -140,11 +179,12 @@ const ConversationalAnalyticsPage: React.FC = () => {
                     content,
                     thinkingSteps,
                     chartConfig,
+                    dataResult,
                 },
             ]);
             reset();
         }
-    }, [isStreaming, content, thinkingSteps, chartConfig, reset]);
+    }, [isStreaming, content, thinkingSteps, chartConfig, dataResult, reset]);
 
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
@@ -172,6 +212,14 @@ const ConversationalAnalyticsPage: React.FC = () => {
             <StatusBar
                 status={isStreaming ? 'Processing...' : 'Ready'}
                 isConnected={true}
+            />
+
+            {/* Thinking / Plan Bar */}
+            <ThinkingProcessBar
+                steps={planSteps}
+                currentStepId={currentStepId}
+                isExpanded={isPlanExpanded}
+                onToggle={() => setIsPlanExpanded(prev => !prev)}
             />
 
             {/* Messages Container */}
@@ -203,6 +251,7 @@ const ConversationalAnalyticsPage: React.FC = () => {
                         content={msg.content}
                         thinkingSteps={msg.thinkingSteps}
                         chartConfig={msg.chartConfig}
+                        dataResult={msg.dataResult}
                     />
                 ))}
 
@@ -213,6 +262,7 @@ const ConversationalAnalyticsPage: React.FC = () => {
                         content={content}
                         thinkingSteps={thinkingSteps}
                         chartConfig={chartConfig}
+                        dataResult={dataResult}
                         isStreaming={true}
                     />
                 )}

@@ -60,6 +60,12 @@ from .stage_helpers import (
     _dataset_preview_from_snapshot,
     _snapshot_age_seconds_from_snapshot,
     _is_snapshot_fresh,
+    _clear_tool_state,
+    _reset_revision_accessories,
+    _build_revision_snapshot_payload,
+    _hydrate_context_from_snapshot,
+    _apply_revision_context_hints,
+    _hydrate_revision_payload,
 )
 from .intent_stage import (
     run_classification_stage,
@@ -73,6 +79,7 @@ from .intent_stage import (
     _refresh_followups,
     _upsert_slot_status,
     _compose_intent_from_resolution,
+    _request_allows_custom,
     SCHEMA_CLARIFIER_ENABLED,
 )
 from .clarification_stage import (
@@ -85,9 +92,33 @@ from .sql_stage import (
     _normalize_calendar_filters,
     _set_sql_generation_artifact,
     _set_sql_execution_artifact,
+    _validate_sql,
 )
-from .chart_stage import run_chart_stage, run_chart_pipeline_stage
-from .analysis_stage import run_analysis_stage
+from .chart_stage import (
+    run_chart_stage,
+    run_chart_pipeline_stage,
+    _generate_chart_design,
+    _summarize_chart_series,
+    _get_sql_dataset,
+    _derive_scope_banner,
+    _set_chart_artifact,
+)
+from .analysis_stage import (
+    run_analysis_stage,
+    _set_analysis_artifact,
+    _compose_reused_analysis_payload,
+    _build_reused_analysis_event,
+    _build_analysis_source_summaries,
+)
+from .result_payload import _build_planner_result_payload, compose_web_ready_payload
+from .accessory_stage import (
+    _accessory_tool_adapters,
+    _PayloadSearchResultProxy,
+    _set_market_artifact,
+    _set_web_artifact,
+    _seed_web_search_from_payload,
+    _seed_stock_widget_from_payload,
+)
 
 __all__ = [
     "TOOL_QUEUE_SENTINEL",
@@ -99,6 +130,7 @@ __all__ = [
     "compose_sql_ready_payload",
     "compose_stock_ready_payload",
     "compose_web_ready_payload",
+    "_request_allows_custom",
     "limit_sample_rows",
     "stream_chart_lane",
     "stream_sql_lane",
@@ -135,6 +167,12 @@ __all__ = [
     "_dataset_preview_from_snapshot",
     "_snapshot_age_seconds_from_snapshot",
     "_is_snapshot_fresh",
+    "_clear_tool_state",
+    "_reset_revision_accessories",
+    "_build_revision_snapshot_payload",
+    "_hydrate_context_from_snapshot",
+    "_apply_revision_context_hints",
+    "_hydrate_revision_payload",
     "run_classification_stage",
     "run_intent_stage",
     "_apply_plan_metric_defaults",
@@ -156,7 +194,24 @@ __all__ = [
     "_set_sql_execution_artifact",
     "run_chart_stage",
     "run_chart_pipeline_stage",
+    "_generate_chart_design",
+    "_summarize_chart_series",
+    "_get_sql_dataset",
+    "_derive_scope_banner",
+    "_set_chart_artifact",
     "run_analysis_stage",
+    "_set_analysis_artifact",
+    "_compose_reused_analysis_payload",
+    "_build_reused_analysis_event",
+    "_build_analysis_source_summaries",
+    "_build_planner_result_payload",
+    "compose_web_ready_payload",
+    "_accessory_tool_adapters",
+    "_PayloadSearchResultProxy",
+    "_set_market_artifact",
+    "_set_web_artifact",
+    "_seed_web_search_from_payload",
+    "_seed_stock_widget_from_payload",
     "maybe_emit_fresh_lane_event",
     "collect_tool_deltas_now",
     "drain_tool_state_async",

@@ -44,6 +44,16 @@
 #   Called from: analytics.flows.multi_agent
 #   Invokes: analytics.core.telemetry._base_payload, analytics.core.telemetry._emit
 #   Why: Keeps analytics.core.telemetry from duplicating agent handoff behavior across flows.
+# Function: allowlist_enforcement
+#   Role: Emits telemetry when supervisor tool allowlists are computed or pruned.
+#   Called from: analytics.flows.multi_agent
+#   Invokes: analytics.core.telemetry._base_payload, analytics.core.telemetry._emit
+#   Why: Provides observability into allowlist decisions and guardrail pruning.
+# Function: supervisor_handoff
+#   Role: Emits telemetry when supervisor initiates handoff to a specialist.
+#   Called from: analytics.flows.multi_agent
+#   Invokes: analytics.core.telemetry._base_payload, analytics.core.telemetry._emit
+#   Why: Tracks supervisor → specialist delegation with route and guardrail context.
 # Function: agent_tool_gap
 #   Role: Handles agent tool gap logic for analytics.core.telemetry.
 #   Called from: analytics.flows.instrumentation
@@ -319,6 +329,57 @@ def agent_handoff(
         payload['agent_role'] = agent_role
     if retry_count is not None:
         payload['retry_count'] = retry_count
+    _emit(payload)
+
+
+def allowlist_enforcement(
+    *,
+    follow_up_route: Optional[str],
+    allowed_tools: Iterable[str],
+    decisions: Optional[Iterable[Mapping[str, Any]]] = None,
+    lane_refresh: Optional[Mapping[str, Any]] = None,
+    guardrail: Optional[Mapping[str, Any]] = None,
+    session_id: Optional[str] = None,
+    flow: Optional[str] = None,
+) -> None:
+    payload = _base_payload("allowlist_enforcement", session_id=session_id, flow=flow)
+    payload.update(
+        {
+            "follow_up_route": follow_up_route,
+            "allowed_tools": sorted({tool for tool in allowed_tools if tool}),
+        }
+    )
+    if decisions:
+        payload["decisions"] = [dict(decision) for decision in decisions]
+    if lane_refresh:
+        payload["lane_refresh"] = dict(lane_refresh)
+    if guardrail:
+        payload["guardrail"] = dict(guardrail)
+    _emit(payload)
+
+
+def supervisor_handoff(
+    *,
+    lane: str,
+    specialist: Optional[str],
+    follow_up_route: Optional[str],
+    allowlist: Optional[Iterable[str]],
+    guardrail: Optional[Mapping[str, Any]] = None,
+    session_id: Optional[str] = None,
+    flow: Optional[str] = None,
+) -> None:
+    payload = _base_payload("supervisor_handoff", session_id=session_id, flow=flow)
+    payload.update(
+        {
+            "lane": lane,
+            "specialist": specialist,
+            "follow_up_route": follow_up_route,
+        }
+    )
+    if allowlist is not None:
+        payload["allowed_tools"] = sorted({tool for tool in allowlist if tool})
+    if guardrail:
+        payload["guardrail"] = dict(guardrail)
     _emit(payload)
 
 

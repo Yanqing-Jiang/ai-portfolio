@@ -63,12 +63,14 @@ class RateLimitScope(str, Enum):
     GLOBAL = "global"
     ANALYTICS_AGENT = "next-gen-analytics-agent"
     ANALYTICS_SQL = "next-gen-analytics-sql"
+    CONVERSATIONAL_ANALYTICS = "conversational-analytics"
 
 # (guest_limit, member_limit)
 SCOPE_LIMITS: Dict[RateLimitScope, Tuple[int, int]] = {
     RateLimitScope.GLOBAL: (GUEST_LIMIT, MEMBER_LIMIT),
     RateLimitScope.ANALYTICS_AGENT: (GUEST_LIMIT, MEMBER_LIMIT),
     RateLimitScope.ANALYTICS_SQL: (GUEST_LIMIT, MEMBER_LIMIT),
+    RateLimitScope.CONVERSATIONAL_ANALYTICS: (GUEST_LIMIT, MEMBER_LIMIT),
 }
 
 SCOPE_ALIAS_MAP: Dict[str, RateLimitScope] = {
@@ -78,6 +80,8 @@ SCOPE_ALIAS_MAP: Dict[str, RateLimitScope] = {
     "next-gen-analytics-agent": RateLimitScope.ANALYTICS_AGENT,
     "analytics_sql": RateLimitScope.ANALYTICS_SQL,
     "next-gen-analytics-sql": RateLimitScope.ANALYTICS_SQL,
+    "conversational_analytics": RateLimitScope.CONVERSATIONAL_ANALYTICS,
+    RateLimitScope.CONVERSATIONAL_ANALYTICS.value: RateLimitScope.CONVERSATIONAL_ANALYTICS,
 }
 
 @dataclass(slots=True)
@@ -437,3 +441,18 @@ async def analytics_agent_rate_limit(request: Request):
 async def analytics_sql_rate_limit(request: Request):
     """Rate limiter dedicated to the analytics SQL workflows."""
     await smart_rate_limit(request, scope=RateLimitScope.ANALYTICS_SQL)
+
+
+async def conversational_analytics_rate_limit(request: Request):
+    """Rate limiter for conversational analytics agent endpoints."""
+    # Dev bypass: when CONV_ANALYTICS_SKIP_JWT is truthy, skip JWT enforcement for local development.
+    if os.getenv("CONV_ANALYTICS_SKIP_JWT", "").lower() in {"1", "true", "yes"}:
+        return
+
+    await smart_rate_limit(request, scope=RateLimitScope.CONVERSATIONAL_ANALYTICS)
+    identifier = await who_am_i(request)
+    if identifier.startswith("ip:"):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Supabase JWT required for conversational analytics",
+        )

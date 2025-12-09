@@ -43,7 +43,7 @@ except ImportError:  # pragma: no cover - fallback for minimal environments
     TYPE_CHECKING = False  # type: ignore[assignment]
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from ..planner_executor import PlannerPhaseContext
+    from analytics.flows.planner.context import PlannerPhaseContext
 
 
 TOOL_QUEUE_SENTINEL: object = object()

@@ -64,36 +64,6 @@
 #   Called from: tests.analytics.test_multi_agent_bundle
 #   Invokes: analytics.validators.sanitize_for_json, json.dumps, analytics.flows.multi_agent._make_identifier, copy.deepcopy
 #   Why: Keeps analytics.flows.multi_agent from duplicating create planner bundle behavior across flows.
-# Function: _planner_agent
-#   Role: Handles planner agent logic for analytics.flows.multi_agent.
-#   Called from: tests.analytics.test_multi_agent_flow
-#   Invokes: analytics.flows.multi_agent._derive_tasks, analytics.flows.multi_agent._create_planner_bundle, analytics.core.telemetry.agent_handoff, analytics.flows.orchestrator.AgentResult
-#   Why: Keeps analytics.flows.multi_agent from duplicating planner agent behavior across flows.
-# Function: _query_agent
-#   Role: Handles query agent logic for analytics.flows.multi_agent.
-#   Called from: tests.analytics.test_multi_agent_flow
-#   Invokes: analytics.flows.multi_agent._task_status, analytics.flows.orchestrator.AgentResult
-#   Why: Keeps analytics.flows.multi_agent from duplicating query agent behavior across flows.
-# Function: _analyst_agent
-#   Role: Handles analyst agent logic for analytics.flows.multi_agent.
-#   Called from: Internal to analytics.flows.multi_agent
-#   Invokes: analytics.flows.multi_agent._task_status, analytics.flows.orchestrator.AgentResult
-#   Why: Keeps analytics.flows.multi_agent from duplicating analyst agent behavior across flows.
-# Function: _chart_agent
-#   Role: Handles chart agent logic for analytics.flows.multi_agent.
-#   Called from: Internal to analytics.flows.multi_agent
-#   Invokes: analytics.flows.multi_agent._task_status, analytics.flows.orchestrator.AgentResult
-#   Why: Keeps analytics.flows.multi_agent from duplicating chart agent behavior across flows.
-# Function: _build_default_agent_registry
-#   Role: Handles build default agent registry logic for analytics.flows.multi_agent.
-#   Called from: Internal to analytics.flows.multi_agent
-#   Invokes: analytics.flows.orchestrator.AgentSpec
-#   Why: Keeps analytics.flows.multi_agent from duplicating build default agent registry behavior across flows.
-# Function: _build_default_plan
-#   Role: Handles build default plan logic for analytics.flows.multi_agent.
-#   Called from: Internal to analytics.flows.multi_agent
-#   Invokes: analytics.flows.orchestrator.AgentTask
-#   Why: Keeps analytics.flows.multi_agent from duplicating build default plan behavior across flows.
 # Class: _SupervisorSequencerState
 #   Role: Handles SupervisorSequencerState logic for analytics.flows.multi_agent.
 #   Called from: Internal to analytics.flows.multi_agent
@@ -152,7 +122,9 @@ from analytics.core.telemetry import (
     analysis_chunk as log_analysis_chunk,
     agent_handoff,
     agent_run as log_agent_run,
+    allowlist_enforcement,
     backpressure_event,
+    supervisor_handoff,
     tool_iteration as log_tool_iteration,
     policy_decision,
 )
@@ -179,12 +151,13 @@ from analytics.services.response_search import ResponseSearchError, perform_resp
 from analytics.routing import FollowUpRoute, FOLLOW_UP_BANNERS, route_requires_market_web
 from analytics.services.revision_focus import RevisionQuestionBundle
 from analytics.validators import CohesiveResultValidationError, CohesiveResultValidator, sanitize_for_json
+from analytics.agent_orchestrator import HandoffConfig
 from analytics.agent_orchestrator.agent_runtime import AgentRuntime, AgentRuntimeConfig
 from analytics.agent_orchestrator.memory import AgentMemory
 from analytics.agent_orchestrator.agent_plan import PlanTemplate
+from analytics.flows.planner.context import PlannerPhaseContext
 from .planner_executor import (
     PlannerExecutorFlow,
-    PlannerPhaseContext,
     run_planner_executor,
     _build_planner_result_payload,
     _build_reused_analysis_event,
@@ -5288,9 +5261,10 @@ class MultiAgentFlow:
         guardrail_payload = self._follow_up_guardrail or {}
         lane_refresh_flags = dict(self._shared_context.get("lane_refresh_required") or {})
         allowlist: Optional[Set[str]] = None
+        allowlist_decisions: List[Dict[str, Any]] = []
+        route = getattr(self, "follow_up_route", FollowUpRoute.FULL_PIPELINE)
         try:
             registry = get_canonical_registry()
-            route = getattr(self, "follow_up_route", FollowUpRoute.FULL_PIPELINE)
             allowed_tool_ids = registry.get_tool_allowlist(route.value)
             def _schema_for(tool_id: CanonicalToolId) -> Optional[ToolSchema]:
                 try:
@@ -5311,6 +5285,14 @@ class MultiAgentFlow:
                     schema = next((s for s in schemas_for_route if s.name == tool_name), None)
                     if schema and str(schema.lane).strip().lower() == lane_key:
                         allowlist.discard(tool_name)
+                allowlist_decisions.append(
+                    {
+                        "lane": lane_key,
+                        "reason": reason,
+                        "reused": reused,
+                        "from_cache": from_cache,
+                    }
+                )
                 receipt_tool = (
                     "web_refresh"
                     if lane_key == "web"
@@ -5336,7 +5318,14 @@ class MultiAgentFlow:
             if isinstance(blocked_tools, Iterable):
                 for tool_name in blocked_tools:
                     if isinstance(tool_name, str) and tool_name.strip():
-                        allowlist.discard(tool_name.strip())
+                        normalized_tool = tool_name.strip()
+                        allowlist.discard(normalized_tool)
+                        allowlist_decisions.append(
+                            {
+                                "tool": normalized_tool,
+                                "reason": "guardrail_blocked",
+                            }
+                        )
 
             for lane_name, required in lane_refresh_flags.items():
                 if required is False:
@@ -5352,6 +5341,16 @@ class MultiAgentFlow:
                 allowlist = None
         except Exception:
             allowlist = allowlist or None
+
+        allowlist_enforcement(
+            session_id=session_id,
+            flow=getattr(self, "flow_label", None),
+            follow_up_route=route.value if hasattr(route, "value") else str(route),
+            allowed_tools=allowlist or [],
+            decisions=allowlist_decisions,
+            lane_refresh=lane_refresh_flags,
+            guardrail=guardrail_payload if isinstance(guardrail_payload, Mapping) else None,
+        )
 
         if use_agent_runtime:
             supervisor_model = getattr(self._supervisor_agent, "model", None) or _coerce_agent_model(
@@ -5422,6 +5421,39 @@ class MultiAgentFlow:
                     self._session_snapshot.record_tool_result("analysis_inputs", sanitize_for_json(analysis_inputs))
                 except Exception:
                     logger.debug("Failed to persist analysis_inputs snapshot", exc_info=True)
+
+            # Emit supervisor -> specialist handoff receipts/events for lanes that will refresh.
+            handoff_lanes = [
+                lane for lane, required in lane_refresh_flags.items() if required and lane in {"sql", "chart", "analysis", "web", "market"}
+            ]
+            for lane in handoff_lanes:
+                try:
+                    config = HandoffConfig(
+                        specialist=f"{lane}_specialist",
+                        tool_allowlist=list(allowlist) if allowlist else None,
+                        context={
+                            "lane": lane,
+                            "follow_up_route": route.value if hasattr(route, "value") else str(route),
+                        },
+                    )
+                    supervisor_handoff(
+                        lane=lane,
+                        specialist=config.specialist,
+                        follow_up_route=route.value if hasattr(route, "value") else str(route),
+                        allowlist=allowlist,
+                        guardrail=guardrail_payload if isinstance(guardrail_payload, Mapping) else None,
+                        session_id=session_id,
+                        flow=getattr(self, "flow_label", None),
+                    )
+                    await runtime.handoff_to_specialist(
+                        config,
+                        payload={
+                            "lane": lane,
+                            "follow_up_route": route.value if hasattr(route, "value") else str(route),
+                        },
+                    )
+                except Exception:
+                    logger.debug("Failed to emit specialist handoff for lane %s", lane, exc_info=True)
 
             runtime_task = asyncio.create_task(
                 runtime.run(

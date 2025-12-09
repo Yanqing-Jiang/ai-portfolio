@@ -24,7 +24,8 @@ from enum import Enum
 from typing import Any, AsyncGenerator, Dict, Mapping, Optional, Tuple, TYPE_CHECKING, Union
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from analytics.flows.planner_executor import PlannerPhaseContext, PlannerPipeline
+    from analytics.flows.planner.context import PlannerPhaseContext
+    from analytics.flows.planner_executor import PlannerPipeline
 
 __all__ = [
     "ToolDefinition",
@@ -76,6 +77,7 @@ class ToolId(str, Enum):
     CLASSIFICATION = "classification"
     INTENT_DETECTION = "intent_detection"
     CLARIFICATION = "clarification"
+    PLAN_ANALYSIS = "plan_analysis"
     PLAN_GENERATION = "plan_generation"
     SQL_GENERATION = "sql_generation"
     CHART_GENERATION = "chart_generation"
@@ -189,6 +191,43 @@ TOOL_REGISTRY: "OrderedDict[ToolId, ToolDefinition]" = OrderedDict(
                         "ask_follow_up": {"type": "boolean"},
                         "clarification_id": {"type": "string"},
                     }
+                ),
+                response_schema=_response_schema_copy(),
+                retryable_errors=RETRYABLE_DEFAULT,
+            ),
+        ),
+        (
+            ToolId.PLAN_ANALYSIS,
+            ToolDefinition(
+                id=ToolId.PLAN_ANALYSIS,
+                description="Run classification, intent, clarification, and plan generation in one tool call.",
+                telemetry_step="plan_analysis",
+                lane="plan",
+                specialist_role="plan_generation",
+                inputs=("query", "clarifications"),
+                outputs=("plan", "intent", "clarifications"),
+                output_artifacts=("plan", "intent", "clarification"),
+                latency_budget_ms=3500,
+                concurrency_limit=1,
+                depends_on=(
+                    ToolId.CLASSIFICATION,
+                    ToolId.INTENT_DETECTION,
+                    ToolId.CLARIFICATION,
+                ),
+                parameters_schema=_schema(
+                    {
+                        "query": {
+                            "type": "string",
+                            "description": "Optional query override; defaults to pipeline context when omitted.",
+                        },
+                        "clarifications": {
+                            "type": "array",
+                            "items": {"type": "object"},
+                            "description": "Optional pre-collected clarification answers.",
+                        },
+                    },
+                    required=(),
+                    allow_extra=True,
                 ),
                 response_schema=_response_schema_copy(),
                 retryable_errors=RETRYABLE_DEFAULT,

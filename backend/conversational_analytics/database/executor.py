@@ -68,7 +68,7 @@ async def check_table_exists() -> bool:
         result = await execute_sql("""
             SELECT EXISTS (
                 SELECT FROM information_schema.tables 
-                WHERE table_name = 'conv_analytics_data'
+                WHERE table_name = 'comp_financials'
             );
         """)
         return result[0].get("exists", False) if result else False

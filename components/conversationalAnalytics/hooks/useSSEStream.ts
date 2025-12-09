@@ -1,7 +1,9 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
+import { authService } from '../../../services/auth';
+import { configService } from '../../../services/config';
 
 export interface SSEEvent {
-    type: 'status' | 'thinking' | 'tool_start' | 'tool_end' | 'content' | 'chart' | 'data' | 'done' | 'error';
+    type: 'status' | 'thinking' | 'tool_start' | 'tool_end' | 'content' | 'chart' | 'data' | 'plan' | 'plan_update' | 'done' | 'error';
     data: Record<string, unknown>;
 }
 
@@ -11,35 +13,55 @@ export interface ThinkingStep {
     message: string;
 }
 
+export interface PlanStep {
+    id: string;
+    label: string;
+    status: 'pending' | 'running' | 'completed' | 'error';
+    summary?: string;
+}
+
 export interface UseSSEStreamResult {
     isStreaming: boolean;
     content: string;
     thinkingSteps: ThinkingStep[];
     chartConfig: Record<string, unknown> | null;
     dataResult: { rows: unknown[]; columns: string[] } | null;
+    planSteps: PlanStep[];
+    currentStepId: string | null;
     error: string | null;
     sendMessage: (message: string, sessionId: string) => void;
     reset: () => void;
 }
 
+/**
+ * Function: useSSEStream — called from ConversationalAnalyticsPage to stream Claude agent responses.
+ * Invokes: POST to the backend conv-analytics SSE endpoint with Supabase auth headers, then delegates event parsing to handleEvent.
+ * Purpose: Keeps the conversational analytics UI decoupled from transport/auth wiring while consuming the Claude Agent stream.
+ */
 export function useSSEStream(apiUrl: string = '/api/conv-analytics/stream'): UseSSEStreamResult {
     const [isStreaming, setIsStreaming] = useState(false);
     const [content, setContent] = useState('');
     const [thinkingSteps, setThinkingSteps] = useState<ThinkingStep[]>([]);
     const [chartConfig, setChartConfig] = useState<Record<string, unknown> | null>(null);
     const [dataResult, setDataResult] = useState<{ rows: unknown[]; columns: string[] } | null>(null);
+    const [planSteps, setPlanSteps] = useState<PlanStep[]>([]);
+    const [currentStepId, setCurrentStepId] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
 
     const abortControllerRef = useRef<AbortController | null>(null);
 
+    // Function: reset — called by ConversationalAnalyticsPage after a turn to clear prior stream state and errors.
     const reset = useCallback(() => {
         setContent('');
         setThinkingSteps([]);
         setChartConfig(null);
         setDataResult(null);
+        setPlanSteps([]);
+        setCurrentStepId(null);
         setError(null);
     }, []);
 
+    // Function: sendMessage — called by ConversationalAnalyticsPage form submit; posts the user message to Claude SSE backend and streams events.
     const sendMessage = useCallback(async (message: string, sessionId: string) => {
         // Abort any existing stream
         if (abortControllerRef.current) {
@@ -51,14 +73,33 @@ export function useSSEStream(apiUrl: string = '/api/conv-analytics/stream'): Use
         abortControllerRef.current = new AbortController();
 
         try {
-            const response = await fetch(apiUrl, {
+            const backendUrl = configService.getBackendUrl();
+            const resolvedUrl = apiUrl.startsWith('http') ? apiUrl : `${backendUrl}${apiUrl}`;
+            const authHeaders = await authService.getAuthHeaders();
+
+            const response = await fetch(resolvedUrl, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
+                    ...authHeaders,
                 },
                 body: JSON.stringify({ message, session_id: sessionId }),
                 signal: abortControllerRef.current.signal,
             });
+
+            if (response.status === 401) {
+                setError('Sign-in required for conversational analytics. Please log in and try again.');
+                return;
+            }
+
+            if (response.status === 429) {
+                const retryAfter = response.headers.get('Retry-After');
+                setError(retryAfter
+                    ? `Rate limit exceeded. Try again in ${retryAfter} seconds.`
+                    : 'Rate limit exceeded. Please try again shortly.'
+                );
+                return;
+            }
 
             if (!response.ok) {
                 throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -101,6 +142,7 @@ export function useSSEStream(apiUrl: string = '/api/conv-analytics/stream'): Use
         }
     }, [apiUrl, reset]);
 
+    // Function: handleEvent — invoked for each SSE payload to keep UI state in sync with Claude agent thinking/data.
     const handleEvent = useCallback((event: SSEEvent) => {
         switch (event.type) {
             case 'thinking':
@@ -132,6 +174,27 @@ export function useSSEStream(apiUrl: string = '/api/conv-analytics/stream'): Use
                 });
                 break;
 
+            case 'plan':
+                setPlanSteps((event.data.steps as PlanStep[]) ?? []);
+                setCurrentStepId(
+                    ((event.data.steps as PlanStep[]) ?? []).find(s => s.status === 'running')?.id || null
+                );
+                break;
+
+            case 'plan_update':
+                setPlanSteps(prev => prev.map(step => {
+                    if (step.id === event.data.step_id) {
+                        return {
+                            ...step,
+                            status: event.data.status as PlanStep['status'],
+                            summary: (event.data.summary as string) || step.summary,
+                        };
+                    }
+                    return step;
+                }));
+                setCurrentStepId(event.data.step_id as string);
+                break;
+
             case 'error':
                 setError(event.data.message as string);
                 break;
@@ -157,6 +220,8 @@ export function useSSEStream(apiUrl: string = '/api/conv-analytics/stream'): Use
         thinkingSteps,
         chartConfig,
         dataResult,
+        planSteps,
+        currentStepId,
         error,
         sendMessage,
         reset,

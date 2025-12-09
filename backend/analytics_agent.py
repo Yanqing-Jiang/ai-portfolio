@@ -2,6 +2,7 @@ import json
 import os
 import re
 import traceback
+import warnings
 import yaml
 from pathlib import Path
 from typing import Dict, Any, List, Optional, AsyncGenerator, TypedDict, Tuple
@@ -9,6 +10,10 @@ from typing import Dict, Any, List, Optional, AsyncGenerator, TypedDict, Tuple
 import asyncpg
 import sys
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+from analytics.core.charting import (
+    compose_series_column_key as _compose_series_column_key,
+    metric_label_from_series as _metric_label_from_series,
+)
 from analytics.core.margins import (
     DEFAULT_MARGIN_LABEL,
     MARGIN_CHOICES,
@@ -17,21 +22,14 @@ from analytics.core.margins import (
     normalize_margin_value,
 )
 from unified_responses_client import get_unified_client
+from analytics.flows.planner_executor import PlannerExecutorFlow
+from analytics.flows.schedulers import FlowMode
 
 
-def _compose_series_column_key(ticker: Optional[str], metric: str) -> str:
-    ticker_clean = (ticker or "").strip()
-    if ticker_clean:
-        return f"{ticker_clean}|{metric}"
-    return metric
-
-
-def _metric_label_from_series(series_name: str, metric: str) -> str:
-    if isinstance(series_name, str) and ' - ' in series_name:
-        tail = series_name.split(' - ', 1)[1].strip()
-        if tail:
-            return tail
-    return metric.replace('_', ' ').title()
+_DEPRECATION_MSG = (
+    "analytics_agent.py is deprecated; prefer PlannerExecutorFlow via "
+    "AnalyticsWorkflow.build_pipeline_executor() or migrate callers off create_analytics_workflow()."
+)
 
 
 class WorkflowState(TypedDict):
@@ -89,6 +87,20 @@ class AnalyticsWorkflow:
             "Revenue": "Revenue",
             "Net Income": "Net Income"
         })
+
+    def build_pipeline_executor(self, flow_mode: str = "direct") -> PlannerExecutorFlow:
+        """
+        Migration helper to adopt PlannerExecutorFlow instead of the legacy workflow.
+        Called from: migration scripts, future API handlers
+        Invokes: analytics.flows.planner_executor.PlannerExecutorFlow
+        Why: Provides a clear path to deprecate analytics_agent in favor of the unified planner.
+        """
+        warnings.warn(_DEPRECATION_MSG, DeprecationWarning, stacklevel=2)
+        try:
+            resolved_mode = FlowMode(flow_mode)
+        except Exception:
+            resolved_mode = FlowMode.DIRECT
+        return PlannerExecutorFlow(flow_mode=resolved_mode)
 
     def _detect_intent(self, query: str) -> Dict[str, Any]:
         """Detect user intent (kind, ticker, names) from the query using queries.yaml patterns."""
@@ -1744,6 +1756,7 @@ Guidelines:
 
 async def create_analytics_workflow() -> AnalyticsWorkflow:
     """Factory function to create analytics workflow with environment variables"""
+    warnings.warn(_DEPRECATION_MSG, DeprecationWarning, stacklevel=2)
     database_url = os.getenv("DATABASE_URL")
     openai_api_key = os.getenv("OPENAI_API_KEY")
     

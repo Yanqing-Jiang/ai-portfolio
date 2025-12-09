@@ -9,6 +9,8 @@ from .sse import (
     content_event,
     chart_event,
     data_event,
+    plan_event,
+    plan_update_event,
     done_event,
     error_event,
 )
@@ -23,6 +25,8 @@ __all__ = [
     "content_event",
     "chart_event",
     "data_event",
+    "plan_event",
+    "plan_update_event",
     "done_event",
     "error_event",
 ]

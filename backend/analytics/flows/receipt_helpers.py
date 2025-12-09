@@ -12,10 +12,14 @@ Part of Phase 2.2 of the analytics refactor plan - extracting receipt logic from
 from __future__ import annotations
 
 from datetime import datetime
+import json
 from typing import Any, Dict, List, Mapping, Optional, TYPE_CHECKING
 
+from analytics.validators import sanitize_for_json
+
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from .planner_executor import ToolInvocationReceipt, PlannerPhaseContext
+    from analytics.flows.planner.context import PlannerPhaseContext
+    from analytics.flows.planner.receipts import ToolInvocationReceipt
 
 __all__ = [
     "LANE_TOOL_MAP",
@@ -53,6 +57,51 @@ LANE_TOOL_MAP: Dict[str, tuple] = {
     "analysis": ("analysis_generation", "analysis_revision"),
 }
 
+# Input guardrail defaults
+MAX_TOOL_INPUT_BYTES = 12000
+MAX_TOOL_INPUT_KEYS = 128
+
+
+def input_guardrail(
+    payload: Any,
+    *,
+    max_bytes: int = MAX_TOOL_INPUT_BYTES,
+    max_keys: int = MAX_TOOL_INPUT_KEYS,
+) -> Optional[Dict[str, Any]]:
+    """
+    Function: input_guardrail
+    Called from: pipeline_tools.PlannerToolRegistry.invoke
+    Why: Enforces size/key-count limits before executing planner tools.
+    """
+    if payload is None:
+        return None
+    try:
+        sanitized = sanitize_for_json(payload)
+    except Exception:
+        sanitized = payload
+    key_count: Optional[int] = None
+    if isinstance(sanitized, Mapping):
+        key_count = len(sanitized)
+        if key_count > max_keys:
+            return {
+                "status": "violation",
+                "reason": "too_many_keys",
+                "observed_keys": key_count,
+                "max_keys": max_keys,
+            }
+    try:
+        encoded = json.dumps(sanitized, default=str).encode("utf-8")
+    except Exception:
+        return None
+    if len(encoded) > max_bytes:
+        return {
+            "status": "violation",
+            "reason": "payload_too_large",
+            "observed_bytes": len(encoded),
+            "max_bytes": max_bytes,
+        }
+    return None
+
 
 def receipt_age_seconds(receipt: "ToolInvocationReceipt") -> Optional[float]:
     """
@@ -87,7 +136,7 @@ def receipt_is_fresh(
     Called from: should_reuse_web, should_reuse_market, should_reuse_sql, should_reuse_chart
     Why: Determines whether a cached tool receipt is still within the lane TTL window.
     """
-    from .planner_executor import ToolInvocationReceipt
+    from analytics.flows.planner.receipts import ToolInvocationReceipt
     
     if receipt is None:
         return False
@@ -141,7 +190,7 @@ def lane_receipts(
     Called from: should_reuse_web, should_reuse_market, should_reuse_sql, should_reuse_chart
     Why: Collects cached tool receipts relevant to a given lane.
     """
-    from .planner_executor import ToolInvocationReceipt
+    from analytics.flows.planner.receipts import ToolInvocationReceipt
     
     lane_key = (lane or "").strip().lower()
     if not lane_key:

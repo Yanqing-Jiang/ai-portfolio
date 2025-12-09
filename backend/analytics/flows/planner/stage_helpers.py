@@ -84,21 +84,63 @@
 #   Called from: analytics.flows.planner_executor analysis artifact helpers
 #   Invokes: None
 #   Why: Formats web evidence for analysis artifact display.
+# Function: _clear_tool_state
+#   Role: Removes cached tool receipts/results for given tool ids.
+#   Called from: analytics.flows.planner_executor, analytics.flows.single_agent_tools
+#   Invokes: Internal filtering on PlannerPhaseContext receipt/state fields
+#   Why: Ensures accessory refresh/reset clears prior tool artifacts.
+# Function: _reset_revision_accessories
+#   Role: Resets web/market accessory state for revision reruns.
+#   Called from: analytics.flows.planner_executor, analytics.flows.single_agent_tools
+#   Invokes: _clear_tool_state
+#   Why: Forces accessory lanes to rerun when refresh is required.
+# Function: _build_revision_snapshot_payload
+#   Role: Builds revision snapshot payload from the current planner context.
+#   Called from: analytics.flows.planner_executor
+#   Invokes: analytics.core.revision_snapshot.build_intent_signature, analytics.flows.planner.sql_lane.limit_sample_rows
+#   Why: Persists planner outputs for revision reuse with TTLs.
+# Function: _hydrate_context_from_snapshot
+#   Role: Hydrates PlannerPhaseContext from a SessionStateSnapshot payload.
+#   Called from: analytics.flows.planner_executor
+#   Invokes: analytics.core.revision_snapshot.extract_revision_snapshot, analytics.artifacts.*
+#   Why: Restores cached lane artifacts/receipts for revision flows.
+# Function: _apply_revision_context_hints
+#   Role: Applies revision_context refresh hints and reasoning to context.
+#   Called from: analytics.flows.planner_executor
+#   Invokes: _hydrate_revision_payload
+#   Why: Honors revision TTL hints and cached payloads across lanes.
+# Function: _hydrate_revision_payload
+#   Role: Hydrates PlannerPhaseContext from a revision payload dict.
+#   Called from: analytics.flows.planner_executor
+#   Invokes: Intent/plan/slot model coercion helpers
+#   Why: Reuses revision data without recomputing classification/intent.
 # --- End Analytics Function/Class Map ---
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import os
 import re
 from datetime import date, datetime
-from typing import Any, Dict, List, Mapping, Optional, TYPE_CHECKING
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, TYPE_CHECKING
 
 from analytics.validators import sanitize_for_json
 
 if TYPE_CHECKING:
     from analytics.services.session_state import SessionStateSnapshot
-    from analytics.artifacts import PipelineArtifacts
+    from analytics.artifacts import (
+        AnalysisArtifact,
+        ChartArtifact,
+        PipelineArtifacts,
+        SQLExecutionArtifact,
+        SQLGenerationArtifact,
+        WebContextArtifact,
+    )
+    from analytics.core.intent import OffTopicClassifierSchema, IntentModel
+    from analytics.core.intent_impl.models import FollowUpModel, IntentResolutionModel, SlotStatusModel
+    from analytics.core.types import ClarifyRequestModel, QueryPlanModel
+    from analytics.flows.planner.context import PlannerPhaseContext
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Text Extraction Constants
@@ -312,7 +354,7 @@ def ensure_tool_receipt(
         ctx.tool_receipts = receipts
     receipt = receipts.get(tool)
     if receipt is None:
-        from analytics.flows.planner_executor import ToolInvocationReceipt  # local import to avoid cycles
+        from analytics.flows.planner.receipts import ToolInvocationReceipt  # local import to avoid cycles
 
         receipt = ToolInvocationReceipt(
             tool=tool,
@@ -642,4 +684,585 @@ def _is_snapshot_fresh(snapshot: Optional[Dict[str, Any]]) -> bool:
     if age_seconds is None:
         return False
     return age_seconds <= SNAPSHOT_MAX_AGE_SECONDS
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Accessory and Snapshot Reset Helpers (moved from planner_executor.py)
+# ─────────────────────────────────────────────────────────────────────────────
+_WEB_TOOL_NAMES = {"web_retriever", "web_retriever_cached", "web_retriever_live"}
+_MARKET_TOOL_NAMES = {"stock_tracker", "market_question_a", "market_question_b"}
+
+
+def _clear_tool_state(ctx: "PlannerPhaseContext", tool_names: Iterable[str]) -> None:
+    """Remove cached tool receipts/results for the provided tool identifiers."""
+    names = {str(name).strip().lower() for name in tool_names if name}
+    if not names:
+        return
+    receipts = getattr(ctx, "tool_receipts", None)
+    if isinstance(receipts, dict):
+        for key in list(receipts.keys()):
+            if str(key).strip().lower() in names:
+                receipts.pop(key, None)
+    results = getattr(ctx, "tool_parallel_results", None)
+    if isinstance(results, list):
+        filtered = []
+        for entry in results:
+            tool_id = str((entry or {}).get("tool") or "").strip().lower()
+            event_id = str((entry or {}).get("event") or "").strip().lower()
+            lane_id = str((entry or {}).get("lane") or "").strip().lower()
+            if tool_id in names or event_id in names or (lane_id in {"web", "market"} and tool_id in names):
+                continue
+            filtered.append(entry)
+        ctx.tool_parallel_results = filtered
+    manifest = getattr(ctx, "tool_parallel_manifest", None)
+    if isinstance(manifest, list):
+        ctx.tool_parallel_manifest = [
+            entry for entry in manifest if str((entry or {}).get("tool") or "").strip().lower() not in names
+        ]
+
+
+def _reset_revision_accessories(ctx: "PlannerPhaseContext", lanes: Iterable[str]) -> None:
+    """Reset web/market accessory state for revision reruns."""
+    lanes_normalized = {str(lane).strip().lower() for lane in lanes if lane}
+    if not lanes_normalized:
+        return
+    if "web" in lanes_normalized:
+        ctx.web_search = None
+        ctx.web_search_seeded = False
+        ctx.reused_web = False
+        ctx.web_ready_emitted = False  # type: ignore[attr-defined]
+        _clear_tool_state(ctx, _WEB_TOOL_NAMES)
+    if "market" in lanes_normalized or "stock" in lanes_normalized:
+        ctx.stock_widget_seeded = False
+        ctx.reused_stock = False
+        ctx.stock_ready_emitted = False  # type: ignore[attr-defined]
+        _clear_tool_state(ctx, _MARKET_TOOL_NAMES)
+    ctx.accessories_prefetched = False
+
+
+def _build_revision_snapshot_payload(ctx: "PlannerPhaseContext") -> Optional[Dict[str, Any]]:
+    """Build a revision snapshot payload from the current planner context."""
+    from analytics.core.revision_snapshot import build_intent_signature
+    from analytics.core.intent_impl.models import SlotStatusModel
+    from analytics.core.intent_impl.models import FollowUpModel
+    from analytics.core.state import QueryPlanModel
+    from analytics.core.types import ClarifyRequestModel
+    from analytics.flows.planner.sql_lane import limit_sample_rows
+
+    plan_model: Optional["QueryPlanModel"] = getattr(ctx, "plan", None) or getattr(ctx, "provisional_plan", None)
+    if plan_model is None:
+        plan_model = QueryPlanModel()
+        ctx.plan = plan_model
+        ctx.provisional_plan = plan_model
+
+    signature = ctx.intent_signature or build_intent_signature(ctx.intent, plan_model)
+    if signature is None:
+        signature = {
+            "query": (ctx.query or "")[:256],
+            "generated_at": datetime.utcnow().isoformat(),
+            "reason": "missing_intent_signature",
+        }
+
+    payload: Dict[str, Any] = {"intent_signature": signature}
+
+    classification_model = getattr(ctx, "classification", None)
+    if classification_model is not None:
+        try:
+            payload["classification"] = classification_model.model_dump()
+        except Exception:
+            payload["classification"] = sanitize_for_json(classification_model)
+
+    sql_generation = ctx.artifacts.sql_generation
+    if sql_generation and sql_generation.sql:
+        payload["sql"] = sql_generation.sql
+
+    sql_execution = ctx.artifacts.sql_execution
+    if sql_execution:
+        if sql_execution.row_count is not None:
+            payload["sql_row_count"] = sql_execution.row_count
+        if sql_execution.columns:
+            payload["columns"] = list(sql_execution.columns)
+        sample_source = sql_execution.sample_rows or sql_execution.dataset_preview
+        samples = limit_sample_rows(sample_source)
+        if samples:
+            payload["data_sample"] = samples
+
+    chart_artifact = ctx.artifacts.chart
+    if chart_artifact:
+        if chart_artifact.spec:
+            payload["chart_spec"] = copy.deepcopy(chart_artifact.spec)
+        if chart_artifact.spec_id:
+            payload["chart_spec_id"] = chart_artifact.spec_id
+
+    analysis_artifact = ctx.artifacts.analysis
+    if analysis_artifact:
+        if analysis_artifact.analysis_text:
+            payload["analysis"] = analysis_artifact.analysis_text
+            if analysis_artifact.length is not None:
+                payload["analysis_length"] = analysis_artifact.length
+        if analysis_artifact.stock_widget and analysis_artifact.stock_widget not in ({}, None):
+            payload["stock_widget"] = copy.deepcopy(analysis_artifact.stock_widget)
+        if analysis_artifact.web_context and analysis_artifact.web_context not in ({}, None):
+            payload["web_context"] = copy.deepcopy(analysis_artifact.web_context)
+
+    if ctx.web_search is not None and not payload.get("web_context"):
+        try:
+            payload["web_context"] = ctx.web_search.to_payload()
+        except Exception:
+            pass
+
+    if ctx.artifacts.market and ctx.artifacts.market.snapshot and not payload.get("stock_widget"):
+        payload["stock_widget"] = copy.deepcopy(ctx.artifacts.market.snapshot)
+
+    intent_model = getattr(ctx, "intent", None)
+    if intent_model is not None:
+        try:
+            payload["intent"] = intent_model.model_dump()
+        except Exception:
+            payload["intent"] = sanitize_for_json(intent_model)
+
+    if plan_model is not None:
+        try:
+            payload["plan"] = plan_model.model_dump()
+        except Exception:
+            plan_payload = getattr(plan_model, "dict", None)
+            payload["plan"] = plan_payload() if callable(plan_payload) else sanitize_for_json(plan_model)
+
+    intent_resolution = getattr(ctx, "intent_resolution", None)
+    if intent_resolution is not None:
+        try:
+            payload["intent_resolution"] = intent_resolution.model_dump()
+        except Exception:
+            payload["intent_resolution"] = sanitize_for_json(intent_resolution)
+
+    slot_statuses_payload: Dict[str, Any] = {}
+    for slot_name, status in (getattr(ctx, "slot_statuses", {}) or {}).items():
+        if isinstance(status, SlotStatusModel):
+            try:
+                slot_statuses_payload[str(slot_name)] = status.model_dump()
+            except Exception:
+                slot_statuses_payload[str(slot_name)] = sanitize_for_json(status)
+        elif isinstance(status, Mapping):
+            slot_statuses_payload[str(slot_name)] = dict(status)
+    if slot_statuses_payload:
+        payload["slot_statuses"] = slot_statuses_payload
+
+    followup_payload: List[Dict[str, Any]] = []
+    for followup in getattr(ctx, "slot_followups", []) or []:
+        if isinstance(followup, FollowUpModel):
+            try:
+                followup_payload.append(followup.model_dump())
+            except Exception:
+                followup_payload.append(sanitize_for_json(followup))
+        elif isinstance(followup, Mapping):
+            followup_payload.append(dict(followup))
+    if followup_payload:
+        payload["slot_followups"] = followup_payload
+
+    clarification_payload: List[Dict[str, Any]] = []
+    for clarification in getattr(ctx, "clarifications", []) or []:
+        if isinstance(clarification, ClarifyRequestModel):
+            try:
+                clarification_payload.append(clarification.model_dump())
+            except Exception:
+                clarification_payload.append(sanitize_for_json(clarification))
+        elif isinstance(clarification, Mapping):
+            clarification_payload.append(dict(clarification))
+    if clarification_payload:
+        payload["clarifications"] = clarification_payload
+
+    clarification_rounds = getattr(ctx, "clarification_rounds", 0)
+    if isinstance(clarification_rounds, int) and clarification_rounds > 0:
+        payload["clarification_rounds"] = clarification_rounds
+
+    assumptions = getattr(ctx, "assumptions", None)
+    if isinstance(assumptions, (list, tuple, set)) and assumptions:
+        payload["assumptions"] = [str(item) for item in assumptions if item not in (None, "")]
+
+    payload["updated_at"] = datetime.utcnow().isoformat()
+    sanitized = sanitize_for_json(payload)
+    return sanitized if isinstance(sanitized, dict) else None
+
+
+def _hydrate_context_from_snapshot(
+    ctx: "PlannerPhaseContext",
+    snapshot: Optional["SessionStateSnapshot"],
+    artifacts: Optional["PipelineArtifacts"],
+) -> None:
+    """Hydrate PlannerPhaseContext from a SessionStateSnapshot payload."""
+    from analytics.core.revision_snapshot import extract_revision_snapshot
+    from analytics.artifacts import (
+        AnalysisArtifact,
+        ChartArtifact,
+        PipelineArtifacts,
+        SQLExecutionArtifact,
+        SQLGenerationArtifact,
+        WebContextArtifact,
+    )
+    from analytics.flows.planner.sql_lane import limit_sample_rows
+
+    revision_snapshot = extract_revision_snapshot(snapshot)
+    if revision_snapshot:
+        ctx.revision_snapshot = copy.deepcopy(revision_snapshot)
+        ctx.prior_intent_signature = revision_snapshot.get("intent_signature")
+    else:
+        ctx.revision_snapshot = None
+        ctx.prior_intent_signature = None
+
+    if ctx.revision_snapshot:
+
+        def _coerce_model(model_cls, payload):
+            if not isinstance(payload, Mapping):
+                return None
+            try:
+                if hasattr(model_cls, "model_validate"):
+                    return model_cls.model_validate(payload)
+                if hasattr(model_cls, "parse_obj"):
+                    return model_cls.parse_obj(payload)  # type: ignore[attr-defined]
+                return model_cls(**payload)
+            except Exception:
+                return None
+
+        hydrated_intent: Optional["IntentModel"] = None
+        intent_payload = ctx.revision_snapshot.get("intent")
+        if intent_payload and getattr(ctx, "intent", None) is None:
+            from analytics.core.types import IntentModel as _IntentModel
+
+            intent_model = _coerce_model(_IntentModel, intent_payload)
+            if intent_model:
+                hydrated_intent = intent_model
+                ctx.intent = intent_model
+
+        plan_payload = ctx.revision_snapshot.get("plan")
+        if plan_payload:
+            from analytics.core.state import QueryPlanModel as _QueryPlanModel
+
+            plan_model = _coerce_model(_QueryPlanModel, plan_payload)
+            if plan_model:
+                ctx.plan = plan_model
+                ctx.provisional_plan = plan_model
+
+        from analytics.core.intent_impl.models import IntentResolutionModel as _IntentResolutionModel, SlotStatusModel
+        from analytics.core.intent_impl.models import FollowUpModel
+        from analytics.core.types import ClarifyRequestModel
+
+        resolution_payload = ctx.revision_snapshot.get("intent_resolution")
+        slot_status_models: Dict[str, SlotStatusModel] = {}
+        followup_models: List[FollowUpModel] = []
+        if resolution_payload:
+            resolution_model = _coerce_model(_IntentResolutionModel, resolution_payload)
+            if resolution_model:
+                ctx.intent_resolution = resolution_model
+                slot_status_models = dict(resolution_model.slots or {})
+                followup_models = list(resolution_model.followups or [])
+
+        slot_status_payload = ctx.revision_snapshot.get("slot_statuses")
+        if isinstance(slot_status_payload, Mapping):
+            for slot_name, raw in slot_status_payload.items():
+                if slot_name in slot_status_models:
+                    continue
+                status_model = _coerce_model(SlotStatusModel, raw)
+                if status_model:
+                    slot_status_models[str(slot_name)] = status_model
+        if slot_status_models:
+            ctx.slot_statuses = slot_status_models
+
+        followup_payload = ctx.revision_snapshot.get("slot_followups")
+        if isinstance(followup_payload, Sequence):
+            for raw in followup_payload:
+                followup_model = _coerce_model(FollowUpModel, raw)
+                if followup_model:
+                    followup_models.append(followup_model)
+        if followup_models:
+            ctx.slot_followups = followup_models
+
+        if getattr(ctx, "intent_resolution", None) is None and (slot_status_models or followup_models):
+            ctx.intent_resolution = _IntentResolutionModel(
+                slots=slot_status_models or {},
+                followups=followup_models or [],
+            )
+        elif getattr(ctx, "intent_resolution", None) is not None:
+            ctx.intent_resolution = ctx.intent_resolution.model_copy(  # type: ignore[assignment]
+                update={
+                    "slots": slot_status_models or dict(ctx.intent_resolution.slots or {}),
+                    "followups": followup_models or list(ctx.intent_resolution.followups or []),
+                }
+            )
+
+        clarifications_payload = ctx.revision_snapshot.get("clarifications")
+        if isinstance(clarifications_payload, Sequence):
+            clarifications: List[ClarifyRequestModel] = []
+            for raw in clarifications_payload:
+                clarification_model = _coerce_model(ClarifyRequestModel, raw)
+                if clarification_model:
+                    clarifications.append(clarification_model)
+            if clarifications:
+                ctx.clarifications = clarifications
+
+        rounds_value = ctx.revision_snapshot.get("clarification_rounds")
+        if isinstance(rounds_value, int) and rounds_value > 0:
+            ctx.clarification_rounds = max(ctx.clarification_rounds, rounds_value)
+
+        assumptions_payload = ctx.revision_snapshot.get("assumptions")
+        if isinstance(assumptions_payload, Sequence) and assumptions_payload:
+            ctx.assumptions = [str(item) for item in assumptions_payload if item not in (None, "")]
+        elif hydrated_intent and getattr(hydrated_intent, "assumptions", None):
+            ctx.assumptions = list(hydrated_intent.assumptions or [])
+        elif getattr(ctx, "intent", None) and getattr(ctx.intent, "assumptions", None):
+            ctx.assumptions = list(ctx.intent.assumptions or [])
+
+        if ctx.prior_intent_signature and not getattr(ctx, "intent_signature", None):
+            ctx.intent_signature = copy.deepcopy(ctx.prior_intent_signature)
+
+        ctx.reuse_snapshot_active = True
+
+    if artifacts is None:
+        if ctx.revision_snapshot:
+            artifacts = PipelineArtifacts()
+        else:
+            return
+
+    if ctx.revision_snapshot:
+        chart_spec = ctx.revision_snapshot.get("chart_spec")
+        if chart_spec and artifacts.chart is None:
+            artifacts.chart = ChartArtifact(
+                query=ctx.query,
+                spec=copy.deepcopy(chart_spec),
+                spec_id=ctx.revision_snapshot.get("chart_spec_id"),
+            )
+        if ctx.revision_snapshot.get("sql") and artifacts.sql_generation is None:
+            artifacts.sql_generation = SQLGenerationArtifact(
+                query=ctx.query,
+                sql=ctx.revision_snapshot.get("sql"),
+                status="completed",
+            )
+        if artifacts.sql_execution is None:
+            if ctx.revision_snapshot.get("sql_row_count") is not None or ctx.revision_snapshot.get("data_sample"):
+                artifacts.sql_execution = SQLExecutionArtifact(
+                    query=ctx.query,
+                    row_count=ctx.revision_snapshot.get("sql_row_count"),
+                    columns=list(ctx.revision_snapshot.get("columns") or []),
+                    sample_rows=limit_sample_rows(ctx.revision_snapshot.get("data_sample") or []),
+                    dataset_preview=limit_sample_rows(ctx.revision_snapshot.get("data_sample") or []),
+                    status="completed",
+                )
+        if artifacts.analysis is None and (
+            ctx.revision_snapshot.get("analysis")
+            or ctx.revision_snapshot.get("stock_widget")
+            or ctx.revision_snapshot.get("web_context")
+        ):
+            artifacts.analysis = AnalysisArtifact(
+                query=ctx.query,
+                analysis_text=ctx.revision_snapshot.get("analysis"),
+                length=ctx.revision_snapshot.get("analysis_length"),
+                stock_widget=copy.deepcopy(ctx.revision_snapshot.get("stock_widget")) if ctx.revision_snapshot.get("stock_widget") else None,
+                web_context=copy.deepcopy(ctx.revision_snapshot.get("web_context")) if ctx.revision_snapshot.get("web_context") else None,
+            )
+        if artifacts.web is None and isinstance(ctx.revision_snapshot.get("web_context"), dict):
+            web_payload = copy.deepcopy(ctx.revision_snapshot["web_context"])
+            artifacts.web = WebContextArtifact(
+                query=ctx.query,
+                summary=web_payload.get("summary"),
+                snippets=list(web_payload.get("snippets") or []),
+                search_id=web_payload.get("search_id"),
+                from_cache=web_payload.get("from_cache"),
+                metadata=copy.deepcopy(web_payload.get("metadata") or {}),
+                topic=web_payload.get("topic"),
+                latency_stats=web_payload.get("latency_stats"),
+            )
+    if artifacts.web is None and snapshot is not None and hasattr(snapshot, "tool_cache"):
+        tool_cache = snapshot.tool_cache if isinstance(snapshot.tool_cache, Mapping) else {}
+        web_cache = tool_cache.get("web_search") if isinstance(tool_cache, Mapping) else None
+        if isinstance(web_cache, Mapping) and web_cache:
+            sanitized = sanitize_for_json(dict(web_cache)) or {}
+            if isinstance(sanitized, Mapping) and sanitized:
+                artifacts.web = WebContextArtifact(
+                    query=ctx.query,
+                    summary=sanitized.get("summary"),
+                    snippets=list(sanitized.get("snippets") or sanitized.get("articles") or []),
+                    search_id=sanitized.get("search_id") or sanitized.get("searchId"),
+                    from_cache=sanitized.get("from_cache") or True,
+                    metadata=copy.deepcopy(sanitized.get("metadata") or {}),
+                    topic=sanitized.get("topic") or sanitized.get("search_topic"),
+                    latency_stats=sanitized.get("latency_stats"),
+                )
+                setattr(ctx, "web_search_seeded", True)
+
+    cached_tool_results: List[Dict[str, Any]] = []
+    if ctx.revision_snapshot:
+        stock_snapshot = ctx.revision_snapshot.get("stock_widget")
+        if stock_snapshot:
+            cached_tool_results.append(
+                {
+                    "tool": "stock_tracker",
+                    "status": "completed",
+                    "payload": {"stock_widget": copy.deepcopy(stock_snapshot)},
+                    "reused": True,
+                }
+            )
+        web_snapshot = ctx.revision_snapshot.get("web_context")
+        if web_snapshot:
+            cached_tool_results.append(
+                {
+                    "tool": "web_retriever",
+                    "status": "completed",
+                    "payload": copy.deepcopy(web_snapshot),
+                    "reused": True,
+                }
+            )
+    ctx.tool_parallel_results = cached_tool_results + (getattr(ctx, "tool_parallel_results", []) or [])
+    ctx.artifacts = artifacts
+    ctx.snapshot_artifacts = artifacts
+    execution_artifact = getattr(ctx.artifacts, "sql_execution", None)
+    preview_payload = _dataset_preview_from_snapshot(snapshot)
+    if execution_artifact and preview_payload:
+        rows = list(preview_payload.get("rows") or [])
+        if rows:
+            execution_artifact.dataset_preview = rows
+            if not getattr(execution_artifact, "dataset", None):
+                execution_artifact.dataset = list(rows)
+            if execution_artifact.row_count is None:
+                row_count = preview_payload.get("row_count")
+                from analytics.core.session_state import normalize_row_count
+
+                normalized_row_count = normalize_row_count(row_count)
+                if normalized_row_count is not None:
+                    execution_artifact.row_count = normalized_row_count
+
+
+def _apply_revision_context_hints(ctx: "PlannerPhaseContext") -> None:
+    """Apply revision_context refresh hints and snapshot payloads to context."""
+    revision_ctx = getattr(ctx, "revision_context", None)
+    if revision_ctx is None:
+        return
+    refresh_flags = dict(getattr(ctx, "lane_refresh_required", {}) or {})
+    candidate_lanes = ("analysis", "chart", "web", "market")
+    for lane in candidate_lanes:
+        needs_refresh = revision_ctx.should_refresh(lane)
+        if needs_refresh is False:
+            refresh_flags[lane] = False
+        elif lane not in refresh_flags and needs_refresh is True:
+            refresh_flags[lane] = True
+    ctx.lane_refresh_required = refresh_flags
+    if revision_ctx.reasoning_summaries and not ctx.revision_reasoning:
+        ctx.revision_reasoning = copy.deepcopy(revision_ctx.reasoning_summaries)
+    payload = getattr(revision_ctx, "snapshot_payload", None)
+    if isinstance(payload, Mapping):
+        if getattr(ctx, "revision_snapshot", None) is None:
+            ctx.revision_snapshot = copy.deepcopy(payload)
+        _hydrate_revision_payload(ctx, payload)
+
+
+def _hydrate_revision_payload(ctx: "PlannerPhaseContext", payload: Mapping[str, Any]) -> None:
+    """Hydrate PlannerPhaseContext from a revision payload dict."""
+    from analytics.core.types import ClarifyRequestModel, IntentModel, OffTopicClassifierSchema
+    from analytics.core.intent_impl.models import IntentResolutionModel, SlotStatusModel, FollowUpModel
+    from analytics.core.state import QueryPlanModel
+
+    if not isinstance(payload, Mapping) or not payload:
+        return
+
+    def _coerce_model(model_cls, raw_payload):
+        if not isinstance(raw_payload, Mapping):
+            return None
+        try:
+            if hasattr(model_cls, "model_validate"):
+                return model_cls.model_validate(raw_payload)  # type: ignore[attr-defined]
+            if hasattr(model_cls, "parse_obj"):
+                return model_cls.parse_obj(raw_payload)  # type: ignore[attr-defined]
+            return model_cls(**raw_payload)
+        except Exception:
+            return None
+
+    classification_payload = payload.get("classification")
+    if classification_payload and getattr(ctx, "classification", None) is None:
+        classification_model = _coerce_model(OffTopicClassifierSchema, classification_payload)
+        if classification_model:
+            ctx.classification = classification_model
+            is_financial = getattr(classification_model, "is_financial_query", None)
+            if is_financial is not None:
+                ctx.is_financial_query = bool(is_financial)
+
+    if getattr(ctx, "intent_signature", None) is None:
+        signature = payload.get("intent_signature")
+        if isinstance(signature, Mapping):
+            ctx.intent_signature = copy.deepcopy(signature)
+
+    hydrated_intent: Optional[IntentModel] = None
+    if getattr(ctx, "intent", None) is None:
+        intent_payload = payload.get("intent")
+        if intent_payload:
+            intent_model = _coerce_model(IntentModel, intent_payload)
+            if intent_model:
+                ctx.intent = intent_model
+                hydrated_intent = intent_model
+    plan_payload = payload.get("plan")
+    if plan_payload and getattr(ctx, "plan", None) is None:
+        plan_model = _coerce_model(QueryPlanModel, plan_payload)
+        if plan_model:
+            ctx.plan = plan_model
+            ctx.provisional_plan = plan_model
+
+    slot_status_models: Dict[str, SlotStatusModel] = {}
+    followup_models: List[FollowUpModel] = []
+    resolution_payload = payload.get("intent_resolution")
+    if resolution_payload and getattr(ctx, "intent_resolution", None) is None:
+        resolution_model = _coerce_model(IntentResolutionModel, resolution_payload)
+        if resolution_model:
+            ctx.intent_resolution = resolution_model
+            slot_status_models = dict(resolution_model.slots or {})
+            followup_models = list(resolution_model.followups or [])
+
+    slot_status_payload = payload.get("slot_statuses")
+    if isinstance(slot_status_payload, Mapping):
+        for slot_name, raw in slot_status_payload.items():
+            if slot_name in slot_status_models:
+                continue
+            status_model = _coerce_model(SlotStatusModel, raw)
+            if status_model:
+                slot_status_models[str(slot_name)] = status_model
+    if slot_status_models:
+        ctx.slot_statuses = slot_status_models
+
+    followup_payload = payload.get("slot_followups")
+    if isinstance(followup_payload, Sequence):
+        for raw in followup_payload:
+            followup_model = _coerce_model(FollowUpModel, raw)
+            if followup_model:
+                followup_models.append(followup_model)
+    if followup_models:
+        ctx.slot_followups = followup_models
+
+    if getattr(ctx, "intent_resolution", None) is None and (slot_status_models or followup_models):
+        ctx.intent_resolution = IntentResolutionModel(
+            slots=slot_status_models or {},
+            followups=followup_models or [],
+        )
+    elif getattr(ctx, "intent_resolution", None) is not None and slot_status_models:
+        ctx.intent_resolution = ctx.intent_resolution.model_copy(  # type: ignore[assignment]
+            update={
+                "slots": slot_status_models or dict(ctx.intent_resolution.slots or {}),
+                "followups": followup_models or list(ctx.intent_resolution.followups or []),
+            }
+        )
+
+    clarifications_payload = payload.get("clarifications")
+    if isinstance(clarifications_payload, Sequence) and not getattr(ctx, "clarifications", None):
+        clarifications: List[ClarifyRequestModel] = []
+        for raw in clarifications_payload:
+            clarification_model = _coerce_model(ClarifyRequestModel, raw)
+            if clarification_model:
+                clarifications.append(clarification_model)
+        if clarifications:
+            ctx.clarifications = clarifications
+
+    rounds_value = payload.get("clarification_rounds")
+    if isinstance(rounds_value, int) and rounds_value > 0:
+        ctx.clarification_rounds = max(ctx.clarification_rounds, rounds_value)
+
+    assumptions_payload = payload.get("assumptions")
+    if isinstance(assumptions_payload, Sequence) and assumptions_payload:
+        ctx.assumptions = [str(item) for item in assumptions_payload if item not in (None, "")]
+    elif hydrated_intent and getattr(hydrated_intent, "assumptions", None) and not ctx.assumptions:
+        ctx.assumptions = list(hydrated_intent.assumptions or [])
 

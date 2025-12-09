@@ -114,6 +114,7 @@ _ROUTE_ALLOWLISTS: Dict[str, Tuple[ToolId, ...]] = {
         ToolId.CLASSIFICATION,
         ToolId.INTENT_DETECTION,
         ToolId.CLARIFICATION,
+        ToolId.PLAN_ANALYSIS,
         ToolId.LANE_DECISION,
         ToolId.PLAN_GENERATION,
         ToolId.SQL_GENERATION,

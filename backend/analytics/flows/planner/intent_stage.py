@@ -124,7 +124,7 @@ from analytics.core.intent import (
     OffTopicClassifierSchema,
     post_process_slots,
 )
-from analytics.core.intent_impl.clarify import compute_required_clarifications
+from analytics.core.clarify import compute_required_clarifications
 from analytics.core.intent_impl.detection import resolve_intent_slots_async
 from analytics.core.intent_impl.models import IntentResolutionModel, SlotStatusModel, FollowUpModel
 from analytics.core.intent_impl.normalization import normalize_metrics, normalize_timeframe
@@ -159,7 +159,6 @@ _FLOW_MODE_TO_RESOLVER_MODE: Dict[FlowMode, str] = {
     FlowMode.DIRECT: "single_agent",
     FlowMode.SINGLE_AGENT: "fanout",
     FlowMode.MULTI_AGENT: "fanout",
-    FlowMode.PLANNER_EXECUTOR: "single_agent",
 }
 
 CONFIGS = get_configs()

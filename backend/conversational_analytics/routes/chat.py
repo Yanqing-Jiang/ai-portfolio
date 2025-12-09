@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 import logging
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends, Request
 from fastapi.responses import StreamingResponse
 
 from ..agent import ConversationalAnalyticsAgent
 from ..models import ChatRequest
 from ..memory import session_store
+from rate_limiter import conversational_analytics_rate_limit
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +19,11 @@ agent = ConversationalAnalyticsAgent()
 
 
 @router.post("/stream")
-async def stream_chat(request: ChatRequest):
+async def stream_chat(
+    request: ChatRequest,
+    fastapi_request: Request,
+    _: None = Depends(conversational_analytics_rate_limit),
+):
     """Stream a chat response with SSE.
     
     This endpoint accepts a user message and session ID, then streams
@@ -51,7 +56,11 @@ async def stream_chat(request: ChatRequest):
 
 
 @router.post("/chat")
-async def chat(request: ChatRequest):
+async def chat(
+    request: ChatRequest,
+    fastapi_request: Request,
+    _: None = Depends(conversational_analytics_rate_limit),
+):
     """Non-streaming chat endpoint for simpler integrations.
     
     This collects all events and returns a final response.
@@ -87,7 +96,11 @@ async def chat(request: ChatRequest):
 
 
 @router.get("/sessions/{session_id}/history")
-async def get_session_history(session_id: str):
+async def get_session_history(
+    session_id: str,
+    fastapi_request: Request,
+    _: None = Depends(conversational_analytics_rate_limit),
+):
     """Get conversation history for a session."""
     session = session_store.get(session_id)
     if not session:
@@ -108,7 +121,11 @@ async def get_session_history(session_id: str):
 
 
 @router.delete("/sessions/{session_id}")
-async def clear_session(session_id: str):
+async def clear_session(
+    session_id: str,
+    fastapi_request: Request,
+    _: None = Depends(conversational_analytics_rate_limit),
+):
     """Clear a session's history."""
     deleted = session_store.delete(session_id)
     if not deleted:

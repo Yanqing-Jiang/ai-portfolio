@@ -5,6 +5,7 @@ import Chat from './Chat';
 import { Page as AnalyticsSqlPage } from './analytics/sql';
 import { Page as AnalyticsMemoryPage } from './analytics/memory';
 import { Page as LinkedInPhotoPage } from './linkedinPhoto/Page';
+import { ConversationalAnalyticsPage } from './conversationalAnalytics';
 import LegacyProjectPage from './LegacyProjectPage';
 import ProjectHelmet from './ProjectHelmet';
 
@@ -12,6 +13,7 @@ interface ProjectViewProps {
   project: Project;
 }
 
+// Function: ProjectView — called from AppRoutes to decide which project UI to mount; routes Conversational Analytics to the Claude SSE page and falls back to generic chat for legacy cards.
 const ProjectView: React.FC<ProjectViewProps> = ({ project }) => {
   const [hasStartedChat, setHasStartedChat] = useState(false);
   const [isHeaderCollapsed, setIsHeaderCollapsed] = useState(false);
@@ -21,12 +23,22 @@ const ProjectView: React.FC<ProjectViewProps> = ({ project }) => {
     setIsHeaderCollapsed(false);
   }, [project.id]);
 
+  // Function: handleFirstMessage — triggered by Chat on the first user turn to collapse the hero header and reveal more vertical space.
   const handleFirstMessage = () => {
     if (!hasStartedChat) {
       setHasStartedChat(true);
       setIsHeaderCollapsed(true);
     }
   };
+
+  if (project.id === 'conversational-analytics') {
+    return (
+      <>
+        <ProjectHelmet project={project} />
+        <ConversationalAnalyticsPage />
+      </>
+    );
+  }
 
   if (project.id === 'next-gen-analytics-sql') {
     return (

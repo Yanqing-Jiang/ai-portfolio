@@ -19,3 +19,5 @@ export type { Badge, BadgeType, BadgeSeverity, LaneBadges } from './useBadgeLogi
 
 export { usePlannerEvents } from './usePlannerEvents';
 export type { PlannerStep, PlannerStepState, PlannerPipelineState } from './usePlannerEvents';
+export * from './useDataTransformers';
+export { useStreamOrchestrator } from './useStreamOrchestrator';
