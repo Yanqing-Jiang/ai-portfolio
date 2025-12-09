@@ -15,6 +15,9 @@ from .schemas import (
     SQLQueryOutput,
     TradingViewConfig,
     AnalysisOutput,
+    SelectionOption,
+    SelectionRequest,
+    SelectionReply,
 )
 
 __all__ = [
@@ -33,4 +36,7 @@ __all__ = [
     "SQLQueryOutput",
     "TradingViewConfig",
     "AnalysisOutput",
+    "SelectionOption",
+    "SelectionRequest",
+    "SelectionReply",
 ]

@@ -140,3 +140,44 @@ def debug_event(category: str, message: str, data: dict | None = None) -> str:
     if data:
         payload["data"] = data
     return format_sse_event("debug", payload)
+
+
+def selection_request_event(
+    request_id: str,
+    title: str,
+    prompt: str,
+    options: list[dict],
+    allow_custom: bool = True,
+    timeout_seconds: int = 60,
+) -> str:
+    """Create a selection request event for HITL slot resolution.
+    
+    Args:
+        request_id: Unique ID for this selection request (used to match replies)
+        title: Card title (e.g., "Confirm analysis options")
+        prompt: Short prompt text (e.g., "Pick the margin type")
+        options: List of option dicts with id, label, description, and payload
+        allow_custom: Whether to show a free-text "Other" input option
+        timeout_seconds: How long to wait before auto-cancelling
+    
+    Returns:
+        SSE formatted selection_request event string
+    """
+    return format_sse_event("selection_request", {
+        "request_id": request_id,
+        "title": title,
+        "prompt": prompt,
+        "options": options,
+        "allow_custom": allow_custom,
+        "timeout_seconds": timeout_seconds,
+    })
+
+
+def selection_timeout_event(request_id: str) -> str:
+    """Create a selection timeout event (request expired without user response)."""
+    return format_sse_event("selection_timeout", {"request_id": request_id})
+
+
+def selection_cancelled_event(request_id: str) -> str:
+    """Create a selection cancelled event (user dismissed or agent cancelled)."""
+    return format_sse_event("selection_cancelled", {"request_id": request_id})

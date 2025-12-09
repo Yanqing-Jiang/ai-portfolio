@@ -15,7 +15,7 @@ except ImportError as exc:  # pragma: no cover - optional dependency
 from .config import settings
 from .memory import session_store
 from .tools import ALL_TOOLS, TOOL_EXECUTORS, is_web_search_tool, format_web_search_results
-from .skills import select_skill, load_skill_content
+from .skills import select_skill, load_skill_content, resolve_slots, SlotSpec
 from .streaming import (
     status_event,
     thinking_event,
@@ -31,6 +31,7 @@ from .streaming import (
     done_event,
     error_event,
     debug_event,
+    selection_request_event,
 )
 
 logger = logging.getLogger(__name__)
@@ -69,6 +70,58 @@ Be conversational, accurate, and insightful. Always cite the data source when us
 
 class MissingDependencyError(RuntimeError):
     """Raised when required third-party dependencies are unavailable."""
+
+
+def _build_hitl_options(ambiguous_slots: List[SlotSpec], max_options: int = 3) -> List[Dict[str, Any]]:
+    """Function: _build_hitl_options — builds up to max_options bundled choices from ambiguous slots.
+    Called from: run_with_tools when slot resolution finds ambiguous required slots.
+    Purpose: Creates user-friendly option cards for HITL selection."""
+    import uuid
+    
+    if not ambiguous_slots:
+        return []
+    
+    # If only one ambiguous slot with defined options, use those directly
+    if len(ambiguous_slots) == 1:
+        slot = ambiguous_slots[0]
+        options = []
+        for opt_value in slot.options[:max_options]:
+            label = opt_value.replace("_", " ").title()
+            options.append({
+                "id": f"{slot.name}_{opt_value}",
+                "label": label,
+                "description": f"Set {slot.name} to {opt_value}",
+                "payload": {slot.name: opt_value},
+            })
+        return options
+    
+    # Multiple ambiguous slots: bundle common combinations
+    # For simplicity, create options from first slot's options combined with defaults for others
+    first_slot = ambiguous_slots[0]
+    options = []
+    
+    for opt_value in first_slot.options[:max_options]:
+        payload = {first_slot.name: opt_value}
+        # Use defaults for other ambiguous slots
+        for other_slot in ambiguous_slots[1:]:
+            if other_slot.default is not None:
+                payload[other_slot.name] = other_slot.default
+            elif other_slot.options:
+                payload[other_slot.name] = other_slot.options[0]
+        
+        label_parts = [f"{first_slot.name}: {opt_value}"]
+        for other_slot in ambiguous_slots[1:]:
+            if other_slot.name in payload:
+                label_parts.append(f"{other_slot.name}: {payload[other_slot.name]}")
+        
+        options.append({
+            "id": str(uuid.uuid4())[:8],
+            "label": ", ".join(label_parts).replace("_", " ").title(),
+            "description": f"Use these settings",
+            "payload": payload,
+        })
+    
+    return options
 
 
 class ConversationalAnalyticsAgent:
@@ -116,6 +169,8 @@ class ConversationalAnalyticsAgent:
         # Detect applicable skill and build augmented system prompt
         selected_skill = select_skill(message)
         system_prompt = SYSTEM_PROMPT
+        resolved_slots: Dict[str, Any] = {}
+        
         if selected_skill:
             skill_text = load_skill_content(selected_skill)
             system_prompt = f"{SYSTEM_PROMPT}\n\nSkill Activated: {selected_skill.name} (id: {selected_skill.skill_id})\nFollow this guidance:\n{skill_text}"
@@ -123,6 +178,64 @@ class ConversationalAnalyticsAgent:
             yield skill_event(selected_skill.skill_id, selected_skill.name, skill_download_url)
             if debug_mode:
                 yield debug_event("agent", f"Skill selected: {selected_skill.skill_id}", {"skill": selected_skill.skill_id})
+            
+            # Check if session has pre-resolved slots from a prior HITL selection
+            pre_resolved = session.context.get("resolved_slots")
+            if pre_resolved and session.context.get("skill_id") == selected_skill.skill_id:
+                resolved_slots = pre_resolved
+                session.update_context("resolved_slots", None)  # Clear after use
+                if debug_mode:
+                    yield debug_event("agent", "Using pre-resolved slots from HITL", {"slots": resolved_slots})
+            else:
+                # Resolve slots from user text + defaults
+                resolved_slots, ambiguous_slots = resolve_slots(selected_skill, message)
+                
+                if debug_mode:
+                    yield debug_event("agent", "Slot resolution complete", {
+                        "resolved": resolved_slots,
+                        "ambiguous": [s.name for s in ambiguous_slots],
+                    })
+                
+                # If there are ambiguous required slots, emit HITL selection request
+                if ambiguous_slots:
+                    import uuid
+                    request_id = str(uuid.uuid4())
+                    options = _build_hitl_options(ambiguous_slots, max_options=3)
+                    
+                    # Store pending selection for validation on reply
+                    session.set_pending_selection(
+                        request_id=request_id,
+                        skill_id=selected_skill.skill_id,
+                        options=options,
+                        resolved_slots=resolved_slots,
+                        ambiguous_slots=[s.name for s in ambiguous_slots],
+                    )
+                    
+                    # Build prompt for user
+                    slot_names = ", ".join(s.name.replace("_", " ") for s in ambiguous_slots)
+                    prompt_text = f"Please clarify: {slot_names}"
+                    
+                    yield selection_request_event(
+                        request_id=request_id,
+                        title="Confirm analysis options",
+                        prompt=prompt_text,
+                        options=options,
+                        allow_custom=True,
+                        timeout_seconds=60,
+                    )
+                    
+                    if debug_mode:
+                        yield debug_event("agent", "Emitted HITL selection request", {"request_id": request_id})
+                    
+                    # End this iteration; frontend will POST selection, then call /stream again
+                    yield thinking_event("awaiting_selection", "running", "Waiting for your choice...")
+                    yield done_event()
+                    return
+            
+            # Augment system prompt with resolved slots
+            if resolved_slots:
+                slots_text = json.dumps(resolved_slots, indent=2)
+                system_prompt += f"\n\nResolved Slots (use these values for the analysis):\n{slots_text}"
         
         yield status_event("Connecting to Claude...")
         plan_steps = [

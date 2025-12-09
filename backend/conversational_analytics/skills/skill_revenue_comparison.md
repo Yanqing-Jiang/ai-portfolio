@@ -7,9 +7,9 @@ Compare revenue totals across selected peer tickers over a time period.
 - "compare revenue", "revenue vs", "revenue between", "revenue among"
 
 ## Inputs
-- `ticker_list` (2-6 tickers; default peer set if missing)
+- `ticker_list` (2-6 tickers; default peer set if missing, required)
 - `years_back` (default: 5)
-- `period_filter` (quarter or year)
+- `period_filter` (quarter or year, required)
 
 ## Outputs
 - SQL (SELECT-only) grouping by period and ticker

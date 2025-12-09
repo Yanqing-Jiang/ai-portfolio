@@ -20,6 +20,17 @@ class Message:
 
 
 @dataclass
+class PendingSelection:
+    """A pending HITL selection request awaiting user response."""
+    request_id: str
+    skill_id: str
+    options: List[Dict[str, Any]]
+    resolved_slots: Dict[str, Any]
+    ambiguous_slots: List[str]
+    created_at: float = field(default_factory=time.time)
+
+
+@dataclass
 class Session:
     """A conversation session with history and context."""
     session_id: str
@@ -27,6 +38,7 @@ class Session:
     context: Dict[str, Any] = field(default_factory=dict)
     created_at: float = field(default_factory=time.time)
     last_accessed: float = field(default_factory=time.time)
+    pending_selection: Optional[PendingSelection] = None
     
     def add_message(self, role: str, content: str, **kwargs) -> Message:
         """Add a message to the session."""
@@ -63,6 +75,35 @@ class Session:
         """Update session context data."""
         self.context[key] = value
         self.last_accessed = time.time()
+    
+    def set_pending_selection(
+        self,
+        request_id: str,
+        skill_id: str,
+        options: List[Dict[str, Any]],
+        resolved_slots: Dict[str, Any],
+        ambiguous_slots: List[str],
+    ) -> None:
+        """Function: set_pending_selection — stores a HITL selection request awaiting user response.
+        Called from: agent when ambiguous slots are detected.
+        Purpose: Enables the reply endpoint to validate and resume the agent."""
+        self.pending_selection = PendingSelection(
+            request_id=request_id,
+            skill_id=skill_id,
+            options=options,
+            resolved_slots=resolved_slots,
+            ambiguous_slots=ambiguous_slots,
+        )
+        self.last_accessed = time.time()
+    
+    def clear_pending_selection(self) -> None:
+        """Function: clear_pending_selection — clears a pending HITL request after user response or timeout."""
+        self.pending_selection = None
+        self.last_accessed = time.time()
+    
+    def get_pending_selection(self) -> Optional[PendingSelection]:
+        """Function: get_pending_selection — returns the pending HITL request, if any."""
+        return self.pending_selection
 
 
 class SessionStore:

@@ -10,7 +10,7 @@ Calculate a company's market share vs the peer set for a given metric and time p
 - `ticker` (one ticker, required)
 - `metric` (default: Revenue)
 - `years_back` (default: 5)
-- `period_filter` (quarter or year)
+- `period_filter` (quarter or year, required)
 
 ## Outputs
 - SQL (SELECT-only) grouped by the chosen period

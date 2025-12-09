@@ -10,7 +10,7 @@ from ..agent import (
     MissingDependencyError,
     get_conversational_analytics_agent,
 )
-from ..models import ChatRequest
+from ..models import ChatRequest, SelectionReply
 from ..memory import session_store
 from rate_limiter import conversational_analytics_rate_limit
 
@@ -146,3 +146,66 @@ async def health_check():
     Invokes: lightweight status response only.
     Purpose: Advertise that conversational analytics routes are mounted."""
     return {"status": "healthy", "service": "conversational-analytics"}
+
+
+@router.post("/selection")
+async def submit_selection(
+    reply: SelectionReply,
+    fastapi_request: Request,
+    _: None = Depends(conversational_analytics_rate_limit),
+):
+    """Function: submit_selection — called by frontend when user makes a HITL choice.
+    Invokes: session_store to validate pending selection and merge chosen slots.
+    Purpose: Accept user selection and resume the agent with resolved slots."""
+    session = session_store.get(reply.session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    pending = session.get_pending_selection()
+    if not pending:
+        raise HTTPException(status_code=400, detail="No pending selection request")
+    
+    if pending.request_id != reply.request_id:
+        raise HTTPException(status_code=400, detail="Request ID mismatch")
+    
+    # Resolve the selected option
+    selected_payload = {}
+    if reply.option_id:
+        # Find the selected option
+        for opt in pending.options:
+            if opt.get("id") == reply.option_id:
+                selected_payload = opt.get("payload", {})
+                break
+        else:
+            raise HTTPException(status_code=400, detail="Invalid option ID")
+    elif reply.custom_value:
+        # Custom free-text value - interpret it (for now, store as raw)
+        selected_payload = {"custom_value": reply.custom_value}
+    else:
+        raise HTTPException(status_code=400, detail="No option or custom value provided")
+    
+    # Merge selected slots with already-resolved slots
+    final_slots = {**pending.resolved_slots, **selected_payload}
+    
+    # Store the resolved slots in session context for agent to use
+    session.update_context("resolved_slots", final_slots)
+    session.update_context("skill_id", pending.skill_id)
+    
+    # Add a synthetic user message with the selection for conversation continuity
+    selection_summary = reply.option_id or reply.custom_value
+    session.add_message(
+        "user",
+        f"[Selected: {selection_summary}]"
+    )
+    
+    # Clear the pending selection
+    session.clear_pending_selection()
+    
+    logger.info("Selection submitted: session=%s, request=%s, option=%s",
+                reply.session_id, reply.request_id, reply.option_id or "custom")
+    
+    return {
+        "status": "accepted",
+        "session_id": reply.session_id,
+        "resolved_slots": final_slots,
+    }

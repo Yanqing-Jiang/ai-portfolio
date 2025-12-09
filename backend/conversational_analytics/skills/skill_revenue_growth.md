@@ -7,9 +7,9 @@ Compute revenue growth rates (YoY and/or QoQ) for peer tickers.
 - "revenue growth", "growth rate", "growth vs peers", "yoy growth", "qoq growth"
 
 ## Inputs
-- `ticker_list` (peer set; default standard semis)
+- `ticker_list` (single or 2+ tickers, required)
 - `years_back` (default: 5)
-- `period_filter` (quarter; supports YoY with lag 4)
+- `period_filter` (quarter; supports YoY with lag 4, required)
 
 ## Outputs
 - SQL with growth calculations (lag-based) and a growth % column

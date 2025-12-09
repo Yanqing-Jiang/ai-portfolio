@@ -3,8 +3,24 @@ import { authService } from '../../../services/auth';
 import { configService } from '../../../services/config';
 
 export interface SSEEvent {
-    type: 'status' | 'thinking' | 'tool_start' | 'tool_end' | 'content' | 'chart' | 'data' | 'news' | 'skill' | 'plan' | 'plan_update' | 'done' | 'error' | 'debug';
+    type: 'status' | 'thinking' | 'tool_start' | 'tool_end' | 'content' | 'chart' | 'data' | 'news' | 'skill' | 'plan' | 'plan_update' | 'done' | 'error' | 'debug' | 'selection_request' | 'selection_timeout' | 'selection_cancelled';
     data: Record<string, unknown>;
+}
+
+export interface SelectionOption {
+    id: string;
+    label: string;
+    description?: string;
+    payload: Record<string, unknown>;
+}
+
+export interface SelectionRequest {
+    request_id: string;
+    title: string;
+    prompt: string;
+    options: SelectionOption[];
+    allow_custom: boolean;
+    timeout_seconds: number;
 }
 
 export interface DebugLog {
@@ -65,7 +81,10 @@ export interface UseSSEStreamResult {
     error: string | null;
     errorDetails: string | null;
     debugLogs: DebugLog[];
+    pendingSelection: SelectionRequest | null;
     sendMessage: (message: string, sessionId: string) => void;
+    submitSelection: (sessionId: string, optionId: string | null, customValue: string | null) => Promise<void>;
+    cancelSelection: () => void;
     reset: () => void;
 }
 
@@ -87,6 +106,7 @@ export function useSSEStream(apiUrl: string = '/api/conv-analytics/stream'): Use
     const [error, setError] = useState<string | null>(null);
     const [errorDetails, setErrorDetails] = useState<string | null>(null);
     const [debugLogs, setDebugLogs] = useState<DebugLog[]>([]);
+    const [pendingSelection, setPendingSelection] = useState<SelectionRequest | null>(null);
 
     const abortControllerRef = useRef<AbortController | null>(null);
 
@@ -103,7 +123,51 @@ export function useSSEStream(apiUrl: string = '/api/conv-analytics/stream'): Use
         setError(null);
         setErrorDetails(null);
         setDebugLogs([]);
+        setPendingSelection(null);
     }, []);
+
+    // Function: cancelSelection — clears pending HITL selection without submitting
+    const cancelSelection = useCallback(() => {
+        setPendingSelection(null);
+    }, []);
+
+    // Function: submitSelection — POSTs user's HITL choice to backend and clears pending state
+    const submitSelection = useCallback(async (
+        sessionId: string,
+        optionId: string | null,
+        customValue: string | null
+    ) => {
+        if (!pendingSelection) return;
+
+        try {
+            const backendUrl = configService.getBackendUrl();
+            const authHeaders = await authService.getAuthHeaders();
+
+            const response = await fetch(`${backendUrl}/api/conv-analytics/selection`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...authHeaders,
+                },
+                body: JSON.stringify({
+                    session_id: sessionId,
+                    request_id: pendingSelection.request_id,
+                    option_id: optionId,
+                    custom_value: customValue,
+                }),
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => ({}));
+                throw new Error(errorData.detail || `HTTP ${response.status}`);
+            }
+
+            // Clear pending selection on success
+            setPendingSelection(null);
+        } catch (err) {
+            setError(`Selection failed: ${(err as Error).message}`);
+        }
+    }, [pendingSelection]);
 
     // Function: sendMessage — called by ConversationalAnalyticsPage form submit; posts the user message to Claude SSE backend and streams events.
     const sendMessage = useCallback(async (message: string, sessionId: string) => {
@@ -281,6 +345,22 @@ export function useSSEStream(apiUrl: string = '/api/conv-analytics/stream'): Use
                 }]);
                 break;
 
+            case 'selection_request':
+                setPendingSelection({
+                    request_id: event.data.request_id as string,
+                    title: event.data.title as string,
+                    prompt: event.data.prompt as string,
+                    options: event.data.options as SelectionOption[],
+                    allow_custom: event.data.allow_custom as boolean,
+                    timeout_seconds: event.data.timeout_seconds as number,
+                });
+                break;
+
+            case 'selection_timeout':
+            case 'selection_cancelled':
+                setPendingSelection(null);
+                break;
+
             case 'done':
                 // Stream completed
                 break;
@@ -309,7 +389,10 @@ export function useSSEStream(apiUrl: string = '/api/conv-analytics/stream'): Use
         error,
         errorDetails,
         debugLogs,
+        pendingSelection,
         sendMessage,
+        submitSelection,
+        cancelSelection,
         reset,
     };
 }

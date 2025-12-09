@@ -9,9 +9,9 @@ Compare profit margins (gross, operating, net) for a target ticker versus peer a
 ## Inputs
 - `target_ticker` (required)
 - `ticker_list` (peers; default standard semis)
-- `metric` (gross/operating/net margin; default net)
+- `metric` (gross/operating/net margin; required)
 - `years_back` (default: 5)
-- `period_filter` (quarter or year)
+- `period_filter` (required, quarter or year)
 
 ## Outputs
 - SQL computing revenue + margin %, plus peer averages

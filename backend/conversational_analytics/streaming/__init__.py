@@ -16,6 +16,9 @@ from .sse import (
     done_event,
     error_event,
     debug_event,
+    selection_request_event,
+    selection_timeout_event,
+    selection_cancelled_event,
 )
 
 __all__ = [
@@ -35,4 +38,7 @@ __all__ = [
     "done_event",
     "error_event",
     "debug_event",
+    "selection_request_event",
+    "selection_timeout_event",
+    "selection_cancelled_event",
 ]

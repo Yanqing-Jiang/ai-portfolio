@@ -19,7 +19,7 @@ Track margin expansion/contraction (percentage points) and compare to peer avera
 - Narrative: direction, magnitude, divergence from peers
 
 ## Guardrails
-- Only `comp_financials`; SELECT-only; limit rows ≤ 500.
+- Only `comp_financials`; SELECT-only; limit rows ≤ 100.
 - Use lag(1) for period-over-period growth; ensure revenue > 0 first.
 - Exclude target from peer average calculation.
 

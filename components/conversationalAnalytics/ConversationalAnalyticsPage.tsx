@@ -11,6 +11,7 @@ import { useSSEStream, ThinkingStep, NewsResult } from './hooks/useSSEStream';
 import MessageBubble from './MessageBubble';
 import ThinkingProcessBar from './ThinkingProcessBar';
 import ChatInput from './ChatInput';
+import SelectionCard from './SelectionCard';
 import { theme } from './styles';
 
 // Welcome screen component
@@ -178,7 +179,10 @@ const ConversationalAnalyticsPage: React.FC = () => {
     error,
     errorDetails,
     debugLogs,
+    pendingSelection,
     sendMessage,
+    submitSelection,
+    cancelSelection,
     reset,
   } = useSSEStream();
 
@@ -336,6 +340,25 @@ const ConversationalAnalyticsPage: React.FC = () => {
                 />
               )}
 
+              {/* HITL Selection Card */}
+              {pendingSelection && (
+                <SelectionCard
+                  selection={pendingSelection}
+                  sessionId={sessionId}
+                  onSubmit={async (sid, optId, customVal) => {
+                    await submitSelection(sid, optId, customVal);
+                    // After successful selection, re-send the original message to resume
+                    if (messages.length > 0) {
+                      const lastUserMsg = [...messages].reverse().find(m => m.role === 'user');
+                      if (lastUserMsg) {
+                        sendMessage(lastUserMsg.content, sid);
+                      }
+                    }
+                  }}
+                  onCancel={cancelSelection}
+                />
+              )}
+
               {/* Error display */}
               {error && (
                 <motion.div
@@ -370,7 +393,7 @@ const ConversationalAnalyticsPage: React.FC = () => {
         value={inputValue}
         onChange={setInputValue}
         onSubmit={handleSubmit}
-        disabled={isStreaming}
+        disabled={isStreaming || !!pendingSelection}
       />
     </div>
   );

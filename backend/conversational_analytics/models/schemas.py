@@ -109,3 +109,30 @@ class AnalysisOutput(BaseModel):
     summary: str
     key_insights: List[str]
     trends: Optional[List[str]] = None
+
+
+# HITL Selection Models
+class SelectionOption(BaseModel):
+    """A single option in a HITL selection request."""
+    id: str = Field(..., description="Unique option identifier")
+    label: str = Field(..., description="Short label for the option")
+    description: Optional[str] = Field(None, description="Longer description")
+    payload: Dict[str, Any] = Field(default_factory=dict, description="Slot values if selected")
+
+
+class SelectionRequest(BaseModel):
+    """HITL selection request sent to the client."""
+    request_id: str = Field(..., description="Unique request ID for matching replies")
+    title: str = Field(..., description="Card title")
+    prompt: str = Field(..., description="Short prompt text")
+    options: List[SelectionOption] = Field(..., description="List of options (up to 3)")
+    allow_custom: bool = Field(True, description="Whether to show a free-text input")
+    timeout_seconds: int = Field(60, description="How long to wait before timeout")
+
+
+class SelectionReply(BaseModel):
+    """Reply from the client for a HITL selection request."""
+    session_id: str = Field(..., description="Session ID")
+    request_id: str = Field(..., description="Request ID being replied to")
+    option_id: Optional[str] = Field(None, description="Selected option ID (if not custom)")
+    custom_value: Optional[str] = Field(None, description="Custom free-text value (if allow_custom)")
