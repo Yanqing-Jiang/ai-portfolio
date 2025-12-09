@@ -26,7 +26,7 @@ class Settings:
     
     # Claude API
     claude_api_key: str = field(default_factory=lambda: os.getenv("CLAUDE_API_KEY", ""))
-    claude_model: str = "claude-sonnet-4-20250514"
+    claude_model: str = "claude-haiku-4-5-20251001"
     
     # Database
     database_url: str = field(default_factory=lambda: os.getenv("DATABASE_URL", ""))
@@ -37,6 +37,9 @@ class Settings:
     
     # Tool settings
     sql_timeout_seconds: float = 15.0
+    
+    # Debug mode - enables verbose activity logging to frontend
+    debug_mode: bool = field(default_factory=lambda: os.getenv("CONV_ANALYTICS_DEBUG", "true").lower() in ("true", "1", "yes"))
     
     def validate(self) -> None:
         """Validate required settings are present."""

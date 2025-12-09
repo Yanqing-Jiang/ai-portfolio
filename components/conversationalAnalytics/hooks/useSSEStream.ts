@@ -3,8 +3,40 @@ import { authService } from '../../../services/auth';
 import { configService } from '../../../services/config';
 
 export interface SSEEvent {
-    type: 'status' | 'thinking' | 'tool_start' | 'tool_end' | 'content' | 'chart' | 'data' | 'plan' | 'plan_update' | 'done' | 'error';
+    type: 'status' | 'thinking' | 'tool_start' | 'tool_end' | 'content' | 'chart' | 'data' | 'news' | 'skill' | 'plan' | 'plan_update' | 'done' | 'error' | 'debug';
     data: Record<string, unknown>;
+}
+
+export interface DebugLog {
+    category: string;
+    message: string;
+    timestamp: number;
+    data?: Record<string, unknown>;
+}
+
+export interface NewsArticle {
+    title: string;
+    summary: string;
+    url: string;
+    source: string;
+    published_at: string;
+    sentiment_score: number;
+    sentiment_label: string;
+    sentiment_color: string;
+    topics: string[];
+}
+
+export interface NewsResult {
+    articles: NewsArticle[];
+    ticker: string;
+    aggregate_sentiment: number;
+    aggregate_label: string;
+}
+
+export interface SkillInfo {
+    id: string;
+    name: string;
+    download_url: string;
 }
 
 export interface ThinkingStep {
@@ -26,9 +58,13 @@ export interface UseSSEStreamResult {
     thinkingSteps: ThinkingStep[];
     chartConfig: Record<string, unknown> | null;
     dataResult: { rows: unknown[]; columns: string[] } | null;
+    newsResult: NewsResult | null;
+    skillInfo: SkillInfo | null;
     planSteps: PlanStep[];
     currentStepId: string | null;
     error: string | null;
+    errorDetails: string | null;
+    debugLogs: DebugLog[];
     sendMessage: (message: string, sessionId: string) => void;
     reset: () => void;
 }
@@ -44,9 +80,13 @@ export function useSSEStream(apiUrl: string = '/api/conv-analytics/stream'): Use
     const [thinkingSteps, setThinkingSteps] = useState<ThinkingStep[]>([]);
     const [chartConfig, setChartConfig] = useState<Record<string, unknown> | null>(null);
     const [dataResult, setDataResult] = useState<{ rows: unknown[]; columns: string[] } | null>(null);
+    const [newsResult, setNewsResult] = useState<NewsResult | null>(null);
+    const [skillInfo, setSkillInfo] = useState<SkillInfo | null>(null);
     const [planSteps, setPlanSteps] = useState<PlanStep[]>([]);
     const [currentStepId, setCurrentStepId] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
+    const [errorDetails, setErrorDetails] = useState<string | null>(null);
+    const [debugLogs, setDebugLogs] = useState<DebugLog[]>([]);
 
     const abortControllerRef = useRef<AbortController | null>(null);
 
@@ -56,9 +96,13 @@ export function useSSEStream(apiUrl: string = '/api/conv-analytics/stream'): Use
         setThinkingSteps([]);
         setChartConfig(null);
         setDataResult(null);
+        setNewsResult(null);
+        setSkillInfo(null);
         setPlanSteps([]);
         setCurrentStepId(null);
         setError(null);
+        setErrorDetails(null);
+        setDebugLogs([]);
     }, []);
 
     // Function: sendMessage — called by ConversationalAnalyticsPage form submit; posts the user message to Claude SSE backend and streams events.
@@ -174,6 +218,23 @@ export function useSSEStream(apiUrl: string = '/api/conv-analytics/stream'): Use
                 });
                 break;
 
+            case 'news':
+                setNewsResult({
+                    articles: event.data.articles as NewsArticle[],
+                    ticker: event.data.ticker as string,
+                    aggregate_sentiment: event.data.aggregate_sentiment as number,
+                    aggregate_label: event.data.aggregate_label as string,
+                });
+                break;
+
+            case 'skill':
+                setSkillInfo({
+                    id: event.data.id as string,
+                    name: event.data.name as string,
+                    download_url: event.data.download_url as string,
+                });
+                break;
+
             case 'plan':
                 setPlanSteps((event.data.steps as PlanStep[]) ?? []);
                 setCurrentStepId(
@@ -197,6 +258,27 @@ export function useSSEStream(apiUrl: string = '/api/conv-analytics/stream'): Use
 
             case 'error':
                 setError(event.data.message as string);
+                if (event.data.details) {
+                    setErrorDetails(event.data.details as string);
+                }
+                // Add error to thinking steps for visibility in thinking panel
+                setThinkingSteps(prev => {
+                    const errorStep: ThinkingStep = {
+                        step: event.data.code as string || 'error',
+                        status: 'error',
+                        message: event.data.message as string,
+                    };
+                    return [...prev, errorStep];
+                });
+                break;
+
+            case 'debug':
+                setDebugLogs(prev => [...prev, {
+                    category: event.data.category as string,
+                    message: event.data.message as string,
+                    timestamp: event.data.timestamp as number,
+                    data: event.data.data as Record<string, unknown> | undefined,
+                }]);
                 break;
 
             case 'done':
@@ -220,9 +302,13 @@ export function useSSEStream(apiUrl: string = '/api/conv-analytics/stream'): Use
         thinkingSteps,
         chartConfig,
         dataResult,
+        newsResult,
+        skillInfo,
         planSteps,
         currentStepId,
         error,
+        errorDetails,
+        debugLogs,
         sendMessage,
         reset,
     };

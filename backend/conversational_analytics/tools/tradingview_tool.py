@@ -81,6 +81,7 @@ def generate_tradingview_config(
     style = CHART_STYLES.get(chart_type, "1")
     
     config = {
+        "widget_type": "tradingview",  # Identifies this as a TradingView widget for frontend
         "symbol": symbol_full,
         "interval": interval,
         "timezone": "America/New_York",
@@ -97,7 +98,9 @@ def generate_tradingview_config(
         "height": 400,
         "hide_volume": not show_volume,
         # Additional studies/indicators can be added
-        "studies": []
+        "studies": [],
+        # Widget script URL for embedding
+        "widget_url": "https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js",
     }
     
     return config

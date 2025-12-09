@@ -46,6 +46,10 @@ The tool takes your data and field mappings to generate the complete ECharts opt
             "series_field": {
                 "type": "string",
                 "description": "Optional field to group data into multiple series (e.g., 'ticker' for comparing companies)"
+            },
+            "value_unit": {
+                "type": "string",
+                "description": "Optional unit hint for y values (e.g., 'millions_usd' for revenue comparisons, 'percentage' for margin charts) to drive labels/tooltip formatting."
             }
         },
         "required": ["chart_type", "data", "x_field", "y_field"]
@@ -59,30 +63,94 @@ CHART_COLORS = [
 ]
 
 
+def _extract_numeric_values(data: List[Dict[str, Any]], y_field: str) -> List[float]:
+    """Function: _extract_numeric_values — used by generate_echarts_spec to gather numeric series values for formatting heuristics."""
+    values: List[float] = []
+    for row in data:
+        value = row.get(y_field, 0)
+        if hasattr(value, "__float__"):
+            try:
+                values.append(float(value))
+            except (TypeError, ValueError):
+                continue
+    return values
+
+
+def _resolve_value_unit(value_unit: Optional[str], y_field: str, data: List[Dict[str, Any]]) -> str:
+    """Function: _resolve_value_unit — called from generate_echarts_spec to determine label units; prefers explicit tool input, then heuristics based on field/metric names."""
+    normalized = value_unit.lower() if value_unit else ""
+
+    if not normalized:
+        y_lower = y_field.lower()
+        metric_text = str(data[0].get("metric", "")).lower() if data else ""
+        if any(key in y_lower for key in ["margin", "pct", "percent"]) or "margin" in metric_text:
+            normalized = "percentage"
+        elif "revenue" in y_lower or "sales" in y_lower or "rev" in metric_text:
+            normalized = "millions_usd"
+        else:
+            normalized = "auto"
+
+    known_units = {"percentage", "millions_usd", "billions_usd"}
+    return normalized if normalized in known_units else "auto"
+
+
+def _build_value_meta(resolved_unit: str, values: List[float]) -> Dict[str, Any]:
+    """Function: _build_value_meta — used by generate_echarts_spec to attach formatting hints for the frontend (suffix, decimals, scale)."""
+    abs_max = max((abs(v) for v in values), default=0)
+
+    if resolved_unit == "percentage":
+        return {
+            "unit": "percentage",
+            "decimals": 1,
+            "suffix": "%",
+            "scale": 1,
+            "from_ratio": abs_max <= 1.5,
+        }
+
+    if resolved_unit == "billions_usd":
+        return {
+            "unit": "billions_usd",
+            "decimals": 1,
+            "suffix": "B",
+            "scale": 1_000_000_000,
+            "from_ratio": False,
+        }
+
+    if resolved_unit == "millions_usd":
+        return {
+            "unit": "millions_usd",
+            "decimals": 1,
+            "suffix": "M",
+            "scale": 1_000_000 if abs_max >= 1_000_000 else 1,
+            "from_ratio": False,
+        }
+
+    return {
+        "unit": "auto",
+        "decimals": 1,
+        "suffix": "",
+        "scale": 1,
+        "from_ratio": False,
+    }
+
+
 def generate_echarts_spec(
     chart_type: str,
     data: List[Dict[str, Any]],
     x_field: str,
     y_field: str,
     title: str = "",
-    series_field: Optional[str] = None
+    series_field: Optional[str] = None,
+    value_unit: Optional[str] = None
 ) -> Dict[str, Any]:
-    """Generate an ECharts option specification.
-    
-    Args:
-        chart_type: Type of chart (bar, line, pie, area)
-        data: Array of data objects
-        x_field: Field for x-axis
-        y_field: Field for y-axis values
-        title: Chart title
-        series_field: Optional field for grouping into series
-        
-    Returns:
-        ECharts option object
-    """
+    """Function: generate_echarts_spec — called from execute_echarts_tool (TOOL_EXECUTORS) to build ECharts options returned to the frontend. Adds value_meta hints so ReactECharts can render data labels/tooltips with correct UOM."""
     if not data:
         return {"title": {"text": title or "No Data"}, "series": []}
     
+    values = _extract_numeric_values(data, y_field)
+    resolved_unit = _resolve_value_unit(value_unit, y_field, data)
+    value_meta = _build_value_meta(resolved_unit, values)
+
     # Base configuration
     option: Dict[str, Any] = {
         "title": {
@@ -94,7 +162,15 @@ def generate_echarts_spec(
             "trigger": "axis" if chart_type != "pie" else "item"
         },
         "backgroundColor": "transparent",
-        "textStyle": {"color": "#a0a0a0"}
+        "textStyle": {"color": "#a0a0a0"},
+        "value_meta": value_meta,
+    }
+
+    legend_base = {
+        "orient": "vertical",
+        "right": "2%",
+        "top": "middle",
+        "textStyle": {"color": "#a0a0a0"},
     }
     
     if chart_type == "pie":
@@ -113,7 +189,7 @@ def generate_echarts_spec(
             "data": [{"name": k, "value": v} for k, v in pie_data.items()],
             "label": {"color": "#e0e0e0"}
         }]
-        option["legend"] = {"bottom": 10, "textStyle": {"color": "#a0a0a0"}}
+        option["legend"] = legend_base
         
     else:
         # Bar, line, area charts
@@ -152,7 +228,7 @@ def generate_echarts_spec(
             option["xAxis"] = {"type": "category", "data": x_axis_data}
             option["yAxis"] = {"type": "value"}
             option["series"] = series_list
-            option["legend"] = {"data": list(series_groups.keys()), "textStyle": {"color": "#a0a0a0"}}
+            option["legend"] = {**legend_base, "data": list(series_groups.keys())}
             
         else:
             # Single series
@@ -178,10 +254,11 @@ def generate_echarts_spec(
                 series_config["areaStyle"] = {"opacity": 0.3}
             
             option["series"] = [series_config]
+            option["legend"] = {**legend_base, "data": [title or y_field]}
     
     # Add grid for better spacing
     if chart_type != "pie":
-        option["grid"] = {"left": "3%", "right": "4%", "bottom": "3%", "containLabel": True}
+        option["grid"] = {"left": "3%", "right": "18%", "bottom": "3%", "containLabel": True}
     
     return option
 
@@ -192,13 +269,10 @@ async def execute_echarts_tool(
     x_field: str,
     y_field: str,
     title: str = "",
-    series_field: Optional[str] = None
+    series_field: Optional[str] = None,
+    value_unit: Optional[str] = None
 ) -> Dict[str, Any]:
-    """Execute the ECharts tool and return chart specification.
-    
-    Returns:
-        Dictionary with success status and chart config
-    """
+    """Function: execute_echarts_tool — called from ConversationalAnalyticsAgent via TOOL_EXECUTORS to return chart configs; forwards value_unit to generate_echarts_spec so the frontend can format labels correctly."""
     try:
         config = generate_echarts_spec(
             chart_type=chart_type,
@@ -206,7 +280,8 @@ async def execute_echarts_tool(
             x_field=x_field,
             y_field=y_field,
             title=title,
-            series_field=series_field
+            series_field=series_field,
+            value_unit=value_unit,
         )
         
         return {

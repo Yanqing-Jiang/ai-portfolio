@@ -5,7 +5,11 @@ import logging
 from fastapi import APIRouter, HTTPException, Depends, Request
 from fastapi.responses import StreamingResponse
 
-from ..agent import ConversationalAnalyticsAgent
+from ..agent import (
+    ConversationalAnalyticsAgent,
+    MissingDependencyError,
+    get_conversational_analytics_agent,
+)
 from ..models import ChatRequest
 from ..memory import session_store
 from rate_limiter import conversational_analytics_rate_limit
@@ -14,8 +18,17 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/conv-analytics", tags=["conversational-analytics"])
 
-# Single agent instance
-agent = ConversationalAnalyticsAgent()
+
+def _get_agent() -> ConversationalAnalyticsAgent:
+    """Function: _get_agent — used by all Conversational Analytics endpoints to fetch the singleton agent.
+    Called from: stream_chat and chat handlers.
+    Invokes: get_conversational_analytics_agent to lazily create the agent.
+    Purpose: Surface missing dependency errors as HTTP 503 instead of silently skipping routes."""
+    try:
+        return get_conversational_analytics_agent()
+    except MissingDependencyError as exc:
+        logger.error("Conversational Analytics unavailable: %s", exc)
+        raise HTTPException(status_code=503, detail=str(exc))
 
 
 @router.post("/stream")
@@ -24,22 +37,11 @@ async def stream_chat(
     fastapi_request: Request,
     _: None = Depends(conversational_analytics_rate_limit),
 ):
-    """Stream a chat response with SSE.
-    
-    This endpoint accepts a user message and session ID, then streams
-    back events as the agent processes the request.
-    
-    Event types:
-    - status: Connection/processing status updates
-    - thinking: Step-by-step thinking process
-    - tool_start: Tool execution started
-    - tool_end: Tool execution completed
-    - content: Streamed response content
-    - chart: TradingView chart configuration
-    - data: Query result data
-    - done: Stream completed
-    - error: Error occurred
-    """
+    """Function: stream_chat — called by components/conversationalAnalytics/hooks/useSSEStream.ts to stream Claude responses.
+    Invokes: _get_agent().run_with_tools to produce SSE events.
+    Purpose: Primary streaming endpoint for conversational analytics with rate limiting."""
+    agent = _get_agent()
+
     async def event_generator():
         async for event in agent.run_with_tools(request.message, request.session_id):
             yield event
@@ -61,10 +63,10 @@ async def chat(
     fastapi_request: Request,
     _: None = Depends(conversational_analytics_rate_limit),
 ):
-    """Non-streaming chat endpoint for simpler integrations.
-    
-    This collects all events and returns a final response.
-    """
+    """Function: chat — used by non-SSE clients for conversational analytics.
+    Invokes: _get_agent().run_with_tools and aggregates the streamed events.
+    Purpose: Provide a single-response alternative to the streaming endpoint."""
+    agent = _get_agent()
     events = []
     content_parts = []
     chart_config = None
@@ -101,7 +103,9 @@ async def get_session_history(
     fastapi_request: Request,
     _: None = Depends(conversational_analytics_rate_limit),
 ):
-    """Get conversation history for a session."""
+    """Function: get_session_history — used by conversational analytics clients to retrieve stored context.
+    Invokes: session_store to fetch messages.
+    Purpose: Allow clients to reload prior chat turns for a session."""
     session = session_store.get(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -126,7 +130,9 @@ async def clear_session(
     fastapi_request: Request,
     _: None = Depends(conversational_analytics_rate_limit),
 ):
-    """Clear a session's history."""
+    """Function: clear_session — invoked by clients when they need a fresh conversational analytics run.
+    Invokes: session_store.delete to clear cached history.
+    Purpose: Support session lifecycle management for conversational analytics."""
     deleted = session_store.delete(session_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -136,5 +142,7 @@ async def clear_session(
 
 @router.get("/health")
 async def health_check():
-    """Health check endpoint."""
+    """Function: health_check — called by monitors and frontend readiness checks.
+    Invokes: lightweight status response only.
+    Purpose: Advertise that conversational analytics routes are mounted."""
     return {"status": "healthy", "service": "conversational-analytics"}

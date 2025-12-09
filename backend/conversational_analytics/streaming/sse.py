@@ -72,6 +72,31 @@ def data_event(rows: list, columns: list) -> str:
     return format_sse_event("data", {"rows": rows, "columns": columns})
 
 
+def skill_event(skill_id: str, name: str, download_url: str) -> str:
+    """Create a skill selection event for client display and download links."""
+    return format_sse_event("skill", {"id": skill_id, "name": name, "download_url": download_url})
+
+
+def news_event(articles: list, ticker: str, aggregate_sentiment: float, aggregate_label: str) -> str:
+    """Create a news/citations event.
+    
+    Args:
+        articles: List of news articles with title, summary, url, source, sentiment
+        ticker: Stock ticker symbol
+        aggregate_sentiment: Average sentiment score
+        aggregate_label: Human-readable sentiment label
+    
+    Returns:
+        SSE formatted news event string
+    """
+    return format_sse_event("news", {
+        "articles": articles,
+        "ticker": ticker,
+        "aggregate_sentiment": aggregate_sentiment,
+        "aggregate_label": aggregate_label,
+    })
+
+
 def plan_event(steps: list[dict]) -> str:
     """Create a plan event with ordered steps."""
     return format_sse_event("plan", {"steps": steps})
@@ -87,6 +112,31 @@ def done_event() -> str:
     return format_sse_event("done", {})
 
 
-def error_event(message: str, code: str = "error") -> str:
-    """Create an error event."""
-    return format_sse_event("error", {"message": message, "code": code})
+def error_event(message: str, code: str = "error", details: str = "") -> str:
+    """Create an error event with optional stack trace/details for debug mode."""
+    data = {"message": message, "code": code}
+    if details:
+        data["details"] = details
+    return format_sse_event("error", data)
+
+
+def debug_event(category: str, message: str, data: dict | None = None) -> str:
+    """Create a debug event for verbose activity tracing.
+    
+    Args:
+        category: Debug category (e.g., 'session', 'api', 'tool', 'agent')
+        message: Human-readable debug message
+        data: Optional additional debug data
+    
+    Returns:
+        SSE formatted debug event string
+    """
+    import time
+    payload = {
+        "category": category,
+        "message": message,
+        "timestamp": time.time(),
+    }
+    if data:
+        payload["data"] = data
+    return format_sse_event("debug", payload)

@@ -1,304 +1,379 @@
+/**
+ * Function: ConversationalAnalyticsPage — Modern ChatGPT/Claude-inspired conversational analytics UI
+ * Called from: ProjectView for the conversational-analytics project
+ * Invokes: useSSEStream hook for Claude agent streaming, renders MessageBubble, ThinkingProcessBar
+ * Purpose: Delivers a sleek, minimalist chat experience for semiconductor financial analysis
+ */
+
 import React, { useState, useRef, useEffect } from 'react';
-import { useSSEStream, ThinkingStep, PlanStep } from './hooks/useSSEStream';
+import { motion, AnimatePresence } from 'framer-motion';
+import { useSSEStream, ThinkingStep, NewsResult } from './hooks/useSSEStream';
+import MessageBubble from './MessageBubble';
 import ThinkingProcessBar from './ThinkingProcessBar';
+import ChatInput from './ChatInput';
+import { theme } from './styles';
 
-// Thinking Process Panel Component
-// Function: ThinkingPanel — rendered inside MessageBubble when assistant is speaking; summarizes thinking steps from useSSEStream so users see Claude’s plan trace.
-const ThinkingPanel: React.FC<{ steps: ThinkingStep[]; isExpanded: boolean; onToggle: () => void }> = ({
-    steps,
-    isExpanded,
-    onToggle,
-}) => {
-    if (steps.length === 0) return null;
+// Welcome screen component
+const WelcomeScreen: React.FC<{ onSuggestionClick: (prompt: string) => void }> = ({ onSuggestionClick }) => {
+  const suggestions = [
+    {
+      icon: '📊',
+      title: 'Market Share Analysis',
+      description: 'Compare market positions',
+      prompt: 'Market share of NVDA vs peers over the last 5 years',
+    },
+    {
+      icon: '📈',
+      title: 'Revenue Comparison',
+      description: 'Cross-company revenue trends',
+      prompt: 'Compare revenue for NVDA, AMD, INTC by year (last 5 years)',
+    },
+    {
+      icon: '📉',
+      title: 'Growth Metrics',
+      description: 'YoY/QoQ growth rates',
+      prompt: 'YoY revenue growth for NVDA and AMD by quarter',
+    },
+    {
+      icon: '💹',
+      title: 'Margin Analysis',
+      description: 'Profitability vs peers',
+      prompt: 'Net margin vs peers for TXN over last 5 years',
+    },
+  ];
 
-    const getStatusIcon = (status: ThinkingStep['status']) => {
-        switch (status) {
-            case 'completed': return '✓';
-            case 'running': return '●';
-            case 'error': return '✗';
-            default: return '○';
-        }
-    };
-
-    const getStatusColor = (status: ThinkingStep['status']) => {
-        switch (status) {
-            case 'completed': return 'text-green-400';
-            case 'running': return 'text-blue-400 animate-pulse';
-            case 'error': return 'text-red-400';
-            default: return 'text-gray-500';
-        }
-    };
-
-    return (
-        <div className="mb-4">
-            <button
-                onClick={onToggle}
-                className="flex items-center gap-2 text-sm text-gray-400 hover:text-gray-200 transition-colors"
-            >
-                <span className={`transform transition-transform ${isExpanded ? 'rotate-90' : ''}`}>▶</span>
-                <span>Thinking... ({steps.filter(s => s.status === 'completed').length}/{steps.length} steps)</span>
-            </button>
-            {isExpanded && (
-                <div className="mt-2 pl-4 border-l-2 border-gray-700 space-y-1">
-                    {steps.map((step, idx) => (
-                        <div key={idx} className="flex items-center gap-2 text-sm">
-                            <span className={getStatusColor(step.status)}>{getStatusIcon(step.status)}</span>
-                            <span className="text-gray-300">{step.message || step.step.replace(/_/g, ' ')}</span>
-                        </div>
-                    ))}
-                </div>
-            )}
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="flex flex-col items-center justify-center h-full px-6"
+    >
+      {/* Logo/Title */}
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.1 }}
+        className="text-center mb-10"
+      >
+        <div
+          className="w-16 h-16 rounded-2xl mx-auto mb-4 flex items-center justify-center text-3xl"
+          style={{
+            background: `linear-gradient(135deg, ${theme.colors.accent.muted} 0%, ${theme.colors.bg.elevated} 100%)`,
+            border: `1px solid ${theme.colors.border.medium}`,
+          }}
+        >
+          ⚡
         </div>
-    );
-};
+        <h1
+          className="text-2xl font-semibold mb-2"
+          style={{ color: theme.colors.text.primary }}
+        >
+          Semiconductor Analyst
+        </h1>
+        <p
+          className="text-sm max-w-md"
+          style={{ color: theme.colors.text.secondary }}
+        >
+          AI-powered financial analysis for semiconductor companies.
+          Ask questions about revenue, margins, market share, and growth.
+        </p>
+      </motion.div>
 
-// Message Bubble Component
-// Function: MessageBubble — used by ConversationalAnalyticsPage to show user and assistant turns plus charts/data; displays live streaming caret while Claude is generating.
-const MessageBubble: React.FC<{
-    role: 'user' | 'assistant';
-    content: string;
-    thinkingSteps?: ThinkingStep[];
-    chartConfig?: Record<string, unknown> | null;
-    dataResult?: { rows: unknown[]; columns: string[] } | null;
-    isStreaming?: boolean;
-}> = ({ role, content, thinkingSteps, chartConfig, dataResult, isStreaming }) => {
-    const [thinkingExpanded, setThinkingExpanded] = useState(true);
-    const isUser = role === 'user';
-
-    return (
-        <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} mb-4`}>
-            <div
-                className={`max-w-[80%] rounded-2xl px-4 py-3 ${isUser
-                        ? 'bg-blue-600 text-white'
-                        : 'bg-gray-800 text-gray-100 border border-gray-700'
-                    }`}
-            >
-                {!isUser && thinkingSteps && thinkingSteps.length > 0 && (
-                    <ThinkingPanel
-                        steps={thinkingSteps}
-                        isExpanded={thinkingExpanded}
-                        onToggle={() => setThinkingExpanded(!thinkingExpanded)}
-                    />
-                )}
-
-                {/* Chart placeholder */}
-                {chartConfig && (
-                    <div className="mb-3 p-4 bg-gray-900 rounded-lg border border-gray-700">
-                        <div className="text-sm text-gray-400 mb-2">📊 Chart Generated</div>
-                        <pre className="text-xs text-gray-400 whitespace-pre-wrap overflow-x-auto max-h-48">
-                            {JSON.stringify(chartConfig, null, 2)}
-                        </pre>
-                    </div>
-                )}
-
-                {dataResult && dataResult.rows && dataResult.rows.length > 0 && (
-                    <div className="mb-3 p-4 bg-gray-900 rounded-lg border border-gray-700">
-                        <div className="text-sm text-gray-400 mb-2">📑 Data Preview</div>
-                        <div className="overflow-x-auto">
-                            <table className="text-xs text-gray-200 w-full">
-                                <thead>
-                                    <tr>
-                                        {dataResult.columns.map(col => (
-                                            <th key={col} className="text-left pr-4 pb-1 text-gray-400">{col}</th>
-                                        ))}
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {dataResult.rows.slice(0, 5).map((row: any, idx) => (
-                                        <tr key={idx} className="border-t border-gray-800">
-                                            {dataResult.columns.map(col => (
-                                                <td key={col} className="pr-4 py-1">
-                                                    {row[col] as any}
-                                                </td>
-                                            ))}
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                )}
-
-                <p className="whitespace-pre-wrap">{content}</p>
-                {isStreaming && <span className="inline-block w-2 h-4 bg-blue-400 animate-pulse ml-1">|</span>}
+      {/* Suggestion cards */}
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.2 }}
+        className="grid grid-cols-1 md:grid-cols-2 gap-3 w-full max-w-2xl"
+      >
+        {suggestions.map((s, idx) => (
+          <motion.button
+            key={idx}
+            onClick={() => onSuggestionClick(s.prompt)}
+            className="p-4 rounded-xl text-left transition-all group"
+            style={{
+              backgroundColor: theme.colors.bg.tertiary,
+              border: `1px solid ${theme.colors.border.subtle}`,
+            }}
+            whileHover={{
+              borderColor: theme.colors.accent.primary + '40',
+              backgroundColor: theme.colors.bg.elevated,
+            }}
+            whileTap={{ scale: 0.98 }}
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.2 + idx * 0.05 }}
+          >
+            <div className="flex items-start gap-3">
+              <span className="text-2xl">{s.icon}</span>
+              <div>
+                <h3
+                  className="text-sm font-medium mb-0.5"
+                  style={{ color: theme.colors.text.primary }}
+                >
+                  {s.title}
+                </h3>
+                <p
+                  className="text-xs"
+                  style={{ color: theme.colors.text.muted }}
+                >
+                  {s.description}
+                </p>
+              </div>
+              <motion.span
+                className="ml-auto text-sm opacity-0 group-hover:opacity-100 transition-opacity"
+                style={{ color: theme.colors.accent.primary }}
+              >
+                →
+              </motion.span>
             </div>
-        </div>
-    );
+          </motion.button>
+        ))}
+      </motion.div>
+
+      {/* Powered by */}
+      <motion.p
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ delay: 0.4 }}
+        className="mt-8 text-xs"
+        style={{ color: theme.colors.text.muted }}
+      >
+        Powered by Claude AI • Data from comp_financials
+      </motion.p>
+    </motion.div>
+  );
 };
 
-// Status Bar Component
-// Function: StatusBar — lightweight indicator displayed beneath the header to show connection readiness for the Claude SSE stream.
-const StatusBar: React.FC<{ status: string; isConnected: boolean }> = ({ status, isConnected }) => (
-    <div className="flex items-center gap-2 px-4 py-2 bg-gray-800 border-b border-gray-700 text-sm">
-        <span className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500' : 'bg-gray-500'}`} />
-        <span className="text-gray-400">{status}</span>
-    </div>
-);
+// Message type for chat history
+interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  thinkingSteps?: ThinkingStep[];
+  chartConfig?: Record<string, unknown> | null;
+  dataResult?: { rows: unknown[]; columns: string[] } | null;
+  newsResult?: NewsResult | null;
+}
 
 // Main Page Component
-// Function: ConversationalAnalyticsPage — mounted by ProjectView for the conversational-analytics project; drives the Claude SSE hook and renders messages, plan bar, and controls.
 const ConversationalAnalyticsPage: React.FC = () => {
-    const [messages, setMessages] = useState<Array<{
-        role: 'user' | 'assistant';
-        content: string;
-        thinkingSteps?: ThinkingStep[];
-        chartConfig?: Record<string, unknown> | null;
-        dataResult?: { rows: unknown[]; columns: string[] } | null;
-    }>>([]);
-    const [inputValue, setInputValue] = useState('');
-    const [sessionId] = useState(() => `session-${Date.now()}`);
-    const messagesEndRef = useRef<HTMLDivElement>(null);
-    const [isPlanExpanded, setIsPlanExpanded] = useState(false);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [inputValue, setInputValue] = useState('');
+  const [sessionId] = useState(() => `session-${Date.now()}`);
+  const [isPlanExpanded, setIsPlanExpanded] = useState(false);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
 
-    const {
-        isStreaming,
-        content,
-        thinkingSteps,
-        chartConfig,
-        dataResult,
-        planSteps,
-        currentStepId,
-        error,
-        sendMessage,
-        reset,
-    } = useSSEStream();
+  const {
+    isStreaming,
+    content,
+    thinkingSteps,
+    chartConfig,
+    dataResult,
+    newsResult,
+    skillInfo,
+    planSteps,
+    currentStepId,
+    error,
+    errorDetails,
+    debugLogs,
+    sendMessage,
+    reset,
+  } = useSSEStream();
 
-    // Auto-scroll to bottom
-    useEffect(() => {
-        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, [messages, content]);
+  // Auto-scroll to bottom
+  useEffect(() => {
+    if (messagesContainerRef.current) {
+      messagesContainerRef.current.scrollTo({
+        top: messagesContainerRef.current.scrollHeight,
+        behavior: 'smooth',
+      });
+    }
+  }, [messages, content, thinkingSteps]);
 
-    // Handle streaming content updates
-    useEffect(() => {
-        if (!isStreaming && content) {
-            // Stream completed - add assistant message
-            setMessages(prev => [
-                ...prev,
-                {
-                    role: 'assistant',
-                    content,
-                    thinkingSteps,
-                    chartConfig,
-                    dataResult,
-                },
-            ]);
-            reset();
-        }
-    }, [isStreaming, content, thinkingSteps, chartConfig, dataResult, reset]);
+  // Handle streaming completion
+  useEffect(() => {
+    if (!isStreaming && content) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: 'assistant',
+          content,
+          thinkingSteps,
+          chartConfig,
+          dataResult,
+          newsResult,
+        },
+      ]);
+    }
+  }, [isStreaming, content, thinkingSteps, chartConfig, dataResult, newsResult, reset]);
 
-    const handleSubmit = (e: React.FormEvent) => {
-        e.preventDefault();
-        if (!inputValue.trim() || isStreaming) return;
+  const handleSubmit = () => {
+    if (!inputValue.trim() || isStreaming) return;
 
-        // Add user message
-        setMessages(prev => [...prev, { role: 'user', content: inputValue }]);
+    setMessages((prev) => [...prev, { role: 'user', content: inputValue }]);
+    sendMessage(inputValue, sessionId);
+    setInputValue('');
+  };
 
-        // Send to API
-        sendMessage(inputValue, sessionId);
-        setInputValue('');
-    };
+  const handleSuggestionClick = (prompt: string) => {
+    setInputValue(prompt);
+  };
 
-    return (
-        <div className="flex flex-col h-full bg-gray-900">
-            {/* Header */}
-            <div className="flex items-center justify-between px-6 py-4 bg-gray-800 border-b border-gray-700">
-                <h1 className="text-xl font-semibold text-white">
-                    Conversational Analytics
-                    <span className="ml-2 text-sm font-normal text-gray-400">Claude Agent</span>
-                </h1>
-            </div>
+  const showWelcome = messages.length === 0 && !isStreaming;
 
-            {/* Status Bar */}
-            <StatusBar
-                status={isStreaming ? 'Processing...' : 'Ready'}
-                isConnected={true}
-            />
-
-            {/* Thinking / Plan Bar */}
-            <ThinkingProcessBar
-                steps={planSteps}
-                currentStepId={currentStepId}
-                isExpanded={isPlanExpanded}
-                onToggle={() => setIsPlanExpanded(prev => !prev)}
-            />
-
-            {/* Messages Container */}
-            <div className="flex-1 overflow-y-auto p-6">
-                {messages.length === 0 && !isStreaming && (
-                    <div className="text-center text-gray-500 mt-20">
-                        <p className="text-lg mb-4">Ask me about semiconductor company financials</p>
-                        <div className="space-y-2">
-                            <button
-                                onClick={() => setInputValue('Show me NVDA revenue trends over the last 5 years')}
-                                className="block mx-auto px-4 py-2 bg-gray-800 rounded-lg hover:bg-gray-700 text-sm text-gray-300"
-                            >
-                                Show me NVDA revenue trends
-                            </button>
-                            <button
-                                onClick={() => setInputValue('Compare AMD and Intel profit margins')}
-                                className="block mx-auto px-4 py-2 bg-gray-800 rounded-lg hover:bg-gray-700 text-sm text-gray-300"
-                            >
-                                Compare AMD and Intel margins
-                            </button>
-                        </div>
-                    </div>
-                )}
-
-                {messages.map((msg, idx) => (
-                    <MessageBubble
-                        key={idx}
-                        role={msg.role}
-                        content={msg.content}
-                        thinkingSteps={msg.thinkingSteps}
-                        chartConfig={msg.chartConfig}
-                        dataResult={msg.dataResult}
-                    />
-                ))}
-
-                {/* Streaming message */}
-                {isStreaming && (
-                    <MessageBubble
-                        role="assistant"
-                        content={content}
-                        thinkingSteps={thinkingSteps}
-                        chartConfig={chartConfig}
-                        dataResult={dataResult}
-                        isStreaming={true}
-                    />
-                )}
-
-                {/* Error display */}
-                {error && (
-                    <div className="text-red-400 text-center py-4">
-                        Error: {error}
-                    </div>
-                )}
-
-                <div ref={messagesEndRef} />
-            </div>
-
-            {/* Input Area */}
-            <form onSubmit={handleSubmit} className="p-4 bg-gray-800 border-t border-gray-700">
-                <div className="flex gap-3">
-                    <input
-                        type="text"
-                        value={inputValue}
-                        onChange={(e) => setInputValue(e.target.value)}
-                        placeholder="Ask about semiconductor financials..."
-                        className="flex-1 px-4 py-3 bg-gray-900 border border-gray-700 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:border-blue-500"
-                        disabled={isStreaming}
-                    />
-                    <button
-                        type="submit"
-                        disabled={isStreaming || !inputValue.trim()}
-                        className="px-6 py-3 bg-blue-600 text-white rounded-xl hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                    >
-                        {isStreaming ? '...' : '➤'}
-                    </button>
-                </div>
-            </form>
+  return (
+    <div
+      className="flex flex-col h-full"
+      style={{ backgroundColor: theme.colors.bg.primary }}
+    >
+      {/* Header */}
+      <header
+        className="flex items-center justify-between px-6 py-4 shrink-0"
+        style={{
+          backgroundColor: theme.colors.bg.secondary,
+          borderBottom: `1px solid ${theme.colors.border.subtle}`,
+        }}
+      >
+        <div className="flex items-center gap-3">
+          <div
+            className="w-9 h-9 rounded-xl flex items-center justify-center text-lg"
+            style={{
+              background: theme.colors.accent.muted,
+              color: theme.colors.accent.primary,
+            }}
+          >
+            ⚡
+          </div>
+          <div>
+            <h1
+              className="text-base font-semibold"
+              style={{ color: theme.colors.text.primary }}
+            >
+              Conversational Analytics
+            </h1>
+            <p className="text-xs" style={{ color: theme.colors.text.muted }}>
+              Claude-powered semiconductor insights
+            </p>
+          </div>
         </div>
-    );
+
+        {/* Session indicator */}
+        <div className="flex items-center gap-2">
+          <div
+            className="w-2 h-2 rounded-full"
+            style={{
+              backgroundColor: isStreaming
+                ? theme.colors.accent.primary
+                : theme.colors.status.success,
+            }}
+          />
+          <span className="text-xs" style={{ color: theme.colors.text.muted }}>
+            {isStreaming ? 'Processing...' : 'Connected'}
+          </span>
+        </div>
+      </header>
+
+      {/* Messages area */}
+      <div
+        ref={messagesContainerRef}
+        className="flex-1 overflow-y-auto"
+        style={{ backgroundColor: theme.colors.bg.primary }}
+      >
+        <AnimatePresence mode="wait">
+          {showWelcome ? (
+            <WelcomeScreen
+              key="welcome"
+              onSuggestionClick={handleSuggestionClick}
+            />
+          ) : (
+            <motion.div
+              key="messages"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              className="max-w-4xl mx-auto px-4 py-6"
+            >
+              {/* Thinking / Plan bar pinned at top */}
+              {(isStreaming || planSteps.length > 0 || error) && (
+                <div className="sticky top-0 z-10 pb-3" style={{ backgroundColor: `${theme.colors.bg.primary}cc`, backdropFilter: 'blur(6px)' }}>
+                  <ThinkingProcessBar
+                    steps={planSteps}
+                    currentStepId={currentStepId}
+                    isExpanded={isPlanExpanded}
+                    onToggle={() => setIsPlanExpanded(prev => !prev)}
+                    debugLogs={debugLogs}
+                    error={error}
+                    errorDetails={errorDetails}
+                    skillInfo={skillInfo}
+                    isStreaming={isStreaming}
+                  />
+                </div>
+              )}
+
+              {/* Message thread */}
+              {messages.map((msg, idx) => (
+                <MessageBubble
+                  key={idx}
+                  role={msg.role}
+                  content={msg.content}
+                  thinkingSteps={msg.thinkingSteps}
+                  chartConfig={msg.chartConfig}
+                  dataResult={msg.dataResult}
+                  newsResult={msg.newsResult}
+                />
+              ))}
+
+              {/* Streaming message */}
+              {isStreaming && (content || chartConfig || dataResult || newsResult) && (
+                <MessageBubble
+                  role="assistant"
+                  content={content}
+                  chartConfig={chartConfig}
+                  dataResult={dataResult}
+                  newsResult={newsResult}
+                  isStreaming={true}
+                />
+              )}
+
+              {/* Error display */}
+              {error && (
+                <motion.div
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="p-4 rounded-xl mb-4"
+                  style={{
+                    backgroundColor: theme.colors.status.error + '15',
+                    border: `1px solid ${theme.colors.status.error}40`,
+                  }}
+                >
+                  <div className="flex items-center gap-2">
+                    <span style={{ color: theme.colors.status.error }}>⚠️</span>
+                    <span
+                      className="text-sm"
+                      style={{ color: theme.colors.status.error }}
+                    >
+                      {error}
+                    </span>
+                  </div>
+                </motion.div>
+              )}
+
+              <div ref={messagesEndRef} />
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+
+      {/* Input area */}
+      <ChatInput
+        value={inputValue}
+        onChange={setInputValue}
+        onSubmit={handleSubmit}
+        disabled={isStreaming}
+      />
+    </div>
+  );
 };
 
 export default ConversationalAnalyticsPage;

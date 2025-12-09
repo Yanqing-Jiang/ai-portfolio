@@ -45,9 +45,13 @@ class Session:
         """Get message history formatted for Claude API."""
         history = []
         for msg in self.messages:
+            # Skip empty/whitespace messages to avoid Claude 400s
+            content = (msg.content or "").strip()
+            if not content:
+                continue
             history.append({
                 "role": msg.role,
-                "content": msg.content
+                "content": content
             })
         return history
     
