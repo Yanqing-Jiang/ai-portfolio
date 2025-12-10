@@ -6,10 +6,23 @@ from pydantic import BaseModel, Field
 
 
 # Request Models
+AgentMode = Literal[
+    "auto",
+    "database_admin",
+    "chart_builder",
+    "news",
+    "single",
+]
+
+
 class ChatRequest(BaseModel):
     """Request body for chat endpoint."""
     message: str = Field(..., description="User's analytics question")
     session_id: str = Field(..., description="Session identifier for conversation history")
+    agent_mode: AgentMode | None = Field(
+        None,
+        description="Optional agent routing mode (auto|database_admin|chart_builder|news|single)",
+    )
 
 
 # SSE Event Models
@@ -67,9 +80,22 @@ class ErrorEvent(BaseModel):
     data: Dict[str, str]  # message, code
 
 
+class AgentEvent(BaseModel):
+    """Agent activation event (supervisor or specialist)."""
+    type: Literal["agent"] = "agent"
+    data: Dict[str, str]  # id, name, role
+
+
+class HandoffEvent(BaseModel):
+    """Agent handoff/delegation event."""
+    type: Literal["handoff"] = "handoff"
+    data: Dict[str, str]  # from, to, reason?
+
+
 SSEEvent = Union[
     StatusEvent, ThinkingEvent, ToolStartEvent, ToolEndEvent,
-    ContentEvent, ChartEvent, DataEvent, DoneEvent, ErrorEvent
+    ContentEvent, ChartEvent, DataEvent, DoneEvent, ErrorEvent,
+    AgentEvent, HandoffEvent,
 ]
 
 

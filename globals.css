@@ -142,3 +142,115 @@
     opacity: 0.7;
   }
 }
+
+/* Process Panel styles */
+@layer components {
+  /* Process panel overlay */
+  .process-panel-overlay {
+    animation: processPanelFadeIn 0.3s ease-out forwards;
+  }
+  
+  /* Process node tree connector lines */
+  .process-tree-line {
+    position: relative;
+  }
+  
+  .process-tree-line::before {
+    content: '';
+    position: absolute;
+    left: 18px;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background: linear-gradient(
+      to bottom,
+      rgba(148, 163, 184, 0.3) 0%,
+      rgba(148, 163, 184, 0.1) 100%
+    );
+  }
+  
+  /* Process node card hover effect */
+  .process-node-card {
+    transition: all 0.2s ease-out;
+  }
+  
+  .process-node-card:hover {
+    transform: translateX(2px);
+  }
+  
+  /* Responsive adjustments for process panel */
+  @media (max-width: 640px) {
+    .process-panel-header {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 0.75rem;
+    }
+    
+    .process-panel-stats {
+      flex-wrap: wrap;
+      gap: 0.5rem;
+    }
+    
+    .process-node-depth {
+      margin-left: 16px !important;
+    }
+  }
+  
+  /* Process status indicator pulse */
+  .process-status-pulse {
+    animation: processStatusPulse 2s ease-in-out infinite;
+  }
+}
+
+@keyframes processPanelFadeIn {
+  from {
+    opacity: 0;
+    backdrop-filter: blur(0px);
+  }
+  to {
+    opacity: 1;
+    backdrop-filter: blur(8px);
+  }
+}
+
+@keyframes processStatusPulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 8px rgba(245, 158, 11, 0);
+  }
+}
+
+/* Process node type icons animation */
+@layer utilities {
+  .animate-node-enter {
+    animation: nodeEnter 0.4s ease-out forwards;
+  }
+  
+  .animate-edge-draw {
+    animation: edgeDraw 0.6s ease-out forwards;
+  }
+}
+
+@keyframes nodeEnter {
+  from {
+    opacity: 0;
+    transform: scale(0.8) translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+@keyframes edgeDraw {
+  from {
+    stroke-dashoffset: 100;
+    opacity: 0;
+  }
+  to {
+    stroke-dashoffset: 0;
+    opacity: 1;
+  }
+}

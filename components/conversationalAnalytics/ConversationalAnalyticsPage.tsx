@@ -12,10 +12,11 @@ import MessageBubble from './MessageBubble';
 import ThinkingProcessBar from './ThinkingProcessBar';
 import ChatInput from './ChatInput';
 import SelectionCard from './SelectionCard';
+import ProcessPanel from './ProcessPanel';
 import { theme } from './styles';
 
 // Welcome screen component
-const WelcomeScreen: React.FC<{ onSuggestionClick: (prompt: string) => void }> = ({ onSuggestionClick }) => {
+const WelcomeScreen: React.FC<{ onSuggestionClick: (prompt: string) => void; mode?: string }> = ({ onSuggestionClick, mode }) => {
   const suggestions = [
     {
       icon: '📊',
@@ -39,7 +40,7 @@ const WelcomeScreen: React.FC<{ onSuggestionClick: (prompt: string) => void }> =
       icon: '💹',
       title: 'Margin Analysis',
       description: 'Profitability vs peers',
-      prompt: 'Net margin vs peers for TXN over last 5 years',
+      prompt: 'Net margin vs peers for NVDA over last 5 years',
     },
   ];
 
@@ -76,8 +77,9 @@ const WelcomeScreen: React.FC<{ onSuggestionClick: (prompt: string) => void }> =
           className="text-sm max-w-md"
           style={{ color: theme.colors.text.secondary }}
         >
-          AI-powered financial analysis for semiconductor companies.
-          Ask questions about revenue, margins, market share, and growth.
+          {mode === 'auto'
+            ? 'Multi-agent: supervisor will route to SQL, Chart Builder, TradingView, or News specialists.'
+            : 'Single Agent: handles data, charts, and insights end-to-end.'}
         </p>
       </motion.div>
 
@@ -155,6 +157,7 @@ interface ChatMessage {
   chartConfig?: Record<string, unknown> | null;
   dataResult?: { rows: unknown[]; columns: string[] } | null;
   newsResult?: NewsResult | null;
+  agentLabel?: string | null;
 }
 
 // Main Page Component
@@ -163,11 +166,13 @@ const ConversationalAnalyticsPage: React.FC = () => {
   const [inputValue, setInputValue] = useState('');
   const [sessionId] = useState(() => `session-${Date.now()}`);
   const [isPlanExpanded, setIsPlanExpanded] = useState(false);
+  const [agentMode, setAgentMode] = useState<string>('auto');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
 
   const {
     isStreaming,
+    isPaused,
     content,
     thinkingSteps,
     chartConfig,
@@ -180,11 +185,52 @@ const ConversationalAnalyticsPage: React.FC = () => {
     errorDetails,
     debugLogs,
     pendingSelection,
+    activeAgent,
+    handoffs,
+    processNodes,
+    processEdges,
+    lastAgentLabel,
     sendMessage,
+    pauseStream,
+    resumeLast,
     submitSelection,
     cancelSelection,
     reset,
   } = useSSEStream();
+  const activeAgentLabel = activeAgent?.name || lastAgentLabel || (agentMode === 'single' ? 'Single Agent' : 'Assistant');
+
+  const buildDynamicSuggestions = (): { label: string; prompt: string; icon: string }[] => {
+    const lastUser = [...messages].reverse().find((m) => m.role === 'user');
+    const text = lastUser?.content || '';
+    const tickers = Array.from(
+      new Set((text.match(/\b[A-Z]{2,5}\b/g) || []).filter((t) => t.length >= 2 && t.length <= 5))
+    );
+    const suggestions: { label: string; prompt: string; icon: string }[] = [];
+
+    if (tickers.length > 0) {
+      const ticker = tickers[0];
+      suggestions.push({
+        label: 'Stock price',
+        prompt: `Show stock price for ${ticker} (6M, candlestick + volume)`,
+        icon: '📈',
+      });
+      suggestions.push({
+        label: 'News sentiment',
+        prompt: `Latest news sentiment for ${ticker}`,
+        icon: '📰',
+      });
+    }
+
+    if (suggestions.length < 3 && text.toLowerCase().includes('year')) {
+      suggestions.push({
+        label: 'Quarterly view',
+        prompt: 'Show quarterly trend for the last 8 quarters',
+        icon: '📅',
+      });
+    }
+
+    return suggestions.slice(0, 3);
+  };
 
   // Auto-scroll to bottom
   useEffect(() => {
@@ -208,16 +254,17 @@ const ConversationalAnalyticsPage: React.FC = () => {
           chartConfig,
           dataResult,
           newsResult,
+          agentLabel: activeAgentLabel,
         },
       ]);
     }
-  }, [isStreaming, content, thinkingSteps, chartConfig, dataResult, newsResult, reset]);
+  }, [isStreaming, content, thinkingSteps, chartConfig, dataResult, newsResult, activeAgentLabel, reset]);
 
   const handleSubmit = () => {
-    if (!inputValue.trim() || isStreaming) return;
+    if (!inputValue.trim() || (isStreaming && !isPaused)) return;
 
     setMessages((prev) => [...prev, { role: 'user', content: inputValue }]);
-    sendMessage(inputValue, sessionId);
+    sendMessage(inputValue, sessionId, agentMode);
     setInputValue('');
   };
 
@@ -258,24 +305,43 @@ const ConversationalAnalyticsPage: React.FC = () => {
               Conversational Analytics
             </h1>
             <p className="text-xs" style={{ color: theme.colors.text.muted }}>
-              Claude-powered semiconductor insights
+              Select Multi-agent or Single Agent below
             </p>
           </div>
         </div>
 
-        {/* Session indicator */}
-        <div className="flex items-center gap-2">
-          <div
-            className="w-2 h-2 rounded-full"
-            style={{
-              backgroundColor: isStreaming
-                ? theme.colors.accent.primary
-                : theme.colors.status.success,
-            }}
+        {/* Process Panel + agent selector */}
+        <div className="flex items-center gap-4">
+          {/* Process Panel (replaces Connected status) */}
+          <ProcessPanel
+            isStreaming={isStreaming}
+            processNodes={processNodes}
+            processEdges={processEdges}
+            activeAgent={activeAgent}
+            agentMode={agentMode}
+            skillInfo={skillInfo}
+            debugLogs={debugLogs}
           />
-          <span className="text-xs" style={{ color: theme.colors.text.muted }}>
-            {isStreaming ? 'Processing...' : 'Connected'}
-          </span>
+
+          <div className="flex items-center gap-2">
+            <span className="text-xs" style={{ color: theme.colors.text.muted }}>
+              Agent
+            </span>
+            <select
+              value={agentMode}
+              onChange={(e) => setAgentMode(e.target.value)}
+              className="text-xs px-2 py-1 rounded-lg border"
+              style={{
+                backgroundColor: theme.colors.bg.elevated,
+                borderColor: theme.colors.border.subtle,
+                color: theme.colors.text.primary,
+              }}
+              disabled={isStreaming}
+            >
+              <option value="auto">Multi-agent (Supervisor)</option>
+              <option value="single">Single Agent</option>
+            </select>
+          </div>
         </div>
       </header>
 
@@ -290,6 +356,7 @@ const ConversationalAnalyticsPage: React.FC = () => {
             <WelcomeScreen
               key="welcome"
               onSuggestionClick={handleSuggestionClick}
+              mode={agentMode}
             />
           ) : (
             <motion.div
@@ -306,11 +373,12 @@ const ConversationalAnalyticsPage: React.FC = () => {
                     currentStepId={currentStepId}
                     isExpanded={isPlanExpanded}
                     onToggle={() => setIsPlanExpanded(prev => !prev)}
-                    debugLogs={debugLogs}
                     error={error}
                     errorDetails={errorDetails}
-                    skillInfo={skillInfo}
                     isStreaming={isStreaming}
+                    activeAgent={activeAgent}
+                    handoffs={handoffs}
+                    isPaused={isPaused}
                   />
                 </div>
               )}
@@ -325,6 +393,7 @@ const ConversationalAnalyticsPage: React.FC = () => {
                   chartConfig={msg.chartConfig}
                   dataResult={msg.dataResult}
                   newsResult={msg.newsResult}
+                  agentLabel={msg.agentLabel}
                 />
               ))}
 
@@ -337,6 +406,7 @@ const ConversationalAnalyticsPage: React.FC = () => {
                   dataResult={dataResult}
                   newsResult={newsResult}
                   isStreaming={true}
+                  agentLabel={activeAgentLabel}
                 />
               )}
 
@@ -351,7 +421,7 @@ const ConversationalAnalyticsPage: React.FC = () => {
                     if (messages.length > 0) {
                       const lastUserMsg = [...messages].reverse().find(m => m.role === 'user');
                       if (lastUserMsg) {
-                        sendMessage(lastUserMsg.content, sid);
+                        sendMessage(lastUserMsg.content, sid, agentMode);
                       }
                     }
                   }}
@@ -393,7 +463,12 @@ const ConversationalAnalyticsPage: React.FC = () => {
         value={inputValue}
         onChange={setInputValue}
         onSubmit={handleSubmit}
-        disabled={isStreaming || !!pendingSelection}
+        onPause={pauseStream}
+        onResume={resumeLast}
+        isStreaming={isStreaming}
+        isPaused={isPaused}
+        placeholder="Ask about semiconductor financials..."
+        suggestionsOverride={buildDynamicSuggestions()}
       />
     </div>
   );

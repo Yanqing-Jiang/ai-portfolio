@@ -9,6 +9,7 @@ export { default as ThinkingProcessBar } from './ThinkingProcessBar';
 export { default as SkillModal } from './SkillModal';
 export { default as ChatInput } from './ChatInput';
 export { default as SelectionCard } from './SelectionCard';
+export { default as ProcessPanel } from './ProcessPanel';
 export { useSSEStream } from './hooks/useSSEStream';
 export { theme, motionVariants } from './styles';
 export type {
@@ -22,4 +23,8 @@ export type {
   SelectionOption,
   SelectionRequest,
   UseSSEStreamResult,
+  ProcessNode,
+  ProcessEdge,
+  AgentInfo,
+  HandoffInfo,
 } from './hooks/useSSEStream';

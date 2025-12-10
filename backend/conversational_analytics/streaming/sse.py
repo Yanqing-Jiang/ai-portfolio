@@ -5,6 +5,15 @@ import json
 from typing import Any, Dict
 
 
+def _safe_dumps(payload: Any) -> str:
+    """JSON dump with robust fallback to string conversion."""
+    try:
+        return json.dumps(payload, default=str)
+    except Exception:
+        # Last-resort stringify to avoid crashing the stream
+        return json.dumps(str(payload))
+
+
 def format_sse(event: Dict[str, Any]) -> str:
     """Format a dictionary as an SSE event string.
     
@@ -14,7 +23,7 @@ def format_sse(event: Dict[str, Any]) -> str:
     Returns:
         SSE formatted string (data: {...}\n\n)
     """
-    return f"data: {json.dumps(event)}\n\n"
+    return f"data: {_safe_dumps(event)}\n\n"
 
 
 def format_sse_event(event_type: str, data: Dict[str, Any]) -> str:
@@ -95,6 +104,19 @@ def news_event(articles: list, ticker: str, aggregate_sentiment: float, aggregat
         "aggregate_sentiment": aggregate_sentiment,
         "aggregate_label": aggregate_label,
     })
+
+
+def agent_event(agent_id: str, name: str, role: str) -> str:
+    """Create an agent activation event so the UI can show which agent is working."""
+    return format_sse_event("agent", {"id": agent_id, "name": name, "role": role})
+
+
+def handoff_event(from_agent: str, to_agent: str, reason: str = "") -> str:
+    """Create a handoff event to surface supervisor-to-specialist delegation."""
+    payload = {"from": from_agent, "to": to_agent}
+    if reason:
+        payload["reason"] = reason
+    return format_sse_event("handoff", payload)
 
 
 def plan_event(steps: list[dict]) -> str:
@@ -181,3 +203,116 @@ def selection_timeout_event(request_id: str) -> str:
 def selection_cancelled_event(request_id: str) -> str:
     """Create a selection cancelled event (user dismissed or agent cancelled)."""
     return format_sse_event("selection_cancelled", {"request_id": request_id})
+
+
+# ============================================================================
+# Process Visualization Events
+# ============================================================================
+
+def process_node_event(
+    node_id: str,
+    node_type: str,
+    label: str,
+    status: str = "pending",
+    parent_id: str | None = None,
+    data: dict | None = None,
+    description: str = "",
+) -> str:
+    """Create a process node event for agent decision visualization.
+    
+    Args:
+        node_id: Unique ID for this node in the process graph
+        node_type: Type of node (decision, action, tool, agent, routing, output)
+        label: Display label for the node
+        status: Node status (pending, running, completed, error, skipped)
+        parent_id: ID of parent node (for hierarchy/connections)
+        data: Optional additional data for the node
+        description: Optional detailed description of what this node does
+    
+    Returns:
+        SSE formatted process_node event string
+    """
+    import time
+    payload = {
+        "node_id": node_id,
+        "node_type": node_type,
+        "label": label,
+        "status": status,
+        "timestamp": time.time(),
+    }
+    if parent_id:
+        payload["parent_id"] = parent_id
+    if data:
+        payload["data"] = data
+    if description:
+        payload["description"] = description
+    return format_sse_event("process_node", payload)
+
+
+def process_edge_event(
+    from_node: str,
+    to_node: str,
+    edge_type: str = "default",
+    label: str = "",
+    animated: bool = False,
+) -> str:
+    """Create a process edge event to connect nodes in the visualization.
+    
+    Args:
+        from_node: Source node ID
+        to_node: Target node ID
+        edge_type: Edge type (default, decision_yes, decision_no, handoff)
+        label: Optional edge label
+        animated: Whether to animate the edge flow
+    
+    Returns:
+        SSE formatted process_edge event string
+    """
+    payload = {
+        "from_node": from_node,
+        "to_node": to_node,
+        "edge_type": edge_type,
+        "animated": animated,
+    }
+    if label:
+        payload["label"] = label
+    return format_sse_event("process_edge", payload)
+
+
+def process_update_event(
+    node_id: str,
+    status: str,
+    summary: str = "",
+    data: dict | None = None,
+) -> str:
+    """Update an existing process node's status.
+    
+    Args:
+        node_id: ID of the node to update
+        status: New status (pending, running, completed, error, skipped)
+        summary: Optional summary text
+        data: Optional additional data
+    
+    Returns:
+        SSE formatted process_update event string
+    """
+    import time
+    payload = {
+        "node_id": node_id,
+        "status": status,
+        "timestamp": time.time(),
+    }
+    if summary:
+        payload["summary"] = summary
+    if data:
+        payload["data"] = data
+    return format_sse_event("process_update", payload)
+
+
+def process_clear_event() -> str:
+    """Clear all process visualization nodes for a new request.
+    
+    Returns:
+        SSE formatted process_clear event string
+    """
+    return format_sse_event("process_clear", {})

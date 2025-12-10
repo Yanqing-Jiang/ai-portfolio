@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 try:
@@ -32,6 +33,10 @@ from .streaming import (
     error_event,
     debug_event,
     selection_request_event,
+    process_node_event,
+    process_edge_event,
+    process_update_event,
+    process_clear_event,
 )
 
 logger = logging.getLogger(__name__)
@@ -64,6 +69,10 @@ Multi-turn guidance:
 - Avoid deterministic scripted steps; choose tools dynamically based on the latest user intent.
 
 Format numbers as: $1.2B (billions), $150M (millions), 15.3% (percentages)
+
+Guardrails:
+- Never include raw tool request/response JSON in the final answer; summarize results only.
+- Do not paste tool inputs or outputs into the user-facing text.
 
 Be conversational, accurate, and insightful. Always cite the data source when using web search."""
 
@@ -139,13 +148,34 @@ class ConversationalAnalyticsAgent:
     async def run_with_tools(
         self,
         message: str,
-        session_id: str
+        session_id: str,
+        *,
+        system_prompt_override: Optional[str] = None,
+        tool_allowlist: Optional[List[str]] = None,
+        plan_steps_override: Optional[List[Dict[str, Any]]] = None,
+        agent_label: Optional[str] = None,
+        agent_mode: Optional[str] = None,
     ) -> AsyncGenerator[str, None]:
         """Function: run_with_tools — called from conversational_analytics.routes.chat stream_chat/chat endpoints to drive SSE responses.
         Invokes: session_store for history, Anthropic streaming, and TOOL_EXECUTORS to emit SSE events.
         Purpose: Orchestrates Claude + tool use for conversational analytics conversations and streams client-facing events.
-        """
+        Supports: Optional prompt/tool/plan overrides for supervisor and specialist routing."""
         debug_mode = settings.debug_mode
+        start_total = time.monotonic()
+        
+        # Clear previous process visualization when running standalone; supervisor handles its own root nodes
+        if not agent_mode:
+            yield process_clear_event()
+        yield process_node_event(
+            node_id="request_received",
+            node_type="input",
+            label="Request Received",
+            status="completed",
+            description=f"User message: {message[:100]}{'...' if len(message) > 100 else ''}",
+        )
+        
+        if debug_mode and agent_label:
+            yield debug_event("agent", f"Agent mode: {agent_label}", {"agent_mode": agent_mode or agent_label})
         
         # Debug: Session initialization
         if debug_mode:
@@ -167,15 +197,43 @@ class ConversationalAnalyticsAgent:
             yield debug_event("agent", f"User message received ({len(message)} chars)")
 
         # Detect applicable skill and build augmented system prompt
+        yield process_node_event(
+            node_id="skill_detection",
+            node_type="decision",
+            label="Skill Detection",
+            status="running",
+            parent_id="request_received",
+            description="Analyzing request to select appropriate skill",
+        )
+        yield process_edge_event("request_received", "skill_detection", animated=True)
+        
         selected_skill = select_skill(message)
-        system_prompt = SYSTEM_PROMPT
+        system_prompt = system_prompt_override or SYSTEM_PROMPT
         resolved_slots: Dict[str, Any] = {}
         
         if selected_skill:
             skill_text = load_skill_content(selected_skill)
-            system_prompt = f"{SYSTEM_PROMPT}\n\nSkill Activated: {selected_skill.name} (id: {selected_skill.skill_id})\nFollow this guidance:\n{skill_text}"
+            system_prompt = f"{system_prompt}\n\nSkill Activated: {selected_skill.name} (id: {selected_skill.skill_id})\nFollow this guidance:\n{skill_text}"
             skill_download_url = f"/api/conv-analytics/skills/{selected_skill.skill_id}"
             yield skill_event(selected_skill.skill_id, selected_skill.name, skill_download_url)
+            
+            # Update skill detection node with result
+            yield process_update_event(
+                node_id="skill_detection",
+                status="completed",
+                summary=f"Selected: {selected_skill.name}",
+            )
+            yield process_node_event(
+                node_id="skill_active",
+                node_type="agent",
+                label=selected_skill.name,
+                status="running",
+                parent_id="skill_detection",
+                description=f"Skill '{selected_skill.name}' is now active",
+                data={"skill_id": selected_skill.skill_id},
+            )
+            yield process_edge_event("skill_detection", "skill_active", label="matched", animated=True)
+            
             if debug_mode:
                 yield debug_event("agent", f"Skill selected: {selected_skill.skill_id}", {"skill": selected_skill.skill_id})
             
@@ -201,6 +259,23 @@ class ConversationalAnalyticsAgent:
                     import uuid
                     request_id = str(uuid.uuid4())
                     options = _build_hitl_options(ambiguous_slots, max_options=3)
+                    
+                    # Emit HITL decision node
+                    yield process_node_event(
+                        node_id="hitl_required",
+                        node_type="decision",
+                        label="User Input Required",
+                        status="running",
+                        parent_id="skill_active" if selected_skill else "skill_detection",
+                        description=f"Ambiguous slots: {', '.join(s.name for s in ambiguous_slots)}",
+                    )
+                    yield process_edge_event(
+                        "skill_active" if selected_skill else "skill_detection",
+                        "hitl_required",
+                        edge_type="decision_yes",
+                        label="needs clarification",
+                        animated=True,
+                    )
                     
                     # Store pending selection for validation on reply
                     session.set_pending_selection(
@@ -238,7 +313,7 @@ class ConversationalAnalyticsAgent:
                 system_prompt += f"\n\nResolved Slots (use these values for the analysis):\n{slots_text}"
         
         yield status_event("Connecting to Claude...")
-        plan_steps = [
+        plan_steps = plan_steps_override or [
             {"id": "understand", "label": "Understand question", "status": "running"},
             {"id": "sql", "label": "Query comp_financials", "status": "pending"},
             {"id": "visualize", "label": "Build chart", "status": "pending"},
@@ -246,6 +321,21 @@ class ConversationalAnalyticsAgent:
         ]
         yield plan_event(plan_steps)
         yield thinking_event("query_analysis", "running", "Analyzing your question...")
+        
+        # Emit Claude API node
+        yield process_node_event(
+            node_id="claude_api",
+            node_type="agent",
+            label="Claude Analysis",
+            status="running",
+            parent_id="skill_active" if selected_skill else "skill_detection",
+            description="Connecting to Claude for analysis",
+        )
+        yield process_edge_event(
+            "skill_active" if selected_skill else "skill_detection",
+            "claude_api",
+            animated=True,
+        )
         
         try:
             # Build messages with history
@@ -270,11 +360,21 @@ class ConversationalAnalyticsAgent:
                 
                 # Stream the response for this iteration
                 streamed_text: List[str] = []
+                tools_to_use = ALL_TOOLS
+                if tool_allowlist:
+                    allow_set = set(tool_allowlist)
+                    tools_to_use = [tool for tool in ALL_TOOLS if tool.get("name") in allow_set]
+                    if debug_mode:
+                        yield debug_event("agent", "Tool allowlist applied", {"tools": list(allow_set)})
+                
+                tool_call_count = 0
+                iter_start = time.monotonic()
+
                 with self.client.messages.stream(
                     model=self.model,
                     max_tokens=4096,
                     system=system_prompt,
-                    tools=ALL_TOOLS,
+                    tools=tools_to_use,
                     messages=messages
                 ) as stream:
                     for event in stream:
@@ -282,8 +382,11 @@ class ConversationalAnalyticsAgent:
                         if getattr(event, "type", None) == "content_block_delta":
                             delta_text = getattr(event.delta, "text", None)
                             if delta_text:
-                                streamed_text.append(delta_text)
-                                yield content_event(delta_text)
+                                # Heuristic: drop raw JSON-like blobs to avoid leaking tool payloads
+                                stripped = delta_text.strip()
+                                if not (len(stripped) > 200 and (stripped.startswith("{") or stripped.startswith("["))):
+                                    streamed_text.append(delta_text)
+                                    yield content_event(delta_text)
                     response = stream.get_final_message()
                 
                 yield thinking_event("query_analysis", "completed", "Question understood")
@@ -310,6 +413,7 @@ class ConversationalAnalyticsAgent:
                     
                     for block in response.content:
                         if block.type == "tool_use":
+                            tool_call_count += 1
                             tool_name = block.name
                             tool_input = block.input
                             tool_use_id = block.id
@@ -336,6 +440,19 @@ class ConversationalAnalyticsAgent:
                             )
                             yield tool_start_event(tool_name, tool_input)
                             
+                            # Emit process node for tool execution
+                            tool_node_id = f"tool_{tool_use_id}"
+                            yield process_node_event(
+                                node_id=tool_node_id,
+                                node_type="tool",
+                                label=tool_name.replace("_", " ").title(),
+                                status="running",
+                                parent_id="claude_api",
+                                description=f"Executing tool: {tool_name}",
+                                data={"tool_input_keys": list(tool_input.keys()) if isinstance(tool_input, dict) else []},
+                            )
+                            yield process_edge_event("claude_api", tool_node_id, label="tool call", animated=True)
+                            
                             # Execute the tool
                             if is_web_search_tool(tool_name):
                                 # Web search is handled by Claude - result comes back in next response
@@ -357,6 +474,13 @@ class ConversationalAnalyticsAgent:
                                 f"tool_{tool_name}",
                                 "completed" if result.get("success", True) else "error",
                                 f"{tool_name} completed" if result.get("success", True) else f"{tool_name} failed: {result.get('error', 'Unknown error')}"
+                            )
+                            
+                            # Update tool process node
+                            yield process_update_event(
+                                node_id=tool_node_id,
+                                status="completed" if result.get("success", True) else "error",
+                                summary=f"{tool_name} {'succeeded' if result.get('success', True) else 'failed'}",
                             )
                             
                             # Send chart or data events if applicable
@@ -438,9 +562,27 @@ class ConversationalAnalyticsAgent:
             if final_content:
                 session.add_message("assistant", final_content)
             
+            # Emit final output node
+            yield process_node_event(
+                node_id="response_generated",
+                node_type="output",
+                label="Response Generated",
+                status="completed",
+                parent_id="claude_api",
+                description="Final response ready for user",
+            )
+            yield process_edge_event("claude_api", "response_generated", label="response", animated=False)
+            yield process_update_event("claude_api", "completed", "Analysis complete")
+            
             yield thinking_event("generating_response", "completed", "Response ready")
             yield plan_update_event("analysis", "completed", "Answer ready")
             yield done_event()
+            if debug_mode:
+                elapsed_ms = int((time.monotonic() - start_total) * 1000)
+                yield debug_event("tool", "Tool/flow stats", {
+                    "tool_call_count": tool_call_count,
+                    "elapsed_ms": elapsed_ms,
+                })
             
         except anthropic.APIError as e:
             import traceback

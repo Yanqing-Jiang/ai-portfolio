@@ -32,10 +32,11 @@ class PendingSelection:
 
 @dataclass
 class Session:
-    """A conversation session with history and context."""
+    """A conversation session with history, context, and specialist outputs."""
     session_id: str
     messages: List[Message] = field(default_factory=list)
     context: Dict[str, Any] = field(default_factory=dict)
+    specialist_outputs: Dict[str, Any] = field(default_factory=dict)
     created_at: float = field(default_factory=time.time)
     last_accessed: float = field(default_factory=time.time)
     pending_selection: Optional[PendingSelection] = None
@@ -104,6 +105,18 @@ class Session:
     def get_pending_selection(self) -> Optional[PendingSelection]:
         """Function: get_pending_selection — returns the pending HITL request, if any."""
         return self.pending_selection
+
+    def set_specialist_output(self, specialist_id: str, payload: Dict[str, Any]) -> None:
+        """Function: set_specialist_output — stores the latest output for a specialist run.
+        Called from: supervisor orchestrator after a specialist completes.
+        Invokes: updates in-memory map keyed by specialist id.
+        Purpose: Preserve structured results for downstream supervisor synthesis and UI."""
+        self.specialist_outputs[specialist_id] = payload
+        self.last_accessed = time.time()
+
+    def get_specialist_outputs(self) -> Dict[str, Any]:
+        """Function: get_specialist_outputs — returns all recorded specialist outputs."""
+        return self.specialist_outputs
 
 
 class SessionStore:

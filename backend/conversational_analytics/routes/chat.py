@@ -10,6 +10,7 @@ from ..agent import (
     MissingDependencyError,
     get_conversational_analytics_agent,
 )
+from ..supervisor import SupervisorOrchestrator, get_supervisor_orchestrator
 from ..models import ChatRequest, SelectionReply
 from ..memory import session_store
 from rate_limiter import conversational_analytics_rate_limit
@@ -31,6 +32,17 @@ def _get_agent() -> ConversationalAnalyticsAgent:
         raise HTTPException(status_code=503, detail=str(exc))
 
 
+def _get_supervisor() -> SupervisorOrchestrator:
+    """Function: _get_supervisor — fetches the supervisor orchestrator for multi-agent routing.
+    Called from: stream_chat and chat when agent_mode is supplied.
+    Invokes: get_supervisor_orchestrator to reuse a singleton supervisor."""
+    try:
+        return get_supervisor_orchestrator()
+    except MissingDependencyError as exc:
+        logger.error("Conversational Analytics unavailable (supervisor): %s", exc)
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
 @router.post("/stream")
 async def stream_chat(
     request: ChatRequest,
@@ -38,13 +50,19 @@ async def stream_chat(
     _: None = Depends(conversational_analytics_rate_limit),
 ):
     """Function: stream_chat — called by components/conversationalAnalytics/hooks/useSSEStream.ts to stream Claude responses.
-    Invokes: _get_agent().run_with_tools to produce SSE events.
+    Invokes: supervisor.run_with_tools when agent_mode provided, otherwise _get_agent().run_with_tools.
     Purpose: Primary streaming endpoint for conversational analytics with rate limiting."""
-    agent = _get_agent()
+    use_supervisor = request.agent_mode is not None
+    supervisor = _get_supervisor() if use_supervisor else None
+    agent = _get_agent() if not use_supervisor else None
 
     async def event_generator():
-        async for event in agent.run_with_tools(request.message, request.session_id):
-            yield event
+        if supervisor:
+            async for event in supervisor.run(request.message, request.session_id, request.agent_mode or "auto"):
+                yield event
+        else:
+            async for event in agent.run_with_tools(request.message, request.session_id):  # type: ignore
+                yield event
     
     return StreamingResponse(
         event_generator(),
@@ -64,15 +82,23 @@ async def chat(
     _: None = Depends(conversational_analytics_rate_limit),
 ):
     """Function: chat — used by non-SSE clients for conversational analytics.
-    Invokes: _get_agent().run_with_tools and aggregates the streamed events.
+    Invokes: supervisor.run when agent_mode is provided, else _get_agent().run_with_tools, and aggregates the streamed events.
     Purpose: Provide a single-response alternative to the streaming endpoint."""
-    agent = _get_agent()
+    use_supervisor = request.agent_mode is not None
+    supervisor = _get_supervisor() if use_supervisor else None
+    agent = _get_agent() if not use_supervisor else None
     events = []
     content_parts = []
     chart_config = None
     data_result = None
     
-    async for event in agent.run_with_tools(request.message, request.session_id):
+    event_source = (
+        supervisor.run(request.message, request.session_id, request.agent_mode or "auto")
+        if supervisor
+        else agent.run_with_tools(request.message, request.session_id)  # type: ignore
+    )
+    
+    async for event in event_source:
         # Parse the SSE event
         if event.startswith("data: "):
             import json

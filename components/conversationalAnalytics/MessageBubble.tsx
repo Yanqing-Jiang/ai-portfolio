@@ -468,6 +468,7 @@ interface MessageBubbleProps {
   dataResult?: { rows: unknown[]; columns: string[] } | null;
   newsResult?: NewsResult | null;
   isStreaming?: boolean;
+  agentLabel?: string | null;
 }
 
 const MessageBubble: React.FC<MessageBubbleProps> = ({
@@ -477,6 +478,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
   dataResult,
   newsResult,
   isStreaming,
+  agentLabel,
 }) => {
   const isUser = role === 'user';
   const isTradingView = chartConfig?.widget_type === 'tradingview';

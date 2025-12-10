@@ -3,7 +3,7 @@ import { authService } from '../../../services/auth';
 import { configService } from '../../../services/config';
 
 export interface SSEEvent {
-    type: 'status' | 'thinking' | 'tool_start' | 'tool_end' | 'content' | 'chart' | 'data' | 'news' | 'skill' | 'plan' | 'plan_update' | 'done' | 'error' | 'debug' | 'selection_request' | 'selection_timeout' | 'selection_cancelled';
+    type: 'status' | 'thinking' | 'tool_start' | 'tool_end' | 'content' | 'chart' | 'data' | 'news' | 'skill' | 'plan' | 'plan_update' | 'done' | 'error' | 'debug' | 'selection_request' | 'selection_timeout' | 'selection_cancelled' | 'agent' | 'handoff' | 'process_node' | 'process_edge' | 'process_update' | 'process_clear';
     data: Record<string, unknown>;
 }
 
@@ -55,6 +55,38 @@ export interface SkillInfo {
     download_url: string;
 }
 
+export interface AgentInfo {
+    id: string;
+    name: string;
+    role: string;
+}
+
+export interface HandoffInfo {
+    from: string;
+    to: string;
+    reason?: string;
+    timestamp: number;
+}
+
+export interface ProcessNode {
+    node_id: string;
+    node_type: 'input' | 'decision' | 'action' | 'tool' | 'agent' | 'routing' | 'output';
+    label: string;
+    status: 'pending' | 'running' | 'completed' | 'error' | 'skipped';
+    parent_id?: string;
+    description?: string;
+    data?: Record<string, unknown>;
+    timestamp: number;
+}
+
+export interface ProcessEdge {
+    from_node: string;
+    to_node: string;
+    edge_type: 'default' | 'decision_yes' | 'decision_no' | 'handoff';
+    label?: string;
+    animated: boolean;
+}
+
 export interface ThinkingStep {
     step: string;
     status: 'pending' | 'running' | 'completed' | 'error';
@@ -70,6 +102,7 @@ export interface PlanStep {
 
 export interface UseSSEStreamResult {
     isStreaming: boolean;
+    isPaused: boolean;
     content: string;
     thinkingSteps: ThinkingStep[];
     chartConfig: Record<string, unknown> | null;
@@ -82,7 +115,14 @@ export interface UseSSEStreamResult {
     errorDetails: string | null;
     debugLogs: DebugLog[];
     pendingSelection: SelectionRequest | null;
-    sendMessage: (message: string, sessionId: string) => void;
+    activeAgent: AgentInfo | null;
+    handoffs: HandoffInfo[];
+    processNodes: ProcessNode[];
+    processEdges: ProcessEdge[];
+    lastAgentLabel: string | null;
+    sendMessage: (message: string, sessionId: string, agentMode?: string | null, options?: { resume?: boolean }) => void;
+    pauseStream: () => void;
+    resumeLast: () => void;
     submitSelection: (sessionId: string, optionId: string | null, customValue: string | null) => Promise<void>;
     cancelSelection: () => void;
     reset: () => void;
@@ -95,6 +135,7 @@ export interface UseSSEStreamResult {
  */
 export function useSSEStream(apiUrl: string = '/api/conv-analytics/stream'): UseSSEStreamResult {
     const [isStreaming, setIsStreaming] = useState(false);
+    const [isPaused, setIsPaused] = useState(false);
     const [content, setContent] = useState('');
     const [thinkingSteps, setThinkingSteps] = useState<ThinkingStep[]>([]);
     const [chartConfig, setChartConfig] = useState<Record<string, unknown> | null>(null);
@@ -107,8 +148,16 @@ export function useSSEStream(apiUrl: string = '/api/conv-analytics/stream'): Use
     const [errorDetails, setErrorDetails] = useState<string | null>(null);
     const [debugLogs, setDebugLogs] = useState<DebugLog[]>([]);
     const [pendingSelection, setPendingSelection] = useState<SelectionRequest | null>(null);
+    const [activeAgent, setActiveAgent] = useState<AgentInfo | null>(null);
+    const [handoffs, setHandoffs] = useState<HandoffInfo[]>([]);
+    const [processNodes, setProcessNodes] = useState<ProcessNode[]>([]);
+    const [processEdges, setProcessEdges] = useState<ProcessEdge[]>([]);
+    const [lastAgentLabel, setLastAgentLabel] = useState<string | null>(null);
 
     const abortControllerRef = useRef<AbortController | null>(null);
+    const lastMessageRef = useRef<string | null>(null);
+    const lastSessionRef = useRef<string | null>(null);
+    const lastAgentModeRef = useRef<string | null>(null);
 
     // Function: reset — called by ConversationalAnalyticsPage after a turn to clear prior stream state and errors.
     const reset = useCallback(() => {
@@ -124,6 +173,11 @@ export function useSSEStream(apiUrl: string = '/api/conv-analytics/stream'): Use
         setErrorDetails(null);
         setDebugLogs([]);
         setPendingSelection(null);
+        setActiveAgent(null);
+        setHandoffs([]);
+        setProcessNodes([]);
+        setProcessEdges([]);
+        setIsPaused(false);
     }, []);
 
     // Function: cancelSelection — clears pending HITL selection without submitting
@@ -170,20 +224,35 @@ export function useSSEStream(apiUrl: string = '/api/conv-analytics/stream'): Use
     }, [pendingSelection]);
 
     // Function: sendMessage — called by ConversationalAnalyticsPage form submit; posts the user message to Claude SSE backend and streams events.
-    const sendMessage = useCallback(async (message: string, sessionId: string) => {
+    const sendMessage = useCallback(async (message: string, sessionId: string, agentMode?: string | null, options?: { resume?: boolean }) => {
         // Abort any existing stream
         if (abortControllerRef.current) {
             abortControllerRef.current.abort();
         }
 
-        reset();
+        if (!options?.resume) {
+            reset();
+        } else {
+            // keep existing partial UI when resuming
+            setError(null);
+            setErrorDetails(null);
+            setPendingSelection(null);
+            setIsPaused(false);
+        }
         setIsStreaming(true);
         abortControllerRef.current = new AbortController();
+        lastMessageRef.current = message;
+        lastSessionRef.current = sessionId;
+        lastAgentModeRef.current = agentMode || null;
 
         try {
             const backendUrl = configService.getBackendUrl();
             const resolvedUrl = apiUrl.startsWith('http') ? apiUrl : `${backendUrl}${apiUrl}`;
             const authHeaders = await authService.getAuthHeaders();
+            const payload: Record<string, unknown> = { message, session_id: sessionId };
+            if (agentMode) {
+                payload.agent_mode = agentMode;
+            }
 
             const response = await fetch(resolvedUrl, {
                 method: 'POST',
@@ -191,7 +260,7 @@ export function useSSEStream(apiUrl: string = '/api/conv-analytics/stream'): Use
                     'Content-Type': 'application/json',
                     ...authHeaders,
                 },
-                body: JSON.stringify({ message, session_id: sessionId }),
+                body: JSON.stringify(payload),
                 signal: abortControllerRef.current.signal,
             });
 
@@ -249,6 +318,20 @@ export function useSSEStream(apiUrl: string = '/api/conv-analytics/stream'): Use
             abortControllerRef.current = null;
         }
     }, [apiUrl, reset]);
+
+    const pauseStream = useCallback(() => {
+        if (abortControllerRef.current) {
+            abortControllerRef.current.abort();
+            abortControllerRef.current = null;
+            setIsStreaming(false);
+            setIsPaused(true);
+        }
+    }, []);
+
+    const resumeLast = useCallback(() => {
+        if (!lastMessageRef.current || !lastSessionRef.current) return;
+        sendMessage(lastMessageRef.current, lastSessionRef.current, lastAgentModeRef.current, { resume: true });
+    }, [sendMessage]);
 
     // Function: handleEvent — invoked for each SSE payload to keep UI state in sync with Claude agent thinking/data.
     const handleEvent = useCallback((event: SSEEvent) => {
@@ -345,6 +428,27 @@ export function useSSEStream(apiUrl: string = '/api/conv-analytics/stream'): Use
                 }]);
                 break;
 
+            case 'agent':
+                setActiveAgent({
+                    id: event.data.id as string,
+                    name: event.data.name as string,
+                    role: event.data.role as string,
+                });
+                setLastAgentLabel(`${event.data.name} • ${event.data.role}`);
+                break;
+
+            case 'handoff':
+                setHandoffs(prev => [
+                    ...prev,
+                    {
+                        from: event.data.from as string,
+                        to: event.data.to as string,
+                        reason: event.data.reason as string | undefined,
+                        timestamp: Date.now() / 1000,
+                    },
+                ]);
+                break;
+
             case 'selection_request':
                 setPendingSelection({
                     request_id: event.data.request_id as string,
@@ -361,8 +465,80 @@ export function useSSEStream(apiUrl: string = '/api/conv-analytics/stream'): Use
                 setPendingSelection(null);
                 break;
 
+            case 'process_node':
+                setProcessNodes(prev => {
+                    const newNode: ProcessNode = {
+                        node_id: event.data.node_id as string,
+                        node_type: event.data.node_type as ProcessNode['node_type'],
+                        label: event.data.label as string,
+                        status: event.data.status as ProcessNode['status'],
+                        parent_id: event.data.parent_id as string | undefined,
+                        description: event.data.description as string | undefined,
+                        data: event.data.data as Record<string, unknown> | undefined,
+                        timestamp: event.data.timestamp as number,
+                    };
+                    // Check if node already exists, update it
+                    const existingIndex = prev.findIndex(n => n.node_id === newNode.node_id);
+                    if (existingIndex >= 0) {
+                        const updated = [...prev];
+                        updated[existingIndex] = newNode;
+                        return updated;
+                    }
+                    return [...prev, newNode];
+                });
+                break;
+
+            case 'process_edge':
+                setProcessEdges(prev => {
+                    const newEdge: ProcessEdge = {
+                        from_node: event.data.from_node as string,
+                        to_node: event.data.to_node as string,
+                        edge_type: (event.data.edge_type as ProcessEdge['edge_type']) || 'default',
+                        label: event.data.label as string | undefined,
+                        animated: event.data.animated as boolean || false,
+                    };
+                    // Avoid duplicate edges
+                    const exists = prev.some(
+                        e => e.from_node === newEdge.from_node && e.to_node === newEdge.to_node
+                    );
+                    if (exists) return prev;
+                    return [...prev, newEdge];
+                });
+                break;
+
+            case 'process_update':
+                setProcessNodes(prev => prev.map(node => {
+                    if (node.node_id === event.data.node_id) {
+                        return {
+                            ...node,
+                            status: event.data.status as ProcessNode['status'],
+                            description: (event.data.summary as string) || node.description,
+                            data: event.data.data ? { ...node.data, ...event.data.data as Record<string, unknown> } : node.data,
+                            timestamp: event.data.timestamp as number || node.timestamp,
+                        };
+                    }
+                    return node;
+                }));
+                break;
+
+            case 'process_clear':
+                setProcessNodes([]);
+                setProcessEdges([]);
+                setLastAgentLabel(null);
+                break;
+
             case 'done':
-                // Stream completed
+                // Stream completed: mark all nodes as completed unless errored
+                setProcessNodes(prev => prev.map(node => (
+                    node.status === 'error'
+                        ? node
+                        : { ...node, status: 'completed' }
+                )));
+                setPlanSteps(prev => prev.map(step => (
+                    step.status === 'error'
+                        ? step
+                        : { ...step, status: 'completed' }
+                )));
                 break;
         }
     }, []);
@@ -390,9 +566,16 @@ export function useSSEStream(apiUrl: string = '/api/conv-analytics/stream'): Use
         errorDetails,
         debugLogs,
         pendingSelection,
+        activeAgent,
+        handoffs,
+        processNodes,
+        processEdges,
         sendMessage,
+        pauseStream,
+        resumeLast,
         submitSelection,
         cancelSelection,
         reset,
+        isPaused,
     };
 }

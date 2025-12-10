@@ -8,19 +8,29 @@ import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { theme } from './styles';
 
+interface SuggestionItem {
+  label: string;
+  prompt: string;
+  icon: string;
+}
+
 interface ChatInputProps {
   value: string;
   onChange: (value: string) => void;
   onSubmit: () => void;
-  disabled: boolean;
+  onPause: () => void;
+  onResume: () => void;
+  isStreaming: boolean;
+  isPaused: boolean;
   placeholder?: string;
+  suggestionsOverride?: SuggestionItem[];
 }
 
-const suggestions = [
+const baseSuggestions: SuggestionItem[] = [
   { label: 'Market share', prompt: 'Market share of NVDA vs peers over last 5 years', icon: '📊' },
   { label: 'Revenue compare', prompt: 'Compare revenue for NVDA, AMD, INTC by year (5y)', icon: '📈' },
   { label: 'Revenue growth', prompt: 'YoY revenue growth for NVDA and AMD by quarter', icon: '📉' },
-  { label: 'Margins vs peers', prompt: 'Net margin vs peers for TXN over last 5 years', icon: '💹' },
+  { label: 'Margins vs peers', prompt: 'Net margin vs peers for NVDA over last 5 years', icon: '💹' },
   { label: 'Margin growth', prompt: 'Operating margin growth vs peers for AMD by quarter', icon: '🔺' },
 ];
 
@@ -28,12 +38,17 @@ const ChatInput: React.FC<ChatInputProps> = ({
   value,
   onChange,
   onSubmit,
-  disabled,
+  onPause,
+  onResume,
+  isStreaming,
+  isPaused,
   placeholder = 'Ask about semiconductor financials...',
+  suggestionsOverride,
 }) => {
   const [isFocused, setIsFocused] = useState(false);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const suggestions = suggestionsOverride && suggestionsOverride.length > 0 ? suggestionsOverride : baseSuggestions;
 
   // Auto-resize textarea
   useEffect(() => {
@@ -46,7 +61,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      if (!disabled && value.trim()) {
+      if (!isStreaming && !isPaused && value.trim()) {
         onSubmit();
       }
     }
@@ -133,7 +148,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
               setTimeout(() => setShowSuggestions(false), 200);
             }}
             placeholder={placeholder}
-            disabled={disabled}
+            disabled={isStreaming && !isPaused}
             rows={1}
             className="flex-1 px-4 py-3 bg-transparent resize-none outline-none text-sm leading-relaxed"
             style={{
@@ -146,28 +161,33 @@ const ChatInput: React.FC<ChatInputProps> = ({
           {/* Send button */}
           <div className="p-2">
             <motion.button
-              onClick={onSubmit}
-              disabled={disabled || !value.trim()}
+              onClick={() => {
+                if (isStreaming && !isPaused) {
+                  onPause();
+                } else if (isPaused) {
+                  onResume();
+                } else {
+                  onSubmit();
+                }
+              }}
+              disabled={!isPaused && !isStreaming && !value.trim()}
               className="w-10 h-10 rounded-xl flex items-center justify-center transition-all"
               style={{
-                background: value.trim() && !disabled
+                background: (isStreaming && !isPaused) || isPaused || value.trim()
                   ? theme.colors.user.bg
                   : theme.colors.bg.elevated,
-                color: value.trim() && !disabled
+                color: (isStreaming && !isPaused) || isPaused || value.trim()
                   ? theme.colors.user.text
                   : theme.colors.text.muted,
-                cursor: disabled || !value.trim() ? 'not-allowed' : 'pointer',
+                cursor: (!isPaused && !isStreaming && !value.trim()) ? 'not-allowed' : 'pointer',
               }}
-              whileHover={value.trim() && !disabled ? { scale: 1.05 } : {}}
-              whileTap={value.trim() && !disabled ? { scale: 0.95 } : {}}
+              whileHover={(isStreaming || isPaused || value.trim()) ? { scale: 1.05 } : {}}
+              whileTap={(isStreaming || isPaused || value.trim()) ? { scale: 0.95 } : {}}
             >
-              {disabled ? (
-                <motion.div
-                  className="w-4 h-4 rounded-full border-2 border-current"
-                  style={{ borderTopColor: 'transparent' }}
-                  animate={{ rotate: 360 }}
-                  transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
-                />
+              {isStreaming && !isPaused ? (
+                <span className="text-xs font-semibold">Pause</span>
+              ) : isPaused ? (
+                <span className="text-xs font-semibold">Resume</span>
               ) : (
                 <svg
                   width="18"
@@ -178,6 +198,9 @@ const ChatInput: React.FC<ChatInputProps> = ({
                   strokeWidth="2"
                   strokeLinecap="round"
                   strokeLinejoin="round"
+                  style={{
+                    opacity: value.trim() ? 1 : 0.35,
+                  }}
                 >
                   <line x1="22" y1="2" x2="11" y2="13" />
                   <polygon points="22 2 15 22 11 13 2 9 22 2" />
