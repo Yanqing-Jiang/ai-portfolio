@@ -323,6 +323,30 @@ export const useAnalyticsSqlStream = () => {
           streamHook.setCurrentStatus('Analysis complete');
           break;
 
+        case 'errors': {
+          const resolvedStep = normalizeStepId(eventData.step) || 'analysis';
+          const errorList = Array.isArray(eventData?.errors)
+            ? (eventData.errors as string[]).filter(Boolean)
+            : [];
+          const message =
+            eventData.message ||
+            eventData.error ||
+            (errorList.length ? errorList.join(' | ') : 'An error occurred');
+          stepsHook.updateStepStatus(
+            resolvedStep,
+            'error',
+            toThinkingList(eventData.thinking).concat(errorList.length ? errorList : message ? [message] : []),
+            extractStepDetails(eventData),
+            eventData.elapsed_ms ?? eventData.elapsed,
+            eventData.ts ?? eventData.timestamp,
+            eventData.sequence ?? eventData.seq,
+            eventData.parallel_group ?? eventData.parallelGroup,
+          );
+          streamHook.setError(message);
+          streamHook.setCurrentStatus(`Error: ${message}`);
+          break;
+        }
+
         case 'error': {
           const resolvedStep = normalizeStepId(eventData.step) || 'unknown';
           const message = eventData.message || eventData.error || 'An error occurred';

@@ -4,8 +4,37 @@ const looksLikeChartSpec = (value: any) => {
   if (!value || typeof value !== 'object') return false;
   if (Array.isArray((value as any).series) && (value as any).series.length > 0) return true;
   if (Array.isArray((value as any).dataset) && (value as any).dataset.length > 0) return true;
+  if (value && typeof value === 'object' && Array.isArray((value as any).dataset?.source)) return true;
   if ((value as any).xAxis || (value as any).yAxis || (value as any).tooltip || (value as any).legend) return true;
   if ((value as any).meta && typeof (value as any).meta === 'object') return true;
+  return false;
+};
+
+const hasDatasetEntries = (candidate: any): boolean => {
+  if (!candidate) {
+    return false;
+  }
+  if (Array.isArray(candidate)) {
+    return candidate.some((entry) => {
+      if (!entry) return false;
+      if (Array.isArray(entry)) {
+        return entry.length > 0;
+      }
+      if (typeof entry === 'object') {
+        const source = (entry as any).source;
+        if (Array.isArray(source)) return source.length > 0;
+        return Object.keys(entry).length > 0;
+      }
+      return false;
+    });
+  }
+  if (typeof candidate === 'object') {
+    const source = (candidate as any).source;
+    if (Array.isArray(source)) {
+      return source.length > 0;
+    }
+    return Object.keys(candidate).length > 0;
+  }
   return false;
 };
 
@@ -1194,6 +1223,8 @@ export const hydrateChartSpec = (spec: any) => {
 
   return dedupePercentShadowSeries(normalizePercentSeriesData(normalizeSeriesNumericValues(hydrated), spec));
 };
+
+// Function: isValidChartSpec — called from SqlAnalyticsPage and ProcessPanel to guard ChartCard rendering; validates the option shape via hydrateChartSpec so we only mount ECharts when data is present.
 export const isValidChartSpec = (spec: any) => {
   try {
     const option = resolveChartSpecOption(spec) ?? (looksLikeChartSpec(spec) ? spec : null);
@@ -1211,8 +1242,8 @@ export const isValidChartSpec = (spec: any) => {
         )
       : false;
 
-    const hasDataset = Array.isArray((target as any).dataset) ? (target as any).dataset.length > 0 : false;
-    const hasDatasets = Array.isArray((target as any).datasets) ? (target as any).datasets.length > 0 : false;
+    const hasDataset = hasDatasetEntries((target as any).dataset);
+    const hasDatasets = hasDatasetEntries((target as any).datasets);
     const hasRawData = Array.isArray(option?.meta?.rawData) ? option.meta.rawData.length > 0 : false;
 
     return hasSeriesData || hasDataset || hasDatasets || hasRawData;

@@ -998,6 +998,7 @@ Rules:
                 "step": "sql_error"
             }
     
+    # Function: _echarts_agent — called from stream_analysis to convert SQL result rows into an ECharts option; emits chart_generated SSE payload that the frontend renders; keeps chart shaping logic server-side so the UI stays lightweight.
     async def _echarts_agent(self, state: WorkflowState) -> WorkflowState:
         """Stage 2: Convert query results into ECharts visualizations"""
         try:
@@ -1008,40 +1009,112 @@ Rules:
             
             data = state["data"]
             print(f"[ECHARTS AGENT] Processing {len(data)} data rows")
-            
-            # Analyze data structure for chart type determination
-            has_time_data = any(
-                row.get('date') or row.get('calendar_quarter') or (row.get('calendar_year') is not None)
-                for row in data
-            )
-            unique_tickers = list(set(row.get('ticker', '') for row in data if row.get('ticker')))
-            unique_metrics = list(set(row.get('metric', '') for row in data if row.get('metric')))
-            
-            print(f"[ECHARTS AGENT] Data analysis - Time data: {has_time_data}, Tickers: {unique_tickers}, Metrics: {unique_metrics}")
-            
-            # Determine chart type based on data characteristics
-            chart_type = self._determine_chart_type(data, unique_tickers, unique_metrics, has_time_data, state.get('query', ''))
-            print(f"[ECHARTS AGENT] Determined chart type: {chart_type}")
-            
-            # Get years_back from state for chart title generation
-            years_back = state.get('years_back', 4)
-            print(f"[ECHARTS AGENT] Using years_back: {years_back}")
-            
-            # Generate a minimal ECharts specification without legacy helpers
+
+            temporal_keys = [
+                "calendar_quarter",
+                "calendar_quarter_num",
+                "calendar_year",
+                "date",
+                "period",
+                "period_end_date",
+                "period_start_date",
+            ]
+            value_skip_keys = {
+                "ticker",
+                "company",
+                "symbol",
+                "metric",
+                "tag_used",
+                "calendar_year",
+                "calendar_quarter",
+                "calendar_quarter_num",
+                "calendar_month",
+                "calendar_month_num",
+                "month",
+                "month_num",
+                "date",
+                "period",
+                "period_end_date",
+                "period_start_date",
+                "year",
+                "quarter",
+            }
+
+            def pick_value_field(sample: Dict[str, Any]) -> Optional[str]:
+                for key, val in sample.items():
+                    if key in value_skip_keys:
+                        continue
+                    if isinstance(val, (int, float)) and val is not None:
+                        return key
+                # Fallback to common names
+                for candidate in ("value", "amount", "revenue"):
+                    if candidate in sample:
+                        return candidate
+                return None
+
+            sample_row = data[0]
+            value_field = pick_value_field(sample_row)
+            if not value_field:
+                raise ValueError("Could not determine numeric field for chart")
+
+            def axis_tuple(row: Dict[str, Any]) -> Tuple[str, Union[int, float, str]]:
+                year = row.get("calendar_year") or row.get("year")
+                quarter = row.get("calendar_quarter_num") or row.get("calendar_quarter")
+                date_val = row.get("date") or row.get("period") or row.get("period_end_date") or row.get("period_start_date")
+                if quarter and year:
+                    return (f"Q{quarter} {year}", (int(year), int(quarter)))
+                if year:
+                    return (str(year), int(year))
+                if date_val:
+                    return (str(date_val), str(date_val))
+                return ("", "")
+
+            grouped: Dict[str, List[Tuple[str, Union[int, float, str], Any]]] = {}
+            for row in data:
+                ticker = row.get("ticker") or "Series"
+                label, sort_key = axis_tuple(row)
+                grouped.setdefault(ticker, []).append((label, sort_key, row.get(value_field)))
+
+            # Build unified x-axis labels ordered by sort_key
+            all_points = []
+            for series_rows in grouped.values():
+                all_points.extend(series_rows)
+            ordered_labels = []
+            seen_labels = set()
+            for label, sort_key, _ in sorted(all_points, key=lambda x: x[1]):
+                if label and label not in seen_labels:
+                    ordered_labels.append(label)
+                    seen_labels.add(label)
+
+            if not ordered_labels:
+                raise ValueError("No axis labels resolved for chart")
+
+            series_list = []
+            for ticker, series_rows in grouped.items():
+                label_to_value: Dict[str, Any] = {label: val for label, _sort, val in series_rows}
+                series_data = [label_to_value.get(label, None) for label in ordered_labels]
+                series_list.append(
+                    {
+                        "name": ticker,
+                        "type": "line" if any(k in sample_row for k in temporal_keys) else "bar",
+                        "data": series_data,
+                        "connectNulls": True,
+                    }
+                )
+
             chart_spec = {
                 "title": {"text": state.get("query", "Financial chart"), "left": "center"},
-                "dataset": {"source": data},
                 "tooltip": {"trigger": "axis"},
-                "xAxis": {"type": "category"},
-                "yAxis": {"type": "value"},
-                "series": [
-                    {
-                        "type": "line" if has_time_data else "bar",
-                        "encode": {"x": "calendar_quarter" if has_time_data else "ticker", "y": unique_metrics[0] if unique_metrics else "value"},
-                    }
-                ],
+                "xAxis": {"type": "category", "data": ordered_labels},
+                "yAxis": {"type": "value", "name": value_field.replace("_", " ").title()},
+                "series": series_list,
+                "meta": {
+                    "includedColumns": [value_field],
+                    "displayNames": {value_field: value_field.replace("_", " ").title()},
+                },
+                "dataset": {"source": data},
             }
-            print(f"[ECHARTS AGENT] Generated chart spec with keys: {list(chart_spec.keys())}")
+            print(f"[ECHARTS AGENT] Generated chart spec with keys: {list(chart_spec.keys())} using value field: {value_field}")
             
             return {
                 **state,

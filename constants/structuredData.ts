@@ -69,14 +69,23 @@ const toQuantitativeValue = (metric: MetricDefinition) => ({
 });
 
 export const buildWebsiteSchema = (projects: Project[]) => {
-  const projectPages = projects.map((project, index) => ({
+  const seenSlugs = new Set<string>();
+  const projectPages = projects.reduce((pages, project) => {
+    const slug = project.canonicalId ?? project.id;
+    if (seenSlugs.has(slug)) {
+      return pages;
+    }
+    seenSlugs.add(slug);
+    pages.push({
     '@type': 'WebPage',
     name: sanitizeText(project.seoTitle ?? project.title),
-    url: `${SITE_BASE_URL}/project/${project.id}`,
+      url: `${SITE_BASE_URL}/project/${slug}`,
     datePublished: project.datePublished ?? LANDING_SEO.updatedTime,
     dateModified: project.dateModified ?? LANDING_SEO.updatedTime,
-    position: index + 1,
-  }));
+      position: pages.length + 1,
+    });
+    return pages;
+  }, [] as any[]);
 
   return {
     '@context': 'https://schema.org',
@@ -192,6 +201,7 @@ const ensureDescription = (project: Project) => {
 };
 
 export const buildArticleSchema = (project: Project) => {
+  const slug = project.canonicalId ?? project.id;
   const keywords = sanitizeStringList(ensureKeywords(project));
   const description = sanitizeText(ensureDescription(project));
   const headline = sanitizeText(project.seoTitle ?? `${project.title} | AI Systems Project`);
@@ -220,7 +230,7 @@ export const buildArticleSchema = (project: Project) => {
         url: DEFAULT_OG_IMAGE,
       },
     },
-    mainEntityOfPage: `${SITE_BASE_URL}/project/${project.id}`,
+    mainEntityOfPage: `${SITE_BASE_URL}/project/${slug}`,
     image: resolvedImage,
     datePublished: project.datePublished ?? LANDING_SEO.updatedTime,
     dateModified: project.dateModified ?? LANDING_SEO.updatedTime,
@@ -251,9 +261,13 @@ export const buildLandingSchemas = (
 export const toNavigationFromProjects = (projects: Project[]): NavigationDefinition[] => {
   const uniqueProjectsMap = new Map<string, NavigationDefinition>();
   projects.forEach((project) => {
-    uniqueProjectsMap.set(project.id, {
+    const slug = project.canonicalId ?? project.id;
+    if (uniqueProjectsMap.has(slug)) {
+      return;
+    }
+    uniqueProjectsMap.set(slug, {
       name: sanitizeText(project.title),
-      url: `${SITE_BASE_URL}/project/${project.id}`,
+      url: `${SITE_BASE_URL}/project/${slug}`,
     });
   });
 
@@ -268,7 +282,7 @@ export const buildAiFactsPayload = (projects: Project[]) =>
     id: project.id,
     title: sanitizeText(project.seoTitle ?? project.title),
     description: sanitizeText(ensureDescription(project)),
-    url: `${SITE_BASE_URL}/project/${project.id}`,
+    url: `${SITE_BASE_URL}/project/${project.canonicalId ?? project.id}`,
     technologies: project.technologies,
     serviceTags: sanitizeStringList(project.serviceTags),
     statHighlights: sanitizeStringList(project.statHighlights),

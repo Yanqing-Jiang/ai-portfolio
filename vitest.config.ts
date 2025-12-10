@@ -15,5 +15,6 @@ export default defineConfig({
     setupFiles: './vitest.setup.ts',
     globals: true,
     css: true,
+    exclude: ['analytics-legacy/**', 'node_modules/**'],
   },
 });

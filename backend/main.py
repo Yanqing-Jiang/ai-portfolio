@@ -157,12 +157,26 @@ logging.basicConfig(
 app = FastAPI()
 app.include_router(linkedin_photo_router)
 
-# Conversational Analytics router
+# Conversational Analytics router (canonical analytics stack)
 try:
     from conversational_analytics.routes import router as conv_analytics_router
     app.include_router(conv_analytics_router)
+    logger.info("[STARTUP] Mounted Conversational Analytics router at /api/conv-analytics (canonical)")
 except ImportError as e:
     logger.warning("[STARTUP] Conversational Analytics not available: %s", e)
+
+
+@app.get("/api/analytics/canonical")
+async def analytics_canonical():
+    """Function: analytics_canonical — called by ops smoke checks and docs to confirm the canonical analytics router.
+    Called from: deployment health checks and docs/analytics references.
+    Invokes: no downstream services; returns the canonical router path and service label.
+    Purpose: Advertise that Conversational Analytics is the primary analytics API surface."""
+    return {
+        "service": "conversational-analytics",
+        "router": "/api/conv-analytics",
+        "status": "healthy",
+    }
 
 
 def _match_ai_crawlers(user_agent: str) -> List[str]:

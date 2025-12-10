@@ -2,7 +2,7 @@
 
 Interactive AI portfolio that combines a Vite-powered React frontend, a FastAPI backend, and multiple agentic workflows (analytics copilots, resume Q&A, LinkedIn headshot generator, and research assistants). The site prerenders static pages, streams live AI responses, and exposes JSON-LD/SEO metadata for every project.
 
-> For deeper diagrams and sequence flows, see `ARCHITECTURE.md`, `docs/linkedin-photo-*`, and `backend/analytics/ARCHITECTURE.md`.
+> For deeper diagrams and sequence flows, see `ARCHITECTURE.md`, `docs/architecture-conversational-analytics.md`, `docs/linkedin-photo-*`, and `backend/analytics/ARCHITECTURE.md` (legacy).
 
 ## Repository Layout
 
@@ -23,7 +23,8 @@ Interactive AI portfolio that combines a Vite-powered React frontend, a FastAPI 
 ## Key Features
 
 - **Agent showcase landing page** – Rich project grid, animations, and SEO tags (Open Graph, Twitter, JSON-LD) driven by `constants.ts` and `components/LandingPage.tsx`.
-- **Analytics copilot demos** – `/components/analytics` renders three flows (`planner-executor`, `single-agent`, `multi-agent`) backed by FastAPI streaming endpoints for SQL planning, charting, and insight narration.
+- **Next Gen Analytics (Agents)** – `/project/next-gen-analytics-agent` now runs on the Conversational Analytics backend (`/api/conv-analytics`) while retaining the original Next Gen naming and SEO; uses `components/conversationalAnalytics` for the chat UI.
+- **Legacy analytics (archived)** – The former Next Gen Analytics agent UI is stored under `analytics-legacy/next-gen-analytics-agent`; SQL flows remain under `components/analytics/sql` for comparison.
 - **LinkedIn Photo generator** – `/components/linkedinPhoto/Page.tsx` integrates the FastAPI `linkedin_photo` router to expand style prompts, call Gemini image editing, and manage user-facing transparency.
 - **Resume & research agents** – Backend endpoints in `backend/resume_agent.py` and `backend/research_agent.py` answer targeted queries with streaming reasoning.
 - **Structured SEO + prerendering** – `ProjectHelmet` and `constants/structuredData.ts` inject page-level metadata, while `scripts/prerender.mjs` prebuilds static HTML, sitemaps, and JSON assets.
@@ -37,7 +38,8 @@ Interactive AI portfolio that combines a Vite-powered React frontend, a FastAPI 
   - `services/config.ts` exposes runtime backend URLs.
   - `services/backendGeminiService.ts` handles Gemini text streaming.
 - **Feature modules**:
-  - `components/analytics/**` for SQL/memory demos, charts, and process timelines.
+  - `components/conversationalAnalytics/**` for the primary analytics chat.
+  - `components/analytics/**` for SQL demos and legacy comparisons (memory flow archived in `analytics-legacy/`).
   - `components/linkedinPhoto/**` for the 3-step headshot wizard.
   - `components/Chat.tsx` for shared agent chat UI.
   - `components/ProjectHelmet.tsx` for head/meta tags and schema injection.
@@ -50,7 +52,11 @@ Interactive AI portfolio that combines a Vite-powered React frontend, a FastAPI 
   - Loads `.env`, configures CORS, registers routers for analytics, research, resume, text-to-speech, payments, and LinkedIn photo flows.
   - Streams Server-Sent Events for analytics workflows (progress, tool calls, reasoning traces).
   - Serves pre-render assets (`public/ai-projects.json`) and health endpoints.
-- **Analytics suite** (`backend/analytics/`):
+- **Conversational analytics** (`backend/conversational_analytics/`):
+  - Claude-driven agent and supervisor orchestration with SSE endpoints at `/api/conv-analytics`.
+  - Skills, memory, and trading integrations live under `skills/`, `memory/`, and `tools/`.
+  - See `docs/architecture-conversational-analytics.md` for diagrams and flow notes.
+- **Analytics suite** (`backend/analytics/`, legacy):
   - `flows/workflow.py` orchestrates planner-executor, single-agent, and multi-agent pipelines.
   - SQL templates sourced from `backend/config/schemas/*.yaml`.
   - Uses LangGraph-inspired task graphs, ECharts-ready payloads, and telemetry for the frontend process panel.
@@ -98,6 +104,9 @@ py -m uvicorn main:app --reload --port 8000
 `backend/.env` expects (subset):
 ```
 GEMINI_API_KEY=...
+CLAUDE_API_KEY=...
+DATABASE_URL=...
+CONV_ANALYTICS_DEBUG=true
 OPENAI_API_KEY=...
 SUPABASE_JWT_SECRET=...
 REDIS_URL=redis://localhost:6379/0
@@ -138,7 +147,9 @@ Continuous integration should run `npm run build` and `pytest backend` before de
 ## Additional Resources
 
 - `ARCHITECTURE.md` – high-level diagrams and module references.
-- `backend/analytics/ARCHITECTURE.md` – detailed analytics flow documentation.
+- `docs/architecture-conversational-analytics.md` – diagrams and notes for the new analytics stack.
+- `backend/analytics/ARCHITECTURE.md` – detailed analytics flow documentation (legacy).
+- `analytics-legacy/next-gen-analytics-agent/README.md` – where the archived Next Gen Analytics UI lives.
 - `docs/linkedin-photo-rate-limit-plan.md` – rollout plan for global/regional safeguards.
 - `docs/linkedin-photo-next-steps.md` – backlog for the LinkedIn generator.
 - `docs/analytics-agent-openai-sdk-roadmap.md` – future work on the analytics OpenAI SDK integration.

@@ -3,7 +3,6 @@ import { motion } from 'framer-motion';
 import type { Project } from '../types';
 import Chat from './Chat';
 import { Page as AnalyticsSqlPage } from './analytics/sql';
-import { Page as AnalyticsMemoryPage } from './analytics/memory';
 import { Page as LinkedInPhotoPage } from './linkedinPhoto/Page';
 import { ConversationalAnalyticsPage } from './conversationalAnalytics';
 import LegacyProjectPage from './LegacyProjectPage';
@@ -13,7 +12,7 @@ interface ProjectViewProps {
   project: Project;
 }
 
-// Function: ProjectView — called from AppRoutes to decide which project UI to mount; routes Conversational Analytics to the Claude SSE page and falls back to generic chat for legacy cards.
+// Function: ProjectView — called from AppRoutes to decide which project UI to mount; routes Conversational Analytics (including the legacy Next Gen alias) to the Claude SSE page and falls back to generic chat for legacy cards.
 const ProjectView: React.FC<ProjectViewProps> = ({ project }) => {
   const [hasStartedChat, setHasStartedChat] = useState(false);
   const [isHeaderCollapsed, setIsHeaderCollapsed] = useState(false);
@@ -31,7 +30,7 @@ const ProjectView: React.FC<ProjectViewProps> = ({ project }) => {
     }
   };
 
-  if (project.id === 'conversational-analytics') {
+  if (project.id === 'conversational-analytics' || project.id === 'next-gen-analytics-agent') {
     return (
       <>
         <ProjectHelmet project={project} />
@@ -45,15 +44,6 @@ const ProjectView: React.FC<ProjectViewProps> = ({ project }) => {
       <>
         <ProjectHelmet project={project} />
         <AnalyticsSqlPage />
-      </>
-    );
-  }
-
-  if (project.id === 'next-gen-analytics-agent') {
-    return (
-      <>
-        <ProjectHelmet project={project} />
-        <AnalyticsMemoryPage />
       </>
     );
   }

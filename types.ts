@@ -1,5 +1,7 @@
 ﻿export interface Project {
   id: string;
+  canonicalId?: string;
+  noindex?: boolean;
   title: string;
   description: string;
   cardDescription?: string;

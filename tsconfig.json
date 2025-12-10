@@ -26,5 +26,11 @@
     "paths": {
       "@/*" :  ["./*"]
     }
-  }
+  },
+  "exclude": [
+    "node_modules",
+    "dist",
+    "dist-ssr",
+    "analytics-legacy/**"
+  ]
 }

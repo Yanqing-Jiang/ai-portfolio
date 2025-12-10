@@ -34,16 +34,18 @@ const truncate = (value: string, maxLength = 160) => {
 };
 
 export const ProjectHelmet: React.FC<ProjectHelmetProps> = ({ project }) => {
+  const canonicalSlug = project.canonicalId ?? project.id;
   const title = project.seoTitle ?? `${project.title} - ${SITE_NAME}`;
   const description = truncate(project.seoDescription ?? project.description);
   const keywords = project.seoKeywords?.length ? project.seoKeywords : project.technologies;
   const keywordList = keywords?.join(', ');
   const imageSource = project.ogImage ?? project.coverUrl ?? project.imageUrl ?? DEFAULT_OG_IMAGE;
   const image = useMemo(() => toAbsoluteUrl(imageSource), [imageSource]);
-  const canonicalUrl = `${SITE_BASE_URL}/project/${project.id}`;
+  const canonicalUrl = `${SITE_BASE_URL}/project/${canonicalSlug}`;
   const datePublished = project.datePublished ?? LANDING_SEO.updatedTime;
   const dateModified = project.dateModified ?? LANDING_SEO.updatedTime;
   const serviceTags = project.serviceTags ?? [];
+  const robotsContent = project.noindex ? 'noindex, nofollow' : 'index, follow';
   const breadcrumbSchema = useMemo(
     () =>
       buildBreadcrumbList([
@@ -84,7 +86,7 @@ export const ProjectHelmet: React.FC<ProjectHelmetProps> = ({ project }) => {
       {keywordList && <meta name="keywords" content={keywordList} />}
       <meta name="author" content={LANDING_SEO.author} />
       <meta name="subject" content={LANDING_SEO.subject} />
-      <meta name="robots" content="index, follow" />
+      <meta name="robots" content={robotsContent} />
       <meta name="theme-color" content={DEFAULT_THEME_COLOR} />
 
       <link rel="canonical" href={canonicalUrl} />

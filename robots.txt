@@ -1,4 +1,4 @@
-# Updated: 2025-10-09
+# Updated: 2025-12-10
 
 # --- AI answer-engine allowlist ---
 User-agent: GPTBot
