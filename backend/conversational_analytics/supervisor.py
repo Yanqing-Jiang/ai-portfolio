@@ -137,7 +137,7 @@ class SupervisorOrchestrator:
         Purpose: Keeps specialist prompts concise while inheriting the global system guidance."""
         config = SPECIALIST_CONFIGS.get(mode)
         suffix = config["prompt_suffix"] if config else ""
-        return f"{SYSTEM_PROMPT}\n\nSpecialist Mode: {mode}\n{suffix}\nUser message: {user_message}"
+        return f"{SYSTEM_PROMPT}\n\nSpecialist Mode: {mode}\n{suffix}"
 
     def _build_plan(self, mode: str) -> Optional[SupervisorPlan]:
         """Function: _build_plan — returns per-mode plan steps for UI."""

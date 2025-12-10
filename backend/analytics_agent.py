@@ -5,7 +5,7 @@ import traceback
 import warnings
 import yaml
 from pathlib import Path
-from typing import Dict, Any, List, Optional, AsyncGenerator, TypedDict, Tuple
+from typing import Dict, Any, List, Optional, AsyncGenerator, TypedDict, Tuple, Union
 
 import asyncpg
 import sys
@@ -1040,22 +1040,34 @@ Rules:
                 "quarter",
             }
 
-            def pick_value_field(sample: Dict[str, Any]) -> Optional[str]:
+            def pick_value_fields(sample: Dict[str, Any]) -> List[str]:
+                fields: List[str] = []
                 for key, val in sample.items():
                     if key in value_skip_keys:
                         continue
                     if isinstance(val, (int, float)) and val is not None:
-                        return key
-                # Fallback to common names
+                        fields.append(key)
+                # Fallback to common names if nothing found
                 for candidate in ("value", "amount", "revenue"):
-                    if candidate in sample:
-                        return candidate
-                return None
+                    if candidate in sample and candidate not in fields:
+                        fields.append(candidate)
+                return fields
 
             sample_row = data[0]
-            value_field = pick_value_field(sample_row)
-            if not value_field:
+            value_fields = pick_value_fields(sample_row)
+            if not value_fields:
                 raise ValueError("Could not determine numeric field for chart")
+            # Limit to a small number to keep charts readable
+            value_fields = value_fields[:4]
+            value_field = value_fields[0]
+
+            def is_percent_field(name: str) -> bool:
+                lower = name.lower()
+                return any(token in lower for token in ["percent", "pct", "share", "margin", "ratio", "yield"])
+
+            def is_currency_field(name: str) -> bool:
+                lower = name.lower()
+                return any(token in lower for token in ["revenue", "income", "profit", "expense", "rnd", "r&d", "capex"])
 
             def axis_tuple(row: Dict[str, Any]) -> Tuple[str, Union[int, float, str]]:
                 year = row.get("calendar_year") or row.get("year")
@@ -1069,11 +1081,14 @@ Rules:
                     return (str(date_val), str(date_val))
                 return ("", "")
 
-            grouped: Dict[str, List[Tuple[str, Union[int, float, str], Any]]] = {}
+            grouped: Dict[str, List[Tuple[str, Union[int, float, str], Dict[str, Any]]]] = {}
+            unique_tickers: List[str] = []
             for row in data:
                 ticker = row.get("ticker") or "Series"
                 label, sort_key = axis_tuple(row)
-                grouped.setdefault(ticker, []).append((label, sort_key, row.get(value_field)))
+                grouped.setdefault(ticker, []).append((label, sort_key, row))
+
+            unique_tickers = list(grouped.keys()) if grouped else []
 
             # Build unified x-axis labels ordered by sort_key
             all_points = []
@@ -1089,18 +1104,33 @@ Rules:
             if not ordered_labels:
                 raise ValueError("No axis labels resolved for chart")
 
-            series_list = []
-            for ticker, series_rows in grouped.items():
-                label_to_value: Dict[str, Any] = {label: val for label, _sort, val in series_rows}
-                series_data = [label_to_value.get(label, None) for label in ordered_labels]
-                series_list.append(
-                    {
-                        "name": ticker,
-                        "type": "line" if any(k in sample_row for k in temporal_keys) else "bar",
-                        "data": series_data,
-                        "connectNulls": True,
-                    }
-                )
+            series_list: List[Dict[str, Any]] = []
+            if len(value_fields) > 1 and len(unique_tickers) <= 1:
+                # Single ticker, multiple metrics → plot each metric as its own series
+                for field in value_fields:
+                    label_to_value = {label: row.get(field) for label, _sort, row in grouped[next(iter(grouped))]}
+                    series_data = [label_to_value.get(label, None) for label in ordered_labels]
+                    series_list.append(
+                        {
+                            "name": field.replace("_", " ").title(),
+                            "type": "line" if any(k in sample_row for k in temporal_keys) else "bar",
+                            "data": series_data,
+                            "connectNulls": True,
+                        }
+                    )
+            else:
+                # Default: one value field per ticker series
+                for ticker, series_rows in grouped.items():
+                    label_to_value: Dict[str, Any] = {label: row.get(value_field) for label, _sort, row in series_rows}
+                    series_data = [label_to_value.get(label, None) for label in ordered_labels]
+                    series_list.append(
+                        {
+                            "name": ticker,
+                            "type": "line" if any(k in sample_row for k in temporal_keys) else "bar",
+                            "data": series_data,
+                            "connectNulls": True,
+                        }
+                    )
 
             chart_spec = {
                 "title": {"text": state.get("query", "Financial chart"), "left": "center"},
@@ -1109,8 +1139,12 @@ Rules:
                 "yAxis": {"type": "value", "name": value_field.replace("_", " ").title()},
                 "series": series_list,
                 "meta": {
-                    "includedColumns": [value_field],
-                    "displayNames": {value_field: value_field.replace("_", " ").title()},
+                    "includedColumns": value_fields,
+                    "displayNames": {field: field.replace("_", " ").title() for field in value_fields},
+                    # Set chart value type to percent when the column name implies percent/share so frontend formats axis and tooltip correctly
+                    "chartValueType": "percent"
+                    if any(is_percent_field(field) for field in value_fields)
+                    else ("currency" if any(is_currency_field(field) for field in value_fields) else "number"),
                 },
                 "dataset": {"source": data},
             }

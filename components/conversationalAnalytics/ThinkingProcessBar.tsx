@@ -222,19 +222,6 @@ const ThinkingProcessBar: React.FC<ThinkingProcessBarProps> = ({
         </div>
 
         <div className="flex items-center gap-3 shrink-0 ml-3">
-          {activeAgent && (
-            <span
-              className="text-xs px-2 py-1 rounded-full"
-              style={{
-                backgroundColor: theme.colors.bg.elevated,
-                color: theme.colors.text.primary,
-                border: `1px solid ${theme.colors.border.subtle}`,
-              }}
-            >
-              {activeAgent.name} • {activeAgent.role}
-            </span>
-          )}
-
           {handoffs.length > 0 && (
             <span
               className="text-xs px-2 py-1 rounded-full"

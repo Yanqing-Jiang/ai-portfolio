@@ -133,6 +133,39 @@ def _build_hitl_options(ambiguous_slots: List[SlotSpec], max_options: int = 3) -
     return options
 
 
+def _build_system_blocks(
+    base_system_prompt: str,
+    skill_block: Optional[str],
+    resolved_slots_block: Optional[str],
+) -> List[Dict[str, Any]]:
+    """Function: _build_system_blocks — called from ConversationalAnalyticsAgent.run_with_tools to compose Claude system blocks with cache breakpoints.
+    Invokes: None (pure helper).
+    Purpose: Separates stable base prompt (cached), skill prompt (cached), and per-turn slot guidance (uncached) to enable prompt caching without losing dynamic context."""
+    blocks: List[Dict[str, Any]] = [
+        {
+            "type": "text",
+            "text": base_system_prompt,
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
+    if skill_block:
+        blocks.append(
+            {
+                "type": "text",
+                "text": skill_block,
+                "cache_control": {"type": "ephemeral"},
+            }
+        )
+    if resolved_slots_block:
+        blocks.append(
+            {
+                "type": "text",
+                "text": resolved_slots_block,
+            }
+        )
+    return blocks
+
+
 class ConversationalAnalyticsAgent:
     """Single agent for conversational analytics with Claude."""
     
@@ -208,12 +241,17 @@ class ConversationalAnalyticsAgent:
         yield process_edge_event("request_received", "skill_detection", animated=True)
         
         selected_skill = select_skill(message)
-        system_prompt = system_prompt_override or SYSTEM_PROMPT
+        base_system_prompt = system_prompt_override or SYSTEM_PROMPT
+        skill_block_text: Optional[str] = None
+        resolved_slots_block: Optional[str] = None
         resolved_slots: Dict[str, Any] = {}
         
         if selected_skill:
             skill_text = load_skill_content(selected_skill)
-            system_prompt = f"{system_prompt}\n\nSkill Activated: {selected_skill.name} (id: {selected_skill.skill_id})\nFollow this guidance:\n{skill_text}"
+            skill_block_text = (
+                f"Skill Activated: {selected_skill.name} (id: {selected_skill.skill_id})\n"
+                f"Follow this guidance:\n{skill_text}"
+            )
             skill_download_url = f"/api/conv-analytics/skills/{selected_skill.skill_id}"
             yield skill_event(selected_skill.skill_id, selected_skill.name, skill_download_url)
             
@@ -310,7 +348,16 @@ class ConversationalAnalyticsAgent:
             # Augment system prompt with resolved slots
             if resolved_slots:
                 slots_text = json.dumps(resolved_slots, indent=2)
-                system_prompt += f"\n\nResolved Slots (use these values for the analysis):\n{slots_text}"
+                resolved_slots_block = (
+                    "Resolved Slots (use these values for the analysis):\n"
+                    f"{slots_text}"
+                )
+
+        system_blocks = _build_system_blocks(
+            base_system_prompt=base_system_prompt,
+            skill_block=skill_block_text,
+            resolved_slots_block=resolved_slots_block,
+        )
         
         yield status_event("Connecting to Claude...")
         plan_steps = plan_steps_override or [
@@ -351,6 +398,7 @@ class ConversationalAnalyticsAgent:
             max_iterations = 10  # Safety limit
             iteration = 0
             final_content = ""
+            last_usage: Optional[Any] = None
             
             while iteration < max_iterations:
                 iteration += 1
@@ -369,11 +417,10 @@ class ConversationalAnalyticsAgent:
                 
                 tool_call_count = 0
                 iter_start = time.monotonic()
-
                 with self.client.messages.stream(
                     model=self.model,
                     max_tokens=4096,
-                    system=system_prompt,
+                    system=system_blocks,
                     tools=tools_to_use,
                     messages=messages
                 ) as stream:
@@ -388,6 +435,23 @@ class ConversationalAnalyticsAgent:
                                     streamed_text.append(delta_text)
                                     yield content_event(delta_text)
                     response = stream.get_final_message()
+                    last_usage = getattr(response, "usage", None)
+
+                if debug_mode and last_usage:
+                    cache_read = getattr(last_usage, "cache_read_input_tokens", None)
+                    cache_creation = getattr(last_usage, "cache_creation_input_tokens", None)
+                    cache_status = "hit" if (cache_read or 0) > 0 else ("write" if (cache_creation or 0) > 0 else "none")
+                    usage_payload = {
+                        "cache_creation_input_tokens": getattr(last_usage, "cache_creation_input_tokens", None),
+                        "cache_read_input_tokens": getattr(last_usage, "cache_read_input_tokens", None),
+                        "input_tokens": getattr(last_usage, "input_tokens", None),
+                        "output_tokens": getattr(last_usage, "output_tokens", None),
+                        "cache_status": cache_status,
+                        "model": self.model,
+                        "agent_mode": agent_mode or agent_label or "single",
+                        "skill_id": selected_skill.skill_id if selected_skill else None,
+                    }
+                    yield debug_event("cache", "Claude usage (cache-aware)", usage_payload)
                 
                 yield thinking_event("query_analysis", "completed", "Question understood")
                 yield plan_update_event("understand", "completed", "Question understood")
@@ -579,6 +643,20 @@ class ConversationalAnalyticsAgent:
             yield done_event()
             if debug_mode:
                 elapsed_ms = int((time.monotonic() - start_total) * 1000)
+                if last_usage:
+                    cache_read = getattr(last_usage, "cache_read_input_tokens", None)
+                    cache_creation = getattr(last_usage, "cache_creation_input_tokens", None)
+                    cache_status = "hit" if (cache_read or 0) > 0 else ("write" if (cache_creation or 0) > 0 else "none")
+                    yield debug_event("cache", "Final Claude usage (cache-aware)", {
+                        "cache_creation_input_tokens": getattr(last_usage, "cache_creation_input_tokens", None),
+                        "cache_read_input_tokens": getattr(last_usage, "cache_read_input_tokens", None),
+                        "input_tokens": getattr(last_usage, "input_tokens", None),
+                        "output_tokens": getattr(last_usage, "output_tokens", None),
+                        "cache_status": cache_status,
+                        "model": self.model,
+                        "agent_mode": agent_mode or agent_label or "single",
+                        "skill_id": selected_skill.skill_id if selected_skill else None,
+                    })
                 yield debug_event("tool", "Tool/flow stats", {
                     "tool_call_count": tool_call_count,
                     "elapsed_ms": elapsed_ms,

@@ -1,9 +1,78 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { AnalysisCard, SqlCard, ChartCard } from '../common';
-import { ProcessPanel } from '../common/ProcessPanel';
 import { useAnalyticsSqlStream } from '../hooks';
 import { isValidChartSpec } from '../utils';
+
+// Simple, lightweight process panel to avoid blank screen rendering and keep telemetry visible.
+const SimpleProcessPanel: React.FC<{
+  open: boolean;
+  steps: ReturnType<typeof useAnalyticsSqlStream>['processSteps'];
+  onClose: () => void;
+}> = ({ open, steps, onClose }) => {
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-40 pointer-events-none">
+      <div className="absolute top-16 right-4 w-[360px] max-h-[78vh] rounded-xl border border-gray-800 bg-gray-950/95 shadow-2xl overflow-hidden pointer-events-auto">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-800">
+          <div className="text-sm font-semibold text-gray-100">SQL Process</div>
+          <button
+            onClick={onClose}
+            className="text-gray-300 hover:text-white text-xs px-2 py-1 rounded border border-gray-700 hover:border-gray-500"
+          >
+            Close
+          </button>
+        </div>
+        <div className="max-h-[70vh] overflow-y-auto p-3 space-y-2 bg-gray-900/70">
+          {steps.length === 0 ? (
+            <div className="text-xs text-gray-400 border border-dashed border-gray-700 rounded-lg px-3 py-4 text-center">
+              Waiting for telemetry…
+            </div>
+          ) : (
+            steps.map((step) => {
+              const statusClass =
+                step.status === 'completed'
+                  ? 'bg-emerald-500/20 text-emerald-200'
+                  : step.status === 'in_progress'
+                  ? 'bg-blue-500/20 text-blue-200'
+                  : step.status === 'error'
+                  ? 'bg-rose-500/20 text-rose-200'
+                  : 'bg-gray-700/50 text-gray-300';
+              return (
+                <div
+                  key={step.id}
+                  className="rounded-lg border border-gray-800 bg-gray-900/80 px-3 py-2"
+                >
+                  <div className="flex items-center justify-between text-xs text-gray-200">
+                    <span className="font-semibold truncate pr-2">{step.name}</span>
+                    <span
+                      className={`px-2 py-0.5 rounded-full text-[10px] uppercase tracking-wide ${statusClass}`}
+                    >
+                      {step.status.replace('_', ' ')}
+                    </span>
+                  </div>
+                  {step.thinking?.length ? (
+                    <div className="mt-1 text-[11px] text-gray-400 line-clamp-2">
+                      {step.thinking.slice(-1)[0]}
+                    </div>
+                  ) : null}
+                  {step.details ? (
+                    <div className="mt-1 text-[10px] text-gray-500 line-clamp-2">
+                      {Object.keys(step.details)
+                        .slice(0, 2)
+                        .map((k) => `${k}: ${String((step.details as any)[k])}`)
+                        .join(' • ')}
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
 
 const SqlAnalyticsPage: React.FC = () => {
   const [query, setQuery] = useState('');
@@ -332,15 +401,11 @@ const SqlAnalyticsPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Process Visualization Panel */}
-      <ProcessPanel
+      {/* Simple Process Panel (lightweight to avoid blank rendering) */}
+      <SimpleProcessPanel
+        open={showProcessPanel}
         steps={processSteps}
-        flowMode={flowMode}
-        showVisualization={false}
-        show={showProcessPanel}
         onClose={() => setShowProcessPanel(false)}
-        title="SQL Process"
-        subtitle="Line-by-line SQL workflow status"
       />
     </div>
   );
