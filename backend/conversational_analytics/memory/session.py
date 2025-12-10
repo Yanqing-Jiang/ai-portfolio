@@ -37,6 +37,7 @@ class Session:
     messages: List[Message] = field(default_factory=list)
     context: Dict[str, Any] = field(default_factory=dict)
     specialist_outputs: Dict[str, Any] = field(default_factory=dict)
+    run_traces: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict)
     created_at: float = field(default_factory=time.time)
     last_accessed: float = field(default_factory=time.time)
     pending_selection: Optional[PendingSelection] = None
@@ -76,6 +77,17 @@ class Session:
         """Update session context data."""
         self.context[key] = value
         self.last_accessed = time.time()
+    
+    def request_cancel(self) -> None:
+        """Function: request_cancel — flags the session for cancellation on the next agent check."""
+        self.context["cancel_requested"] = True
+        self.last_accessed = time.time()
+    
+    def consume_cancel(self) -> bool:
+        """Function: consume_cancel — returns and clears any pending cancel flag."""
+        pending = bool(self.context.pop("cancel_requested", False))
+        self.last_accessed = time.time()
+        return pending
     
     def set_pending_selection(
         self,
@@ -118,6 +130,22 @@ class Session:
         """Function: get_specialist_outputs — returns all recorded specialist outputs."""
         return self.specialist_outputs
 
+    def start_run_trace(self, run_id: str) -> None:
+        """Function: start_run_trace — initializes an empty trace for a run."""
+        self.run_traces[run_id] = []
+        self.last_accessed = time.time()
+
+    def append_run_event(self, run_id: str, event: Dict[str, Any]) -> None:
+        """Function: append_run_event — appends an SSE event payload to a run trace."""
+        if run_id not in self.run_traces:
+            self.run_traces[run_id] = []
+        self.run_traces[run_id].append(event)
+        self.last_accessed = time.time()
+
+    def get_run_trace(self, run_id: str) -> List[Dict[str, Any]]:
+        """Function: get_run_trace — returns the recorded trace for a given run_id."""
+        return self.run_traces.get(run_id, [])
+
 
 class SessionStore:
     """Thread-safe in-memory session storage."""
@@ -155,6 +183,29 @@ class SessionStore:
                 del self._sessions[session_id]
                 return True
             return False
+
+    def start_run_trace(self, session_id: str, run_id: str) -> None:
+        """Function: start_run_trace — initialize run trace storage for a session."""
+        with self._lock:
+            session = self._sessions.get(session_id)
+            if session:
+                session.start_run_trace(run_id)
+
+    def append_run_event(self, session_id: str, run_id: str, event: Dict[str, Any]) -> None:
+        """Function: append_run_event — append a run event to the session trace."""
+        with self._lock:
+            session = self._sessions.get(session_id)
+            if session:
+                session.append_run_event(run_id, event)
+
+    def request_cancel(self, session_id: str) -> bool:
+        """Function: request_cancel — mark a session's active run for cancellation."""
+        with self._lock:
+            session = self._sessions.get(session_id)
+            if not session:
+                return False
+            session.request_cancel()
+            return True
     
     def _cleanup_expired(self) -> None:
         """Remove expired sessions (called within lock)."""

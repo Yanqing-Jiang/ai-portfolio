@@ -25,6 +25,9 @@ from .sse import (
     process_edge_event,
     process_update_event,
     process_clear_event,
+    set_run_context,
+    set_step_context,
+    clear_run_context,
 )
 
 __all__ = [
@@ -53,4 +56,7 @@ __all__ = [
     "process_edge_event",
     "process_update_event",
     "process_clear_event",
+    "set_run_context",
+    "set_step_context",
+    "clear_run_context",
 ]

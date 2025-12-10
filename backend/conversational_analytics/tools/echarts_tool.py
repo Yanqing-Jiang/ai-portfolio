@@ -156,13 +156,13 @@ def generate_echarts_spec(
         "title": {
             "text": title,
             "left": "center",
-            "textStyle": {"color": "#e0e0e0"}
+            "textStyle": {"color": "#111827"},  # dark text for light background
         },
         "tooltip": {
             "trigger": "axis" if chart_type != "pie" else "item"
         },
-        "backgroundColor": "transparent",
-        "textStyle": {"color": "#a0a0a0"},
+        "backgroundColor": "#ffffff",
+        "textStyle": {"color": "#111827"},
         "value_meta": value_meta,
     }
 
@@ -170,7 +170,7 @@ def generate_echarts_spec(
         "orient": "vertical",
         "right": "2%",
         "top": "middle",
-        "textStyle": {"color": "#a0a0a0"},
+        "textStyle": {"color": "#374151"},
     }
     
     if chart_type == "pie":

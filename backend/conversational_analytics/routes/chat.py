@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import json
 from fastapi import APIRouter, HTTPException, Depends, Request
 from fastapi.responses import StreamingResponse
 
@@ -59,9 +60,25 @@ async def stream_chat(
     async def event_generator():
         if supervisor:
             async for event in supervisor.run(request.message, request.session_id, request.agent_mode or "auto"):
+                if event.startswith("data: "):
+                    try:
+                        parsed = json.loads(event[6:].strip())
+                        run_id = parsed.get("data", {}).get("run_id")
+                        if run_id:
+                            session_store.append_run_event(request.session_id, run_id, parsed)
+                    except json.JSONDecodeError:
+                        pass
                 yield event
         else:
             async for event in agent.run_with_tools(request.message, request.session_id):  # type: ignore
+                if event.startswith("data: "):
+                    try:
+                        parsed = json.loads(event[6:].strip())
+                        run_id = parsed.get("data", {}).get("run_id")
+                        if run_id:
+                            session_store.append_run_event(request.session_id, run_id, parsed)
+                    except json.JSONDecodeError:
+                        pass
                 yield event
     
     return StreamingResponse(
@@ -101,10 +118,12 @@ async def chat(
     async for event in event_source:
         # Parse the SSE event
         if event.startswith("data: "):
-            import json
             try:
                 parsed = json.loads(event[6:].strip())
                 events.append(parsed)
+                run_id = parsed.get("data", {}).get("run_id")
+                if run_id:
+                    session_store.append_run_event(request.session_id, run_id, parsed)
                 
                 if parsed.get("type") == "content":
                     content_parts.append(parsed.get("data", {}).get("delta", ""))
@@ -172,6 +191,21 @@ async def health_check():
     Invokes: lightweight status response only.
     Purpose: Advertise that conversational analytics routes are mounted."""
     return {"status": "healthy", "service": "conversational-analytics"}
+
+
+@router.post("/cancel/{session_id}")
+async def cancel_run(
+    session_id: str,
+    fastapi_request: Request,
+    _: None = Depends(conversational_analytics_rate_limit),
+):
+    """Function: cancel_run — kill switch endpoint to stop an in-flight conversational analytics run.
+    Invokes: session_store.request_cancel to set a cancellation flag consumed by the agent loop.
+    Purpose: Provide frontend/ops a way to halt long or unwanted runs."""
+    ok = session_store.request_cancel(session_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {"status": "cancel_requested", "session_id": session_id}
 
 
 @router.post("/selection")

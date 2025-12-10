@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 import logging
 import time
+import uuid
+import asyncio
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 try:
@@ -13,10 +15,22 @@ except ImportError as exc:  # pragma: no cover - optional dependency
     anthropic = None  # type: ignore
     _anthropic_import_error = exc
 
+try:
+    from anthropic import ClaudeSDKClient, ClaudeAgentOptions  # type: ignore
+except Exception:  # pragma: no cover - SDK may be unavailable
+    ClaudeSDKClient = None  # type: ignore
+    ClaudeAgentOptions = None  # type: ignore
+
 from .config import settings
 from .memory import session_store
 from .tools import ALL_TOOLS, TOOL_EXECUTORS, is_web_search_tool, format_web_search_results
 from .skills import select_skill, load_skill_content, resolve_slots, SlotSpec
+from .sdk_assets import (
+    get_allowed_tools,
+    load_project_guide,
+    load_project_settings,
+    should_use_sdk_assets,
+)
 from .streaming import (
     status_event,
     thinking_event,
@@ -37,6 +51,9 @@ from .streaming import (
     process_edge_event,
     process_update_event,
     process_clear_event,
+    set_run_context,
+    set_step_context,
+    clear_run_context,
 )
 
 logger = logging.getLogger(__name__)
@@ -135,12 +152,13 @@ def _build_hitl_options(ambiguous_slots: List[SlotSpec], max_options: int = 3) -
 
 def _build_system_blocks(
     base_system_prompt: str,
+    project_guide: Optional[str],
     skill_block: Optional[str],
     resolved_slots_block: Optional[str],
 ) -> List[Dict[str, Any]]:
     """Function: _build_system_blocks — called from ConversationalAnalyticsAgent.run_with_tools to compose Claude system blocks with cache breakpoints.
     Invokes: None (pure helper).
-    Purpose: Separates stable base prompt (cached), skill prompt (cached), and per-turn slot guidance (uncached) to enable prompt caching without losing dynamic context."""
+    Purpose: Separates stable base prompt (cached), project guide (cached), skill prompt (cached), and per-turn slot guidance (uncached) to enable prompt caching without losing dynamic context."""
     blocks: List[Dict[str, Any]] = [
         {
             "type": "text",
@@ -148,6 +166,14 @@ def _build_system_blocks(
             "cache_control": {"type": "ephemeral"},
         }
     ]
+    if project_guide:
+        blocks.append(
+            {
+                "type": "text",
+                "text": project_guide,
+                "cache_control": {"type": "ephemeral"},
+            }
+        )
     if skill_block:
         blocks.append(
             {
@@ -175,7 +201,38 @@ class ConversationalAnalyticsAgent:
                 "Conversational Analytics requires the 'anthropic' package. "
                 "Install backend dependencies (pip install -r backend/requirements.txt)."
             ) from _anthropic_import_error
-        self.client = anthropic.Anthropic(api_key=settings.claude_api_key)
+        self.use_sdk_assets = should_use_sdk_assets(settings.use_sdk_assets)
+        self.sdk_settings = load_project_settings() if self.use_sdk_assets else {}
+        self.project_guide = load_project_guide() if self.use_sdk_assets else None
+        self.sdk_client = None
+        self.allowed_tool_names = get_allowed_tools([tool["name"] for tool in ALL_TOOLS]) if self.use_sdk_assets else [tool["name"] for tool in ALL_TOOLS]
+        timeouts = self.sdk_settings.get("timeouts", {}) if self.sdk_settings else {}
+        self.run_deadline_seconds: Optional[int] = timeouts.get("run_seconds")
+        self.default_tool_timeout: Optional[int] = timeouts.get("default_tool_seconds")
+        self.per_tool_timeout: Dict[str, Any] = timeouts.get("per_tool", {})
+        self.tool_failures: Dict[str, int] = {}
+        self.max_tool_failures = 3
+        if not self.use_sdk_assets:
+            logger.info("SDK assets disabled or missing; using legacy prompt path.")
+
+        # Prefer Claude Agent SDK client when available; fall back to standard Anthropics client.
+        if self.use_sdk_assets and ClaudeSDKClient and ClaudeAgentOptions:
+            try:
+                self.sdk_client = ClaudeSDKClient(
+                    api_key=settings.claude_api_key,
+                    options=ClaudeAgentOptions(
+                        setting_sources=["project"],
+                        allowed_tools=self.allowed_tool_names,
+                        project_path=str(settings.sdk_project_path),
+                    ),
+                )
+                self.client = self.sdk_client
+                logger.info("Claude Agent SDK client initialized with project settings.")
+            except Exception as exc:  # pragma: no cover - safe fallback path
+                logger.warning("Falling back to Anthropics client (SDK init failed): %s", exc)
+                self.client = anthropic.Anthropic(api_key=settings.claude_api_key)
+        else:
+            self.client = anthropic.Anthropic(api_key=settings.claude_api_key)
         self.model = settings.claude_model
         
     async def run_with_tools(
@@ -195,6 +252,8 @@ class ConversationalAnalyticsAgent:
         Supports: Optional prompt/tool/plan overrides for supervisor and specialist routing."""
         debug_mode = settings.debug_mode
         start_total = time.monotonic()
+        run_id = str(uuid.uuid4())
+        set_run_context(run_id)
         
         # Clear previous process visualization when running standalone; supervisor handles its own root nodes
         if not agent_mode:
@@ -216,6 +275,13 @@ class ConversationalAnalyticsAgent:
         
         # Get or create session
         session = session_store.get_or_create(session_id)
+        session_store.start_run_trace(session_id, run_id)
+        session.update_context("last_run_id", run_id)
+        if session.consume_cancel():
+            yield error_event("Run cancelled", "cancelled")
+            yield done_event()
+            clear_run_context()
+            return
         
         if debug_mode:
             yield debug_event("session", "Session ready", {
@@ -343,6 +409,7 @@ class ConversationalAnalyticsAgent:
                     # End this iteration; frontend will POST selection, then call /stream again
                     yield thinking_event("awaiting_selection", "running", "Waiting for your choice...")
                     yield done_event()
+                    clear_run_context()
                     return
             
             # Augment system prompt with resolved slots
@@ -353,8 +420,10 @@ class ConversationalAnalyticsAgent:
                     f"{slots_text}"
                 )
 
+        project_guide_block = self.project_guide if (self.use_sdk_assets and system_prompt_override is None) else None
         system_blocks = _build_system_blocks(
             base_system_prompt=base_system_prompt,
+            project_guide=project_guide_block,
             skill_block=skill_block_text,
             resolved_slots_block=resolved_slots_block,
         )
@@ -366,6 +435,7 @@ class ConversationalAnalyticsAgent:
             {"id": "visualize", "label": "Build chart", "status": "pending"},
             {"id": "analysis", "label": "Summarize insights", "status": "pending"},
         ]
+        set_step_context("plan")
         yield plan_event(plan_steps)
         yield thinking_event("query_analysis", "running", "Analyzing your question...")
         
@@ -405,12 +475,23 @@ class ConversationalAnalyticsAgent:
                 
                 if debug_mode:
                     yield debug_event("api", f"Claude API iteration {iteration}/{max_iterations}")
+
+                if session.consume_cancel():
+                    yield error_event("Run cancelled", "cancelled")
+                    yield done_event()
+                    break
+
+                if self.run_deadline_seconds and (time.monotonic() - start_total) > self.run_deadline_seconds:
+                    yield error_event(f"Run exceeded {self.run_deadline_seconds}s budget", "run_timeout")
+                    yield done_event()
+                    break
                 
                 # Stream the response for this iteration
                 streamed_text: List[str] = []
-                tools_to_use = ALL_TOOLS
+                base_allowlist = set(self.allowed_tool_names) if self.allowed_tool_names else set(tool.get("name") for tool in ALL_TOOLS)
+                tools_to_use = [tool for tool in ALL_TOOLS if tool.get("name") in base_allowlist]
                 if tool_allowlist:
-                    allow_set = set(tool_allowlist)
+                    allow_set = set(tool_allowlist) & base_allowlist
                     tools_to_use = [tool for tool in ALL_TOOLS if tool.get("name") in allow_set]
                     if debug_mode:
                         yield debug_event("agent", "Tool allowlist applied", {"tools": list(allow_set)})
@@ -518,6 +599,7 @@ class ConversationalAnalyticsAgent:
                             yield process_edge_event("claude_api", tool_node_id, label="tool call", animated=True)
                             
                             # Execute the tool
+                            tool_start_time = time.monotonic()
                             if is_web_search_tool(tool_name):
                                 # Web search is handled by Claude - result comes back in next response
                                 result = {"success": True, "type": "server_tool"}
@@ -533,7 +615,10 @@ class ConversationalAnalyticsAgent:
                                         "error": result.get("error") if not result.get("success") else None,
                                     })
                             
-                            yield tool_end_event(tool_name, result, result.get("success", True))
+                            duration_ms = int((time.monotonic() - tool_start_time) * 1000)
+                            result_with_timing = dict(result)
+                            result_with_timing["duration_ms"] = duration_ms
+                            yield tool_end_event(tool_name, result_with_timing, result.get("success", True))
                             yield thinking_event(
                                 f"tool_{tool_name}",
                                 "completed" if result.get("success", True) else "error",
@@ -545,6 +630,7 @@ class ConversationalAnalyticsAgent:
                                 node_id=tool_node_id,
                                 status="completed" if result.get("success", True) else "error",
                                 summary=f"{tool_name} {'succeeded' if result.get('success', True) else 'failed'}",
+                                data={"duration_ms": duration_ms},
                             )
                             
                             # Send chart or data events if applicable
@@ -688,12 +774,36 @@ class ConversationalAnalyticsAgent:
             yield thinking_event("agent_error", "error", f"Error: {str(e)}")
             yield error_event(f"Error: {str(e)}", "agent_error", error_details if debug_mode else "")
             yield done_event()
+        finally:
+            clear_run_context()
+
+    def _get_tool_timeout(self, tool_name: str) -> Optional[float]:
+        """Function: _get_tool_timeout — returns the timeout for a tool based on settings.json.
+        Called from: _execute_tool to enforce per-tool deadlines.
+        Invokes: cached sdk settings for default/per-tool values.
+        Purpose: Enables consistent tool timeouts aligned with SDK configuration."""
+        if self.per_tool_timeout:
+            value = self.per_tool_timeout.get(tool_name)
+            if value is not None:
+                try:
+                    return float(value)
+                except (TypeError, ValueError):
+                    return None
+        if self.default_tool_timeout:
+            try:
+                return float(self.default_tool_timeout)
+            except (TypeError, ValueError):
+                return None
+        return None
     
     async def _execute_tool(self, tool_name: str, tool_input: Dict[str, Any]) -> Dict[str, Any]:
         """Function: _execute_tool — invoked by run_with_tools to dispatch domain tools.
         Called from: run_with_tools after a Claude tool_use event.
         Invokes: TOOL_EXECUTORS registry to execute the requested tool.
         Purpose: Centralizes tool execution and error handling for conversational analytics."""
+        if self.tool_failures.get(tool_name, 0) >= self.max_tool_failures:
+            return {"success": False, "error": f"{tool_name} temporarily blocked after repeated failures"}
+
         executor = TOOL_EXECUTORS.get(tool_name)
         if not executor:
             logger.warning("Unknown tool requested: %s", tool_name)
@@ -701,12 +811,24 @@ class ConversationalAnalyticsAgent:
         
         try:
             # Execute the tool (all are async)
-            result = await executor(**tool_input)
+            timeout = self._get_tool_timeout(tool_name)
+            coro = executor(**tool_input)
+            result = await asyncio.wait_for(coro, timeout=timeout) if timeout else await coro
+            # Reset circuit breaker on success
+            self.tool_failures[tool_name] = 0
             return result
+        except asyncio.TimeoutError:
+            self.tool_failures[tool_name] = self.tool_failures.get(tool_name, 0) + 1
+            logger.warning("Tool execution timeout (%s) after %ss", tool_name, timeout)
+            return {
+                "success": False,
+                "error": f"{tool_name} timed out after {timeout}s",
+            }
         except Exception as e:
             import traceback
             error_details = traceback.format_exc()
             logger.error("Tool execution error (%s): %s\n%s", tool_name, e, error_details)
+            self.tool_failures[tool_name] = self.tool_failures.get(tool_name, 0) + 1
             return {
                 "success": False,
                 "error": str(e),

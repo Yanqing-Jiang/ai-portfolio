@@ -6,6 +6,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from ..config import settings
+from ..sdk_assets import load_skill_override, should_use_sdk_assets
+
 BASE_DIR = Path(__file__).parent
 
 
@@ -94,7 +97,14 @@ def select_skill(user_message: str) -> Optional[SkillMeta]:
 
 
 def load_skill_content(skill: SkillMeta) -> str:
-    """Function: load_skill_content — reads a skill markdown file for prompt injection."""
+    """Function: load_skill_content — reads a skill markdown file for prompt injection.
+    Called from: agent when building system prompt.
+    Invokes: optional `.claude/skills` mirror before falling back to in-repo skills.
+    Purpose: Keeps SDK filesystem as the primary prompt source while preserving local fallback."""
+    if should_use_sdk_assets(settings.use_sdk_assets):
+        override = load_skill_override(skill.filename)
+        if override:
+            return override
     return skill.path.read_text(encoding="utf-8")
 
 

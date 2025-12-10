@@ -1090,6 +1090,23 @@ Rules:
 
             unique_tickers = list(grouped.keys()) if grouped else []
 
+            has_time_axis = any(
+                sample_row.get(key) not in (None, "")
+                for key in (
+                    "calendar_year",
+                    "calendar_quarter_num",
+                    "calendar_quarter",
+                    "date",
+                    "period",
+                    "period_end_date",
+                    "period_start_date",
+                )
+            )
+            chart_type = self._determine_chart_type(data, unique_tickers, value_fields, has_time_axis, state.get("query", ""))
+            base_series_type = "bar" if "bar" in chart_type else "line"
+            is_stacked = "stacked" in chart_type
+            use_area = "area" in chart_type
+
             # Build unified x-axis labels ordered by sort_key
             all_points = []
             for series_rows in grouped.values():
@@ -1113,9 +1130,11 @@ Rules:
                     series_list.append(
                         {
                             "name": field.replace("_", " ").title(),
-                            "type": "line" if any(k in sample_row for k in temporal_keys) else "bar",
+                            "type": base_series_type if not use_area else "line",
                             "data": series_data,
                             "connectNulls": True,
+                            **({"stack": "total"} if is_stacked else {}),
+                            **({"areaStyle": {}} if use_area else {}),
                         }
                     )
             else:
@@ -1126,9 +1145,11 @@ Rules:
                     series_list.append(
                         {
                             "name": ticker,
-                            "type": "line" if any(k in sample_row for k in temporal_keys) else "bar",
+                            "type": base_series_type if not use_area else "line",
                             "data": series_data,
                             "connectNulls": True,
+                            **({"stack": "total"} if is_stacked else {}),
+                            **({"areaStyle": {}} if use_area else {}),
                         }
                     )
 
@@ -1145,8 +1166,10 @@ Rules:
                     "chartValueType": "percent"
                     if any(is_percent_field(field) for field in value_fields)
                     else ("currency" if any(is_currency_field(field) for field in value_fields) else "number"),
+                    "chartDesign": {"chart_type": chart_type},
                 },
                 "dataset": {"source": data},
+                "chart_type": chart_type,
             }
             print(f"[ECHARTS AGENT] Generated chart spec with keys: {list(chart_spec.keys())} using value field: {value_field}")
             
@@ -1274,18 +1297,28 @@ Important:
                 await conn.close()
     
     def _determine_chart_type(self, data: List[Dict], tickers: List[str], metrics: List[str], has_time: bool, query: str = "") -> str:
-        """Determine appropriate chart type based on data characteristics and user wording"""
+        """Determine chart type from user wording and data shape (line, bar, stacked_bar, area, stacked_area)."""
         q = (query or '').lower()
-        if 'bar chart' in q or 'bar' in q:
+
+        if 'stacked area' in q or 'area stacked' in q or 'stack area' in q:
+            return 'stacked_area'
+        if 'stacked bar' in q or 'stack chart' in q or 'stacked chart' in q:
+            return 'stacked_bar'
+        if 'area chart' in q or 'area' in q:
+            return 'area'
+        if 'bar chart' in q or 'bar' in q or 'column chart' in q or 'column' in q:
             return 'bar'
-        # If time axis is present, prefer a line chart even with no ticker column (e.g., year-only data)
+        if 'line chart' in q or 'line graph' in q:
+            return 'line'
+
+        # Heuristics based on data shape
         if has_time:
             return "line"
         if len(tickers) > 1 and len(metrics) == 1:
-            return "bar"   # Compare companies on single metric
+            return "bar"
         if len(metrics) > 1 and len(tickers) == 1:
-            return "bar"   # Compare metrics for single company
-        return "bar"       # Default to bar chart
+            return "bar"
+        return "bar"
     
     def _build_time_series_chart(self, data: List[Dict], tickers: List[str], metrics: List[str], query: str, series_type: str = 'line', years_back: int = 4) -> Dict[str, Any]:
         """Build time series chart (line or bar) for both traditional and derived metrics"""

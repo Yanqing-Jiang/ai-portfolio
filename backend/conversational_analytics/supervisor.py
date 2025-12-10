@@ -16,6 +16,13 @@ from .streaming import (
     process_update_event,
     process_clear_event,
 )
+from .config import settings
+from .sdk_assets import (
+    load_agent_prompt,
+    load_project_guide,
+    load_project_settings,
+    should_use_sdk_assets,
+)
 from .memory import session_store
 
 SupervisorPlan = List[Dict[str, Any]]
@@ -129,6 +136,11 @@ class SupervisorOrchestrator:
 
     def __init__(self, base_agent: Optional[ConversationalAnalyticsAgent] = None):
         self.agent = base_agent or get_conversational_analytics_agent()
+        self.use_sdk_assets = should_use_sdk_assets(settings.use_sdk_assets)
+        self.project_guide = load_project_guide() if self.use_sdk_assets else None
+        self.sdk_settings = load_project_settings() if self.use_sdk_assets else {}
+        timeouts = self.sdk_settings.get("timeouts", {}) if self.sdk_settings else {}
+        self.specialist_timeout_seconds = timeouts.get("specialist_seconds", self.SPECIALIST_TIMEOUT_SECONDS)
 
     def _build_prompt(self, mode: str, user_message: str) -> str:
         """Function: _build_prompt — used internally to assemble specialist prompts.
@@ -137,7 +149,15 @@ class SupervisorOrchestrator:
         Purpose: Keeps specialist prompts concise while inheriting the global system guidance."""
         config = SPECIALIST_CONFIGS.get(mode)
         suffix = config["prompt_suffix"] if config else ""
-        return f"{SYSTEM_PROMPT}\n\nSpecialist Mode: {mode}\n{suffix}"
+        prompt_parts = [SYSTEM_PROMPT]
+        if self.project_guide:
+            prompt_parts.append(self.project_guide)
+        agent_prompt = load_agent_prompt(mode) if self.use_sdk_assets else None
+        if agent_prompt:
+            prompt_parts.append(agent_prompt)
+        else:
+            prompt_parts.append(f"Specialist Mode: {mode}\n{suffix}")
+        return "\n\n".join(prompt_parts)
 
     def _build_plan(self, mode: str) -> Optional[SupervisorPlan]:
         """Function: _build_plan — returns per-mode plan steps for UI."""
@@ -146,6 +166,10 @@ class SupervisorOrchestrator:
 
     def _allowed_tools(self, mode: str) -> List[str] | None:
         """Function: _allowed_tools — returns allowlisted tools per mode."""
+        if self.use_sdk_assets:
+            settings_allowlist = self.sdk_settings.get("allowlists", {}).get("agents", {}).get(mode) if self.sdk_settings else None
+            if settings_allowlist:
+                return list(settings_allowlist)
         config = SPECIALIST_CONFIGS.get(mode)
         tools = config["tool_allowlist"] if config else None
         if tools:
@@ -276,7 +300,7 @@ class SupervisorOrchestrator:
                             except json.JSONDecodeError:
                                 pass
 
-                        if time.monotonic() - start_time > self.SPECIALIST_TIMEOUT_SECONDS:
+                        if time.monotonic() - start_time > self.specialist_timeout_seconds:
                             raise TimeoutError(f"{cfg['label']} timed out")
 
                     if output:

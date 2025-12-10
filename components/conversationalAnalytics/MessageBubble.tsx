@@ -119,7 +119,7 @@ const enhanceEChartsConfig = (config: Record<string, unknown>): Record<string, u
     orient: 'vertical',
     right: legendSource.right ?? '2%',
     top: legendSource.top ?? 'middle',
-    textStyle: { color: '#a0a0a0', ...(legendSource.textStyle || {}) },
+    textStyle: { color: '#374151', ...(legendSource.textStyle || {}) },
     data: legendData,
   };
 
@@ -154,6 +154,7 @@ const enhanceEChartsConfig = (config: Record<string, unknown>): Record<string, u
         show: labelBase.show ?? true,
         position: labelBase.position ?? 'top',
         formatter: (params: any) => formatWithMeta(params.value),
+        color: (labelBase as any)?.color || '#111827',
       };
     }
   });
@@ -166,6 +167,7 @@ const enhanceEChartsConfig = (config: Record<string, unknown>): Record<string, u
         axisLabel: {
           ...(axis.axisLabel || {}),
           formatter: (val: any) => formatWithMeta(val),
+          color: (axis.axisLabel && axis.axisLabel.color) || '#111827',
         },
       }));
     } else {
@@ -174,6 +176,7 @@ const enhanceEChartsConfig = (config: Record<string, unknown>): Record<string, u
         axisLabel: {
           ...(yAxisConfig.axisLabel || {}),
           formatter: (val: any) => formatWithMeta(val),
+          color: (yAxisConfig.axisLabel && yAxisConfig.axisLabel.color) || '#111827',
         },
       };
     }
@@ -543,7 +546,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
                   <ReactECharts
                     option={chartOptions as Record<string, unknown>}
                     style={{ height: '340px', width: '100%' }}
-                    theme="dark"
+                    theme="light"
                     opts={{ renderer: 'canvas' }}
                   />
                 </div>

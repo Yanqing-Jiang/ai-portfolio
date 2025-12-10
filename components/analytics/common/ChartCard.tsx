@@ -4,6 +4,7 @@ import { ChartCardProps } from '../types';
 import { ChartErrorBoundary } from './ChartErrorBoundary';
 import { withLightTheme, hydrateChartSpec, downloadCsv, extractDataFromChartSpec } from '../utils';
 
+// Function: ChartCard — called from SqlAnalyticsPage/ProcessPanel to render interactive charts; hydrates chart specs, applies light theme, and manages legend selection/dropdown for analytics visualizations.
 export const ChartCard: React.FC<ChartCardProps> = ({
   chartSpec,
   dataSample,
@@ -19,6 +20,31 @@ export const ChartCard: React.FC<ChartCardProps> = ({
   const dropdownId = useId();
   const resolvedSpec = useMemo(() => hydrateChartSpec(chartSpec), [chartSpec]);
   const spec = resolvedSpec;
+
+  const legendNamesFromSpec = useMemo(() => {
+    const names = new Set<string>();
+    const collectFromLegend = (legend: any) => {
+      const entries = Array.isArray(legend) ? legend : legend ? [legend] : [];
+      entries.forEach((entry: any) => {
+        if (Array.isArray(entry?.data)) {
+          entry.data.forEach((name: unknown) => {
+            if (typeof name === 'string' && name.trim().length) {
+              names.add(name);
+            }
+          });
+        }
+      });
+    };
+    collectFromLegend(spec?.legend);
+    if (Array.isArray(spec?.series)) {
+      spec.series.forEach((series: any) => {
+        if (series?.name && typeof series.name === 'string') {
+          names.add(series.name);
+        }
+      });
+    }
+    return Array.from(names);
+  }, [spec]);
 
   const parseCompositeKey = useCallback((column: string | undefined) => {
     if (typeof column !== 'string' || !column.length) {
@@ -151,22 +177,47 @@ export const ChartCard: React.FC<ChartCardProps> = ({
     if (!enableDropdown) {
       return [] as Array<{ label: string; value: string }>;
     }
-    if (intentKey === 'revenue_growth_vs_avg') {
-      return [
-        { label: 'YoY Growth', value: 'yoy_growth' },
-        { label: 'Company', value: 'company' },
-        { label: 'Industry Average', value: 'industry' },
-      ];
+    const opts: Array<{ label: string; value: string }> = [];
+    const hasLegendOptions = legendNamesFromSpec.length > 1 && metricKeys.length <= 1;
+    const hasMetricOptions = metricKeys.length > 0;
+
+    if (hasLegendOptions || (hasMetricOptions && metricKeys.length > 1)) {
+      opts.push({ label: 'All Series', value: '__all__' });
     }
-    return metricKeys.map((metric) => ({
-      value: metric,
-      label: metricDisplayNames[metric] ?? formatColumnLabel(metric),
-    }));
-  }, [enableDropdown, intentKey, metricDisplayNames, metricKeys]);
+
+    if (hasLegendOptions) {
+      legendNamesFromSpec.forEach((name) => {
+        opts.push({ label: name, value: `legend:${name}` });
+      });
+    }
+
+    if (hasMetricOptions) {
+      if (intentKey === 'revenue_growth_vs_avg') {
+        opts.push(
+          { label: 'YoY Growth', value: 'yoy_growth' },
+          { label: 'Company', value: 'company' },
+          { label: 'Industry Average', value: 'industry' },
+        );
+      } else {
+        metricKeys.forEach((metric) => {
+          opts.push({
+            value: metric,
+            label: metricDisplayNames[metric] ?? formatColumnLabel(metric),
+          });
+        });
+      }
+    }
+
+    return opts;
+  }, [enableDropdown, intentKey, legendNamesFromSpec, metricDisplayNames, metricKeys]);
 
   const defaultDropdownValue = useMemo(() => {
     if (!dropdownOptions.length) {
       return undefined;
+    }
+    const allOption = dropdownOptions.find((option) => option.value === '__all__');
+    if (allOption) {
+      return allOption.value;
     }
     if (intentKey === 'revenue_growth_vs_avg') {
       return 'yoy_growth';
@@ -195,6 +246,10 @@ export const ChartCard: React.FC<ChartCardProps> = ({
   }, [defaultDropdownValue]);
 
   const [legendSelection, setLegendSelection] = useState<Record<string, boolean>>({});
+  const legendSelectionRef = useRef<Record<string, boolean>>({});
+  useEffect(() => {
+    legendSelectionRef.current = legendSelection;
+  }, [legendSelection]);
 
   const selectValue = useMemo(() => {
     if (!dropdownOptions.length) {
@@ -263,35 +318,71 @@ export const ChartCard: React.FC<ChartCardProps> = ({
     }
   };
 
-  const handleMetricChange = useCallback(
-    (metricKey: string) => {
-      if (!metricKey) {
-        return;
-      }
-      setActiveMetric(metricKey);
-      const instance = chartRef.current;
-      if (!instance || typeof instance.getOption !== 'function') {
-        return;
-      }
-      const option = instance.getOption() || {};
-      const legendOption = option?.legend;
-      const legendEntries = Array.isArray(legendOption)
-        ? legendOption
-        : legendOption
-        ? [legendOption]
-        : [];
-      if (!legendEntries.length) {
-        return;
-      }
-      const nextSelection: Record<string, boolean> = {};
-      legendEntries.forEach((entry: any) => {
+  const deriveLegendNames = useCallback((): string[] => {
+    const names = new Set<string>();
+    const normalizeLegend = (legend: any) => (Array.isArray(legend) ? legend : legend ? [legend] : []);
+    const collectFromLegend = (legendEntries: any) => {
+      normalizeLegend(legendEntries).forEach((entry: any) => {
         if (Array.isArray(entry?.data)) {
           entry.data.forEach((name: unknown) => {
-            if (typeof name === 'string') {
-              nextSelection[name] = false;
+            if (typeof name === 'string' && name.trim().length) {
+              names.add(name);
             }
           });
         }
+      });
+    };
+
+    try {
+      const option = chartRef.current?.getOption?.() || {};
+      collectFromLegend(option.legend);
+      if (Array.isArray(option.series)) {
+        option.series.forEach((series: any) => {
+          if (series?.name && typeof series.name === 'string') {
+            names.add(series.name);
+          }
+        });
+      }
+    } catch {
+      // ignore option extraction errors
+    }
+
+    if (!names.size) {
+      collectFromLegend(spec?.legend);
+      if (Array.isArray(spec?.series)) {
+        spec.series.forEach((series: any) => {
+          if (series?.name && typeof series.name === 'string') {
+            names.add(series.name);
+          }
+        });
+      }
+    }
+
+    return Array.from(names);
+  }, [spec]);
+
+  const buildSelectionForMetric = useCallback(
+    (metricKey: string, legendNames: string[]) => {
+      if (metricKey === '__all__') {
+        const enableAll: Record<string, boolean> = {};
+        legendNames.forEach((name) => {
+          enableAll[name] = true;
+        });
+        return enableAll;
+      }
+
+      if (metricKey.startsWith('legend:')) {
+        const target = metricKey.replace(/^legend:/, '');
+        const selection: Record<string, boolean> = {};
+        legendNames.forEach((name) => {
+          selection[name] = name === target;
+        });
+        return selection;
+      }
+
+      const nextSelection: Record<string, boolean> = {};
+      legendNames.forEach((name) => {
+        nextSelection[name] = false;
       });
       const enableSeries = (name: string) => {
         if (Object.prototype.hasOwnProperty.call(nextSelection, name)) {
@@ -308,7 +399,7 @@ export const ChartCard: React.FC<ChartCardProps> = ({
       );
       let matched = false;
       if (explicitNames.size) {
-        Object.keys(nextSelection).forEach((name) => {
+        legendNames.forEach((name) => {
           if (explicitNames.has(name)) {
             matched = enableSeries(name) || matched;
           }
@@ -318,7 +409,7 @@ export const ChartCard: React.FC<ChartCardProps> = ({
       if (!matched) {
         const compositeTargets = metricSeriesColumns[metricKey] ?? [];
         if (compositeTargets.length) {
-          Object.keys(nextSelection).forEach((name) => {
+          legendNames.forEach((name) => {
             const nameLower = name.trim().toLowerCase();
             compositeTargets.forEach((target) => {
               const parsed = parseCompositeKey(target);
@@ -338,7 +429,7 @@ export const ChartCard: React.FC<ChartCardProps> = ({
       if (!matched) {
         const label = metricDisplayNames[metricKey] ?? formatColumnLabel(metricKey);
         const selectedLower = label.trim().toLowerCase();
-        Object.keys(nextSelection).forEach((name) => {
+        legendNames.forEach((name) => {
           const nameLower = name.trim().toLowerCase();
           if (nameLower === selectedLower || nameLower.endsWith(` - ${selectedLower}`)) {
             matched = enableSeries(name) || matched;
@@ -353,13 +444,29 @@ export const ChartCard: React.FC<ChartCardProps> = ({
 
       if (!matched) {
         const fallback =
-          Object.entries(legendSelection).find(([, value]) => Boolean(value))?.[0] ??
-          Object.keys(nextSelection)[0];
+          Object.entries(legendSelectionRef.current).find(([, value]) => Boolean(value))?.[0] ??
+          legendNames[0];
         if (fallback) {
           nextSelection[fallback] = true;
         }
       }
 
+      return nextSelection;
+    },
+    [formatColumnLabel, metricDisplayNames, metricLegendMap, metricSeriesColumns, parseCompositeKey],
+  );
+
+  const handleMetricChange = useCallback(
+    (metricKey: string) => {
+      if (!metricKey) {
+        return;
+      }
+      setActiveMetric((prev) => (prev === metricKey ? prev : metricKey));
+      const legendNames = deriveLegendNames();
+      if (!legendNames.length) {
+        return;
+      }
+      const nextSelection = buildSelectionForMetric(metricKey, legendNames);
       setLegendSelection((prev) => {
         const prevKeys = Object.keys(prev);
         const nextKeys = Object.keys(nextSelection);
@@ -372,16 +479,42 @@ export const ChartCard: React.FC<ChartCardProps> = ({
         return nextSelection;
       });
     },
-    [
-      formatColumnLabel,
-      legendSelection,
-      metricDisplayNames,
-      metricLegendMap,
-      metricSeriesColumns,
-      parseCompositeKey,
-      setActiveMetric,
-    ],
+    [buildSelectionForMetric, deriveLegendNames],
   );
+
+  useEffect(() => {
+    if (!enableDropdown || !selectValue) {
+      return;
+    }
+    handleMetricChange(selectValue);
+  }, [enableDropdown, selectValue, handleMetricChange]);
+
+  // Special-case: for market_share_single intent, default to the market share percent line only.
+  useEffect(() => {
+    if (intentKey !== 'market_share_single') return;
+    if (legendSelection && Object.keys(legendSelection).length) return;
+
+    const legendNames = deriveLegendNames();
+    if (!legendNames.length) return;
+
+    // Prefer the metric key if available; otherwise fall back to the legend name containing "market share".
+    const marketShareMetric =
+      metricKeys.find((m) => m.includes('market_share')) ?? 'market_share_percent';
+    let selection = buildSelectionForMetric(marketShareMetric, legendNames);
+
+    // If still none selected (e.g., metric key not mapped), try legend heuristic.
+    if (!Object.values(selection).some(Boolean)) {
+      const marketLegend = legendNames.find((name) => name.toLowerCase().includes('market share'));
+      if (marketLegend) {
+        selection = buildSelectionForMetric(`legend:${marketLegend}`, legendNames);
+      }
+    }
+
+    if (Object.values(selection).some(Boolean)) {
+      setLegendSelection(selection);
+      setActiveMetric(marketShareMetric);
+    }
+  }, [buildSelectionForMetric, deriveLegendNames, intentKey, legendSelection, metricKeys]);
 
   const scopeBanner = spec?.meta?.scopeBanner;
   const statistic = spec?.meta?.chartDesign?.statistic ?? spec?.statistic;
@@ -619,6 +752,9 @@ export const ChartCard: React.FC<ChartCardProps> = ({
                   } catch (err) {
                     console.warn('[ChartCard] Unable to apply legend selection on ready', err);
                   }
+                }
+                if (enableDropdown && selectValue) {
+                  handleMetricChange(selectValue);
                 }
                 // Small delay to ensure proper initialization
                 setTimeout(() => instance.resize(), 100);

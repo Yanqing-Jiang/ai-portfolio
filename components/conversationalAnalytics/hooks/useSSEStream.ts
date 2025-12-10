@@ -120,6 +120,8 @@ export interface UseSSEStreamResult {
     processNodes: ProcessNode[];
     processEdges: ProcessEdge[];
     lastAgentLabel: string | null;
+    runId: string | null;
+    permissionState: string | null;
     sendMessage: (message: string, sessionId: string, agentMode?: string | null, options?: { resume?: boolean }) => void;
     pauseStream: () => void;
     resumeLast: () => void;
@@ -153,6 +155,8 @@ export function useSSEStream(apiUrl: string = '/api/conv-analytics/stream'): Use
     const [processNodes, setProcessNodes] = useState<ProcessNode[]>([]);
     const [processEdges, setProcessEdges] = useState<ProcessEdge[]>([]);
     const [lastAgentLabel, setLastAgentLabel] = useState<string | null>(null);
+    const [runId, setRunId] = useState<string | null>(null);
+    const [permissionState, setPermissionState] = useState<string | null>(null);
 
     const abortControllerRef = useRef<AbortController | null>(null);
     const lastMessageRef = useRef<string | null>(null);
@@ -178,6 +182,8 @@ export function useSSEStream(apiUrl: string = '/api/conv-analytics/stream'): Use
         setProcessNodes([]);
         setProcessEdges([]);
         setIsPaused(false);
+        setRunId(null);
+        setPermissionState(null);
     }, []);
 
     // Function: cancelSelection — clears pending HITL selection without submitting
@@ -335,6 +341,10 @@ export function useSSEStream(apiUrl: string = '/api/conv-analytics/stream'): Use
 
     // Function: handleEvent — invoked for each SSE payload to keep UI state in sync with Claude agent thinking/data.
     const handleEvent = useCallback((event: SSEEvent) => {
+        const incomingRunId = event.data.run_id as string | undefined;
+        if (incomingRunId) {
+            setRunId(incomingRunId);
+        }
         switch (event.type) {
             case 'thinking':
                 setThinkingSteps(prev => {
@@ -408,6 +418,7 @@ export function useSSEStream(apiUrl: string = '/api/conv-analytics/stream'): Use
                 if (event.data.details) {
                     setErrorDetails(event.data.details as string);
                 }
+                setPermissionState((event.data.code as string) || null);
                 // Add error to thinking steps for visibility in thinking panel
                 setThinkingSteps(prev => {
                     const errorStep: ThinkingStep = {
@@ -577,5 +588,7 @@ export function useSSEStream(apiUrl: string = '/api/conv-analytics/stream'): Use
         cancelSelection,
         reset,
         isPaused,
+        runId,
+        permissionState,
     };
 }

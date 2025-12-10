@@ -190,6 +190,8 @@ const ConversationalAnalyticsPage: React.FC = () => {
     processNodes,
     processEdges,
     lastAgentLabel,
+    runId,
+    permissionState,
     sendMessage,
     pauseStream,
     resumeLast,
@@ -321,6 +323,8 @@ const ConversationalAnalyticsPage: React.FC = () => {
             agentMode={agentMode}
             skillInfo={skillInfo}
             debugLogs={debugLogs}
+            runId={runId}
+            permissionState={permissionState}
           />
 
           <div className="flex items-center gap-2">

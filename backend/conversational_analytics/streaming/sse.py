@@ -2,7 +2,11 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict
+from contextvars import ContextVar
+from typing import Any, Dict, Optional
+
+_run_id_ctx: ContextVar[Optional[str]] = ContextVar("run_id_ctx", default=None)
+_step_id_ctx: ContextVar[Optional[str]] = ContextVar("step_id_ctx", default=None)
 
 
 def _safe_dumps(payload: Any) -> str:
@@ -36,7 +40,34 @@ def format_sse_event(event_type: str, data: Dict[str, Any]) -> str:
     Returns:
         SSE formatted string
     """
-    return format_sse({"type": event_type, "data": data})
+    payload = {"type": event_type, "data": data}
+    run_id = _run_id_ctx.get()
+    step_id = _step_id_ctx.get()
+    if run_id and isinstance(payload.get("data"), dict):
+        payload["data"]["run_id"] = run_id
+    if step_id and isinstance(payload.get("data"), dict):
+        payload["data"]["step_id"] = step_id
+    return format_sse(payload)
+
+
+def set_run_context(run_id: Optional[str], step_id: Optional[str] = None) -> None:
+    """Function: set_run_context — sets per-run contextvars so SSE events carry tracing metadata.
+    Called from: agent.run_with_tools at run start and teardown.
+    Invokes: ContextVar.set for run_id and step_id.
+    Purpose: Adds run_id/step_id to every event without changing individual call sites."""
+    _run_id_ctx.set(run_id)
+    _step_id_ctx.set(step_id)
+
+
+def set_step_context(step_id: Optional[str]) -> None:
+    """Function: set_step_context — updates the current step identifier for downstream SSE events."""
+    _step_id_ctx.set(step_id)
+
+
+def clear_run_context() -> None:
+    """Function: clear_run_context — clears tracing context after a run completes."""
+    _run_id_ctx.set(None)
+    _step_id_ctx.set(None)
 
 
 # Convenience functions for common events

@@ -29,6 +29,8 @@ interface ProcessPanelProps {
   skillInfo?: SkillInfo | null;
   debugLogs: DebugLog[];
   lastAgentLabel?: string | null;
+  runId?: string | null;
+  permissionState?: string | null;
 }
 
 // Node type configuration with icons and colors
@@ -498,6 +500,8 @@ const ProcessPanel: React.FC<ProcessPanelProps> = ({
   skillInfo,
   debugLogs,
   lastAgentLabel,
+  runId,
+  permissionState,
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
@@ -941,6 +945,9 @@ const ProcessPanel: React.FC<ProcessPanelProps> = ({
                     });
                     const payload = {
                       generated_at: new Date().toISOString(),
+                      run_id: runId,
+                      permission_state: permissionState,
+                      blocked: permissionState ? ['permission_denied', 'run_timeout', 'cancelled'].includes(permissionState) : false,
                       process_nodes: processNodes,
                       process_edges: processEdges,
                       supervisor_logs: supervisorLogs,

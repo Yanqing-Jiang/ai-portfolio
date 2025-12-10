@@ -27,6 +27,8 @@ class Settings:
     # Claude API
     claude_api_key: str = field(default_factory=lambda: os.getenv("CLAUDE_API_KEY", ""))
     claude_model: str = "claude-haiku-4-5-20251001"
+    use_sdk_assets: bool = field(default_factory=lambda: os.getenv("CONV_ANALYTICS_USE_SDK_ASSETS", "true").lower() in ("true", "1", "yes"))
+    sdk_project_path: Path = field(default_factory=lambda: Path(__file__).resolve().parents[2] / ".claude")
     
     # Database
     database_url: str = field(default_factory=lambda: os.getenv("DATABASE_URL", ""))

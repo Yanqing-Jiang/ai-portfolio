@@ -1259,12 +1259,30 @@ export const withLightTheme = (spec: any) => {
   option.textStyle = { ...(spec.textStyle || {}), color: '#333333', fontFamily: 'Inter, ui-sans-serif, system-ui' };
   option.title = {
     ...(spec.title || {}),
+    left: (spec.title || {}).left ?? 'center',
+    top: (spec.title || {}).top ?? '3%',
     textStyle: { ...((spec.title || {}).textStyle || {}), color: '#111111', fontWeight: 700 },
   };
   option.legend = {
     ...(spec.legend || {}),
+    top: (spec.legend || {}).top ?? '10%',
+    left: (spec.legend || {}).left ?? 'center',
+    padding: (spec.legend || {}).padding ?? [0, 0, 0, 0],
     textStyle: { ...((spec.legend || {}).textStyle || {}), color: '#333333' },
   };
+  const normalizeGrid = (grid: any) => ({
+    ...(grid || {}),
+    top: (grid || {}).top ?? 70,
+    left: (grid || {}).left ?? '6%',
+    right: (grid || {}).right ?? '6%',
+    bottom: (grid || {}).bottom ?? 50,
+    containLabel: (grid || {}).containLabel ?? true,
+  });
+  if (Array.isArray(option.grid)) {
+    option.grid = option.grid.map(normalizeGrid);
+  } else {
+    option.grid = normalizeGrid(option.grid);
+  }
   option.tooltip = {
     ...(spec.tooltip || {}),
     backgroundColor: '#ffffff',
