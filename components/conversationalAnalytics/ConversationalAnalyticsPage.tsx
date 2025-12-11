@@ -1,5 +1,5 @@
 /**
- * Function: ConversationalAnalyticsPage — Next Gen Analytics (Agent) chat UI inspired by ChatGPT/Claude
+ * Function: ConversationalAnalyticsPage - Next Gen Analytics (Agent) chat UI inspired by ChatGPT/Claude
  * Called from: ProjectView for the conversational-analytics project
  * Invokes: useSSEStream hook for Claude agent streaming, renders MessageBubble, ThinkingProcessBar
  * Purpose: Delivers a sleek, minimalist chat experience for semiconductor financial analysis
@@ -15,7 +15,12 @@ import SelectionCard from './SelectionCard';
 import ProcessPanel from './ProcessPanel';
 import { theme } from './styles';
 
-// Welcome screen component
+/**
+ * Function: WelcomeScreen - used when there are no chat messages to show starter prompts
+ * Called from: ConversationalAnalyticsPage conditional render prior to the messages list
+ * Invokes: onSuggestionClick callback to stage prompts in ChatInput
+ * Purpose: Accelerates onboarding by giving one-click example queries for the analytics agents
+ */
 const WelcomeScreen: React.FC<{ onSuggestionClick: (prompt: string) => void; mode?: string }> = ({ onSuggestionClick, mode }) => {
   const suggestions = [
     {
@@ -151,6 +156,12 @@ interface ChatMessage {
   htmlArtifact?: HtmlArtifact | null;
 }
 
+/**
+ * Function: ConversationalAnalyticsPage - orchestrates chat layout, streaming state, and agent controls
+ * Called from: ProjectView route for conversational analytics
+ * Invokes: useSSEStream for backend interaction; renders ProcessPanel, ThinkingProcessBar, MessageBubble, SelectionCard, ChatInput
+ * Purpose: Central hub connecting UI, agent selection, and streaming data flow
+ */
 // Main Page Component
 const ConversationalAnalyticsPage: React.FC = () => {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -193,6 +204,12 @@ const ConversationalAnalyticsPage: React.FC = () => {
   } = useSSEStream();
   const activeAgentLabel = activeAgent?.name || lastAgentLabel || (agentMode === 'single' ? 'Single Agent' : 'Assistant');
 
+  /**
+   * Function: buildDynamicSuggestions - crafts quick prompts based on the latest user text and tickers
+   * Called from: ChatInput via suggestionsOverride prop
+   * Invokes: Regex parsing for ticker symbols; returns suggestion metadata consumed by ChatInput
+   * Purpose: Keep assistant proactive with context-aware prompts without manual typing
+   */
   const buildDynamicSuggestions = (): { label: string; prompt: string; icon: string }[] => {
     const lastUser = [...messages].reverse().find((m) => m.role === 'user');
     const text = lastUser?.content || '';
@@ -256,6 +273,12 @@ const ConversationalAnalyticsPage: React.FC = () => {
     }
   }, [isStreaming, content, thinkingSteps, chartConfig, dataResult, newsResult, htmlArtifact, activeAgentLabel, reset]);
 
+  /**
+   * Function: handleSubmit - dispatches the typed prompt to the SSE pipeline
+   * Called from: ChatInput onSubmit
+   * Invokes: sendMessage with session/agent context and updates local message log
+   * Purpose: Central guard preventing empty submissions or overlapping sends
+   */
   const handleSubmit = () => {
     if (!inputValue.trim() || (isStreaming && !isPaused)) return;
 
@@ -264,6 +287,12 @@ const ConversationalAnalyticsPage: React.FC = () => {
     setInputValue('');
   };
 
+  /**
+   * Function: handleSuggestionClick - stages a suggested prompt for the user
+   * Called from: WelcomeScreen suggestion buttons
+   * Invokes: setInputValue to prefill ChatInput
+   * Purpose: Simplifies prompt entry from curated examples
+   */
   const handleSuggestionClick = (prompt: string) => {
     setInputValue(prompt);
   };
@@ -301,7 +330,14 @@ const ConversationalAnalyticsPage: React.FC = () => {
               Next Gen Analytics (Agent)
             </h1>
             <p className="text-xs" style={{ color: theme.colors.text.muted }}>
-              Select Single Agent or Multi-agent →
+              Select Single Agent or Multi-agent
+              <span
+                aria-hidden="true"
+                className="ml-1 text-sm align-middle"
+                style={{ color: '#facc15' }}
+              >
+                →
+              </span>
             </p>
           </div>
         </div>

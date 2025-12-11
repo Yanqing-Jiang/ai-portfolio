@@ -253,12 +253,12 @@ const ChatInput: React.FC<ChatInputProps> = ({
 
         {/* Auth + quota status */}
         <div
-          className="mt-3 flex flex-wrap items-center justify-between gap-3 text-xs"
+          className="mt-3 flex items-center gap-3 text-xs"
           style={{ color: theme.colors.text.muted }}
         >
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5">
             <span
-              className="w-2.5 h-2.5 rounded-full"
+              className="w-2 h-2 rounded-full"
               style={{
                 backgroundColor: authState.loading
                   ? theme.colors.status.warning
@@ -267,40 +267,37 @@ const ChatInput: React.FC<ChatInputProps> = ({
                   : theme.colors.status.warning,
               }}
             />
-            <span style={{ color: theme.colors.text.primary }}>
-              {authState.loading
-                ? 'Checking sign-in status...'
-                : authState.user
-                ? `Signed in as ${authState.user.email ?? 'member'}`
-                : 'Guest access'}
-            </span>
-          </div>
-          <div className="flex items-center gap-2">
             <span>
-              â€¢ {usageStats ? `${usageStats.current_usage}/${usageStats.limit}` : isUsageLoading ? 'Loading...' : 'â€”'} requests/day
+              {authState.loading
+                ? 'Checking...'
+                : authState.user
+                ? (authState.user.email ?? 'Member')
+                : 'Guest'}
             </span>
-            {authState.user ? (
-              <button
-                onClick={async () => {
-                  await authService.signOut();
-                  setUsageStats(null);
-                  setIsUsageLoading(true);
-                }}
-                className="underline"
-                style={{ color: theme.colors.accent.primary }}
-              >
-                Sign out
-              </button>
-            ) : (
-              <button
-                onClick={() => setShowAuthModal(true)}
-                className="underline"
-                style={{ color: theme.colors.accent.primary }}
-              >
-                Sign in
-              </button>
-            )}
+            <span style={{ opacity: 0.5 }}>•</span>
+            <span>
+              {usageStats ? `${usageStats.current_usage}/${usageStats.limit}` : isUsageLoading ? '—' : '—'} requests/day
+            </span>
           </div>
+          {authState.user ? (
+            <button
+              onClick={async () => {
+                await authService.signOut();
+                setUsageStats(null);
+                setIsUsageLoading(true);
+              }}
+              style={{ color: theme.colors.accent.primary }}
+            >
+              Sign out
+            </button>
+          ) : (
+            <button
+              onClick={() => setShowAuthModal(true)}
+              style={{ color: theme.colors.accent.primary }}
+            >
+              Sign in for more
+            </button>
+          )}
         </div>
       </div>
       </div>
