@@ -18,7 +18,15 @@ from typing import Dict, Any, Optional, AsyncGenerator, TypeVar, Type
 from pydantic import BaseModel
 import openai
 from openai import OpenAI, AsyncOpenAI
-from backend import unified_responses_client
+
+# Render starts uvicorn inside the backend/ directory, so the project root
+# (which contains the `backend` package) may be missing from PYTHONPATH.
+# Fallback to a local import so deployment works whether the package name
+# is resolvable or not.
+try:
+    from backend import unified_responses_client
+except ModuleNotFoundError:  # pragma: no cover - only hit in Render envs
+    import unified_responses_client  # type: ignore
 
 logger = logging.getLogger(__name__)
 
