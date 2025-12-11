@@ -1,5 +1,5 @@
-/**
- * Function: ChatInput — Modern chat input with suggestions, animations, and auth/quota status
+﻿/**
+ * Function: ChatInput â€” Modern chat input with suggestions, animations, and auth/quota status
  * Called from: ConversationalAnalyticsPage
  * Invokes: Supabase auth (authService) + /api/rate-limit/usage to show the signed-in widget; AuthModal for sign-in
  * Purpose: Provides the conversational input experience while mirroring the sign-in/quota pill used in other project chats
@@ -37,7 +37,7 @@ const baseSuggestions: SuggestionItem[] = [
   { label: 'Margins vs peers', prompt: 'Net margin vs peers for NVDA over last 5 years', icon: '💹' },
   { label: 'Margin growth', prompt: 'Operating margin growth vs peers for AMD by quarter', icon: '🔺' },
   { label: 'Project showcase', prompt: 'Project showcase walkthrough of the Next Gen Analytics agent', icon: '🗂️' },
-};
+];
 
 // Use shared chat scope so credits align across projects
 const RATE_LIMIT_SCOPE = 'chat';
@@ -277,7 +277,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
           </div>
           <div className="flex items-center gap-2">
             <span>
-              • {usageStats ? `${usageStats.current_usage}/${usageStats.limit}` : isUsageLoading ? 'Loading...' : '—'} requests/day
+              â€¢ {usageStats ? `${usageStats.current_usage}/${usageStats.limit}` : isUsageLoading ? 'Loading...' : 'â€”'} requests/day
             </span>
             {authState.user ? (
               <button
