@@ -3,8 +3,9 @@ from __future__ import annotations
 
 import logging
 import json
+from pathlib import Path
 from fastapi import APIRouter, HTTPException, Depends, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
 
 from ..agent import (
     ConversationalAnalyticsAgent,
@@ -269,3 +270,15 @@ async def submit_selection(
         "session_id": reply.session_id,
         "resolved_slots": final_slots,
     }
+
+
+@router.get("/showcase")
+async def serve_showcase_page():
+    """Function: serve_showcase_page — called from the `open_showcase_page` tool and docs links to surface the static HTML showcase.
+    Called from: showcase tool response (agent.run_with_tools) and direct browser hits to /api/conv-analytics/showcase.
+    Invokes: FileResponse streaming of backend/conversational_analytics/static/showcase.html.
+    Purpose: Provide a public, auth-free showcase page that can be embedded or opened directly without Supabase JWT."""
+    static_path = Path(__file__).parent.parent / "static" / "showcase.html"
+    if not static_path.exists():
+        raise HTTPException(status_code=404, detail="Showcase not found")
+    return FileResponse(path=static_path, media_type="text/html")

@@ -465,9 +465,6 @@ async def conversational_analytics_rate_limit(request: Request):
 
     # Share quota with general chat so usage is unified across projects
     await smart_rate_limit(request, scope=RateLimitScope.CHAT)
-    identifier = await who_am_i(request)
-    if identifier.startswith("ip:"):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Supabase JWT required for conversational analytics",
-        )
+    # Allow unauthenticated guests up to the CHAT guest limit (5/day today); JWT users keep higher member limits.
+    # smart_rate_limit already increments usage and enforces quotas; no extra JWT gate needed here.
+    return
