@@ -16,7 +16,7 @@ import { authService, type AuthState } from '@/services/auth';
 
 // --- Function/Class Map ---
 // Component: LinkedInPhotoPage — mounted by ProjectView for the LinkedIn photo project; handles upload → prompt selection → generation/variation.
-// Helper: fetchCredits — fetches lifetime LinkedIn photo credits for signed-in users from /api/linkedin-photo/credits.
+// Helper: fetchCredits — fetches LinkedIn photo credits for signed-in users from /api/linkedin-photo/credits.
 // Helper: ensureAuthenticated/ensureCreditsAvailable — gates actions to logged-in users with remaining credits; shows auth or follow modals when blocked.
 // Purpose: Deliver the LinkedIn photo generator experience with credit gating, hero imagery, and preset loading.
 
@@ -382,6 +382,7 @@ const LinkedInPhotoPage: React.FC<LinkedInPhotoPageProps> = ({ apiPath = '/api/l
     formData.append('prop', options.prop);
 
     try {
+      const authHeaders = await authService.getAuthHeaders();
       const targetUrl = VARIATION_API_PATH.startsWith('http')
         ? VARIATION_API_PATH
         : `${backendBaseRef.current}${VARIATION_API_PATH.startsWith('/') ? '' : '/'}${VARIATION_API_PATH}`;
@@ -389,6 +390,9 @@ const LinkedInPhotoPage: React.FC<LinkedInPhotoPageProps> = ({ apiPath = '/api/l
       const response = await fetch(targetUrl, {
         method: 'POST',
         body: formData,
+        headers: {
+          ...authHeaders,
+        },
       });
 
       if (!response.ok) {
@@ -522,6 +526,7 @@ const LinkedInPhotoPage: React.FC<LinkedInPhotoPageProps> = ({ apiPath = '/api/l
         setGenerationProgress((prev) => Math.min(prev + 10, 90));
       }, 500);
 
+      const authHeaders = await authService.getAuthHeaders();
       const targetUrl = apiPath.startsWith('http')
         ? apiPath
         : `${backendBaseRef.current}${apiPath.startsWith('/') ? '' : '/'}${apiPath}`;
@@ -529,6 +534,9 @@ const LinkedInPhotoPage: React.FC<LinkedInPhotoPageProps> = ({ apiPath = '/api/l
       const response = await fetch(targetUrl, {
         method: 'POST',
         body: formData,
+        headers: {
+          ...authHeaders,
+        },
       });
 
       if (!response.ok) {
@@ -684,7 +692,7 @@ const LinkedInPhotoPage: React.FC<LinkedInPhotoPageProps> = ({ apiPath = '/api/l
                   <span>
                     {creditsLoading
                       ? 'Loading credits...'
-                      : `${credits?.remaining ?? LINKEDIN_CREDIT_LIMIT}/${credits?.limit ?? LINKEDIN_CREDIT_LIMIT} LinkedIn photo credits left (lifetime)`}
+                      : `${credits?.remaining ?? LINKEDIN_CREDIT_LIMIT}/${credits?.limit ?? LINKEDIN_CREDIT_LIMIT} LinkedIn photo credits left`}
                   </span>
                 </div>
               </div>
@@ -695,7 +703,7 @@ const LinkedInPhotoPage: React.FC<LinkedInPhotoPageProps> = ({ apiPath = '/api/l
                     <div className="space-y-1 text-left">
                       <p className="font-semibold text-lg">Sign in to use the LinkedIn Photo Generator</p>
                       <p className="text-sm text-amber-100/90">
-                        Uploads and generations are available to signed-in users with 2 lifetime credits.
+                        Uploads and generations are available to signed-in users with 2 credits.
                       </p>
                     </div>
                     <Button onClick={() => setShowAuthModal(true)} variant="default" className="bg-primary text-primary-foreground">

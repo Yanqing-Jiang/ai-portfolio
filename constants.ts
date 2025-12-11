@@ -13,7 +13,7 @@ Step 1 �?" Upload: validate JPEG or PNG up to 8 MB, show an inline preview, an
 Step 2 �?" Describe: capture a single style sentence and expand it with Gemini into a photography-grade brief (lighting, background, wardrobe) that preserves identity.
 Step 3 �?" Generate: FastAPI validates the file, expands the prompt, calls Gemini Nano Banana image editing, and returns the professional headshot alongside the transparent prompt display with download/share actions.`,
         cardDescription:
-          'Upload a portrait, describe the vibe, and watch Gemini 3 Pro Image deliver a LinkedIn headshot with the exact expanded prompt beside it.',
+          'Upload any causal photos, choose a template, and watch Gemini 3 Pro Image deliver a LinkedIn headshot with professional studio level camera.',
         technologies: [
           'Tailwind CSS',
           'Image Iterations',
@@ -48,7 +48,7 @@ Backend: FastAPI router /api/linkedin-photo/generate, Gemini LLM for prompt expa
         ogImage: 'https://yanqinghot.blob.core.windows.net/public-access/linkedin-photo-generator.jpg',
         seoTitle: 'LinkedIn Photo Generator | Gemini Nano Banana Headshots',
         seoDescription:
-          'Upload a portrait, describe the vibe, and generate a LinkedIn-ready professional headshot with Gemini Nano Banana. The app shows the exact prompt used so users trust the workflow.',
+          'Upload any causal photos, choose a template, and watch Gemini 3 Pro Image deliver a LinkedIn headshot with professional studio level camera.',
         seoKeywords: [
           'LinkedIn headshot generator',
           'Gemini Nano Banana',
@@ -669,7 +669,6 @@ This production-grade web application automates the invoice validation and match
     ],
   },
 ];
-
 
 
 
