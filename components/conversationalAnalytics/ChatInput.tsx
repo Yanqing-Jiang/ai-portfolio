@@ -1,12 +1,16 @@
 /**
- * Function: ChatInput — Modern chat input with suggestions and animations
+ * Function: ChatInput — Modern chat input with suggestions, animations, and auth/quota status
  * Called from: ConversationalAnalyticsPage
- * Purpose: Provides elegant input experience with quick suggestions
+ * Invokes: Supabase auth (authService) + /api/rate-limit/usage to show the signed-in widget; AuthModal for sign-in
+ * Purpose: Provides the conversational input experience while mirroring the sign-in/quota pill used in other project chats
  */
 
 import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { theme } from './styles';
+import { authService, type AuthState } from '../../services/auth';
+import { apiService, type UsageStats } from '../../services/apiService';
+import { AuthModal } from '../AuthModal';
 
 interface SuggestionItem {
   label: string;
@@ -33,7 +37,10 @@ const baseSuggestions: SuggestionItem[] = [
   { label: 'Margins vs peers', prompt: 'Net margin vs peers for NVDA over last 5 years', icon: '💹' },
   { label: 'Margin growth', prompt: 'Operating margin growth vs peers for AMD by quarter', icon: '🔺' },
   { label: 'Project showcase', prompt: 'Project showcase walkthrough of the Next Gen Analytics agent', icon: '🗂️' },
-];
+};
+
+// Use shared chat scope so credits align across projects
+const RATE_LIMIT_SCOPE = 'chat';
 
 const ChatInput: React.FC<ChatInputProps> = ({
   value,
@@ -49,6 +56,10 @@ const ChatInput: React.FC<ChatInputProps> = ({
   const [isFocused, setIsFocused] = useState(false);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const [authState, setAuthState] = useState<AuthState>({ user: null, loading: true, error: null });
+  const [usageStats, setUsageStats] = useState<UsageStats | null>(null);
+  const [isUsageLoading, setIsUsageLoading] = useState(true);
+  const [showAuthModal, setShowAuthModal] = useState(false);
   const suggestions = suggestionsOverride && suggestionsOverride.length > 0 ? suggestionsOverride : baseSuggestions;
 
   // Auto-resize textarea
@@ -58,6 +69,34 @@ const ChatInput: React.FC<ChatInputProps> = ({
       inputRef.current.style.height = Math.min(inputRef.current.scrollHeight, 150) + 'px';
     }
   }, [value]);
+
+  useEffect(() => {
+    const unsubscribe = authService.subscribe(setAuthState);
+    return unsubscribe;
+  }, []);
+
+  useEffect(() => {
+    let isMounted = true;
+    const fetchUsage = async () => {
+      setIsUsageLoading(true);
+      const result = await apiService.getUsageStats(RATE_LIMIT_SCOPE);
+      if (!isMounted) return;
+      if (result.success && result.data) {
+        setUsageStats(result.data);
+      } else {
+        setUsageStats(null);
+      }
+      setIsUsageLoading(false);
+    };
+
+    if (!authState.loading) {
+      fetchUsage();
+    }
+
+    return () => {
+      isMounted = false;
+    };
+  }, [authState.loading, authState.user?.id]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -75,13 +114,14 @@ const ChatInput: React.FC<ChatInputProps> = ({
   };
 
   return (
-    <div
-      className="relative"
-      style={{
-        backgroundColor: theme.colors.bg.secondary,
-        borderTop: `1px solid ${theme.colors.border.subtle}`,
-      }}
-    >
+    <>
+      <div
+        className="relative"
+        style={{
+          backgroundColor: theme.colors.bg.secondary,
+          borderTop: `1px solid ${theme.colors.border.subtle}`,
+        }}
+      >
       {/* Suggestions */}
       <AnimatePresence>
         {showSuggestions && !value && (
@@ -211,14 +251,67 @@ const ChatInput: React.FC<ChatInputProps> = ({
           </div>
         </div>
 
-        {/* Helper text */}
-        <p className="mt-2 text-center text-xs" style={{ color: theme.colors.text.muted }}>
-          Press <kbd className="px-1.5 py-0.5 rounded" style={{ backgroundColor: theme.colors.bg.elevated }}>Enter</kbd> to send, <kbd className="px-1.5 py-0.5 rounded" style={{ backgroundColor: theme.colors.bg.elevated }}>Shift+Enter</kbd> for new line
-        </p>
+        {/* Auth + quota status */}
+        <div
+          className="mt-3 flex flex-wrap items-center justify-between gap-3 text-xs"
+          style={{ color: theme.colors.text.muted }}
+        >
+          <div className="flex items-center gap-2">
+            <span
+              className="w-2.5 h-2.5 rounded-full"
+              style={{
+                backgroundColor: authState.loading
+                  ? theme.colors.status.warning
+                  : authState.user
+                  ? theme.colors.status.success
+                  : theme.colors.status.warning,
+              }}
+            />
+            <span style={{ color: theme.colors.text.primary }}>
+              {authState.loading
+                ? 'Checking sign-in status...'
+                : authState.user
+                ? `Signed in as ${authState.user.email ?? 'member'}`
+                : 'Guest access'}
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span>
+              • {usageStats ? `${usageStats.current_usage}/${usageStats.limit}` : isUsageLoading ? 'Loading...' : '—'} requests/day
+            </span>
+            {authState.user ? (
+              <button
+                onClick={async () => {
+                  await authService.signOut();
+                  setUsageStats(null);
+                  setIsUsageLoading(true);
+                }}
+                className="underline"
+                style={{ color: theme.colors.accent.primary }}
+              >
+                Sign out
+              </button>
+            ) : (
+              <button
+                onClick={() => setShowAuthModal(true)}
+                className="underline"
+                style={{ color: theme.colors.accent.primary }}
+              >
+                Sign in
+              </button>
+            )}
+          </div>
+        </div>
       </div>
-    </div>
+      </div>
+
+      <AuthModal
+        isOpen={showAuthModal}
+        onClose={() => setShowAuthModal(false)}
+        onSuccess={() => setShowAuthModal(false)}
+      />
+    </>
   );
 };
 
 export default ChatInput;
-

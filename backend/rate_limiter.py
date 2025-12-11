@@ -463,7 +463,8 @@ async def conversational_analytics_rate_limit(request: Request):
     if os.getenv("CONV_ANALYTICS_SKIP_JWT", "").lower() in {"1", "true", "yes"}:
         return
 
-    await smart_rate_limit(request, scope=RateLimitScope.CONVERSATIONAL_ANALYTICS)
+    # Share quota with general chat so usage is unified across projects
+    await smart_rate_limit(request, scope=RateLimitScope.CHAT)
     identifier = await who_am_i(request)
     if identifier.startswith("ip:"):
         raise HTTPException(
