@@ -79,9 +79,9 @@ Backend: FastAPI router /api/linkedin-photo/generate, Gemini LLM for prompt expa
         coverUrl: 'https://yanqing.app/next-gen-analytics-agent-hero.gif',
         imageUrl: 'https://yanqing.app/next-gen-analytics-agent-hero.gif',
         ogImage: 'https://yanqing.app/next-gen-analytics-agent-hero.gif',
-        seoTitle: 'Next Gen Analytics Agents | OpenAI Agent SDK, Agentic Analytics',
+        seoTitle: 'Next Gen Analytics Agent | SKILL.MD driven Analytics | Claude Agent SDK',
         seoDescription:
-          'LLM-driven analytics built on the OpenAI Agent SDK framework that clarifies intent, pulls from Supabase SQL, streams stock charts, runs online research, and mirrors Claude code-like single-agent setups alongside multi-agent orchestration.',
+          'Skill.md driven analytics build on the Claude Agent SDK framework that clarifies intent, pulls from SQL database, build charts, run latest sentiment analysis',
         seoKeywords: [
           'LangGraph analytics',
           'analytics agents',
@@ -669,7 +669,6 @@ This production-grade web application automates the invoice validation and match
     ],
   },
 ];
-
 
 
 
