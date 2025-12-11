@@ -1,5 +1,5 @@
 /**
- * Function: ConversationalAnalyticsPage — Modern ChatGPT/Claude-inspired conversational analytics UI
+ * Function: ConversationalAnalyticsPage — Next Gen Analytics (Agent) chat UI inspired by ChatGPT/Claude
  * Called from: ProjectView for the conversational-analytics project
  * Invokes: useSSEStream hook for Claude agent streaming, renders MessageBubble, ThinkingProcessBar
  * Purpose: Delivers a sleek, minimalist chat experience for semiconductor financial analysis
@@ -7,7 +7,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { useSSEStream, ThinkingStep, NewsResult } from './hooks/useSSEStream';
+import { useSSEStream, ThinkingStep, NewsResult, HtmlArtifact } from './hooks/useSSEStream';
 import MessageBubble from './MessageBubble';
 import ThinkingProcessBar from './ThinkingProcessBar';
 import ChatInput from './ChatInput';
@@ -71,15 +71,15 @@ const WelcomeScreen: React.FC<{ onSuggestionClick: (prompt: string) => void; mod
           className="text-2xl font-semibold mb-2"
           style={{ color: theme.colors.text.primary }}
         >
-          Semiconductor Analyst
+          Next Gen Analytics (Agent)
         </h1>
         <p
           className="text-sm max-w-md"
           style={{ color: theme.colors.text.secondary }}
         >
           {mode === 'auto'
-            ? 'Multi-agent: supervisor will route to SQL, Chart Builder, TradingView, or News specialists.'
-            : 'Single Agent: handles data, charts, and insights end-to-end.'}
+            ? 'Multi-agent routes to SQL, Chart Builder, TradingView, or News specialists.'
+            : 'Available tickers: NVDA, AMD, INTC, AVGO, QCOM, MU, TXN.'}
         </p>
       </motion.div>
 
@@ -135,16 +135,6 @@ const WelcomeScreen: React.FC<{ onSuggestionClick: (prompt: string) => void; mod
         ))}
       </motion.div>
 
-      {/* Powered by */}
-      <motion.p
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={{ delay: 0.4 }}
-        className="mt-8 text-xs"
-        style={{ color: theme.colors.text.muted }}
-      >
-        Powered by Claude AI • Data from comp_financials
-      </motion.p>
     </motion.div>
   );
 };
@@ -158,6 +148,7 @@ interface ChatMessage {
   dataResult?: { rows: unknown[]; columns: string[] } | null;
   newsResult?: NewsResult | null;
   agentLabel?: string | null;
+  htmlArtifact?: HtmlArtifact | null;
 }
 
 // Main Page Component
@@ -166,7 +157,7 @@ const ConversationalAnalyticsPage: React.FC = () => {
   const [inputValue, setInputValue] = useState('');
   const [sessionId] = useState(() => `session-${Date.now()}`);
   const [isPlanExpanded, setIsPlanExpanded] = useState(false);
-  const [agentMode, setAgentMode] = useState<string>('auto');
+  const [agentMode, setAgentMode] = useState<string>('single');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
 
@@ -179,6 +170,7 @@ const ConversationalAnalyticsPage: React.FC = () => {
     dataResult,
     newsResult,
     skillInfo,
+    htmlArtifact,
     planSteps,
     currentStepId,
     error,
@@ -246,7 +238,8 @@ const ConversationalAnalyticsPage: React.FC = () => {
 
   // Handle streaming completion
   useEffect(() => {
-    if (!isStreaming && content) {
+    const hasPayload = content || chartConfig || dataResult || newsResult || htmlArtifact;
+    if (!isStreaming && hasPayload) {
       setMessages((prev) => [
         ...prev,
         {
@@ -257,10 +250,11 @@ const ConversationalAnalyticsPage: React.FC = () => {
           dataResult,
           newsResult,
           agentLabel: activeAgentLabel,
+          htmlArtifact,
         },
       ]);
     }
-  }, [isStreaming, content, thinkingSteps, chartConfig, dataResult, newsResult, activeAgentLabel, reset]);
+  }, [isStreaming, content, thinkingSteps, chartConfig, dataResult, newsResult, htmlArtifact, activeAgentLabel, reset]);
 
   const handleSubmit = () => {
     if (!inputValue.trim() || (isStreaming && !isPaused)) return;
@@ -304,10 +298,10 @@ const ConversationalAnalyticsPage: React.FC = () => {
               className="text-base font-semibold"
               style={{ color: theme.colors.text.primary }}
             >
-              Conversational Analytics
+              Next Gen Analytics (Agent)
             </h1>
             <p className="text-xs" style={{ color: theme.colors.text.muted }}>
-              Select Multi-agent or Single Agent below
+              Select Single Agent or Multi-agent →
             </p>
           </div>
         </div>
@@ -342,8 +336,8 @@ const ConversationalAnalyticsPage: React.FC = () => {
               }}
               disabled={isStreaming}
             >
-              <option value="auto">Multi-agent (Supervisor)</option>
               <option value="single">Single Agent</option>
+              <option value="auto">Multi-agent</option>
             </select>
           </div>
         </div>
@@ -398,17 +392,19 @@ const ConversationalAnalyticsPage: React.FC = () => {
                   dataResult={msg.dataResult}
                   newsResult={msg.newsResult}
                   agentLabel={msg.agentLabel}
+                  htmlArtifact={msg.htmlArtifact}
                 />
               ))}
 
               {/* Streaming message */}
-              {isStreaming && (content || chartConfig || dataResult || newsResult) && (
+              {isStreaming && (content || chartConfig || dataResult || newsResult || htmlArtifact) && (
                 <MessageBubble
                   role="assistant"
                   content={content}
                   chartConfig={chartConfig}
                   dataResult={dataResult}
                   newsResult={newsResult}
+                  htmlArtifact={htmlArtifact}
                   isStreaming={true}
                   agentLabel={activeAgentLabel}
                 />

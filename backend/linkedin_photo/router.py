@@ -1,18 +1,88 @@
 from typing import Dict
 
-from fastapi import APIRouter, File, Form, UploadFile, Request
+from fastapi import APIRouter, File, Form, UploadFile, Request, HTTPException
 
 try:
-    from rate_limiter import smart_rate_limit, RateLimitScope
+    from rate_limiter import smart_rate_limit, RateLimitScope, who_am_i, redis_pool
 except ImportError:  # pragma: no cover - support module execution
-    from ..rate_limiter import smart_rate_limit, RateLimitScope  # type: ignore
+    from ..rate_limiter import smart_rate_limit, RateLimitScope, who_am_i, redis_pool  # type: ignore
 from .schemas import LinkedInPhotoResponse
 from .service import LinkedInPhotoService
 from .fixed_prompts import load_fixed_prompts
 
+# --- Function/Class Map ---
+# Function: list_linkedin_prompts — called by frontend preset loader; returns canonical style prompts.
+# Function: generate_linkedin_photo — called by POST /generate; enforces auth + credits, rate limits, then delegates to LinkedInPhotoService.generate.
+# Function: generate_linkedin_photo_variation — called by POST /variation; enforces auth + credits, rate limits, then delegates to LinkedInPhotoService.generate_variation.
+# Function: get_linkedin_credits — used by frontend to show remaining lifetime LinkedIn photo credits for authenticated users.
+# Helper: _require_authenticated_user — ensures Supabase JWT present; returns user id.
+# Helper: _get_credit_usage/_consume_credit_if_available — Redis/in-memory tracking of lifetime 2-credit allowance.
+# Purpose: API surface for LinkedIn photo generation with auth gating, quota enforcement, and preset hydration.
+
 router = APIRouter(prefix="/api/linkedin-photo", tags=["linkedin-photo"])
 service = LinkedInPhotoService()
 LINKEDIN_PROMPT_WEIGHT = 10
+LINKEDIN_CREDIT_LIMIT = 2
+LINKEDIN_FOLLOW_URL = "https://www.linkedin.com/in/jiangyanqing/"
+
+_in_memory_credits: Dict[str, int] = {}
+
+
+def _credit_key(user_id: str) -> str:
+    return f"linkedin-photo:credits:{user_id}"
+
+
+async def _require_authenticated_user(request: Request) -> str:
+    identifier = await who_am_i(request)
+    if identifier.startswith("ip:"):
+        raise HTTPException(
+            status_code=401,
+            detail="Sign in to generate or edit LinkedIn photos.",
+        )
+    return identifier.split("user:", 1)[-1] if ":" in identifier else identifier
+
+
+async def _get_credit_usage(user_id: str) -> int:
+    if redis_pool is not None:
+        try:
+            raw = await redis_pool.get(_credit_key(user_id))
+            return int(raw) if raw is not None else 0
+        except Exception as exc:  # pragma: no cover - network issues
+            print(f"[LINKEDIN_CREDITS] Redis get failed: {exc}")
+    return _in_memory_credits.get(user_id, 0)
+
+
+async def _consume_credit_if_available(user_id: str) -> None:
+    used = await _get_credit_usage(user_id)
+    if used >= LINKEDIN_CREDIT_LIMIT:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "You've used all available LinkedIn photo credits. "
+                f"Follow Yanqing on LinkedIn ({LINKEDIN_FOLLOW_URL}) to get more credits."
+            ),
+        )
+
+    new_used = used + 1
+
+    if redis_pool is not None:
+        try:
+            await redis_pool.set(_credit_key(user_id), new_used)
+            return
+        except Exception as exc:  # pragma: no cover - network issues
+            print(f"[LINKEDIN_CREDITS] Redis set failed, falling back: {exc}")
+
+    _in_memory_credits[user_id] = new_used
+
+
+async def _get_credit_response(user_id: str) -> Dict[str, int]:
+    used = await _get_credit_usage(user_id)
+    remaining = max(0, LINKEDIN_CREDIT_LIMIT - used)
+    return {
+        "used": used,
+        "remaining": remaining,
+        "limit": LINKEDIN_CREDIT_LIMIT,
+    }
 
 
 @router.get(
@@ -27,6 +97,15 @@ async def list_linkedin_prompts() -> Dict[str, str]:
     Frontend clients can call this endpoint to hydrate their preset lists without hard-coding copies.
     """
     return load_fixed_prompts()
+
+
+@router.get(
+    "/credits",
+    summary="Get remaining LinkedIn photo credits for the authenticated user",
+)
+async def get_linkedin_credits(request: Request) -> Dict[str, int]:
+    user_id = await _require_authenticated_user(request)
+    return await _get_credit_response(user_id)
 
 
 @router.post(
@@ -49,8 +128,11 @@ async def generate_linkedin_photo(
     The backend expands the user's prompt via LLM, invokes Gemini image generation,
     and returns both the transparent expanded prompt and the generated image bytes.
     """
+    user_id = await _require_authenticated_user(request)
     await smart_rate_limit(request, scope=RateLimitScope.GLOBAL, weight=LINKEDIN_PROMPT_WEIGHT)
-    return await service.generate(photo, prompt, prompt_mode=prompt_mode)
+    response = await service.generate(photo, prompt, prompt_mode=prompt_mode)
+    await _consume_credit_if_available(user_id)
+    return response
 
 
 @router.post(
@@ -85,8 +167,9 @@ async def generate_linkedin_photo_variation(
     This keeps the LinkedIn-ready polish while letting designers iteratively nudge background, expression,
     pose, or props—mirroring the multi-turn workflows recommended in Gemini Nano Banana guidance.
     """
+    user_id = await _require_authenticated_user(request)
     await smart_rate_limit(request, scope=RateLimitScope.GLOBAL, weight=LINKEDIN_PROMPT_WEIGHT)
-    return await service.generate_variation(
+    response = await service.generate_variation(
         photo,
         base_prompt,
         background=background,
@@ -94,3 +177,5 @@ async def generate_linkedin_photo_variation(
         pose=pose,
         prop=prop,
     )
+    await _consume_credit_if_available(user_id)
+    return response

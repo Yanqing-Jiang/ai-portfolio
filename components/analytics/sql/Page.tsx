@@ -1,76 +1,328 @@
 import React, { useState, useEffect } from 'react';
-import { motion } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 import { AnalysisCard, SqlCard, ChartCard } from '../common';
 import { useAnalyticsSqlStream } from '../hooks';
 import { isValidChartSpec } from '../utils';
 
-// Simple, lightweight process panel to avoid blank screen rendering and keep telemetry visible.
-const SimpleProcessPanel: React.FC<{
+/**
+ * Function: ProcessNodeIcon — Renders an icon based on step status.
+ * Called from: DiagramProcessPanel node rendering
+ * Invokes: None
+ * Why: Visual status indication for each process node
+ */
+const ProcessNodeIcon: React.FC<{ status: string; isExpanded?: boolean }> = ({ status, isExpanded }) => {
+  if (status === 'completed') {
+    return (
+      <motion.div 
+        initial={{ scale: 0 }} 
+        animate={{ scale: 1 }} 
+        className="w-5 h-5 rounded-full bg-gradient-to-br from-emerald-400 to-emerald-600 flex items-center justify-center shadow-lg shadow-emerald-500/30"
+      >
+        <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+        </svg>
+      </motion.div>
+    );
+  }
+  if (status === 'in_progress') {
+    return (
+      <div className="relative w-5 h-5">
+        <motion.div 
+          animate={{ rotate: 360 }} 
+          transition={{ duration: 1.5, repeat: Infinity, ease: "linear" }}
+          className="w-5 h-5 rounded-full border-2 border-cyan-400 border-t-transparent shadow-lg shadow-cyan-500/30"
+        />
+        <div className="absolute inset-0 rounded-full bg-cyan-400/20 animate-ping" />
+      </div>
+    );
+  }
+  if (status === 'error') {
+    return (
+      <motion.div 
+        initial={{ scale: 0 }} 
+        animate={{ scale: 1 }}
+        className="w-5 h-5 rounded-full bg-gradient-to-br from-rose-400 to-rose-600 flex items-center justify-center shadow-lg shadow-rose-500/30"
+      >
+        <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M6 18L18 6M6 6l12 12" />
+        </svg>
+      </motion.div>
+    );
+  }
+  if (status === 'stopped') {
+    return (
+      <div className="w-5 h-5 rounded-full bg-gradient-to-br from-amber-400 to-amber-600 flex items-center justify-center shadow-lg shadow-amber-500/30">
+        <div className="w-2 h-2 bg-white rounded-sm" />
+      </div>
+    );
+  }
+  return (
+    <div className="w-5 h-5 rounded-full bg-gray-700/80 border-2 border-gray-600 shadow-inner" />
+  );
+};
+
+/**
+ * Function: DiagramProcessPanel — Modern diagram-based SQL process visualization.
+ * Called from: SqlAnalyticsPage
+ * Invokes: ProcessNodeIcon
+ * Why: Provides visual feedback for the SQL workflow process with expandable nodes
+ */
+const DiagramProcessPanel: React.FC<{
   open: boolean;
   steps: ReturnType<typeof useAnalyticsSqlStream>['processSteps'];
   onClose: () => void;
 }> = ({ open, steps, onClose }) => {
-  if (!open) return null;
+  const [expandedSteps, setExpandedSteps] = useState<Record<string, boolean>>({});
+
+  const toggleStep = (stepId: string) => {
+    setExpandedSteps(prev => ({ ...prev, [stepId]: !prev[stepId] }));
+  };
+
+  // Calculate progress
+  const completedCount = steps.filter(s => s.status === 'completed').length;
+  const progressPercent = steps.length > 0 ? Math.round((completedCount / steps.length) * 100) : 0;
+
+  // Panel animation variants
+  const panelVariants = {
+    hidden: { 
+      x: '100%', 
+      opacity: 0,
+      transition: { duration: 0.3, ease: [0.4, 0, 0.2, 1] }
+    },
+    visible: { 
+      x: 0, 
+      opacity: 1,
+      transition: { duration: 0.4, ease: [0, 0, 0.2, 1] }
+    }
+  };
+
+  // Node animation variants
+  const nodeVariants = {
+    hidden: { opacity: 0, x: 20, scale: 0.95 },
+    visible: (i: number) => ({
+      opacity: 1,
+      x: 0,
+      scale: 1,
+      transition: { 
+        delay: i * 0.08,
+        duration: 0.35,
+        ease: [0, 0, 0.2, 1]
+      }
+    })
+  };
+
+  // Details animation
+  const detailsVariants = {
+    hidden: { height: 0, opacity: 0 },
+    visible: { 
+      height: 'auto', 
+      opacity: 1,
+      transition: { duration: 0.25, ease: [0, 0, 0.2, 1] }
+    }
+  };
+
   return (
-    <div className="fixed inset-0 z-40 pointer-events-none">
-      <div className="absolute top-16 right-4 w-[360px] max-h-[78vh] rounded-xl border border-gray-800 bg-gray-950/95 shadow-2xl overflow-hidden pointer-events-auto">
-        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-800">
-          <div className="text-sm font-semibold text-gray-100">SQL Process</div>
-          <button
-            onClick={onClose}
-            className="text-gray-300 hover:text-white text-xs px-2 py-1 rounded border border-gray-700 hover:border-gray-500"
-          >
-            Close
-          </button>
-        </div>
-        <div className="max-h-[70vh] overflow-y-auto p-3 space-y-2 bg-gray-900/70">
-          {steps.length === 0 ? (
-            <div className="text-xs text-gray-400 border border-dashed border-gray-700 rounded-lg px-3 py-4 text-center">
-              Waiting for telemetry…
-            </div>
-          ) : (
-            steps.map((step) => {
-              const statusClass =
-                step.status === 'completed'
-                  ? 'bg-emerald-500/20 text-emerald-200'
-                  : step.status === 'in_progress'
-                  ? 'bg-blue-500/20 text-blue-200'
-                  : step.status === 'error'
-                  ? 'bg-rose-500/20 text-rose-200'
-                  : 'bg-gray-700/50 text-gray-300';
-              return (
-                <div
-                  key={step.id}
-                  className="rounded-lg border border-gray-800 bg-gray-900/80 px-3 py-2"
-                >
-                  <div className="flex items-center justify-between text-xs text-gray-200">
-                    <span className="font-semibold truncate pr-2">{step.name}</span>
-                    <span
-                      className={`px-2 py-0.5 rounded-full text-[10px] uppercase tracking-wide ${statusClass}`}
-                    >
-                      {step.status.replace('_', ' ')}
-                    </span>
-                  </div>
-                  {step.thinking?.length ? (
-                    <div className="mt-1 text-[11px] text-gray-400 line-clamp-2">
-                      {step.thinking.slice(-1)[0]}
-                    </div>
-                  ) : null}
-                  {step.details ? (
-                    <div className="mt-1 text-[10px] text-gray-500 line-clamp-2">
-                      {Object.keys(step.details)
-                        .slice(0, 2)
-                        .map((k) => `${k}: ${String((step.details as any)[k])}`)
-                        .join(' • ')}
-                    </div>
-                  ) : null}
+    <AnimatePresence>
+      {open && (
+        <motion.div
+          initial="hidden"
+          animate="visible"
+          exit="hidden"
+          variants={panelVariants}
+          className="fixed top-0 right-0 h-screen w-full sm:w-[340px] md:w-[380px] lg:w-[420px] max-w-[420px] z-50 flex flex-col bg-gray-900/95 shadow-2xl overflow-hidden"
+        >
+          {/* Header */}
+          <div className="flex-shrink-0 px-5 py-4 border-b border-cyan-500/10">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div>
+                  <h3 className="text-sm font-semibold text-white tracking-wide">SQL Pipeline</h3>
+                  <p className="text-[11px] text-gray-400 mt-0.5">Real-time process flow</p>
                 </div>
-              );
-            })
-          )}
-        </div>
-      </div>
-    </div>
+              </div>
+              <motion.button
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.95 }}
+                onClick={onClose}
+                className="w-8 h-8 rounded-lg bg-gray-800/60 hover:bg-gray-700/80 border border-gray-700/50 hover:border-gray-600 flex items-center justify-center transition-all duration-200"
+              >
+                <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </motion.button>
+            </div>
+
+            {/* Progress Bar */}
+            {steps.length > 0 && (
+              <div className="mt-4">
+                <div className="flex items-center justify-between text-[10px] text-gray-400 mb-2">
+                  <span>{completedCount} of {steps.length} completed</span>
+                  <span className="text-cyan-400 font-medium">{progressPercent}%</span>
+                </div>
+                <div className="h-1.5 bg-gray-800/80 rounded-full overflow-hidden">
+                  <motion.div 
+                    initial={{ width: 0 }}
+                    animate={{ width: `${progressPercent}%` }}
+                    transition={{ duration: 0.5, ease: "easeOut" }}
+                    className="h-full rounded-full bg-gradient-to-r from-cyan-500 to-blue-500 shadow-lg shadow-cyan-500/30"
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Process Diagram */}
+          <div className="flex-1 overflow-y-auto overflow-x-hidden px-4 py-5 custom-scrollbar">
+            {steps.length === 0 ? (
+              <motion.div 
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="flex flex-col items-center justify-center h-full text-center px-6"
+              >
+                <div className="w-16 h-16 rounded-2xl bg-gray-800/50 border border-gray-700/50 flex items-center justify-center mb-4">
+                  <motion.div
+                    animate={{ rotate: [0, 10, -10, 0] }}
+                    transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
+                  >
+                    <svg className="w-8 h-8 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                    </svg>
+                  </motion.div>
+                </div>
+                <p className="text-sm text-gray-400 font-medium">Awaiting query</p>
+                <p className="text-xs text-gray-500 mt-1">Process flow will appear here</p>
+              </motion.div>
+            ) : (
+              <div>
+                {/* Process nodes */}
+                <div className="space-y-3">
+                  {steps.map((step, index) => {
+                    const isExpanded = expandedSteps[step.id];
+                    const statusColors = {
+                      completed: { bg: 'from-emerald-500/10 to-emerald-600/5', border: 'border-emerald-500/30', text: 'text-emerald-300' },
+                      in_progress: { bg: 'from-cyan-500/10 to-blue-500/5', border: 'border-cyan-500/40', text: 'text-cyan-300' },
+                      error: { bg: 'from-rose-500/10 to-rose-600/5', border: 'border-rose-500/30', text: 'text-rose-300' },
+                      stopped: { bg: 'from-amber-500/10 to-amber-600/5', border: 'border-amber-500/30', text: 'text-amber-300' },
+                      pending: { bg: 'from-gray-500/10 to-gray-600/5', border: 'border-gray-600/30', text: 'text-gray-400' }
+                    };
+                    const colors = statusColors[step.status as keyof typeof statusColors] || statusColors.pending;
+
+                    return (
+                      <motion.div
+                        key={step.id}
+                        custom={index}
+                        initial="hidden"
+                        animate="visible"
+                        variants={nodeVariants}
+                        className="relative"
+                      >
+                        <motion.button
+                          onClick={() => toggleStep(step.id)}
+                          whileHover={{ scale: 1.01, x: 2 }}
+                          whileTap={{ scale: 0.99 }}
+                          className={`w-full text-left pl-9 pr-3 py-3 rounded-xl bg-gradient-to-r ${colors.bg} border ${colors.border} transition-all duration-200 hover:shadow-lg group`}
+                          style={{ boxShadow: step.status === 'in_progress' ? '0 0 20px rgba(56, 189, 248, 0.15)' : undefined }}
+                        >
+                          {/* Node icon - positioned on the vertical line */}
+                          <div className="absolute left-0 top-1/2 -translate-y-1/2 z-10">
+                            <ProcessNodeIcon status={step.status} isExpanded={isExpanded} />
+                          </div>
+
+                          <div className="flex items-center justify-between">
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs font-semibold text-white truncate">{step.name}</span>
+                                <span className={`text-[9px] uppercase tracking-wider font-medium px-1.5 py-0.5 rounded ${colors.text} bg-white/5`}>
+                                  {step.status.replace('_', ' ')}
+                                </span>
+                              </div>
+                              {step.thinking?.length ? (
+                                <p className="text-[11px] text-gray-400 mt-1 line-clamp-1 pr-4">
+                                  {step.thinking.slice(-1)[0]}
+                                </p>
+                              ) : null}
+                            </div>
+                            <motion.div
+                              animate={{ rotate: isExpanded ? 180 : 0 }}
+                              transition={{ duration: 0.2 }}
+                              className="ml-2 text-gray-500 group-hover:text-gray-300"
+                            >
+                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                              </svg>
+                            </motion.div>
+                          </div>
+                        </motion.button>
+
+                        {/* Expandable details */}
+                        <AnimatePresence>
+                          {isExpanded && (
+                            <motion.div
+                              initial="hidden"
+                              animate="visible"
+                              exit="hidden"
+                              variants={detailsVariants}
+                              className="overflow-hidden"
+                            >
+                              <div className="ml-9 mt-2 p-3 rounded-lg bg-gray-900/60 border border-gray-800/50 space-y-3">
+                                {/* Thinking section */}
+                                {step.thinking?.length ? (
+                                  <div>
+                                    <div className="text-[9px] uppercase tracking-wider text-gray-500 mb-1.5 flex items-center gap-1.5">
+                                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                                      </svg>
+                                      Agent Thoughts
+                                    </div>
+                                    <div className="space-y-1">
+                                      {step.thinking.slice(-3).map((thought, i) => (
+                                        <p key={i} className="text-[11px] text-gray-300 leading-relaxed pl-2 border-l-2 border-gray-700">
+                                          {thought}
+                                        </p>
+                                      ))}
+                                    </div>
+                                  </div>
+                                ) : null}
+
+                                {/* Details/Telemetry */}
+                                {step.details && Object.keys(step.details).length > 0 && (
+                                  <div>
+                                    <div className="text-[9px] uppercase tracking-wider text-gray-500 mb-1.5 flex items-center gap-1.5">
+                                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                                      </svg>
+                                      Telemetry
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-2">
+                                      {Object.entries(step.details as Record<string, any>)
+                                        .filter(([, v]) => v != null && v !== '')
+                                        .slice(0, 6)
+                                        .map(([key, value]) => (
+                                          <div key={key} className="bg-gray-800/50 rounded-md p-2">
+                                            <div className="text-[9px] text-gray-500 truncate">{key}</div>
+                                            <div className="text-[10px] text-gray-200 truncate font-mono">
+                                              {typeof value === 'object' ? JSON.stringify(value).slice(0, 30) + '...' : String(value).slice(0, 30)}
+                                            </div>
+                                          </div>
+                                        ))}
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+                      </motion.div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+
+        </motion.div>
+      )}
+    </AnimatePresence>
   );
 };
 
@@ -162,7 +414,11 @@ const SqlAnalyticsPage: React.FC = () => {
   return (
     <div className="flex h-screen bg-gray-900 text-gray-100 overflow-hidden">
       {/* Main Content */}
-      <div className={`flex-1 flex flex-col transition-all duration-300 overflow-hidden ${showProcessPanel ? 'md:mr-80' : ''}`}>
+      <div
+        className={`flex-1 flex flex-col transition-[margin] duration-300 ease-in-out overflow-hidden ${
+          showProcessPanel ? 'sm:mr-0 md:mr-[360px] lg:mr-[420px]' : ''
+        }`}
+      >
         {/* Enhanced Header */}
         <motion.div 
           initial={false}
@@ -193,12 +449,18 @@ const SqlAnalyticsPage: React.FC = () => {
               </div>
               <div className="flex items-center gap-2">
                 {hasStartedChat && (
-                  <button
+                  <motion.button
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
                     onClick={() => setShowProcessPanel(!showProcessPanel)}
-                    className="px-3 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-gray-200 rounded-lg transition-colors"
+                className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-all duration-200 ${
+                      showProcessPanel 
+                        ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shadow-lg shadow-cyan-500/10' 
+                        : 'bg-gray-700/80 hover:bg-gray-600/80 text-gray-200 border border-gray-600/50 hover:border-gray-500/50'
+                    }`}
                   >
-                    {showProcessPanel ? 'Hide' : 'Show'} Process
-                  </button>
+                    {showProcessPanel ? 'Hide Pipeline' : 'Show Pipeline'}
+                  </motion.button>
                 )}
                 <button
                   onClick={() => setIsHeaderCollapsed(!isHeaderCollapsed)}
@@ -339,14 +601,6 @@ const SqlAnalyticsPage: React.FC = () => {
                   </div>
                 )}
                 <div className="text-sm text-gray-300 min-w-0 flex-1 truncate">{currentStatus}</div>
-                <div className="flex items-center gap-2 shrink-0">
-                  <button
-                    onClick={() => setShowProcessPanel(!showProcessPanel)}
-                    className="px-3 py-1.5 text-xs bg-gray-700/90 hover:bg-gray-600 text-gray-200 rounded-lg transition-colors"
-                  >
-                    {showProcessPanel ? 'Hide' : 'Show'} Process
-                  </button>
-                </div>
               </div>
               {error && (
                 <div className="mt-2 bg-red-900/30 border border-red-700/50 rounded-lg p-2">
@@ -401,8 +655,8 @@ const SqlAnalyticsPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Simple Process Panel (lightweight to avoid blank rendering) */}
-      <SimpleProcessPanel
+      {/* Diagram Process Panel - Modern diagram-based visualization */}
+      <DiagramProcessPanel
         open={showProcessPanel}
         steps={processSteps}
         onClose={() => setShowProcessPanel(false)}

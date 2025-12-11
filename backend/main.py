@@ -3,7 +3,7 @@ import logging
 from typing import Any, Dict, List, Tuple, Optional
 from fastapi import FastAPI, Request, Depends, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, Response, JSONResponse
+from fastapi.responses import StreamingResponse, Response, JSONResponse, FileResponse
 from pydantic import BaseModel
 from pathlib import Path
 import os
@@ -164,6 +164,15 @@ try:
     logger.info("[STARTUP] Mounted Conversational Analytics router at /api/conv-analytics (canonical)")
 except ImportError as e:
     logger.warning("[STARTUP] Conversational Analytics not available: %s", e)
+
+
+@app.get("/project-showcase")
+async def project_showcase():
+    """Serve the conversational analytics project showcase HTML at a friendly URL."""
+    static_path = Path(__file__).parent / "conversational_analytics" / "static" / "showcase.html"
+    if not static_path.exists():
+        raise HTTPException(status_code=404, detail="Showcase not found")
+    return FileResponse(path=static_path, media_type="text/html")
 
 
 @app.get("/api/analytics/canonical")

@@ -6,46 +6,71 @@ export const PROJECT_DATA: ProjectYear[] = [
     subtitle: '(Agentic AI & Autonomous Trading)',
     projects: [
       {
+        id: 'linkedin-photo',
+        title: 'LinkedIn Photo Generator',
+        description: `Three-step UX flow that turns a casual portrait into a LinkedIn-ready headshot.
+Step 1 �?" Upload: validate JPEG or PNG up to 8 MB, show an inline preview, and prep metadata.
+Step 2 �?" Describe: capture a single style sentence and expand it with Gemini into a photography-grade brief (lighting, background, wardrobe) that preserves identity.
+Step 3 �?" Generate: FastAPI validates the file, expands the prompt, calls Gemini Nano Banana image editing, and returns the professional headshot alongside the transparent prompt display with download/share actions.`,
+        cardDescription:
+          'Upload a portrait, describe the vibe, and watch Gemini 3 Pro Image deliver a LinkedIn headshot with the exact expanded prompt beside it.',
+        technologies: [
+          'Tailwind CSS',
+          'Image Iterations',
+          'Gemini Nano Banana',
+          'Prompt Engineering',
+          'Gemini SDK',
+        ],
+        systemInstruction: `You are the AI assistant for **LinkedIn Photo Generator**. You have full knowledge of how the three-step wizard, FastAPI pipeline, and Gemini Nano Banana integration work. Use the details below to answer questions about UX, validation rules, and AI workflow.
+
++--------------------
+FEATURE OVERVIEW
+Step 1 �?" Upload: drag-and-drop interface, JPEG/PNG up to 8 MB, EXIF stripped, portrait preview.
+Step 2 �?" Style Prompt: single control, hints for wardrobe/background, Gemini text model expands into full photography instructions.
+Step 3 �?" Generate: FastAPI validates the file, expands the prompt, calls Gemini image model with reference photo, returns headshot and displays the prompt for transparency.
+
+SECURITY & TRUST
+- Pillow ensures the upload is truly an image and enforces size/type limits.
+- Expanded prompt is read-only and surfaced next to the final photo.
+- Download + Web Share actions keep the experience self-contained without third-party uploads.
+
+TECH STACK
+Frontend: React 19 + Tailwind utility classes, wizard flow on /project/linkedin-photo.
+Backend: FastAPI router /api/linkedin-photo/generate, Gemini LLM for prompt expansion plus Nano Banana image editing.
++--------------------`,
+        defaultPrompts: [
+          'Summarize the three LinkedIn Photo wizard steps and why they stay on one screen.',
+          'How does the FastAPI backend validate uploads before calling Gemini Nano Banana?',
+          'What transparency do users get after generation finishes?',
+        ],
+        coverUrl: 'https://yanqinghot.blob.core.windows.net/public-access/linkedin-photo-generator.jpg',
+        imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/linkedin-photo-generator.jpg',
+        ogImage: 'https://yanqinghot.blob.core.windows.net/public-access/linkedin-photo-generator.jpg',
+        seoTitle: 'LinkedIn Photo Generator | Gemini Nano Banana Headshots',
+        seoDescription:
+          'Upload a portrait, describe the vibe, and generate a LinkedIn-ready professional headshot with Gemini Nano Banana. The app shows the exact prompt used so users trust the workflow.',
+        seoKeywords: [
+          'LinkedIn headshot generator',
+          'Gemini Nano Banana',
+          'FastAPI image workflow',
+          'LLM prompt expansion',
+          'React wizard UI',
+        ],
+        datePublished: '2025-06-01',
+        dateModified: '2025-09-15',
+        serviceTags: ['Analytics Automation', 'AI Agents', 'Decision Intelligence'],
+        statHighlights: [
+          'Supports direct, single-agent, and supervisor-led workflows in one UI',
+          'Caches SQL, RAG, and visualization context for repeatable market insights',
+        ],
+      },
+      {
         id: 'next-gen-analytics-agent',
         title: 'Next Gen Analytics (Agents)',
         description: `Three Agentic Workflows:\nDirect (fixed path): deterministic tool orchestration for rapid answers\nSingle-Agent (multi-tool use): adaptive LangGraph agent that rewrites SQL, charts, and commentary\nMulti-Agent (supervisor + specialists): orchestrated analytics swarm with explainable task graph\nHuman-in-the-loop: Inline clarifications tuned for metrics, peers, and guardrail ranges\nExplainable thinking process panel: plan graph + per-step trace for analyst-grade transparency.\nLive semiconductor coverage: AMD, AVGO, INTC, MU, NVDA, QCOM, TXN.\nMemory optimization: RAG tuned recall, cached SQL, vector prompts, and stateful agents`,
-        cardDescription: 'Agentic analytics without dashboards—LangGraph copilots clarify questions, write SQL, and narrate semiconductor insights in real time.',
+        cardDescription: 'Agentic analytics without dashboards—AI agents write SQL, generate charts, generate actionable insights with context, and provide next steps in real time.',
         technologies: ['Single Agent Workflow', 'Multi-Agent Workflow', 'Human-in-the-Loop', 'RAG', 'Long-Term Memory'],
-        systemInstruction: `You are the AI assistant for **Next Gen Analytics (Agents)**. You have full knowledge of the project described below. Use this embedded reference to answer questions with detail and accuracy. Quote or paraphrase the content to explain features, tech stack, workflow and technical implementation.
-
-+--------------------
-EMBEDDED PROJECT DOC
-🔧 Tech Stack
-Frontend: React, TypeScript, ECharts for interactive visualizations
-Backend: Python, FastAPI, LangGraph for agent orchestration with memory pipeline
-Database: Supabase (PostgreSQL) with comp_financials table
-LLM: OpenAI API (GPT-4o-mini) for intent detection, SQL generation and analysis
-Agent Coordination: LangGraph state machine with memory and clarification workflow
-Memory System: Session-based conversation persistence with context awareness
-
-📘 Memory Pipeline Features
-• Intent Detection with Clarifications: Advanced intent analysis with interactive clarification requests
-• Conversation Memory: Persistent chat history across sessions with localStorage backup
-• Context Engineering: Smart context retention for follow-up queries and iterative analysis
-• Inline Clarifications: Chat-based clarification system replacing modal dialogs
-• Progressive Results: Streaming results directly into conversational interface
-
-🔄 Enhanced Agent Workflow
-1. Intent Detection Agent: Analyzes user query and determines clarification needs
-2. Clarification Engine: Generates interactive questions for ambiguous requests
-3. Memory Agent: Maintains conversation context and session state
-4. SQL Agent: Generates optimized queries using clarified intent and context
-5. ECharts Agent: Creates visualizations based on results and conversation history
-6. Analysis Agent: Provides contextual insights referencing previous interactions
-
-✨ Key Innovations
-• Conversational clarification system with inline chat interface
-• Session persistence with conversation turn tracking
-• Context-aware follow-up query handling
-• Progressive result streaming into chat messages
-• Memory-enhanced SQL generation using conversation history
-• Interactive choice buttons replacing modal interruptions
-+--------------------`,
+        systemInstruction: `You are the AI assistant for **Next Gen Analytics (Agents)**. You have full knowledge of the project described below. Use this embedded reference to answer questions with detail and accuracy. Quote or paraphrase the content to explain features, tech stack, workflow and technical implementation.\n\n+--------------------\nEMBEDDED PROJECT DOC\n🔧 Tech Stack\nFrontend: React, TypeScript, ECharts for interactive visualizations\nBackend: Python, FastAPI, LangGraph for agent orchestration with memory pipeline\nDatabase: Supabase (PostgreSQL) with comp_financials table\nLLM: OpenAI API (GPT-4o-mini) for intent detection, SQL generation and analysis\nAgent Coordination: LangGraph state machine with memory and clarification workflow\nMemory System: Session-based conversation persistence with context awareness\n\n📘 Memory Pipeline Features\n• Intent Detection with Clarifications: Advanced intent analysis with interactive clarification requests\n• Conversation Memory: Persistent chat history across sessions with localStorage backup\n• Context Engineering: Smart context retention for follow-up queries and iterative analysis\n• Inline Clarifications: Chat-based clarification system replacing modal dialogs\n• Progressive Results: Streaming results directly into conversational interface\n\n🔄 Enhanced Agent Workflow\n1. Intent Detection Agent: Analyzes user query and determines clarification needs\n2. Clarification Engine: Generates interactive questions for ambiguous requests\n3. Memory Agent: Maintains conversation context and session state\n4. SQL Agent: Generates optimized queries using clarified intent and context\n5. ECharts Agent: Creates visualizations based on results and conversation history\n6. Analysis Agent: Provides contextual insights referencing previous interactions\n\n✨ Key Innovations\n• Conversational clarification system with inline chat interface\n• Session persistence with conversation turn tracking\n• Context-aware follow-up query handling\n• Progressive result streaming into conversational interface\n• Memory-enhanced SQL generation using conversation history\n• Interactive choice buttons replacing modal interruptions\n+--------------------`,
         defaultPrompts: [
           'Analyze NVDA market share trends and compare with previous quarters',
           'Show me AMD vs INTC margins - how do they compare to our last analysis?',
@@ -63,51 +88,6 @@ Memory System: Session-based conversation persistence with context awareness
           'agentic copilot',
           'FastAPI Supabase',
           'multi-agent workflow',
-        ],
-        datePublished: '2025-06-01',
-        dateModified: '2025-09-15',
-        serviceTags: ['Analytics Automation', 'AI Agents', 'Decision Intelligence'],
-        statHighlights: [
-          'Supports direct, single-agent, and supervisor-led workflows in one UI',
-          'Caches SQL, RAG, and visualization context for repeatable market insights',
-        ],
-        primaryMetricValue: {
-          label: 'Clarification latency improvement',
-          value: 60,
-          unitText: 'Percent',
-        },
-      },
-      {
-        id: 'linkedin-photo',
-        title: 'LinkedIn Photo Generator',
-        description: `Three-step UX flow that turns a casual portrait into a LinkedIn-ready headshot.\nStep 1 �?" Upload: validate JPEG or PNG up to 8 MB, show an inline preview, and prep metadata.\nStep 2 �?" Describe: capture a single style sentence and expand it with Gemini into a photography-grade brief (lighting, background, wardrobe) that preserves identity.\nStep 3 �?" Generate: FastAPI validates the file, expands the prompt, calls Gemini Nano Banana image editing, and returns the professional headshot alongside the transparent prompt display with download/share actions.`,
-        cardDescription:
-          'Upload a portrait, describe the vibe, and watch Gemini Nano Banana deliver a LinkedIn headshot with the exact expanded prompt beside it.',
-        technologies: [
-          'Tailwind CSS',
-          'Image Iterations',
-          'Gemini Nano Banana',
-          'Prompt Engineering',
-          'Gemini SDK',
-        ],
-        systemInstruction: `You are the AI assistant for **LinkedIn Photo Generator**. You have full knowledge of how the three-step wizard, FastAPI pipeline, and Gemini Nano Banana integration work. Use the details below to answer questions about UX, validation rules, and AI workflow.\n\n+--------------------\nFEATURE OVERVIEW\nStep 1 �?" Upload: drag-and-drop interface, JPEG/PNG up to 8 MB, EXIF stripped, portrait preview.\nStep 2 �?" Style Prompt: single control, hints for wardrobe/background, Gemini text model expands into full photography instructions.\nStep 3 �?" Generate: FastAPI validates, expands prompt, calls Gemini image model with reference photo, returns headshot and displays the prompt for transparency.\n\nSECURITY & TRUST\n- Pillow ensures the upload is truly an image and enforces size/type limits.\n- Expanded prompt is read-only and surfaced next to the final photo.\n- Download + Web Share actions keep the experience self-contained without third-party uploads.\n\nTECH STACK\nFrontend: React 19 + Tailwind utility classes, wizard flow on /project/linkedin-photo.\nBackend: FastAPI router /api/linkedin-photo/generate, Gemini LLM for prompt expansion plus Nano Banana image editing.\n+--------------------`,
-        defaultPrompts: [
-          'Summarize the three LinkedIn Photo wizard steps and why they stay on one screen.',
-          'How does the FastAPI backend validate uploads before calling Gemini Nano Banana?',
-          'What transparency do users get after generation finishes?',
-        ],
-        coverUrl: '/projects/linkedin-photo-cover.svg',
-        imageUrl: '/projects/linkedin-photo-cover.svg',
-        ogImage: '/projects/linkedin-photo-cover.svg',
-        seoTitle: 'LinkedIn Photo Generator | Gemini Nano Banana Headshots',
-        seoDescription:
-          'Upload a portrait, describe the vibe, and generate a LinkedIn-ready professional headshot with Gemini Nano Banana. The app shows the exact prompt used so users trust the workflow.',
-        seoKeywords: [
-          'LinkedIn headshot generator',
-          'Gemini Nano Banana',
-          'FastAPI image workflow',
-          'LLM prompt expansion',
-          'React wizard UI',
         ],
         datePublished: '2025-11-01',
         dateModified: '2025-11-01',

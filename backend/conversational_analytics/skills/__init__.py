@@ -73,6 +73,23 @@ SKILL_INDEX: List[SkillMeta] = [
         description="Track margin growth vs peer averages.",
     ),
     SkillMeta(
+        skill_id="project_showcase",
+        name="Project Showcase / Architecture Demo",
+        filename="skill_project_showcase.md",
+        keywords=[
+            "project tour",
+            "showcase",
+            "demo",
+            "architecture demo",
+            "explain agents",
+            "multi-agent",
+            "single-agent",
+            "how does this work",
+            "skills explanation",
+        ],
+        description="Educational walkthrough of the Next Gen Analytics Agent architecture.",
+    ),
+    SkillMeta(
         skill_id="offscope_greeting",
         name="Off-Scope / Greeting",
         filename="skill_offscope_greeting.md",
@@ -141,6 +158,7 @@ SKILL_SLOTS: Dict[str, List[SlotSpec]] = {
         SlotSpec(name="years_back", required=False, default=5, options=["3", "5", "10"], description="Years of history"),
         SlotSpec(name="period_filter", required=True, default=None, options=["quarter", "year"], description="Period granularity"),
     ],
+    "project_showcase": [],
     "offscope_greeting": [],
 }
 

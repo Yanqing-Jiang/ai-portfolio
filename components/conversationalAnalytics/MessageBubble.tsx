@@ -9,7 +9,8 @@ import { motion } from 'framer-motion';
 import ReactECharts from 'echarts-for-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { ThinkingStep, NewsResult, NewsArticle } from './hooks/useSSEStream';
+import { ThinkingStep, NewsResult, NewsArticle, HtmlArtifact } from './hooks/useSSEStream';
+import { configService } from '../../services/config';
 import { theme, motionVariants } from './styles';
 
 type ValueMeta = {
@@ -472,6 +473,7 @@ interface MessageBubbleProps {
   newsResult?: NewsResult | null;
   isStreaming?: boolean;
   agentLabel?: string | null;
+  htmlArtifact?: HtmlArtifact | null;
 }
 
 const MessageBubble: React.FC<MessageBubbleProps> = ({
@@ -482,6 +484,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
   newsResult,
   isStreaming,
   agentLabel,
+  htmlArtifact,
 }) => {
   const isUser = role === 'user';
   const isTradingView = chartConfig?.widget_type === 'tradingview';
@@ -492,6 +495,13 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
         : chartConfig,
     [chartConfig, isTradingView],
   );
+  const resolvedHtmlUrl = useMemo(() => {
+    if (!htmlArtifact?.url) return null;
+    const backendUrl = configService.getBackendUrl();
+    return htmlArtifact.url.startsWith('http')
+      ? htmlArtifact.url
+      : `${backendUrl}${htmlArtifact.url}`;
+  }, [htmlArtifact]);
 
   return (
     <motion.div
@@ -561,6 +571,51 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
             {/* Data Preview */}
             {dataResult && dataResult.rows && dataResult.rows.length > 0 && (
               <DataPreview data={dataResult} />
+            )}
+
+            {/* HTML Artifact (showcase) */}
+            {htmlArtifact && resolvedHtmlUrl && (
+              <motion.div
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="rounded-xl overflow-hidden"
+                style={{
+                  backgroundColor: theme.colors.bg.elevated,
+                  border: `1px solid ${theme.colors.border.medium}`,
+                }}
+              >
+                <div
+                  className="px-4 py-2.5 flex items-center gap-2"
+                  style={{ borderBottom: `1px solid ${theme.colors.border.subtle}` }}
+                >
+                  <span className="text-lg">🗂️</span>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium" style={{ color: theme.colors.text.secondary }}>
+                      {htmlArtifact.title || 'Showcase'}
+                    </div>
+                    <div className="text-xs" style={{ color: theme.colors.text.muted }}>
+                      {htmlArtifact.description}
+                    </div>
+                  </div>
+                  <a
+                    href={resolvedHtmlUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs font-semibold"
+                    style={{ color: theme.colors.accent.primary }}
+                  >
+                    Open →
+                  </a>
+                </div>
+                <div className="bg-black" style={{ aspectRatio: '16 / 10', minHeight: 260 }}>
+                  <iframe
+                    src={resolvedHtmlUrl}
+                    title={htmlArtifact.title || 'Showcase'}
+                    style={{ border: '0', width: '100%', height: '100%' }}
+                    loading="lazy"
+                  />
+                </div>
+              </motion.div>
             )}
 
             {/* Markdown content */}

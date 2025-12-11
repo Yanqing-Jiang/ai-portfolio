@@ -18,6 +18,14 @@ try:
 except ImportError:  # pragma: no cover - allow execution as script
     from token_store import token_store  # type: ignore
 
+# --- Function/Class Map ---
+# Function: who_am_i — called from rate limiter dependencies and /api usage endpoints; chooses user:<id> or ip:<addr>.
+# Function: smart_rate_limit — main guard used by API routes (chat, analytics, linkedin photo) to enforce per-scope limits and token fallback.
+# Function: resolve_limits/resolve_scope — maps scopes to configured guest/member quotas.
+# Function: manual_increment_counter/get_user_usage — shared helpers that read/write Redis (or in-memory fallback) and annotate request.state.
+# Class: UsageSnapshot — lightweight struct for current usage, limit, and reset epoch.
+# Purpose: Centralized rate limiting and identifier resolution for all backend endpoints.
+
 # Load environment variables from .env file
 env_path = Path(__file__).resolve().parent / ".env"
 load_dotenv(dotenv_path=env_path, override=False)
@@ -55,8 +63,10 @@ if not SUPABASE_JWT_SECRET or SUPABASE_JWT_SECRET == "your-jwt-secret-here":
     SUPABASE_JWT_SECRET = "fallback-secret-key"
 
 # Rate limiting constants (prompt units)
-GUEST_LIMIT = 100  # temporary bump per request; revert when quotas normalize
-MEMBER_LIMIT = 20  # 2 LinkedIn photos or 20 chats per day
+GUEST_LIMIT = 100  # default guest limit for non-chat scopes
+MEMBER_LIMIT = 20  # default member limit for non-chat scopes
+CHAT_GUEST_LIMIT = 5
+CHAT_MEMBER_LIMIT = 10
 LIMIT_WINDOW = 86400  # legacy fallback; real TTL is until midnight UTC
 
 class RateLimitScope(str, Enum):
@@ -64,6 +74,7 @@ class RateLimitScope(str, Enum):
     ANALYTICS_AGENT = "next-gen-analytics-agent"
     ANALYTICS_SQL = "next-gen-analytics-sql"
     CONVERSATIONAL_ANALYTICS = "conversational-analytics"
+    CHAT = "chat"
 
 # (guest_limit, member_limit)
 SCOPE_LIMITS: Dict[RateLimitScope, Tuple[int, int]] = {
@@ -71,6 +82,7 @@ SCOPE_LIMITS: Dict[RateLimitScope, Tuple[int, int]] = {
     RateLimitScope.ANALYTICS_AGENT: (GUEST_LIMIT, MEMBER_LIMIT),
     RateLimitScope.ANALYTICS_SQL: (GUEST_LIMIT, MEMBER_LIMIT),
     RateLimitScope.CONVERSATIONAL_ANALYTICS: (GUEST_LIMIT, MEMBER_LIMIT),
+    RateLimitScope.CHAT: (CHAT_GUEST_LIMIT, CHAT_MEMBER_LIMIT),
 }
 
 SCOPE_ALIAS_MAP: Dict[str, RateLimitScope] = {
@@ -82,6 +94,8 @@ SCOPE_ALIAS_MAP: Dict[str, RateLimitScope] = {
     "next-gen-analytics-sql": RateLimitScope.ANALYTICS_SQL,
     "conversational_analytics": RateLimitScope.CONVERSATIONAL_ANALYTICS,
     RateLimitScope.CONVERSATIONAL_ANALYTICS.value: RateLimitScope.CONVERSATIONAL_ANALYTICS,
+    "chat": RateLimitScope.CHAT,
+    RateLimitScope.CHAT.value: RateLimitScope.CHAT,
 }
 
 @dataclass(slots=True)

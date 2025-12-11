@@ -713,7 +713,7 @@ const ProcessPanel: React.FC<ProcessPanelProps> = ({
                       Agent Process Flow
                     </h2>
                     <p className="text-xs" style={{ color: theme.colors.text.muted }}>
-                      {isSingleAgent ? 'Single Agent' : 'Multi-agent (Supervisor → Specialists)'}
+                      {isSingleAgent ? 'Single Agent' : 'Multi-agent (Specialist routing)'}
                       {lastAgentLabel ? ` • Active: ${lastAgentLabel}` : activeAgent ? ` • Active: ${activeAgent.name}` : ''}
                     </p>
                   </div>

@@ -137,6 +137,18 @@ def news_event(articles: list, ticker: str, aggregate_sentiment: float, aggregat
     })
 
 
+def html_artifact_event(url: str, title: str, description: str) -> str:
+    """Function: html_artifact_event — emits a link to an HTML artifact for inline rendering.
+    Called from: agent when the showcase tool returns a URL.
+    Invokes: format_sse_event to broadcast the artifact metadata to the frontend.
+    Purpose: Allow the UI to embed the static showcase page without relying on Claude text alone."""
+    return format_sse_event("html_artifact", {
+        "url": url,
+        "title": title,
+        "description": description,
+    })
+
+
 def agent_event(agent_id: str, name: str, role: str) -> str:
     """Create an agent activation event so the UI can show which agent is working."""
     return format_sse_event("agent", {"id": agent_id, "name": name, "role": role})

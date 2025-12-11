@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { StepIndicator } from './StepIndicator';
 import { StylePresetCard, INITIAL_STYLE_PRESETS, type StylePreset } from './StylePresetCard';
 import { ImageVariationGallery, type ImageVariation } from './ImageVariationGallery';
@@ -11,6 +11,14 @@ import { Upload, X, Sparkles } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { configService } from '@/services/config';
 import { apiService } from '@/services/apiService';
+import { AuthModal } from '../AuthModal';
+import { authService, type AuthState } from '@/services/auth';
+
+// --- Function/Class Map ---
+// Component: LinkedInPhotoPage — mounted by ProjectView for the LinkedIn photo project; handles upload → prompt selection → generation/variation.
+// Helper: fetchCredits — fetches lifetime LinkedIn photo credits for signed-in users from /api/linkedin-photo/credits.
+// Helper: ensureAuthenticated/ensureCreditsAvailable — gates actions to logged-in users with remaining credits; shows auth or follow modals when blocked.
+// Purpose: Deliver the LinkedIn photo generator experience with credit gating, hero imagery, and preset loading.
 
 interface LinkedInPhotoPageProps {
   apiPath?: string;
@@ -45,6 +53,8 @@ const LINKEDIN_PHOTO_THEME: React.CSSProperties = {
 };
 
 const VARIATION_API_PATH = '/api/linkedin-photo/variation';
+const LINKEDIN_CREDIT_LIMIT = 2;
+const LINKEDIN_FOLLOW_URL = 'https://www.linkedin.com/in/jiangyanqing/';
 
 const LinkedInPhotoPage: React.FC<LinkedInPhotoPageProps> = ({ apiPath = '/api/linkedin-photo/generate' }) => {
   const [currentStep, setCurrentStep] = useState(1);
@@ -70,11 +80,119 @@ const LinkedInPhotoPage: React.FC<LinkedInPhotoPageProps> = ({ apiPath = '/api/l
     background: null,
     pose: null,
   });
+  const [authState, setAuthState] = useState<AuthState>({ user: null, loading: true, error: null });
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  type CreditInfo = { used: number; remaining: number; limit: number };
+  const [credits, setCredits] = useState<CreditInfo | null>(null);
+  const [creditsLoading, setCreditsLoading] = useState(false);
+  const [creditsError, setCreditsError] = useState<string | null>(null);
+  const [showFollowModal, setShowFollowModal] = useState(false);
+  const [followMessage, setFollowMessage] = useState<string | null>(null);
+  const isSignedIn = !!authState.user;
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const step2Ref = useRef<HTMLDivElement>(null);
   const step3Ref = useRef<HTMLDivElement>(null);
   const backendBaseRef = useRef(configService.getBackendUrl().replace(/\/$/, ''));
+
+  useEffect(() => {
+    const unsubscribe = authService.subscribe(setAuthState);
+    return unsubscribe;
+  }, []);
+
+  const fetchCredits = useCallback(async (): Promise<CreditInfo | null> => {
+    if (!authState.user) {
+      setCredits(null);
+      setCreditsError(null);
+      return null;
+    }
+
+    setCreditsLoading(true);
+    setCreditsError(null);
+
+    try {
+      const headers = await authService.getAuthHeaders();
+      const response = await fetch(`${backendBaseRef.current}/api/linkedin-photo/credits`, {
+        headers,
+      });
+
+      if (response.status === 401) {
+        setShowAuthModal(true);
+        throw new Error('Sign in to view your LinkedIn photo credits.');
+      }
+
+      if (!response.ok) {
+        const text = await response.text().catch(() => '');
+        const trimmed = text.trim();
+        throw new Error(trimmed || `Unable to load credits (HTTP ${response.status}).`);
+      }
+
+      const payload = await response.json();
+      const nextCredits: CreditInfo = {
+        used: typeof payload?.used === 'number' ? payload.used : 0,
+        remaining: typeof payload?.remaining === 'number' ? payload.remaining : 0,
+        limit: typeof payload?.limit === 'number' ? payload.limit : LINKEDIN_CREDIT_LIMIT,
+      };
+      setCredits(nextCredits);
+      return nextCredits;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unable to load credits.';
+      setCreditsError(message);
+      return null;
+    } finally {
+      setCreditsLoading(false);
+    }
+  }, [authState.user]);
+
+  const ensureAuthenticated = useCallback((): boolean => {
+    if (!authState.user) {
+      setShowAuthModal(true);
+      setError('Sign in to generate your LinkedIn photo.');
+      return false;
+    }
+    return true;
+  }, [authState.user]);
+
+  const ensureCreditsAvailable = useCallback(async (): Promise<boolean> => {
+    const latest = await fetchCredits();
+    const snapshot = latest ?? credits;
+    if (!snapshot) {
+      if (creditsError) {
+        setError(creditsError);
+      }
+      return false;
+    }
+    const remaining = snapshot.remaining ?? 0;
+
+    if (remaining <= 0) {
+      const message =
+        'You have used all available LinkedIn photo credits. Follow Yanqing on LinkedIn to request more.';
+      setFollowMessage(message);
+      setShowFollowModal(true);
+      setError(message);
+      return false;
+    }
+    return true;
+  }, [credits, creditsError, fetchCredits]);
+
+  useEffect(() => {
+    if (authState.loading) return;
+    if (!authState.user) {
+      setCredits(null);
+      setCreditsError(null);
+      return;
+    }
+    fetchCredits();
+  }, [authState.loading, authState.user, fetchCredits]);
+
+  const handleFollowClose = () => {
+    setShowFollowModal(false);
+    setFollowMessage(null);
+  };
+
+  const handleFollowLink = () => {
+    window.open(LINKEDIN_FOLLOW_URL, '_blank', 'noopener,noreferrer');
+  };
 
   useEffect(() => {
     return () => {
@@ -247,6 +365,10 @@ const LinkedInPhotoPage: React.FC<LinkedInPhotoPageProps> = ({ apiPath = '/api/l
       return;
     }
 
+    if (!ensureAuthenticated()) return;
+    const hasCredits = await ensureCreditsAvailable();
+    if (!hasCredits) return;
+
     setIsCreatingVariation(true);
     setError(null);
     setShareStatus(null);
@@ -313,11 +435,16 @@ const LinkedInPhotoPage: React.FC<LinkedInPhotoPageProps> = ({ apiPath = '/api/l
         setProcessingMs(nextProcessingMs);
       }
 
+      await fetchCredits();
       setTimeout(() => scrollToRef(step3Ref), 100);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unable to create a variation right now.';
       console.error('LinkedIn photo variation failed:', err);
       setError(message);
+      if (message.toLowerCase().includes('credit') || message.toLowerCase().includes('follow yanqing')) {
+        setFollowMessage(message);
+        setShowFollowModal(true);
+      }
     } finally {
       setIsCreatingVariation(false);
     }
@@ -341,6 +468,10 @@ const LinkedInPhotoPage: React.FC<LinkedInPhotoPageProps> = ({ apiPath = '/api/l
 
   const handleGenerate = async () => {
     if (!photoFile) return;
+
+    if (!ensureAuthenticated()) return;
+    const hasCredits = await ensureCreditsAvailable();
+    if (!hasCredits) return;
 
     const isCustomPreset = selectedPreset?.id === 'custom';
 
@@ -440,6 +571,7 @@ const LinkedInPhotoPage: React.FC<LinkedInPhotoPageProps> = ({ apiPath = '/api/l
             ? payload.processingMs
             : null;
       setProcessingMs(nextProcessingMs);
+      await fetchCredits();
       setGenerationProgress(100);
       setCurrentStep(3);
       setTimeout(() => scrollToRef(step3Ref), 100);
@@ -447,6 +579,10 @@ const LinkedInPhotoPage: React.FC<LinkedInPhotoPageProps> = ({ apiPath = '/api/l
       const message = err instanceof Error ? err.message : 'Unable to generate headshot right now.';
       console.error('LinkedIn photo generation failed:', err);
       setError(message);
+      if (message.toLowerCase().includes('credit') || message.toLowerCase().includes('follow yanqing')) {
+        setFollowMessage(message);
+        setShowFollowModal(true);
+      }
     } finally {
       if (progressInterval) {
         clearInterval(progressInterval);
@@ -532,7 +668,48 @@ const LinkedInPhotoPage: React.FC<LinkedInPhotoPageProps> = ({ apiPath = '/api/l
               <p className="text-xl sm:text-2xl text-muted-foreground/90 max-w-3xl mx-auto font-light leading-relaxed">
                 Transform your photo into a professional LinkedIn profile picture.
               </p>
+              <div className="flex justify-center">
+                <img
+                  src="https://yanqinghot.blob.core.windows.net/public-access/linkedin-photo-generator.jpg"
+                  alt="LinkedIn photo generator hero"
+                  className="w-full max-w-3xl rounded-2xl shadow-2xl border border-border/60"
+                  loading="lazy"
+                />
+              </div>
             </div>
+            {isSignedIn ? (
+              <div className="flex justify-center">
+                <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-primary/10 border border-primary/30 text-primary-foreground">
+                  <Sparkles className="w-4 h-4" />
+                  <span>
+                    {creditsLoading
+                      ? 'Loading credits...'
+                      : `${credits?.remaining ?? LINKEDIN_CREDIT_LIMIT}/${credits?.limit ?? LINKEDIN_CREDIT_LIMIT} LinkedIn photo credits left (lifetime)`}
+                  </span>
+                </div>
+              </div>
+            ) : (
+              !authState.loading && (
+                <div className="max-w-3xl mx-auto p-4 rounded-xl border border-amber-500/40 bg-amber-500/10 text-amber-100">
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                    <div className="space-y-1 text-left">
+                      <p className="font-semibold text-lg">Sign in to use the LinkedIn Photo Generator</p>
+                      <p className="text-sm text-amber-100/90">
+                        Uploads and generations are available to signed-in users with 2 lifetime credits.
+                      </p>
+                    </div>
+                    <Button onClick={() => setShowAuthModal(true)} variant="default" className="bg-primary text-primary-foreground">
+                      Sign in
+                    </Button>
+                  </div>
+                </div>
+              )
+            )}
+            {creditsError && isSignedIn && (
+              <div className="max-w-3xl mx-auto p-3 rounded-lg border border-destructive/30 bg-destructive/10 text-sm text-destructive text-left">
+                {creditsError}
+              </div>
+            )}
           </header>
 
           {/* Step Indicator */}
@@ -540,7 +717,7 @@ const LinkedInPhotoPage: React.FC<LinkedInPhotoPageProps> = ({ apiPath = '/api/l
 
           <div className="grid gap-8 lg:grid-cols-2 lg:items-start">
             {/* Step 1: Upload Photo */}
-            <Card className="h-full border-border/50 shadow-xl">
+            <Card className={cn('h-full border-border/50 shadow-xl', !isSignedIn && 'opacity-40 pointer-events-none')}>
               <CardHeader className="space-y-3 pb-6">
                 <CardTitle className="flex items-center gap-3 text-2xl">
                   <span className="flex items-center justify-center w-10 h-10 rounded-full bg-primary text-primary-foreground text-base font-bold">
@@ -606,7 +783,11 @@ const LinkedInPhotoPage: React.FC<LinkedInPhotoPageProps> = ({ apiPath = '/api/l
 
             {/* Step 2: Choose Style */}
             <div ref={step2Ref} className="h-full">
-              <Card className={cn('h-full border-border/50 shadow-xl', !photoFile && 'opacity-50 pointer-events-none')}>
+              <Card className={cn(
+                'h-full border-border/50 shadow-xl',
+                !photoFile && 'opacity-50 pointer-events-none',
+                !isSignedIn && 'opacity-40 pointer-events-none'
+              )}>
                 <CardHeader className="space-y-3 pb-6">
                   <CardTitle className="flex items-center gap-3 text-2xl">
                     <span
@@ -749,6 +930,56 @@ const LinkedInPhotoPage: React.FC<LinkedInPhotoPageProps> = ({ apiPath = '/api/l
           )}
         </div>
       </div>
+
+      {showFollowModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+          <div className="relative w-full max-w-md transform transition-all duration-300 bg-gradient-to-br from-blue-50 to-purple-50 rounded-2xl shadow-2xl border border-white/40">
+            <button
+              onClick={handleFollowClose}
+              className="absolute top-4 right-4 text-gray-500 hover:text-gray-700 transition-colors"
+              aria-label="Close follow modal"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+            <div className="px-8 pt-8 pb-6 text-center space-y-4">
+              <div className="w-16 h-16 mx-auto rounded-full bg-white/40 backdrop-blur flex items-center justify-center">
+                <svg className="w-8 h-8 text-blue-600" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M4.98 3.5C4.98 4.88 3.88 6 2.5 6S0 4.88 0 3.5 1.12 1 2.5 1 4.98 2.12 4.98 3.5zM.22 8.98h4.56V24H.22zM8.94 8.98h4.37v2.05h.06c.61-1.16 2.1-2.38 4.32-2.38 4.62 0 5.47 3.04 5.47 6.99V24h-4.56v-7.35c0-1.75-.03-4-2.44-4-2.45 0-2.82 1.9-2.82 3.86V24H8.94z" />
+                </svg>
+              </div>
+              <h3 className="text-2xl font-bold text-gray-900">Credits used up</h3>
+              <p className="text-sm text-gray-700 leading-relaxed">
+                {followMessage || 'You have used both LinkedIn photo credits. Follow Yanqing on LinkedIn to request more.'}
+              </p>
+              <div className="flex flex-col gap-2">
+                <button
+                  onClick={handleFollowLink}
+                  className="w-full py-3 rounded-xl bg-blue-600 text-white font-semibold hover:bg-blue-500 transition-colors shadow-lg"
+                >
+                  Follow on LinkedIn
+                </button>
+                <button
+                  onClick={handleFollowClose}
+                  className="w-full py-3 rounded-xl border border-gray-200 text-gray-800 hover:bg-white transition-colors"
+                >
+                  Maybe later
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <AuthModal
+        isOpen={showAuthModal}
+        onClose={() => setShowAuthModal(false)}
+        onSuccess={() => {
+          setShowAuthModal(false);
+          fetchCredits();
+        }}
+      />
     </div>
   );
 };

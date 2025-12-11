@@ -1,6 +1,13 @@
 import { authService } from './auth'
 import { configService } from './config'
 
+// --- Function/Class Map ---
+// Class: ApiService — shared API client; called across frontend components to add auth headers, surface rate-limit details, and stream SSE responses.
+// Method: makeRequest — core fetch wrapper surfacing server-provided detail messages for 401/429 responses.
+// Method: getUsageStats/countUserInput — fetches/consumes per-scope rate limits for chat and other workflows.
+// Method: streamWithAuth — handles SSE streaming with auth + rate-limit handling for research/resume endpoints.
+// Purpose: Centralize backend communication with consistent error handling and auth headers.
+
 export interface ApiResponse<T = any> {
   success: boolean
   data?: T
@@ -32,6 +39,26 @@ class ApiService {
     endpoint: string,
     options: RequestInit = {}
   ): Promise<ApiResponse<T>> {
+    const extractError = async (response: Response) => {
+      try {
+        const data = await response.json()
+        if (typeof data?.detail === 'string') return data.detail
+        if (typeof data?.error === 'string') return data.error
+      } catch {
+        // ignore JSON parse issues
+      }
+      try {
+        const text = await response.text()
+        const trimmed = text.trim()
+        if (trimmed && !trimmed.startsWith('<')) {
+          return trimmed
+        }
+      } catch {
+        // ignore text read issues
+      }
+      return undefined
+    }
+
     try {
       // Get auth headers
       const authHeaders = await authService.getAuthHeaders()
@@ -48,21 +75,23 @@ class ApiService {
       // Handle rate limiting (401 means auth required for more requests)
       if (response.status === 401) {
         const retryAfter = response.headers.get('Retry-After')
+        const detail = await extractError(response)
         return {
           success: false,
           needsAuth: true,
           retryAfter: retryAfter ? parseInt(retryAfter) : undefined,
-          error: 'Sign-in required after free quota. Please sign in to continue.',
+          error: detail || 'Sign-in required after free quota. Please sign in to continue.',
         }
       }
 
       // Handle standard rate limiting (429)
       if (response.status === 429) {
         const retryAfter = response.headers.get('Retry-After')
+        const detail = await extractError(response)
         return {
           success: false,
           retryAfter: retryAfter ? parseInt(retryAfter) : undefined,
-          error: 'Rate limit exceeded. Please try again later.',
+          error: detail || 'Rate limit exceeded. Please try again later.',
         }
       }
 

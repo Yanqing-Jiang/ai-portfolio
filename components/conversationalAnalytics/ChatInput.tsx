@@ -32,6 +32,7 @@ const baseSuggestions: SuggestionItem[] = [
   { label: 'Revenue growth', prompt: 'YoY revenue growth for NVDA and AMD by quarter', icon: '📉' },
   { label: 'Margins vs peers', prompt: 'Net margin vs peers for NVDA over last 5 years', icon: '💹' },
   { label: 'Margin growth', prompt: 'Operating margin growth vs peers for AMD by quarter', icon: '🔺' },
+  { label: 'Project showcase', prompt: 'Project showcase walkthrough of the Next Gen Analytics agent', icon: '🗂️' },
 ];
 
 const ChatInput: React.FC<ChatInputProps> = ({
@@ -91,8 +92,8 @@ const ChatInput: React.FC<ChatInputProps> = ({
             className="absolute bottom-full left-0 right-0 p-4 pb-6"
             style={{ backgroundColor: theme.colors.bg.secondary }}
           >
-            <p className="text-xs mb-3" style={{ color: theme.colors.text.muted }}>
-              Quick suggestions
+            <p className="text-xs mb-2" style={{ color: theme.colors.text.muted }}>
+              Quick Suggestions
             </p>
             <div className="flex flex-wrap gap-2">
               {suggestions.map((s, idx) => (

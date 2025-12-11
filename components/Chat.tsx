@@ -13,6 +13,12 @@ import { authService, type AuthState } from '../services/auth';
 import { apiService, handleApiError, type UsageStats } from '../services/apiService';
 import { configService } from '../services/config';
 
+// --- Function/Class Map ---
+// Component: Chat — mounted by ProjectView; renders chat UI, streams replies, and enforces chat rate limits.
+// Helper: fetchUsageStats — reloads per-day chat quota from /api/rate-limit/usage when auth changes.
+// Helper: sendMessage — runs on submit/prompt click; calls /api/user-input (chat scope), streams backend responses, shows auth/follow modals on limits.
+// Purpose: Provide gated project chat with clear quota messaging for guests and signed-in users.
+
 interface ChatProps {
   project: Project;
   onFirstMessage?: () => void;
@@ -29,6 +35,7 @@ const GOGGINS_DEFAULT_PROMPTS = [
     "I'm about to give up."
 ];
 const GOGGINS_IMG_URL = 'https://yanqinghot.blob.core.windows.net/public-access/Goggins%20Yelling.jpg';
+const LINKEDIN_FOLLOW_URL = 'https://www.linkedin.com/in/jiangyanqing/';
 
 // Add this at the top of the file (or in a types file if preferred)
 declare global {
@@ -58,6 +65,8 @@ const Chat: React.FC<ChatProps> = ({ project, onFirstMessage }) => {
   
   // Usage stats state
   const [usageStats, setUsageStats] = useState<UsageStats | null>(null);
+  const [showFollowModal, setShowFollowModal] = useState(false);
+  const [followMessage, setFollowMessage] = useState<string | null>(null);
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -146,7 +155,7 @@ const Chat: React.FC<ChatProps> = ({ project, onFirstMessage }) => {
   // Function to fetch usage stats
   const fetchUsageStats = useCallback(async () => {
     try {
-      const response = await apiService.getUsageStats();
+      const response = await apiService.getUsageStats('chat');
       if (response.success && response.data) {
         setUsageStats(response.data);
       } else {
@@ -206,7 +215,7 @@ const Chat: React.FC<ChatProps> = ({ project, onFirstMessage }) => {
     
     // First, count this user input against rate limit
     try {
-      const countResponse = await apiService.countUserInput();
+      const countResponse = await apiService.countUserInput({ scope: 'chat' });
       if (!countResponse.success) {
         if (countResponse.needsAuth) {
           setShowAuthModal(true);
@@ -216,11 +225,14 @@ const Chat: React.FC<ChatProps> = ({ project, onFirstMessage }) => {
             text: 'Please sign in to continue using the service.',
           }]);
         } else {
+          const errorText = countResponse.error || 'Rate limit exceeded. Please try again later.';
           setMessages((prev: ChatMessage[]) => [...prev, {
             id: (Date.now() + 1).toString(),
             role: 'model',
-            text: countResponse.error || 'Rate limit exceeded. Please try again later.',
+            text: errorText,
           }]);
+          setFollowMessage(errorText);
+          setShowFollowModal(true);
         }
         setIsLoading(false);
         return;
@@ -491,6 +503,15 @@ const Chat: React.FC<ChatProps> = ({ project, onFirstMessage }) => {
     }
   };
 
+  const handleFollowClose = () => {
+    setShowFollowModal(false);
+    setFollowMessage(null);
+  };
+
+  const handleFollowLink = () => {
+    window.open(LINKEDIN_FOLLOW_URL, '_blank', 'noopener,noreferrer');
+  };
+
   const activeDefaultPrompts = isGogginsProject && isGogginsMode ? GOGGINS_DEFAULT_PROMPTS : defaultPrompts;
 
   return (
@@ -676,6 +697,48 @@ const Chat: React.FC<ChatProps> = ({ project, onFirstMessage }) => {
           </div>
         </div>
       </div>
+
+    {/* Follow LinkedIn Modal */}
+    {showFollowModal && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+        <div className="relative w-full max-w-md rounded-2xl border border-white/15 bg-gradient-to-br from-slate-900 to-slate-800 shadow-2xl">
+          <button
+            onClick={handleFollowClose}
+            className="absolute top-3 right-3 text-gray-400 hover:text-white transition-colors"
+            aria-label="Close follow modal"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+          <div className="px-6 pt-6 pb-5 text-center space-y-3">
+            <div className="w-16 h-16 mx-auto rounded-full bg-blue-500/20 border border-blue-400/40 flex items-center justify-center">
+              <svg className="w-8 h-8 text-blue-300" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M4.98 3.5C4.98 4.88 3.88 6 2.5 6S0 4.88 0 3.5 1.12 1 2.5 1 4.98 2.12 4.98 3.5zM.22 8.98h4.56V24H.22zM8.94 8.98h4.37v2.05h.06c.61-1.16 2.1-2.38 4.32-2.38 4.62 0 5.47 3.04 5.47 6.99V24h-4.56v-7.35c0-1.75-.03-4-2.44-4-2.45 0-2.82 1.9-2.82 3.86V24H8.94z" />
+              </svg>
+            </div>
+            <h3 className="text-lg font-semibold text-white">You’ve used your free chats</h3>
+            <p className="text-sm text-gray-300 leading-relaxed">
+              {followMessage || 'Follow Yanqing on LinkedIn to unlock more conversations.'}
+            </p>
+            <div className="flex flex-col gap-2 mt-2">
+              <button
+                onClick={handleFollowLink}
+                className="w-full py-3 rounded-xl bg-blue-600 text-white font-semibold hover:bg-blue-500 transition-colors shadow-lg"
+              >
+                Follow on LinkedIn
+              </button>
+              <button
+                onClick={handleFollowClose}
+                className="w-full py-3 rounded-xl border border-white/15 text-gray-200 hover:bg-white/5 transition-colors"
+              >
+                Maybe later
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    )}
 
       {/* Authentication Modal */}
       <AuthModal

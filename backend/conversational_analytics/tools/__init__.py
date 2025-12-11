@@ -5,6 +5,7 @@ from .analysis_tool import ANALYSIS_TOOL_DEFINITION, execute_analysis_tool
 from .echarts_tool import ECHARTS_TOOL_DEFINITION, execute_echarts_tool, generate_echarts_spec
 from .web_search import WEB_SEARCH_TOOL_DEFINITION, format_web_search_results, is_web_search_tool
 from .news_tool import NEWS_TOOL_DEFINITION, execute_news_tool
+from .showcase_tool import SHOWCASE_TOOL_DEFINITION, execute_showcase_tool
 
 # Custom tool definitions for Claude (excludes web_search which is a server tool)
 CUSTOM_TOOL_DEFINITIONS = [
@@ -13,6 +14,7 @@ CUSTOM_TOOL_DEFINITIONS = [
     TRADINGVIEW_TOOL_DEFINITION,
     ANALYSIS_TOOL_DEFINITION,
     NEWS_TOOL_DEFINITION,
+    SHOWCASE_TOOL_DEFINITION,
 ]
 
 # Web search is a server tool, handled separately
@@ -30,6 +32,7 @@ TOOL_EXECUTORS = {
     "create_tradingview_chart": execute_tradingview_tool,
     "generate_analysis": execute_analysis_tool,
     "get_news_sentiment": execute_news_tool,
+    "open_showcase_page": execute_showcase_tool,
 }
 
 __all__ = [

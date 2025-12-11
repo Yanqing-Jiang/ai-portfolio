@@ -3,6 +3,10 @@ import { authService } from '../services/auth'
 // @ts-ignore
 import { Helmet } from 'react-helmet-async'
 
+// --- Function/Class Map ---
+// Component: AuthModal — reusable sign-in/sign-up modal; called from Chat and LinkedIn photo pages to prompt Supabase auth.
+// Purpose: Present Supabase-powered email/password and OAuth flows with consistent styling and status messaging.
+
 interface AuthModalProps {
   isOpen: boolean
   onClose: () => void
@@ -185,7 +189,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
                 </div>
                 <div className="flex items-center">
                   <div className="w-2 h-2 bg-green-300 rounded-full mr-2"></div>
-                  <span>Member: 20/day</span>
+                  <span>Member: 10/day</span>
                 </div>
               </div>
             </div>

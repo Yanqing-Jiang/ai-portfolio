@@ -3,7 +3,7 @@ import { authService } from '../../../services/auth';
 import { configService } from '../../../services/config';
 
 export interface SSEEvent {
-    type: 'status' | 'thinking' | 'tool_start' | 'tool_end' | 'content' | 'chart' | 'data' | 'news' | 'skill' | 'plan' | 'plan_update' | 'done' | 'error' | 'debug' | 'selection_request' | 'selection_timeout' | 'selection_cancelled' | 'agent' | 'handoff' | 'process_node' | 'process_edge' | 'process_update' | 'process_clear';
+    type: 'status' | 'thinking' | 'tool_start' | 'tool_end' | 'content' | 'chart' | 'data' | 'news' | 'skill' | 'plan' | 'plan_update' | 'done' | 'error' | 'debug' | 'selection_request' | 'selection_timeout' | 'selection_cancelled' | 'agent' | 'handoff' | 'process_node' | 'process_edge' | 'process_update' | 'process_clear' | 'html_artifact';
     data: Record<string, unknown>;
 }
 
@@ -61,6 +61,12 @@ export interface AgentInfo {
     role: string;
 }
 
+export interface HtmlArtifact {
+    url: string;
+    title: string;
+    description: string;
+}
+
 export interface HandoffInfo {
     from: string;
     to: string;
@@ -109,6 +115,7 @@ export interface UseSSEStreamResult {
     dataResult: { rows: unknown[]; columns: string[] } | null;
     newsResult: NewsResult | null;
     skillInfo: SkillInfo | null;
+    htmlArtifact: HtmlArtifact | null;
     planSteps: PlanStep[];
     currentStepId: string | null;
     error: string | null;
@@ -144,6 +151,7 @@ export function useSSEStream(apiUrl: string = '/api/conv-analytics/stream'): Use
     const [dataResult, setDataResult] = useState<{ rows: unknown[]; columns: string[] } | null>(null);
     const [newsResult, setNewsResult] = useState<NewsResult | null>(null);
     const [skillInfo, setSkillInfo] = useState<SkillInfo | null>(null);
+    const [htmlArtifact, setHtmlArtifact] = useState<HtmlArtifact | null>(null);
     const [planSteps, setPlanSteps] = useState<PlanStep[]>([]);
     const [currentStepId, setCurrentStepId] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
@@ -171,6 +179,7 @@ export function useSSEStream(apiUrl: string = '/api/conv-analytics/stream'): Use
         setDataResult(null);
         setNewsResult(null);
         setSkillInfo(null);
+        setHtmlArtifact(null);
         setPlanSteps([]);
         setCurrentStepId(null);
         setError(null);
@@ -271,7 +280,7 @@ export function useSSEStream(apiUrl: string = '/api/conv-analytics/stream'): Use
             });
 
             if (response.status === 401) {
-                setError('Sign-in required for conversational analytics. Please log in and try again.');
+                setError('Sign-in required for Next Gen Analytics (Agent). Please log in and try again.');
                 return;
             }
 
@@ -389,6 +398,14 @@ export function useSSEStream(apiUrl: string = '/api/conv-analytics/stream'): Use
                     id: event.data.id as string,
                     name: event.data.name as string,
                     download_url: event.data.download_url as string,
+                });
+                break;
+
+            case 'html_artifact':
+                setHtmlArtifact({
+                    url: event.data.url as string,
+                    title: event.data.title as string,
+                    description: event.data.description as string,
                 });
                 break;
 
@@ -571,6 +588,7 @@ export function useSSEStream(apiUrl: string = '/api/conv-analytics/stream'): Use
         dataResult,
         newsResult,
         skillInfo,
+        htmlArtifact,
         planSteps,
         currentStepId,
         error,

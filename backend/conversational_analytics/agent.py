@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-import uuid
+import uuid as py_uuid
 import asyncio
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
@@ -45,6 +45,7 @@ from .streaming import (
     plan_update_event,
     done_event,
     error_event,
+    html_artifact_event,
     debug_event,
     selection_request_event,
     process_node_event,
@@ -102,8 +103,7 @@ def _build_hitl_options(ambiguous_slots: List[SlotSpec], max_options: int = 3) -
     """Function: _build_hitl_options — builds up to max_options bundled choices from ambiguous slots.
     Called from: run_with_tools when slot resolution finds ambiguous required slots.
     Purpose: Creates user-friendly option cards for HITL selection."""
-    import uuid
-    
+    # local import removed; uses module-level py_uuid
     if not ambiguous_slots:
         return []
     
@@ -141,7 +141,7 @@ def _build_hitl_options(ambiguous_slots: List[SlotSpec], max_options: int = 3) -
                 label_parts.append(f"{other_slot.name}: {payload[other_slot.name]}")
         
         options.append({
-            "id": str(uuid.uuid4())[:8],
+            "id": str(py_uuid.uuid4())[:8],
             "label": ", ".join(label_parts).replace("_", " ").title(),
             "description": f"Use these settings",
             "payload": payload,
@@ -252,7 +252,7 @@ class ConversationalAnalyticsAgent:
         Supports: Optional prompt/tool/plan overrides for supervisor and specialist routing."""
         debug_mode = settings.debug_mode
         start_total = time.monotonic()
-        run_id = str(uuid.uuid4())
+        run_id = str(py_uuid.uuid4())
         set_run_context(run_id)
         
         # Clear previous process visualization when running standalone; supervisor handles its own root nodes
@@ -360,8 +360,7 @@ class ConversationalAnalyticsAgent:
                 
                 # If there are ambiguous required slots, emit HITL selection request
                 if ambiguous_slots:
-                    import uuid
-                    request_id = str(uuid.uuid4())
+                    request_id = str(py_uuid.uuid4())
                     options = _build_hitl_options(ambiguous_slots, max_options=3)
                     
                     # Emit HITL decision node
@@ -624,6 +623,18 @@ class ConversationalAnalyticsAgent:
                                 "completed" if result.get("success", True) else "error",
                                 f"{tool_name} completed" if result.get("success", True) else f"{tool_name} failed: {result.get('error', 'Unknown error')}"
                             )
+
+                            # Emit showcase artifact link for frontend embedding
+                            if (
+                                tool_name == "open_showcase_page"
+                                and result.get("success")
+                                and result.get("url")
+                            ):
+                                yield html_artifact_event(
+                                    result.get("url"),
+                                    result.get("title", "Project Showcase"),
+                                    result.get("description", "Interactive overview of the Next Gen Analytics project."),
+                                )
                             
                             # Update tool process node
                             yield process_update_event(
