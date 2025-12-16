@@ -1,10 +1,19 @@
+---
+name: Revenue Comparison (Peers)
+description: |
+  Compare revenue across multiple semiconductor companies over time.
+  USE THIS SKILL WHEN the user asks about:
+  - Revenue comparison between companies (e.g., "compare NVDA vs AMD revenue")
+  - Revenue trends across peers, revenue vs, revenue between tickers
+  - Side-by-side revenue analysis for multiple companies
+  - Follow-ups like "add INTC", "show quarterly", "last 3 years" when comparing revenue
+  DO NOT USE for single-company market share analysis.
+---
+
 # Skill: Revenue Comparison (Peers)
 
 ## Intent
 Compare revenue totals across selected peer tickers over a time period.
-
-## Triggers
-- "compare revenue", "revenue vs", "revenue between", "revenue among"
 
 ## Inputs
 - `ticker_list` (2-6 tickers; default peer set if missing, required)

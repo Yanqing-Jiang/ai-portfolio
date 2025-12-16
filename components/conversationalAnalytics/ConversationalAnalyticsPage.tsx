@@ -1,7 +1,7 @@
 /**
  * Function: ConversationalAnalyticsPage - Next Gen Analytics (Agent) chat UI inspired by ChatGPT/Claude
  * Called from: ProjectView for the conversational-analytics project
- * Invokes: useSSEStream hook for Claude agent streaming, renders MessageBubble, ThinkingProcessBar
+ * Invokes: useSSEStream hook for Claude agent streaming, renders MessageBubble, ProcessPanel with dynamic steps
  * Purpose: Delivers a sleek, minimalist chat experience for semiconductor financial analysis
  */
 
@@ -9,7 +9,6 @@ import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useSSEStream, ThinkingStep, NewsResult, HtmlArtifact } from './hooks/useSSEStream';
 import MessageBubble from './MessageBubble';
-import ThinkingProcessBar from './ThinkingProcessBar';
 import ChatInput from './ChatInput';
 import SelectionCard from './SelectionCard';
 import ProcessPanel from './ProcessPanel';
@@ -159,7 +158,7 @@ interface ChatMessage {
 /**
  * Function: ConversationalAnalyticsPage - orchestrates chat layout, streaming state, and agent controls
  * Called from: ProjectView route for conversational analytics
- * Invokes: useSSEStream for backend interaction; renders ProcessPanel, ThinkingProcessBar, MessageBubble, SelectionCard, ChatInput
+ * Invokes: useSSEStream for backend interaction; renders ProcessPanel (dynamic steps), MessageBubble, SelectionCard, ChatInput
  * Purpose: Central hub connecting UI, agent selection, and streaming data flow
  */
 // Main Page Component
@@ -167,7 +166,6 @@ const ConversationalAnalyticsPage: React.FC = () => {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [sessionId] = useState(() => `session-${Date.now()}`);
-  const [isPlanExpanded, setIsPlanExpanded] = useState(false);
   const [agentMode, setAgentMode] = useState<string>('single');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
@@ -182,14 +180,10 @@ const ConversationalAnalyticsPage: React.FC = () => {
     newsResult,
     skillInfo,
     htmlArtifact,
-    planSteps,
-    currentStepId,
     error,
-    errorDetails,
     debugLogs,
     pendingSelection,
     activeAgent,
-    handoffs,
     processNodes,
     processEdges,
     lastAgentLabel,
@@ -200,7 +194,6 @@ const ConversationalAnalyticsPage: React.FC = () => {
     resumeLast,
     submitSelection,
     cancelSelection,
-    reset,
   } = useSSEStream();
   const activeAgentLabel = activeAgent?.name || lastAgentLabel || (agentMode === 'single' ? 'Single Agent' : 'Assistant');
 
@@ -271,7 +264,7 @@ const ConversationalAnalyticsPage: React.FC = () => {
         },
       ]);
     }
-  }, [isStreaming, content, thinkingSteps, chartConfig, dataResult, newsResult, htmlArtifact, activeAgentLabel, reset]);
+  }, [isStreaming, content, thinkingSteps, chartConfig, dataResult, newsResult, htmlArtifact, activeAgentLabel]);
 
   /**
    * Function: handleSubmit - dispatches the typed prompt to the SSE pipeline
@@ -399,24 +392,6 @@ const ConversationalAnalyticsPage: React.FC = () => {
               animate={{ opacity: 1 }}
               className="max-w-4xl mx-auto px-4 py-6"
             >
-              {/* Thinking / Plan bar pinned at top */}
-              {(isStreaming || planSteps.length > 0 || error) && (
-                <div className="sticky top-0 z-10 pb-3" style={{ backgroundColor: `${theme.colors.bg.primary}cc`, backdropFilter: 'blur(6px)' }}>
-                  <ThinkingProcessBar
-                    steps={planSteps}
-                    currentStepId={currentStepId}
-                    isExpanded={isPlanExpanded}
-                    onToggle={() => setIsPlanExpanded(prev => !prev)}
-                    error={error}
-                    errorDetails={errorDetails}
-                    isStreaming={isStreaming}
-                    activeAgent={activeAgent}
-                    handoffs={handoffs}
-                    isPaused={isPaused}
-                  />
-                </div>
-              )}
-
               {/* Message thread */}
               {messages.map((msg, idx) => (
                 <MessageBubble

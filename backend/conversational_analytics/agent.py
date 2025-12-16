@@ -24,7 +24,15 @@ except Exception:  # pragma: no cover - SDK may be unavailable
 from .config import settings
 from .memory import session_store
 from .tools import ALL_TOOLS, TOOL_EXECUTORS, is_web_search_tool, format_web_search_results
-from .skills import select_skill, load_skill_content, resolve_slots, SlotSpec
+from .skills import (
+    get_skill_by_id,
+    load_skill_instructions,
+    build_skill_catalog,
+    extract_skill_from_response,
+    resolve_slots,
+    SlotSpec,
+    SKILL_INDEX,
+)
 from .sdk_assets import (
     get_allowed_tools,
     load_project_guide,
@@ -59,8 +67,8 @@ from .streaming import (
 
 logger = logging.getLogger(__name__)
 
-# System prompt for the agent
-SYSTEM_PROMPT = """You are a conversational analytics assistant specialized in financial data analysis for semiconductor companies.
+# System prompt base (skill catalog is appended dynamically)
+SYSTEM_PROMPT_BASE = """You are a conversational analytics assistant specialized in financial data analysis for semiconductor companies.
 
 You have access to a database with financial metrics for these companies:
 - NVDA (NVIDIA), AMD, INTC (Intel), AVGO (Broadcom), QCOM (Qualcomm), MU (Micron), TXN (Texas Instruments)
@@ -93,6 +101,18 @@ Guardrails:
 - Do not paste tool inputs or outputs into the user-facing text.
 
 Be conversational, accurate, and insightful. Always cite the data source when using web search."""
+
+
+def _get_system_prompt_with_skills() -> str:
+    """Function: _get_system_prompt_with_skills — builds complete system prompt with skill catalog.
+    Called from: agent initialization and run_with_tools.
+    Purpose: Combines base prompt with skill descriptions so Claude can decide which skill to use."""
+    skill_catalog = build_skill_catalog()
+    return f"{SYSTEM_PROMPT_BASE}\n\n{skill_catalog}"
+
+
+# Full system prompt with skill catalog
+SYSTEM_PROMPT = _get_system_prompt_with_skills()
 
 
 class MissingDependencyError(RuntimeError):
@@ -295,136 +315,36 @@ class ConversationalAnalyticsAgent:
         if debug_mode:
             yield debug_event("agent", f"User message received ({len(message)} chars)")
 
-        # Detect applicable skill and build augmented system prompt
+        # Claude-native skill routing: Claude decides which skill to use based on context
+        # The system prompt includes skill catalog with descriptions
         yield process_node_event(
             node_id="skill_detection",
             node_type="decision",
             label="Skill Detection",
             status="running",
             parent_id="request_received",
-            description="Analyzing request to select appropriate skill",
+            description="Claude will decide based on context",
         )
         yield process_edge_event("request_received", "skill_detection", animated=True)
         
-        selected_skill = select_skill(message)
         base_system_prompt = system_prompt_override or SYSTEM_PROMPT
-        skill_block_text: Optional[str] = None
-        resolved_slots_block: Optional[str] = None
-        resolved_slots: Dict[str, Any] = {}
         
-        if selected_skill:
-            skill_text = load_skill_content(selected_skill)
-            skill_block_text = (
-                f"Skill Activated: {selected_skill.name} (id: {selected_skill.skill_id})\n"
-                f"Follow this guidance:\n{skill_text}"
-            )
-            skill_download_url = f"/api/conv-analytics/skills/{selected_skill.skill_id}"
-            yield skill_event(selected_skill.skill_id, selected_skill.name, skill_download_url)
-            
-            # Update skill detection node with result
-            yield process_update_event(
-                node_id="skill_detection",
-                status="completed",
-                summary=f"Selected: {selected_skill.name}",
-            )
-            yield process_node_event(
-                node_id="skill_active",
-                node_type="agent",
-                label=selected_skill.name,
-                status="running",
-                parent_id="skill_detection",
-                description=f"Skill '{selected_skill.name}' is now active",
-                data={"skill_id": selected_skill.skill_id},
-            )
-            yield process_edge_event("skill_detection", "skill_active", label="matched", animated=True)
-            
-            if debug_mode:
-                yield debug_event("agent", f"Skill selected: {selected_skill.skill_id}", {"skill": selected_skill.skill_id})
-            
-            # Check if session has pre-resolved slots from a prior HITL selection
-            pre_resolved = session.context.get("resolved_slots")
-            if pre_resolved and session.context.get("skill_id") == selected_skill.skill_id:
-                resolved_slots = pre_resolved
-                session.update_context("resolved_slots", None)  # Clear after use
-                if debug_mode:
-                    yield debug_event("agent", "Using pre-resolved slots from HITL", {"slots": resolved_slots})
-            else:
-                # Resolve slots from user text + defaults
-                resolved_slots, ambiguous_slots = resolve_slots(selected_skill, message)
-                
-                if debug_mode:
-                    yield debug_event("agent", "Slot resolution complete", {
-                        "resolved": resolved_slots,
-                        "ambiguous": [s.name for s in ambiguous_slots],
-                    })
-                
-                # If there are ambiguous required slots, emit HITL selection request
-                if ambiguous_slots:
-                    request_id = str(py_uuid.uuid4())
-                    options = _build_hitl_options(ambiguous_slots, max_options=3)
-                    
-                    # Emit HITL decision node
-                    yield process_node_event(
-                        node_id="hitl_required",
-                        node_type="decision",
-                        label="User Input Required",
-                        status="running",
-                        parent_id="skill_active" if selected_skill else "skill_detection",
-                        description=f"Ambiguous slots: {', '.join(s.name for s in ambiguous_slots)}",
-                    )
-                    yield process_edge_event(
-                        "skill_active" if selected_skill else "skill_detection",
-                        "hitl_required",
-                        edge_type="decision_yes",
-                        label="needs clarification",
-                        animated=True,
-                    )
-                    
-                    # Store pending selection for validation on reply
-                    session.set_pending_selection(
-                        request_id=request_id,
-                        skill_id=selected_skill.skill_id,
-                        options=options,
-                        resolved_slots=resolved_slots,
-                        ambiguous_slots=[s.name for s in ambiguous_slots],
-                    )
-                    
-                    # Build prompt for user
-                    slot_names = ", ".join(s.name.replace("_", " ") for s in ambiguous_slots)
-                    prompt_text = f"Please clarify: {slot_names}"
-                    
-                    yield selection_request_event(
-                        request_id=request_id,
-                        title="Confirm analysis options",
-                        prompt=prompt_text,
-                        options=options,
-                        allow_custom=True,
-                        timeout_seconds=60,
-                    )
-                    
-                    if debug_mode:
-                        yield debug_event("agent", "Emitted HITL selection request", {"request_id": request_id})
-                    
-                    # End this iteration; frontend will POST selection, then call /stream again
-                    yield thinking_event("awaiting_selection", "running", "Waiting for your choice...")
-                    yield done_event()
-                    clear_run_context()
-                    return
-            
-            # Augment system prompt with resolved slots
-            if resolved_slots:
-                slots_text = json.dumps(resolved_slots, indent=2)
-                resolved_slots_block = (
-                    "Resolved Slots (use these values for the analysis):\n"
-                    f"{slots_text}"
-                )
+        # Mark skill detection as ready (Claude will indicate skill in response)
+        yield process_update_event(
+            node_id="skill_detection",
+            status="completed",
+            summary="Claude-native routing",
+        )
+        
+        if debug_mode:
+            yield debug_event("agent", "Using Claude-native skill routing (no pre-selection)")
 
         project_guide_block = self.project_guide if (self.use_sdk_assets and system_prompt_override is None) else None
         system_blocks = _build_system_blocks(
             base_system_prompt=base_system_prompt,
             project_guide=project_guide_block,
-            skill_block=skill_block_text,
-            resolved_slots_block=resolved_slots_block,
+            skill_block=None,  # Skills are now in the base system prompt
+            resolved_slots_block=None,
         )
         
         yield status_event("Connecting to Claude...")
@@ -444,11 +364,11 @@ class ConversationalAnalyticsAgent:
             node_type="agent",
             label="Claude Analysis",
             status="running",
-            parent_id="skill_active" if selected_skill else "skill_detection",
+            parent_id="skill_detection",
             description="Connecting to Claude for analysis",
         )
         yield process_edge_event(
-            "skill_active" if selected_skill else "skill_detection",
+            "skill_detection",
             "claude_api",
             animated=True,
         )
@@ -529,7 +449,7 @@ class ConversationalAnalyticsAgent:
                         "cache_status": cache_status,
                         "model": self.model,
                         "agent_mode": agent_mode or agent_label or "single",
-                        "skill_id": selected_skill.skill_id if selected_skill else None,
+                        "skill_id": None,  # Claude-native routing, skill detected from response
                     }
                     yield debug_event("cache", "Claude usage (cache-aware)", usage_payload)
                 
@@ -752,7 +672,7 @@ class ConversationalAnalyticsAgent:
                         "cache_status": cache_status,
                         "model": self.model,
                         "agent_mode": agent_mode or agent_label or "single",
-                        "skill_id": selected_skill.skill_id if selected_skill else None,
+                        "skill_id": None,  # Claude-native routing
                     })
                 yield debug_event("tool", "Tool/flow stats", {
                     "tool_call_count": tool_call_count,

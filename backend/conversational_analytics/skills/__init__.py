@@ -1,10 +1,12 @@
 # Skill registry utilities for conversational analytics.
+# Claude-native skill routing: Claude decides which skill to use based on descriptions.
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from ..config import settings
 from ..sdk_assets import load_skill_override, should_use_sdk_assets
@@ -24,105 +26,186 @@ class SlotSpec:
 
 @dataclass
 class SkillMeta:
-    """Skill metadata used for routing and client surfacing."""
+    """Function: SkillMeta — skill metadata used for routing and client surfacing.
+    Called from: agent when Claude indicates a skill, skill catalog builder.
+    Purpose: Lightweight metadata holder; actual routing is done by Claude using descriptions."""
     skill_id: str
     name: str
     filename: str
-    keywords: List[str]
-    description: str
+    description: str  # Brief description for the index (full description in YAML frontmatter)
 
     @property
     def path(self) -> Path:
         return BASE_DIR / self.filename
 
 
+# Skill index - descriptions here are brief; full descriptions are in YAML frontmatter
 SKILL_INDEX: List[SkillMeta] = [
     SkillMeta(
         skill_id="market_share_single",
         name="Market Share (Single Company)",
         filename="skill_market_share_single.md",
-        keywords=["market share", "share of market", "market position"],
         description="Calculate a company's market share versus peers.",
     ),
     SkillMeta(
         skill_id="revenue_comparison",
         name="Revenue Comparison (Peers)",
         filename="skill_revenue_comparison.md",
-        keywords=["revenue comparison", "revenue vs", "compare revenue", "between"],
         description="Compare revenue across peer tickers over time.",
     ),
     SkillMeta(
         skill_id="revenue_growth",
         name="Revenue Growth (YoY/QoQ)",
         filename="skill_revenue_growth.md",
-        keywords=["revenue growth", "growth rate", "yoy", "qoq", "growth"],
         description="Compute revenue growth rates over time.",
     ),
     SkillMeta(
         skill_id="margins_vs_peers",
         name="Margins vs Peers",
         filename="skill_margins_vs_peers.md",
-        keywords=["margin", "profit margin", "vs peers", "industry average"],
         description="Compare margins against peer averages.",
     ),
     SkillMeta(
         skill_id="margin_growth_peers",
         name="Margin Growth vs Peers",
         filename="skill_margin_growth_peers.md",
-        keywords=["margin growth", "margin expansion", "change in margin"],
         description="Track margin growth vs peer averages.",
     ),
     SkillMeta(
         skill_id="project_showcase",
         name="Project Showcase / Architecture Demo",
         filename="skill_project_showcase.md",
-        keywords=[
-            "project tour",
-            "showcase",
-            "demo",
-            "architecture demo",
-            "explain agents",
-            "multi-agent",
-            "single-agent",
-            "how does this work",
-            "skills explanation",
-        ],
         description="Educational walkthrough of the Next Gen Analytics Agent architecture.",
-    ),
-    SkillMeta(
-        skill_id="offscope_greeting",
-        name="Off-Scope / Greeting",
-        filename="skill_offscope_greeting.md",
-        keywords=["hello", "hi", "hey", "thanks", "not finance", "non financial"],
-        description="Politely decline or handle greetings without tools.",
     ),
 ]
 
 
 def _normalize(text: str) -> str:
-    """Function: _normalize — called by skill selection to lower/strip user text."""
+    """Function: _normalize — normalizes text for slot extraction."""
     return re.sub(r"\s+", " ", text).lower().strip()
 
 
-def select_skill(user_message: str) -> Optional[SkillMeta]:
-    """Function: select_skill — called from agent to choose a skill based on keywords."""
-    text = _normalize(user_message)
+def _parse_yaml_frontmatter(content: str) -> Tuple[Dict[str, Any], str]:
+    """Function: _parse_yaml_frontmatter — extracts YAML frontmatter from skill markdown.
+    Called from: build_skill_catalog, load_skill_content_without_frontmatter.
+    Returns: (frontmatter_dict, remaining_content)
+    Purpose: Separates skill description metadata from skill instructions."""
+    if not content.startswith("---"):
+        return {}, content
+    
+    # Find the closing ---
+    end_idx = content.find("---", 3)
+    if end_idx == -1:
+        return {}, content
+    
+    yaml_block = content[3:end_idx].strip()
+    remaining = content[end_idx + 3:].strip()
+    
+    # Simple YAML parsing for name and description
+    frontmatter: Dict[str, Any] = {}
+    current_key = None
+    current_value_lines: List[str] = []
+    
+    for line in yaml_block.split("\n"):
+        # Check for new key
+        if ":" in line and not line.startswith(" ") and not line.startswith("\t"):
+            # Save previous key if exists
+            if current_key and current_value_lines:
+                value = "\n".join(current_value_lines).strip()
+                # Remove leading | for multiline
+                if value.startswith("|"):
+                    value = value[1:].strip()
+                frontmatter[current_key] = value
+            
+            key, _, value = line.partition(":")
+            current_key = key.strip()
+            value = value.strip()
+            
+            if value and value != "|":
+                frontmatter[current_key] = value
+                current_key = None
+                current_value_lines = []
+            else:
+                current_value_lines = []
+        elif current_key:
+            # Continuation of multiline value
+            current_value_lines.append(line.strip())
+    
+    # Save last key
+    if current_key and current_value_lines:
+        value = "\n".join(current_value_lines).strip()
+        frontmatter[current_key] = value
+    
+    return frontmatter, remaining
+
+
+def get_skill_by_id(skill_id: str) -> Optional[SkillMeta]:
+    """Function: get_skill_by_id — retrieves a skill by its ID.
+    Called from: agent when Claude indicates which skill to use.
+    Purpose: Lookup skill metadata after Claude makes a routing decision."""
     for skill in SKILL_INDEX:
-        if any(kw in text for kw in skill.keywords):
+        if skill.skill_id == skill_id:
             return skill
     return None
 
 
 def load_skill_content(skill: SkillMeta) -> str:
     """Function: load_skill_content — reads a skill markdown file for prompt injection.
-    Called from: agent when building system prompt.
+    Called from: agent when building system prompt after Claude selects a skill.
     Invokes: optional `.claude/skills` mirror before falling back to in-repo skills.
-    Purpose: Keeps SDK filesystem as the primary prompt source while preserving local fallback."""
+    Purpose: Returns full skill content including frontmatter."""
     if should_use_sdk_assets(settings.use_sdk_assets):
         override = load_skill_override(skill.filename)
         if override:
             return override
     return skill.path.read_text(encoding="utf-8")
+
+
+def load_skill_instructions(skill: SkillMeta) -> str:
+    """Function: load_skill_instructions — reads skill content without YAML frontmatter.
+    Called from: agent when injecting skill guidance after selection.
+    Purpose: Returns only the instruction part, not the routing description."""
+    content = load_skill_content(skill)
+    _, instructions = _parse_yaml_frontmatter(content)
+    return instructions
+
+
+@lru_cache(maxsize=1)
+def build_skill_catalog() -> str:
+    """Function: build_skill_catalog — builds a catalog of all skills with descriptions.
+    Called from: agent when constructing the system prompt.
+    Purpose: Provides Claude with all skill descriptions so it can decide which to use.
+    
+    The catalog includes each skill's name, ID, and full description from YAML frontmatter.
+    Claude uses this to autonomously decide which skill (if any) applies to the user's request."""
+    
+    catalog_lines = [
+        "## Available Skills",
+        "",
+        "You have access to specialized skills for financial analysis. Review the descriptions below and decide which skill (if any) best matches the user's request.",
+        "",
+        "**IMPORTANT**: You are NOT required to use a skill. If the user's request doesn't match any skill, respond naturally without activating a skill. Skills are optional guidance, not mandatory routing.",
+        "",
+        "When you decide to use a skill, indicate it by including `[SKILL: skill_id]` at the start of your response (e.g., `[SKILL: market_share_single]`). The full skill instructions will then be loaded.",
+        "",
+    ]
+    
+    for skill in SKILL_INDEX:
+        # Load and parse frontmatter for full description
+        try:
+            content = load_skill_content(skill)
+            frontmatter, _ = _parse_yaml_frontmatter(content)
+            description = frontmatter.get("description", skill.description)
+        except Exception:
+            description = skill.description
+        
+        catalog_lines.append(f"### {skill.name}")
+        catalog_lines.append(f"**Skill ID**: `{skill.skill_id}`")
+        catalog_lines.append(f"**Description**:")
+        catalog_lines.append(description)
+        catalog_lines.append("")
+    
+    return "\n".join(catalog_lines)
 
 
 # Slot specifications per skill (defines required/optional slots, defaults, and options for HITL)
@@ -159,7 +242,6 @@ SKILL_SLOTS: Dict[str, List[SlotSpec]] = {
         SlotSpec(name="period_filter", required=True, default=None, options=["quarter", "year"], description="Period granularity"),
     ],
     "project_showcase": [],
-    "offscope_greeting": [],
 }
 
 
@@ -245,15 +327,30 @@ def resolve_slots(skill: SkillMeta, user_text: str) -> tuple[Dict[str, Any], Lis
     return resolved, ambiguous
 
 
+def extract_skill_from_response(response_text: str) -> Optional[str]:
+    """Function: extract_skill_from_response — extracts skill ID from Claude's response.
+    Called from: agent after receiving Claude's first response.
+    Purpose: Detects if Claude indicated a skill using [SKILL: skill_id] marker.
+    
+    Returns the skill_id if found, None otherwise."""
+    # Look for [SKILL: skill_id] pattern
+    match = re.search(r'\[SKILL:\s*(\w+)\]', response_text)
+    if match:
+        return match.group(1)
+    return None
+
+
 __all__ = [
     "SkillMeta",
     "SlotSpec", 
     "SKILL_INDEX",
     "SKILL_SLOTS",
-    "select_skill",
+    "get_skill_by_id",
     "load_skill_content",
+    "load_skill_instructions",
+    "build_skill_catalog",
+    "extract_skill_from_response",
     "get_skill_slots",
     "extract_slots_from_text",
     "resolve_slots",
 ]
-

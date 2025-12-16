@@ -83,7 +83,8 @@ def _resolve_value_unit(value_unit: Optional[str], y_field: str, data: List[Dict
     if not normalized:
         y_lower = y_field.lower()
         metric_text = str(data[0].get("metric", "")).lower() if data else ""
-        if any(key in y_lower for key in ["margin", "pct", "percent"]) or "margin" in metric_text:
+        # Detect percentage fields: margins, shares, percents
+        if any(key in y_lower for key in ["margin", "pct", "percent", "share", "_pct", "_percent"]) or "margin" in metric_text:
             normalized = "percentage"
         elif "revenue" in y_lower or "sales" in y_lower or "rev" in metric_text:
             normalized = "millions_usd"

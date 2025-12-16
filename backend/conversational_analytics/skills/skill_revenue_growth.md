@@ -1,10 +1,19 @@
+---
+name: Revenue Growth (YoY/QoQ)
+description: |
+  Calculate and visualize revenue growth rates for semiconductor companies.
+  USE THIS SKILL WHEN the user asks about:
+  - Revenue growth, growth rate, YoY growth, QoQ growth
+  - Year-over-year or quarter-over-quarter revenue changes
+  - Growth trends, growth vs peers, which company is growing fastest
+  - Follow-ups like "show QoQ instead", "last 8 quarters" when discussing growth
+  DO NOT USE for absolute revenue comparisons (use Revenue Comparison instead).
+---
+
 # Skill: Revenue Growth (YoY / QoQ)
 
 ## Intent
 Compute revenue growth rates (YoY and/or QoQ) for peer tickers.
-
-## Triggers
-- "revenue growth", "growth rate", "growth vs peers", "yoy growth", "qoq growth"
 
 ## Inputs
 - `ticker_list` (single or 2+ tickers, required)
@@ -27,8 +36,7 @@ Compute revenue growth rates (YoY and/or QoQ) for peer tickers.
 - Encode `value_unit: "percentage"` and include `value_meta` so the frontend renders % labels (1 decimal) and converts ratios when needed.
 
 ## News Hook
-- If sharp changes or user asks “why”, call `get_news_sentiment` for the primary ticker(s).
+- If sharp changes or user asks "why", call `get_news_sentiment` for the primary ticker(s).
 
 ## Example Prompt Snippet
-“Use Revenue Growth skill. Peer set NVDA, AMD, AVGO. Quarterly growth with YoY % column. Chart = line. If user asks why, call get_news_sentiment for NVDA.”
-
+"Use Revenue Growth skill. Peer set NVDA, AMD, AVGO. Quarterly growth with YoY % column. Chart = line. If user asks why, call get_news_sentiment for NVDA."

@@ -1,13 +1,15 @@
 /**
- * Function: ProcessPanel — Agent thinking process visualization panel with flowchart diagram
- * Called from: ConversationalAnalyticsPage header (replaces "Connected" status)
+ * Function: ProcessPanel — Agent thinking process visualization panel with dynamic steps display
+ * Called from: ConversationalAnalyticsPage header (replaces "Connected" status and ThinkingProcessBar)
  * Invokes: Renders flowchart-style diagram with expandable nodes including Skill section
- * Purpose: Shows real-time agent decision flow with expandable full-screen canvas
+ * Purpose: Shows real-time agent decision flow via compact header chip and expandable full-screen canvas
  * 
  * 2025 Design Patterns Applied:
- * - Flowchart-style vertical layout with SVG connectors
+ * - Dynamic major steps derived from processNodes (Input → Skill → Tool(s) → Agent(s) → Output)
+ * - Compact status chip shows current step, icon, and progress counter (e.g., "SQL Query 2/5")
+ * - Flowchart-style vertical layout with SVG connectors in expanded view
  * - Expandable nodes with progressive disclosure
- * - Integrated skill visualization (moved from ThinkingProcessBar)
+ * - Integrated skill visualization
  * - Real-time status animations
  * - Hierarchical tree for multi-agent, linear flow for single-agent
  */
@@ -50,6 +52,163 @@ const STATUS_CONFIG: Record<ProcessNode['status'], { color: string; icon: string
   completed: { color: '#10b981', icon: '✓', label: 'Completed' },
   error: { color: '#ef4444', icon: '✕', label: 'Error' },
   skipped: { color: '#94a3b8', icon: '–', label: 'Skipped' },
+};
+
+/**
+ * Interface: MajorStep — Represents a significant step to display in the compact status chip
+ * Purpose: Provides a simplified view of the agent's progress for the header indicator
+ */
+interface MajorStep {
+  id: string;
+  label: string;
+  shortLabel: string;
+  status: ProcessNode['status'];
+  icon: string;
+  type: 'input' | 'skill' | 'tool' | 'agent' | 'output' | 'routing';
+}
+
+/**
+ * Function: deriveMajorSteps — Converts processNodes into displayable major steps
+ * Called from: ProcessPanel useMemo
+ * Purpose: Filters and transforms raw process nodes into user-friendly step indicators
+ */
+const deriveMajorSteps = (
+  processNodes: ProcessNode[],
+  skillInfo: SkillInfo | null | undefined
+): MajorStep[] => {
+  const steps: MajorStep[] = [];
+  const sortedNodes = [...processNodes].sort((a, b) => a.timestamp - b.timestamp);
+  
+  // Track if we've added a skill step
+  let skillStepAdded = false;
+  
+  for (const node of sortedNodes) {
+    // Skip internal/minor nodes - only show significant ones
+    if (node.node_id.includes('_internal') || node.node_id.includes('_helper')) {
+      continue;
+    }
+    
+    // Handle input nodes
+    if (node.node_type === 'input') {
+      steps.push({
+        id: node.node_id,
+        label: 'Request Received',
+        shortLabel: 'Input',
+        status: node.status,
+        icon: '📥',
+        type: 'input',
+      });
+      continue;
+    }
+    
+    // Handle skill detection/decision nodes
+    if (node.node_type === 'decision' || node.node_id.includes('skill')) {
+      if (!skillStepAdded && skillInfo) {
+        steps.push({
+          id: 'skill_active',
+          label: `Skill: ${skillInfo.name}`,
+          shortLabel: skillInfo.name,
+          status: node.status,
+          icon: '⚡',
+          type: 'skill',
+        });
+        skillStepAdded = true;
+      } else if (!skillStepAdded) {
+        steps.push({
+          id: node.node_id,
+          label: node.label || 'Analyzing Request',
+          shortLabel: 'Analysis',
+          status: node.status,
+          icon: '🔀',
+          type: 'routing',
+        });
+        skillStepAdded = true;
+      }
+      continue;
+    }
+    
+    // Handle tool nodes
+    if (node.node_type === 'tool') {
+      // Extract tool name from label or node_id
+      const toolName = node.label || node.node_id.replace('tool_', '').replace(/_/g, ' ');
+      const shortName = toolName.length > 12 ? toolName.substring(0, 12) + '...' : toolName;
+      steps.push({
+        id: node.node_id,
+        label: `Tool: ${toolName}`,
+        shortLabel: shortName,
+        status: node.status,
+        icon: '🔧',
+        type: 'tool',
+      });
+      continue;
+    }
+    
+    // Handle agent nodes (for multi-agent)
+    if (node.node_type === 'agent') {
+      const agentName = node.label || node.node_id.replace('agent_', '').replace(/_/g, ' ');
+      steps.push({
+        id: node.node_id,
+        label: `Agent: ${agentName}`,
+        shortLabel: agentName,
+        status: node.status,
+        icon: '🤖',
+        type: 'agent',
+      });
+      continue;
+    }
+    
+    // Handle routing nodes (for multi-agent handoffs)
+    if (node.node_type === 'routing') {
+      steps.push({
+        id: node.node_id,
+        label: node.label || 'Routing Decision',
+        shortLabel: 'Routing',
+        status: node.status,
+        icon: '🔄',
+        type: 'routing',
+      });
+      continue;
+    }
+    
+    // Handle output nodes
+    if (node.node_type === 'output') {
+      steps.push({
+        id: node.node_id,
+        label: 'Generating Response',
+        shortLabel: 'Response',
+        status: node.status,
+        icon: '📤',
+        type: 'output',
+      });
+      continue;
+    }
+    
+    // Handle action nodes (generic actions)
+    if (node.node_type === 'action') {
+      steps.push({
+        id: node.node_id,
+        label: node.label || 'Processing',
+        shortLabel: node.label?.substring(0, 12) || 'Action',
+        status: node.status,
+        icon: '⚡',
+        type: 'tool',
+      });
+    }
+  }
+  
+  // If we have skill info but no skill step was added from nodes, add it at the start
+  if (skillInfo && !skillStepAdded && steps.length > 0) {
+    steps.splice(1, 0, {
+      id: 'skill_active',
+      label: `Skill: ${skillInfo.name}`,
+      shortLabel: skillInfo.name,
+      status: 'completed',
+      icon: '⚡',
+      type: 'skill',
+    });
+  }
+  
+  return steps;
 };
 
 // SVG Connector Component for flowchart-style connections
@@ -610,23 +769,51 @@ const ProcessPanel: React.FC<ProcessPanelProps> = ({
     [processNodes]
   );
   
-  // Get current status text
+  /**
+   * Derive major steps from processNodes for compact display
+   * Shows key workflow steps: Input → Skill → Tool(s) → Agent(s) → Output
+   */
+  const majorSteps = useMemo(() => {
+    return deriveMajorSteps(processNodes, skillInfo);
+  }, [processNodes, skillInfo]);
+  
+  // Find current active step (running) or latest completed step
+  const currentStep = useMemo(() => {
+    const runningStep = majorSteps.find(s => s.status === 'running');
+    if (runningStep) return runningStep;
+    
+    // Find the last completed step if no running step
+    const completedSteps = majorSteps.filter(s => s.status === 'completed');
+    return completedSteps[completedSteps.length - 1] || majorSteps[0] || null;
+  }, [majorSteps]);
+  
+  // Calculate step progress
+  const stepProgress = useMemo(() => {
+    if (majorSteps.length === 0) return { current: 0, total: 0 };
+    const completedCount = majorSteps.filter(s => s.status === 'completed').length;
+    const runningIndex = majorSteps.findIndex(s => s.status === 'running');
+    const currentIndex = runningIndex >= 0 ? runningIndex + 1 : completedCount;
+    return { current: currentIndex, total: majorSteps.length };
+  }, [majorSteps]);
+  
+  // Get current status text for the compact chip
   const statusText = useMemo(() => {
     if (!isStreaming && processNodes.length === 0) return 'Connected';
-    if (isStreaming && stats.running > 0) return 'Processing...';
+    if (isStreaming && currentStep) return currentStep.shortLabel;
     if (stats.total > 0 && stats.completed === stats.total) return 'Complete';
+    if (isStreaming) return 'Processing...';
     return 'Ready';
-  }, [isStreaming, processNodes.length, stats]);
+  }, [isStreaming, processNodes.length, stats, currentStep]);
   
   return (
     <>
-      {/* Compact Status Indicator */}
+      {/* Compact Status Indicator with Dynamic Steps */}
       <motion.button
         onClick={() => setIsExpanded(true)}
         className="flex items-center gap-2 px-3 py-1.5 rounded-lg transition-all group"
         style={{
           backgroundColor: theme.colors.bg.elevated,
-          border: `1px solid ${theme.colors.border.subtle}`,
+          border: `1px solid ${isStreaming ? theme.colors.accent.primary + '40' : theme.colors.border.subtle}`,
         }}
         whileHover={{
           borderColor: theme.colors.accent.primary + '60',
@@ -634,7 +821,7 @@ const ProcessPanel: React.FC<ProcessPanelProps> = ({
         }}
         whileTap={{ scale: 0.98 }}
       >
-        {/* Status dot */}
+        {/* Status dot with animation */}
         <div className="relative">
           {isStreaming ? (
             <motion.div
@@ -642,6 +829,11 @@ const ProcessPanel: React.FC<ProcessPanelProps> = ({
               style={{ backgroundColor: theme.colors.accent.primary }}
               animate={{ scale: [1, 1.3, 1], opacity: [1, 0.7, 1] }}
               transition={{ duration: 0.8, repeat: Infinity }}
+            />
+          ) : stats.total > 0 && stats.completed === stats.total ? (
+            <div
+              className="w-2 h-2 rounded-full"
+              style={{ backgroundColor: theme.colors.status.success }}
             />
           ) : (
             <div
@@ -651,12 +843,33 @@ const ProcessPanel: React.FC<ProcessPanelProps> = ({
           )}
         </div>
         
-        <span className="text-xs" style={{ color: theme.colors.text.muted }}>
+        {/* Current step icon when streaming */}
+        {isStreaming && currentStep && (
+          <span className="text-sm">{currentStep.icon}</span>
+        )}
+        
+        {/* Status/Step label */}
+        <span 
+          className="text-xs font-medium max-w-[120px] truncate"
+          style={{ color: isStreaming ? theme.colors.text.primary : theme.colors.text.muted }}
+        >
           {statusText}
         </span>
         
-        {/* Removed badges for counts/skill to declutter header; skill lives in panel */}
+        {/* Progress counter when there are steps */}
+        {majorSteps.length > 0 && (isStreaming || stats.completed > 0) && (
+          <span
+            className="text-[10px] px-1.5 py-0.5 rounded-full font-medium"
+            style={{
+              backgroundColor: isStreaming ? theme.colors.accent.muted : theme.colors.bg.tertiary,
+              color: isStreaming ? theme.colors.accent.primary : theme.colors.text.muted,
+            }}
+          >
+            {stepProgress.current}/{stepProgress.total}
+          </span>
+        )}
         
+        {/* Arrow indicator */}
         <motion.span
           className="text-xs opacity-0 group-hover:opacity-100 transition-opacity"
           style={{ color: theme.colors.accent.primary }}
