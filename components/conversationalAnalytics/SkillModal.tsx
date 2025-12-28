@@ -25,6 +25,20 @@ const SkillModal: React.FC<SkillModalProps> = ({ skill, isOpen, onClose, initial
   const [isLoading, setIsLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<'what' | 'current'>(initialTab);
 
+  // Function: parseSkillContent — parses YAML frontmatter and reformats to "Skill: [Name]" format
+  const parseSkillContent = (rawContent: string, skillName: string): string => {
+    // Remove YAML frontmatter if present (between --- markers)
+    let content = rawContent;
+    const yamlFrontmatterRegex = /^---[\s\S]*?---\s*/;
+    content = content.replace(yamlFrontmatterRegex, '');
+
+    // Trim any leading/trailing whitespace
+    content = content.trim();
+
+    // Format with Skill header
+    return `## Skill: ${skillName}\n\n${content}`;
+  };
+
   // Fetch skill content when modal opens
   useEffect(() => {
     if (isOpen && skill && !skillContent) {
@@ -33,7 +47,7 @@ const SkillModal: React.FC<SkillModalProps> = ({ skill, isOpen, onClose, initial
       fetch(`${backendUrl}/api/conv-analytics/skills/${skill.id}`)
         .then(res => res.text())
         .then(content => {
-          setSkillContent(content);
+          setSkillContent(parseSkillContent(content, skill.name));
           setIsLoading(false);
         })
         .catch(() => {
@@ -58,14 +72,14 @@ const SkillModal: React.FC<SkillModalProps> = ({ skill, isOpen, onClose, initial
           onClick={onClose}
         >
           {/* Backdrop */}
-          <div 
+          <div
             className="absolute inset-0"
             style={{ backgroundColor: 'rgba(0, 0, 0, 0.7)', backdropFilter: 'blur(4px)' }}
           />
-          
+
           {/* Modal - Smaller, centered, responsive */}
           <motion.div
-            className="relative w-full max-w-md sm:max-w-lg max-h-[70vh] overflow-hidden rounded-xl"
+            className="relative w-full max-w-md sm:max-w-lg max-h-[85vh] overflow-hidden rounded-xl flex flex-col"
             style={{
               backgroundColor: theme.colors.bg.tertiary,
               border: `1px solid ${theme.colors.border.medium}`,
@@ -75,22 +89,22 @@ const SkillModal: React.FC<SkillModalProps> = ({ skill, isOpen, onClose, initial
             onClick={e => e.stopPropagation()}
           >
             {/* Header */}
-            <div 
+            <div
               className="flex items-center justify-between px-4 sm:px-5 py-3"
               style={{ borderBottom: `1px solid ${theme.colors.border.subtle}` }}
             >
               <div className="flex items-center gap-2">
-                <div 
+                <div
                   className="w-8 h-8 rounded-lg flex items-center justify-center text-base"
-                  style={{ 
+                  style={{
                     background: theme.colors.accent.muted,
-                    color: theme.colors.accent.primary 
+                    color: theme.colors.accent.primary
                   }}
                 >
                   ⚡
                 </div>
                 <div>
-                  <h2 
+                  <h2
                     className="text-sm font-semibold"
                     style={{ color: theme.colors.text.primary }}
                   >
@@ -101,7 +115,7 @@ const SkillModal: React.FC<SkillModalProps> = ({ skill, isOpen, onClose, initial
               <button
                 onClick={onClose}
                 className="w-7 h-7 rounded-md flex items-center justify-center transition-colors text-sm"
-                style={{ 
+                style={{
                   color: theme.colors.text.muted,
                   backgroundColor: 'transparent',
                 }}
@@ -113,7 +127,7 @@ const SkillModal: React.FC<SkillModalProps> = ({ skill, isOpen, onClose, initial
             </div>
 
             {/* Tabs - Current Skill Details on LEFT, What is a Skill? on RIGHT */}
-            <div 
+            <div
               className="flex gap-1 px-4 sm:px-5 py-2"
               style={{ borderBottom: `1px solid ${theme.colors.border.subtle}` }}
             >
@@ -140,7 +154,7 @@ const SkillModal: React.FC<SkillModalProps> = ({ skill, isOpen, onClose, initial
             </div>
 
             {/* Content */}
-            <div className="p-4 sm:p-5 overflow-y-auto" style={{ maxHeight: 'calc(70vh - 140px)' }}>
+            <div className="p-4 sm:p-5 overflow-y-auto flex-1" style={{ minHeight: 0 }}>
               <AnimatePresence mode="wait">
                 {activeTab === 'current' ? (
                   <motion.div
@@ -163,7 +177,7 @@ const SkillModal: React.FC<SkillModalProps> = ({ skill, isOpen, onClose, initial
                         </div>
                       </div>
                     ) : (
-                      <div 
+                      <div
                         className="prose prose-sm max-w-none prose-invert
                           prose-headings:text-slate-100 prose-headings:font-semibold
                           prose-h1:text-base prose-h2:text-sm prose-h3:text-sm
@@ -189,23 +203,23 @@ const SkillModal: React.FC<SkillModalProps> = ({ skill, isOpen, onClose, initial
                     transition={{ duration: 0.15 }}
                   >
                     <div className="space-y-3">
-                      <div 
+                      <div
                         className="p-3 rounded-lg"
                         style={{ backgroundColor: theme.colors.bg.elevated }}
                       >
-                        <h3 
+                        <h3
                           className="text-sm font-semibold mb-1.5 flex items-center gap-2"
                           style={{ color: theme.colors.text.primary }}
                         >
                           <span style={{ color: theme.colors.accent.primary }}>📄</span>
                           What is a SKILL.md file?
                         </h3>
-                        <p 
+                        <p
                           className="text-xs leading-relaxed mb-2"
                           style={{ color: theme.colors.text.secondary }}
                         >
-                          A <strong style={{ color: theme.colors.text.primary }}>SKILL.md</strong> file is a 
-                          structured markdown document that defines how the AI agent should handle specific 
+                          A <strong style={{ color: theme.colors.text.primary }}>SKILL.md</strong> file is a
+                          structured markdown document that defines how the AI agent should handle specific
                           types of requests. It acts as a "playbook" that guides the agent's behavior.
                         </p>
                         <a
@@ -221,72 +235,72 @@ const SkillModal: React.FC<SkillModalProps> = ({ skill, isOpen, onClose, initial
                       </div>
 
                       <div className="grid grid-cols-2 gap-2">
-                        <div 
+                        <div
                           className="p-3 rounded-lg"
                           style={{ backgroundColor: theme.colors.bg.elevated }}
                         >
                           <div className="text-xl mb-1">🎯</div>
-                          <h4 
+                          <h4
                             className="text-xs font-medium mb-0.5"
                             style={{ color: theme.colors.text.primary }}
                           >
                             Intent & Triggers
                           </h4>
-                          <p 
+                          <p
                             className="text-[10px]"
                             style={{ color: theme.colors.text.muted }}
                           >
                             Keywords that activate this skill
                           </p>
                         </div>
-                        <div 
+                        <div
                           className="p-3 rounded-lg"
                           style={{ backgroundColor: theme.colors.bg.elevated }}
                         >
                           <div className="text-xl mb-1">🛡️</div>
-                          <h4 
+                          <h4
                             className="text-xs font-medium mb-0.5"
                             style={{ color: theme.colors.text.primary }}
                           >
                             Guardrails
                           </h4>
-                          <p 
+                          <p
                             className="text-[10px]"
                             style={{ color: theme.colors.text.muted }}
                           >
                             Safety rules and constraints
                           </p>
                         </div>
-                        <div 
+                        <div
                           className="p-3 rounded-lg"
                           style={{ backgroundColor: theme.colors.bg.elevated }}
                         >
                           <div className="text-xl mb-1">📊</div>
-                          <h4 
+                          <h4
                             className="text-xs font-medium mb-0.5"
                             style={{ color: theme.colors.text.primary }}
                           >
                             Chart Guidance
                           </h4>
-                          <p 
+                          <p
                             className="text-[10px]"
                             style={{ color: theme.colors.text.muted }}
                           >
                             Visualization rules
                           </p>
                         </div>
-                        <div 
+                        <div
                           className="p-3 rounded-lg"
                           style={{ backgroundColor: theme.colors.bg.elevated }}
                         >
                           <div className="text-xl mb-1">📰</div>
-                          <h4 
+                          <h4
                             className="text-xs font-medium mb-0.5"
                             style={{ color: theme.colors.text.primary }}
                           >
                             News Hooks
                           </h4>
-                          <p 
+                          <p
                             className="text-[10px]"
                             style={{ color: theme.colors.text.muted }}
                           >
@@ -295,14 +309,14 @@ const SkillModal: React.FC<SkillModalProps> = ({ skill, isOpen, onClose, initial
                         </div>
                       </div>
 
-                      <div 
+                      <div
                         className="p-3 rounded-lg border"
-                        style={{ 
+                        style={{
                           backgroundColor: theme.colors.thinking.bg,
                           borderColor: theme.colors.thinking.border,
                         }}
                       >
-                        <p 
+                        <p
                           className="text-xs"
                           style={{ color: theme.colors.text.secondary }}
                         >
@@ -317,7 +331,7 @@ const SkillModal: React.FC<SkillModalProps> = ({ skill, isOpen, onClose, initial
             </div>
 
             {/* Footer - Only Got it button, no download */}
-            <div 
+            <div
               className="px-4 sm:px-5 py-3 flex justify-end"
               style={{ borderTop: `1px solid ${theme.colors.border.subtle}` }}
             >

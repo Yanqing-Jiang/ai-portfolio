@@ -387,6 +387,7 @@ class ConversationalAnalyticsAgent:
             max_iterations = 10  # Safety limit
             iteration = 0
             final_content = ""
+            all_streamed_text: List[str] = []  # Track ALL streamed text for skill extraction
             last_usage: Optional[Any] = None
             
             while iteration < max_iterations:
@@ -433,6 +434,7 @@ class ConversationalAnalyticsAgent:
                                 stripped = delta_text.strip()
                                 if not (len(stripped) > 200 and (stripped.startswith("{") or stripped.startswith("["))):
                                     streamed_text.append(delta_text)
+                                    all_streamed_text.append(delta_text)  # Track for skill detection
                                     yield content_event(delta_text)
                     response = stream.get_final_message()
                     last_usage = getattr(response, "usage", None)
@@ -580,7 +582,8 @@ class ConversationalAnalyticsAgent:
                             elif tool_name == "query_database" and result.get("success"):
                                 yield data_event(
                                     result.get("rows", [])[:50],  # Limit rows sent
-                                    result.get("columns", [])
+                                    result.get("columns", []),
+                                    result.get("sql"),  # Include SQL for transparency widget
                                 )
                                 yield plan_update_event(
                                     "sql",
@@ -642,6 +645,21 @@ class ConversationalAnalyticsAgent:
             # Add assistant response to history
             if final_content:
                 session.add_message("assistant", final_content)
+            
+            # Extract skill from response and emit skill_event if detected
+            # Use all_streamed_text since the [SKILL:] marker may come in early iterations
+            full_streamed_content = "".join(all_streamed_text)
+            detected_skill_id = extract_skill_from_response(full_streamed_content)
+            if detected_skill_id:
+                detected_skill = get_skill_by_id(detected_skill_id)
+                if detected_skill:
+                    skill_download_url = f"/api/conversational-analytics/skills/{detected_skill.filename}"
+                    yield skill_event(detected_skill_id, detected_skill.name, skill_download_url)
+                    if debug_mode:
+                        yield debug_event("skill", f"Detected skill: {detected_skill.name}", {
+                            "skill_id": detected_skill_id,
+                            "filename": detected_skill.filename,
+                        })
             
             # Emit final output node
             yield process_node_event(

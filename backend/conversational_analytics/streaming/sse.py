@@ -107,9 +107,21 @@ def chart_event(config: Dict[str, Any]) -> str:
     return format_sse_event("chart", {"config": config})
 
 
-def data_event(rows: list, columns: list) -> str:
-    """Create a data result event."""
-    return format_sse_event("data", {"rows": rows, "columns": columns})
+def data_event(rows: list, columns: list, sql: str | None = None) -> str:
+    """Create a data result event.
+    
+    Args:
+        rows: List of row dictionaries from query result
+        columns: List of column names
+        sql: Optional SQL statement that was executed (for transparency widget)
+    
+    Returns:
+        SSE formatted data event string
+    """
+    payload = {"rows": rows, "columns": columns}
+    if sql:
+        payload["sql"] = sql
+    return format_sse_event("data", payload)
 
 
 def skill_event(skill_id: str, name: str, download_url: str) -> str:

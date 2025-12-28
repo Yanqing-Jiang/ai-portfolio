@@ -96,7 +96,12 @@ def _resolve_value_unit(value_unit: Optional[str], y_field: str, data: List[Dict
 
 
 def _build_value_meta(resolved_unit: str, values: List[float]) -> Dict[str, Any]:
-    """Function: _build_value_meta — used by generate_echarts_spec to attach formatting hints for the frontend (suffix, decimals, scale)."""
+    """Function: _build_value_meta — used by generate_echarts_spec to attach formatting hints for the frontend (suffix, decimals, scale).
+    
+    Intelligently switches between millions and billions based on value magnitude:
+    - If max value >= 10 billion and requested millions_usd, auto-upgrade to billions
+    - This avoids awkward displays like "$20,000M" when "$20.0B" is clearer
+    """
     abs_max = max((abs(v) for v in values), default=0)
 
     if resolved_unit == "percentage":
@@ -118,6 +123,16 @@ def _build_value_meta(resolved_unit: str, values: List[float]) -> Dict[str, Any]
         }
 
     if resolved_unit == "millions_usd":
+        # Auto-upgrade to billions if values are very large (>= 10B raw)
+        # This prevents awkward "$20,000M" displays, showing "$20.0B" instead
+        if abs_max >= 10_000_000_000:  # 10 billion threshold
+            return {
+                "unit": "billions_usd",
+                "decimals": 1,
+                "suffix": "B",
+                "scale": 1_000_000_000,
+                "from_ratio": False,
+            }
         return {
             "unit": "millions_usd",
             "decimals": 1,

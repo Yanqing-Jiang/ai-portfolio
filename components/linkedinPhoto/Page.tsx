@@ -674,7 +674,7 @@ const LinkedInPhotoPage: React.FC<LinkedInPhotoPageProps> = ({ apiPath = '/api/l
                 LinkedIn Profile Picture Generator
               </h1>
               <p className="text-xl sm:text-2xl text-muted-foreground/90 max-w-3xl mx-auto font-light leading-relaxed">
-                Transform your photo into a professional LinkedIn profile picture.
+                Powered by <span className="text-primary font-semibold">Nano Banana Pro by Gemini 3</span>
               </p>
               <div className="flex justify-center">
                 <img

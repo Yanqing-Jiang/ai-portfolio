@@ -12,6 +12,7 @@ import {
 import Sidebar from './components/Sidebar';
 import ProjectView from './components/ProjectView';
 import LandingPage from './components/LandingPage';
+import LandingPageFlow from './components/LandingPageFlow';
 import { PROJECT_DATA } from './constants';
 import type { Project } from './types';
 import { ChevronLeftIcon } from './components/icons/ChevronLeftIcon';
@@ -72,7 +73,7 @@ const Layout: React.FC = () => {
     navigate('/');
     if (isMobile) setIsSidebarOpen(false); // Close sidebar on mobile after navigation
   };
-  
+
   const goProject = (p: Project) => {
     navigate(`/project/${p.id}`);
     if (isMobile) setIsSidebarOpen(false); // Close sidebar on mobile after navigation
@@ -87,11 +88,11 @@ const Layout: React.FC = () => {
         onSelectProject={goProject}
         onGoHome={goHome}
       />
-      
+
       {/* Mobile overlay when sidebar is open */}
       {isSidebarOpen && isMobile && (
-        <div 
-          onClick={() => setIsSidebarOpen(false)} 
+        <div
+          onClick={() => setIsSidebarOpen(false)}
           className="fixed inset-0 bg-black/50 z-20 md:hidden backdrop-blur-sm"
         />
       )}
@@ -122,6 +123,15 @@ const Layout: React.FC = () => {
               }
             />
             <Route path="/project/:projectId" element={<ProjectRoute />} />
+            <Route
+              path="/design-v2"
+              element={
+                <LandingPageFlow
+                  projectData={PROJECT_DATA}
+                  onSelectProject={goProject}
+                />
+              }
+            />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </main>

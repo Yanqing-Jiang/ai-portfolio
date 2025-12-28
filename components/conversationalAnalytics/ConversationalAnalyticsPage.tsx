@@ -7,7 +7,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { useSSEStream, ThinkingStep, NewsResult, HtmlArtifact } from './hooks/useSSEStream';
+import { useSSEStream, ThinkingStep, NewsResult, HtmlArtifact, SkillInfo } from './hooks/useSSEStream';
 import MessageBubble from './MessageBubble';
 import ChatInput from './ChatInput';
 import SelectionCard from './SelectionCard';
@@ -149,10 +149,11 @@ interface ChatMessage {
   content: string;
   thinkingSteps?: ThinkingStep[];
   chartConfig?: Record<string, unknown> | null;
-  dataResult?: { rows: unknown[]; columns: string[] } | null;
+  dataResult?: { rows: unknown[]; columns: string[]; sql?: string } | null;
   newsResult?: NewsResult | null;
   agentLabel?: string | null;
   htmlArtifact?: HtmlArtifact | null;
+  skillInfo?: SkillInfo | null;
 }
 
 /**
@@ -261,10 +262,11 @@ const ConversationalAnalyticsPage: React.FC = () => {
           newsResult,
           agentLabel: activeAgentLabel,
           htmlArtifact,
+          skillInfo,
         },
       ]);
     }
-  }, [isStreaming, content, thinkingSteps, chartConfig, dataResult, newsResult, htmlArtifact, activeAgentLabel]);
+  }, [isStreaming, content, thinkingSteps, chartConfig, dataResult, newsResult, htmlArtifact, activeAgentLabel, skillInfo]);
 
   /**
    * Function: handleSubmit - dispatches the typed prompt to the SSE pipeline
@@ -404,6 +406,7 @@ const ConversationalAnalyticsPage: React.FC = () => {
                   newsResult={msg.newsResult}
                   agentLabel={msg.agentLabel}
                   htmlArtifact={msg.htmlArtifact}
+                  skillInfo={msg.skillInfo}
                 />
               ))}
 
@@ -418,6 +421,7 @@ const ConversationalAnalyticsPage: React.FC = () => {
                   htmlArtifact={htmlArtifact}
                   isStreaming={true}
                   agentLabel={activeAgentLabel}
+                  skillInfo={skillInfo}
                 />
               )}
 

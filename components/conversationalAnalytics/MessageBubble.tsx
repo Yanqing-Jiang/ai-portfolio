@@ -9,9 +9,10 @@ import { motion } from 'framer-motion';
 import ReactECharts from 'echarts-for-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { ThinkingStep, NewsResult, NewsArticle, HtmlArtifact } from './hooks/useSSEStream';
+import { ThinkingStep, NewsResult, NewsArticle, HtmlArtifact, SkillInfo } from './hooks/useSSEStream';
 import { configService } from '../../services/config';
 import { theme, motionVariants } from './styles';
+import SkillModal from './SkillModal';
 
 type ValueMeta = {
   unit?: string;
@@ -405,63 +406,273 @@ const NewsCard: React.FC<{ news: NewsResult }> = ({ news }) => {
   );
 };
 
-// Data Preview Table
-const DataPreview: React.FC<{ data: { rows: unknown[]; columns: string[] } }> = ({ data }) => (
-  <motion.div
-    initial={{ opacity: 0, y: 10 }}
-    animate={{ opacity: 1, y: 0 }}
-    className="mb-4 rounded-xl overflow-hidden"
-    style={{
-      backgroundColor: theme.colors.bg.elevated,
-      border: `1px solid ${theme.colors.border.medium}`,
-    }}
-  >
-    <div
-      className="px-4 py-2.5 flex items-center gap-2"
-      style={{ borderBottom: `1px solid ${theme.colors.border.subtle}` }}
+// SQL Preview Component - Collapsible widget showing executed SQL query
+const SQLPreview: React.FC<{ sql: string }> = ({ sql }) => {
+  const [isExpanded, setIsExpanded] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      await navigator.clipboard.writeText(sql);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.error('Failed to copy SQL:', err);
+    }
+  };
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="mb-4 rounded-xl overflow-hidden"
+      style={{
+        backgroundColor: theme.colors.bg.elevated,
+        border: `1px solid ${theme.colors.border.medium}`,
+      }}
     >
-      <span className="text-lg">📑</span>
-      <span className="text-sm font-medium" style={{ color: theme.colors.text.secondary }}>
-        Data Preview
-      </span>
-      <span className="text-xs px-2 py-0.5 rounded-full" style={{ backgroundColor: theme.colors.bg.tertiary, color: theme.colors.text.muted }}>
-        {data.rows.length} rows
-      </span>
-    </div>
-    <div className="overflow-x-auto p-4">
-      <table className="w-full text-sm">
-        <thead>
-          <tr>
-            {data.columns.map((col) => (
-              <th
-                key={col}
-                className="text-left px-3 py-2 text-xs font-semibold"
-                style={{ color: theme.colors.text.muted, borderBottom: `1px solid ${theme.colors.border.subtle}` }}
-              >
-                {col}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {data.rows.slice(0, 5).map((row: Record<string, unknown>, idx: number) => (
-            <tr key={idx}>
-              {data.columns.map((col) => (
-                <td
-                  key={col}
-                  className="px-3 py-2 text-sm"
-                  style={{ color: theme.colors.text.secondary, borderBottom: `1px solid ${theme.colors.border.subtle}` }}
-                >
-                  {String(row[col] ?? '')}
-                </td>
+      <button
+        onClick={() => setIsExpanded(!isExpanded)}
+        className="w-full px-4 py-2.5 flex items-center justify-between transition-colors hover:bg-opacity-80"
+        style={{ backgroundColor: 'transparent' }}
+      >
+        <div className="flex items-center gap-2">
+          <motion.span
+            animate={{ rotate: isExpanded ? 90 : 0 }}
+            className="text-xs"
+            style={{ color: theme.colors.text.muted }}
+          >
+            ▶
+          </motion.span>
+          <span className="text-lg">💾</span>
+          <span className="text-sm font-medium" style={{ color: theme.colors.text.secondary }}>
+            SQL Query
+          </span>
+        </div>
+      </button>
+
+      {isExpanded && (
+        <motion.div
+          initial={{ height: 0, opacity: 0 }}
+          animate={{ height: 'auto', opacity: 1 }}
+          exit={{ height: 0, opacity: 0 }}
+          className="px-4 pb-4"
+        >
+          <div className="flex justify-end mb-2">
+            <button
+              onClick={handleCopy}
+              className="px-3 py-1 rounded-lg text-xs font-medium transition-all flex items-center gap-1.5"
+              style={{
+                backgroundColor: copied ? theme.colors.status.success + '20' : theme.colors.bg.tertiary,
+                color: copied ? theme.colors.status.success : theme.colors.text.secondary,
+                border: `1px solid ${copied ? theme.colors.status.success + '40' : theme.colors.border.subtle}`,
+              }}
+            >
+              {copied ? (
+                <>
+                  <span>✓</span>
+                  Copied
+                </>
+              ) : (
+                <>
+                  <span>📋</span>
+                  Copy
+                </>
+              )}
+            </button>
+          </div>
+          <pre
+            className="p-4 rounded-lg overflow-x-auto text-sm"
+            style={{
+              backgroundColor: theme.colors.bg.tertiary,
+              border: `1px solid ${theme.colors.border.subtle}`,
+              color: theme.colors.text.primary,
+              fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace',
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+            }}
+          >
+            <code>{sql}</code>
+          </pre>
+        </motion.div>
+      )}
+    </motion.div>
+  );
+};
+
+// Data Preview Table - Collapsible widget showing query results
+const DataPreview: React.FC<{ data: { rows: unknown[]; columns: string[]; sql?: string } }> = ({ data }) => {
+  const [isExpanded, setIsExpanded] = useState(false);
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="mb-4 rounded-xl overflow-hidden"
+      style={{
+        backgroundColor: theme.colors.bg.elevated,
+        border: `1px solid ${theme.colors.border.medium}`,
+      }}
+    >
+      <button
+        onClick={() => setIsExpanded(!isExpanded)}
+        className="w-full px-4 py-2.5 flex items-center justify-between transition-colors hover:bg-opacity-80"
+        style={{ backgroundColor: 'transparent' }}
+      >
+        <div className="flex items-center gap-2">
+          <motion.span
+            animate={{ rotate: isExpanded ? 90 : 0 }}
+            className="text-xs"
+            style={{ color: theme.colors.text.muted }}
+          >
+            ▶
+          </motion.span>
+          <span className="text-lg">📑</span>
+          <span className="text-sm font-medium" style={{ color: theme.colors.text.secondary }}>
+            Data Preview
+          </span>
+          <span className="text-xs px-2 py-0.5 rounded-full" style={{ backgroundColor: theme.colors.bg.tertiary, color: theme.colors.text.muted }}>
+            {data.rows.length} rows
+          </span>
+        </div>
+      </button>
+
+      {isExpanded && (
+        <motion.div
+          initial={{ height: 0, opacity: 0 }}
+          animate={{ height: 'auto', opacity: 1 }}
+          exit={{ height: 0, opacity: 0 }}
+          className="overflow-x-auto px-4 pb-4"
+        >
+          <table className="w-full text-sm">
+            <thead>
+              <tr>
+                {data.columns.map((col) => (
+                  <th
+                    key={col}
+                    className="text-left px-3 py-2 text-xs font-semibold"
+                    style={{ color: theme.colors.text.muted, borderBottom: `1px solid ${theme.colors.border.subtle}` }}
+                  >
+                    {col}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {data.rows.slice(0, 5).map((row: Record<string, unknown>, idx: number) => (
+                <tr key={idx}>
+                  {data.columns.map((col) => (
+                    <td
+                      key={col}
+                      className="px-3 py-2 text-sm"
+                      style={{ color: theme.colors.text.secondary, borderBottom: `1px solid ${theme.colors.border.subtle}` }}
+                    >
+                      {String(row[col] ?? '')}
+                    </td>
+                  ))}
+                </tr>
               ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  </motion.div>
-);
+            </tbody>
+          </table>
+        </motion.div>
+      )}
+    </motion.div>
+  );
+};
+
+// Skill Preview Component - Collapsible widget showing detected SKILL.md
+const SkillPreview: React.FC<{ skill: SkillInfo }> = ({ skill }) => {
+  const [isExpanded, setIsExpanded] = useState(false);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+
+  return (
+    <>
+      <motion.div
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="mb-4 rounded-xl overflow-hidden"
+        style={{
+          backgroundColor: theme.colors.bg.elevated,
+          border: `1px solid ${theme.colors.border.medium}`,
+        }}
+      >
+        <button
+          onClick={() => setIsExpanded(!isExpanded)}
+          className="w-full px-4 py-2.5 flex items-center justify-between transition-colors hover:bg-opacity-80"
+          style={{ backgroundColor: 'transparent' }}
+        >
+          <div className="flex items-center gap-2">
+            <motion.span
+              animate={{ rotate: isExpanded ? 90 : 0 }}
+              className="text-xs"
+              style={{ color: theme.colors.text.muted }}
+            >
+              ▶
+            </motion.span>
+            <span className="text-lg">⚡</span>
+            <span className="text-sm font-medium" style={{ color: theme.colors.text.secondary }}>
+              SKILL.md
+            </span>
+            <span
+              className="text-xs px-2 py-0.5 rounded-full"
+              style={{
+                backgroundColor: theme.colors.accent.muted,
+                color: theme.colors.accent.primary,
+              }}
+            >
+              {skill.name}
+            </span>
+          </div>
+        </button>
+
+        {isExpanded && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            className="px-4 pb-4"
+          >
+            <div
+              className="p-3 rounded-lg"
+              style={{
+                backgroundColor: theme.colors.bg.tertiary,
+                border: `1px solid ${theme.colors.border.subtle}`,
+              }}
+            >
+              <p className="text-xs mb-3" style={{ color: theme.colors.text.secondary }}>
+                This response was guided by the <strong style={{ color: theme.colors.accent.primary }}>{skill.name}</strong> skill,
+                which provides structured instructions for accurate analysis.
+              </p>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setIsModalOpen(true);
+                }}
+                className="px-3 py-1.5 rounded-lg text-xs font-medium transition-all flex items-center gap-1.5"
+                style={{
+                  backgroundColor: theme.colors.accent.muted,
+                  color: theme.colors.accent.primary,
+                  border: `1px solid ${theme.colors.accent.primary}40`,
+                }}
+              >
+                <span>📄</span>
+                View Skill Details
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </motion.div>
+
+      <SkillModal
+        skill={skill}
+        isOpen={isModalOpen}
+        onClose={() => setIsModalOpen(false)}
+        initialTab="current"
+      />
+    </>
+  );
+};
 
 // Main MessageBubble component
 interface MessageBubbleProps {
@@ -469,11 +680,12 @@ interface MessageBubbleProps {
   content: string;
   thinkingSteps?: ThinkingStep[];
   chartConfig?: Record<string, unknown> | null;
-  dataResult?: { rows: unknown[]; columns: string[] } | null;
+  dataResult?: { rows: unknown[]; columns: string[]; sql?: string } | null;
   newsResult?: NewsResult | null;
   isStreaming?: boolean;
   agentLabel?: string | null;
   htmlArtifact?: HtmlArtifact | null;
+  skillInfo?: SkillInfo | null;
 }
 
 const MessageBubble: React.FC<MessageBubbleProps> = ({
@@ -485,6 +697,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
   isStreaming,
   agentLabel,
   htmlArtifact,
+  skillInfo,
 }) => {
   const isUser = role === 'user';
   const isTradingView = chartConfig?.widget_type === 'tradingview';
@@ -502,6 +715,13 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
       ? htmlArtifact.url
       : `${backendUrl}${htmlArtifact.url}`;
   }, [htmlArtifact]);
+
+  // Remove [SKILL: xxx] pattern from content since skill info is shown separately in SkillPreview bubble
+  const cleanedContent = useMemo(() => {
+    if (!content) return content;
+    // Remove patterns like [SKILL: margins_vs_peers] or [SKILL: some_skill_name]
+    return content.replace(/\[SKILL:\s*[\w_-]+\]\s*/gi, '').trim();
+  }, [content]);
 
   return (
     <motion.div
@@ -568,6 +788,16 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
               <NewsCard news={newsResult} />
             )}
 
+            {/* Skill Preview - Collapsible widget showing detected SKILL.md */}
+            {skillInfo && (
+              <SkillPreview skill={skillInfo} />
+            )}
+
+            {/* SQL Preview - Collapsible widget showing executed query */}
+            {dataResult && dataResult.sql && (
+              <SQLPreview sql={dataResult.sql} />
+            )}
+
             {/* Data Preview */}
             {dataResult && dataResult.rows && dataResult.rows.length > 0 && (
               <DataPreview data={dataResult} />
@@ -619,7 +849,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
             )}
 
             {/* Markdown content */}
-            {content && (
+            {cleanedContent && (
               <div
                 className="prose prose-sm max-w-none prose-invert
                   prose-headings:text-slate-100 prose-headings:font-semibold prose-headings:mt-4 prose-headings:mb-2
@@ -632,7 +862,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
                   prose-pre:bg-slate-800 prose-pre:rounded-xl prose-pre:p-4
                 "
               >
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{cleanedContent}</ReactMarkdown>
                 {isStreaming && (
                   <motion.span
                     className="inline-block w-0.5 h-5 ml-0.5"

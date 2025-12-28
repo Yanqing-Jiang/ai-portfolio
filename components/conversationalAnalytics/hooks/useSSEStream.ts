@@ -112,7 +112,7 @@ export interface UseSSEStreamResult {
     content: string;
     thinkingSteps: ThinkingStep[];
     chartConfig: Record<string, unknown> | null;
-    dataResult: { rows: unknown[]; columns: string[] } | null;
+    dataResult: { rows: unknown[]; columns: string[]; sql?: string } | null;
     newsResult: NewsResult | null;
     skillInfo: SkillInfo | null;
     htmlArtifact: HtmlArtifact | null;
@@ -148,7 +148,7 @@ export function useSSEStream(apiUrl: string = '/api/conv-analytics/stream'): Use
     const [content, setContent] = useState('');
     const [thinkingSteps, setThinkingSteps] = useState<ThinkingStep[]>([]);
     const [chartConfig, setChartConfig] = useState<Record<string, unknown> | null>(null);
-    const [dataResult, setDataResult] = useState<{ rows: unknown[]; columns: string[] } | null>(null);
+    const [dataResult, setDataResult] = useState<{ rows: unknown[]; columns: string[]; sql?: string } | null>(null);
     const [newsResult, setNewsResult] = useState<NewsResult | null>(null);
     const [skillInfo, setSkillInfo] = useState<SkillInfo | null>(null);
     const [htmlArtifact, setHtmlArtifact] = useState<HtmlArtifact | null>(null);
@@ -381,6 +381,7 @@ export function useSSEStream(apiUrl: string = '/api/conv-analytics/stream'): Use
                 setDataResult({
                     rows: event.data.rows as unknown[],
                     columns: event.data.columns as string[],
+                    sql: event.data.sql as string | undefined,
                 });
                 break;
 
