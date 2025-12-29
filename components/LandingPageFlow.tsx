@@ -265,6 +265,9 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                 const track = trackRef.current;
                 const section = horizontalSectionRef.current;
 
+                // Get the main scroller element - CRITICAL for nested scroll layouts
+                const mainScroller = document.querySelector('main');
+
                 // Calculate scroll amount
                 const getScrollAmount = () => -(track.scrollWidth - window.innerWidth);
 
@@ -273,6 +276,7 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                     ease: 'none',
                     scrollTrigger: {
                         trigger: section,
+                        scroller: mainScroller, // EXPLICIT scroller for nested layouts
                         start: 'top top',
                         end: () => `+=${track.scrollWidth - window.innerWidth}`,
                         pin: true,
@@ -456,7 +460,16 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
 
         }, containerRef);
 
-        return () => ctx.revert();
+        // CRITICAL: Refresh ScrollTrigger after a short delay to ensure DOM is fully rendered
+        // This fixes issues in production where elements may not be measured correctly on first load
+        const refreshTimeout = setTimeout(() => {
+            ScrollTrigger.refresh(true);
+        }, 100);
+
+        return () => {
+            clearTimeout(refreshTimeout);
+            ctx.revert();
+        };
     }, { scope: containerRef, dependencies: [displayYears, preAiProjects] });
 
     return (
