@@ -1,4 +1,4 @@
-import React, { useRef, useMemo, useState, useEffect } from 'react';
+﻿import React, { useRef, useMemo, useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import gsap from 'gsap';
 import { ScrollTrigger } from 'gsap/ScrollTrigger';
@@ -270,8 +270,10 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                 // Calculate scroll amount
                 const getScrollAmount = () => -(track.scrollWidth - window.innerWidth);
 
-                // Helper function to create card animations (used by both mobile and desktop)
-                const createCardAnimations = (tween: gsap.core.Tween) => {
+                // ============================================
+                // DESKTOP: Full cinematic card assembly
+                // ============================================
+                const createDesktopCardAnimations = (tween: gsap.core.Tween) => {
                     const cards = gsap.utils.toArray('.stream-card') as HTMLElement[];
                     cards.forEach((card) => {
                         const background = card.querySelector('.assembler-bg');
@@ -279,7 +281,7 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                         const content = card.querySelector('.assembler-content');
                         const header = card.querySelector('.assembler-header');
 
-                        // Background glass flies in
+                        // Background glass flies in with 3D depth
                         gsap.from(background, {
                             z: -600, opacity: 0, scale: 0.8, rotateX: -25,
                             scrollTrigger: {
@@ -288,7 +290,7 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                             }
                         });
 
-                        // Image slides in with blur
+                        // Image slides in with blur reveal
                         gsap.from(image, {
                             x: 150, opacity: 0, scale: 1.2, filter: 'blur(20px)',
                             scrollTrigger: {
@@ -297,7 +299,7 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                             }
                         });
 
-                        // Content floats up
+                        // Content floats up magnetically
                         gsap.from(content, {
                             y: 120, opacity: 0, rotate: 5,
                             scrollTrigger: {
@@ -306,7 +308,7 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                             }
                         });
 
-                        // Header slides in
+                        // Header slides in with power
                         gsap.from(header, {
                             x: -80, scale: 0.9, opacity: 0,
                             scrollTrigger: {
@@ -315,7 +317,7 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                             }
                         });
 
-                        // Focus highlight
+                        // Focus highlight effect
                         gsap.to(card, {
                             scale: 1.05, filter: 'brightness(1.1) saturate(1.1)', zIndex: 50, duration: 0.5,
                             scrollTrigger: {
@@ -343,10 +345,107 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                     });
                 };
 
-                // Create responsive horizontal scroll with matchMedia
+                // ============================================
+                // MOBILE: Ultra-smooth emergence animation
+                // Only GPU-friendly transforms: x, y, scale, opacity
+                // NO blur, NO 3D, NO complex filters
+                // ============================================
+                const createMobileCardAnimations = (tween: gsap.core.Tween) => {
+                    const cards = gsap.utils.toArray('.stream-card') as HTMLElement[];
+
+                    cards.forEach((card, index) => {
+                        const image = card.querySelector('.assembler-image');
+                        const content = card.querySelector('.assembler-content');
+                        const header = card.querySelector('.assembler-header');
+
+                        // EPIC CENTER: "Emergence from the Void"
+                        // Cards start scaled down and fade in as user scrolls
+                        // Simple but mesmerizing - feels like pulling content towards you
+
+                        // Whole card: Scale up from 0.85 with fade
+                        gsap.fromTo(card,
+                            { scale: 0.85, opacity: 0.3 },
+                            {
+                                scale: 1, opacity: 1,
+                                scrollTrigger: {
+                                    trigger: card, containerAnimation: tween,
+                                    start: 'left right-=100', // Start when card enters from right
+                                    end: 'left center',       // Fully visible at center
+                                    scrub: 2,                 // Smooth catch-up
+                                }
+                            }
+                        );
+
+                        // Image: Subtle parallax drift (slower than card)
+                        gsap.fromTo(image,
+                            { x: 30, scale: 1.1 },
+                            {
+                                x: 0, scale: 1,
+                                scrollTrigger: {
+                                    trigger: card, containerAnimation: tween,
+                                    start: 'left right', end: 'left center-=100',
+                                    scrub: 2.5, // Slightly slower for parallax depth
+                                }
+                            }
+                        );
+
+                        // Content: Rises up from below (feels like surfacing)
+                        gsap.fromTo(content,
+                            { y: 40, opacity: 0 },
+                            {
+                                y: 0, opacity: 1,
+                                scrollTrigger: {
+                                    trigger: card, containerAnimation: tween,
+                                    start: 'left center+=100', end: 'left center-=50',
+                                    scrub: 2,
+                                }
+                            }
+                        );
+
+                        // Header: Slides in from left edge
+                        gsap.fromTo(header,
+                            { x: -30, opacity: 0 },
+                            {
+                                x: 0, opacity: 1,
+                                scrollTrigger: {
+                                    trigger: card, containerAnimation: tween,
+                                    start: 'left center+=80', end: 'left center-=30',
+                                    scrub: 2,
+                                }
+                            }
+                        );
+
+                        // FOCUS STATE: Gentle scale pulse when centered
+                        // No complex filters - just scale
+                        gsap.to(card, {
+                            scale: 1.02,
+                            scrollTrigger: {
+                                trigger: card, containerAnimation: tween,
+                                start: 'center center+=50', end: 'center center-=50',
+                                scrub: 1,
+                            }
+                        });
+                    });
+
+                    // Year markers: Simple fade/scale (no complex parallax)
+                    const years = gsap.utils.toArray('.year-marker-bg') as HTMLElement[];
+                    years.forEach((year) => {
+                        gsap.to(year, {
+                            x: 100, opacity: 0.3, scale: 1.1, ease: 'none',
+                            scrollTrigger: {
+                                trigger: year, containerAnimation: tween,
+                                start: 'left right', end: 'right left', scrub: 2,
+                            }
+                        });
+                    });
+                };
+
+                // ============================================
+                // RESPONSIVE SCROLL SETUP with matchMedia
+                // ============================================
                 const mm = gsap.matchMedia();
 
-                // Desktop: Standard horizontal scroll
+                // Desktop (768px+): Full cinematic experience
                 mm.add("(min-width: 768px)", () => {
                     const tween = gsap.to(track, {
                         x: getScrollAmount,
@@ -362,31 +461,31 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                             anticipatePin: 1,
                         },
                     });
-                    createCardAnimations(tween);
+                    createDesktopCardAnimations(tween);
                     return () => { tween.kill(); };
                 });
 
-                // Mobile: Smoother scrub to reduce "vibrating" sensation
+                // Mobile (<768px): Ultra-smooth emergence
                 mm.add("(max-width: 767px)", () => {
                     const tween = gsap.to(track, {
                         x: getScrollAmount,
-                        ease: 'power1.out',
+                        ease: 'none', // Linear for predictable feel
                         scrollTrigger: {
                             trigger: section,
                             scroller: mainScroller,
                             start: 'top top',
                             end: () => `+=${track.scrollWidth - window.innerWidth}`,
                             pin: true,
-                            scrub: 3, // Higher scrub = smoother mobile
+                            scrub: 4, // High scrub = ultra smooth, dampens jitter
                             invalidateOnRefresh: true,
                             anticipatePin: 1,
                         },
                     });
-                    createCardAnimations(tween);
+                    createMobileCardAnimations(tween);
                     return () => { tween.kill(); };
                 });
 
-                // Neural Pulse Progress Point Tracker (works on both)
+                // Neural Pulse Progress Tracker
                 const pulsePoint = document.querySelector('.neural-pulse-point');
                 if (pulsePoint) {
                     gsap.to(pulsePoint, {
@@ -701,10 +800,6 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                                                                     </Link>
                                                                 </div>
 
-                                                                {/* Procedural Data Points (Decorative) */}
-                                                                <div className="absolute bottom-6 right-8 text-[9px] font-mono text-slate-700 tracking-[0.3em] uppercase pointer-events-none">
-                                                                    0x{project.id.substring(0, 6)} // SIG_VERIFIED
-                                                                </div>
                                                             </div>
                                                         </div>
                                                     );
@@ -772,14 +867,14 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
 
                                                     {/* Year Badge */}
                                                     <div className="absolute top-4 right-4 bg-amber-900/40 backdrop-blur-md px-3 py-1 rounded-full border border-amber-500/30 text-[10px] font-mono text-amber-200 tracking-tighter uppercase">
-                                                        MOD: ARCHIVE_01
+                                                        {project.year}
                                                     </div>
                                                 </div>
 
                                                 <div className="p-6 sm:p-8">
                                                     <div className="mb-2 text-[10px] font-mono text-amber-500/60 flex items-center gap-2">
                                                         <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
-                                                        LEGACY_RECORDING_STREAMS
+                                                        Pre-AI Era
                                                     </div>
 
                                                     <h3 className="text-xl sm:text-2xl font-bold text-white mb-4 group-hover:text-amber-300 transition-colors">
