@@ -513,7 +513,7 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                         </div>
 
                         {/* Match legacy LandingPage.tsx hero exactly */}
-                        <div className="relative mx-auto grid max-w-7xl grid-cols-1 gap-10 px-4 sm:px-6 lg:px-8 py-12 sm:py-16 md:py-20 lg:grid-cols-[3fr_2fr] lg:items-center">
+                        <div className="relative mx-auto grid max-w-7xl grid-cols-1 gap-10 px-4 sm:px-6 lg:px-8 pt-4 pb-12 sm:pt-6 sm:pb-16 md:pt-8 md:pb-20 lg:grid-cols-[3fr_2fr] lg:items-center">
                             {/* Left: Name and info */}
                             <div className="flex flex-col">
                                 <h1
@@ -584,7 +584,6 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                                 {/* The Neural Pulse Progress Tracker */}
                                 <div className="fixed bottom-12 left-12 right-12 h-px bg-slate-800 z-50 pointer-events-none hidden md:block">
                                     <div className="neural-pulse-point absolute top-1/2 left-0 -translate-y-1/2 w-2 h-2 rounded-full bg-blue-500 shadow-[0_0_15px_theme('colors.blue.400')]" />
-                                    <div className="absolute top-4 left-0 text-[10px] font-mono text-slate-600 tracking-widest">TIMELINE_FLUX</div>
                                 </div>
 
                                 {/* Connecting Data Line (Background) */}
@@ -603,7 +602,7 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                                     </div>
 
                                     {/* Years Loop */}
-                                    {displayYears.map(({ year, subtitle, projects, label }) => {
+                                    {displayYears.map(({ year, projects, label }) => {
                                         const theme = getYearTheme(year);
                                         return (
                                             <div key={year} className="flex gap-12 md:gap-20 items-center relative">
@@ -627,7 +626,7 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                                                 </div>
 
                                                 {/* Projects Stream */}
-                                                {projects.map((project, idx) => {
+                                                {projects.map((project) => {
                                                     const previewDescription = project.cardDescription ?? project.description;
                                                     const shortDesc = previewDescription.length > 120 ? previewDescription.substring(0, 120) + '...' : previewDescription;
 
@@ -702,7 +701,6 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
 
                                     {/* Visual End of Stream */}
                                     <div className="min-w-[20vw] flex items-center justify-center text-slate-500 text-sm font-mono tracking-widest uppercase rotate-90">
-                                        End of Evolution
                                     </div>
                                 </div>
                             </div>

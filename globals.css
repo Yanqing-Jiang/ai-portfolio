@@ -4,27 +4,27 @@
 
 @layer base {
   :root {
-  --background: 0 0% 100%;
-  --foreground: 222.2 84% 4.9%;
-  --card: 0 0% 100%;
-  --card-foreground: 222.2 84% 4.9%;
-  --popover: 0 0% 100%;
-  --popover-foreground: 222.2 84% 4.9%;
-  --primary: 221.2 83.2% 53.3%;
-  --primary-foreground: 210 40% 98%;
-  --secondary: 210 40% 96.1%;
-  --secondary-foreground: 222.2 47.4% 11.2%;
-  --muted: 210 40% 96.1%;
-  --muted-foreground: 215.4 16.3% 46.9%;
-  --accent: 210 40% 96.1%;
-  --accent-foreground: 222.2 47.4% 11.2%;
-  --destructive: 0 84.2% 60.2%;
-  --destructive-foreground: 210 40% 98%;
-  --border: 214.3 31.8% 91.4%;
-  --input: 214.3 31.8% 91.4%;
-  --ring: 221.2 83.2% 53.3%;
-  --radius: 0.5rem;
-}
+    --background: 0 0% 100%;
+    --foreground: 222.2 84% 4.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 222.2 84% 4.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222.2 84% 4.9%;
+    --primary: 221.2 83.2% 53.3%;
+    --primary-foreground: 210 40% 98%;
+    --secondary: 210 40% 96.1%;
+    --secondary-foreground: 222.2 47.4% 11.2%;
+    --muted: 210 40% 96.1%;
+    --muted-foreground: 215.4 16.3% 46.9%;
+    --accent: 210 40% 96.1%;
+    --accent-foreground: 222.2 47.4% 11.2%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 214.3 31.8% 91.4%;
+    --input: 214.3 31.8% 91.4%;
+    --ring: 221.2 83.2% 53.3%;
+    --radius: 0.5rem;
+  }
 
   .dark {
     --background: 222.2 84% 4.9%;
@@ -53,6 +53,7 @@
   * {
     @apply border-border;
   }
+
   body {
     @apply bg-background text-foreground;
   }
@@ -60,25 +61,26 @@
 
 /* Conversational Analytics custom styles */
 @layer components {
+
   /* Custom scrollbar for chat areas */
   .conv-analytics-scrollbar {
     scrollbar-width: thin;
     scrollbar-color: rgba(148, 163, 184, 0.3) transparent;
   }
-  
+
   .conv-analytics-scrollbar::-webkit-scrollbar {
     width: 6px;
   }
-  
+
   .conv-analytics-scrollbar::-webkit-scrollbar-track {
     background: transparent;
   }
-  
+
   .conv-analytics-scrollbar::-webkit-scrollbar-thumb {
     background: rgba(148, 163, 184, 0.3);
     border-radius: 3px;
   }
-  
+
   .conv-analytics-scrollbar::-webkit-scrollbar-thumb:hover {
     background: rgba(148, 163, 184, 0.5);
   }
@@ -88,20 +90,20 @@
     scrollbar-width: thin;
     scrollbar-color: rgba(56, 189, 248, 0.25) transparent;
   }
-  
+
   .custom-scrollbar::-webkit-scrollbar {
     width: 5px;
   }
-  
+
   .custom-scrollbar::-webkit-scrollbar-track {
     background: transparent;
   }
-  
+
   .custom-scrollbar::-webkit-scrollbar-thumb {
     background: linear-gradient(to bottom, rgba(56, 189, 248, 0.3), rgba(59, 130, 246, 0.2));
     border-radius: 2.5px;
   }
-  
+
   .custom-scrollbar::-webkit-scrollbar-thumb:hover {
     background: linear-gradient(to bottom, rgba(56, 189, 248, 0.5), rgba(59, 130, 246, 0.4));
   }
@@ -111,30 +113,35 @@
   .animate-fade-in {
     animation: fadeIn 0.3s ease-out forwards;
   }
-  
+
   .animate-slide-up {
     animation: slideUp 0.4s ease-out forwards;
   }
-  
+
   .animate-scale-in {
     animation: scaleIn 0.2s ease-out forwards;
   }
-  
+
   .animate-pulse-subtle {
     animation: pulseSoft 2s ease-in-out infinite;
   }
-  
-  .animate-bounce-x {
-    animation: bounceX 1s ease-in-out infinite;
+
+  .animate-bounce-horizontal {
+    animation: bounceHorizontal 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
   }
 }
 
-@keyframes bounceX {
-  0%, 100% {
+@keyframes bounceHorizontal {
+
+  0%,
+  100% {
     transform: translateX(0);
+    animation-timing-function: cubic-bezier(0.8, 0, 1, 1);
   }
+
   50% {
-    transform: translateX(-6px);
+    transform: translateX(-10px);
+    animation-timing-function: cubic-bezier(0, 0, 0.2, 1);
   }
 }
 
@@ -142,6 +149,7 @@
   from {
     opacity: 0;
   }
+
   to {
     opacity: 1;
   }
@@ -152,6 +160,7 @@
     opacity: 0;
     transform: translateY(10px);
   }
+
   to {
     opacity: 1;
     transform: translateY(0);
@@ -163,6 +172,7 @@
     opacity: 0;
     transform: scale(0.95);
   }
+
   to {
     opacity: 1;
     transform: scale(1);
@@ -170,9 +180,12 @@
 }
 
 @keyframes pulseSoft {
-  0%, 100% {
+
+  0%,
+  100% {
     opacity: 1;
   }
+
   50% {
     opacity: 0.7;
   }
@@ -180,16 +193,17 @@
 
 /* Process Panel styles */
 @layer components {
+
   /* Process panel overlay */
   .process-panel-overlay {
     animation: processPanelFadeIn 0.3s ease-out forwards;
   }
-  
+
   /* Process node tree connector lines */
   .process-tree-line {
     position: relative;
   }
-  
+
   .process-tree-line::before {
     content: '';
     position: absolute;
@@ -197,22 +211,20 @@
     top: 0;
     bottom: 0;
     width: 1px;
-    background: linear-gradient(
-      to bottom,
-      rgba(148, 163, 184, 0.3) 0%,
-      rgba(148, 163, 184, 0.1) 100%
-    );
+    background: linear-gradient(to bottom,
+        rgba(148, 163, 184, 0.3) 0%,
+        rgba(148, 163, 184, 0.1) 100%);
   }
-  
+
   /* Process node card hover effect */
   .process-node-card {
     transition: all 0.2s ease-out;
   }
-  
+
   .process-node-card:hover {
     transform: translateX(2px);
   }
-  
+
   /* Responsive adjustments for process panel */
   @media (max-width: 640px) {
     .process-panel-header {
@@ -220,17 +232,17 @@
       align-items: flex-start;
       gap: 0.75rem;
     }
-    
+
     .process-panel-stats {
       flex-wrap: wrap;
       gap: 0.5rem;
     }
-    
+
     .process-node-depth {
       margin-left: 16px !important;
     }
   }
-  
+
   /* Process status indicator pulse */
   .process-status-pulse {
     animation: processStatusPulse 2s ease-in-out infinite;
@@ -242,6 +254,7 @@
     opacity: 0;
     backdrop-filter: blur(0px);
   }
+
   to {
     opacity: 1;
     backdrop-filter: blur(8px);
@@ -249,9 +262,12 @@
 }
 
 @keyframes processStatusPulse {
-  0%, 100% {
+
+  0%,
+  100% {
     box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.4);
   }
+
   50% {
     box-shadow: 0 0 0 8px rgba(245, 158, 11, 0);
   }
@@ -262,7 +278,7 @@
   .animate-node-enter {
     animation: nodeEnter 0.4s ease-out forwards;
   }
-  
+
   .animate-edge-draw {
     animation: edgeDraw 0.6s ease-out forwards;
   }
@@ -273,6 +289,7 @@
     opacity: 0;
     transform: scale(0.8) translateY(-10px);
   }
+
   to {
     opacity: 1;
     transform: scale(1) translateY(0);
@@ -284,6 +301,7 @@
     stroke-dashoffset: 100;
     opacity: 0;
   }
+
   to {
     stroke-dashoffset: 0;
     opacity: 1;
