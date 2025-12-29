@@ -36,10 +36,11 @@ Backend: FastAPI, Claude Agent SDK, SSE streaming, Pydantic models
 Protocol: A2UI v0.8 with custom financial component catalog extension
 +--------------------`,
         defaultPrompts: [
-          'Why did NVDA drop on December 18?',
-          'Compare AAPL vs MSFT profit margins',
-          'Show me the correlation between semiconductor stocks',
+          'Why did NVDA drop recently? Show price chart and news',
+          'Compare AMD vs INTC quarterly revenue',
+          'QCOM vs AVGO profit margin trends',
         ],
+
         coverUrl: 'https://yanqinghot.blob.core.windows.net/public-access/generative-ui-hero.png',
         imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/generative-ui-hero.png',
         ogImage: 'https://yanqinghot.blob.core.windows.net/public-access/generative-ui-hero.png',
