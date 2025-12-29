@@ -107,7 +107,6 @@
   }
 }
 
-/* Smooth animations */
 @layer utilities {
   .animate-fade-in {
     animation: fadeIn 0.3s ease-out forwards;
@@ -123,6 +122,19 @@
   
   .animate-pulse-subtle {
     animation: pulseSoft 2s ease-in-out infinite;
+  }
+  
+  .animate-bounce-x {
+    animation: bounceX 1s ease-in-out infinite;
+  }
+}
+
+@keyframes bounceX {
+  0%, 100% {
+    transform: translateX(0);
+  }
+  50% {
+    transform: translateX(-6px);
   }
 }
 

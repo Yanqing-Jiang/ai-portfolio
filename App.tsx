@@ -56,13 +56,19 @@ const Layout: React.FC = () => {
   useEffect(() => {
     const hasSeenHint = localStorage.getItem('sidebarHintSeen');
     if (!hasSeenHint) {
-      // Small delay before showing hint
-      const timer = setTimeout(() => setShowSidebarHint(true), 1500);
+      // Show immediately on first visit
+      setShowSidebarHint(true);
+
+      // Auto-hide after 3 seconds
+      const timer = setTimeout(() => {
+        setShowSidebarHint(false);
+        localStorage.setItem('sidebarHintSeen', 'true');
+      }, 3000);
       return () => clearTimeout(timer);
     }
   }, []);
 
-  // Dismiss hint on scroll
+  // Also dismiss hint on scroll (backup)
   useEffect(() => {
     const mainEl = mainContentRef.current;
     if (!mainEl || !showSidebarHint) return;
@@ -137,12 +143,24 @@ const Layout: React.FC = () => {
           {isSidebarOpen ? <ChevronLeftIcon /> : <ChevronRightIcon />}
         </button>
 
-        {/* Sidebar hint tooltip - shows once */}
+        {/* Sidebar hint tooltip with animated arrow - shows once */}
         {showSidebarHint && !isSidebarOpen && (
-          <div className="fixed top-4 left-16 z-50 animate-pulse">
-            <div className="relative bg-blue-600 text-white text-xs px-3 py-2 rounded-lg shadow-lg">
-              <div className="absolute left-0 top-1/2 -translate-x-full -translate-y-1/2 border-8 border-transparent border-r-blue-600" />
-              Click to explore projects
+          <div className="fixed top-3 left-[60px] z-50 flex items-center gap-2 animate-fade-in">
+            {/* Animated curved arrow pointing left */}
+            <svg
+              className="w-8 h-8 text-blue-400 animate-bounce-x"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M19 12H5M12 19l-7-7 7-7" />
+            </svg>
+            {/* Tooltip bubble */}
+            <div className="bg-gradient-to-r from-blue-600 to-purple-600 text-white text-xs font-medium px-4 py-2 rounded-full shadow-lg shadow-blue-500/30">
+              Explore all projects
             </div>
           </div>
         )}
