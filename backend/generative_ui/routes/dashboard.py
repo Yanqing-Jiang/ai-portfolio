@@ -11,8 +11,10 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import json
 
-from ..a2ui import A2UIMessageGenerator
+from ..a2ui import A2UIMessageGenerator, DashboardPlanner, DashboardSynthesizer
 from ..models import DashboardPlan, get_dashboard_store
+from ..config import get_settings
+from conversational_analytics.database.executor import execute_sql
 
 
 router = APIRouter(prefix="/api/dash", tags=["dashboard"])
@@ -47,20 +49,21 @@ class ActionRequest(BaseModel):
 async def create_dashboard(request: CreateDashboardRequest):
     """
     Create a new dashboard from a user question.
-    
-    This endpoint:
-    1. Sends the question to Claude for planning
-    2. Creates a dashboard state
-    3. Returns the dashboard ID for streaming
     """
     store = get_dashboard_store()
+    settings = get_settings()
     
-    # TODO: Replace with actual Claude call
-    # For now, use example plan based on question keywords
-    if "drop" in request.question.lower() or "why" in request.question.lower():
-        plan = DashboardPlan.example_explain_move()
-    else:
-        plan = DashboardPlan.example_compare()
+    # Use LLM Planner
+    planner = DashboardPlanner(api_key=settings.claude_api_key)
+    try:
+        plan = await planner.generate_plan(request.question)
+    except Exception as e:
+        print(f"Planning failed: {e}")
+        # Fallback to keyword-based examples if LLM fails
+        if "drop" in request.question.lower() or "why" in request.question.lower():
+            plan = DashboardPlan.example_explain_move()
+        else:
+            plan = DashboardPlan.example_compare()
     
     # Override ticker if provided
     if request.ticker:
@@ -82,11 +85,10 @@ async def create_dashboard(request: CreateDashboardRequest):
 async def stream_dashboard(dashboard_id: str):
     """
     Stream A2UI messages for a dashboard.
-    
-    Returns Server-Sent Events with A2UI JSONL payloads.
     """
     store = get_dashboard_store()
     state = store.get(dashboard_id)
+    settings = get_settings()
     
     if not state:
         raise HTTPException(status_code=404, detail="Dashboard not found")
@@ -101,26 +103,36 @@ async def stream_dashboard(dashboard_id: str):
         # Reconstruct plan from stored JSON
         plan = DashboardPlan(**state.plan_json)
         
-        # Stream structure
+        # 1. Stream structure immediately
         for msg in a2ui.generate_from_plan(plan):
             yield f"data: {msg}\n\n"
         
-        # TODO: Execute SQL queries and stream data
-        # For now, send mock data
-        mock_data = {
-            "price": 134.25,
-            "volume": 89000000,
-            "change": -5.2,
-            "changePercent": -3.8,
-        }
+        # 2. Execute Data Fetching
+        tool_results = {}
         
-        data_msg = a2ui.update_price_data(
-            price=mock_data["price"],
-            volume=mock_data["volume"],
-            change=mock_data["change"],
-            change_percent=mock_data["changePercent"]
-        )
-        yield f"data: {data_msg}\n\n"
+        # Execute SQL if present
+        if plan.sql_queries:
+            sql_results = []
+            for query in plan.sql_queries:
+                try:
+                    result = await execute_sql(query)
+                    sql_results.append(result)
+                except Exception as e:
+                    print(f"SQL Error: {e}")
+            tool_results["sql"] = sql_results
+            
+        # TODO: Execute Search if present
+        
+        # 3. Synthesize with Gemini
+        synthesizer = DashboardSynthesizer(api_key=settings.gemini_api_key)
+        data_model_dict = await synthesizer.synthesize(plan, tool_results)
+        
+        # 4. Stream data updates
+        if data_model_dict:
+            entries = a2ui.dict_to_data_entries(data_model_dict)
+            msg = a2ui.data_model_update(entries)
+            yield f"data: {msg}\n\n"
+
         
         # Signal completion
         yield f"data: {json.dumps({'done': True})}\n\n"

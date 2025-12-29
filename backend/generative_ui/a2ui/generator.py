@@ -152,6 +152,19 @@ class A2UIMessageGenerator:
                 tickers_path="/data/correlationTickers",
                 matrix_path="/data/correlationMatrix"
             )
+        elif widget.type == "explain_move":
+            # Map factors and citations to data model
+            component = A2UIComponent(
+                id=widget_id,
+                component={
+                    "ExplainMovePanel": {
+                        "title": {"path": "/dashboard/title"},
+                        "explanation": {"path": "/data/summary"},
+                        "factors": {"path": "/data/factors"},
+                        "citations": {"path": "/data/citations"}
+                    }
+                }
+            )
         else:
             # Default to text placeholder
             component = A2UIComponent.text(
@@ -286,3 +299,22 @@ class A2UIMessageGenerator:
             DataEntry(key="correlationMatrix", valueArray=matrix),
         ]
         return self.data_model_update(contents, path="/data")
+
+    def dict_to_data_entries(self, data: Dict[str, Any]) -> List[DataEntry]:
+        """
+        Convert a flat or nested dictionary into a list of DataEntry objects.
+        """
+        entries = []
+        for key, value in data.items():
+            if isinstance(value, str):
+                entries.append(DataEntry(key=key, valueString=value))
+            elif isinstance(value, (int, float)):
+                entries.append(DataEntry(key=key, valueNumber=float(value)))
+            elif isinstance(value, bool):
+                entries.append(DataEntry(key=key, valueBoolean=value))
+            elif isinstance(value, list):
+                entries.append(DataEntry(key=key, valueArray=value))
+            elif isinstance(value, dict):
+                entries.append(DataEntry(key=key, valueMap=self.dict_to_data_entries(value)))
+        return entries
+
