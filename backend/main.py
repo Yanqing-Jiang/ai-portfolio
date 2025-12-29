@@ -165,6 +165,15 @@ try:
 except ImportError as e:
     logger.warning("[STARTUP] Conversational Analytics not available: %s", e)
 
+# Generative UI - A2UI Dashboard router (2026 project)
+try:
+    from generative_ui.routes import dashboard_router as genui_router
+    app.include_router(genui_router)
+    logger.info("[STARTUP] Mounted Generative UI router at /api/dash (A2UI v0.8)")
+except ImportError as e:
+    logger.warning("[STARTUP] Generative UI not available: %s", e)
+
+
 
 @app.get("/project-showcase")
 async def project_showcase():

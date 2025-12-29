@@ -104,6 +104,14 @@ interface YearTheme {
 }
 
 const YEAR_THEMES: Record<number | string, YearTheme> = {
+    2026: {
+        gradient: 'from-rose-400 to-amber-500',
+        headingGradient: 'from-rose-300 via-amber-400 to-pink-400',
+        nodeGradient: 'from-rose-400 to-amber-500',
+        glowColor: 'rgba(244, 63, 94, 0.4)',
+        cardBorderHover: 'hover:border-rose-500/50',
+        cardShadowHover: 'hover:shadow-rose-500/20',
+    },
     2025: {
         gradient: 'from-cyan-400 to-purple-500',
         headingGradient: 'from-cyan-300 via-sky-400 to-purple-400',
@@ -112,6 +120,7 @@ const YEAR_THEMES: Record<number | string, YearTheme> = {
         cardBorderHover: 'hover:border-cyan-500/50',
         cardShadowHover: 'hover:shadow-cyan-500/20',
     },
+
     2024: {
         gradient: 'from-blue-400 to-teal-500',
         headingGradient: 'from-blue-300 via-blue-400 to-teal-400',

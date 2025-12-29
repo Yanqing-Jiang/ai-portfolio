@@ -2,12 +2,75 @@ import type { ProjectYear } from './types';
 
 export const PROJECT_DATA: ProjectYear[] = [
   {
+    year: 2026,
+    subtitle: '(Generative UI & Agent UX)',
+    projects: [
+      {
+        id: 'generative-ui-a2ui',
+        title: 'Generative Financial Dashboard',
+        description: `AI-powered dashboard generation using the A2UI v0.8 protocol.
+
+Ask a question about any stock, and watch as Claude analyzes your query and streams a custom dashboard in real-time. The system:
+
+• Parses your intent and selects relevant widgets (charts, KPIs, tables, news)
+• Streams A2UI protocol messages to progressively render components
+• Binds live data from SQL queries and research APIs
+• Supports interactive actions like timeframe changes and ticker additions
+
+Built with Claude Agent SDK, FastAPI SSE streaming, and a custom React A2UI renderer.`,
+        cardDescription: 'Ask a question, watch Claude generate a custom financial dashboard in real-time using the A2UI protocol.',
+        technologies: ['A2UI Protocol', 'Claude Agent SDK', 'React Renderer', 'SSE Streaming', 'Generative UX'],
+        systemInstruction: `You are the AI assistant for **Generative Financial Dashboard**. You have full knowledge of the A2UI protocol and how this project works. Use the details below to answer questions.
+
++--------------------
+FEATURE OVERVIEW
+• Natural language to dashboard: Ask "Why did NVDA drop?" → get price chart, KPIs, news timeline, analysis panel
+• A2UI v0.8 protocol: Streaming JSON messages (surfaceUpdate, dataModelUpdate) render React components
+• Custom financial catalog: PriceChart, KpiCard, DataTable, NewsTimeline, CorrelationMatrix, ExplainMovePanel
+• Data binding: BoundValue objects link component props to live data model paths
+• Interactive actions: userAction messages enable drilldown, timeframe changes, ticker additions
+
+TECH STACK
+Frontend: React 19 + TypeScript, custom A2UI renderer, TradingView/ECharts widgets
+Backend: FastAPI, Claude Agent SDK, SSE streaming, Pydantic models
+Protocol: A2UI v0.8 with custom financial component catalog extension
++--------------------`,
+        defaultPrompts: [
+          'Why did NVDA drop on December 18?',
+          'Compare AAPL vs MSFT profit margins',
+          'Show me the correlation between semiconductor stocks',
+        ],
+        coverUrl: 'https://yanqinghot.blob.core.windows.net/public-access/generative-ui-hero.png',
+        imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/generative-ui-hero.png',
+        ogImage: 'https://yanqinghot.blob.core.windows.net/public-access/generative-ui-hero.png',
+        seoTitle: 'Generative Financial Dashboard | A2UI Protocol + Claude Agent SDK',
+        seoDescription:
+          'Ask a question and watch AI generate a custom financial dashboard in real-time using the A2UI protocol, Claude Agent SDK, and streaming React components.',
+        seoKeywords: [
+          'A2UI protocol',
+          'generative UI',
+          'Claude Agent SDK',
+          'streaming dashboard',
+          'financial analytics AI',
+        ],
+        datePublished: '2026-01-01',
+        dateModified: '2026-01-01',
+        serviceTags: ['Generative UI', 'Agent UX', 'Financial Analytics'],
+        statHighlights: [
+          'Streams custom dashboards from natural language queries via A2UI protocol',
+          'Renders TradingView charts, ECharts visualizations, and real-time KPIs',
+        ],
+      },
+    ],
+  },
+  {
     year: 2025,
     subtitle: '(Agentic AI & Autonomous Trading)',
     projects: [
       {
         id: 'linkedin-photo',
         title: 'LinkedIn Photo Generator',
+
         description: `Three-step UX flow that turns a casual portrait into a LinkedIn-ready headshot.
 Step 1 �?" Upload: validate JPEG or PNG up to 8 MB, show an inline preview, and prep metadata.
 Step 2 �?" Describe: capture a single style sentence and expand it with Gemini into a photography-grade brief (lighting, background, wardrobe) that preserves identity.

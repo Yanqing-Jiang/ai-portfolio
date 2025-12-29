@@ -12,12 +12,14 @@ import {
 import Sidebar from './components/Sidebar';
 import ProjectView from './components/ProjectView';
 import LandingPageFlow from './components/LandingPageFlow';
+import { GenerativeUIPage } from './components/generativeUiDashboard';
 import { PROJECT_DATA } from './constants';
 import type { Project } from './types';
 import { ChevronLeftIcon } from './components/icons/ChevronLeftIcon';
 import { ChevronRightIcon } from './components/icons/ChevronRightIcon';
 // @ts-ignore
 import { HelmetProvider } from 'react-helmet-async';
+
 
 // --- helper to look up a project by id ---
 const ALL_PROJECTS = PROJECT_DATA.flatMap((y) => y.projects);
@@ -186,9 +188,12 @@ const Layout: React.FC = () => {
                 />
               }
             />
+            {/* 2026 Generative UI - Custom full-page experience */}
+            <Route path="/project/generative-ui-a2ui" element={<GenerativeUIPage />} />
             <Route path="/project/:projectId" element={<ProjectRoute />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
+
         </main>
       </div>
     </div>
