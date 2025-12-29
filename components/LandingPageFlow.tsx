@@ -261,119 +261,132 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                 .from('.hero-morph', { opacity: 0, scale: 0.9, duration: 0.8 }, '-=0.3');
 
             // 2. Horizontal Scroll Section "The Neural Stream"
+            // Use matchMedia to optimize for mobile vs desktop
             if (horizontalSectionRef.current && trackRef.current) {
                 const track = trackRef.current;
                 const section = horizontalSectionRef.current;
-
-                // Get the main scroller element - CRITICAL for nested scroll layouts
                 const mainScroller = document.querySelector('main');
 
                 // Calculate scroll amount
                 const getScrollAmount = () => -(track.scrollWidth - window.innerWidth);
 
-                const tween = gsap.to(track, {
-                    x: getScrollAmount,
-                    ease: 'none',
-                    scrollTrigger: {
-                        trigger: section,
-                        scroller: mainScroller, // EXPLICIT scroller for nested layouts
-                        start: 'top top',
-                        end: () => `+=${track.scrollWidth - window.innerWidth}`,
-                        pin: true,
-                        scrub: 1.2, // Smoother scrub for Lenis
-                        invalidateOnRefresh: true,
-                        anticipatePin: 1,
-                    },
+                // Helper function to create card animations (used by both mobile and desktop)
+                const createCardAnimations = (tween: gsap.core.Tween) => {
+                    const cards = gsap.utils.toArray('.stream-card') as HTMLElement[];
+                    cards.forEach((card) => {
+                        const background = card.querySelector('.assembler-bg');
+                        const image = card.querySelector('.assembler-image');
+                        const content = card.querySelector('.assembler-content');
+                        const header = card.querySelector('.assembler-header');
+
+                        // Background glass flies in
+                        gsap.from(background, {
+                            z: -600, opacity: 0, scale: 0.8, rotateX: -25,
+                            scrollTrigger: {
+                                trigger: card, containerAnimation: tween,
+                                start: 'left center+=500', end: 'left center', scrub: true,
+                            }
+                        });
+
+                        // Image slides in with blur
+                        gsap.from(image, {
+                            x: 150, opacity: 0, scale: 1.2, filter: 'blur(20px)',
+                            scrollTrigger: {
+                                trigger: card, containerAnimation: tween,
+                                start: 'left center+=600', end: 'left center', scrub: true,
+                            }
+                        });
+
+                        // Content floats up
+                        gsap.from(content, {
+                            y: 120, opacity: 0, rotate: 5,
+                            scrollTrigger: {
+                                trigger: card, containerAnimation: tween,
+                                start: 'left center+=400', end: 'left center', scrub: true,
+                            }
+                        });
+
+                        // Header slides in
+                        gsap.from(header, {
+                            x: -80, scale: 0.9, opacity: 0,
+                            scrollTrigger: {
+                                trigger: card, containerAnimation: tween,
+                                start: 'left center+=450', end: 'left center', scrub: true,
+                            }
+                        });
+
+                        // Focus highlight
+                        gsap.to(card, {
+                            scale: 1.05, filter: 'brightness(1.1) saturate(1.1)', zIndex: 50, duration: 0.5,
+                            scrollTrigger: {
+                                trigger: card, containerAnimation: tween,
+                                start: 'left center+=200', end: 'right center-=200',
+                                toggleActions: 'play reverse play reverse',
+                                onEnter: () => card.classList.add('is-focused'),
+                                onLeave: () => card.classList.remove('is-focused'),
+                                onEnterBack: () => card.classList.add('is-focused'),
+                                onLeaveBack: () => card.classList.remove('is-focused'),
+                            }
+                        });
+                    });
+
+                    // Year markers parallax
+                    const years = gsap.utils.toArray('.year-marker-bg') as HTMLElement[];
+                    years.forEach((year) => {
+                        gsap.to(year, {
+                            x: 500, opacity: 0, scale: 1.5, ease: 'none',
+                            scrollTrigger: {
+                                trigger: year, containerAnimation: tween,
+                                start: 'left right', end: 'right left', scrub: true,
+                            }
+                        });
+                    });
+                };
+
+                // Create responsive horizontal scroll with matchMedia
+                const mm = gsap.matchMedia();
+
+                // Desktop: Standard horizontal scroll
+                mm.add("(min-width: 768px)", () => {
+                    const tween = gsap.to(track, {
+                        x: getScrollAmount,
+                        ease: 'none',
+                        scrollTrigger: {
+                            trigger: section,
+                            scroller: mainScroller,
+                            start: 'top top',
+                            end: () => `+=${track.scrollWidth - window.innerWidth}`,
+                            pin: true,
+                            scrub: 1.2,
+                            invalidateOnRefresh: true,
+                            anticipatePin: 1,
+                        },
+                    });
+                    createCardAnimations(tween);
+                    return () => { tween.kill(); };
                 });
 
-                // THE EPICENTER: Project Assembly Interaction
-                const cards = gsap.utils.toArray('.stream-card') as HTMLElement[];
-                cards.forEach((card) => {
-                    const background = card.querySelector('.assembler-bg');
-                    const image = card.querySelector('.assembler-image');
-                    const content = card.querySelector('.assembler-content');
-                    const header = card.querySelector('.assembler-header');
-
-                    // 1. Quantum Assembly: Everything scattered until it hits center
-                    // Background glass flies from even further behind
-                    gsap.from(background, {
-                        z: -600,
-                        opacity: 0,
-                        scale: 0.8,
-                        rotateX: -25,
+                // Mobile: Smoother scrub to reduce "vibrating" sensation
+                mm.add("(max-width: 767px)", () => {
+                    const tween = gsap.to(track, {
+                        x: getScrollAmount,
+                        ease: 'power1.out',
                         scrollTrigger: {
-                            trigger: card,
-                            containerAnimation: tween,
-                            start: 'left center+=500',
-                            end: 'left center',
-                            scrub: true,
-                        }
+                            trigger: section,
+                            scroller: mainScroller,
+                            start: 'top top',
+                            end: () => `+=${track.scrollWidth - window.innerWidth}`,
+                            pin: true,
+                            scrub: 3, // Higher scrub = smoother mobile
+                            invalidateOnRefresh: true,
+                            anticipatePin: 1,
+                        },
                     });
-
-                    // Image slides in with a blur reveal
-                    gsap.from(image, {
-                        x: 150,
-                        opacity: 0,
-                        scale: 1.2,
-                        filter: 'blur(20px)',
-                        scrollTrigger: {
-                            trigger: card,
-                            containerAnimation: tween,
-                            start: 'left center+=600',
-                            end: 'left center',
-                            scrub: true,
-                        }
-                    });
-
-                    // Text content floats up magnetically
-                    gsap.from(content, {
-                        y: 120,
-                        opacity: 0,
-                        rotate: 5,
-                        scrollTrigger: {
-                            trigger: card,
-                            containerAnimation: tween,
-                            start: 'left center+=400',
-                            end: 'left center',
-                            scrub: true,
-                        }
-                    });
-
-                    // Header (Title) slides in with a power focus
-                    gsap.from(header, {
-                        x: -80,
-                        scale: 0.9,
-                        opacity: 0,
-                        scrollTrigger: {
-                            trigger: card,
-                            containerAnimation: tween,
-                            start: 'left center+=450',
-                            end: 'left center',
-                            scrub: true,
-                        }
-                    });
-
-                    // 2. FOCUS HIGHLIGHT: Highlight card when it's in the center of the viewport
-                    gsap.to(card, {
-                        scale: 1.05,
-                        filter: 'brightness(1.1) saturate(1.1)',
-                        zIndex: 50,
-                        duration: 0.5,
-                        scrollTrigger: {
-                            trigger: card,
-                            containerAnimation: tween,
-                            start: 'left center+=200',
-                            end: 'right center-=200',
-                            toggleActions: 'play reverse play reverse',
-                            onEnter: () => card.classList.add('is-focused'),
-                            onLeave: () => card.classList.remove('is-focused'),
-                            onEnterBack: () => card.classList.add('is-focused'),
-                            onLeaveBack: () => card.classList.remove('is-focused'),
-                        }
-                    });
+                    createCardAnimations(tween);
+                    return () => { tween.kill(); };
                 });
 
-                // Neural Pulse Progress Point Tracker
+                // Neural Pulse Progress Point Tracker (works on both)
                 const pulsePoint = document.querySelector('.neural-pulse-point');
                 if (pulsePoint) {
                     gsap.to(pulsePoint, {
@@ -384,30 +397,13 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                         ease: 'none',
                         scrollTrigger: {
                             trigger: section,
+                            scroller: mainScroller,
                             start: 'top top',
                             end: () => `+=${track.scrollWidth - window.innerWidth}`,
                             scrub: true,
                         }
                     });
                 }
-
-                // Year Markers Parallax (Dramatic Lag)
-                const years = gsap.utils.toArray('.year-marker-bg') as HTMLElement[];
-                years.forEach((year) => {
-                    gsap.to(year, {
-                        x: 500,
-                        opacity: 0,
-                        scale: 1.5,
-                        ease: 'none',
-                        scrollTrigger: {
-                            trigger: year,
-                            containerAnimation: tween,
-                            start: 'left right',
-                            end: 'right left',
-                            scrub: true,
-                        }
-                    });
-                });
             }
 
             // 3. Pre-AI Section (Vertical) - CRT/TERMINAL REVEAL
