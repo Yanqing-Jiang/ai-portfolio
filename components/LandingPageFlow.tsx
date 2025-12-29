@@ -415,6 +415,9 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                 const header = preAiSectionRef.current.querySelector('.pre-ai-header');
                 const cards = preAiSectionRef.current.querySelectorAll('.pre-ai-card');
 
+                // Get the main scroller for nested layouts
+                const mainScroller = document.querySelector('main');
+
                 // Standard reveal for the whole container - more relaxed trigger to ensure it shows
                 gsap.from(header, {
                     y: 40,
@@ -423,6 +426,7 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                     duration: 1,
                     scrollTrigger: {
                         trigger: header,
+                        scroller: mainScroller, // EXPLICIT scroller for nested layouts
                         start: 'top bottom', // Start as soon as it enters viewport
                         toggleActions: 'play none none none',
                     }
@@ -439,6 +443,7 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                         ease: 'power2.out',
                         scrollTrigger: {
                             trigger: preAiSectionRef.current,
+                            scroller: mainScroller, // EXPLICIT scroller for nested layouts
                             start: 'top bottom-=50',
                         }
                     }
