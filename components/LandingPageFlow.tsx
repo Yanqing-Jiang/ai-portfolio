@@ -16,7 +16,6 @@ import {
     LANDING_FAQ,
     LANDING_SEO,
     SITE_NAME,
-    STORY_POINTS,
 } from '../constants/seo';
 import { buildLandingSchemas, toNavigationFromProjects } from '../constants/structuredData';
 

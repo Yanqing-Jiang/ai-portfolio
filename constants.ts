@@ -15,8 +15,8 @@ Step 3 �?" Generate: FastAPI validates the file, expands the prompt, calls Gem
         cardDescription:
           'Upload any causal photos, choose a template, and watch Gemini 3 Pro Image deliver a LinkedIn headshot with professional studio level setup.',
         technologies: [
-          'Tailwind CSS',
-          'Image Iterations',
+          'Google Gemini 3',
+          'Dynamic Prompts',
           'Gemini Nano Banana',
           'Prompt Engineering',
           'Gemini SDK',

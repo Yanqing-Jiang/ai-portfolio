@@ -11,7 +11,6 @@ import {
 } from 'react-router-dom';
 import Sidebar from './components/Sidebar';
 import ProjectView from './components/ProjectView';
-import LandingPage from './components/LandingPage';
 import LandingPageFlow from './components/LandingPageFlow';
 import { PROJECT_DATA } from './constants';
 import type { Project } from './types';
@@ -116,22 +115,13 @@ const Layout: React.FC = () => {
             <Route
               path="/"
               element={
-                <LandingPage
-                  projectData={PROJECT_DATA}
-                  onSelectProject={goProject}
-                />
-              }
-            />
-            <Route path="/project/:projectId" element={<ProjectRoute />} />
-            <Route
-              path="/design-v2"
-              element={
                 <LandingPageFlow
                   projectData={PROJECT_DATA}
                   onSelectProject={goProject}
                 />
               }
             />
+            <Route path="/project/:projectId" element={<ProjectRoute />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </main>
