@@ -20,6 +20,7 @@ import { KpiCard } from './widgets/KpiCard';
 import { DataTable } from './widgets/DataTable';
 import { NewsTimeline } from './widgets/NewsTimeline';
 import { CorrelationMatrix } from './widgets/CorrelationMatrix';
+import { ExplainMovePanel } from './widgets/ExplainMovePanel';
 
 /**
  * Common props passed to all A2UI component implementations.
@@ -59,7 +60,9 @@ export const componentRegistry: Record<
     DataTable,
     NewsTimeline,
     CorrelationMatrix,
+    ExplainMovePanel,
 };
+
 
 /**
  * Extract component type and props from an A2UI component definition.

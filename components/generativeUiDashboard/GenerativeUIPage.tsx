@@ -517,7 +517,11 @@ export function GenerativeUIPage(): React.ReactElement {
                                 <div className="h-6 w-px" style={{ backgroundColor: theme.colors.border.medium }} />
 
                                 <div className="flex items-center gap-3">
-                                    <span className="text-2xl">✨</span>
+                                    <div className="w-9 h-9 rounded-lg flex items-center justify-center" style={{ background: `linear-gradient(135deg, ${theme.colors.accent.primary}, ${theme.colors.accent.secondary})` }}>
+                                        <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                                        </svg>
+                                    </div>
                                     <div>
                                         <h1 className="text-lg font-bold" style={{ color: theme.colors.text.primary }}>
                                             Generative Financial Dashboard
@@ -561,16 +565,6 @@ export function GenerativeUIPage(): React.ReactElement {
                                     <span style={{ color: theme.colors.text.secondary }}>{getStatusText()}</span>
                                 </div>
 
-                                {/* Year Badge */}
-                                <span
-                                    className="px-3 py-1.5 rounded-full text-xs font-bold"
-                                    style={{
-                                        background: `linear-gradient(135deg, ${theme.colors.accent.primary}, ${theme.colors.accent.secondary})`,
-                                        color: 'white',
-                                    }}
-                                >
-                                    2026
-                                </span>
                             </div>
                         </div>
                     </div>
@@ -788,22 +782,6 @@ export function GenerativeUIPage(): React.ReactElement {
                                 )}
                             </AnimatePresence>
 
-                            {/* Footer with ticker info */}
-                            <div className="mt-auto flex items-center justify-between text-xs" style={{ color: theme.colors.text.muted }}>
-                                <div className="flex items-center gap-2">
-                                    <span>📈 Powered by comp_financials</span>
-                                    <span style={{ opacity: 0.5 }}>•</span>
-                                    <span>Quarterly data</span>
-                                </div>
-                                <button
-                                    onClick={() => setShowSuggestions(!showSuggestions)}
-                                    className="flex items-center gap-1 hover:underline"
-                                    style={{ color: theme.colors.accent.primary }}
-                                >
-                                    <span>💡</span>
-                                    <span>Show suggestions</span>
-                                </button>
-                            </div>
                         </div>
                     </div>
                 </div>
