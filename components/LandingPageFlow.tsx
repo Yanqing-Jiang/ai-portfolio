@@ -346,106 +346,11 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                 };
 
                 // ============================================
-                // MOBILE: Ultra-smooth emergence animation
-                // Only GPU-friendly transforms: x, y, scale, opacity
-                // NO blur, NO 3D, NO complex filters
-                // ============================================
-                const createMobileCardAnimations = (tween: gsap.core.Tween) => {
-                    const cards = gsap.utils.toArray('.stream-card') as HTMLElement[];
-
-                    cards.forEach((card, index) => {
-                        const image = card.querySelector('.assembler-image');
-                        const content = card.querySelector('.assembler-content');
-                        const header = card.querySelector('.assembler-header');
-
-                        // EPIC CENTER: "Emergence from the Void"
-                        // Cards start scaled down and fade in as user scrolls
-                        // Simple but mesmerizing - feels like pulling content towards you
-
-                        // Whole card: Scale up from 0.85 with fade
-                        gsap.fromTo(card,
-                            { scale: 0.85, opacity: 0.3 },
-                            {
-                                scale: 1, opacity: 1,
-                                scrollTrigger: {
-                                    trigger: card, containerAnimation: tween,
-                                    start: 'left right-=100', // Start when card enters from right
-                                    end: 'left center',       // Fully visible at center
-                                    scrub: 2,                 // Smooth catch-up
-                                }
-                            }
-                        );
-
-                        // Image: Subtle parallax drift (slower than card)
-                        gsap.fromTo(image,
-                            { x: 30, scale: 1.1 },
-                            {
-                                x: 0, scale: 1,
-                                scrollTrigger: {
-                                    trigger: card, containerAnimation: tween,
-                                    start: 'left right', end: 'left center-=100',
-                                    scrub: 2.5, // Slightly slower for parallax depth
-                                }
-                            }
-                        );
-
-                        // Content: Rises up from below (feels like surfacing)
-                        gsap.fromTo(content,
-                            { y: 40, opacity: 0 },
-                            {
-                                y: 0, opacity: 1,
-                                scrollTrigger: {
-                                    trigger: card, containerAnimation: tween,
-                                    start: 'left center+=100', end: 'left center-=50',
-                                    scrub: 2,
-                                }
-                            }
-                        );
-
-                        // Header: Slides in from left edge
-                        gsap.fromTo(header,
-                            { x: -30, opacity: 0 },
-                            {
-                                x: 0, opacity: 1,
-                                scrollTrigger: {
-                                    trigger: card, containerAnimation: tween,
-                                    start: 'left center+=80', end: 'left center-=30',
-                                    scrub: 2,
-                                }
-                            }
-                        );
-
-                        // FOCUS STATE: Gentle scale pulse when centered
-                        // No complex filters - just scale
-                        gsap.to(card, {
-                            scale: 1.02,
-                            scrollTrigger: {
-                                trigger: card, containerAnimation: tween,
-                                start: 'center center+=50', end: 'center center-=50',
-                                scrub: 1,
-                            }
-                        });
-                    });
-
-                    // Year markers: Simple fade/scale (no complex parallax)
-                    const years = gsap.utils.toArray('.year-marker-bg') as HTMLElement[];
-                    years.forEach((year) => {
-                        gsap.to(year, {
-                            x: 100, opacity: 0.3, scale: 1.1, ease: 'none',
-                            scrollTrigger: {
-                                trigger: year, containerAnimation: tween,
-                                start: 'left right', end: 'right left', scrub: 2,
-                            }
-                        });
-                    });
-                };
-
-                // ============================================
                 // RESPONSIVE SCROLL SETUP with matchMedia
                 // ============================================
                 const mm = gsap.matchMedia();
 
-                // Desktop (768px+): Full cinematic experience
+                // Desktop (768px+): Full horizontal scroll cinematic experience
                 mm.add("(min-width: 768px)", () => {
                     const tween = gsap.to(track, {
                         x: getScrollAmount,
@@ -462,47 +367,53 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                         },
                     });
                     createDesktopCardAnimations(tween);
+
+                    // Neural Pulse Progress Tracker (desktop only)
+                    const pulsePoint = document.querySelector('.neural-pulse-point');
+                    if (pulsePoint) {
+                        gsap.to(pulsePoint, {
+                            x: () => {
+                                const bar = pulsePoint.parentElement;
+                                return bar ? (bar.clientWidth - 8) : 0;
+                            },
+                            ease: 'none',
+                            scrollTrigger: {
+                                trigger: section,
+                                scroller: mainScroller,
+                                start: 'top top',
+                                end: () => `+=${track.scrollWidth - window.innerWidth}`,
+                                scrub: true,
+                            }
+                        });
+                    }
+
                     return () => { tween.kill(); };
                 });
 
-                // Mobile (<768px): Ultra-smooth emergence
+                // Mobile (<768px): NO horizontal scroll - it's hidden
+                // Instead, we animate the vertical stacked cards
                 mm.add("(max-width: 767px)", () => {
-                    const tween = gsap.to(track, {
-                        x: getScrollAmount,
-                        ease: 'none', // Linear for predictable feel
-                        scrollTrigger: {
-                            trigger: section,
-                            scroller: mainScroller,
-                            start: 'top top',
-                            end: () => `+=${track.scrollWidth - window.innerWidth}`,
-                            pin: true,
-                            scrub: 4, // High scrub = ultra smooth, dampens jitter
-                            invalidateOnRefresh: true,
-                            anticipatePin: 1,
-                        },
-                    });
-                    createMobileCardAnimations(tween);
-                    return () => { tween.kill(); };
-                });
+                    const mobileCards = gsap.utils.toArray('.mobile-project-card') as HTMLElement[];
 
-                // Neural Pulse Progress Tracker
-                const pulsePoint = document.querySelector('.neural-pulse-point');
-                if (pulsePoint) {
-                    gsap.to(pulsePoint, {
-                        x: () => {
-                            const bar = pulsePoint.parentElement;
-                            return bar ? (bar.clientWidth - 8) : 0;
-                        },
-                        ease: 'none',
-                        scrollTrigger: {
-                            trigger: section,
-                            scroller: mainScroller,
-                            start: 'top top',
-                            end: () => `+=${track.scrollWidth - window.innerWidth}`,
-                            scrub: true,
-                        }
+                    mobileCards.forEach((card) => {
+                        gsap.fromTo(card,
+                            { y: 60, opacity: 0 },
+                            {
+                                y: 0, opacity: 1,
+                                duration: 0.8,
+                                ease: 'power2.out',
+                                scrollTrigger: {
+                                    trigger: card,
+                                    scroller: mainScroller,
+                                    start: 'top bottom-=100',
+                                    toggleActions: 'play none none none',
+                                }
+                            }
+                        );
                     });
-                }
+
+                    return () => { };
+                });
             }
 
             // 3. Pre-AI Section (Vertical) - CRT/TERMINAL REVEAL
@@ -688,9 +599,9 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                         </div>
                     </section>
 
-                    {/* HORIZONTAL SCROLL "NEURAL STREAM" SECTION */}
-                    {/* GSAP Pins this section, so we start with h-screen and let GSAP add the scroll duration spacer */}
-                    <div ref={horizontalSectionRef} className="relative h-screen w-screen bg-slate-950 z-30 overflow-hidden">
+                    {/* HORIZONTAL SCROLL "NEURAL STREAM" SECTION - DESKTOP ONLY */}
+                    {/* Mobile shows vertical stacked cards instead (see below) */}
+                    <div ref={horizontalSectionRef} className="hidden md:block relative h-screen w-screen bg-slate-950 z-30 overflow-hidden">
                         <div className="h-full w-full flex items-center">
                             {/* The Track - full width without constraints */}
                             <div ref={trackRef} className="flex h-full items-center gap-0 w-max relative">
@@ -816,6 +727,90 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                         </div>
                     </div>
 
+                    {/* MOBILE VERTICAL STACKED CARDS - Shown only on mobile */}
+                    {/* This replaces the horizontal timeline experience with natural vertical scroll */}
+                    <section className="md:hidden relative bg-slate-950 py-12 px-4">
+                        {/* Section Header */}
+                        <div className="text-center mb-10">
+                            <h2 className="text-3xl font-black text-transparent bg-clip-text bg-gradient-to-br from-white to-slate-600 mb-4">
+                                AI Projects
+                            </h2>
+                            <div className="h-1 w-16 mx-auto bg-gradient-to-r from-blue-500 to-purple-500 rounded-full" />
+                            <p className="mt-4 text-slate-400 text-sm max-w-xs mx-auto">
+                                Scroll to explore Yanqing's work
+                            </p>
+                        </div>
+
+                        {/* Vertically Stacked Project Cards */}
+                        <div className="space-y-8 max-w-md mx-auto">
+                            {displayYears.flatMap(({ year, projects }) =>
+                                projects.map((project) => {
+                                    const previewDescription = project.cardDescription ?? project.description;
+                                    const shortDesc = previewDescription.length > 100
+                                        ? previewDescription.substring(0, 100) + '...'
+                                        : previewDescription;
+
+                                    return (
+                                        <div
+                                            key={project.id}
+                                            className="mobile-project-card group relative rounded-2xl overflow-hidden bg-slate-900/80 border border-slate-800 shadow-xl"
+                                        >
+                                            {/* Project Image */}
+                                            <div className="relative h-48 overflow-hidden">
+                                                <img
+                                                    src={project.coverUrl ?? project.imageUrl}
+                                                    alt={project.title}
+                                                    className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+                                                    loading="lazy"
+                                                />
+                                                <div className="absolute inset-0 bg-gradient-to-t from-slate-900 via-slate-900/40 to-transparent" />
+
+                                                {/* Year Badge */}
+                                                <div className="absolute top-3 right-3 bg-blue-600/80 backdrop-blur-sm px-3 py-1 rounded-full text-xs font-bold text-white">
+                                                    {year}
+                                                </div>
+                                            </div>
+
+                                            {/* Project Content */}
+                                            <div className="p-5">
+                                                <h3 className="text-lg font-bold text-white mb-2 leading-tight">
+                                                    {project.title}
+                                                </h3>
+                                                <p className="text-slate-400 text-sm mb-4 leading-relaxed">
+                                                    {shortDesc}
+                                                </p>
+
+                                                {/* Tech Tags */}
+                                                <div className="flex flex-wrap gap-2 mb-4">
+                                                    {project.technologies.slice(0, 3).map((tech) => (
+                                                        <span
+                                                            key={tech}
+                                                            className="text-[10px] font-medium px-2 py-0.5 rounded-full border border-blue-500/30 bg-blue-500/10 text-blue-300"
+                                                        >
+                                                            {tech}
+                                                        </span>
+                                                    ))}
+                                                </div>
+
+                                                {/* CTA Button */}
+                                                <Link
+                                                    to={`/project/${project.id}`}
+                                                    onClick={() => onSelectProject(project)}
+                                                    className="inline-flex items-center gap-2 text-sm font-semibold text-blue-400 hover:text-blue-300 transition-colors"
+                                                >
+                                                    View Details
+                                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 8l4 4m0 0l-4 4m4-4H3" />
+                                                    </svg>
+                                                </Link>
+                                            </div>
+                                        </div>
+                                    );
+                                })
+                            )}
+                        </div>
+                    </section>
+
                     {/* Pre-AI Projects Section - Distinct "Nostalgic" Style */}
                     {preAiProjects.length > 0 && (
                         <section ref={preAiSectionRef} className="relative bg-gradient-to-b from-slate-950 via-amber-950/10 to-slate-950 border-t border-amber-900/30">
@@ -867,7 +862,7 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
 
                                                     {/* Year Badge */}
                                                     <div className="absolute top-4 right-4 bg-amber-900/40 backdrop-blur-md px-3 py-1 rounded-full border border-amber-500/30 text-[10px] font-mono text-amber-200 tracking-tighter uppercase">
-                                                        {project.year}
+                                                        Pre-AI
                                                     </div>
                                                 </div>
 
