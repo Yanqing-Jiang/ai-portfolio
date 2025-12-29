@@ -33,28 +33,50 @@ const ProjectRoute: React.FC = () => {
 
 // --- main layout that stays the same on every page ---
 const Layout: React.FC = () => {
-  const [isSidebarOpen, setIsSidebarOpen] = useState(false); // Default closed for mobile-first
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false); // Always default closed
   const [isMobile, setIsMobile] = useState(false);
+  const [showSidebarHint, setShowSidebarHint] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
   const mainContentRef = useRef<HTMLDivElement>(null);
 
-  // Check if screen is mobile size
+  // Check if screen is mobile size - but keep sidebar closed by default
   useEffect(() => {
     const checkMobile = () => {
       setIsMobile(window.innerWidth < 768); // md breakpoint
-      // Auto-open sidebar on desktop, keep closed on mobile
-      if (window.innerWidth >= 768) {
-        setIsSidebarOpen(true);
-      } else {
-        setIsSidebarOpen(false);
-      }
+      // Keep sidebar closed by default on all sizes
     };
 
     checkMobile();
     window.addEventListener('resize', checkMobile);
     return () => window.removeEventListener('resize', checkMobile);
   }, []);
+
+  // Show hint once on first visit (check localStorage)
+  useEffect(() => {
+    const hasSeenHint = localStorage.getItem('sidebarHintSeen');
+    if (!hasSeenHint) {
+      // Small delay before showing hint
+      const timer = setTimeout(() => setShowSidebarHint(true), 1500);
+      return () => clearTimeout(timer);
+    }
+  }, []);
+
+  // Dismiss hint on scroll
+  useEffect(() => {
+    const mainEl = mainContentRef.current;
+    if (!mainEl || !showSidebarHint) return;
+
+    const handleScroll = () => {
+      if (showSidebarHint) {
+        setShowSidebarHint(false);
+        localStorage.setItem('sidebarHintSeen', 'true');
+      }
+    };
+
+    mainEl.addEventListener('scroll', handleScroll, { passive: true });
+    return () => mainEl.removeEventListener('scroll', handleScroll);
+  }, [showSidebarHint]);
 
   useEffect(() => {
     const frame = requestAnimationFrame(() => {
@@ -99,7 +121,13 @@ const Layout: React.FC = () => {
       <div className="relative flex-1 flex flex-col min-w-0">
         {/* Sidebar toggle button - responsive positioning */}
         <button
-          onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+          onClick={() => {
+            setIsSidebarOpen(!isSidebarOpen);
+            if (showSidebarHint) {
+              setShowSidebarHint(false);
+              localStorage.setItem('sidebarHintSeen', 'true');
+            }
+          }}
           className={`fixed top-4 z-40 flex items-center justify-center w-10 h-10 md:w-8 md:h-8
                      bg-gray-800 hover:bg-gray-700 border border-gray-700/50 rounded-full
                      transition-all duration-300 shadow-lg hover:shadow-xl
@@ -108,6 +136,16 @@ const Layout: React.FC = () => {
         >
           {isSidebarOpen ? <ChevronLeftIcon /> : <ChevronRightIcon />}
         </button>
+
+        {/* Sidebar hint tooltip - shows once */}
+        {showSidebarHint && !isSidebarOpen && (
+          <div className="fixed top-4 left-16 z-50 animate-pulse">
+            <div className="relative bg-blue-600 text-white text-xs px-3 py-2 rounded-lg shadow-lg">
+              <div className="absolute left-0 top-1/2 -translate-x-full -translate-y-1/2 border-8 border-transparent border-r-blue-600" />
+              Click to explore projects
+            </div>
+          </div>
+        )}
 
         {/* Main content area with fluid dimensions */}
         <main ref={mainContentRef} className="flex-1 overflow-y-auto pt-16 md:pt-0">

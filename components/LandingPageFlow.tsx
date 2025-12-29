@@ -577,10 +577,10 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
 
                     {/* HORIZONTAL SCROLL "NEURAL STREAM" SECTION */}
                     {/* GSAP Pins this section, so we start with h-screen and let GSAP add the scroll duration spacer */}
-                    <div ref={horizontalSectionRef} className="relative h-screen bg-slate-950 z-30 overflow-hidden">
+                    <div ref={horizontalSectionRef} className="relative h-screen w-screen bg-slate-950 z-30 overflow-hidden">
                         <div className="h-full w-full flex items-center">
-                            {/* The Track */}
-                            <div ref={trackRef} className="flex h-full items-center px-10 md:px-20 w-max relative">
+                            {/* The Track - full width without constraints */}
+                            <div ref={trackRef} className="flex h-full items-center gap-0 w-max relative">
                                 {/* The Neural Pulse Progress Tracker */}
                                 <div className="fixed bottom-12 left-12 right-12 h-px bg-slate-800 z-50 pointer-events-none hidden md:block">
                                     <div className="neural-pulse-point absolute top-1/2 left-0 -translate-y-1/2 w-2 h-2 rounded-full bg-blue-500 shadow-[0_0_15px_theme('colors.blue.400')]" />
@@ -590,10 +590,10 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                                 {/* Connecting Data Line (Background) */}
                                 <div className="absolute top-1/2 left-0 right-0 h-px bg-gradient-to-r from-transparent via-blue-500/10 to-transparent w-full pointer-events-none" />
 
-                                <div className="flex gap-40 md:gap-60 items-center">
+                                <div className="flex gap-20 md:gap-40 items-center pl-8 md:pl-20 pr-[50vw]">
                                     {/* Introduction / Start Node */}
-                                    <div className="flex flex-col justify-center min-w-[70vw] md:min-w-[20vw] px-6 sm:px-10">
-                                        <h2 className="text-4xl md:text-6xl font-black text-transparent bg-clip-text bg-gradient-to-br from-white to-slate-600 mb-6">
+                                    <div className="flex flex-col justify-center min-w-[80vw] md:min-w-[30vw] px-4 sm:px-10">
+                                        <h2 className="text-3xl md:text-6xl font-black text-transparent bg-clip-text bg-gradient-to-br from-white to-slate-600 mb-6">
                                             Project<br />Preview
                                         </h2>
                                         <div className="h-1 w-20 sm:w-24 bg-gradient-to-r from-blue-500 to-purple-500 rounded-full" />
@@ -606,7 +606,7 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                                     {displayYears.map(({ year, subtitle, projects, label }) => {
                                         const theme = getYearTheme(year);
                                         return (
-                                            <div key={year} className="flex gap-20 items-center relative">
+                                            <div key={year} className="flex gap-12 md:gap-20 items-center relative">
                                                 {/* Giant Background Year Marker */}
                                                 <div
                                                     className="year-marker-bg absolute -top-20 md:-top-40 -left-10 md:-left-20 text-[8rem] md:text-[18rem] font-bold text-slate-900/40 select-none z-0 pointer-events-none"
