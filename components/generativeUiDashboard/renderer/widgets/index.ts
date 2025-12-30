@@ -8,4 +8,5 @@ export { DataTable } from './DataTable';
 export { NewsTimeline } from './NewsTimeline';
 export { CorrelationMatrix } from './CorrelationMatrix';
 export { ExplainMovePanel } from './ExplainMovePanel';
+export { ErrorPanel } from './ErrorPanel';
 
