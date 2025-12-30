@@ -163,6 +163,26 @@ FINANCIAL_CATALOG = CatalogDefinition(
                 ),
             }
         ),
+        "ErrorPanel": ComponentDefinition(
+            description="Displays structured error codes/messages from backend validation",
+            properties={
+                "code": ComponentProperty(
+                    type="BoundString",
+                    required=True,
+                    description="Machine-readable error code"
+                ),
+                "message": ComponentProperty(
+                    type="BoundString",
+                    required=True,
+                    description="Human-readable error message"
+                ),
+                "details": ComponentProperty(
+                    type="BoundString",
+                    required=False,
+                    description="Optional additional details"
+                ),
+            }
+        ),
     }
 )
 

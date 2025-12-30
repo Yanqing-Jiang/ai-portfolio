@@ -3,30 +3,38 @@ Configuration for Generative UI service.
 """
 
 import os
-from pydantic_settings import BaseSettings
+from pathlib import Path
 from typing import Optional
-from dataclasses import field
 
+from dotenv import load_dotenv
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Load env from backend/.env and backend/generative_ui/.env (if present) so the
+# agent can reuse CLAUDE_API_KEY/GENUI_* when launched via uvicorn.
+_MODULE_DIR = Path(__file__).resolve().parent
+load_dotenv(dotenv_path=_MODULE_DIR.parent / ".env", override=False)
+load_dotenv(dotenv_path=_MODULE_DIR / ".env", override=False)
 
 
 class GenerativeUISettings(BaseSettings):
     """Settings for the Generative UI A2UI service."""
+    model_config = SettingsConfigDict(
+        env_prefix="GENUI_",
+        env_file=".env",
+        extra="ignore",
+        env_file_encoding="utf-8",
+    )
     
     # Claude API (for dashboard planning)
-    claude_api_key: Optional[str] = field(default_factory=lambda: os.getenv("ANTHROPIC_API_KEY", os.getenv("CLAUDE_API_KEY")))
-    claude_model: str = "claude-3-5-sonnet-20241022"
-    
-    # Gemini API (for data synthesis)
-    gemini_api_key: Optional[str] = field(default_factory=lambda: os.getenv("GEMINI_API_KEY", os.getenv("GOOGLE_API_KEY")))
-    gemini_model: str = "gemini-1.5-pro"
+    claude_api_key: Optional[str] = os.getenv("GENUI_CLAUDE_API_KEY") or os.getenv("CLAUDE_API_KEY")
+    claude_model: str = os.getenv("GENUI_CLAUDE_MODEL", "claude-haiku-4-5-20251001")
     
     # Database (reuse from main app)
-    database_url: Optional[str] = field(default_factory=lambda: os.getenv("DATABASE_URL"))
+    database_url: Optional[str] = None
     
     # A2UI Configuration
     a2ui_version: str = "0.8"
     default_surface_id: str = "dashboard_main"
-
     
     # Catalog
     catalog_id: str = "https://yoursite.com/a2ui/financial-catalog/v1.0"
@@ -40,9 +48,6 @@ class GenerativeUISettings(BaseSettings):
     # Debug
     debug_mode: bool = True
     
-    class Config:
-        env_prefix = "GENUI_"
-        env_file = ".env"
 
 
 # Singleton settings instance
@@ -50,7 +55,11 @@ _settings: Optional[GenerativeUISettings] = None
 
 
 def get_settings() -> GenerativeUISettings:
-    """Get the settings singleton."""
+    """
+    Function: get_settings — called from generative_ui.agent and routes.dashboard;
+    returns singleton settings configured from environment; exists to centralize
+    Claude/database config for the A2UI service.
+    """
     global _settings
     if _settings is None:
         _settings = GenerativeUISettings()

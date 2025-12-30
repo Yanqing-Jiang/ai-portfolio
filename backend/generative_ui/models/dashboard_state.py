@@ -54,7 +54,7 @@ class DashboardState(BaseModel):
     updated_at: datetime = Field(default_factory=datetime.utcnow)
     
     # Configuration
-    catalog_id: str = "https://yoursite.com/a2ui/financial-catalog/v1.0"
+    catalog_id: str = "financial-standard-v1"
     
     @property
     def latest_run(self) -> Optional[DashboardRun]:

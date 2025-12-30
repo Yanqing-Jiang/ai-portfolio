@@ -5,17 +5,18 @@ FastAPI endpoints for A2UI dashboard management.
 """
 
 from __future__ import annotations
+import logging
 from typing import Any, Dict, Optional
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import json
 
-from ..a2ui import A2UIMessageGenerator, DashboardPlanner, DashboardSynthesizer
+from ..a2ui import A2UIMessageGenerator
 from ..models import DashboardPlan, get_dashboard_store
-from ..config import get_settings
-from conversational_analytics.database.executor import execute_sql
+from ..agent import get_dashboard_agent, DashboardAgentError
 
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/dash", tags=["dashboard"])
 
@@ -49,21 +50,23 @@ class ActionRequest(BaseModel):
 async def create_dashboard(request: CreateDashboardRequest):
     """
     Create a new dashboard from a user question.
+    
+    This endpoint:
+    1. Sends the question to Claude for planning
+    2. Creates a dashboard state
+    3. Returns the dashboard ID for streaming
     """
     store = get_dashboard_store()
-    settings = get_settings()
     
-    # Use LLM Planner
-    planner = DashboardPlanner(api_key=settings.claude_api_key)
     try:
-        plan = await planner.generate_plan(request.question)
-    except Exception as e:
-        print(f"Planning failed: {e}")
-        # Fallback to keyword-based examples if LLM fails
-        if "drop" in request.question.lower() or "why" in request.question.lower():
-            plan = DashboardPlan.example_explain_move()
-        else:
-            plan = DashboardPlan.example_compare()
+        # Use Claude agent for plan generation
+        agent = get_dashboard_agent()
+        plan = await agent.generate_plan(request.question)
+        logger.info("[DASHBOARD] Generated plan: archetype=%s, widgets=%d", 
+                   plan.archetype, len(plan.widgets))
+    except DashboardAgentError as e:
+        logger.warning("[DASHBOARD] Agent error: %s", e)
+        raise HTTPException(status_code=500, detail=f"Plan generation failed: {e}")
     
     # Override ticker if provided
     if request.ticker:
@@ -81,14 +84,16 @@ async def create_dashboard(request: CreateDashboardRequest):
     )
 
 
+
 @router.get("/{dashboard_id}/stream")
 async def stream_dashboard(dashboard_id: str):
     """
     Stream A2UI messages for a dashboard.
+    
+    Returns Server-Sent Events with A2UI JSONL payloads.
     """
     store = get_dashboard_store()
     state = store.get(dashboard_id)
-    settings = get_settings()
     
     if not state:
         raise HTTPException(status_code=404, detail="Dashboard not found")
@@ -103,36 +108,39 @@ async def stream_dashboard(dashboard_id: str):
         # Reconstruct plan from stored JSON
         plan = DashboardPlan(**state.plan_json)
         
-        # 1. Stream structure immediately
+        # Stream structure
         for msg in a2ui.generate_from_plan(plan):
             yield f"data: {msg}\n\n"
         
-        # 2. Execute Data Fetching
-        tool_results = {}
-        
-        # Execute SQL if present
-        if plan.sql_queries:
-            sql_results = []
-            for query in plan.sql_queries:
-                try:
-                    result = await execute_sql(query)
-                    sql_results.append(result)
-                except Exception as e:
-                    print(f"SQL Error: {e}")
-            tool_results["sql"] = sql_results
-            
-        # TODO: Execute Search if present
-        
-        # 3. Synthesize with Gemini
-        synthesizer = DashboardSynthesizer(api_key=settings.gemini_api_key)
-        data_model_dict = await synthesizer.synthesize(plan, tool_results)
-        
-        # 4. Stream data updates
-        if data_model_dict:
-            entries = a2ui.dict_to_data_entries(data_model_dict)
-            msg = a2ui.data_model_update(entries)
-            yield f"data: {msg}\n\n"
+        # Execute SQL queries via shared tool
+        agent = get_dashboard_agent()
+        try:
+            query_data = await agent.execute_queries(plan)
+        except Exception as exc:
+            for msg in a2ui.error_surface("query_execution_failed", str(exc)):
+                yield f"data: {msg}\n\n"
+            yield f"data: {json.dumps({'done': True})}\n\n"
+            return
 
+        # Persist run results
+        state.add_run(query_data)
+
+        # Attempt to stream data to widgets
+        first_query = query_data.get("query_0") if query_data else None
+        if first_query and first_query.get("success") and first_query.get("rows"):
+            first_row = first_query["rows"][0]
+            data_msg = a2ui.update_price_data(
+                price=first_row.get("close", first_row.get("value", 0)),
+                volume=first_row.get("volume", 0),
+                change=first_row.get("change", 0),
+                change_percent=first_row.get("change_percent", 0)
+            )
+            yield f"data: {data_msg}\n\n"
+        else:
+            # Stream error into data model so the frontend can render JSON dump
+            details = first_query.get("error") if first_query else "No query results"
+            for msg in a2ui.error_surface("query_failed", details):
+                yield f"data: {msg}\n\n"
         
         # Signal completion
         yield f"data: {json.dumps({'done': True})}\n\n"
@@ -209,12 +217,17 @@ async def handle_action(dashboard_id: str, request: ActionRequest):
         new_timeframe = context.get("timeframe", "1M")
         state.update_params({"timeRange": new_timeframe})
         
-        # TODO: Re-run data queries with new timeframe
+        # Re-run data queries with updated timeframe
+        agent = get_dashboard_agent()
+        plan = DashboardPlan(**state.plan_json)
+        plan.time_range = new_timeframe
+        query_data = await agent.execute_queries(plan)
+        state.add_run(query_data)
         return {
             "status": "success",
             "action": action_name,
             "updated_params": {"timeRange": new_timeframe},
-            "refresh_data": True,
+            "data": query_data,
         }
     
     elif action_name == "add_ticker":
@@ -258,3 +271,6 @@ async def delete_dashboard(dashboard_id: str):
         return {"status": "deleted", "dashboard_id": dashboard_id}
     else:
         raise HTTPException(status_code=404, detail="Dashboard not found")
+
+
+# helper removed in favor of a2ui.error_surface
