@@ -1,3 +1,50 @@
+# --- Dashboard Route Function/Class Map ---
+# Class: CreateDashboardRequest
+#   Role: Request payload for dashboard creation.
+#   Called from: FastAPI POST /api/dash/create
+#   Invokes: n/a
+#   Why: Validates incoming dashboard creation requests.
+# Class: CreateDashboardResponse
+#   Role: Response payload for dashboard creation.
+#   Called from: FastAPI POST /api/dash/create
+#   Invokes: n/a
+#   Why: Standardizes dashboard creation responses for clients.
+# Class: ActionRequest
+#   Role: Request payload for A2UI userAction messages.
+#   Called from: FastAPI POST /api/dash/{dashboard_id}/action
+#   Invokes: n/a
+#   Why: Validates user action payloads before processing.
+# Function: create_dashboard
+#   Role: Create a dashboard state and preselect an A2UI skill.
+#   Called from: FastAPI POST /api/dash/create
+#   Invokes: backend.generative_ui.agent_v2.A2UIAgent.select_skill, backend.generative_ui.models.get_dashboard_store
+#   Why: Persists dashboard metadata before streaming begins.
+# Function: stream_dashboard
+#   Role: Stream A2UI messages for a dashboard session.
+#   Called from: FastAPI GET /api/dash/{dashboard_id}/stream
+#   Invokes: backend.generative_ui.agent_v2.A2UIAgent.stream_dashboard
+#   Why: Drives the live A2UI SSE stream for the frontend.
+# Function: get_dashboard_spec
+#   Role: Return stored dashboard plan metadata.
+#   Called from: FastAPI GET /api/dash/{dashboard_id}/spec
+#   Invokes: backend.generative_ui.models.get_dashboard_store
+#   Why: Allows clients to inspect the stored dashboard definition.
+# Function: get_dashboard_data
+#   Role: Return the latest stored dashboard data payload.
+#   Called from: FastAPI GET /api/dash/{dashboard_id}/data
+#   Invokes: backend.generative_ui.models.get_dashboard_store
+#   Why: Supports debugging and data export workflows.
+# Function: handle_action
+#   Role: Process incoming A2UI userAction requests.
+#   Called from: FastAPI POST /api/dash/{dashboard_id}/action
+#   Invokes: backend.generative_ui.agent_v2.A2UIAgent.execute_skill
+#   Why: Keeps dashboard interactions aligned with the A2UI agent pipeline.
+# Function: delete_dashboard
+#   Role: Delete a dashboard state entry.
+#   Called from: FastAPI DELETE /api/dash/{dashboard_id}
+#   Invokes: backend.generative_ui.models.get_dashboard_store
+#   Why: Cleans up server-side dashboard state.
+# --- End Dashboard Route Function/Class Map ---
 """
 Dashboard API Routes
 
@@ -7,14 +54,12 @@ FastAPI endpoints for A2UI dashboard management.
 from __future__ import annotations
 import logging
 from typing import Any, Dict, Optional
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-import json
 
-from ..a2ui import A2UIMessageGenerator
-from ..models import DashboardPlan, get_dashboard_store
-from ..agent import get_dashboard_agent, DashboardAgentError
+from ..models import get_dashboard_store
+from ..agent_v2 import get_a2ui_agent, A2UIAgentError
 
 logger = logging.getLogger(__name__)
 
@@ -52,30 +97,27 @@ async def create_dashboard(request: CreateDashboardRequest):
     Create a new dashboard from a user question.
     
     This endpoint:
-    1. Sends the question to Claude for planning
+    1. Selects an A2UI skill and stores the plan
     2. Creates a dashboard state
     3. Returns the dashboard ID for streaming
     """
     store = get_dashboard_store()
     
     try:
-        # Use Claude agent for plan generation
-        agent = get_dashboard_agent()
-        plan = await agent.generate_plan(request.question)
-        logger.info("[DASHBOARD] Generated plan: archetype=%s, widgets=%d", 
-                   plan.archetype, len(plan.widgets))
-    except DashboardAgentError as e:
+        agent = get_a2ui_agent()
+        selection = await agent.select_skill(request.question)
+        if request.ticker:
+            selection = selection.model_copy(update={"tickers": [request.ticker]})
+        plan = agent.selection_to_plan(selection)
+        logger.info("[DASHBOARD] Selected skill: %s", plan.get("skill_id"))
+    except A2UIAgentError as e:
         logger.warning("[DASHBOARD] Agent error: %s", e)
-        raise HTTPException(status_code=500, detail=f"Plan generation failed: {e}")
-    
-    # Override ticker if provided
-    if request.ticker:
-        plan.ticker = request.ticker
+        raise HTTPException(status_code=500, detail=f"Skill selection failed: {e}")
     
     # Create dashboard state
     state = store.create(
         question=request.question,
-        plan=plan.model_dump()
+        plan=plan
     )
     
     return CreateDashboardResponse(
@@ -99,51 +141,18 @@ async def stream_dashboard(dashboard_id: str):
         raise HTTPException(status_code=404, detail="Dashboard not found")
     
     async def generate():
-        # Create A2UI generator
-        a2ui = A2UIMessageGenerator(
+        agent = get_a2ui_agent()
+
+        def _record_result(result):
+            state.add_run(result.data_model, result.citations)
+
+        async for msg in agent.stream_dashboard(
+            question=state.question,
             surface_id=state.surface_id,
-            catalog_id=state.catalog_id
-        )
-        
-        # Reconstruct plan from stored JSON
-        plan = DashboardPlan(**state.plan_json)
-        
-        # Stream structure
-        for msg in a2ui.generate_from_plan(plan):
+            plan=state.plan_json,
+            on_result=_record_result,
+        ):
             yield f"data: {msg}\n\n"
-        
-        # Execute SQL queries via shared tool
-        agent = get_dashboard_agent()
-        try:
-            query_data = await agent.execute_queries(plan)
-        except Exception as exc:
-            for msg in a2ui.error_surface("query_execution_failed", str(exc)):
-                yield f"data: {msg}\n\n"
-            yield f"data: {json.dumps({'done': True})}\n\n"
-            return
-
-        # Persist run results
-        state.add_run(query_data)
-
-        # Attempt to stream data to widgets
-        first_query = query_data.get("query_0") if query_data else None
-        if first_query and first_query.get("success") and first_query.get("rows"):
-            first_row = first_query["rows"][0]
-            data_msg = a2ui.update_price_data(
-                price=first_row.get("close", first_row.get("value", 0)),
-                volume=first_row.get("volume", 0),
-                change=first_row.get("change", 0),
-                change_percent=first_row.get("change_percent", 0)
-            )
-            yield f"data: {data_msg}\n\n"
-        else:
-            # Stream error into data model so the frontend can render JSON dump
-            details = first_query.get("error") if first_query else "No query results"
-            for msg in a2ui.error_surface("query_failed", details):
-                yield f"data: {msg}\n\n"
-        
-        # Signal completion
-        yield f"data: {json.dumps({'done': True})}\n\n"
     
     return StreamingResponse(
         generate(),
@@ -216,27 +225,31 @@ async def handle_action(dashboard_id: str, request: ActionRequest):
     if action_name == "change_timeframe":
         new_timeframe = context.get("timeframe", "1M")
         state.update_params({"timeRange": new_timeframe})
-        
-        # Re-run data queries with updated timeframe
-        agent = get_dashboard_agent()
-        plan = DashboardPlan(**state.plan_json)
-        plan.time_range = new_timeframe
-        query_data = await agent.execute_queries(plan)
-        state.add_run(query_data)
-        return {
-            "status": "success",
-            "action": action_name,
-            "updated_params": {"timeRange": new_timeframe},
-            "data": query_data,
-        }
+
+        try:
+            state.plan_json["time_range"] = new_timeframe
+            agent = get_a2ui_agent()
+            selection = agent.selection_from_plan(state.plan_json)
+            skill = agent.skill_lookup[selection.skill_id]
+            result = await agent.execute_skill(skill, selection)
+            state.add_run(result.data_model, result.citations)
+            return {
+                "status": "success",
+                "action": action_name,
+                "updated_params": {"timeRange": new_timeframe},
+                "data": result.data_model,
+            }
+        except A2UIAgentError as e:
+            raise HTTPException(status_code=500, detail=str(e))
     
     elif action_name == "add_ticker":
         new_ticker = context.get("ticker")
         if new_ticker:
-            peers = state.params.get("peers", [])
-            if new_ticker not in peers:
-                peers.append(new_ticker)
-                state.update_params({"peers": peers})
+            tickers = list(state.plan_json.get("tickers") or [])
+            if new_ticker not in tickers:
+                tickers.append(new_ticker)
+                state.plan_json["tickers"] = tickers
+                state.update_params({"peers": tickers[1:]})
         
         return {
             "status": "success",

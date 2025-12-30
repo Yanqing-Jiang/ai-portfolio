@@ -1,3 +1,15 @@
+// --- ExplainMovePanel Function Map ---
+// Function: ExplainMovePanelInternal
+//   Role: Render the explanation panel UI from resolved props.
+//   Called from: components/generativeUiDashboard/renderer/widgets/ExplainMovePanel.ExplainMovePanel
+//   Invokes: React + framer-motion primitives
+//   Why: Keeps presentation logic isolated from A2UI data binding.
+// Function: ExplainMovePanel
+//   Role: Resolve A2UI bound props and render ExplainMovePanelInternal.
+//   Called from: components/generativeUiDashboard/renderer/Registry (componentRegistry)
+//   Invokes: resolveString, resolveArray, ExplainMovePanelInternal
+//   Why: Bridges A2UI data binding to the UI component.
+// --- End ExplainMovePanel Function Map ---
 /**
  * ExplainMovePanel Widget
  *
@@ -6,6 +18,9 @@
 
 import React from 'react';
 import { motion } from 'framer-motion';
+import type { A2UIRendererProps } from '../Registry';
+import { resolveArray, resolveString } from '../../a2ui/DataBinder';
+import type { ExplainMovePanelProps } from '../../a2ui/types';
 
 interface Factor {
     title: string;
@@ -14,10 +29,17 @@ interface Factor {
     source?: string;
 }
 
+interface Citation {
+    title: string;
+    url?: string;
+    date?: string;
+}
+
 interface ExplainMovePanelInternalProps {
-    summary?: string;
-    factors?: Factor[];
-    showCitations?: boolean;
+    title: string;
+    explanation: string;
+    factors: Factor[];
+    citations: Citation[];
 }
 
 const theme = {
@@ -62,11 +84,13 @@ const DEFAULT_FACTORS: Factor[] = [
 ];
 
 function ExplainMovePanelInternal({
-    summary = 'Analysis in progress...',
-    factors = [],
-    showCitations = true,
+    title,
+    explanation,
+    factors,
+    citations,
 }: ExplainMovePanelInternalProps): React.ReactElement {
     const displayFactors = factors.length > 0 ? factors : DEFAULT_FACTORS;
+    const showCitations = citations.length > 0;
 
     return (
         <motion.div
@@ -80,15 +104,15 @@ function ExplainMovePanelInternal({
         >
             {/* Header */}
             <div className="flex items-center gap-2 mb-4">
-                <span className="text-lg">üîç</span>
+                <span className="text-lg">dY"?</span>
                 <h3 className="text-sm font-semibold" style={{ color: theme.text.primary }}>
-                    Price Movement Analysis
+                    {title}
                 </h3>
             </div>
 
             {/* Summary */}
             <p className="text-sm mb-4" style={{ color: theme.text.secondary }}>
-                {summary}
+                {explanation}
             </p>
 
             {/* Factors */}
@@ -136,9 +160,40 @@ function ExplainMovePanelInternal({
                 ))}
             </div>
 
+            {showCitations && (
+                <div className="mt-4 space-y-2">
+                    <p className="text-xs uppercase tracking-wide" style={{ color: theme.text.muted }}>
+                        Sources
+                    </p>
+                    <ul className="space-y-1">
+                        {citations.map((citation) => (
+                            <li
+                                key={`${citation.title}-${citation.url ?? ''}`}
+                                className="text-xs"
+                                style={{ color: theme.text.secondary }}
+                            >
+                                {citation.url ? (
+                                    <a
+                                        href={citation.url}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        style={{ color: theme.text.secondary, textDecoration: 'underline' }}
+                                    >
+                                        {citation.title}
+                                    </a>
+                                ) : (
+                                    citation.title
+                                )}
+                                {citation.date ? ` ï ${citation.date}` : ''}
+                            </li>
+                        ))}
+                    </ul>
+                </div>
+            )}
+
             {/* Disclaimer */}
             <p className="text-xs mt-4 opacity-50" style={{ color: theme.text.muted }}>
-                ‚ö†Ô∏è This analysis is AI-generated for informational purposes only.
+                Ésˇã,? This analysis is AI-generated for informational purposes only.
             </p>
         </motion.div>
     );
@@ -147,25 +202,19 @@ function ExplainMovePanelInternal({
 /**
  * A2UI-compatible wrapper component
  */
-interface A2UIRendererProps {
-    componentId: string;
-    props: Record<string, unknown>;
-    dataModel: Record<string, unknown>;
-    components: Map<string, unknown>;
-    onAction: (actionName: string, context: Record<string, unknown>) => void;
-    renderChild: (childId: string) => React.ReactNode;
-}
-
-export function ExplainMovePanel({ props }: A2UIRendererProps): React.ReactElement {
-    const summary = props.summary as string | undefined;
-    const factors = props.factors as Factor[] | undefined;
-    const showCitations = props.showCitations as boolean | undefined;
+export function ExplainMovePanel({ props, dataModel }: A2UIRendererProps): React.ReactElement {
+    const panelProps = props as unknown as ExplainMovePanelProps;
+    const title = resolveString(panelProps.title, dataModel, 'Price Movement Analysis');
+    const explanation = resolveString(panelProps.explanation, dataModel, 'Analysis in progress...');
+    const factors = resolveArray<Factor>(panelProps.factors, dataModel, []);
+    const citations = resolveArray<Citation>(panelProps.citations, dataModel, []);
 
     return (
         <ExplainMovePanelInternal
-            summary={summary}
+            title={title}
+            explanation={explanation}
             factors={factors}
-            showCitations={showCitations}
+            citations={citations}
         />
     );
 }
