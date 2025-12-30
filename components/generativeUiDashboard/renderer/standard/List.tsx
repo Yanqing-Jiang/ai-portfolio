@@ -1,25 +1,28 @@
 /**
- * A2UI Column Component
+ * A2UI List Component
  *
- * Vertical flexbox layout container.
+ * Renders children either vertically or horizontally.
  */
 
 import React from 'react';
 import type { A2UIRendererProps } from '../Registry';
-import type { ColumnProps } from '../../a2ui/types';
+import type { ListProps } from '../../a2ui/types';
 import { getByPath } from '../../a2ui/DataBinder';
 
-export function A2UIColumn({
+/**
+ * Function: A2UIList — called from componentRegistry; renders children in row/column layouts; enables the standard A2UI List component within the React renderer.
+ */
+export function A2UIList({
     componentId,
     props,
     dataModel,
     components,
     renderChild,
 }: A2UIRendererProps): React.ReactElement {
-    const columnProps = props as unknown as ColumnProps;
-    const children = columnProps.children;
+    const listProps = props as unknown as ListProps;
+    const children = listProps.children;
+    const direction = listProps.direction || 'column';
 
-    // Get child IDs (supports ChildrenTemplate)
     const childIds: string[] = [];
     if ('explicitList' in children) {
         childIds.push(...children.explicitList);
@@ -37,32 +40,30 @@ export function A2UIColumn({
         });
     }
 
-    // Map alignment to CSS
     const alignmentMap: Record<string, string> = {
         start: 'flex-start',
         center: 'center',
         end: 'flex-end',
+        spaceBetween: 'space-between',
+        spaceAround: 'space-around',
         stretch: 'stretch',
     };
 
-    const alignItems = columnProps.alignment
-        ? alignmentMap[columnProps.alignment] || 'stretch'
-        : 'stretch';
+    const alignItems = listProps.alignment ? alignmentMap[listProps.alignment] || 'stretch' : 'stretch';
 
     return (
         <div
-            className="a2ui-column"
+            className="a2ui-list"
             data-component-id={componentId}
             style={{
                 display: 'flex',
-                flexDirection: 'column',
+                flexDirection: direction === 'row' ? 'row' : 'column',
+                gap: '0.75rem',
                 alignItems,
-                gap: '1rem',
-                width: '100%',
             }}
         >
             {childIds.map((childId) => (
-                <div key={childId} className="a2ui-column__item">
+                <div key={childId} style={{ width: '100%' }}>
                     {renderChild(componentsHasId(components, childId) ? childId : children.template || childId)}
                 </div>
             ))}

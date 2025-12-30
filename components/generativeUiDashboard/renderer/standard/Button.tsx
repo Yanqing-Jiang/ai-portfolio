@@ -9,17 +9,22 @@ import type { A2UIRendererProps } from '../Registry';
 import type { ButtonProps } from '../../a2ui/types';
 import { resolveString, resolveBoundValue } from '../../a2ui/DataBinder';
 
+/**
+ * Function: A2UIButton — registered in componentRegistry; renders buttons with optional child content and dispatches user actions; supports the standard A2UI Button component.
+ */
 export function A2UIButton({
     componentId,
     props,
     dataModel,
     onAction,
+    renderChild,
 }: A2UIRendererProps): React.ReactElement {
     const buttonProps = props as unknown as ButtonProps;
 
     const label = resolveString(buttonProps.label, dataModel, 'Button');
     const actionName = buttonProps.action?.name || 'click';
-    const variant = buttonProps.variant || 'primary';
+    const primaryFlag = buttonProps.primary ? !!resolveBoundValue(buttonProps.primary, dataModel) : false;
+    const variant = primaryFlag ? 'primary' : buttonProps.variant || 'primary';
 
     // Resolve action context
     const resolveContext = useCallback((): Record<string, unknown> => {
@@ -73,7 +78,7 @@ export function A2UIButton({
                 ...variantStyles[variant],
             }}
         >
-            {label}
+            {buttonProps.child ? renderChild(buttonProps.child) : label}
         </button>
     );
 }

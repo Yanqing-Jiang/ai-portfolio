@@ -6,7 +6,6 @@ Converts structured dashboard plans into A2UI message streams.
 
 from __future__ import annotations
 from typing import Any, Dict, Generator, List, Optional
-import json
 
 from .messages import (
     A2UIComponent,
@@ -17,6 +16,7 @@ from .messages import (
     DeleteSurface,
 )
 from ..models.dashboard_plan import DashboardPlan, DashboardWidget
+from .validator import validate_components
 
 
 class A2UIMessageGenerator:
@@ -30,8 +30,13 @@ class A2UIMessageGenerator:
     """
     
     def __init__(self, surface_id: str, catalog_id: Optional[str] = None):
+        """
+        Function: __init__ — called from dashboard routes and agent; configures
+        surface_id + catalog_id and sets up internal counters; exists to
+        centralize catalog alignment across surfaces.
+        """
         self.surface_id = surface_id
-        self.catalog_id = catalog_id
+        self.catalog_id = catalog_id or "financial-standard-v1"
         self._component_counter = 0
     
     def _next_id(self, prefix: str = "comp") -> str:
@@ -53,7 +58,18 @@ class A2UIMessageGenerator:
         return msg.to_json()
     
     def surface_update(self, components: List[A2UIComponent]) -> str:
-        """Generate surfaceUpdate message."""
+        """
+        Generate surfaceUpdate message after validating component types.
+        Raises ValueError when unknown components are present.
+        """
+        component_names = []
+        for comp in components:
+            # comp.component is dict like {"Text": {...}}
+            if comp.component:
+                component_names.extend(list(comp.component.keys()))
+        errors = validate_components(component_names)
+        if errors:
+            raise ValueError("; ".join(errors))
         msg = SurfaceUpdate(surfaceId=self.surface_id, components=components)
         return msg.to_json()
     
@@ -153,17 +169,12 @@ class A2UIMessageGenerator:
                 matrix_path="/data/correlationMatrix"
             )
         elif widget.type == "explain_move":
-            # Map factors and citations to data model
-            component = A2UIComponent(
-                id=widget_id,
-                component={
-                    "ExplainMovePanel": {
-                        "title": {"path": "/dashboard/title"},
-                        "explanation": {"path": "/data/summary"},
-                        "factors": {"path": "/data/factors"},
-                        "citations": {"path": "/data/citations"}
-                    }
-                }
+            component = A2UIComponent.explain_move_panel(
+                widget_id,
+                title_path="/data/explain/title",
+                explanation_path="/data/explain/summary",
+                factors_path="/data/explain/factors",
+                citations_path="/data/explain/citations",
             )
         else:
             # Default to text placeholder
@@ -249,6 +260,29 @@ class A2UIMessageGenerator:
         
         return self.data_model_update(contents)
     
+    def error_surface(self, code: str, message: str) -> List[str]:
+        """
+        Create messages that render an ErrorPanel bound to /data/error.
+        """
+        components = [
+            A2UIComponent.error_panel("error_panel", "/data/error/code", "/data/error/message", "/data/error/details"),
+            A2UIComponent.card("error_card", "error_panel"),
+            A2UIComponent.column("error_root", ["error_card"]),
+            A2UIComponent.column("root", ["error_root"]),
+        ]
+        # Surface update + data
+        surface_msg = self.surface_update(components)
+        data_msg = self.data_model_update([
+            DataEntry(
+                key="error",
+                valueMap=[
+                    DataEntry(key="code", valueString=code),
+                    DataEntry(key="message", valueString=message),
+                ],
+            )
+        ], path="/data")
+        return [surface_msg, data_msg]
+    
     # ========================================================================
     # Data Update Helpers
     # ========================================================================
@@ -299,22 +333,3 @@ class A2UIMessageGenerator:
             DataEntry(key="correlationMatrix", valueArray=matrix),
         ]
         return self.data_model_update(contents, path="/data")
-
-    def dict_to_data_entries(self, data: Dict[str, Any]) -> List[DataEntry]:
-        """
-        Convert a flat or nested dictionary into a list of DataEntry objects.
-        """
-        entries = []
-        for key, value in data.items():
-            if isinstance(value, str):
-                entries.append(DataEntry(key=key, valueString=value))
-            elif isinstance(value, (int, float)):
-                entries.append(DataEntry(key=key, valueNumber=float(value)))
-            elif isinstance(value, bool):
-                entries.append(DataEntry(key=key, valueBoolean=value))
-            elif isinstance(value, list):
-                entries.append(DataEntry(key=key, valueArray=value))
-            elif isinstance(value, dict):
-                entries.append(DataEntry(key=key, valueMap=self.dict_to_data_entries(value)))
-        return entries
-

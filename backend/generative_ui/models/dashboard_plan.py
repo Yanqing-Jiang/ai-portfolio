@@ -33,9 +33,16 @@ class DashboardPlan(BaseModel):
     time_range: str = Field(default="3M", description="Default time range")
     
     # Question classification
-    archetype: Literal["explain_move", "compare", "screen", "monitor", "portfolio_doctor"] = Field(
-        description="Type of analysis question"
-    )
+    archetype: Literal[
+        "explain_move",
+        "compare",
+        "trend_analysis",
+        "earnings_focus",
+        "sector_overview",
+        "screen",
+        "monitor",
+        "portfolio_doctor",
+    ] = Field(description="Type of analysis question")
     
     # Dashboard composition
     widgets: List[DashboardWidget] = Field(

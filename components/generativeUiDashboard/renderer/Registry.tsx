@@ -13,6 +13,19 @@ import { A2UIRow } from './standard/Row';
 import { A2UIColumn } from './standard/Column';
 import { A2UICard } from './standard/Card';
 import { A2UIButton } from './standard/Button';
+import { Divider } from './standard/Divider';
+import { A2UIList } from './standard/List';
+import { A2UITabs } from './standard/Tabs';
+import { A2UIImage } from './standard/Image';
+import { A2UIIcon } from './standard/Icon';
+import { A2UIVideo } from './standard/Video';
+import { A2UIAudioPlayer } from './standard/AudioPlayer';
+import { A2UIModal } from './standard/Modal';
+import { A2UICheckBox } from './standard/CheckBox';
+import { A2UITextField } from './standard/TextField';
+import { A2UIDateTimeInput } from './standard/DateTimeInput';
+import { A2UIMultipleChoice } from './standard/MultipleChoice';
+import { A2UISlider } from './standard/Slider';
 
 // Financial widgets
 import { PriceChart } from './widgets/PriceChart';
@@ -21,6 +34,7 @@ import { DataTable } from './widgets/DataTable';
 import { NewsTimeline } from './widgets/NewsTimeline';
 import { CorrelationMatrix } from './widgets/CorrelationMatrix';
 import { ExplainMovePanel } from './widgets/ExplainMovePanel';
+import { ErrorPanel } from './widgets/ErrorPanel';
 
 /**
  * Common props passed to all A2UI component implementations.
@@ -53,6 +67,19 @@ export const componentRegistry: Record<
     Column: A2UIColumn,
     Card: A2UICard,
     Button: A2UIButton,
+    Divider,
+    List: A2UIList,
+    Tabs: A2UITabs,
+    Image: A2UIImage,
+    Icon: A2UIIcon,
+    Video: A2UIVideo,
+    AudioPlayer: A2UIAudioPlayer,
+    Modal: A2UIModal,
+    CheckBox: A2UICheckBox,
+    TextField: A2UITextField,
+    DateTimeInput: A2UIDateTimeInput,
+    MultipleChoice: A2UIMultipleChoice,
+    Slider: A2UISlider,
 
     // Custom financial widgets
     PriceChart,
@@ -61,6 +88,7 @@ export const componentRegistry: Record<
     NewsTimeline,
     CorrelationMatrix,
     ExplainMovePanel,
+    ErrorPanel,
 };
 
 

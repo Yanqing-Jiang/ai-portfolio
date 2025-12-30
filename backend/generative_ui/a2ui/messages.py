@@ -209,9 +209,25 @@ class A2UIComponent(BaseModel):
         return cls(id=id, component={"Row": comp})
     
     @classmethod
+    def row_template(cls, id: str, template: str, data_path: str, alignment: str = None) -> "A2UIComponent":
+        """Create a Row component using ChildrenTemplate."""
+        comp = {"children": {"template": template, "dataPath": data_path}}
+        if alignment:
+            comp["alignment"] = alignment
+        return cls(id=id, component={"Row": comp})
+    
+    @classmethod
     def column(cls, id: str, children: List[str], alignment: str = None) -> "A2UIComponent":
         """Create a Column component."""
         comp = {"children": {"explicitList": children}}
+        if alignment:
+            comp["alignment"] = alignment
+        return cls(id=id, component={"Column": comp})
+    
+    @classmethod
+    def column_template(cls, id: str, template: str, data_path: str, alignment: str = None) -> "A2UIComponent":
+        """Create a Column component using ChildrenTemplate."""
+        comp = {"children": {"template": template, "dataPath": data_path}}
         if alignment:
             comp["alignment"] = alignment
         return cls(id=id, component={"Column": comp})
@@ -275,6 +291,37 @@ class A2UIComponent(BaseModel):
             "tickers": {"path": tickers_path},
             "matrix": {"path": matrix_path}
         }})
+    
+    @classmethod
+    def explain_move_panel(
+        cls,
+        id: str,
+        title_path: str,
+        explanation_path: str,
+        factors_path: Optional[str] = None,
+        citations_path: Optional[str] = None,
+    ) -> "A2UIComponent":
+        """Create an ExplainMovePanel component."""
+        comp: Dict[str, Any] = {
+            "title": {"path": title_path},
+            "explanation": {"path": explanation_path},
+        }
+        if factors_path:
+            comp["factors"] = {"path": factors_path}
+        if citations_path:
+            comp["citations"] = {"path": citations_path}
+        return cls(id=id, component={"ExplainMovePanel": comp})
+    
+    @classmethod
+    def error_panel(cls, id: str, code_path: str, message_path: str, details_path: Optional[str] = None) -> "A2UIComponent":
+        """Create an ErrorPanel component."""
+        payload = {
+            "code": {"path": code_path},
+            "message": {"path": message_path},
+        }
+        if details_path:
+            payload["details"] = {"path": details_path}
+        return cls(id=id, component={"ErrorPanel": payload})
 
 
 # ============================================================================

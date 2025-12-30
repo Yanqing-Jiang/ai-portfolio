@@ -95,8 +95,10 @@ export interface CardProps {
 }
 
 export interface ButtonProps {
-    label: BoundString;
+    child?: string;
+    label?: BoundString;
     action: ComponentAction;
+    primary?: BoundBoolean;
     variant?: 'primary' | 'secondary' | 'text';
 }
 
@@ -106,6 +108,79 @@ export interface ImageProps {
 }
 
 export interface DividerProps { }
+
+export interface IconProps {
+    name: BoundString;
+    size?: BoundNumber;
+    color?: BoundString;
+}
+
+export interface VideoProps {
+    url: BoundString;
+    autoplay?: BoundBoolean;
+    controls?: BoundBoolean;
+}
+
+export interface AudioPlayerProps {
+    url: BoundString;
+    autoplay?: BoundBoolean;
+    controls?: BoundBoolean;
+}
+
+export interface ListProps {
+    children: Children;
+    direction?: 'row' | 'column';
+    alignment?: 'start' | 'center' | 'end' | 'spaceBetween' | 'spaceAround' | 'stretch';
+}
+
+export interface TabItem {
+    title: BoundString;
+    child: string;
+}
+
+export interface TabsProps {
+    tabItems: TabItem[];
+}
+
+export interface ModalProps {
+    entryPointChild: string;
+    contentChild: string;
+}
+
+export interface CheckBoxProps {
+    label: BoundString;
+    value: BoundBoolean;
+}
+
+export interface TextFieldProps {
+    label: BoundString;
+    text: BoundString;
+    textFieldType?: 'text' | 'email' | 'number' | 'password';
+    validationRegexp?: string;
+}
+
+export interface DateTimeInputProps {
+    value: BoundString;
+    enableDate?: BoundBoolean;
+    enableTime?: BoundBoolean;
+}
+
+export interface MultipleChoiceOption {
+    label: BoundString;
+    value: string;
+}
+
+export interface MultipleChoiceProps {
+    selections: BoundArray;
+    options: MultipleChoiceOption[];
+    maxAllowedSelections?: number;
+}
+
+export interface SliderProps {
+    value: BoundNumber;
+    minValue?: number;
+    maxValue?: number;
+}
 
 // ============================================================================
 // Custom Financial Components
@@ -147,6 +222,12 @@ export interface ExplainMovePanelProps {
     citations?: BoundArray;
 }
 
+export interface ErrorPanelProps {
+    code: BoundString;
+    message: BoundString;
+    details?: BoundString;
+}
+
 // ============================================================================
 // Component Definitions
 // ============================================================================
@@ -158,13 +239,25 @@ export type ComponentType =
     | { Card: CardProps }
     | { Button: ButtonProps }
     | { Image: ImageProps }
+    | { Icon: IconProps }
+    | { Video: VideoProps }
+    | { AudioPlayer: AudioPlayerProps }
+    | { List: ListProps }
+    | { Tabs: TabsProps }
+    | { Modal: ModalProps }
+    | { CheckBox: CheckBoxProps }
+    | { TextField: TextFieldProps }
+    | { DateTimeInput: DateTimeInputProps }
+    | { MultipleChoice: MultipleChoiceProps }
+    | { Slider: SliderProps }
     | { Divider: DividerProps }
     | { PriceChart: PriceChartProps }
     | { KpiCard: KpiCardProps }
     | { DataTable: DataTableProps }
     | { NewsTimeline: NewsTimelineProps }
     | { CorrelationMatrix: CorrelationMatrixProps }
-    | { ExplainMovePanel: ExplainMovePanelProps };
+    | { ExplainMovePanel: ExplainMovePanelProps }
+    | { ErrorPanel: ErrorPanelProps };
 
 export interface A2UIComponent {
     id: string;
