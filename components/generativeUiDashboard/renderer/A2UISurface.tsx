@@ -7,6 +7,7 @@
 import React from 'react';
 import type { Surface, DataModel } from '../a2ui/types';
 import { ComponentRenderer } from './ComponentRenderer';
+import { DashboardSkeleton } from './widgets/WidgetSkeleton';
 
 export interface A2UISurfaceProps {
     /** The surface to render */
@@ -54,18 +55,16 @@ export function A2UISurface({
 }
 
 /**
- * Loading state for surfaces.
+ * Loading state for surfaces — uses shimmer skeleton for premium feel.
  */
 export function A2UISurfaceLoading(): React.ReactElement {
     return (
         <div className="a2ui-surface a2ui-surface--loading">
-            <div className="a2ui-loading-indicator">
-                <div className="a2ui-loading-spinner" />
-                <p>Loading dashboard...</p>
-            </div>
+            <DashboardSkeleton />
         </div>
     );
 }
+
 
 /**
  * Error state for surfaces.

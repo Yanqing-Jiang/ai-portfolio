@@ -50,7 +50,7 @@
 #   Invokes: A2UIComponent builders
 #   Why: Aligns explain-move widgets with A2UI layout expectations.
 # Method: A2UIMessageEmitter._build_peer_compare_layout
-#   Role: Build the grid layout for peer comparison dashboards.
+#   Role: Build the grid layout for peer comparison dashboards with MetricChart + correlation.
 #   Called from: A2UIMessageEmitter.build_components_for_skill
 #   Invokes: A2UIComponent builders
 #   Why: Arranges comparison widgets consistently.
@@ -182,6 +182,7 @@ class A2UIMessageEmitter:
             ticker_path="/data/ticker",
             interval=context.time_range,
             show_volume=True,
+            interval_path="/data/time_range",
         )
         price_card = A2UIComponent.card("price_chart_card", "price_chart")
 
@@ -247,13 +248,15 @@ class A2UIMessageEmitter:
         title = A2UIComponent.text_bound("title_text", "/data/title", "h2")
         header = A2UIComponent.row("header_row", ["title_text"])
 
-        price_chart = A2UIComponent.price_chart(
-            "price_chart",
-            ticker_path="/data/primary_ticker",
-            interval=context.time_range,
-            show_volume=False,
+        metric_chart = A2UIComponent.metric_chart(
+            "peer_metric_chart",
+            series_path="/data/chart/series",
+            title_literal=f"{context.metric} Comparison",
+            metric=context.metric,
+            chart_type="line",
+            annotations_path="/data/chart/annotations",
         )
-        price_card = A2UIComponent.card("price_chart_card", "price_chart")
+        metric_card = A2UIComponent.card("metric_chart_card", "peer_metric_chart")
 
         correlation = A2UIComponent.correlation_matrix(
             "correlation_matrix",
@@ -262,7 +265,7 @@ class A2UIMessageEmitter:
         )
         correlation_card = A2UIComponent.card("correlation_card", "correlation_matrix")
 
-        charts_row = A2UIComponent.row("charts_row", ["price_chart_card", "correlation_card"])
+        charts_row = A2UIComponent.row("charts_row", ["metric_chart_card", "correlation_card"])
 
         table = A2UIComponent.data_table(
             "metrics_table",
@@ -286,8 +289,8 @@ class A2UIMessageEmitter:
         return [
             title,
             header,
-            price_chart,
-            price_card,
+            metric_chart,
+            metric_card,
             correlation,
             correlation_card,
             charts_row,
@@ -323,6 +326,17 @@ class A2UIMessageEmitter:
         )
         kpi_row = A2UIComponent.row("kpi_row", ["kpi_gross_margin", "kpi_operating_margin", "kpi_net_margin"])
 
+        # Add MetricChart for margin trends over time
+        margin_chart = A2UIComponent.metric_chart(
+            "margin_chart",
+            series_path="/data/chart/series",
+            title_literal=f"{context.primary_ticker} Margin Trends",
+            metric="Margin %",
+            chart_type="line",
+            annotations_path="/data/chart/annotations",
+        )
+        chart_card = A2UIComponent.card("margin_chart_card", "margin_chart")
+
         table = A2UIComponent.data_table(
             "margin_table",
             columns_path="/data/table/columns",
@@ -340,7 +354,7 @@ class A2UIMessageEmitter:
         )
         explain_card = A2UIComponent.card("explain_card", "explain_panel")
 
-        root = A2UIComponent.column("layout_root", ["header_row", "kpi_row", "table_card", "explain_card"])
+        root = A2UIComponent.column("layout_root", ["header_row", "kpi_row", "margin_chart_card", "table_card", "explain_card"])
 
         return [
             title,
@@ -349,6 +363,8 @@ class A2UIMessageEmitter:
             kpi_operating,
             kpi_net,
             kpi_row,
+            margin_chart,
+            chart_card,
             table,
             table_card,
             explain,
@@ -361,13 +377,16 @@ class A2UIMessageEmitter:
         title = A2UIComponent.text_bound("title_text", "/data/title", "h2")
         header = A2UIComponent.row("header_row", ["title_text"])
 
-        price_chart = A2UIComponent.price_chart(
+        # Use MetricChart (ECharts) instead of PriceChart (TradingView) for revenue data
+        metric_chart = A2UIComponent.metric_chart(
             "revenue_chart",
-            ticker_path="/data/ticker",
-            interval=context.time_range,
-            show_volume=False,
+            series_path="/data/chart/series",
+            title_literal=f"{context.primary_ticker} Revenue Trend",
+            metric="Revenue",
+            chart_type="area",
+            annotations_path="/data/chart/annotations",
         )
-        price_card = A2UIComponent.card("revenue_chart_card", "revenue_chart")
+        chart_card = A2UIComponent.card("revenue_chart_card", "revenue_chart")
 
         kpi_latest = A2UIComponent.kpi_card(
             "kpi_latest_revenue",
@@ -407,8 +426,8 @@ class A2UIMessageEmitter:
         return [
             title,
             header,
-            price_chart,
-            price_card,
+            metric_chart,
+            chart_card,
             kpi_latest,
             kpi_yoy,
             kpi_column,

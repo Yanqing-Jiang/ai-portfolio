@@ -1,7 +1,7 @@
 # --- A2UI Agent Function/Class Map ---
 # Class: A2UIAgentError
 #   Role: Typed exception for A2UI agent failures.
-#   Called from: backend.generative_ui.routes.dashboard
+#   Called from: backend.generative_ui.routes.dashboard, backend.generative_ui.agent_v2
 #   Invokes: n/a
 #   Why: Standardizes error reporting for the A2UI pipeline.
 # Dataclass: A2UIRunResult
@@ -19,66 +19,6 @@
 #   Called from: backend.generative_ui.agent_v2.A2UIAgent.select_skill
 #   Invokes: n/a
 #   Why: Encapsulates the selection tool schema with allowed skill IDs.
-# Function: _normalize_tickers
-#   Role: Filter and normalize tickers to the allowed universe.
-#   Called from: backend.generative_ui.agent_v2.A2UIAgent._validate_selection, backend.generative_ui.agent_v2.A2UIAgent.selection_from_plan
-#   Invokes: n/a
-#   Why: Keeps tool queries within supported tickers.
-# Function: _row_sort_key
-#   Role: Produce a sortable key for comp_financials rows.
-#   Called from: backend.generative_ui.agent_v2._sorted_rows, backend.generative_ui.agent_v2._metric_series
-#   Invokes: n/a
-#   Why: Ensures time-series values are ordered consistently.
-# Function: _sorted_rows
-#   Role: Sort comp_financials rows descending by period.
-#   Called from: backend.generative_ui.agent_v2.A2UIAgent._execute_* methods
-#   Invokes: backend.generative_ui.agent_v2._row_sort_key
-#   Why: Simplifies latest value extraction.
-# Function: _period_label
-#   Role: Build a readable period label from row metadata.
-#   Called from: backend.generative_ui.agent_v2.A2UIAgent._execute_* methods
-#   Invokes: n/a
-#   Why: Feeds DataTable period columns.
-# Function: _coerce_float
-#   Role: Convert numeric inputs to float when possible.
-#   Called from: backend.generative_ui.agent_v2._metric_series
-#   Invokes: n/a
-#   Why: Normalizes SQL values for calculations.
-# Function: _metric_series
-#   Role: Extract ordered metric values from SQL rows.
-#   Called from: backend.generative_ui.agent_v2.A2UIAgent._execute_* methods
-#   Invokes: backend.generative_ui.agent_v2._sorted_rows, backend.generative_ui.agent_v2._coerce_float
-#   Why: Provides consistent time-series inputs.
-# Function: _latest_and_previous
-#   Role: Return latest + previous numeric values from a series.
-#   Called from: backend.generative_ui.agent_v2.A2UIAgent._execute_* methods
-#   Invokes: n/a
-#   Why: Enables delta calculations for KPIs.
-# Function: _percentage_change
-#   Role: Compute percentage change between two values.
-#   Called from: backend.generative_ui.agent_v2.A2UIAgent._execute_* methods
-#   Invokes: n/a
-#   Why: Standardizes percent delta logic.
-# Function: _compute_correlation_matrix
-#   Role: Generate a Pearson correlation matrix from series data.
-#   Called from: backend.generative_ui.agent_v2.A2UIAgent._execute_peer_compare
-#   Invokes: math.sqrt
-#   Why: Supplies correlation data for A2UI visualization.
-# Function: _parse_published_at
-#   Role: Normalize news timestamps into ISO-like strings.
-#   Called from: backend.generative_ui.agent_v2._map_news_event
-#   Invokes: datetime.strptime
-#   Why: Produces consistent NewsTimeline dates.
-# Function: _map_sentiment
-#   Role: Map sentiment scores/labels to positive/neutral/negative.
-#   Called from: backend.generative_ui.agent_v2._map_news_event
-#   Invokes: n/a
-#   Why: Aligns sentiment values with frontend styling.
-# Function: _map_news_event
-#   Role: Convert news tool payloads into NewsTimeline event objects.
-#   Called from: backend.generative_ui.agent_v2.A2UIAgent._execute_explain_move
-#   Invokes: backend.generative_ui.agent_v2._map_sentiment, backend.generative_ui.agent_v2._parse_published_at
-#   Why: Standardizes news data for the UI.
 # Function: _extract_tool_input
 #   Role: Extract the tool input payload from a Claude response.
 #   Called from: backend.generative_ui.agent_v2.A2UIAgent.select_skill
@@ -107,7 +47,7 @@
 # Method: A2UIAgent.selection_from_plan
 #   Role: Rehydrate a SkillSelection from stored plan JSON.
 #   Called from: backend.generative_ui.routes.dashboard.stream_dashboard
-#   Invokes: backend.generative_ui.skills.get_a2ui_skill
+#   Invokes: cached skill lookup
 #   Why: Avoids re-calling the model during streaming.
 # Method: A2UIAgent.stream_dashboard
 #   Role: Emit A2UI messages for a full dashboard session.
@@ -116,29 +56,59 @@
 #   Why: Provides the streaming backbone for the dashboard UI.
 # Method: A2UIAgent.execute_skill
 #   Role: Route tool execution based on the selected skill.
-#   Called from: backend.generative_ui.agent_v2.A2UIAgent.stream_dashboard
-#   Invokes: A2UIAgent._execute_explain_move/_execute_peer_compare/_execute_margin_analysis/_execute_revenue_trend
+#   Called from: backend.generative_ui.agent_v2.A2UIAgent.stream_dashboard, backend.generative_ui.routes.dashboard.handle_action
+#   Invokes: A2UIAgent._execute_explain_move/_execute_peer_compare/_execute_margin_analysis/_execute_revenue_trend, A2UIAgent._execute_narrative
 #   Why: Keeps tool usage aligned with skill intent.
+# Method: A2UIAgent._execute_narrative
+#   Role: Generate concise narrative summaries for non-explain-move skills.
+#   Called from: backend.generative_ui.agent_v2.A2UIAgent.execute_skill
+#   Invokes: conversational_analytics.tools.execute_analysis_tool
+#   Why: Supplies summary copy for ExplainMovePanel on metric dashboards.
+# Method: A2UIAgent._execute_chart_annotations
+#   Role: Build chart annotations from recent news events.
+#   Called from: backend.generative_ui.agent_v2.A2UIAgent._execute_margin_analysis, backend.generative_ui.agent_v2.A2UIAgent._execute_revenue_trend
+#   Invokes: conversational_analytics.tools.execute_news_tool, backend.generative_ui.utils.date_to_period_label
+#   Why: Aligns narrative events with chart periods.
 # Method: A2UIAgent._execute_explain_move
 #   Role: Run SQL + news tools and assemble explain-move data.
 #   Called from: backend.generative_ui.agent_v2.A2UIAgent.execute_skill
 #   Invokes: conversational_analytics.tools.execute_sql_tool, conversational_analytics.tools.execute_news_tool, conversational_analytics.tools.execute_analysis_tool
 #   Why: Supplies KPIs, news, and explanations for explain-move dashboards.
 # Method: A2UIAgent._execute_peer_compare
-#   Role: Run SQL tool and compute comparison/correlation outputs.
+#   Role: Run SQL tool and compute comparison, chart, and correlation outputs.
 #   Called from: backend.generative_ui.agent_v2.A2UIAgent.execute_skill
-#   Invokes: conversational_analytics.tools.execute_sql_tool, backend.generative_ui.agent_v2._compute_correlation_matrix
-#   Why: Powers peer comparison dashboards.
+#   Invokes: conversational_analytics.tools.execute_sql_tool, backend.generative_ui.utils.compute_correlation_matrix
+#   Why: Powers peer comparison dashboards with metric series.
 # Method: A2UIAgent._execute_margin_analysis
-#   Role: Run SQL tool and compute margin KPIs + history.
+#   Role: Run SQL tool and compute margin KPIs + chart series.
 #   Called from: backend.generative_ui.agent_v2.A2UIAgent.execute_skill
-#   Invokes: conversational_analytics.tools.execute_sql_tool
+#   Invokes: conversational_analytics.tools.execute_sql_tool, A2UIAgent._execute_multi_ticker_margins
 #   Why: Supplies margin analysis dashboards with data.
+# Method: A2UIAgent._execute_multi_ticker_margins
+#   Role: Build margin comparison data for multiple tickers.
+#   Called from: backend.generative_ui.agent_v2.A2UIAgent._execute_margin_analysis
+#   Invokes: conversational_analytics.tools.execute_sql_tool
+#   Why: Provides multi-ticker margin comparisons.
 # Method: A2UIAgent._execute_revenue_trend
-#   Role: Run SQL tool and compute revenue trend KPIs + table.
+#   Role: Run SQL tool and compute revenue trend KPIs + chart series.
 #   Called from: backend.generative_ui.agent_v2.A2UIAgent.execute_skill
 #   Invokes: conversational_analytics.tools.execute_sql_tool
 #   Why: Supplies revenue trend dashboards with data.
+# Method: A2UIAgent._validate_selection
+#   Role: Validate skill selection inputs.
+#   Called from: backend.generative_ui.agent_v2.A2UIAgent.select_skill, backend.generative_ui.agent_v2.A2UIAgent.stream_dashboard
+#   Invokes: backend.generative_ui.utils.normalize_tickers
+#   Why: Guards against unsupported tickers/time ranges.
+# Method: A2UIAgent._build_render_context
+#   Role: Build context used by layout emitters.
+#   Called from: backend.generative_ui.agent_v2.A2UIAgent.stream_dashboard
+#   Invokes: backend.generative_ui.agent_v2.A2UIAgent._build_title
+#   Why: Keeps layout logic isolated from skill selection details.
+# Method: A2UIAgent._build_title
+#   Role: Generate dashboard titles based on skill + tickers.
+#   Called from: backend.generative_ui.agent_v2.A2UIAgent._build_render_context
+#   Invokes: n/a
+#   Why: Ensures consistent titles across dashboards.
 # Function: get_a2ui_agent
 #   Role: Provide a singleton A2UIAgent instance.
 #   Called from: backend.generative_ui.routes.dashboard
@@ -186,6 +156,7 @@ from .utils import (
     percentage_change,
     compute_correlation_matrix,
     parse_published_at,
+    date_to_period_label,
     map_sentiment,
     map_news_event,
 )
@@ -535,13 +506,39 @@ class A2UIAgent:
                 "citations": [],
             }
         except Exception as e:
-            logger.warning("Narrative generation failed: %s", e)
+            import logging
+            logging.getLogger(__name__).warning("Narrative generation failed: %s", e)
             return {
                 "title": "Analysis Summary",
                 "text": "Data visualized below. Summarization currently unavailable.",
                 "factors": [],
                 "citations": [],
             }
+
+    async def _execute_chart_annotations(self, tickers: List[str], period_set: set[str]) -> List[Dict[str, Any]]:
+        """Fetch news and map to chart annotations if they land on valid chart periods."""
+        annotations = []
+        for ticker in tickers[:2]: # Limit to first 2 tickers to keep it snappy
+            try:
+                news = await execute_news_tool(ticker=ticker, limit=10)
+                if news.get("success"):
+                    for article in news.get("articles", []):
+                        pub_date = article.get("published_at")
+                        if not pub_date: continue
+                        
+                        period = date_to_period_label(str(pub_date))
+                        if period in period_set:
+                            annotations.append({
+                                "period": period,
+                                "ticker": ticker,
+                                "label": "News",
+                                "details": article.get("title", "Market update")
+                            })
+                            # Only one annotation per period per ticker to avoid clutter
+                            period_set.remove(period)
+            except Exception:
+                continue
+        return annotations
 
     async def _execute_explain_move(self, selection: SkillSelection) -> A2UIRunResult:
         """Fetch KPI + news data for explain-move dashboards."""
@@ -656,23 +653,31 @@ class A2UIAgent:
                 rows_by_ticker[ticker].append(row)
 
         table_rows = []
+        chart_series: List[Dict[str, Any]] = []
         series_by_ticker: Dict[str, List[float]] = {}
         for ticker, ticker_rows in rows_by_ticker.items():
             series = metric_series(ticker_rows, metric)
-            latest, previous = latest_and_previous(series)
-            delta = percentage_change(latest, previous)
-            series_by_ticker[ticker] = [entry["value"] for entry in series]
+            latest, _previous = latest_and_previous(series)
+            yoy_change = None
+            if len(series) > 4:
+                yoy_value = coerce_float(series[4].get("value"))
+                yoy_change = percentage_change(latest, yoy_value)
+            series_values = [entry["value"] for entry in series]
+            series_by_ticker[ticker] = series_values
+            chart_series.append({"ticker": ticker, "data": series})
             table_rows.append(
                 {
                     "ticker": ticker,
-                    "latest_value": latest or 0,
-                    "yoy_change": delta or 0,
+                    "latest_value": latest if latest is not None else 0,
+                    "yoy_change": yoy_change,
                 }
             )
 
+        metric_lower = metric.lower()
+        value_type = "percentage" if "margin" in metric_lower or "rate" in metric_lower else "currency"
         columns = [
             {"key": "ticker", "label": "Ticker", "type": "string"},
-            {"key": "latest_value", "label": f"Latest {metric}", "type": "currency"},
+            {"key": "latest_value", "label": f"Latest {metric}", "type": value_type},
             {"key": "yoy_change", "label": "YoY %", "type": "percentage"},
         ]
 
@@ -683,6 +688,7 @@ class A2UIAgent:
             "primary_ticker": tickers[0],
             "table": {"columns": columns, "rows": table_rows},
             "correlation": {"tickers": tickers, "matrix": correlation},
+            "chart": {"series": chart_series, "annotations": []},
         }
         return A2UIRunResult(data_model=data_model, citations=[])
 
@@ -749,6 +755,12 @@ class A2UIAgent:
             {"key": "net_margin", "label": "Net Margin", "type": "percentage"},
         ]
 
+        chart_series = [
+            {"ticker": "Gross Margin", "data": gross_series},
+            {"ticker": "Operating Margin", "data": operating_series},
+            {"ticker": "Net Margin", "data": net_margin_series},
+        ]
+
         data_model = {
             "ticker": ticker,
             "kpis": {
@@ -757,7 +769,16 @@ class A2UIAgent:
                 "net_margin": net_latest or 0,
             },
             "table": {"columns": columns, "rows": table_rows},
+            "chart": {
+                "series": chart_series,
+                "annotations": [],
+            },
         }
+
+        # Add annotations to chart
+        periods = {entry["period"] for entry in revenue_series}
+        data_model["chart"]["annotations"] = await self._execute_chart_annotations([ticker], periods)
+        
         return A2UIRunResult(data_model=data_model, citations=[])
 
     async def _execute_multi_ticker_margins(self, tickers: List[str]) -> A2UIRunResult:
@@ -782,6 +803,7 @@ class A2UIAgent:
                 rows_by_ticker[ticker].append(row)
 
         table_rows = []
+        chart_series: List[Dict[str, Any]] = []
         for ticker, ticker_rows in rows_by_ticker.items():
             gross_series = metric_series(ticker_rows, "Gross Margin")
             operating_series = metric_series(ticker_rows, "Operating Margin")
@@ -792,15 +814,17 @@ class A2UIAgent:
             gross_latest, _ = latest_and_previous(gross_series)
             operating_latest, _ = latest_and_previous(operating_series)
 
-            # Compute net margin from net income / revenue
-            net_margin = None
-            if revenue_series and net_income_series:
-                latest_period = revenue_series[0]["period"] if revenue_series else None
-                if latest_period:
-                    revenue_val = revenue_series[0]["value"]
-                    net_val = net_income_by_period.get(latest_period)
-                    if net_val is not None and revenue_val and revenue_val != 0:
-                        net_margin = (net_val / revenue_val) * 100
+            net_margin_series: List[Dict[str, Any]] = []
+            for entry in revenue_series:
+                period = entry["period"]
+                revenue_value = entry["value"]
+                net_value = net_income_by_period.get(period)
+                if net_value is None or revenue_value == 0:
+                    continue
+                net_margin_series.append({"period": period, "value": (net_value / revenue_value) * 100})
+            net_margin = net_margin_series[0]["value"] if net_margin_series else None
+            if net_margin_series:
+                chart_series.append({"ticker": ticker, "data": net_margin_series})
 
             table_rows.append({
                 "ticker": ticker,
@@ -825,6 +849,7 @@ class A2UIAgent:
                 "net_margin": table_rows[0]["net_margin"] if table_rows else 0,
             },
             "table": {"columns": columns, "rows": table_rows},
+            "chart": {"series": chart_series, "annotations": []},
         }
         return A2UIRunResult(data_model=data_model, citations=[])
 
@@ -860,6 +885,8 @@ class A2UIAgent:
             for entry in revenue_series[:8]
         ]
 
+        chart_series = [{"ticker": ticker, "data": revenue_series}]
+
         data_model = {
             "ticker": ticker,
             "kpis": {
@@ -867,7 +894,16 @@ class A2UIAgent:
                 "yoy_growth": yoy_growth or 0,
             },
             "table": {"columns": columns, "rows": rows_table},
+            "chart": {
+                "series": chart_series,
+                "annotations": [],
+            },
         }
+
+        # Add annotations to chart
+        periods = {entry["period"] for entry in revenue_series}
+        data_model["chart"]["annotations"] = await self._execute_chart_annotations([ticker], periods)
+        
         return A2UIRunResult(data_model=data_model, citations=[])
 
     def _validate_selection(self, selection: SkillSelection) -> None:

@@ -9,20 +9,21 @@ import {
   useLocation,
   useParams,
 } from 'react-router-dom';
-import Sidebar from './components/Sidebar';
+import Sidebar from './components/SidebarV2';
 import ProjectView from './components/ProjectView';
 import LandingPageFlow from './components/LandingPageFlow';
 import { GenerativeUIPage } from './components/generativeUiDashboard';
 import NeuralWebDemo from './components/demos/NeuralWebDemo';
 import StreamingInsightDemo from './components/demos/StreamingInsightDemo';
 import BentoPulseDemo from './components/demos/BentoPulseDemo';
+import TimelineDemo from './components/demos/TimelineDemo';
+import SidebarRedesignDemo from './components/demos/SidebarRedesignDemo';
 import { PROJECT_DATA } from './constants';
 import type { Project } from './types';
 import { ChevronLeftIcon } from './components/icons/ChevronLeftIcon';
 import { ChevronRightIcon } from './components/icons/ChevronRightIcon';
 // @ts-ignore
 import { HelmetProvider } from 'react-helmet-async';
-import { AnimatePresence, motion } from 'framer-motion';
 
 
 // --- helper to look up a project by id ---
@@ -122,19 +123,6 @@ const Layout: React.FC = () => {
         onGoHome={goHome}
       />
 
-      {/* Mobile overlay when sidebar is open */}
-      <AnimatePresence>
-        {isSidebarOpen && isMobile && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            onClick={() => setIsSidebarOpen(false)}
-            className="fixed inset-0 bg-black/60 z-40 md:hidden backdrop-blur-md"
-          />
-        )}
-      </AnimatePresence>
-
       <div className="relative flex-1 flex flex-col min-w-0 transition-all duration-500 ease-in-out">
         {/* Sidebar toggle button - responsive positioning */}
         <button
@@ -204,6 +192,8 @@ const Layout: React.FC = () => {
             <Route path="/demo/neural-web" element={<NeuralWebDemo />} />
             <Route path="/demo/streaming-insight" element={<StreamingInsightDemo />} />
             <Route path="/demo/bento-pulse" element={<BentoPulseDemo />} />
+            <Route path="/demo/timeline" element={<TimelineDemo />} />
+            <Route path="/demo/sidebar-redesign" element={<SidebarRedesignDemo />} />
 
             <Route path="/project/:projectId" element={<ProjectRoute />} />
             <Route path="*" element={<Navigate to="/" replace />} />

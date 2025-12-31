@@ -1,10 +1,52 @@
+# --- A2UI Clarification Function/Class Map ---
+# Class: ClarificationOption
+#   Role: Define selectable clarification option metadata.
+#   Called from: build_clarification_for_ambiguous_comparison, build_clarification_for_margin_detail, build_clarification_for_missing_ticker
+#   Invokes: n/a
+#   Why: Standardizes option payloads for clarification UIs.
+# Class: ClarificationField
+#   Role: Describe a single clarification prompt field.
+#   Called from: build_clarification_for_ambiguous_comparison, build_clarification_for_margin_detail, build_clarification_for_missing_ticker
+#   Invokes: n/a
+#   Why: Encapsulates the input contract for clarification UI rendering.
+# Class: ClarificationRequest
+#   Role: Bundle clarification fields with metadata and targeting info.
+#   Called from: backend.generative_ui.routes.dashboard
+#   Invokes: n/a
+#   Why: Supports SSE delivery of clarification prompts tied to specific visuals.
+# Class: ClarificationResponse
+#   Role: Model user responses to clarification prompts.
+#   Called from: backend.generative_ui.routes.dashboard
+#   Invokes: n/a
+#   Why: Keeps response payloads structured for validation.
+# Function: build_clarification_for_ambiguous_comparison
+#   Role: Build clarification prompt for ambiguous peer comparisons.
+#   Called from: backend.generative_ui.routes.dashboard
+#   Invokes: ClarificationRequest, ClarificationField
+#   Why: Resolves ambiguous comparison intent before rendering visuals.
+# Function: build_clarification_for_margin_detail
+#   Role: Build clarification prompt for margin analysis specifics.
+#   Called from: backend.generative_ui.routes.dashboard
+#   Invokes: ClarificationRequest, ClarificationField
+#   Why: Lets users specify which margin detail to visualize.
+# Function: build_clarification_for_missing_ticker
+#   Role: Build clarification prompt when no ticker is detected.
+#   Called from: backend.generative_ui.routes.dashboard
+#   Invokes: ClarificationRequest, ClarificationField
+#   Why: Ensures required ticker inputs are collected.
+# Function: clarification_to_sse_event
+#   Role: Serialize a clarification request into an SSE event string.
+#   Called from: backend.generative_ui.routes.dashboard
+#   Invokes: ClarificationRequest.model_dump_json
+#   Why: Delivers clarification prompts over the dashboard stream.
+# Function: validate_clarification_response
+#   Role: Validate user responses against the original request.
+#   Called from: backend.generative_ui.routes.dashboard
+#   Invokes: n/a
+#   Why: Protects plan updates from invalid or unexpected values.
+# --- End A2UI Clarification Function/Class Map ---
 """
-A2UI Clarification System — LLM-driven pre-generation clarification for ambiguous queries.
-
-Function: ClarificationField — Pydantic model for individual clarification inputs.
-Function: ClarificationRequest — Full request payload with multiple fields.
-Function: generate_clarification_request — Uses LLM to decide what clarification to prompt.
-Function: validate_clarification_response — Validates user responses match expected fields.
+A2UI Clarification System - LLM-driven pre-generation clarification for ambiguous queries.
 """
 
 from __future__ import annotations
@@ -60,6 +102,10 @@ class ClarificationRequest(BaseModel):
     fields: List[ClarificationField] = Field(..., description="List of input fields")
     timeout_seconds: int = Field(default=120, description="Auto-cancel timeout")
     skip_allowed: bool = Field(default=True, description="Whether user can skip and let LLM decide")
+    target_component_id: Optional[str] = Field(
+        default=None,
+        description="Optional A2UI component ID to anchor clarification UI",
+    )
 
 
 class ClarificationResponse(BaseModel):
@@ -71,10 +117,10 @@ class ClarificationResponse(BaseModel):
 
 # Predefined options for common clarification types
 TIMEFRAME_OPTIONS = [
-    ClarificationOption(id="1M", label="1 Month", icon="📅"),
-    ClarificationOption(id="3M", label="3 Months", icon="📅"),
-    ClarificationOption(id="6M", label="6 Months", icon="📅"),
-    ClarificationOption(id="1Y", label="1 Year", icon="📆"),
+    ClarificationOption(id="1M", label="1 Month", icon="CAL"),
+    ClarificationOption(id="3M", label="3 Months", icon="CAL"),
+    ClarificationOption(id="6M", label="6 Months", icon="CAL"),
+    ClarificationOption(id="1Y", label="1 Year", icon="CAL"),
 ]
 
 MARGIN_TYPE_OPTIONS = [
@@ -85,9 +131,9 @@ MARGIN_TYPE_OPTIONS = [
 ]
 
 COMPARISON_TYPE_OPTIONS = [
-    ClarificationOption(id="margins", label="Profit Margins", description="Compare gross, operating, net margins", icon="📊"),
-    ClarificationOption(id="revenue", label="Revenue & Growth", description="Compare revenue trends", icon="📈"),
-    ClarificationOption(id="stock", label="Stock Performance", description="Compare stock price movements", icon="💹"),
+    ClarificationOption(id="margins", label="Profit Margins", description="Compare gross, operating, net margins", icon="MARG"),
+    ClarificationOption(id="revenue", label="Revenue & Growth", description="Compare revenue trends", icon="REV"),
+    ClarificationOption(id="stock", label="Stock Performance", description="Compare stock price movements", icon="PRICE"),
 ]
 
 PERIOD_OPTIONS = [
@@ -100,6 +146,7 @@ def build_clarification_for_ambiguous_comparison(
     tickers: Sequence[str],
     question: str,
     request_id: str,
+    target_component_id: Optional[str] = None,
 ) -> ClarificationRequest:
     """
     Generate clarification request when comparing tickers but comparison type is ambiguous.
@@ -110,6 +157,7 @@ def build_clarification_for_ambiguous_comparison(
         request_id=request_id,
         title=f"Comparing {', '.join(tickers)}",
         subtitle="What would you like to compare?",
+        target_component_id=target_component_id,
         fields=[
             ClarificationField(
                 field_id="comparison_type",
@@ -134,6 +182,7 @@ def build_clarification_for_ambiguous_comparison(
 def build_clarification_for_margin_detail(
     ticker: str,
     request_id: str,
+    target_component_id: Optional[str] = None,
 ) -> ClarificationRequest:
     """
     Generate clarification request when margin analysis needs more specificity.
@@ -144,6 +193,7 @@ def build_clarification_for_margin_detail(
         request_id=request_id,
         title=f"{ticker} Margin Analysis",
         subtitle="Customize your analysis",
+        target_component_id=target_component_id,
         fields=[
             ClarificationField(
                 field_id="margin_types",
@@ -170,6 +220,7 @@ def build_clarification_for_missing_ticker(
     question: str,
     request_id: str,
     available_tickers: Sequence[str],
+    target_component_id: Optional[str] = None,
 ) -> ClarificationRequest:
     """
     Generate clarification request when no ticker could be extracted.
@@ -185,6 +236,7 @@ def build_clarification_for_missing_ticker(
         request_id=request_id,
         title="Which company?",
         subtitle="Please select or enter a ticker symbol",
+        target_component_id=target_component_id,
         fields=[
             ClarificationField(
                 field_id="ticker",

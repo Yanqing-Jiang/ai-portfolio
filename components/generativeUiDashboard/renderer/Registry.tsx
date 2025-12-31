@@ -35,6 +35,7 @@ import { NewsTimeline } from './widgets/NewsTimeline';
 import { CorrelationMatrix } from './widgets/CorrelationMatrix';
 import { ExplainMovePanel } from './widgets/ExplainMovePanel';
 import { ErrorPanel } from './widgets/ErrorPanel';
+import { MetricChart } from './widgets/MetricChart';
 
 /**
  * Common props passed to all A2UI component implementations.
@@ -89,6 +90,7 @@ export const componentRegistry: Record<
     CorrelationMatrix,
     ExplainMovePanel,
     ErrorPanel,
+    MetricChart,
 };
 
 

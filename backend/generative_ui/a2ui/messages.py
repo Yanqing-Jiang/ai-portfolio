@@ -1,3 +1,250 @@
+# --- A2UI Message Function/Class Map ---
+# Class: BoundString
+#   Role: Represents literal or data-bound string values.
+#   Called from: backend.generative_ui.a2ui.messages.A2UIComponent builders, backend.generative_ui.a2ui.emitter
+#   Invokes: pydantic validation
+#   Why: Encodes bound values per the A2UI spec.
+# Class: BoundNumber
+#   Role: Represents literal or data-bound numeric values.
+#   Called from: backend.generative_ui.a2ui.messages.A2UIComponent builders
+#   Invokes: pydantic validation
+#   Why: Encodes bound numbers per the A2UI spec.
+# Class: BoundBoolean
+#   Role: Represents literal or data-bound boolean values.
+#   Called from: backend.generative_ui.a2ui.messages.A2UIComponent builders
+#   Invokes: pydantic validation
+#   Why: Encodes bound booleans per the A2UI spec.
+# Class: BoundArray
+#   Role: Represents literal or data-bound array values.
+#   Called from: backend.generative_ui.a2ui.messages.A2UIComponent builders
+#   Invokes: pydantic validation
+#   Why: Encodes bound arrays per the A2UI spec.
+# Class: DataEntry
+#   Role: Encode data model adjacency list entries.
+#   Called from: backend.generative_ui.a2ui.emitter.A2UIMessageEmitter
+#   Invokes: pydantic validation
+#   Why: Serializes nested data model updates for A2UI.
+# Class: ChildrenExplicitList
+#   Role: Explicit list of child component IDs.
+#   Called from: backend.generative_ui.a2ui.messages.A2UIComponent.row/column
+#   Invokes: n/a
+#   Why: Encodes static children in A2UI layouts.
+# Class: ChildrenTemplate
+#   Role: Data-driven children template definitions.
+#   Called from: backend.generative_ui.a2ui.messages.A2UIComponent.row_template/column_template
+#   Invokes: n/a
+#   Why: Supports dynamic child rendering.
+# Class: ActionContext
+#   Role: Key/value context pair for actions.
+#   Called from: backend.generative_ui.a2ui.messages.A2UIComponent.button
+#   Invokes: n/a
+#   Why: Supplies context payloads for user actions.
+# Class: ComponentAction
+#   Role: Action definition for interactive components.
+#   Called from: backend.generative_ui.a2ui.messages.A2UIComponent.button
+#   Invokes: n/a
+#   Why: Encodes action metadata per A2UI spec.
+# Class: TextComponent
+#   Role: A2UI text display component schema.
+#   Called from: backend.generative_ui.a2ui.messages.A2UIComponent.text/text_bound
+#   Invokes: n/a
+#   Why: Defines text widget structure.
+# Class: RowComponent
+#   Role: A2UI horizontal layout component schema.
+#   Called from: backend.generative_ui.a2ui.messages.A2UIComponent.row/row_template
+#   Invokes: n/a
+#   Why: Defines row layout structure.
+# Class: ColumnComponent
+#   Role: A2UI vertical layout component schema.
+#   Called from: backend.generative_ui.a2ui.messages.A2UIComponent.column/column_template
+#   Invokes: n/a
+#   Why: Defines column layout structure.
+# Class: CardComponent
+#   Role: A2UI card container schema.
+#   Called from: backend.generative_ui.a2ui.messages.A2UIComponent.card
+#   Invokes: n/a
+#   Why: Wraps child widgets with card styling.
+# Class: ButtonComponent
+#   Role: A2UI button schema.
+#   Called from: backend.generative_ui.a2ui.messages.A2UIComponent.button
+#   Invokes: n/a
+#   Why: Defines interactive button payloads.
+# Class: ImageComponent
+#   Role: A2UI image schema.
+#   Called from: backend.generative_ui.a2ui.messages.A2UIComponent.image (via generic component usage)
+#   Invokes: n/a
+#   Why: Encodes image widgets.
+# Class: DividerComponent
+#   Role: A2UI divider schema.
+#   Called from: backend.generative_ui.a2ui.messages.A2UIComponent.divider (via generic component usage)
+#   Invokes: n/a
+#   Why: Encodes divider widgets.
+# Class: PriceChartComponent
+#   Role: Price chart schema for TradingView widgets.
+#   Called from: backend.generative_ui.a2ui.messages.A2UIComponent.price_chart
+#   Invokes: n/a
+#   Why: Encodes price chart payloads.
+# Class: KpiCardComponent
+#   Role: KPI card schema for metric callouts.
+#   Called from: backend.generative_ui.a2ui.messages.A2UIComponent.kpi_card
+#   Invokes: n/a
+#   Why: Encodes KPI widgets.
+# Class: DataTableComponent
+#   Role: Data table schema.
+#   Called from: backend.generative_ui.a2ui.messages.A2UIComponent.data_table
+#   Invokes: n/a
+#   Why: Encodes sortable tables.
+# Class: NewsTimelineComponent
+#   Role: News timeline schema.
+#   Called from: backend.generative_ui.a2ui.messages.A2UIComponent.news_timeline
+#   Invokes: n/a
+#   Why: Encodes news timeline widgets.
+# Class: CorrelationMatrixComponent
+#   Role: Correlation matrix schema.
+#   Called from: backend.generative_ui.a2ui.messages.A2UIComponent.correlation_matrix
+#   Invokes: n/a
+#   Why: Encodes correlation heatmap widgets.
+# Class: MetricChartComponent
+#   Role: Metric chart schema for ECharts widgets.
+#   Called from: backend.generative_ui.a2ui.messages.A2UIComponent.metric_chart
+#   Invokes: n/a
+#   Why: Encodes metric chart payloads.
+# Class: A2UIComponent
+#   Role: Wrapper for A2UI components and builder helpers.
+#   Called from: backend.generative_ui.a2ui.emitter
+#   Invokes: Pydantic model_dump
+#   Why: Provides ergonomic construction for A2UI layouts.
+# Method: A2UIComponent.text
+#   Role: Build literal Text components.
+#   Called from: backend.generative_ui.a2ui.emitter
+#   Invokes: n/a
+#   Why: Simplifies text component creation.
+# Method: A2UIComponent.text_bound
+#   Role: Build data-bound Text components.
+#   Called from: backend.generative_ui.a2ui.emitter
+#   Invokes: n/a
+#   Why: Binds text to data model paths.
+# Method: A2UIComponent.row
+#   Role: Build Row layout components.
+#   Called from: backend.generative_ui.a2ui.emitter
+#   Invokes: n/a
+#   Why: Encodes horizontal layouts.
+# Method: A2UIComponent.row_template
+#   Role: Build Row layouts from templates.
+#   Called from: backend.generative_ui.a2ui.emitter
+#   Invokes: n/a
+#   Why: Supports data-driven row layouts.
+# Method: A2UIComponent.column
+#   Role: Build Column layout components.
+#   Called from: backend.generative_ui.a2ui.emitter
+#   Invokes: n/a
+#   Why: Encodes vertical layouts.
+# Method: A2UIComponent.column_template
+#   Role: Build Column layouts from templates.
+#   Called from: backend.generative_ui.a2ui.emitter
+#   Invokes: n/a
+#   Why: Supports data-driven column layouts.
+# Method: A2UIComponent.card
+#   Role: Build Card containers.
+#   Called from: backend.generative_ui.a2ui.emitter
+#   Invokes: n/a
+#   Why: Encapsulates widgets in card shells.
+# Method: A2UIComponent.button
+#   Role: Build interactive Button components.
+#   Called from: backend.generative_ui.a2ui.emitter
+#   Invokes: n/a
+#   Why: Encodes actions for user interaction.
+# Method: A2UIComponent.price_chart
+#   Role: Build PriceChart components with bound interval support.
+#   Called from: backend.generative_ui.a2ui.emitter
+#   Invokes: n/a
+#   Why: Powers TradingView price visuals.
+# Method: A2UIComponent.kpi_card
+#   Role: Build KPI card components.
+#   Called from: backend.generative_ui.a2ui.emitter
+#   Invokes: n/a
+#   Why: Encodes KPI widgets for dashboards.
+# Method: A2UIComponent.data_table
+#   Role: Build DataTable components.
+#   Called from: backend.generative_ui.a2ui.emitter
+#   Invokes: n/a
+#   Why: Encodes tabular outputs.
+# Method: A2UIComponent.news_timeline
+#   Role: Build NewsTimeline components.
+#   Called from: backend.generative_ui.a2ui.emitter
+#   Invokes: n/a
+#   Why: Encodes news timeline widgets.
+# Method: A2UIComponent.correlation_matrix
+#   Role: Build CorrelationMatrix components.
+#   Called from: backend.generative_ui.a2ui.emitter
+#   Invokes: n/a
+#   Why: Encodes correlation heatmaps.
+# Method: A2UIComponent.explain_move_panel
+#   Role: Build ExplainMovePanel components.
+#   Called from: backend.generative_ui.a2ui.emitter
+#   Invokes: n/a
+#   Why: Encodes narrative/explanation panels.
+# Method: A2UIComponent.error_panel
+#   Role: Build ErrorPanel components.
+#   Called from: backend.generative_ui.a2ui.emitter
+#   Invokes: n/a
+#   Why: Encodes error displays for A2UI.
+# Method: A2UIComponent.metric_chart
+#   Role: Build MetricChart components.
+#   Called from: backend.generative_ui.a2ui.emitter
+#   Invokes: n/a
+#   Why: Encodes metric chart widgets.
+# Class: BeginRendering
+#   Role: BeginRendering message schema.
+#   Called from: backend.generative_ui.a2ui.emitter
+#   Invokes: BeginRendering.to_json
+#   Why: Boots A2UI surfaces.
+# Method: BeginRendering.to_json
+#   Role: Serialize BeginRendering message to JSON.
+#   Called from: backend.generative_ui.a2ui.emitter
+#   Invokes: json.dumps
+#   Why: Sends SSE payloads for surface initialization.
+# Class: SurfaceUpdate
+#   Role: SurfaceUpdate message schema.
+#   Called from: backend.generative_ui.a2ui.emitter
+#   Invokes: SurfaceUpdate.to_json
+#   Why: Adds components to an A2UI surface.
+# Method: SurfaceUpdate.to_json
+#   Role: Serialize SurfaceUpdate message to JSON.
+#   Called from: backend.generative_ui.a2ui.emitter
+#   Invokes: json.dumps
+#   Why: Sends SSE payloads for layout updates.
+# Class: DataModelUpdate
+#   Role: DataModelUpdate message schema.
+#   Called from: backend.generative_ui.a2ui.emitter
+#   Invokes: DataModelUpdate.to_json
+#   Why: Updates surface data model state.
+# Method: DataModelUpdate.to_json
+#   Role: Serialize DataModelUpdate message to JSON.
+#   Called from: backend.generative_ui.a2ui.emitter
+#   Invokes: json.dumps, DataModelUpdate._serialize_entry
+#   Why: Sends SSE payloads for data updates.
+# Method: DataModelUpdate._serialize_entry
+#   Role: Serialize DataEntry values recursively.
+#   Called from: DataModelUpdate.to_json
+#   Invokes: n/a
+#   Why: Converts nested data entries to JSON.
+# Class: UserAction
+#   Role: Client-to-server action schema.
+#   Called from: backend.generative_ui.routes.dashboard
+#   Invokes: n/a
+#   Why: Defines userAction payload shape.
+# Class: DeleteSurface
+#   Role: DeleteSurface message schema.
+#   Called from: backend.generative_ui.a2ui.emitter
+#   Invokes: DeleteSurface.to_json
+#   Why: Removes A2UI surfaces.
+# Method: DeleteSurface.to_json
+#   Role: Serialize DeleteSurface message to JSON.
+#   Called from: backend.generative_ui.a2ui.emitter
+#   Invokes: json.dumps
+#   Why: Sends SSE payloads for surface teardown.
+# --- End A2UI Message Function/Class Map ---
 """
 A2UI Protocol Message Types (v0.8)
 
@@ -170,6 +417,15 @@ class CorrelationMatrixComponent(BaseModel):
     matrix: BoundArray
 
 
+class MetricChartComponent(BaseModel):
+    """ECharts-based time-series chart for financial metrics."""
+    title: Optional[BoundString] = None
+    series: BoundArray  # Array of {ticker, data: [{period, value}]}
+    annotations: Optional[BoundArray] = None # Array of {period, ticker, label, details}
+    metric: Optional[BoundString] = None  # e.g., "Revenue", "Net Income"
+    chartType: Optional[BoundString] = None  # "line", "bar", "area"
+
+
 # ============================================================================
 # A2UI Component Wrapper
 # ============================================================================
@@ -249,11 +505,21 @@ class A2UIComponent(BaseModel):
         return cls(id=id, component={"Button": {"label": {"literalString": label}, "action": action}})
     
     @classmethod
-    def price_chart(cls, id: str, ticker_path: str, interval: str = "1D", show_volume: bool = True) -> "A2UIComponent":
+    def price_chart(
+        cls,
+        id: str,
+        ticker_path: str,
+        interval: str = "1D",
+        show_volume: bool = True,
+        interval_path: Optional[str] = None,
+    ) -> "A2UIComponent":
         """Create a PriceChart component."""
+        interval_value: Dict[str, Any] = {"literalString": interval}
+        if interval_path:
+            interval_value = {"path": interval_path}
         return cls(id=id, component={"PriceChart": {
             "ticker": {"path": ticker_path},
-            "interval": {"literalString": interval},
+            "interval": interval_value,
             "showVolume": {"literalBoolean": show_volume}
         }})
     
@@ -322,6 +588,33 @@ class A2UIComponent(BaseModel):
         if details_path:
             payload["details"] = {"path": details_path}
         return cls(id=id, component={"ErrorPanel": payload})
+
+    @classmethod
+    def metric_chart(
+        cls,
+        id: str,
+        series_path: str,
+        title_path: Optional[str] = None,
+        title_literal: Optional[str] = None,
+        metric: str = "Value",
+        chart_type: str = "line",
+        annotations_path: Optional[str] = None,
+    ) -> "A2UIComponent":
+        """Create a MetricChart component (ECharts-based time-series)."""
+        comp: Dict[str, Any] = {
+            "series": {"path": series_path},
+            "metric": {"literalString": metric},
+            "chartType": {"literalString": chart_type},
+        }
+        if title_path:
+            comp["title"] = {"path": title_path}
+        elif title_literal:
+            comp["title"] = {"literalString": title_literal}
+        
+        if annotations_path:
+            comp["annotations"] = {"path": annotations_path}
+            
+        return cls(id=id, component={"MetricChart": comp})
 
 
 # ============================================================================

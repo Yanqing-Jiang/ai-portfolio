@@ -183,6 +183,39 @@ FINANCIAL_CATALOG = CatalogDefinition(
                 ),
             }
         ),
+        "MetricChart": ComponentDefinition(
+            description="ECharts-based time-series chart for financial metrics (revenue, margins, etc.)",
+            properties={
+                "title": ComponentProperty(
+                    type="BoundString",
+                    required=False,
+                    description="Chart title"
+                ),
+                "series": ComponentProperty(
+                    type="BoundArray",
+                    required=True,
+                    description="Array of series [{ticker, data: [{period, value}]}]"
+                ),
+                "metric": ComponentProperty(
+                    type="BoundString",
+                    required=False,
+                    default="Value",
+                    description="Y-axis label (e.g., Revenue, Margin %)"
+                ),
+                "chartType": ComponentProperty(
+                    type="BoundString",
+                    required=False,
+                    default="line",
+                    enum=["line", "bar", "area"],
+                    description="Chart visualization type"
+                ),
+                "annotations": ComponentProperty(
+                    type="BoundArray",
+                    required=False,
+                    description="Array of annotations [{period, ticker, label, details}]"
+                ),
+            }
+        ),
     }
 )
 

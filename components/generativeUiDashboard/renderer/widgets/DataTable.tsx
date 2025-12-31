@@ -1,3 +1,10 @@
+// --- Function/Class Map ---
+// Component: DataTable
+//   Role: Render sortable tabular data for A2UI dashboards.
+//   Called from: components/generativeUiDashboard/renderer/Registry.tsx
+//   Invokes: resolveArray, resolveBoolean
+//   Why: Displays KPI and comparison tables with sorting.
+// --- End Function/Class Map ---
 /**
  * DataTable Widget
  *
@@ -92,8 +99,8 @@ export function DataTable({
     // Sort indicator
     const getSortIndicator = (key: string): string => {
         if (sortKey !== key) return '';
-        if (sortDir === 'asc') return ' ↑';
-        if (sortDir === 'desc') return ' ↓';
+        if (sortDir === 'asc') return ' ^';
+        if (sortDir === 'desc') return ' v';
         return '';
     };
 

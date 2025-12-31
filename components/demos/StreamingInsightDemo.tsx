@@ -315,7 +315,7 @@ export const AdvancedNeuralField: React.FC = () => {
         };
     }, []);
 
-    return <canvas ref={canvasRef} className="fixed inset-0 z-0 select-none bg-[#010208]" />;
+    return <canvas id="neural-field-canvas" ref={canvasRef} className="fixed inset-0 z-0 select-none bg-[#010208]" />;
 };
 
 // --- HOLOGRAPHIC DASHBOARD WIDGET ---

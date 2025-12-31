@@ -144,6 +144,22 @@ def compute_correlation_matrix(
     return matrix
 
 
+def date_to_period_label(date_str: str) -> str:
+    """Map a date string (ISO or similar) to a QX YYYY period label."""
+    try:
+        from datetime import datetime
+        # Simple ISO parse
+        if 'T' in date_str:
+            dt = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+        else:
+            dt = datetime.strptime(date_str[:10], "%Y-%m-%d")
+        
+        quarter = (dt.month - 1) // 3 + 1
+        return f"Q{quarter} {dt.year}"
+    except Exception:
+        return "Unknown"
+
+
 __all__ = [
     "row_sort_key",
     "sorted_rows",
@@ -153,4 +169,5 @@ __all__ = [
     "latest_and_previous",
     "percentage_change",
     "compute_correlation_matrix",
+    "date_to_period_label",
 ]

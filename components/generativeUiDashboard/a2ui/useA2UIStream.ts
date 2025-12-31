@@ -1,3 +1,20 @@
+// --- Function/Class Map ---
+// Function: useA2UIStream
+//   Role: Manage SSE connections, stream state, clarifications, and action updates.
+//   Called from: components/generativeUiDashboard/GenerativeUIPage.tsx
+//   Invokes: createMessageProcessor, EventSource, mergeDataAtPath
+//   Why: Centralizes A2UI streaming state management for the dashboard UI.
+// Function: useSurface
+//   Role: Select a single surface + data model from stream state.
+//   Called from: components/generativeUiDashboard/GenerativeUIPage.tsx
+//   Invokes: Map.get
+//   Why: Simplifies surface access for renderers.
+// Function: mergeDataAtPath
+//   Role: Merge action response data into the data model at a JSON-pointer path.
+//   Called from: useA2UIStream.sendAction
+//   Invokes: n/a
+//   Why: Aligns action responses with /data-bound widgets.
+// --- End Function/Class Map ---
 /**
  * useA2UIStream Hook
  *
@@ -7,6 +24,29 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createMessageProcessor, MessageProcessor } from './MessageProcessor';
 import type { Surface, DataModel, UserActionMessage } from './types';
+
+/** Backend clarification field */
+export interface BackendClarificationField {
+    field_id: string;
+    input_type: 'single_choice' | 'multi_choice' | 'dropdown' | 'freeform' | 'ticker_select' | 'timeframe_select';
+    label: string;
+    prompt?: string;
+    required: boolean;
+    options?: Array<{ id: string; label: string; description?: string; icon?: string }>;
+    placeholder?: string;
+    default?: string;
+}
+
+/** Backend clarification request */
+export interface BackendClarificationRequest {
+    request_id: string;
+    title: string;
+    subtitle?: string;
+    fields: BackendClarificationField[];
+    timeout_seconds: number;
+    skip_allowed: boolean;
+    target_component_id?: string;
+}
 
 export interface A2UIStreamState {
     /** Whether the stream is currently connected */
@@ -25,6 +65,8 @@ export interface A2UIStreamState {
     retryCount: number;
     /** Connection status for UI display */
     connectionStatus: 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'error' | 'complete';
+    /** Pending clarification request from backend */
+    pendingClarification: BackendClarificationRequest | null;
 }
 
 export interface A2UIStreamActions {
@@ -34,6 +76,8 @@ export interface A2UIStreamActions {
     reconnect: () => void;
     /** Close the stream */
     close: () => void;
+    /** Clear pending clarification request */
+    clearClarification: () => void;
 }
 
 export interface UseA2UIStreamOptions {
@@ -54,6 +98,41 @@ const DEFAULT_OPTIONS: UseA2UIStreamOptions = {
 const MAX_RETRIES = 5;
 const INITIAL_BACKOFF_MS = 1000;
 const MAX_BACKOFF_MS = 30000;
+
+/**
+ * Merge data into the model at a given JSON-pointer path.
+ */
+function mergeDataAtPath(
+    existing: DataModel,
+    path: string | undefined,
+    data: Record<string, unknown>
+): DataModel {
+    if (!path || path === '' || path === '/') {
+        return { ...existing, ...data };
+    }
+
+    const segments = path.replace(/^\//, '').split('/');
+    const result: Record<string, unknown> = { ...existing };
+    let current: Record<string, unknown> = result;
+
+    for (let i = 0; i < segments.length - 1; i += 1) {
+        const segment = segments[i];
+        const next = current[segment];
+        if (!next || typeof next !== 'object') {
+            current[segment] = {};
+        } else {
+            current[segment] = { ...(next as Record<string, unknown>) };
+        }
+        current = current[segment] as Record<string, unknown>;
+    }
+
+    const lastSegment = segments[segments.length - 1];
+    const lastValue = current[lastSegment];
+    const lastObject = lastValue && typeof lastValue === 'object' ? (lastValue as Record<string, unknown>) : {};
+    current[lastSegment] = { ...lastObject, ...data };
+
+    return result as DataModel;
+}
 
 /**
  * Hook for consuming A2UI SSE streams.
@@ -78,6 +157,7 @@ export function useA2UIStream(
         isDone: false,
         retryCount: 0,
         connectionStatus: 'idle',
+        pendingClarification: null,
     });
 
     // Refs
@@ -138,6 +218,19 @@ export function useA2UIStream(
                 connectionStatus: 'connected',
             }));
         };
+
+        // Handle clarification_request events from backend
+        eventSource.addEventListener('clarification_request', (event) => {
+            try {
+                const clarification = JSON.parse((event as MessageEvent).data) as BackendClarificationRequest;
+                setState((prev) => ({
+                    ...prev,
+                    pendingClarification: clarification,
+                }));
+            } catch (err) {
+                console.error('Failed to parse clarification_request:', err);
+            }
+        });
 
         eventSource.onmessage = (event) => {
             const data = event.data;
@@ -228,7 +321,7 @@ export function useA2UIStream(
         }));
     }, []);
 
-    // Send action to server
+    // Send action to server and apply returned data to surface state
     const sendAction = useCallback(
         async (action: UserActionMessage['userAction']): Promise<unknown> => {
             if (!opts.dashboardId) {
@@ -247,7 +340,28 @@ export function useA2UIStream(
                 throw new Error(`Action failed: ${response.statusText}`);
             }
 
-            return response.json();
+            const result = await response.json();
+
+            // Apply data update from action response to the surface state
+            if (result.data && typeof result.data === 'object') {
+                const surfaceId = action.surfaceId;
+                const dataPath = typeof result.data_path === 'string' ? result.data_path : '/data';
+                if (surfaceId) {
+                    setState((prev) => {
+                        const newDataModels = new Map(prev.dataModels);
+                        const existingModel = prev.dataModels.get(surfaceId) || {};
+                        const updatedModel = mergeDataAtPath(
+                            existingModel,
+                            dataPath,
+                            result.data as Record<string, unknown>
+                        );
+                        newDataModels.set(surfaceId, updatedModel);
+                        return { ...prev, dataModels: newDataModels };
+                    });
+                }
+            }
+
+            return result;
         },
         [opts.dashboardId, opts.apiBaseUrl]
     );
@@ -263,10 +377,16 @@ export function useA2UIStream(
         };
     }, [streamUrl, opts.autoConnect, connect, close]);
 
+    // Clear clarification
+    const clearClarification = useCallback(() => {
+        setState((prev) => ({ ...prev, pendingClarification: null }));
+    }, []);
+
     const actions: A2UIStreamActions = {
         sendAction,
         reconnect: () => connect(false),
         close,
+        clearClarification,
     };
 
     return [state, actions];

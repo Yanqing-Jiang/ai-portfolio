@@ -22,36 +22,6 @@ import { buildLandingSchemas, toNavigationFromProjects } from '../constants/stru
 // Register GSAP plugins
 gsap.registerPlugin(ScrollTrigger);
 
-// Contact links data
-const contactLinks = [
-    {
-        label: 'LinkedIn',
-        href: 'https://www.linkedin.com/in/jiangyanqing/',
-        icon: (
-            <svg viewBox="0 0 34 34" className="w-8 h-8 sm:w-10 sm:h-10" xmlns="http://www.w3.org/2000/svg">
-                <rect width="34" height="34" rx="4" fill="#0A66C2" />
-                <path d="M8 12.5h4v13H8v-13zm2-6.5C8.9 6 8 6.9 8 8s.9 2 2 2 2-.9 2-2-.9-2-2-2zm6 6.5h3.8v1.8h.1c.5-1 1.9-2 3.9-2 4.1 0 4.9 2.7 4.9 6.1V25.5h-4v-6.4c0-1.5 0-3.5-2.1-3.5-2.1 0-2.4 1.6-2.4 3.4v6.5h-4v-13z" fill="#fff" />
-            </svg>
-        ),
-    },
-    {
-        label: 'Medium',
-        href: 'https://medium.com/@yanqing_j',
-        icon: (
-            <img src="https://yanqinghot.blob.core.windows.net/public-access/Medium_logo_Monogram.svg.png" alt="Medium" className="w-8 h-8 sm:w-10 sm:h-10" />
-        ),
-    },
-    {
-        label: 'Email',
-        href: 'mailto:jiangyanqing90@gmail.com',
-        icon: (
-            <svg viewBox="0 0 24 24" fill="currentColor" className="w-8 h-8 sm:w-10 sm:h-10">
-                <path d="M20 4H4a2 2 0 00-2 2v12a2 2 0 002 2h16a2 2 0 002-2V6a2 2 0 00-2-2zm0 2l-8 5-8-5h16zm0 12H4V8l8 5 8-5v10z" />
-            </svg>
-        ),
-    },
-] as const;
-
 // Tech badge styling
 type TechCategory = 'ai' | 'data' | 'frontend' | 'infra' | 'ml' | 'default';
 
@@ -94,8 +64,11 @@ const TECH_CATEGORY_KEYWORDS: Array<{ category: TechCategory; keywords: string[]
 ];
 
 // Year-specific visual themes for Project Evolution section
+// Year-specific visual themes for Project Evolution section
 interface YearTheme {
     gradient: string;
+    bgGradient: string; // Global atmosphere
+    accent: string;
     headingGradient: string;
     nodeGradient: string;
     glowColor: string;
@@ -105,59 +78,51 @@ interface YearTheme {
 
 const YEAR_THEMES: Record<number | string, YearTheme> = {
     2026: {
-        gradient: 'from-rose-400 to-amber-500',
-        headingGradient: 'from-rose-300 via-amber-400 to-pink-400',
-        nodeGradient: 'from-rose-400 to-amber-500',
+        gradient: 'from-orange-400 to-rose-500',
+        bgGradient: 'radial-gradient(circle at 50% 50%, rgba(251, 146, 60, 0.15), rgba(225, 29, 72, 0.05) 50%, transparent 100%)',
+        accent: '#fb923c',
+        headingGradient: 'from-orange-300 via-rose-400 to-pink-400',
+        nodeGradient: 'from-orange-400 to-rose-500',
         glowColor: 'rgba(244, 63, 94, 0.4)',
         cardBorderHover: 'hover:border-rose-500/50',
         cardShadowHover: 'hover:shadow-rose-500/20',
     },
     2025: {
-        gradient: 'from-cyan-400 to-purple-500',
-        headingGradient: 'from-cyan-300 via-sky-400 to-purple-400',
-        nodeGradient: 'from-cyan-400 to-purple-500',
+        gradient: 'from-cyan-400 to-blue-600',
+        bgGradient: 'radial-gradient(circle at 50% 50%, rgba(34, 211, 238, 0.15), rgba(37, 99, 235, 0.05) 50%, transparent 100%)',
+        accent: '#22d3ee',
+        headingGradient: 'from-cyan-300 via-sky-400 to-blue-500',
+        nodeGradient: 'from-cyan-400 to-blue-600',
         glowColor: 'rgba(34, 211, 238, 0.4)',
         cardBorderHover: 'hover:border-cyan-500/50',
         cardShadowHover: 'hover:shadow-cyan-500/20',
     },
-
     2024: {
-        gradient: 'from-blue-400 to-teal-500',
-        headingGradient: 'from-blue-300 via-blue-400 to-teal-400',
-        nodeGradient: 'from-blue-400 to-teal-500',
-        glowColor: 'rgba(59, 130, 246, 0.4)',
-        cardBorderHover: 'hover:border-blue-500/50',
-        cardShadowHover: 'hover:shadow-blue-500/20',
-    },
-    2023: {
-        gradient: 'from-purple-400 to-pink-500',
-        headingGradient: 'from-purple-300 via-fuchsia-400 to-pink-400',
-        nodeGradient: 'from-purple-400 to-pink-500',
-        glowColor: 'rgba(168, 85, 247, 0.4)',
-        cardBorderHover: 'hover:border-purple-500/50',
-        cardShadowHover: 'hover:shadow-purple-500/20',
-    },
-    2022: {
-        gradient: 'from-green-400 to-emerald-500',
-        headingGradient: 'from-green-300 via-emerald-400 to-teal-400',
-        nodeGradient: 'from-green-400 to-emerald-500',
+        gradient: 'from-emerald-400 to-teal-600',
+        bgGradient: 'radial-gradient(circle at 50% 50%, rgba(52, 211, 153, 0.15), rgba(13, 148, 136, 0.05) 50%, transparent 100%)',
+        accent: '#34d399',
+        headingGradient: 'from-emerald-300 via-teal-400 to-green-500',
+        nodeGradient: 'from-emerald-400 to-teal-600',
         glowColor: 'rgba(52, 211, 153, 0.4)',
         cardBorderHover: 'hover:border-emerald-500/50',
         cardShadowHover: 'hover:shadow-emerald-500/20',
     },
     default: {
-        gradient: 'from-sky-400 to-purple-500',
-        headingGradient: 'from-sky-300 via-blue-400 to-purple-400',
-        nodeGradient: 'from-sky-400 to-purple-500',
+        gradient: 'from-purple-400 to-indigo-600',
+        bgGradient: 'radial-gradient(circle at 50% 50%, rgba(168, 85, 247, 0.15), rgba(79, 70, 229, 0.05) 50%, transparent 100%)',
+        accent: '#a855f7',
+        headingGradient: 'from-purple-300 via-indigo-400 to-purple-500',
+        nodeGradient: 'from-purple-400 to-indigo-600',
         glowColor: 'rgba(56, 189, 248, 0.4)',
-        cardBorderHover: 'hover:border-sky-500/50',
-        cardShadowHover: 'hover:shadow-sky-500/20',
+        cardBorderHover: 'hover:border-purple-500/50',
+        cardShadowHover: 'hover:shadow-purple-500/20',
     },
 };
 
 const getYearTheme = (year: number | string): YearTheme => {
     return YEAR_THEMES[year] ?? YEAR_THEMES.default;
 };
+
 
 const getTechBadgeClass = (tech: string) => {
     const normalized = tech.trim().toLowerCase();
@@ -292,86 +257,14 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                 const getScrollAmount = () => -(track.scrollWidth - window.innerWidth);
 
                 // ============================================
-                // DESKTOP: Full cinematic card assembly
-                // ============================================
-                const createDesktopCardAnimations = (tween: gsap.core.Tween) => {
-                    const cards = gsap.utils.toArray('.stream-card') as HTMLElement[];
-                    cards.forEach((card) => {
-                        const background = card.querySelector('.assembler-bg');
-                        const image = card.querySelector('.assembler-image');
-                        const content = card.querySelector('.assembler-content');
-                        const header = card.querySelector('.assembler-header');
-
-                        // Background glass flies in with 3D depth
-                        gsap.from(background, {
-                            z: -600, opacity: 0, scale: 0.8, rotateX: -25,
-                            scrollTrigger: {
-                                trigger: card, containerAnimation: tween,
-                                start: 'left center+=500', end: 'left center', scrub: true,
-                            }
-                        });
-
-                        // Image slides in with blur reveal
-                        gsap.from(image, {
-                            x: 150, opacity: 0, scale: 1.2, filter: 'blur(20px)',
-                            scrollTrigger: {
-                                trigger: card, containerAnimation: tween,
-                                start: 'left center+=600', end: 'left center', scrub: true,
-                            }
-                        });
-
-                        // Content floats up magnetically
-                        gsap.from(content, {
-                            y: 120, opacity: 0, rotate: 5,
-                            scrollTrigger: {
-                                trigger: card, containerAnimation: tween,
-                                start: 'left center+=400', end: 'left center', scrub: true,
-                            }
-                        });
-
-                        // Header slides in with power
-                        gsap.from(header, {
-                            x: -80, scale: 0.9, opacity: 0,
-                            scrollTrigger: {
-                                trigger: card, containerAnimation: tween,
-                                start: 'left center+=450', end: 'left center', scrub: true,
-                            }
-                        });
-
-                        // Focus highlight effect
-                        gsap.to(card, {
-                            scale: 1.05, filter: 'brightness(1.1) saturate(1.1)', zIndex: 50, duration: 0.5,
-                            scrollTrigger: {
-                                trigger: card, containerAnimation: tween,
-                                start: 'left center+=200', end: 'right center-=200',
-                                toggleActions: 'play reverse play reverse',
-                                onEnter: () => card.classList.add('is-focused'),
-                                onLeave: () => card.classList.remove('is-focused'),
-                                onEnterBack: () => card.classList.add('is-focused'),
-                                onLeaveBack: () => card.classList.remove('is-focused'),
-                            }
-                        });
-                    });
-
-                    // Year markers parallax
-                    const years = gsap.utils.toArray('.year-marker-bg') as HTMLElement[];
-                    years.forEach((year) => {
-                        gsap.to(year, {
-                            x: 500, opacity: 0, scale: 1.5, ease: 'none',
-                            scrollTrigger: {
-                                trigger: year, containerAnimation: tween,
-                                start: 'left right', end: 'right left', scrub: true,
-                            }
-                        });
-                    });
-                };
-
-                // ============================================
                 // RESPONSIVE SCROLL SETUP with matchMedia
                 // ============================================
                 const mm = gsap.matchMedia();
 
-                // Desktop (768px+): Full horizontal scroll cinematic experience
+                // ============================================
+                // DESKTOP: Timeline "Wow" Factor logic
+                // ============================================
+
                 mm.add("(min-width: 768px)", () => {
                     const tween = gsap.to(track, {
                         x: getScrollAmount,
@@ -382,34 +275,73 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                             start: 'top top',
                             end: () => `+=${track.scrollWidth - window.innerWidth}`,
                             pin: true,
-                            scrub: 1.2,
+                            scrub: 1,
                             invalidateOnRefresh: true,
-                            anticipatePin: 1,
+                            onToggle: (self) => {
+                                // Performance: Hide hero background canvas when timeline is active
+                                gsap.set("#neural-field-canvas", {
+                                    display: self.isActive ? "none" : "block"
+                                });
+                            }
                         },
                     });
-                    createDesktopCardAnimations(tween);
 
-                    // Neural Pulse Progress Tracker (desktop only)
-                    const pulsePoint = document.querySelector('.neural-pulse-point');
+                    // 1. Parallax Images
+                    gsap.utils.toArray<HTMLElement>('.parallax-img').forEach(img => {
+                        gsap.to(img, {
+                            x: 100,
+                            ease: 'none',
+                            scrollTrigger: {
+                                trigger: img.closest('.stream-card'),
+                                scroller: mainScroller,
+                                containerAnimation: tween,
+                                start: 'left right',
+                                end: 'right left',
+                                scrub: true,
+                            }
+                        });
+                    });
+
+                    // 2. Atmosphere Shift (Background Gradients)
+                    displayYears.forEach((yearData) => {
+                        const yearSection = document.getElementById(`year-section-${yearData.year}`);
+                        const bgLayer = document.getElementById(`bg-layer-${yearData.year}`);
+                        if (yearSection && bgLayer) {
+                            gsap.to(bgLayer, {
+                                opacity: 1,
+                                duration: 1,
+                                scrollTrigger: {
+                                    trigger: yearSection,
+                                    scroller: mainScroller,
+                                    containerAnimation: tween,
+                                    start: 'left center',
+                                    end: 'right center',
+                                    toggleActions: 'play reverse play reverse',
+                                    scrub: 0.5,
+                                }
+                            });
+                        }
+                    });
+
+                    // 3. Living Timeline Pulse
+                    const pulsePoint = document.querySelector('.timeline-pulse');
                     if (pulsePoint) {
                         gsap.to(pulsePoint, {
-                            x: () => {
-                                const bar = pulsePoint.parentElement;
-                                return bar ? (bar.clientWidth - 8) : 0;
-                            },
+                            x: track.scrollWidth,
                             ease: 'none',
                             scrollTrigger: {
                                 trigger: section,
                                 scroller: mainScroller,
                                 start: 'top top',
                                 end: () => `+=${track.scrollWidth - window.innerWidth}`,
-                                scrub: true,
+                                scrub: 0.1,
                             }
                         });
                     }
 
                     return () => { tween.kill(); };
                 });
+
 
                 // Mobile (<768px): NO horizontal scroll - it's hidden
                 // Instead, we animate the vertical stacked cards
@@ -550,7 +482,10 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
 
                 <div className="relative z-20">
                     {/* Hero Section with 3D Holographic Dashboard */}
-                    <section ref={heroRef} className="relative min-h-screen flex flex-col items-center justify-center overflow-hidden py-12 px-4 sm:px-6 lg:px-8 border-b border-white/5 bg-[#010208]">
+                    <section ref={heroRef} className="relative min-h-screen flex flex-col items-center justify-center overflow-hidden py-12 px-4 sm:px-6 lg:px-8 border-b border-white/5 bg-slate-950">
+                        {/* Noise Texture (Consistent with Sidebar & Rest of Page) */}
+                        <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-20 pointer-events-none" />
+
                         <AdvancedNeuralField />
 
                         {/* Ambient Nebula Glows */}
@@ -590,132 +525,122 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                     </section>
 
                     {/* HORIZONTAL SCROLL "NEURAL STREAM" SECTION - DESKTOP ONLY */}
-                    {/* Mobile shows vertical stacked cards instead (see below) */}
                     <div ref={horizontalSectionRef} className="hidden md:block relative h-screen w-screen bg-slate-950 z-30 overflow-hidden">
-                        <div className="h-full w-full flex items-center">
+                        {/* GLOBAL ATMOSPHERE LAYERS (Fixed behind track) */}
+                        <div className="absolute inset-0 w-full h-full pointer-events-none z-0">
+                            {displayYears.map(y => (
+                                <div
+                                    key={`bg-${y.year}`}
+                                    id={`bg-layer-${y.year}`}
+                                    className="absolute inset-0 w-full h-full opacity-0 will-change-[opacity]"
+                                    style={{
+                                        background: getYearTheme(y.year).bgGradient,
+                                        filter: 'blur(60px)'
+                                    }}
+                                />
+                            ))}
+                            {/* NOISE OVERLAY */}
+                            <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-20" />
+                        </div>
+
+                        <div className="h-full w-full relative z-10 overflow-visible">
                             {/* The Track - full width without constraints */}
-                            <div ref={trackRef} className="flex h-full items-center gap-0 w-max relative">
-                                {/* The Neural Pulse Progress Tracker */}
-                                <div className="fixed bottom-12 left-12 right-12 h-px bg-slate-800 z-50 pointer-events-none hidden md:block">
-                                    <div className="neural-pulse-point absolute top-1/2 left-0 -translate-y-1/2 w-2 h-2 rounded-full bg-blue-500 shadow-[0_0_15px_theme('colors.blue.400')]" />
+                            <div ref={trackRef} className="flex h-full items-center gap-0 w-max relative pl-20 will-change-transform shrink-0">
+                                {/* THE LIVING TIMELINE LINE */}
+                                <div className="absolute top-1/2 left-0 right-0 h-px bg-slate-800 w-full pointer-events-none">
+                                    <div className="timeline-pulse absolute top-1/2 left-0 -translate-y-1/2 w-32 h-1 bg-gradient-to-r from-transparent via-white to-transparent blur-[2px]" />
                                 </div>
 
-                                {/* Connecting Data Line (Background) */}
-                                <div className="absolute top-1/2 left-0 right-0 h-px bg-gradient-to-r from-transparent via-blue-500/10 to-transparent w-full pointer-events-none" />
+                                {/* Introduction / Start Node */}
+                                <div className="w-[30vw] shrink-0 px-10">
+                                    <h2 className="text-6xl font-black mb-4">The Work</h2>
+                                    <p className="text-slate-400">A journey through generative UI, agents, and data.</p>
+                                </div>
 
-                                <div className="flex gap-20 md:gap-40 items-center pl-8 md:pl-20 pr-[50vw]">
-                                    {/* Introduction / Start Node */}
-                                    <div className="flex flex-col justify-center min-w-[80vw] md:min-w-[30vw] px-4 sm:px-10">
-                                        <h2 className="text-3xl md:text-6xl font-black text-transparent bg-clip-text bg-gradient-to-br from-white to-slate-600 mb-6">
-                                            Project<br />Preview
-                                        </h2>
-                                        <div className="h-1 w-20 sm:w-24 bg-gradient-to-r from-blue-500 to-purple-500 rounded-full" />
-                                        <p className="mt-6 text-slate-400 text-base sm:text-lg max-w-sm">
-                                            Scroll to view timeline of Yanqing's AI projects
-                                        </p>
-                                    </div>
+                                {/* Years Loop */}
+                                {displayYears.map((yearGroup) => {
+                                    const theme = getYearTheme(yearGroup.year);
+                                    return (
+                                        <div
+                                            key={yearGroup.year}
+                                            id={`year-section-${yearGroup.year}`}
+                                            className="flex items-center gap-20 px-10 relative"
+                                        >
+                                            {/* YEAR MARKER */}
+                                            <div className="relative shrink-0 flex flex-col items-center gap-6">
+                                                <div className="text-[12rem] font-bold leading-none text-transparent bg-clip-text bg-gradient-to-b from-white/10 to-transparent select-none absolute -top-40 left-1/2 -translate-x-1/2 blur-sm">
+                                                    {yearGroup.year}
+                                                </div>
 
-                                    {/* Years Loop */}
-                                    {displayYears.map(({ year, projects, label }) => {
-                                        const theme = getYearTheme(year);
-                                        return (
-                                            <div key={year} className="flex gap-12 md:gap-20 items-center relative">
-                                                {/* Giant Background Year Marker */}
+                                                {/* Timeline Node */}
                                                 <div
-                                                    className="year-marker-bg absolute -top-20 md:-top-40 -left-10 md:-left-20 text-[8rem] md:text-[18rem] font-bold text-slate-900/40 select-none z-0 pointer-events-none"
-                                                    style={{ fontFamily: 'Inter, sans-serif' }}
+                                                    className="w-4 h-4 rounded-full relative z-10"
+                                                    style={{ background: theme.accent, boxShadow: `0 0 20px ${theme.accent}` }}
+                                                />
+                                                <div className="h-24 w-px bg-gradient-to-b from-slate-700 to-transparent" />
+                                                <h3 className="text-xl font-mono tracking-widest uppercase" style={{ color: theme.accent }}>
+                                                    {yearGroup.subtitle?.replace(/[()]/g, '') || 'Era'}
+                                                </h3>
+                                            </div>
+
+                                            {/* Projects */}
+                                            {yearGroup.projects.map((project) => (
+                                                <div
+                                                    key={project.id}
+                                                    className="stream-card relative w-[600px] h-[450px] shrink-0 group perspective-1000"
                                                 >
-                                                    {year}
-                                                </div>
+                                                    <div className="relative w-full h-full bg-slate-900/40 backdrop-blur-md border border-white/10 rounded-3xl overflow-hidden hover:border-white/30 transition-all duration-500 hover:shadow-2xl hover:shadow-cyan-500/10 group-hover:-translate-y-2">
+                                                        {/* PARALLAX IMAGE CONTAINER */}
+                                                        <div className="absolute inset-0 overflow-hidden pointer-events-none">
+                                                            <div className="absolute inset-0 grayscale group-hover:grayscale-0 opacity-60 group-hover:opacity-80 transition-opacity duration-700">
+                                                                <img
+                                                                    src={project.coverUrl ?? project.imageUrl}
+                                                                    alt={project.title}
+                                                                    className="parallax-img w-[120%] h-full object-cover grayscale group-hover:grayscale-0"
+                                                                    style={{ transform: 'translateX(-50px)' }}
+                                                                />
+                                                            </div>
+                                                            <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/20 to-transparent" />
+                                                        </div>
 
-                                                {/* Visual Separator / Node */}
-                                                <div className="relative z-10 flex flex-col items-center gap-4">
-                                                    <div
-                                                        className={`w-4 h-4 rounded-full bg-gradient-to-r ${theme.nodeGradient} shadow-[0_0_20px_theme('colors.blue.400')]`}
-                                                    />
-                                                    <div className="h-32 w-px bg-slate-800" />
-                                                    <h3 className={`text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-br ${theme.headingGradient} rotate-[-90deg] whitespace-nowrap origin-center select-none`}>
-                                                        {label ?? year}
-                                                    </h3>
-                                                </div>
-
-                                                {/* Projects Stream */}
-                                                {projects.map((project) => {
-                                                    const previewDescription = project.cardDescription ?? project.description;
-                                                    const shortDesc = previewDescription.length > 120 ? previewDescription.substring(0, 120) + '...' : previewDescription;
-
-                                                    return (
-                                                        <div
-                                                            key={project.id}
-                                                            className="stream-card relative group flex-shrink-0 w-[90vw] md:w-[700px] h-[60vh] md:h-[550px] perspective-2000 z-10 will-change-transform"
-                                                        >
-                                                            {/* Card Container - DECONSTRUCTED ASSEMBLER */}
-                                                            <div className="relative w-full h-full flex flex-col justify-end p-6 md:p-14 group-hover:shadow-[0_0_60px_rgba(59,130,246,0.25)] transition-shadow duration-500 rounded-3xl">
-
-                                                                {/* Layer 1: Background Glass Frame (Assembler Piece) */}
-                                                                <div className="assembler-bg absolute inset-0 rounded-3xl bg-slate-900/40 backdrop-blur-xl border border-white/5 group-hover:border-white/20 transition-colors duration-700 shadow-2xl will-change-transform" />
-
-                                                                {/* Layer 2: Image Fragment (Assembler Piece) */}
-                                                                <div className="assembler-image absolute top-4 right-4 bottom-1/2 md:bottom-4 left-4 md:left-1/3 rounded-2xl overflow-hidden pointer-events-none z-0">
-                                                                    <div className="absolute inset-0 grayscale contrast-125 opacity-40 group-hover:grayscale-0 group-hover:opacity-80 transition-all duration-1000">
-                                                                        <img
-                                                                            src={project.coverUrl ?? project.imageUrl}
-                                                                            alt={project.title}
-                                                                            className="w-full h-full object-cover scale-110 group-hover:scale-100 transition-transform duration-1000"
-                                                                        />
-                                                                    </div>
-                                                                    <div className="absolute inset-0 bg-gradient-to-t md:bg-gradient-to-l from-slate-950/80 via-transparent to-transparent" />
-                                                                </div>
-
-                                                                {/* Layer 3: Floating Meta (Assembler Piece) */}
-                                                                <div className="assembler-header absolute top-10 md:top-12 left-8 md:left-10 z-30">
-                                                                    <div className="flex flex-wrap gap-2 mb-4 md:mb-6">
-                                                                        {project.technologies.slice(0, 3).map(tech => (
-                                                                            <span key={tech} className={`text-[9px] md:text-[10px] uppercase tracking-widest font-bold px-2 py-0.5 rounded-full ${getTechBadgeClass(tech)}`}>
-                                                                                {tech}
-                                                                            </span>
-                                                                        ))}
-                                                                    </div>
-                                                                    <h4 className={`text-3xl md:text-6xl font-black text-white leading-none tracking-tighter transition-all duration-500 group-hover:text-blue-400`}>
-                                                                        {project.title.split(' ').map((word, i) => (
-                                                                            <span key={i} className="block">{word}</span>
-                                                                        ))}
-                                                                    </h4>
-                                                                </div>
-
-                                                                {/* Layer 4: Description (Assembler Piece) */}
-                                                                <div className="assembler-content relative z-30 max-w-sm">
-                                                                    <p className="text-slate-400 text-sm md:text-lg mb-6 md:mb-8 leading-relaxed font-medium">
-                                                                        {shortDesc}
-                                                                    </p>
-
-                                                                    <Link
-                                                                        to={`/project/${project.id}`}
-                                                                        onClick={() => onSelectProject(project)}
-                                                                        className="group/btn relative inline-flex items-center justify-center px-8 py-3 overflow-hidden font-bold text-white transition-all duration-300 bg-white/5 rounded-full hover:bg-white/10"
-                                                                    >
-                                                                        <span className="relative flex items-center gap-2 text-xs tracking-widest uppercase">
-                                                                            Explore Project
-                                                                            <svg className="w-4 h-4 transition-transform group-hover/btn:translate-x-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 8l4 4m0 0l-4 4m4-4H3" /></svg>
-                                                                        </span>
-                                                                    </Link>
-                                                                </div>
-
+                                                        {/* CONTENT */}
+                                                        <div className="absolute bottom-0 left-0 w-full p-8 z-20 translate-y-4 group-hover:translate-y-0 transition-transform duration-500">
+                                                            <div className="flex gap-2 mb-3">
+                                                                {project.technologies.slice(0, 3).map(tech => (
+                                                                    <span key={tech} className="text-[10px] uppercase font-bold px-2 py-1 rounded bg-white/5 border border-white/10 text-slate-300">
+                                                                        {tech}
+                                                                    </span>
+                                                                ))}
+                                                            </div>
+                                                            <h4 className="text-3xl font-bold leading-tight mb-2 group-hover:text-white transition-colors">
+                                                                {project.title}
+                                                            </h4>
+                                                            <p className="text-slate-400 text-sm line-clamp-2 mb-6 group-hover:text-slate-300 transition-colors">
+                                                                {project.cardDescription ?? project.description}
+                                                            </p>
+                                                            <div className="flex items-center gap-2 text-sm font-bold tracking-widest uppercase text-cyan-400 opacity-0 group-hover:opacity-100 transition-opacity duration-500 delay-100">
+                                                                <Link
+                                                                    to={`/project/${project.id}`}
+                                                                    onClick={() => onSelectProject(project)}
+                                                                >
+                                                                    <span>View Project</span>
+                                                                </Link>
+                                                                <span className="text-lg">→</span>
                                                             </div>
                                                         </div>
-                                                    );
-                                                })}
-                                            </div>
-                                        );
-                                    })}
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    );
+                                })}
 
-                                    {/* Visual End of Stream */}
-                                    <div className="min-w-[20vw] flex items-center justify-center text-slate-500 text-sm font-mono tracking-widest uppercase rotate-90">
-                                    </div>
-                                </div>
+                                {/* END SPACER */}
+                                <div className="w-[50vw]" />
                             </div>
                         </div>
                     </div>
+
 
                     {/* MOBILE VERTICAL STACKED CARDS - Shown only on mobile */}
                     {/* This replaces the horizontal timeline experience with natural vertical scroll */}

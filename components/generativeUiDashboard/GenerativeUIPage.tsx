@@ -1,3 +1,20 @@
+// --- Function/Class Map ---
+// Component: UnifiedHeader
+//   Role: Display streaming status and dashboard-level actions.
+//   Called from: components/generativeUiDashboard/GenerativeUIPage.tsx
+//   Invokes: onDebugToggle, onReset callbacks
+//   Why: Keeps stream state visible and actions accessible.
+// Component: SuggestionPopup
+//   Role: Render quick-start suggestion cards for common queries.
+//   Called from: components/generativeUiDashboard/GenerativeUIPage.tsx
+//   Invokes: onSelect callback
+//   Why: Helps users discover example prompts quickly.
+// Component: GenerativeUIPage
+//   Role: Orchestrate A2UI streaming, clarifications, and dashboard layout.
+//   Called from: App routing
+//   Invokes: useA2UIStream, useSurface, ClarificationOverlay, FollowUpSuggestions
+//   Why: Main A2UI experience container for the portfolio.
+// --- End Function/Class Map ---
 /**
  * Generative UI Project Page (2026) - Award-Winning Redesign
  *
@@ -17,6 +34,9 @@ import { motion, AnimatePresence } from 'framer-motion';
 // A2UI imports
 import { useA2UIStream, useSurface } from './a2ui';
 import { A2UISurface, A2UISurfaceLoading, A2UISurfaceError } from './renderer';
+import { ClarificationOverlay, type ClarificationRequest } from './ClarificationOverlay';
+import { FollowUpSuggestions, type FollowUpSuggestion } from './FollowUpSuggestions';
+import { SkillHeaderBadge, type SkillInfo } from './SkillHeaderBadge';
 
 // ============================================================================
 // Theme Tokens (Premium Rose/Amber)
@@ -59,6 +79,38 @@ const theme = {
     },
 };
 
+const ICONS = {
+    suggestions: {
+        price: 'PRICE',
+        revenue: 'REV',
+        margins: 'MARG',
+        earnings: 'EARN',
+        position: 'PEER',
+    },
+    header: {
+        debug: 'DBG',
+        reset: 'NEW',
+    },
+    prompt: {
+        tip: 'TIP',
+        close: 'x',
+    },
+    emptyState: 'CHART',
+    followUps: {
+        deep: 'DEEP',
+        peer: 'PEER',
+    },
+    events: {
+        skillSelected: 'SKL',
+        streamStarted: 'STR',
+        dataReceived: 'DATA',
+        layoutUpdated: 'LAY',
+        streamComplete: 'DONE',
+        error: 'ERR',
+        default: '...',
+    },
+};
+
 // ============================================================================
 // Suggestions - Using actual comp_financials tickers
 // ============================================================================
@@ -66,27 +118,27 @@ const theme = {
 const SUGGESTIONS = [
     {
         text: 'Why did NVDA drop recently?',
-        icon: '📉',
+        icon: ICONS.suggestions.price,
         description: 'Price movement analysis with news'
     },
     {
         text: 'Compare AMD vs INTC revenue',
-        icon: '📊',
+        icon: ICONS.suggestions.revenue,
         description: 'Revenue comparison chart'
     },
     {
         text: 'QCOM vs AVGO margins trend',
-        icon: '💹',
+        icon: ICONS.suggestions.margins,
         description: 'Margin analysis over time'
     },
     {
         text: 'Show MU quarterly earnings',
-        icon: '📈',
+        icon: ICONS.suggestions.earnings,
         description: 'Quarterly KPIs and chart'
     },
     {
         text: 'TXN market position vs peers',
-        icon: '🎯',
+        icon: ICONS.suggestions.position,
         description: 'Competitive landscape'
     },
 ];
@@ -165,7 +217,7 @@ function UnifiedHeader({ dashboardId, streamState, onDebugToggle, onReset }: Uni
                     title="Toggle Debug Inspector"
                     style={{ color: theme.colors.text.secondary }}
                 >
-                    <span className="text-lg">🔧</span>
+                    <span className="text-lg">{ICONS.header.debug}</span>
                 </button>
 
                 {dashboardId && (
@@ -175,7 +227,7 @@ function UnifiedHeader({ dashboardId, streamState, onDebugToggle, onReset }: Uni
                         title="Start New Analysis"
                         style={{ color: theme.colors.text.secondary }}
                     >
-                        <span className="text-lg">🔄</span>
+                        <span className="text-lg">{ICONS.header.reset}</span>
                     </button>
                 )}
             </div>
@@ -211,14 +263,15 @@ function SuggestionPopup({ isVisible, onSelect, onClose }: SuggestionPopupProps)
                 >
                     <div className="flex items-center justify-between mb-3">
                         <h3 className="text-sm font-semibold" style={{ color: theme.colors.text.primary }}>
-                            💡 Try asking about semiconductor stocks
+                             <span className="mr-2">{ICONS.prompt.tip}</span>
+                             Try asking about semiconductor stocks
                         </h3>
                         <button
                             onClick={onClose}
                             className="text-xs px-2 py-1 rounded"
                             style={{ color: theme.colors.text.muted }}
                         >
-                            ✕
+                            {ICONS.prompt.close}
                         </button>
                     </div>
 
@@ -289,6 +342,29 @@ export function GenerativeUIPage(): React.ReactElement {
     const [isFocused, setIsFocused] = useState(false);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
 
+    // Clarification and follow-up state
+    const [clarificationRequest, setClarificationRequest] = useState<ClarificationRequest | null>(null);
+    const [followUpSuggestions, setFollowUpSuggestions] = useState<FollowUpSuggestion[]>([]);
+    const [activeSkill, setActiveSkill] = useState<SkillInfo | null>(null);
+
+    // Audit trail for debug panel - tracks execution timeline
+    interface AuditEvent {
+        id: string;
+        type: 'skill_selected' | 'stream_started' | 'data_received' | 'layout_updated' | 'stream_complete' | 'error';
+        label: string;
+        timestamp: Date;
+        details?: string;
+    }
+    const [auditTrail, setAuditTrail] = useState<AuditEvent[]>([]);
+
+    // Add audit event helper
+    const addAuditEvent = useCallback((type: AuditEvent['type'], label: string, details?: string) => {
+        setAuditTrail((prev) => [
+            ...prev,
+            { id: `${Date.now()}`, type, label, timestamp: new Date(), details },
+        ]);
+    }, []);
+
     // A2UI stream state
     const streamUrl = dashboardId ? `/api/dash/${dashboardId}/stream` : null;
     const [streamState, streamActions] = useA2UIStream(streamUrl, {
@@ -311,8 +387,9 @@ export function GenerativeUIPage(): React.ReactElement {
     }, [question]);
 
     // Handle dashboard creation
-    const handleSubmit = useCallback(async () => {
-        if (!question.trim() || isCreating) return;
+    const handleSubmit = useCallback(async (overrideQuestion?: string) => {
+        const nextQuestion = (overrideQuestion ?? question).trim();
+        if (!nextQuestion || isCreating) return;
 
         setIsCreating(true);
         setError(null);
@@ -322,7 +399,7 @@ export function GenerativeUIPage(): React.ReactElement {
             const response = await fetch('/api/dash/create', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ question: question.trim() }),
+                body: JSON.stringify({ question: nextQuestion }),
             });
 
             if (!response.ok) {
@@ -331,12 +408,15 @@ export function GenerativeUIPage(): React.ReactElement {
 
             const data = await response.json();
             setDashboardId(data.dashboard_id);
+            setQuestion(nextQuestion);
+            addAuditEvent('stream_started', 'Dashboard created', `ID: ${data.dashboard_id}`);
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Unknown error');
+            addAuditEvent('error', 'Creation failed', err instanceof Error ? err.message : 'Unknown error');
         } finally {
             setIsCreating(false);
         }
-    }, [question, isCreating]);
+    }, [question, isCreating, addAuditEvent]);
 
     // Handle suggestion click
     const handleSuggestion = (text: string) => {
@@ -370,12 +450,177 @@ export function GenerativeUIPage(): React.ReactElement {
         setDashboardId(null);
         setQuestion('');
         setError(null);
+        setClarificationRequest(null);
+        setFollowUpSuggestions([]);
+        setActiveSkill(null);
         streamActions.close();
     };
 
-    // Unified Debug Panel (simplified)
+    // Fetch skill info when dashboard is created
+    useEffect(() => {
+        if (dashboardId && !activeSkill) {
+            const fetchSkillInfo = async () => {
+                try {
+                    const response = await fetch(`/api/dash/${dashboardId}/spec`);
+                    if (response.ok) {
+                        const data = await response.json();
+                        if (data.plan?.skill_id) {
+                            setActiveSkill({
+                                id: data.plan.skill_id,
+                                name: data.plan.skill_id.replace('a2ui_', '').replace(/_/g, ' '),
+                            });
+                            addAuditEvent('skill_selected', 'Skill selected', data.plan.skill_id);
+                        }
+                    }
+                } catch (err) {
+                    console.error('Failed to fetch skill info:', err);
+                }
+            };
+            fetchSkillInfo();
+        }
+    }, [dashboardId, activeSkill, addAuditEvent]);
+
+    // Convert backend clarification to frontend format when received
+    useEffect(() => {
+        if (streamState.pendingClarification && !clarificationRequest) {
+            const backend = streamState.pendingClarification;
+            // Convert to frontend ClarificationRequest format
+            const firstField = backend.fields[0];
+            if (firstField) {
+                const converted: ClarificationRequest = {
+                    id: backend.request_id,
+                    fieldId: firstField.field_id,
+                    type: firstField.input_type === 'multi_choice' ? 'multi_choice'
+                        : firstField.input_type === 'freeform' ? 'freeform'
+                            : 'single_choice',
+                    prompt: backend.subtitle || firstField.label,
+                    options: firstField.options?.map((o) => ({
+                        label: o.label,
+                        value: o.id,
+                        description: o.description,
+                    })),
+                    maxSelections: firstField.input_type === 'multi_choice' ? firstField.options?.length : undefined,
+                    placeholder: firstField.placeholder,
+                    targetComponentId: backend.target_component_id,
+                };
+                setClarificationRequest(converted);
+            }
+        }
+    }, [streamState.pendingClarification, clarificationRequest]);
+
+    // Handle clarification response
+    const handleClarificationSubmit = useCallback(
+        async (requestId: string, response: string | string[]) => {
+            setClarificationRequest(null);
+            streamActions.clearClarification();
+            const fieldId = clarificationRequest?.fieldId || 'response';
+
+            // Send response to backend
+            if (dashboardId) {
+                try {
+                    await fetch(`/api/dash/${dashboardId}/clarification`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            request_id: requestId,
+                            values: { [fieldId]: response },
+                            skipped: false,
+                        }),
+                    });
+                } catch (err) {
+                    console.error('Failed to submit clarification:', err);
+                }
+            }
+        },
+        [dashboardId, streamActions, clarificationRequest]
+    );
+
+    const handleClarificationDismiss = useCallback((_requestId: string) => {
+        setClarificationRequest(null);
+        streamActions.clearClarification();
+    }, [streamActions]);
+
+    // Handle follow-up suggestion click
+    const handleFollowUpSelect = useCallback(
+        (suggestion: FollowUpSuggestion) => {
+            setQuestion(suggestion.query);
+            setFollowUpSuggestions([]);
+            // Auto-submit the follow-up
+            handleSubmit(suggestion.query);
+        },
+        [handleSubmit]
+    );
+
+    // Track stream completion
+    useEffect(() => {
+        if (streamState.isDone && !auditTrail.some((e) => e.type === 'stream_complete')) {
+            addAuditEvent('stream_complete', 'Stream completed', `${streamState.surfaces.size} surfaces rendered`);
+        }
+    }, [streamState.isDone, streamState.surfaces.size, auditTrail, addAuditEvent]);
+
+    // Track layout updates when surface changes
+    useEffect(() => {
+        if (surface?.root && !auditTrail.some((e) => e.type === 'layout_updated')) {
+            addAuditEvent('layout_updated', 'Layout rendered', surfaceId);
+        }
+    }, [surface?.root, surfaceId, auditTrail, addAuditEvent]);
+
+    // Generate follow-up suggestions when dashboard completes via backend API
+    useEffect(() => {
+        if (streamState.isDone && surface?.root && followUpSuggestions.length === 0 && dashboardId) {
+            const fetchFollowUps = async () => {
+                try {
+                    const response = await fetch(`/api/dash/${dashboardId}/follow-ups`);
+                    if (response.ok) {
+                        const data = await response.json();
+                        if (data.suggestions && Array.isArray(data.suggestions)) {
+                            setFollowUpSuggestions(data.suggestions);
+                        }
+                    }
+                } catch (err) {
+                    console.error('Failed to fetch follow-up suggestions:', err);
+                    // Fall back to basic suggestions
+                    setFollowUpSuggestions([
+                        { id: '1', label: 'Deeper analysis', query: 'Explain the key drivers', icon: ICONS.followUps.deep },
+                        { id: '2', label: 'Compare peers', query: 'Compare to industry peers', icon: ICONS.followUps.peer },
+                    ]);
+                }
+            };
+
+            // Small delay to let the dashboard render
+            const timer = setTimeout(fetchFollowUps, 500);
+            return () => clearTimeout(timer);
+        }
+    }, [streamState.isDone, surface?.root, dashboardId, followUpSuggestions.length]);
+
+    // Unified Debug Panel with Audit Trail
     const renderDebugPanel = () => {
         if (!showDebugPanel) return null;
+
+        const getEventIcon = (type: AuditEvent['type']) => {
+            switch (type) {
+                case 'skill_selected': return ICONS.events.skillSelected;
+                case 'stream_started': return ICONS.events.streamStarted;
+                case 'data_received': return ICONS.events.dataReceived;
+                case 'layout_updated': return ICONS.events.layoutUpdated;
+                case 'stream_complete': return ICONS.events.streamComplete;
+                case 'error': return ICONS.events.error;
+                default: return ICONS.events.default;
+            }
+        };
+
+        const getEventColor = (type: AuditEvent['type']) => {
+            switch (type) {
+                case 'skill_selected': return '#f59e0b';
+                case 'stream_started': return '#3b82f6';
+                case 'data_received': return '#10b981';
+                case 'layout_updated': return '#8b5cf6';
+                case 'stream_complete': return '#22c55e';
+                case 'error': return '#ef4444';
+                default: return '#94a3b8';
+            }
+        };
+
         return (
             <AnimatePresence>
                 <div
@@ -392,20 +637,60 @@ export function GenerativeUIPage(): React.ReactElement {
                     >
                         <div className="p-4 border-b border-slate-800 flex justify-between items-center">
                             <h3 className="font-bold text-white">Stream Inspector</h3>
-                            <button onClick={() => setShowDebugPanel(false)} className="text-slate-400">✕</button>
+                            <button onClick={() => setShowDebugPanel(false)} className="text-slate-400">{ICONS.prompt.close}</button>
                         </div>
                         <div className="p-4 max-h-[60vh] overflow-auto">
-                            <div className="grid grid-cols-2 gap-4 mb-4">
+                            {/* Stats Grid */}
+                            <div className="grid grid-cols-3 gap-3 mb-4">
                                 <div className="p-3 bg-slate-800 rounded-xl">
                                     <p className="text-[10px] uppercase text-slate-500 font-bold mb-1">Messages</p>
                                     <p className="text-xl text-white font-mono">{streamState.surfaces.size}</p>
                                 </div>
                                 <div className="p-3 bg-slate-800 rounded-xl">
-                                    <p className="text-[10px] uppercase text-slate-500 font-bold mb-1">Surface ID</p>
-                                    <p className="text-sm text-white font-mono truncate">{surfaceId}</p>
+                                    <p className="text-[10px] uppercase text-slate-500 font-bold mb-1">Skill</p>
+                                    <p className="text-sm text-amber-400 font-mono truncate">{activeSkill?.id || 'pending'}</p>
+                                </div>
+                                <div className="p-3 bg-slate-800 rounded-xl">
+                                    <p className="text-[10px] uppercase text-slate-500 font-bold mb-1">Status</p>
+                                    <p className="text-sm text-white font-mono">{streamState.connectionStatus}</p>
                                 </div>
                             </div>
-                            <pre className="text-[10px] font-mono bg-black/50 p-4 rounded-xl text-slate-300 overflow-auto">
+
+                            {/* Audit Trail Timeline */}
+                            <div className="mb-4">
+                                <h4 className="text-xs uppercase text-slate-500 font-bold mb-2">Execution Timeline</h4>
+                                <div className="bg-black/30 rounded-xl p-3 space-y-2 max-h-40 overflow-auto">
+                                    {auditTrail.length === 0 ? (
+                                        <p className="text-xs text-slate-500 italic">No events yet...</p>
+                                    ) : (
+                                        auditTrail.map((event) => (
+                                            <motion.div
+                                                key={event.id}
+                                                initial={{ opacity: 0, x: -10 }}
+                                                animate={{ opacity: 1, x: 0 }}
+                                                className="flex items-start gap-2"
+                                            >
+                                                <span className="text-sm" style={{ color: getEventColor(event.type) }}>
+                                                    {getEventIcon(event.type)}
+                                                </span>
+                                                <div className="flex-1 min-w-0">
+                                                    <p className="text-xs text-white truncate">{event.label}</p>
+                                                    {event.details && (
+                                                        <p className="text-[10px] text-slate-500 truncate">{event.details}</p>
+                                                    )}
+                                                </div>
+                                                <span className="text-[10px] text-slate-600 font-mono">
+                                                    {event.timestamp.toLocaleTimeString()}
+                                                </span>
+                                            </motion.div>
+                                        ))
+                                    )}
+                                </div>
+                            </div>
+
+                            {/* Data Model JSON */}
+                            <h4 className="text-xs uppercase text-slate-500 font-bold mb-2">Data Model</h4>
+                            <pre className="text-[10px] font-mono bg-black/50 p-4 rounded-xl text-slate-300 overflow-auto max-h-40">
                                 {JSON.stringify(dataModel, null, 2)}
                             </pre>
                         </div>
@@ -543,7 +828,7 @@ export function GenerativeUIPage(): React.ReactElement {
                                                     border: `1px solid ${theme.colors.border.accent}`,
                                                 }}
                                             >
-                                                <span className="text-5xl">📊</span>
+                                                <span className="text-5xl">{ICONS.emptyState}</span>
                                             </motion.div>
                                             <h2
                                                 className="text-2xl font-bold mb-3"
@@ -573,12 +858,38 @@ export function GenerativeUIPage(): React.ReactElement {
 
                                     {/* A2UI Surface */}
                                     {surface?.root && (
-                                        <A2UISurface
-                                            surface={surface}
-                                            dataModel={dataModel}
-                                            onAction={handleAction}
-                                        />
+                                        <>
+                                            {/* Skill Header Badge */}
+                                            <SkillHeaderBadge
+                                                skill={activeSkill}
+                                                isLoading={streamState.isLoading && !activeSkill}
+                                            />
+
+                                            <A2UISurface
+                                                surface={surface}
+                                                dataModel={dataModel}
+                                                onAction={handleAction}
+                                            />
+
+                                            {/* Follow-up Suggestions */}
+                                            {streamState.isDone && followUpSuggestions.length > 0 && (
+                                                <div className="mt-4">
+                                                    <FollowUpSuggestions
+                                                        suggestions={followUpSuggestions}
+                                                        onSelect={handleFollowUpSelect}
+                                                    />
+                                                </div>
+                                            )}
+                                        </>
                                     )}
+
+                                    {/* Clarification Overlay */}
+                                    <ClarificationOverlay
+                                        request={clarificationRequest}
+                                        onSubmit={handleClarificationSubmit}
+                                        onDismiss={handleClarificationDismiss}
+                                        fullScreen={!clarificationRequest?.targetComponentId}
+                                    />
                                 </div>
                             </div>
                         </div>

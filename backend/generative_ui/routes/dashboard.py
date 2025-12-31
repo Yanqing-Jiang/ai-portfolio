@@ -14,6 +14,41 @@
 #   Called from: FastAPI POST /api/dash/{dashboard_id}/action
 #   Invokes: n/a
 #   Why: Validates user action payloads before processing.
+# Class: ClarificationSubmitRequest
+#   Role: Request payload for clarification submissions.
+#   Called from: FastAPI POST /api/dash/{dashboard_id}/clarification
+#   Invokes: n/a
+#   Why: Validates clarification submissions before plan mutation.
+# Class: FollowUpSuggestion
+#   Role: Response shape for follow-up query suggestions.
+#   Called from: FastAPI GET /api/dash/{dashboard_id}/follow-ups
+#   Invokes: n/a
+#   Why: Keeps follow-up suggestions consistent for the UI.
+# Function: _sse_data
+#   Role: Wrap JSON payloads in SSE data envelopes.
+#   Called from: stream_dashboard
+#   Invokes: n/a
+#   Why: Keeps SSE formatting consistent for A2UI messages.
+# Function: _needs_peer_compare_clarification
+#   Role: Determine whether peer comparisons need metric clarification.
+#   Called from: _build_visual_clarification
+#   Invokes: n/a
+#   Why: Avoids unnecessary clarification prompts.
+# Function: _needs_margin_clarification
+#   Role: Determine whether margin analysis needs more detail.
+#   Called from: _build_visual_clarification
+#   Invokes: n/a
+#   Why: Requests margin specificity only when needed.
+# Function: _build_visual_clarification
+#   Role: Create per-visual clarification requests for streaming.
+#   Called from: stream_dashboard
+#   Invokes: build_clarification_for_ambiguous_comparison, build_clarification_for_margin_detail
+#   Why: Ties clarification prompts to specific dashboard visuals.
+# Function: _await_clarification_response
+#   Role: Poll dashboard state for clarification responses.
+#   Called from: stream_dashboard
+#   Invokes: asyncio.sleep
+#   Why: Blocks streaming until clarifications resolve or time out.
 # Function: create_dashboard
 #   Role: Create a dashboard state and preselect an A2UI skill.
 #   Called from: FastAPI POST /api/dash/create
@@ -22,8 +57,8 @@
 # Function: stream_dashboard
 #   Role: Stream A2UI messages for a dashboard session.
 #   Called from: FastAPI GET /api/dash/{dashboard_id}/stream
-#   Invokes: backend.generative_ui.agent_v2.A2UIAgent.stream_dashboard
-#   Why: Drives the live A2UI SSE stream for the frontend.
+#   Invokes: backend.generative_ui.agent_v2.A2UIAgent.execute_skill, backend.generative_ui.a2ui.emitter.A2UIMessageEmitter
+#   Why: Drives the live A2UI SSE stream with clarification gating.
 # Function: get_dashboard_spec
 #   Role: Return stored dashboard plan metadata.
 #   Called from: FastAPI GET /api/dash/{dashboard_id}/spec
@@ -44,6 +79,21 @@
 #   Called from: FastAPI DELETE /api/dash/{dashboard_id}
 #   Invokes: backend.generative_ui.models.get_dashboard_store
 #   Why: Cleans up server-side dashboard state.
+# Function: get_follow_up_suggestions
+#   Role: Return follow-up suggestions tailored to the dashboard.
+#   Called from: FastAPI GET /api/dash/{dashboard_id}/follow-ups
+#   Invokes: backend.generative_ui.models.get_dashboard_store
+#   Why: Feeds follow-up suggestion UI chips.
+# Function: submit_clarification
+#   Role: Validate and apply clarification responses to the plan.
+#   Called from: FastAPI POST /api/dash/{dashboard_id}/clarification
+#   Invokes: validate_clarification_response
+#   Why: Updates dashboard parameters before streaming resumes.
+# Function: get_showcase
+#   Role: Serve the A2UI showcase HTML page.
+#   Called from: FastAPI GET /api/dash/showcase
+#   Invokes: pathlib.Path.read_text
+#   Why: Exposes the A2UI demo landing page.
 # --- End Dashboard Route Function/Class Map ---
 """
 Dashboard API Routes
@@ -52,7 +102,11 @@ FastAPI endpoints for A2UI dashboard management.
 """
 
 from __future__ import annotations
+import asyncio
+import json
 import logging
+import time
+import uuid
 from pathlib import Path
 from typing import Any, Dict, Optional
 from fastapi import APIRouter, HTTPException
@@ -60,15 +114,101 @@ from fastapi.responses import StreamingResponse, HTMLResponse
 from pydantic import BaseModel
 
 from ..models import get_dashboard_store
-from ..agent_v2 import get_a2ui_agent, A2UIAgentError
+from ..agent_v2 import DEFAULT_METRIC, get_a2ui_agent, A2UIAgentError
+from ..a2ui.emitter import A2UIMessageEmitter
 from ..clarification import (
+    ClarificationRequest,
     ClarificationResponse,
+    build_clarification_for_ambiguous_comparison,
+    build_clarification_for_margin_detail,
+    clarification_to_sse_event,
     validate_clarification_response,
 )
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/dash", tags=["dashboard"])
+
+COMPARISON_KEYWORDS = ("revenue", "margin", "profit", "stock", "price", "earnings", "eps", "income", "growth")
+MARGIN_KEYWORDS = ("gross", "operating", "net")
+
+
+def _sse_data(payload: str) -> str:
+    """Wrap a JSON payload for SSE delivery."""
+    return f"data: {payload}\n\n"
+
+
+def _needs_peer_compare_clarification(question: str, plan: Dict[str, Any], params: Dict[str, Any]) -> bool:
+    """Return True when peer comparisons need metric clarification."""
+    if params.get("clarified") or params.get("pending_clarification"):
+        return False
+    if plan.get("comparison_type"):
+        return False
+    question_lower = question.lower()
+    if not any(token in question_lower for token in ("compare", "vs", "versus")):
+        return False
+    return not any(token in question_lower for token in COMPARISON_KEYWORDS)
+
+
+def _needs_margin_clarification(question: str, plan: Dict[str, Any], params: Dict[str, Any]) -> bool:
+    """Return True when margin analysis needs more specificity."""
+    if params.get("clarified") or params.get("pending_clarification"):
+        return False
+    if plan.get("margin_types"):
+        return False
+    question_lower = question.lower()
+    if "margin" not in question_lower:
+        return False
+    return not any(token in question_lower for token in MARGIN_KEYWORDS)
+
+
+def _build_visual_clarification(
+    question: str,
+    selection: Any,
+    plan: Dict[str, Any],
+    params: Dict[str, Any],
+) -> Optional[ClarificationRequest]:
+    """Create a clarification request scoped to a specific visual."""
+    if selection.skill_id == "a2ui_peer_compare" and _needs_peer_compare_clarification(question, plan, params):
+        request_id = f"clarify_{uuid.uuid4().hex}"
+        return build_clarification_for_ambiguous_comparison(
+            selection.tickers,
+            question,
+            request_id,
+            target_component_id="peer_metric_chart",
+        )
+    if selection.skill_id == "a2ui_margin_analysis" and _needs_margin_clarification(question, plan, params):
+        request_id = f"clarify_{uuid.uuid4().hex}"
+        ticker = selection.tickers[0] if selection.tickers else "Selected ticker"
+        return build_clarification_for_margin_detail(
+            ticker,
+            request_id,
+            target_component_id="margin_chart",
+        )
+    return None
+
+
+async def _await_clarification_response(
+    state: Any,
+    request_id: str,
+    timeout_seconds: int,
+) -> Dict[str, Any]:
+    """Poll the dashboard state for a clarification response or timeout."""
+    deadline = time.monotonic() + max(timeout_seconds, 1)
+    while time.monotonic() < deadline:
+        responses = state.params.get("clarification_responses") or {}
+        if isinstance(responses, dict) and request_id in responses:
+            payload = responses.get(request_id, {})
+            next_responses = dict(responses)
+            next_responses.pop(request_id, None)
+            state.update_params({
+                "clarification_responses": next_responses,
+                "pending_clarification": None,
+            })
+            return payload if isinstance(payload, dict) else {}
+        await asyncio.sleep(0.2)
+    state.update_params({"pending_clarification": None})
+    return {"values": {}, "skipped": True}
 
 
 # ============================================================================
@@ -154,17 +294,63 @@ async def stream_dashboard(dashboard_id: str):
     
     async def generate():
         agent = get_a2ui_agent()
+        emitter = A2UIMessageEmitter(surface_id=state.surface_id, catalog_id=state.catalog_id)
+        yield _sse_data(emitter.begin_rendering())
 
-        def _record_result(result):
+        try:
+            selection = agent.selection_from_plan(state.plan_json)
+            agent._validate_selection(selection)
+            skill = agent.skill_lookup[selection.skill_id]
+            context = agent._build_render_context(selection, skill)
+
+            components = emitter.build_components_for_skill(skill, context)
+            yield _sse_data(emitter.surface_update(components))
+
+            seed_data = {
+                "title": context.title,
+                "ticker": context.primary_ticker,
+                "primary_ticker": context.primary_ticker,
+                "tickers": context.tickers,
+                "time_range": context.time_range,
+                "metric": context.metric,
+            }
+            yield _sse_data(emitter.data_update(seed_data))
+
+            clarification = _build_visual_clarification(state.question, selection, state.plan_json, state.params)
+            if clarification:
+                state.update_params({
+                    "pending_clarification": clarification.model_dump(),
+                    "clarification_responses": state.params.get("clarification_responses") or {},
+                })
+                yield clarification_to_sse_event(clarification)
+                await _await_clarification_response(state, clarification.request_id, clarification.timeout_seconds)
+
+                selection = agent.selection_from_plan(state.plan_json)
+                agent._validate_selection(selection)
+                skill = agent.skill_lookup[selection.skill_id]
+                context = agent._build_render_context(selection, skill)
+
+                components = emitter.build_components_for_skill(skill, context)
+                yield _sse_data(emitter.surface_update(components))
+
+                seed_data = {
+                    "title": context.title,
+                    "ticker": context.primary_ticker,
+                    "primary_ticker": context.primary_ticker,
+                    "tickers": context.tickers,
+                    "time_range": context.time_range,
+                    "metric": context.metric,
+                }
+                yield _sse_data(emitter.data_update(seed_data))
+
+            result = await agent.execute_skill(skill, selection)
+            yield _sse_data(emitter.data_update(result.data_model))
             state.add_run(result.data_model, result.citations)
-
-        async for msg in agent.stream_dashboard(
-            question=state.question,
-            surface_id=state.surface_id,
-            plan=state.plan_json,
-            on_result=_record_result,
-        ):
-            yield f"data: {msg}\n\n"
+            yield _sse_data(json.dumps({"done": True}))
+        except Exception as exc:
+            for msg in emitter.error_surface("agent_error", str(exc)):
+                yield _sse_data(msg)
+            yield _sse_data(json.dumps({"done": True}))
     
     return StreamingResponse(
         generate(),
@@ -244,12 +430,14 @@ async def handle_action(dashboard_id: str, request: ActionRequest):
             selection = agent.selection_from_plan(state.plan_json)
             skill = agent.skill_lookup[selection.skill_id]
             result = await agent.execute_skill(skill, selection)
+            result.data_model["time_range"] = new_timeframe
             state.add_run(result.data_model, result.citations)
             return {
                 "status": "success",
                 "action": action_name,
                 "updated_params": {"timeRange": new_timeframe},
                 "data": result.data_model,
+                "data_path": "/data",
             }
         except A2UIAgentError as e:
             raise HTTPException(status_code=500, detail=str(e))
@@ -298,6 +486,70 @@ async def delete_dashboard(dashboard_id: str):
         raise HTTPException(status_code=404, detail="Dashboard not found")
 
 
+class FollowUpSuggestion(BaseModel):
+    """A follow-up query suggestion."""
+    id: str
+    label: str
+    query: str
+    icon: str = "NEXT"
+
+
+@router.get("/{dashboard_id}/follow-ups")
+async def get_follow_up_suggestions(dashboard_id: str):
+    """
+    Get AI-generated follow-up suggestions based on the current dashboard.
+    
+    Uses the dashboard's skill and tickers to generate contextual next steps.
+    Called from: GenerativeUIPage.tsx after dashboard completes
+    """
+    store = get_dashboard_store()
+    state = store.get(dashboard_id)
+    
+    if not state:
+        raise HTTPException(status_code=404, detail="Dashboard not found")
+    
+    # Generate contextual follow-ups based on the dashboard plan
+    suggestions = []
+    skill_id = state.plan.skill_id if state.plan else None
+    tickers = state.plan.tickers if state.plan else []
+    primary_ticker = tickers[0] if tickers else "NVDA"
+    
+    # Skill-specific suggestions
+    if skill_id == "a2ui_explain_move":
+        suggestions = [
+            FollowUpSuggestion(id="1", label="Margin analysis", query=f"Show {primary_ticker} margin analysis", icon="MARG"),
+            FollowUpSuggestion(id="2", label="Compare peers", query=f"Compare {primary_ticker} to its peers", icon="PEER"),
+            FollowUpSuggestion(id="3", label="Revenue trend", query=f"Show {primary_ticker} revenue trend", icon="REV"),
+        ]
+    elif skill_id == "a2ui_margin_analysis":
+        suggestions = [
+            FollowUpSuggestion(id="1", label="Revenue breakdown", query=f"Show {primary_ticker} revenue trend", icon="REV"),
+            FollowUpSuggestion(id="2", label="Compare margins", query=f"Compare {primary_ticker} margins vs AMD", icon="MARG"),
+            FollowUpSuggestion(id="3", label="Stock movement", query=f"Explain recent {primary_ticker} stock movement", icon="PRICE"),
+        ]
+    elif skill_id == "a2ui_revenue_trend":
+        suggestions = [
+            FollowUpSuggestion(id="1", label="Margin analysis", query=f"Show {primary_ticker} margin analysis", icon="MARG"),
+            FollowUpSuggestion(id="2", label="YoY comparison", query=f"Compare {primary_ticker} revenue year over year", icon="YOY"),
+            FollowUpSuggestion(id="3", label="Peer comparison", query=f"Compare {primary_ticker} vs INTC revenue", icon="PEER"),
+        ]
+    elif skill_id == "a2ui_peer_compare":
+        peer_list = ", ".join(tickers[:3]) if len(tickers) > 1 else f"{primary_ticker} and INTC"
+        suggestions = [
+            FollowUpSuggestion(id="1", label="Deeper on leader", query=f"Show {primary_ticker} detailed analysis", icon="DEEP"),
+            FollowUpSuggestion(id="2", label="Stock comparison", query=f"Compare {peer_list} stock performance", icon="PRICE"),
+            FollowUpSuggestion(id="3", label="Margin comparison", query=f"Compare {peer_list} margins", icon="MARG"),
+        ]
+    else:
+        # Default suggestions
+        suggestions = [
+            FollowUpSuggestion(id="1", label="Deeper analysis", query=f"Tell me more about {primary_ticker}", icon="DEEP"),
+            FollowUpSuggestion(id="2", label="Compare peers", query=f"Compare to industry peers", icon="PEER"),
+        ]
+    
+    return {"suggestions": [s.model_dump() for s in suggestions]}
+
+
 @router.post("/{dashboard_id}/clarification")
 async def submit_clarification(dashboard_id: str, request: ClarificationSubmitRequest):
     """
@@ -314,16 +566,23 @@ async def submit_clarification(dashboard_id: str, request: ClarificationSubmitRe
     if not state:
         raise HTTPException(status_code=404, detail="Dashboard not found")
     
-    # If user skipped, just return to let LLM decide
+    pending_request = state.params.get("pending_clarification")
+    original_request = ClarificationRequest(**pending_request) if isinstance(pending_request, dict) else None
+    response_payload = ClarificationResponse(
+        request_id=request.request_id,
+        values=request.values,
+        skipped=request.skipped,
+    )
+
     if request.skipped:
-        return {
-            "status": "skipped",
-            "dashboard_id": dashboard_id,
-            "message": "Proceeding with AI-selected options",
-        }
-    
+        validated_values: Dict[str, Any] = {}
+    elif original_request:
+        validated_values = validate_clarification_response(response_payload, original_request)
+    else:
+        validated_values = request.values
+
     # Extract clarification values and merge into plan
-    values = request.values
+    values = validated_values
     plan = state.plan_json
     
     # Map clarification fields to plan properties
@@ -336,8 +595,13 @@ async def submit_clarification(dashboard_id: str, request: ClarificationSubmitRe
             plan["skill_id"] = "a2ui_peer_compare"
             plan["metric"] = "Revenue"
         elif comp_type == "stock":
-            plan["skill_id"] = "a2ui_peer_compare"
-            plan["metric"] = "Stock Price"
+            primary = plan.get("ticker") or (plan.get("tickers") or [None])[0]
+            if primary:
+                plan["ticker"] = primary
+                plan["tickers"] = [primary]
+                plan["peers"] = []
+            plan["skill_id"] = "a2ui_explain_move"
+            plan["metric"] = DEFAULT_METRIC
     
     if "ticker" in values and values["ticker"]:
         tickers = plan.get("tickers", [])
@@ -363,7 +627,15 @@ async def submit_clarification(dashboard_id: str, request: ClarificationSubmitRe
     
     # Update state
     state.plan_json = plan
-    state.update_params({"clarified": True, **values})
+    responses = state.params.get("clarification_responses") or {}
+    if isinstance(responses, dict):
+        responses[request.request_id] = {"values": values, "skipped": request.skipped}
+    state.update_params({
+        "clarified": True,
+        "pending_clarification": None,
+        "clarification_responses": responses,
+        **values,
+    })
     
     return {
         "status": "success",
