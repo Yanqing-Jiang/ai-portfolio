@@ -156,7 +156,7 @@ const Sidebar: React.FC<SidebarProps> = ({ projectData, selectedProject, onSelec
             <div className="text-left min-w-0">
               <p className="text-[10px] font-black text-sky-500/70 uppercase tracking-[0.2em] leading-none mb-1">Access.Terminal</p>
               <p className="text-[11px] text-white truncate font-mono">
-                {authState.user ? authState.user.email : 'Authentication Required'}
+                {authState.user ? authState.user.email : 'Sign In / Sign Up'}
               </p>
             </div>
           </button>
