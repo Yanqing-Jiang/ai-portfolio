@@ -21,6 +21,10 @@ export interface A2UIStreamState {
     dataModels: Map<string, DataModel>;
     /** Whether the stream is complete */
     isDone: boolean;
+    /** Number of reconnection attempts */
+    retryCount: number;
+    /** Connection status for UI display */
+    connectionStatus: 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'error' | 'complete';
 }
 
 export interface A2UIStreamActions {
@@ -46,6 +50,11 @@ const DEFAULT_OPTIONS: UseA2UIStreamOptions = {
     apiBaseUrl: '/api/dash',
 };
 
+// Reconnection constants
+const MAX_RETRIES = 5;
+const INITIAL_BACKOFF_MS = 1000;
+const MAX_BACKOFF_MS = 30000;
+
 /**
  * Hook for consuming A2UI SSE streams.
  *
@@ -67,11 +76,14 @@ export function useA2UIStream(
         surfaces: new Map(),
         dataModels: new Map(),
         isDone: false,
+        retryCount: 0,
+        connectionStatus: 'idle',
     });
 
     // Refs
     const eventSourceRef = useRef<EventSource | null>(null);
     const processorRef = useRef<MessageProcessor | null>(null);
+    const retryTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
     // Update state from processor
     const syncState = useCallback(() => {
@@ -86,8 +98,14 @@ export function useA2UIStream(
     }, []);
 
     // Connect to the stream
-    const connect = useCallback(() => {
+    const connect = useCallback((isRetry = false) => {
         if (!streamUrl) return;
+
+        // Clear any pending retry
+        if (retryTimeoutRef.current) {
+            clearTimeout(retryTimeoutRef.current);
+            retryTimeoutRef.current = null;
+        }
 
         // Close existing connection
         if (eventSourceRef.current) {
@@ -104,6 +122,7 @@ export function useA2UIStream(
             isLoading: true,
             error: null,
             isDone: false,
+            connectionStatus: isRetry ? 'reconnecting' : 'connecting',
         }));
 
         // Create EventSource
@@ -111,24 +130,33 @@ export function useA2UIStream(
         eventSourceRef.current = eventSource;
 
         eventSource.onopen = () => {
-            setState((prev) => ({ ...prev, isConnected: true, isLoading: true }));
+            setState((prev) => ({
+                ...prev,
+                isConnected: true,
+                isLoading: true,
+                retryCount: 0,
+                connectionStatus: 'connected',
+            }));
         };
 
         eventSource.onmessage = (event) => {
             const data = event.data;
 
-            // Check for done signal
-            if (data.includes('"done"')) {
-                try {
-                    const parsed = JSON.parse(data);
-                    if (parsed.done === true) {
-                        setState((prev) => ({ ...prev, isDone: true, isLoading: false }));
-                        eventSource.close();
-                        return;
-                    }
-                } catch {
-                    // Not a done message, continue processing
+            // Check for a "done" signal
+            try {
+                const json = JSON.parse(data);
+                if (json && typeof json === 'object' && json.done === true) {
+                    setState((prev) => ({
+                        ...prev,
+                        isDone: true,
+                        isConnected: false,
+                        connectionStatus: 'complete',
+                    }));
+                    eventSource.close();
+                    return; // Stop processing this message
                 }
+            } catch (e) {
+                // Not a JSON message, or not a "done" signal, proceed as normal
             }
 
             // Process A2UI messages (may be multiple lines)
@@ -144,18 +172,51 @@ export function useA2UIStream(
 
         eventSource.onerror = (event) => {
             console.error('A2UI stream error:', event);
-            setState((prev) => ({
-                ...prev,
-                isConnected: false,
-                isLoading: false,
-                error: new Error('Stream connection lost'),
-            }));
             eventSource.close();
+
+            setState((prev) => {
+                const newRetryCount = prev.retryCount + 1;
+
+                if (newRetryCount <= MAX_RETRIES && !prev.isDone) {
+                    // Calculate exponential backoff
+                    const backoffMs = Math.min(
+                        INITIAL_BACKOFF_MS * Math.pow(2, prev.retryCount),
+                        MAX_BACKOFF_MS
+                    );
+
+                    console.log(`A2UI: Reconnecting in ${backoffMs}ms (attempt ${newRetryCount}/${MAX_RETRIES})`);
+
+                    retryTimeoutRef.current = setTimeout(() => {
+                        connect(true);
+                    }, backoffMs);
+
+                    return {
+                        ...prev,
+                        isConnected: false,
+                        retryCount: newRetryCount,
+                        connectionStatus: 'reconnecting',
+                    };
+                }
+
+                // Max retries reached
+                return {
+                    ...prev,
+                    isConnected: false,
+                    isLoading: false,
+                    error: new Error(`Stream connection lost after ${MAX_RETRIES} retries`),
+                    connectionStatus: 'error',
+                };
+            });
         };
     }, [streamUrl, syncState]);
 
     // Close the stream
     const close = useCallback(() => {
+        // Clear any pending retry
+        if (retryTimeoutRef.current) {
+            clearTimeout(retryTimeoutRef.current);
+            retryTimeoutRef.current = null;
+        }
         if (eventSourceRef.current) {
             eventSourceRef.current.close();
             eventSourceRef.current = null;
@@ -163,6 +224,7 @@ export function useA2UIStream(
         setState((prev) => ({
             ...prev,
             isConnected: false,
+            connectionStatus: 'idle',
         }));
     }, []);
 
@@ -203,7 +265,7 @@ export function useA2UIStream(
 
     const actions: A2UIStreamActions = {
         sendAction,
-        reconnect: connect,
+        reconnect: () => connect(false),
         close,
     };
 

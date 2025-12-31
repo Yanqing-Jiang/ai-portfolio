@@ -1,26 +1,10 @@
-// --- ExplainMovePanel Function Map ---
-// Function: ExplainMovePanelInternal
-//   Role: Render the explanation panel UI from resolved props.
-//   Called from: components/generativeUiDashboard/renderer/widgets/ExplainMovePanel.ExplainMovePanel
-//   Invokes: React + framer-motion primitives
-//   Why: Keeps presentation logic isolated from A2UI data binding.
-// Function: ExplainMovePanel
-//   Role: Resolve A2UI bound props and render ExplainMovePanelInternal.
-//   Called from: components/generativeUiDashboard/renderer/Registry (componentRegistry)
-//   Invokes: resolveString, resolveArray, ExplainMovePanelInternal
-//   Why: Bridges A2UI data binding to the UI component.
-// --- End ExplainMovePanel Function Map ---
-/**
- * ExplainMovePanel Widget
- *
- * Displays AI-generated explanation for price movements with citations.
- */
-
 import React from 'react';
 import { motion } from 'framer-motion';
 import type { A2UIRendererProps } from '../Registry';
 import { resolveArray, resolveString } from '../../a2ui/DataBinder';
 import type { ExplainMovePanelProps } from '../../a2ui/types';
+import { useStreamingText } from '../../hooks/useStreamingText';
+
 
 interface Factor {
     title: string;
@@ -33,13 +17,6 @@ interface Citation {
     title: string;
     url?: string;
     date?: string;
-}
-
-interface ExplainMovePanelInternalProps {
-    title: string;
-    explanation: string;
-    factors: Factor[];
-    citations: Citation[];
 }
 
 const theme = {
@@ -58,10 +35,9 @@ const theme = {
         positive: '#10b981',
         negative: '#ef4444',
         neutral: '#f59e0b',
-    },
+    }
 };
 
-// Default factors if none provided
 const DEFAULT_FACTORS: Factor[] = [
     {
         title: 'Market Conditions',
@@ -74,85 +50,138 @@ const DEFAULT_FACTORS: Factor[] = [
         description: 'Recent earnings report and forward guidance expectations',
         impact: 'negative',
         source: 'Company Filings',
-    },
-    {
-        title: 'Technical Factors',
-        description: 'Key support/resistance levels and momentum indicators',
-        impact: 'neutral',
-        source: 'Technical Analysis',
-    },
+    }
 ];
 
-function ExplainMovePanelInternal({
-    title,
-    explanation,
-    factors,
-    citations,
-}: ExplainMovePanelInternalProps): React.ReactElement {
+export function ExplainMovePanel({
+    componentId,
+    props,
+    dataModel,
+}: A2UIRendererProps): React.ReactElement {
+    const panelProps = props as unknown as ExplainMovePanelProps;
+    const title = resolveString(panelProps.title, dataModel, 'Insight Analysis');
+    const fullExplanation = resolveString(panelProps.explanation, dataModel, 'Analysis in progress...');
+    const factors = resolveArray<Factor>(panelProps.factors, dataModel, []);
+    const citations = resolveArray<Citation>(panelProps.citations, dataModel, []);
+
+    // Use streaming text hook for the narrative
+    const { displayText, isComplete } = useStreamingText(fullExplanation, { speed: 25 });
+
     const displayFactors = factors.length > 0 ? factors : DEFAULT_FACTORS;
     const showCitations = citations.length > 0;
 
     return (
         <motion.div
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="rounded-xl p-4"
+            layout
+            layoutId={componentId}
+            initial={{ opacity: 0, scale: 0.98 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="a2ui-explain-panel"
             style={{
                 backgroundColor: theme.bg.card,
+                padding: '1.5rem',
+                borderRadius: '16px',
                 border: `1px solid ${theme.border.subtle}`,
+                boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
+                backdropFilter: 'blur(12px)',
+                marginBottom: '1rem',
             }}
         >
             {/* Header */}
-            <div className="flex items-center gap-2 mb-4">
-                <span className="text-lg">dY"?</span>
-                <h3 className="text-sm font-semibold" style={{ color: theme.text.primary }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem' }}>
+                <div style={{
+                    width: '32px',
+                    height: '32px',
+                    borderRadius: '50%',
+                    backgroundColor: 'rgba(56, 189, 248, 0.1)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: '#38bdf8'
+                }}>
+                    âœ¨
+                </div>
+                <h3 style={{
+                    fontSize: '1.125rem',
+                    fontWeight: 600,
+                    color: theme.text.primary,
+                    margin: 0
+                }}>
                     {title}
                 </h3>
             </div>
 
-            {/* Summary */}
-            <p className="text-sm mb-4" style={{ color: theme.text.secondary }}>
-                {explanation}
-            </p>
+            {/* Narrative Summary with Streaming Effect */}
+            <div style={{ marginBottom: '1.5rem', position: 'relative' }}>
+                <p style={{
+                    fontSize: '1rem',
+                    lineHeight: '1.6',
+                    color: theme.text.secondary,
+                    margin: 0,
+                    minHeight: '3em'
+                }}>
+                    {displayText}
+                    {!isComplete && (
+                        <motion.span
+                            animate={{ opacity: [0, 1, 0] }}
+                            transition={{ repeat: Infinity, duration: 0.8 }}
+                            style={{
+                                display: 'inline-block',
+                                width: '2px',
+                                height: '1.2em',
+                                backgroundColor: '#38bdf8',
+                                marginLeft: '2px',
+                                verticalAlign: 'middle'
+                            }}
+                        />
+                    )}
+                </p>
+            </div>
 
-            {/* Factors */}
-            <div className="space-y-3">
+            {/* Key Factors */}
+            <div style={{ display: 'grid', gap: '1rem', marginBottom: '1.5rem' }}>
                 {displayFactors.map((factor, idx) => (
                     <motion.div
-                        key={factor.title}
+                        key={`${factor.title}-${idx}`}
                         initial={{ opacity: 0, x: -10 }}
                         animate={{ opacity: 1, x: 0 }}
-                        transition={{ delay: idx * 0.1 }}
-                        className="flex items-start gap-3 p-3 rounded-lg"
+                        transition={{ delay: 0.1 * idx }}
                         style={{
-                            backgroundColor: 'rgba(15, 23, 42, 0.5)',
+                            display: 'flex',
+                            gap: '1rem',
+                            padding: '1rem',
+                            borderRadius: '12px',
+                            backgroundColor: 'rgba(15, 23, 42, 0.3)',
                             border: `1px solid ${theme.border.subtle}`,
                         }}
                     >
-                        {/* Impact indicator */}
-                        <div
-                            className="w-2 h-2 rounded-full mt-1.5 flex-shrink-0"
-                            style={{ backgroundColor: theme.impact[factor.impact] }}
-                        />
-
-                        <div className="flex-1 min-w-0">
-                            <div className="flex items-center justify-between gap-2">
-                                <h4 className="text-sm font-medium" style={{ color: theme.text.primary }}>
+                        <div style={{
+                            width: '8px',
+                            height: '8px',
+                            borderRadius: '50%',
+                            marginTop: '0.5rem',
+                            flexShrink: 0,
+                            backgroundColor: theme.impact[factor.impact] || theme.impact.neutral,
+                            boxShadow: `0 0 10px ${theme.impact[factor.impact] || theme.impact.neutral}`,
+                        }} />
+                        <div style={{ flex: 1 }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.25rem' }}>
+                                <h4 style={{ fontSize: '0.9rem', fontWeight: 500, color: theme.text.primary, margin: 0 }}>
                                     {factor.title}
                                 </h4>
-                                {showCitations && factor.source && (
-                                    <span
-                                        className="text-xs px-2 py-0.5 rounded"
-                                        style={{
-                                            backgroundColor: 'rgba(148, 163, 184, 0.1)',
-                                            color: theme.text.muted,
-                                        }}
-                                    >
+                                {factor.source && (
+                                    <span style={{
+                                        fontSize: '0.75rem',
+                                        padding: '2px 8px',
+                                        borderRadius: '4px',
+                                        backgroundColor: 'rgba(148, 163, 184, 0.1)',
+                                        color: theme.text.muted,
+                                    }}>
                                         {factor.source}
                                     </span>
                                 )}
                             </div>
-                            <p className="text-xs mt-1" style={{ color: theme.text.secondary }}>
+                            <p style={{ fontSize: '0.85rem', color: theme.text.secondary, margin: 0 }}>
                                 {factor.description}
                             </p>
                         </div>
@@ -160,31 +189,50 @@ function ExplainMovePanelInternal({
                 ))}
             </div>
 
+            {/* Citations */}
             {showCitations && (
-                <div className="mt-4 space-y-2">
-                    <p className="text-xs uppercase tracking-wide" style={{ color: theme.text.muted }}>
+                <div style={{ borderTop: `1px solid ${theme.border.subtle}`, paddingTop: '1rem' }}>
+                    <p style={{
+                        fontSize: '0.75rem',
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.05em',
+                        color: theme.text.muted,
+                        marginBottom: '0.5rem'
+                    }}>
                         Sources
                     </p>
-                    <ul className="space-y-1">
-                        {citations.map((citation) => (
-                            <li
-                                key={`${citation.title}-${citation.url ?? ''}`}
-                                className="text-xs"
-                                style={{ color: theme.text.secondary }}
-                            >
+                    <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+                        {citations.map((citation, idx) => (
+                            <li key={idx}>
                                 {citation.url ? (
                                     <a
                                         href={citation.url}
                                         target="_blank"
                                         rel="noopener noreferrer"
-                                        style={{ color: theme.text.secondary, textDecoration: 'underline' }}
+                                        style={{
+                                            fontSize: '0.75rem',
+                                            color: '#38bdf8',
+                                            textDecoration: 'none',
+                                            padding: '4px 10px',
+                                            borderRadius: '6px',
+                                            backgroundColor: 'rgba(56, 189, 248, 0.1)',
+                                            border: '1px solid rgba(56, 189, 248, 0.2)',
+                                            transition: 'all 0.2s',
+                                        }}
+                                        onMouseOver={(e) => {
+                                            e.currentTarget.style.backgroundColor = 'rgba(56, 189, 248, 0.2)';
+                                        }}
+                                        onMouseOut={(e) => {
+                                            e.currentTarget.style.backgroundColor = 'rgba(56, 189, 248, 0.1)';
+                                        }}
                                     >
                                         {citation.title}
                                     </a>
                                 ) : (
-                                    citation.title
+                                    <span style={{ fontSize: '0.75rem', color: theme.text.secondary }}>
+                                        {citation.title}
+                                    </span>
                                 )}
-                                {citation.date ? ` • ${citation.date}` : ''}
                             </li>
                         ))}
                     </ul>
@@ -192,30 +240,17 @@ function ExplainMovePanelInternal({
             )}
 
             {/* Disclaimer */}
-            <p className="text-xs mt-4 opacity-50" style={{ color: theme.text.muted }}>
-                ƒsÿ‹,? This analysis is AI-generated for informational purposes only.
+            <p style={{
+                fontSize: '0.7rem',
+                marginTop: '1.5rem',
+                opacity: 0.4,
+                color: theme.text.muted,
+                textAlign: 'center',
+                fontStyle: 'italic'
+            }}>
+                AI-generated analysis. For information purposes only.
             </p>
         </motion.div>
-    );
-}
-
-/**
- * A2UI-compatible wrapper component
- */
-export function ExplainMovePanel({ props, dataModel }: A2UIRendererProps): React.ReactElement {
-    const panelProps = props as unknown as ExplainMovePanelProps;
-    const title = resolveString(panelProps.title, dataModel, 'Price Movement Analysis');
-    const explanation = resolveString(panelProps.explanation, dataModel, 'Analysis in progress...');
-    const factors = resolveArray<Factor>(panelProps.factors, dataModel, []);
-    const citations = resolveArray<Citation>(panelProps.citations, dataModel, []);
-
-    return (
-        <ExplainMovePanelInternal
-            title={title}
-            explanation={explanation}
-            factors={factors}
-            citations={citations}
-        />
     );
 }
 

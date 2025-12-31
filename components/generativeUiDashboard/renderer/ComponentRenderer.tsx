@@ -2,9 +2,11 @@
  * A2UI Component Renderer
  *
  * Recursively renders A2UI components from the component tree.
+ * Uses Framer Motion for smooth layout animations.
  */
 
 import React, { useCallback } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 import type { ComponentType as A2UIComponentType, DataModel } from '../a2ui/types';
 import { extractComponent, resolveComponent, type A2UIRendererProps } from './Registry';
 
@@ -19,8 +21,17 @@ export interface ComponentRendererProps {
     onAction: (actionName: string, context: Record<string, unknown>) => void;
 }
 
+/** Spring animation config for smooth, natural-feeling transitions */
+const springConfig = {
+    type: "spring" as const,
+    stiffness: 200,
+    damping: 25,
+    mass: 0.8,
+};
+
 /**
  * Renders a single A2UI component and its children.
+ * Wraps each component with motion.div for layout animations.
  */
 export function ComponentRenderer({
     componentId,
@@ -49,27 +60,35 @@ export function ComponentRenderer({
     if (!Component) {
         // Render placeholder for unknown components
         return (
-            <div className="a2ui-unknown-component" data-component-id={componentId}>
+            <motion.div
+                className="a2ui-unknown-component"
+                data-component-id={componentId}
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95 }}
+                transition={springConfig}
+            >
                 Unknown: {type}
-            </div>
+            </motion.div>
         );
     }
 
-    // Create render child helper
+    // Create render child helper with AnimatePresence wrapper
     const renderChild = useCallback(
         (childId: string): React.ReactNode => (
-            <ComponentRenderer
-                key={childId}
-                componentId={childId}
-                components={components}
-                dataModel={dataModel}
-                onAction={onAction}
-            />
+            <AnimatePresence mode="popLayout" key={childId}>
+                <ComponentRenderer
+                    componentId={childId}
+                    components={components}
+                    dataModel={dataModel}
+                    onAction={onAction}
+                />
+            </AnimatePresence>
         ),
         [components, dataModel, onAction]
     );
 
-    // Render the component
+    // Render the component with motion wrapper
     const rendererProps: A2UIRendererProps = {
         componentId,
         props,
@@ -79,7 +98,21 @@ export function ComponentRenderer({
         renderChild,
     };
 
-    return <Component {...rendererProps} />;
+    return (
+        <motion.div
+            layout
+            layoutId={componentId}
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.95 }}
+            transition={springConfig}
+            className="a2ui-component-wrapper"
+            data-component-id={componentId}
+            data-component-type={type}
+        >
+            <Component {...rendererProps} />
+        </motion.div>
+    );
 }
 
 /**

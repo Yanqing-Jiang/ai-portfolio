@@ -5,10 +5,10 @@ import { ScrollTrigger } from 'gsap/ScrollTrigger';
 import { useGSAP } from '@gsap/react';
 import type { Project, ProjectYear } from '../types';
 import { motion } from 'framer-motion';
-import Style2MorphWords from './hero/Style2MorphWords';
 // @ts-ignore
 import { Helmet } from 'react-helmet-async';
 import Lenis from 'lenis';
+import { AdvancedNeuralField, HolographicTerminal } from './demos/StreamingInsightDemo';
 import {
     DEFAULT_OG_IMAGE,
     DEFAULT_THEME_COLOR,
@@ -261,13 +261,25 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                 scroller: scroller,
             });
 
-            // 1. Hero Animations (Immediate)
-            const heroTl = gsap.timeline({ defaults: { ease: 'power3.out' } });
+            // 1. Hero Animations (Cinematic Reveal)
+            const heroTl = gsap.timeline({ defaults: { ease: 'power4.out', duration: 1.5 } });
             heroTl
-                .from('.hero-name', { opacity: 0, y: 60, duration: 1, delay: 0.2 })
-                .from('.hero-title', { opacity: 0, y: 40, duration: 0.8 }, '-=0.5')
-                .from('.hero-social', { opacity: 0, y: 30, stagger: 0.1, duration: 0.6 }, '-=0.4')
-                .from('.hero-morph', { opacity: 0, scale: 0.9, duration: 0.8 }, '-=0.3');
+                .from('.hero-name span', { y: 100, opacity: 0, skewX: -20, stagger: 0.1, filter: 'blur(20px)', delay: 0.5 })
+                .from('.hero-line', { scaleX: 0, transformOrigin: 'left' }, '-=1')
+                .from('.hero-title', { opacity: 0, y: 20, duration: 0.8 }, '-=0.8')
+                .from('.terminal-entrance', { scale: 0.9, opacity: 0, y: 40, duration: 2 }, '-=1.2');
+
+            // Scroll-triggered tilt for the hero dashboard
+            gsap.to('.terminal-entrance', {
+                rotateX: -10,
+                y: -30,
+                scrollTrigger: {
+                    trigger: '.terminal-entrance',
+                    start: 'top bottom',
+                    end: 'bottom top',
+                    scrub: true
+                }
+            });
 
             // 2. Horizontal Scroll Section "The Neural Stream"
             // Use matchMedia to optimize for mobile vs desktop
@@ -537,73 +549,42 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                 />
 
                 <div className="relative z-20">
-                    {/* Hero Section with Parallax Background */}
-                    <section ref={heroRef} className="relative overflow-hidden border-b border-white/5">
-                        {/* Parallax background elements */}
-                        <div className="absolute inset-0 overflow-hidden pointer-events-none">
-                            <div className="parallax-bg absolute -top-20 -right-20 w-96 h-96 bg-gradient-to-br from-sky-500/10 to-purple-500/10 rounded-full blur-3xl" />
-                            <div className="parallax-bg absolute -bottom-32 -left-32 w-80 h-80 bg-gradient-to-tr from-pink-500/10 to-sky-500/10 rounded-full blur-3xl" />
+                    {/* Hero Section with 3D Holographic Dashboard */}
+                    <section ref={heroRef} className="relative min-h-screen flex flex-col items-center justify-center overflow-hidden py-12 px-4 sm:px-6 lg:px-8 border-b border-white/5 bg-[#010208]">
+                        <AdvancedNeuralField />
+
+                        {/* Ambient Nebula Glows */}
+                        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full h-full pointer-events-none">
+                            <div className="absolute top-1/4 -left-1/4 w-[800px] h-[800px] bg-sky-600/10 rounded-full blur-[200px]" />
+                            <div className="absolute bottom-1/4 -right-1/4 w-[800px] h-[800px] bg-purple-600/10 rounded-full blur-[200px]" />
                         </div>
 
-                        {/* Match legacy LandingPage.tsx hero exactly */}
-                        <div className="relative mx-auto grid max-w-7xl grid-cols-1 gap-10 px-4 sm:px-6 lg:px-8 pt-4 pb-12 sm:pt-6 sm:pb-16 md:pt-8 md:pb-20 lg:grid-cols-[3fr_2fr] lg:items-center">
-                            {/* Left: Name and info */}
-                            <div className="flex flex-col">
-                                <h1
-                                    className="hero-name text-balance font-extrabold text-white tracking-[-0.01em] leading-[1.1]"
-                                    style={{ fontSize: 'clamp(36px, 8vw, 56px)' }}
-                                >
-                                    Yanqing Jiang
-                                </h1>
-                                <div
-                                    className="hero-title mt-4 font-bold text-sky-200"
-                                    style={{ fontSize: 'clamp(15px, 2.5vw, 22px)' }}
-                                >
-                                    Advanced Analytics @ P&amp;G
+                        <div className="relative z-20 max-w-7xl w-full grid grid-cols-1 lg:grid-cols-[1fr_1.5fr] gap-8 lg:gap-16 items-center lg:min-h-[80vh]">
+                            {/* Information Section */}
+                            <div className="space-y-10 lg:pr-12">
+                                <div className="space-y-6">
+                                    <div className="hero-line h-px w-24 bg-sky-500" />
+
+                                    <h1 className="hero-name text-[clamp(2.5rem,8vw,8rem)] font-black italic tracking-tighter leading-[0.85] flex flex-col uppercase text-white">
+                                        <span className="inline-block">Yanqing</span>
+                                        <span className="inline-block">Jiang</span>
+                                    </h1>
+
+                                    <div className="hero-title space-y-2">
+                                        <p className="text-sky-500 font-mono text-sm md:text-base tracking-[0.4em] uppercase">Advanced Analytics @ P&G</p>
+                                    </div>
                                 </div>
-                                <div className="mt-8 flex flex-wrap items-center gap-4 sm:gap-6 text-gray-400">
-                                    {contactLinks.map((item) => (
-                                        <motion.a
-                                            key={item.label}
-                                            href={item.href}
-                                            target="_blank"
-                                            rel="noopener noreferrer"
-                                            className="hero-social group flex flex-col items-center hover:text-white transition-colors"
-                                            initial="rest"
-                                            whileHover="hover"
-                                            animate="rest"
-                                        >
-                                            <motion.div
-                                                variants={{ rest: { scale: 1 }, hover: { scale: 1.1 } }}
-                                                className="flex items-center justify-center rounded-full border border-white/10 bg-white/5 p-2.5 sm:p-3 backdrop-blur-sm"
-                                            >
-                                                {/* Scale icon for mobile */}
-                                                <div className="scale-75 sm:scale-100">
-                                                    {item.icon}
-                                                </div>
-                                            </motion.div>
-                                            <motion.span
-                                                variants={{ rest: { opacity: 0.8, y: 0 }, hover: { opacity: 1, y: -2 } }}
-                                                className="mt-2 text-[10px] sm:text-xs uppercase tracking-widest"
-                                            >
-                                                {item.label}
-                                            </motion.span>
-                                        </motion.a>
-                                    ))}
-                                </div>
+
                             </div>
 
-                            {/* Right: Morphing keywords (matching legacy Style2MorphWords) */}
-                            <div className="hero-morph relative flex justify-center lg:justify-end">
-                                <div className="relative z-10 w-full max-w-xl text-left">
-                                    <Style2MorphWords
-                                        variant="inline"
-                                        size="xl"
-                                        gradient={false}
-                                        intervalMs={2900}
-                                        words={['AI Agent Systems', 'Insight Automation', 'Enterprise Data Platform', 'Long-term Memory Agent']}
-                                    />
-                                </div>
+                            {/* VISUAL SECTION: WIDE 3D DASHBOARD */}
+                            <div className="terminal-entrance relative flex items-center justify-center perspective-2000">
+                                <motion.div
+                                    className="relative z-20 w-full max-w-[750px] aspect-[1.6/1]"
+                                >
+                                    <div className="absolute inset-0 bg-sky-500/10 blur-[150px] rounded-full opacity-30 pointer-events-none" />
+                                    <HolographicTerminal />
+                                </motion.div>
                             </div>
                         </div>
                     </section>
@@ -929,6 +910,7 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                     }
                 `}</style>
             </div>
+
         </>
     );
 };

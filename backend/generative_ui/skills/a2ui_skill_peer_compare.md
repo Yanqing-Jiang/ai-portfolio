@@ -2,13 +2,17 @@
 name: Peer Comparison
 skill_id: a2ui_peer_compare
 description: |
-  Compare financial metrics across multiple companies.
+  Compare revenue, stock price, or general performance across multiple companies.
   USE THIS SKILL WHEN the user asks:
-  - "Compare X vs Y"
+  - "Compare X vs Y" (general comparison)
   - "How does X stack up against Y?"
-  - "X vs Y revenue/margins/performance"
+  - "X vs Y revenue" or "X vs Y performance"
   - "Side-by-side comparison of X and Y"
-  DO NOT USE for single-company analysis.
+  - "Stock price comparison" or "price correlation"
+  DO NOT USE for:
+  - Single-company analysis
+  - Margin/profitability comparisons (use margin_analysis skill instead)
+  - "X vs Y margins" or "X vs Y margin trend" → use margin_analysis
 widgets:
   - PriceChart
   - DataTable

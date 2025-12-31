@@ -66,6 +66,52 @@ export const theme = {
         sm: '0 1px 2px 0 rgba(0, 0, 0, 0.05)',
         md: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
         lg: '0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05)',
+        glow: '0 0 20px rgba(99, 102, 241, 0.3)',
+    },
+
+    // Ambient animation tokens for "wow factor"
+    animations: {
+        /** Spring config for layout transitions */
+        spring: {
+            type: 'spring' as const,
+            stiffness: 200,
+            damping: 25,
+            mass: 0.8,
+        },
+        /** Faster spring for micro-interactions */
+        springFast: {
+            type: 'spring' as const,
+            stiffness: 400,
+            damping: 30,
+            mass: 0.5,
+        },
+        /** Slow spring for large layout changes */
+        springSoft: {
+            type: 'spring' as const,
+            stiffness: 100,
+            damping: 20,
+            mass: 1,
+        },
+        /** Duration for ambient effects (ms) */
+        ambientDuration: 4000,
+        /** Streaming text speed (ms per character) */
+        streamingSpeed: 30,
+    },
+
+    // Glassmorphism effects
+    glass: {
+        background: 'rgba(15, 23, 42, 0.85)',
+        border: 'rgba(99, 102, 241, 0.25)',
+        blur: '12px',
+    },
+
+    // Connection status colors
+    status: {
+        connected: '#22c55e',
+        connecting: '#fbbf24',
+        reconnecting: '#f97316',
+        disconnected: '#ef4444',
+        streaming: '#6366f1',
     },
 };
 

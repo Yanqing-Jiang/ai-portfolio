@@ -1,7 +1,7 @@
 """
 A2UI Protocol Implementation
 
-Core A2UI v0.8 message types, generator, and utilities.
+Core A2UI v0.8 message types, emitter, and utilities.
 """
 
 from .messages import (
@@ -17,7 +17,7 @@ from .messages import (
     BoundArray,
     DataEntry,
 )
-from .generator import A2UIMessageGenerator
+from .emitter import A2UIMessageEmitter, SkillRenderContext
 from .catalog import FinancialCatalog, get_catalog
 
 __all__ = [
@@ -34,8 +34,9 @@ __all__ = [
     "BoundBoolean",
     "BoundArray",
     "DataEntry",
-    # Generator
-    "A2UIMessageGenerator",
+    # Emitter (replaces legacy A2UIMessageGenerator)
+    "A2UIMessageEmitter",
+    "SkillRenderContext",
     # Catalog
     "FinancialCatalog",
     "get_catalog",

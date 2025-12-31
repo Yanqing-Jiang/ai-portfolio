@@ -13,12 +13,16 @@ import Sidebar from './components/Sidebar';
 import ProjectView from './components/ProjectView';
 import LandingPageFlow from './components/LandingPageFlow';
 import { GenerativeUIPage } from './components/generativeUiDashboard';
+import NeuralWebDemo from './components/demos/NeuralWebDemo';
+import StreamingInsightDemo from './components/demos/StreamingInsightDemo';
+import BentoPulseDemo from './components/demos/BentoPulseDemo';
 import { PROJECT_DATA } from './constants';
 import type { Project } from './types';
 import { ChevronLeftIcon } from './components/icons/ChevronLeftIcon';
 import { ChevronRightIcon } from './components/icons/ChevronRightIcon';
 // @ts-ignore
 import { HelmetProvider } from 'react-helmet-async';
+import { AnimatePresence, motion } from 'framer-motion';
 
 
 // --- helper to look up a project by id ---
@@ -109,7 +113,7 @@ const Layout: React.FC = () => {
   };
 
   return (
-    <div className="flex h-screen bg-gray-900 text-gray-100 font-sans overflow-hidden">
+    <div className="flex h-screen bg-[#010208] text-white font-sans overflow-hidden">
       <Sidebar
         isSidebarOpen={isSidebarOpen}
         projectData={PROJECT_DATA}
@@ -119,14 +123,19 @@ const Layout: React.FC = () => {
       />
 
       {/* Mobile overlay when sidebar is open */}
-      {isSidebarOpen && isMobile && (
-        <div
-          onClick={() => setIsSidebarOpen(false)}
-          className="fixed inset-0 bg-black/50 z-20 md:hidden backdrop-blur-sm"
-        />
-      )}
+      <AnimatePresence>
+        {isSidebarOpen && isMobile && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => setIsSidebarOpen(false)}
+            className="fixed inset-0 bg-black/60 z-40 md:hidden backdrop-blur-md"
+          />
+        )}
+      </AnimatePresence>
 
-      <div className="relative flex-1 flex flex-col min-w-0">
+      <div className="relative flex-1 flex flex-col min-w-0 transition-all duration-500 ease-in-out">
         {/* Sidebar toggle button - responsive positioning */}
         <button
           onClick={() => {
@@ -136,11 +145,11 @@ const Layout: React.FC = () => {
               localStorage.setItem('sidebarHintSeen', 'true');
             }
           }}
-          className={`fixed top-4 z-40 flex items-center justify-center w-10 h-10 md:w-8 md:h-8
-                     bg-gray-800 hover:bg-gray-700 border border-gray-700/50 rounded-full
-                     transition-all duration-300 shadow-lg hover:shadow-xl
-                     ${isSidebarOpen && !isMobile ? 'left-[18rem]' : 'left-4'}
-                     md:absolute md:top-6 md:left-auto md:-ml-4`}
+          className={`fixed top-6 z-[60] flex items-center justify-center w-8 h-8 md:w-10 md:h-10
+                     bg-slate-900/80 backdrop-blur-xl border border-sky-500/30 rounded-full
+                     text-sky-400 transition-all duration-500 shadow-[0_0_20px_rgba(14,165,233,0.2)] 
+                     hover:bg-sky-500/20 hover:text-white hover:border-sky-400
+                     ${isSidebarOpen ? 'left-[19rem] sm:left-[23rem] md:left-[19rem]' : 'left-6'}`}
         >
           {isSidebarOpen ? <ChevronLeftIcon /> : <ChevronRightIcon />}
         </button>
@@ -190,6 +199,12 @@ const Layout: React.FC = () => {
             />
             {/* 2026 Generative UI - Custom full-page experience */}
             <Route path="/project/generative-ui-a2ui" element={<GenerativeUIPage />} />
+
+            {/* Design Demos */}
+            <Route path="/demo/neural-web" element={<NeuralWebDemo />} />
+            <Route path="/demo/streaming-insight" element={<StreamingInsightDemo />} />
+            <Route path="/demo/bento-pulse" element={<BentoPulseDemo />} />
+
             <Route path="/project/:projectId" element={<ProjectRoute />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

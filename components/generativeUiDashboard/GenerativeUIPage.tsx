@@ -98,164 +98,88 @@ const AVAILABLE_TICKERS = ['AMD', 'AVGO', 'INTC', 'MU', 'NVDA', 'QCOM', 'TXN'];
 // Debug Panel Component
 // ============================================================================
 
-interface DebugPanelProps {
-    isOpen: boolean;
-    onClose: () => void;
+// ============================================================================
+// Unified Header & Status Component
+// ============================================================================
+
+interface UnifiedHeaderProps {
+    dashboardId: string | null;
     streamState: {
         messageCount: number;
         isConnected: boolean;
         isDone: boolean;
         error: string | null;
+        isLoading?: boolean;
     };
-    surface: unknown;
-    dataModel: unknown;
-    dashboardId: string | null;
+    onDebugToggle: () => void;
+    onReset: () => void;
 }
 
-function DebugPanel({ isOpen, onClose, streamState, surface, dataModel, dashboardId }: DebugPanelProps) {
-    const [activeTab, setActiveTab] = useState<'surface' | 'data' | 'raw'>('surface');
-
-    const debugData = {
-        dashboardId,
-        timestamp: new Date().toISOString(),
-        streamState: {
-            messageCount: streamState.messageCount,
-            isConnected: streamState.isConnected,
-            isDone: streamState.isDone,
-            error: streamState.error,
-        },
-        surface,
-        dataModel,
-    };
-
-    const handleDownload = () => {
-        const blob = new Blob([JSON.stringify(debugData, null, 2)], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `dashboard-debug-${dashboardId || 'unknown'}-${Date.now()}.json`;
-        a.click();
-        URL.revokeObjectURL(url);
-    };
-
-    if (!isOpen) return null;
+function UnifiedHeader({ dashboardId, streamState, onDebugToggle, onReset }: UnifiedHeaderProps) {
+    const isStreaming = streamState.isConnected;
+    const isComplete = streamState.isDone;
 
     return (
-        <AnimatePresence>
-            <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="fixed inset-0 z-50 flex items-center justify-center p-4"
-                style={{ backgroundColor: 'rgba(0, 0, 0, 0.8)', backdropFilter: 'blur(8px)' }}
-                onClick={onClose}
+        <div className="flex items-center gap-4">
+            {/* Status Indicator */}
+            <div
+                className="flex items-center gap-3 px-4 py-2 rounded-full border transition-all"
+                style={{
+                    backgroundColor: theme.colors.bg.tertiary,
+                    borderColor: isStreaming ? theme.colors.accent.primary + '50' : theme.colors.border.subtle,
+                    boxShadow: isStreaming ? `0 0 15px ${theme.colors.accent.glow}` : 'none'
+                }}
             >
-                <motion.div
-                    initial={{ opacity: 0, scale: 0.9, y: 20 }}
-                    animate={{ opacity: 1, scale: 1, y: 0 }}
-                    exit={{ opacity: 0, scale: 0.9, y: 20 }}
-                    onClick={(e) => e.stopPropagation()}
-                    className="w-full max-w-4xl max-h-[80vh] rounded-2xl overflow-hidden"
-                    style={{
-                        backgroundColor: theme.colors.bg.secondary,
-                        border: `1px solid ${theme.colors.border.medium}`,
-                        boxShadow: theme.shadows.card,
-                    }}
-                >
-                    {/* Header */}
-                    <div
-                        className="flex items-center justify-between px-6 py-4 border-b"
-                        style={{ borderColor: theme.colors.border.subtle }}
-                    >
-                        <div className="flex items-center gap-3">
-                            <span className="text-xl">🔧</span>
-                            <div>
-                                <h2 className="text-lg font-bold" style={{ color: theme.colors.text.primary }}>
-                                    Debug Panel
-                                </h2>
-                                <p className="text-xs" style={{ color: theme.colors.text.muted }}>
-                                    A2UI Stream Inspector
-                                </p>
-                            </div>
-                        </div>
-                        <div className="flex items-center gap-3">
-                            <button
-                                onClick={handleDownload}
-                                className="px-4 py-2 rounded-lg text-sm font-medium transition-all hover:scale-105"
-                                style={{
-                                    background: `linear-gradient(135deg, ${theme.colors.accent.primary}, ${theme.colors.accent.secondary})`,
-                                    color: 'white',
-                                }}
-                            >
-                                Download JSON
-                            </button>
-                            <button
-                                onClick={onClose}
-                                className="w-8 h-8 rounded-lg flex items-center justify-center transition-colors"
-                                style={{ backgroundColor: theme.colors.bg.tertiary, color: theme.colors.text.secondary }}
-                            >
-                                ✕
-                            </button>
-                        </div>
-                    </div>
-
-                    {/* Tabs */}
-                    <div className="flex gap-1 px-6 pt-4" style={{ borderBottom: `1px solid ${theme.colors.border.subtle}` }}>
-                        {(['surface', 'data', 'raw'] as const).map((tab) => (
-                            <button
-                                key={tab}
-                                onClick={() => setActiveTab(tab)}
-                                className="px-4 py-2 text-sm font-medium rounded-t-lg transition-colors"
-                                style={{
-                                    backgroundColor: activeTab === tab ? theme.colors.bg.tertiary : 'transparent',
-                                    color: activeTab === tab ? theme.colors.text.primary : theme.colors.text.muted,
-                                    borderBottom: activeTab === tab ? `2px solid ${theme.colors.accent.primary}` : 'none',
-                                }}
-                            >
-                                {tab === 'surface' ? '🎨 Surface' : tab === 'data' ? '📊 Data Model' : '📄 Raw JSON'}
-                            </button>
-                        ))}
-                    </div>
-
-                    {/* Content */}
-                    <div className="p-6 overflow-auto" style={{ maxHeight: 'calc(80vh - 180px)' }}>
-                        <pre
-                            className="text-xs font-mono p-4 rounded-lg overflow-auto"
-                            style={{
-                                backgroundColor: theme.colors.bg.primary,
-                                color: theme.colors.text.secondary,
-                                border: `1px solid ${theme.colors.border.subtle}`,
-                            }}
-                        >
-                            {activeTab === 'surface' && JSON.stringify(surface, null, 2)}
-                            {activeTab === 'data' && JSON.stringify(dataModel, null, 2)}
-                            {activeTab === 'raw' && JSON.stringify(debugData, null, 2)}
-                        </pre>
-                    </div>
-
-                    {/* Status Bar */}
-                    <div
-                        className="flex items-center justify-between px-6 py-3 text-xs"
-                        style={{
-                            backgroundColor: theme.colors.bg.tertiary,
-                            borderTop: `1px solid ${theme.colors.border.subtle}`,
-                            color: theme.colors.text.muted,
+                <div className="relative">
+                    <motion.div
+                        className="w-2.5 h-2.5 rounded-full"
+                        animate={{
+                            scale: isStreaming ? [1, 1.4, 1] : 1,
+                            opacity: isStreaming ? [1, 0.6, 1] : 1
                         }}
+                        transition={{ duration: 1.5, repeat: Infinity }}
+                        style={{
+                            backgroundColor: isStreaming
+                                ? theme.colors.status.streaming
+                                : (isComplete ? theme.colors.status.success : theme.colors.text.muted)
+                        }}
+                    />
+                </div>
+                <div className="flex flex-col">
+                    <span className="text-[10px] uppercase tracking-widest font-bold" style={{ color: theme.colors.text.muted }}>
+                        System Status
+                    </span>
+                    <span className="text-xs font-semibold" style={{ color: theme.colors.text.primary }}>
+                        {isStreaming ? 'AI Analysis Streaming...' : (isComplete ? 'Analysis Complete' : 'A2UI Ready')}
+                    </span>
+                </div>
+            </div>
+
+            <div className="h-8 w-px" style={{ backgroundColor: theme.colors.border.medium }} />
+
+            {/* Actions */}
+            <div className="flex items-center gap-2">
+                <button
+                    onClick={onDebugToggle}
+                    className="p-2 rounded-lg transition-all hover:bg-white/5 active:scale-95"
+                    title="Toggle Debug Inspector"
+                    style={{ color: theme.colors.text.secondary }}
+                >
+                    <span className="text-lg">🔧</span>
+                </button>
+
+                {dashboardId && (
+                    <button
+                        onClick={onReset}
+                        className="p-2 rounded-lg transition-all hover:bg-white/5 active:scale-95"
+                        title="Start New Analysis"
+                        style={{ color: theme.colors.text.secondary }}
                     >
-                        <div className="flex items-center gap-4">
-                            <span>Messages: {streamState.messageCount}</span>
-                            <span>
-                                Status:{' '}
-                                <span style={{ color: streamState.isConnected ? theme.colors.status.streaming : theme.colors.status.success }}>
-                                    {streamState.isConnected ? 'Streaming' : streamState.isDone ? 'Complete' : 'Idle'}
-                                </span>
-                            </span>
-                        </div>
-                        <span>Dashboard ID: {dashboardId || 'None'}</span>
-                    </div>
-                </motion.div>
-            </motion.div>
-        </AnimatePresence>
+                        <span className="text-lg">🔄</span>
+                    </button>
+                )}
+            </div>
+        </div>
     );
 }
 
@@ -449,17 +373,46 @@ export function GenerativeUIPage(): React.ReactElement {
         streamActions.close();
     };
 
-    const getStatusColor = () => {
-        if (streamState.isConnected) return theme.colors.status.streaming;
-        if (streamState.isDone) return theme.colors.status.success;
-        return theme.colors.text.muted;
-    };
-
-    const getStatusText = () => {
-        if (streamState.isConnected) return 'Streaming';
-        if (streamState.isDone) return 'Complete';
-        if (isCreating) return 'Creating...';
-        return 'Ready';
+    // Unified Debug Panel (simplified)
+    const renderDebugPanel = () => {
+        if (!showDebugPanel) return null;
+        return (
+            <AnimatePresence>
+                <div
+                    className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4"
+                    style={{ backgroundColor: 'rgba(0, 0, 0, 0.4)', backdropFilter: 'blur(4px)' }}
+                    onClick={() => setShowDebugPanel(false)}
+                >
+                    <motion.div
+                        initial={{ opacity: 0, y: 50 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: 50 }}
+                        onClick={(e) => e.stopPropagation()}
+                        className="w-full max-w-2xl bg-slate-900 border border-slate-700 rounded-2xl overflow-hidden shadow-2xl"
+                    >
+                        <div className="p-4 border-b border-slate-800 flex justify-between items-center">
+                            <h3 className="font-bold text-white">Stream Inspector</h3>
+                            <button onClick={() => setShowDebugPanel(false)} className="text-slate-400">✕</button>
+                        </div>
+                        <div className="p-4 max-h-[60vh] overflow-auto">
+                            <div className="grid grid-cols-2 gap-4 mb-4">
+                                <div className="p-3 bg-slate-800 rounded-xl">
+                                    <p className="text-[10px] uppercase text-slate-500 font-bold mb-1">Messages</p>
+                                    <p className="text-xl text-white font-mono">{streamState.surfaces.size}</p>
+                                </div>
+                                <div className="p-3 bg-slate-800 rounded-xl">
+                                    <p className="text-[10px] uppercase text-slate-500 font-bold mb-1">Surface ID</p>
+                                    <p className="text-sm text-white font-mono truncate">{surfaceId}</p>
+                                </div>
+                            </div>
+                            <pre className="text-[10px] font-mono bg-black/50 p-4 rounded-xl text-slate-300 overflow-auto">
+                                {JSON.stringify(dataModel, null, 2)}
+                            </pre>
+                        </div>
+                    </motion.div>
+                </div>
+            </AnimatePresence>
+        );
     };
 
     return (
@@ -534,37 +487,18 @@ export function GenerativeUIPage(): React.ReactElement {
                             </div>
 
                             <div className="flex items-center gap-3">
-                                {/* Debug Button */}
-                                <button
-                                    onClick={() => setShowDebugPanel(true)}
-                                    className="flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium transition-all hover:scale-105"
-                                    style={{
-                                        backgroundColor: theme.colors.bg.tertiary,
-                                        border: `1px solid ${theme.colors.border.subtle}`,
-                                        color: theme.colors.text.secondary,
+                                <UnifiedHeader
+                                    dashboardId={dashboardId}
+                                    streamState={{
+                                        messageCount: streamState.surfaces.size,
+                                        isConnected: streamState.isConnected,
+                                        isDone: streamState.isDone,
+                                        error: streamState.error?.message ?? null,
+                                        isLoading: isCreating
                                     }}
-                                >
-                                    <span>🔧</span>
-                                    <span className="hidden sm:inline">Debug</span>
-                                </button>
-
-                                {/* Connection Status */}
-                                <div
-                                    className="flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium"
-                                    style={{
-                                        backgroundColor: theme.colors.bg.tertiary,
-                                        border: `1px solid ${theme.colors.border.subtle}`,
-                                    }}
-                                >
-                                    <motion.span
-                                        className="w-2 h-2 rounded-full"
-                                        animate={{ opacity: streamState.isConnected ? [1, 0.5, 1] : 1 }}
-                                        transition={{ duration: 1, repeat: streamState.isConnected ? Infinity : 0 }}
-                                        style={{ backgroundColor: getStatusColor() }}
-                                    />
-                                    <span style={{ color: theme.colors.text.secondary }}>{getStatusText()}</span>
-                                </div>
-
+                                    onDebugToggle={() => setShowDebugPanel(!showDebugPanel)}
+                                    onReset={handleReset}
+                                />
                             </div>
                         </div>
                     </div>
@@ -786,20 +720,8 @@ export function GenerativeUIPage(): React.ReactElement {
                     </div>
                 </div>
 
-                {/* Debug Panel */}
-                <DebugPanel
-                    isOpen={showDebugPanel}
-                    onClose={() => setShowDebugPanel(false)}
-                    streamState={{
-                        messageCount: streamState.surfaces.size,
-                        isConnected: streamState.isConnected,
-                        isDone: streamState.isDone,
-                        error: streamState.error?.message ?? null,
-                    }}
-                    surface={surface}
-                    dataModel={dataModel}
-                    dashboardId={dashboardId}
-                />
+                {/* Debug Panel Portal */}
+                {renderDebugPanel()}
             </div>
         </>
     );

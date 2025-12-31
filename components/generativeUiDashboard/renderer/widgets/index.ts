@@ -9,4 +9,4 @@ export { NewsTimeline } from './NewsTimeline';
 export { CorrelationMatrix } from './CorrelationMatrix';
 export { ExplainMovePanel } from './ExplainMovePanel';
 export { ErrorPanel } from './ErrorPanel';
-
+export { WidgetSkeleton, DashboardSkeleton } from './WidgetSkeleton';

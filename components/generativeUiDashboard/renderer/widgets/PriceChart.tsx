@@ -43,7 +43,8 @@ export function PriceChart({
         // Load TradingView script
         const loadScript = (): Promise<void> => {
             return new Promise((resolve, reject) => {
-                if ((window as Record<string, unknown>).TradingView) {
+                const win = window as any;
+                if (win.TradingView) {
                     resolve();
                     return;
                 }
@@ -69,9 +70,7 @@ export function PriceChart({
                 }
 
                 // Create new widget
-                const TradingView = (window as Record<string, unknown>).TradingView as {
-                    widget: new (config: unknown) => unknown;
-                };
+                const TradingView = (window as any).TradingView;
 
                 widgetRef.current = new TradingView.widget({
                     autosize: true,
@@ -105,10 +104,12 @@ export function PriceChart({
             data-component-id={componentId}
             style={{
                 width: '100%',
-                height: '400px',
-                backgroundColor: '#0f172a',
-                borderRadius: '8px',
+                aspectRatio: '16 / 9',
+                maxHeight: '450px',
+                backgroundColor: 'rgba(15, 23, 42, 0.5)',
+                borderRadius: '12px',
                 overflow: 'hidden',
+                border: '1px solid rgba(148, 163, 184, 0.1)',
             }}
         >
             <div

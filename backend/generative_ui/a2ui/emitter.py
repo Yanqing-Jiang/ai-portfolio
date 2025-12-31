@@ -271,8 +271,17 @@ class A2UIMessageEmitter:
             sortable=True,
         )
         table_card = A2UIComponent.card("table_card", "metrics_table")
+        
+        explain = A2UIComponent.explain_move_panel(
+            "explain_panel",
+            title_path="/data/explanation/title",
+            explanation_path="/data/explanation/text",
+            factors_path="/data/explanation/factors",
+            citations_path="/data/explanation/citations",
+        )
+        explain_card = A2UIComponent.card("explain_card", "explain_panel")
 
-        root = A2UIComponent.column("layout_root", ["header_row", "charts_row", "table_card"])
+        root = A2UIComponent.column("layout_root", ["header_row", "charts_row", "table_card", "explain_card"])
 
         return [
             title,
@@ -284,6 +293,8 @@ class A2UIMessageEmitter:
             charts_row,
             table,
             table_card,
+            explain,
+            explain_card,
             root,
         ]
 
@@ -320,7 +331,16 @@ class A2UIMessageEmitter:
         )
         table_card = A2UIComponent.card("table_card", "margin_table")
 
-        root = A2UIComponent.column("layout_root", ["header_row", "kpi_row", "table_card"])
+        explain = A2UIComponent.explain_move_panel(
+            "explain_panel",
+            title_path="/data/explanation/title",
+            explanation_path="/data/explanation/text",
+            factors_path="/data/explanation/factors",
+            citations_path="/data/explanation/citations",
+        )
+        explain_card = A2UIComponent.card("explain_card", "explain_panel")
+
+        root = A2UIComponent.column("layout_root", ["header_row", "kpi_row", "table_card", "explain_card"])
 
         return [
             title,
@@ -331,6 +351,8 @@ class A2UIMessageEmitter:
             kpi_row,
             table,
             table_card,
+            explain,
+            explain_card,
             root,
         ]
 
@@ -371,7 +393,16 @@ class A2UIMessageEmitter:
         )
         table_card = A2UIComponent.card("table_card", "revenue_table")
 
-        root = A2UIComponent.column("layout_root", ["header_row", "main_row", "table_card"])
+        explain = A2UIComponent.explain_move_panel(
+            "explain_panel",
+            title_path="/data/explanation/title",
+            explanation_path="/data/explanation/text",
+            factors_path="/data/explanation/factors",
+            citations_path="/data/explanation/citations",
+        )
+        explain_card = A2UIComponent.card("explain_card", "explain_panel")
+
+        root = A2UIComponent.column("layout_root", ["header_row", "main_row", "table_card", "explain_card"])
 
         return [
             title,
@@ -384,6 +415,8 @@ class A2UIMessageEmitter:
             main_row,
             table,
             table_card,
+            explain,
+            explain_card,
             root,
         ]
 

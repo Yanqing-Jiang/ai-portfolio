@@ -14,6 +14,7 @@ export * from './renderer';
 export { DashboardViewer, CreateDashboardForm } from './DashboardViewer';
 export { DashboardPage } from './DashboardPage';
 export { GenerativeUIPage } from './GenerativeUIPage';
+export { default as ClarificationCard } from './ClarificationCard';
 
 // Styles
 export { dashboardStyles, theme } from './styles';

@@ -53,13 +53,18 @@ FastAPI endpoints for A2UI dashboard management.
 
 from __future__ import annotations
 import logging
+from pathlib import Path
 from typing import Any, Dict, Optional
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, HTMLResponse
 from pydantic import BaseModel
 
 from ..models import get_dashboard_store
 from ..agent_v2 import get_a2ui_agent, A2UIAgentError
+from ..clarification import (
+    ClarificationResponse,
+    validate_clarification_response,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +90,13 @@ class CreateDashboardResponse(BaseModel):
 class ActionRequest(BaseModel):
     """User action request."""
     userAction: Dict[str, Any]
+
+
+class ClarificationSubmitRequest(BaseModel):
+    """Submit user's clarification response."""
+    request_id: str
+    values: Dict[str, Any]
+    skipped: bool = False
 
 
 # ============================================================================
@@ -284,6 +296,96 @@ async def delete_dashboard(dashboard_id: str):
         return {"status": "deleted", "dashboard_id": dashboard_id}
     else:
         raise HTTPException(status_code=404, detail="Dashboard not found")
+
+
+@router.post("/{dashboard_id}/clarification")
+async def submit_clarification(dashboard_id: str, request: ClarificationSubmitRequest):
+    """
+    Submit user's clarification response.
+    
+    This endpoint:
+    1. Validates the clarification response
+    2. Merges values into dashboard plan/params
+    3. Returns updated plan for streaming
+    """
+    store = get_dashboard_store()
+    state = store.get(dashboard_id)
+    
+    if not state:
+        raise HTTPException(status_code=404, detail="Dashboard not found")
+    
+    # If user skipped, just return to let LLM decide
+    if request.skipped:
+        return {
+            "status": "skipped",
+            "dashboard_id": dashboard_id,
+            "message": "Proceeding with AI-selected options",
+        }
+    
+    # Extract clarification values and merge into plan
+    values = request.values
+    plan = state.plan_json
+    
+    # Map clarification fields to plan properties
+    if "comparison_type" in values:
+        comp_type = values["comparison_type"]
+        # Switch skill based on comparison type
+        if comp_type == "margins":
+            plan["skill_id"] = "a2ui_margin_analysis"
+        elif comp_type == "revenue":
+            plan["skill_id"] = "a2ui_peer_compare"
+            plan["metric"] = "Revenue"
+        elif comp_type == "stock":
+            plan["skill_id"] = "a2ui_peer_compare"
+            plan["metric"] = "Stock Price"
+    
+    if "ticker" in values and values["ticker"]:
+        tickers = plan.get("tickers", [])
+        if values["ticker"] not in tickers:
+            tickers.insert(0, values["ticker"])
+            plan["tickers"] = tickers
+    
+    if "custom_ticker" in values and values["custom_ticker"]:
+        custom = values["custom_ticker"].upper().strip()
+        tickers = plan.get("tickers", [])
+        if custom not in tickers:
+            tickers.insert(0, custom)
+            plan["tickers"] = tickers
+    
+    if "timeframe" in values:
+        plan["time_range"] = values["timeframe"]
+    
+    if "period" in values:
+        plan["period"] = values["period"]
+    
+    if "margin_types" in values:
+        plan["margin_types"] = values["margin_types"]
+    
+    # Update state
+    state.plan_json = plan
+    state.update_params({"clarified": True, **values})
+    
+    return {
+        "status": "success",
+        "dashboard_id": dashboard_id,
+        "plan": plan,
+        "values": values,
+    }
+
+
+@router.get("/showcase", response_class=HTMLResponse)
+async def get_showcase():
+    """
+    Serve the Generative UI showcase/demo page.
+    
+    Returns static HTML with skills overview, architecture diagram,
+    and click-to-try example queries.
+    """
+    showcase_path = Path(__file__).parent.parent / "static" / "showcase.html"
+    if not showcase_path.exists():
+        raise HTTPException(status_code=404, detail="Showcase not found")
+    
+    return HTMLResponse(content=showcase_path.read_text(encoding="utf-8"))
 
 
 # helper removed in favor of a2ui.error_surface

@@ -175,6 +175,20 @@ except Exception:  # pragma: no cover - SDK may be unavailable
 from .config import get_settings
 from .skills import A2UISkillMeta, build_a2ui_skill_catalog, get_a2ui_skill, get_a2ui_skills
 from .a2ui.emitter import A2UIMessageEmitter, SkillRenderContext
+from .utils import (
+    AVAILABLE_TICKERS,
+    normalize_tickers,
+    sorted_rows,
+    period_label,
+    coerce_float,
+    metric_series,
+    latest_and_previous,
+    percentage_change,
+    compute_correlation_matrix,
+    parse_published_at,
+    map_sentiment,
+    map_news_event,
+)
 from conversational_analytics.tools import execute_sql_tool, execute_news_tool, execute_analysis_tool
 from conversational_analytics.sdk_assets import (
     CLAUDE_DIR,
@@ -184,7 +198,6 @@ from conversational_analytics.sdk_assets import (
 )
 
 
-AVAILABLE_TICKERS = ["AMD", "AVGO", "INTC", "MU", "NVDA", "QCOM", "TXN"]
 ALLOWED_TIME_RANGES = {"1M", "3M", "6M", "1Y"}
 DEFAULT_TIME_RANGE = "3M"
 DEFAULT_METRIC = "Revenue"
@@ -245,142 +258,6 @@ def _build_skill_selection_tool(skill_ids: Sequence[str]) -> Dict[str, Any]:
     }
 
 
-def _normalize_tickers(tickers: Iterable[str]) -> List[str]:
-    normalized = []
-    for ticker in tickers:
-        if not ticker:
-            continue
-        candidate = str(ticker).upper().strip()
-        if candidate and candidate in AVAILABLE_TICKERS and candidate not in normalized:
-            normalized.append(candidate)
-    return normalized
-
-
-def _row_sort_key(row: Mapping[str, Any]) -> Tuple[int, int]:
-    year = int(row.get("calendar_year") or 0)
-    quarter = int(row.get("calendar_quarter_num") or 0)
-    return (year, quarter)
-
-
-def _sorted_rows(rows: Sequence[Mapping[str, Any]]) -> List[Mapping[str, Any]]:
-    return sorted(rows, key=_row_sort_key, reverse=True)
-
-
-def _period_label(row: Mapping[str, Any]) -> str:
-    year = row.get("calendar_year")
-    quarter = row.get("calendar_quarter_num")
-    if year and quarter:
-        return f"Q{quarter} {year}"
-    if year:
-        return str(year)
-    return "Unknown"
-
-
-def _coerce_float(value: Any) -> Optional[float]:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _metric_series(rows: Sequence[Mapping[str, Any]], metric: str) -> List[Dict[str, Any]]:
-    filtered = [row for row in rows if str(row.get("metric", "")) == metric]
-    series: List[Dict[str, Any]] = []
-    for row in _sorted_rows(filtered):
-        value = _coerce_float(row.get("value"))
-        if value is None:
-            continue
-        series.append({"period": _period_label(row), "value": value})
-    return series
-
-
-def _latest_and_previous(series: Sequence[Mapping[str, Any]]) -> Tuple[Optional[float], Optional[float]]:
-    if not series:
-        return None, None
-    latest = _coerce_float(series[0].get("value"))
-    previous = _coerce_float(series[1].get("value")) if len(series) > 1 else None
-    return latest, previous
-
-
-def _percentage_change(current: Optional[float], previous: Optional[float]) -> Optional[float]:
-    if current is None or previous is None:
-        return None
-    if previous == 0:
-        return None
-    return (current - previous) / previous * 100
-
-
-def _compute_correlation_matrix(series_by_ticker: Mapping[str, Sequence[float]], tickers: Sequence[str]) -> List[List[float]]:
-    matrix: List[List[float]] = []
-    for i, ticker_a in enumerate(tickers):
-        row: List[float] = []
-        series_a = list(series_by_ticker.get(ticker_a, []))
-        for j, ticker_b in enumerate(tickers):
-            if i == j:
-                row.append(1.0)
-                continue
-            series_b = list(series_by_ticker.get(ticker_b, []))
-            n = min(len(series_a), len(series_b))
-            if n < 2:
-                row.append(0.0)
-                continue
-            a = series_a[:n]
-            b = series_b[:n]
-            mean_a = sum(a) / n
-            mean_b = sum(b) / n
-            cov = sum((a[k] - mean_a) * (b[k] - mean_b) for k in range(n)) / n
-            var_a = sum((a[k] - mean_a) ** 2 for k in range(n)) / n
-            var_b = sum((b[k] - mean_b) ** 2 for k in range(n)) / n
-            if var_a == 0 or var_b == 0:
-                row.append(0.0)
-                continue
-            corr = cov / math.sqrt(var_a * var_b)
-            row.append(round(corr, 3))
-        matrix.append(row)
-    return matrix
-
-
-def _parse_published_at(raw: str) -> str:
-    if not raw:
-        return ""
-    try:
-        if "T" in raw and len(raw) >= 15:
-            dt = datetime.strptime(raw[:15], "%Y%m%dT%H%M%S")
-            return dt.isoformat()
-    except ValueError:
-        return raw
-    return raw
-
-
-def _map_sentiment(score: Optional[float], label: Optional[str]) -> str:
-    if score is not None:
-        if score >= 0.15:
-            return "positive"
-        if score <= -0.15:
-            return "negative"
-        return "neutral"
-    lowered = (label or "").lower()
-    if "bull" in lowered:
-        return "positive"
-    if "bear" in lowered:
-        return "negative"
-    return "neutral"
-
-
-def _map_news_event(article: Mapping[str, Any]) -> Dict[str, Any]:
-    score = _coerce_float(article.get("sentiment_score"))
-    sentiment = _map_sentiment(score, article.get("sentiment_label"))
-    published_at = article.get("published_at") or ""
-    return {
-        "date": _parse_published_at(str(published_at)),
-        "title": article.get("title", ""),
-        "summary": article.get("summary", ""),
-        "sentiment": sentiment,
-        "source": article.get("source", ""),
-        "url": article.get("url", ""),
-    }
-
-
 def _extract_tool_input(response: Any, tool_name: str) -> Dict[str, Any]:
     content = getattr(response, "content", []) or []
     for block in content:
@@ -433,40 +310,76 @@ class A2UIAgent:
         else:
             self.client = anthropic.Anthropic(api_key=self.settings.claude_api_key)
 
-    async def select_skill(self, question: str) -> SkillSelection:
-        """Select a skill and slots using the model."""
+    async def select_skill(self, question: str, max_retries: int = 2) -> SkillSelection:
+        """Select a skill and slots using the model with retry logic.
+        
+        Args:
+            question: User's question to route.
+            max_retries: Number of retries on validation failure (default: 2).
+            
+        Returns:
+            SkillSelection with skill_id, tickers, metric, and time_range.
+            
+        Raises:
+            A2UIAgentError: If skill selection fails after all retries.
+        """
         system_prompt = (
             "You are an A2UI skill router. Choose exactly one skill_id from the catalog and extract tickers, metric, and time range if present. "
             "Only use the allowed ticker list. time_range must be one of: 1M, 3M, 6M, 1Y."
         )
         if not self.allowed_tool_names:
             raise A2UIAgentError("Claude SDK allowlist blocks A2UI skill routing tool.")
+        
         tool = _build_skill_selection_tool(self.skill_lookup.keys())
-        response = self.client.messages.create(
-            model=self.model,
-            max_tokens=512,
-            system=f"{system_prompt}\n\n{self.skill_catalog}",
-            tools=[tool],
-            tool_choice={"type": "tool", "name": SKILL_SELECTION_TOOL_NAME},
-            messages=[
-                {
-                    "role": "user",
-                    "content": (
-                        f"Question: {question}\n\n"
-                        f"Allowed tickers: {', '.join(AVAILABLE_TICKERS)}"
-                    ),
-                }
-            ],
+        last_error: Optional[Exception] = None
+        
+        for attempt in range(max_retries):
+            try:
+                # Use lower temperature on retry for more deterministic output
+                temperature = 0.7 if attempt == 0 else 0.3
+                
+                response = self.client.messages.create(
+                    model=self.model,
+                    max_tokens=512,
+                    temperature=temperature,
+                    system=f"{system_prompt}\n\n{self.skill_catalog}",
+                    tools=[tool],
+                    tool_choice={"type": "tool", "name": SKILL_SELECTION_TOOL_NAME},
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": (
+                                f"Question: {question}\n\n"
+                                f"Allowed tickers: {', '.join(AVAILABLE_TICKERS)}"
+                            ),
+                        }
+                    ],
+                )
+                
+                tool_input = _extract_tool_input(response, SKILL_SELECTION_TOOL_NAME)
+                selection = SkillSelection(**tool_input)
+                self._validate_selection(selection)
+                return selection
+                
+            except (ValueError, A2UIAgentError, Exception) as exc:
+                last_error = exc
+                # Log retry attempt (avoid duplicate logging on final attempt)
+                if attempt < max_retries - 1:
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        f"Skill selection attempt {attempt + 1} failed: {exc}. Retrying..."
+                    )
+                continue
+        
+        # All retries exhausted
+        raise A2UIAgentError(
+            f"Skill selection failed after {max_retries} attempts: {last_error}"
         )
-        tool_input = _extract_tool_input(response, SKILL_SELECTION_TOOL_NAME)
-        selection = SkillSelection(**tool_input)
-        self._validate_selection(selection)
-        return selection
 
     def selection_to_plan(self, selection: SkillSelection) -> Dict[str, Any]:
         """Convert a skill selection into plan JSON for storage."""
         skill = get_a2ui_skill(selection.skill_id)
-        tickers = _normalize_tickers(selection.tickers)
+        tickers = normalize_tickers(selection.tickers)
         if not tickers:
             raise A2UIAgentError("No valid tickers selected")
         primary = tickers[0]
@@ -495,7 +408,7 @@ class A2UIAgent:
             ticker = plan.get("ticker")
             peers = plan.get("peers") or []
             tickers = [t for t in [ticker, *peers] if t]
-        normalized = _normalize_tickers(tickers)
+        normalized = normalize_tickers(tickers)
         if not normalized:
             raise A2UIAgentError("Plan did not contain valid tickers")
         metric = str(plan.get("metric") or DEFAULT_METRIC)
@@ -553,18 +466,86 @@ class A2UIAgent:
     async def execute_skill(self, skill: A2UISkillMeta, selection: SkillSelection) -> A2UIRunResult:
         """Execute tools for the selected skill."""
         if skill.skill_id == "a2ui_explain_move":
-            return await self._execute_explain_move(selection)
-        if skill.skill_id == "a2ui_peer_compare":
-            return await self._execute_peer_compare(selection)
-        if skill.skill_id == "a2ui_margin_analysis":
-            return await self._execute_margin_analysis(selection)
-        if skill.skill_id == "a2ui_revenue_trend":
-            return await self._execute_revenue_trend(selection)
-        raise A2UIAgentError(f"Unsupported skill_id: {skill.skill_id}")
+            result = await self._execute_explain_move(selection)
+        elif skill.skill_id == "a2ui_peer_compare":
+            result = await self._execute_peer_compare(selection)
+        elif skill.skill_id == "a2ui_margin_analysis":
+            result = await self._execute_margin_analysis(selection)
+        elif skill.skill_id == "a2ui_revenue_trend":
+            result = await self._execute_revenue_trend(selection)
+        else:
+            raise A2UIAgentError(f"Unsupported skill_id: {skill.skill_id}")
+        
+        # Add narrative summary for all skills except explain_move (which has its own)
+        if skill.skill_id != "a2ui_explain_move":
+            narrative = await self._execute_narrative(selection, result.data_model)
+            result.data_model["explanation"] = narrative
+            
+        return result
+
+    async def _execute_narrative(self, selection: SkillSelection, data_model: Dict[str, Any]) -> Dict[str, Any]:
+        """Generate a concise AI narrative summarizing the data results."""
+        ticker = selection.tickers[0] if selection.tickers else "the company"
+        
+        # Prepare a concise data summary for the LLM
+        # We exclude large lists like table rows to keep the prompt small
+        data_summary = {
+            "ticker": ticker,
+            "metric": selection.metric,
+            "kpis": data_model.get("kpis", {}),
+            "correlation": data_model.get("correlation", {}),
+            "tickers": data_model.get("tickers", []),
+        }
+
+        system_prompt = (
+            "You are a Senior Financial Analyst briefing a high-stakes trader. "
+            "Write a concise, 2-3 sentence narrative summary based on the provided data. "
+            "Focus on the most interesting trend or anomaly. "
+            "Keep it professional, data-driven, and very concise. "
+            "Do not use markdown formatting like bolding or lists. "
+            f"The user asked about: {selection.skill_id} for {ticker}."
+        )
+        
+        user_msg = f"Data Summary: {json.dumps(data_summary)}"
+        
+        try:
+            # We reuse execute_analysis_tool if it's available and suitable, 
+            # or we could use _call_claude directly. 
+            # Given explain_move uses execute_analysis_tool, let's stick to that for consistency
+            # but wrap it to provide the specific format ExplainPanel expects.
+            
+            findings = [f"Analyzing {selection.metric} data for {ticker}."]
+            for k, v in data_summary["kpis"].items():
+                findings.append(f"{k.replace('_', ' ').title()}: {v}")
+
+            analysis_result = await execute_analysis_tool(
+                data_summary=f"Financial data for {ticker}.",
+                key_findings=findings,
+                trend_direction="neutral",
+            )
+            
+            text = "Analysis pending."
+            if analysis_result.get("success"):
+                text = analysis_result.get("analysis", {}).get("summary", text)
+            
+            return {
+                "title": f"Insight: {selection.metric} for {ticker}",
+                "text": text,
+                "factors": [],
+                "citations": [],
+            }
+        except Exception as e:
+            logger.warning("Narrative generation failed: %s", e)
+            return {
+                "title": "Analysis Summary",
+                "text": "Data visualized below. Summarization currently unavailable.",
+                "factors": [],
+                "citations": [],
+            }
 
     async def _execute_explain_move(self, selection: SkillSelection) -> A2UIRunResult:
         """Fetch KPI + news data for explain-move dashboards."""
-        ticker = _normalize_tickers(selection.tickers)[0]
+        ticker = normalize_tickers(selection.tickers)[0]
         sql = (
             "SELECT ticker, calendar_year, calendar_quarter_num, calendar_quarter, metric, value "
             "FROM comp_financials "
@@ -576,29 +557,29 @@ class A2UIAgent:
         if not sql_result.get("success"):
             raise A2UIAgentError(sql_result.get("error", "SQL query failed"))
 
-        rows = _sorted_rows(sql_result.get("rows", []))
-        revenue_series = _metric_series(rows, "Revenue")
-        net_income_series = _metric_series(rows, "Net Income")
-        gross_margin_series = _metric_series(rows, "Gross Margin")
+        rows = sorted_rows(sql_result.get("rows", []))
+        revenue_series = metric_series(rows, "Revenue")
+        net_income_series = metric_series(rows, "Net Income")
+        gross_margin_series = metric_series(rows, "Gross Margin")
 
-        revenue_latest, revenue_prev = _latest_and_previous(revenue_series)
-        net_latest, net_prev = _latest_and_previous(net_income_series)
-        gross_latest, _ = _latest_and_previous(gross_margin_series)
+        revenue_latest, revenue_prev = latest_and_previous(revenue_series)
+        net_latest, net_prev = latest_and_previous(net_income_series)
+        gross_latest, _ = latest_and_previous(gross_margin_series)
 
-        revenue_delta = _percentage_change(revenue_latest, revenue_prev)
-        net_delta = _percentage_change(net_latest, net_prev)
+        revenue_delta = percentage_change(revenue_latest, revenue_prev)
+        net_delta = percentage_change(net_latest, net_prev)
 
         news_result = await execute_news_tool(ticker=ticker, limit=5)
         if not news_result.get("success"):
             raise A2UIAgentError(news_result.get("error", "News tool failed"))
 
         articles = news_result.get("articles", [])
-        events = [_map_news_event(article) for article in articles]
+        events = [map_news_event(article) for article in articles]
         factors = [
             {
                 "title": article.get("title", ""),
                 "description": article.get("summary", ""),
-                "impact": _map_sentiment(_coerce_float(article.get("sentiment_score")), article.get("sentiment_label")),
+                "impact": map_sentiment(coerce_float(article.get("sentiment_score")), article.get("sentiment_label")),
                 "source": article.get("source", ""),
             }
             for article in articles[:3]
@@ -607,7 +588,7 @@ class A2UIAgent:
             {
                 "title": article.get("title", ""),
                 "url": article.get("url", ""),
-                "date": _parse_published_at(str(article.get("published_at") or "")),
+                "date": parse_published_at(str(article.get("published_at") or "")),
             }
             for article in articles
         ]
@@ -651,7 +632,7 @@ class A2UIAgent:
 
     async def _execute_peer_compare(self, selection: SkillSelection) -> A2UIRunResult:
         """Fetch comparison data for peer dashboards."""
-        tickers = _normalize_tickers(selection.tickers)
+        tickers = normalize_tickers(selection.tickers)
         if len(tickers) < 2:
             raise A2UIAgentError("Peer comparison requires at least two tickers")
         tickers_sql = ", ".join([f"'{t}'" for t in tickers])
@@ -667,7 +648,7 @@ class A2UIAgent:
         if not sql_result.get("success"):
             raise A2UIAgentError(sql_result.get("error", "SQL query failed"))
 
-        rows = _sorted_rows(sql_result.get("rows", []))
+        rows = sorted_rows(sql_result.get("rows", []))
         rows_by_ticker: Dict[str, List[Mapping[str, Any]]] = {ticker: [] for ticker in tickers}
         for row in rows:
             ticker = row.get("ticker")
@@ -677,9 +658,9 @@ class A2UIAgent:
         table_rows = []
         series_by_ticker: Dict[str, List[float]] = {}
         for ticker, ticker_rows in rows_by_ticker.items():
-            series = _metric_series(ticker_rows, metric)
-            latest, previous = _latest_and_previous(series)
-            delta = _percentage_change(latest, previous)
+            series = metric_series(ticker_rows, metric)
+            latest, previous = latest_and_previous(series)
+            delta = percentage_change(latest, previous)
             series_by_ticker[ticker] = [entry["value"] for entry in series]
             table_rows.append(
                 {
@@ -695,7 +676,7 @@ class A2UIAgent:
             {"key": "yoy_change", "label": "YoY %", "type": "percentage"},
         ]
 
-        correlation = _compute_correlation_matrix(series_by_ticker, tickers)
+        correlation = compute_correlation_matrix(series_by_ticker, tickers)
 
         data_model = {
             "tickers": tickers,
@@ -706,8 +687,17 @@ class A2UIAgent:
         return A2UIRunResult(data_model=data_model, citations=[])
 
     async def _execute_margin_analysis(self, selection: SkillSelection) -> A2UIRunResult:
-        """Fetch margin KPIs and history."""
-        ticker = _normalize_tickers(selection.tickers)[0]
+        """Fetch margin KPIs and history. Supports single or multi-ticker margin comparisons."""
+        tickers = normalize_tickers(selection.tickers)
+        if not tickers:
+            raise A2UIAgentError("No valid tickers for margin analysis")
+
+        # Multi-ticker margin comparison
+        if len(tickers) > 1:
+            return await self._execute_multi_ticker_margins(tickers)
+
+        # Single ticker margin analysis (original logic)
+        ticker = tickers[0]
         sql = (
             "SELECT ticker, calendar_year, calendar_quarter_num, calendar_quarter, metric, value "
             "FROM comp_financials "
@@ -719,15 +709,15 @@ class A2UIAgent:
         if not sql_result.get("success"):
             raise A2UIAgentError(sql_result.get("error", "SQL query failed"))
 
-        rows = _sorted_rows(sql_result.get("rows", []))
-        gross_series = _metric_series(rows, "Gross Margin")
-        operating_series = _metric_series(rows, "Operating Margin")
-        revenue_series = _metric_series(rows, "Revenue")
-        net_income_series = _metric_series(rows, "Net Income")
+        rows = sorted_rows(sql_result.get("rows", []))
+        gross_series = metric_series(rows, "Gross Margin")
+        operating_series = metric_series(rows, "Operating Margin")
+        revenue_series = metric_series(rows, "Revenue")
+        net_income_series = metric_series(rows, "Net Income")
         net_income_by_period = {entry["period"]: entry["value"] for entry in net_income_series}
 
-        gross_latest, _ = _latest_and_previous(gross_series)
-        operating_latest, _ = _latest_and_previous(operating_series)
+        gross_latest, _ = latest_and_previous(gross_series)
+        operating_latest, _ = latest_and_previous(operating_series)
 
         net_margin_series: List[Dict[str, Any]] = []
         for entry in revenue_series:
@@ -738,7 +728,7 @@ class A2UIAgent:
                 continue
             net_margin_series.append({"period": period, "value": (net_value / revenue_value) * 100})
 
-        net_latest, _ = _latest_and_previous(net_margin_series)
+        net_latest, _ = latest_and_previous(net_margin_series)
 
         table_rows = []
         for entry in revenue_series[:8]:
@@ -770,9 +760,77 @@ class A2UIAgent:
         }
         return A2UIRunResult(data_model=data_model, citations=[])
 
+    async def _execute_multi_ticker_margins(self, tickers: List[str]) -> A2UIRunResult:
+        """Fetch margin comparison data for multiple tickers."""
+        tickers_sql = ", ".join([f"'{t}'" for t in tickers])
+        sql = (
+            "SELECT ticker, calendar_year, calendar_quarter_num, calendar_quarter, metric, value "
+            "FROM comp_financials "
+            f"WHERE ticker IN ({tickers_sql}) AND metric IN ('Gross Margin', 'Operating Margin', 'Net Income', 'Revenue') "
+            "ORDER BY ticker, calendar_year DESC, calendar_quarter_num DESC "
+            "LIMIT 200"
+        )
+        sql_result = await execute_sql_tool(sql, reason="Multi-ticker margin comparison")
+        if not sql_result.get("success"):
+            raise A2UIAgentError(sql_result.get("error", "SQL query failed"))
+
+        rows = sorted_rows(sql_result.get("rows", []))
+        rows_by_ticker: Dict[str, List[Mapping[str, Any]]] = {ticker: [] for ticker in tickers}
+        for row in rows:
+            ticker = row.get("ticker")
+            if ticker in rows_by_ticker:
+                rows_by_ticker[ticker].append(row)
+
+        table_rows = []
+        for ticker, ticker_rows in rows_by_ticker.items():
+            gross_series = metric_series(ticker_rows, "Gross Margin")
+            operating_series = metric_series(ticker_rows, "Operating Margin")
+            revenue_series = metric_series(ticker_rows, "Revenue")
+            net_income_series = metric_series(ticker_rows, "Net Income")
+            net_income_by_period = {entry["period"]: entry["value"] for entry in net_income_series}
+
+            gross_latest, _ = latest_and_previous(gross_series)
+            operating_latest, _ = latest_and_previous(operating_series)
+
+            # Compute net margin from net income / revenue
+            net_margin = None
+            if revenue_series and net_income_series:
+                latest_period = revenue_series[0]["period"] if revenue_series else None
+                if latest_period:
+                    revenue_val = revenue_series[0]["value"]
+                    net_val = net_income_by_period.get(latest_period)
+                    if net_val is not None and revenue_val and revenue_val != 0:
+                        net_margin = (net_val / revenue_val) * 100
+
+            table_rows.append({
+                "ticker": ticker,
+                "gross_margin": gross_latest or 0,
+                "operating_margin": operating_latest or 0,
+                "net_margin": net_margin or 0,
+            })
+
+        columns = [
+            {"key": "ticker", "label": "Ticker", "type": "string"},
+            {"key": "gross_margin", "label": "Gross Margin", "type": "percentage"},
+            {"key": "operating_margin", "label": "Operating Margin", "type": "percentage"},
+            {"key": "net_margin", "label": "Net Margin", "type": "percentage"},
+        ]
+
+        data_model = {
+            "tickers": tickers,
+            "primary_ticker": tickers[0],
+            "kpis": {
+                "gross_margin": table_rows[0]["gross_margin"] if table_rows else 0,
+                "operating_margin": table_rows[0]["operating_margin"] if table_rows else 0,
+                "net_margin": table_rows[0]["net_margin"] if table_rows else 0,
+            },
+            "table": {"columns": columns, "rows": table_rows},
+        }
+        return A2UIRunResult(data_model=data_model, citations=[])
+
     async def _execute_revenue_trend(self, selection: SkillSelection) -> A2UIRunResult:
         """Fetch revenue trend metrics."""
-        ticker = _normalize_tickers(selection.tickers)[0]
+        ticker = normalize_tickers(selection.tickers)[0]
         sql = (
             "SELECT ticker, calendar_year, calendar_quarter_num, calendar_quarter, metric, value "
             "FROM comp_financials "
@@ -784,14 +842,14 @@ class A2UIAgent:
         if not sql_result.get("success"):
             raise A2UIAgentError(sql_result.get("error", "SQL query failed"))
 
-        rows = _sorted_rows(sql_result.get("rows", []))
-        revenue_series = _metric_series(rows, "Revenue")
-        latest, previous = _latest_and_previous(revenue_series)
+        rows = sorted_rows(sql_result.get("rows", []))
+        revenue_series = metric_series(rows, "Revenue")
+        latest, previous = latest_and_previous(revenue_series)
 
         yoy_growth = None
         if len(revenue_series) > 4:
             yoy_value = revenue_series[4].get("value")
-            yoy_growth = _percentage_change(latest, _coerce_float(yoy_value))
+            yoy_growth = percentage_change(latest, coerce_float(yoy_value))
 
         columns = [
             {"key": "period", "label": "Period", "type": "string"},
@@ -817,13 +875,13 @@ class A2UIAgent:
             raise A2UIAgentError(f"Unknown skill_id: {selection.skill_id}")
         if selection.time_range not in ALLOWED_TIME_RANGES:
             raise A2UIAgentError(f"Invalid time_range: {selection.time_range}")
-        normalized = _normalize_tickers(selection.tickers)
+        normalized = normalize_tickers(selection.tickers)
         if not normalized:
             raise A2UIAgentError("No valid tickers provided")
         selection.tickers = normalized
 
     def _build_render_context(self, selection: SkillSelection, skill: A2UISkillMeta) -> SkillRenderContext:
-        tickers = _normalize_tickers(selection.tickers)
+        tickers = normalize_tickers(selection.tickers)
         primary = tickers[0] if tickers else ""
         title = self._build_title(skill, tickers, selection.metric)
         return SkillRenderContext(
@@ -838,6 +896,8 @@ class A2UIAgent:
         if skill.skill_id == "a2ui_peer_compare":
             return f"Comparing {', '.join(tickers)}"
         if skill.skill_id == "a2ui_margin_analysis":
+            if len(tickers) > 1:
+                return f"{' vs '.join(tickers)} Margin Comparison"
             return f"{tickers[0]} Margin Analysis" if tickers else "Margin Analysis"
         if skill.skill_id == "a2ui_revenue_trend":
             return f"{tickers[0]} Revenue Trend" if tickers else "Revenue Trend"

@@ -2,14 +2,20 @@
 name: Margin Analysis
 skill_id: a2ui_margin_analysis
 description: |
-  Analyze profit margins (gross, operating, net) for a company vs peers.
+  Analyze profit margins (gross, operating, net) for one or more companies.
   USE THIS SKILL WHEN the user asks:
   - "What are X's margins?"
   - "X profitability analysis"
   - "Gross/operating/net margin for X"
   - "How profitable is X compared to peers?"
   - "X margin vs industry average"
-  DO NOT USE for margin growth/expansion trends over time.
+  - "X vs Y margins" or "X vs Y margin trend" (margin-focused comparisons)
+  - "Compare margins for X and Y"
+  - "X vs Y profitability"
+  DO NOT USE for:
+  - Revenue comparisons without margin context
+  - Stock price comparisons
+  - General "compare X vs Y" without margin/profitability keywords
 widgets:
   - KpiCard
   - DataTable

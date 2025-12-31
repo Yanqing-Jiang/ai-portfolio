@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Generative Financial Dashboard — Showcase</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap"
+        rel="stylesheet">
+    <style>
+        :root {
+            --bg: #0a0f1a;
+            --panel: #0f1624;
+            --panel-2: #111a2a;
+            --border: #1f2937;
+            --text: #e5e7eb;
+            --muted: #9ca3af;
+            --accent: #f59e0b;
+            --accent-glow: rgba(245, 158, 11, 0.25);
+            --blue: #3b82f6;
+            --green: #10b981;
+            --purple: #8b5cf6;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            font-family: "Space Grotesk", system-ui, sans-serif;
+            background: var(--bg);
+            background-image:
+                radial-gradient(ellipse at 20% 0%, rgba(245, 158, 11, 0.08) 0%, transparent 50%),
+                radial-gradient(ellipse at 80% 100%, rgba(59, 130, 246, 0.06) 0%, transparent 50%);
+            color: var(--text);
+            min-height: 100vh;
+            padding: 32px 16px 64px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        /* Header */
+        .header {
+            text-align: center;
+            margin-bottom: 48px;
+        }
+
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: linear-gradient(135deg, rgba(245, 158, 11, 0.15) 0%, rgba(245, 158, 11, 0.05) 100%);
+            color: var(--accent);
+            padding: 8px 16px;
+            border-radius: 999px;
+            border: 1px solid rgba(245, 158, 11, 0.3);
+            font-size: 13px;
+            font-weight: 600;
+            margin-bottom: 16px;
+        }
+
+        .title {
+            font-size: clamp(28px, 5vw, 42px);
+            font-weight: 700;
+            margin: 0 0 12px;
+            background: linear-gradient(135deg, #fff 0%, #9ca3af 100%);
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .subtitle {
+            color: var(--muted);
+            font-size: 16px;
+            max-width: 600px;
+            margin: 0 auto;
+            line-height: 1.6;
+        }
+
+        /* Skills Grid */
+        .skills-section {
+            margin-bottom: 48px;
+        }
+
+        .section-title {
+            font-size: 18px;
+            font-weight: 600;
+            margin: 0 0 24px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .skills-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 16px;
+        }
+
+        .skill-card {
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 24px;
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+
+        .skill-card:hover {
+            border-color: var(--accent);
+            transform: translateY(-4px);
+            box-shadow: 0 10px 40px var(--accent-glow);
+        }
+
+        .skill-icon {
+            width: 48px;
+            height: 48px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            margin-bottom: 16px;
+        }
+
+        .skill-card.margins .skill-icon {
+            background: rgba(59, 130, 246, 0.15);
+        }
+
+        .skill-card.compare .skill-icon {
+            background: rgba(139, 92, 246, 0.15);
+        }
+
+        .skill-card.trend .skill-icon {
+            background: rgba(16, 185, 129, 0.15);
+        }
+
+        .skill-card.explain .skill-icon {
+            background: rgba(245, 158, 11, 0.15);
+        }
+
+        .skill-name {
+            font-size: 16px;
+            font-weight: 600;
+            margin: 0 0 8px;
+        }
+
+        .skill-desc {
+            font-size: 13px;
+            color: var(--muted);
+            margin: 0 0 16px;
+            line-height: 1.5;
+        }
+
+        .skill-examples {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .example-query {
+            background: rgba(245, 158, 11, 0.1);
+            color: var(--accent);
+            padding: 6px 12px;
+            border-radius: 8px;
+            font-size: 11px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .example-query:hover {
+            background: rgba(245, 158, 11, 0.2);
+            transform: scale(1.02);
+        }
+
+        /* Architecture Section */
+        .architecture-section {
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 24px;
+            padding: 32px;
+            margin-bottom: 48px;
+        }
+
+        .flow-diagram {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .flow-step {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+            padding: 16px;
+            background: var(--panel-2);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            min-width: 140px;
+        }
+
+        .flow-step-icon {
+            font-size: 28px;
+        }
+
+        .flow-step-label {
+            font-size: 13px;
+            font-weight: 600;
+            text-align: center;
+        }
+
+        .flow-step-desc {
+            font-size: 11px;
+            color: var(--muted);
+            text-align: center;
+        }
+
+        .flow-arrow {
+            color: var(--accent);
+            font-size: 24px;
+        }
+
+        /* Widget Preview */
+        .widgets-preview {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-top: 32px;
+        }
+
+        .widget-preview {
+            background: var(--panel-2);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 16px;
+            text-align: center;
+        }
+
+        .widget-icon {
+            font-size: 32px;
+            margin-bottom: 8px;
+        }
+
+        .widget-name {
+            font-size: 14px;
+            font-weight: 600;
+            margin: 0 0 4px;
+        }
+
+        .widget-type {
+            font-size: 11px;
+            color: var(--muted);
+        }
+
+        /* CTA */
+        .cta-section {
+            text-align: center;
+            padding: 48px 0;
+        }
+
+        .cta-button {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: linear-gradient(135deg, var(--accent) 0%, #d97706 100%);
+            color: #000;
+            padding: 14px 28px;
+            border-radius: 12px;
+            font-size: 16px;
+            font-weight: 600;
+            text-decoration: none;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 20px var(--accent-glow);
+        }
+
+        .cta-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 30px var(--accent-glow);
+        }
+
+        /* Try It Input */
+        .try-it-section {
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 24px;
+            margin-bottom: 48px;
+        }
+
+        .try-it-input {
+            display: flex;
+            gap: 12px;
+        }
+
+        .try-it-input input {
+            flex: 1;
+            background: var(--panel-2);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 14px 18px;
+            font-size: 15px;
+            color: var(--text);
+            font-family: inherit;
+        }
+
+        .try-it-input input::placeholder {
+            color: var(--muted);
+        }
+
+        .try-it-input input:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+
+        .try-it-input button {
+            background: linear-gradient(135deg, var(--accent) 0%, #d97706 100%);
+            color: #000;
+            border: none;
+            border-radius: 12px;
+            padding: 14px 24px;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            font-family: inherit;
+        }
+
+        .try-it-input button:hover {
+            transform: scale(1.02);
+        }
+
+        @media (max-width: 640px) {
+            .flow-diagram {
+                flex-direction: column;
+            }
+
+            .flow-arrow {
+                transform: rotate(90deg);
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <div class="badge">🚀 A2UI Protocol v1.0</div>
+            <h1 class="title">Generative Financial Dashboard</h1>
+            <p class="subtitle">
+                AI-powered dashboards that adapt to your questions. Ask about margins, compare companies, or explore
+                revenue trends — the interface builds itself.
+            </p>
+        </header>
+
+        <!-- Try It Section -->
+        <section class="try-it-section">
+            <h2 class="section-title">🎯 Try a Query</h2>
+            <div class="try-it-input">
+                <input type="text" id="query-input" placeholder="e.g., Compare NVDA vs AMD margins..." />
+                <button onclick="tryQuery()">Generate →</button>
+            </div>
+        </section>
+
+        <!-- Skills Grid -->
+        <section class="skills-section">
+            <h2 class="section-title">✨ Available Skills</h2>
+            <div class="skills-grid">
+                <div class="skill-card margins" onclick="setQuery('What are NVDA\'s margins?')">
+                    <div class="skill-icon">📊</div>
+                    <h3 class="skill-name">Margin Analysis</h3>
+                    <p class="skill-desc">Analyze gross, operating, and net margins. Compare single companies or
+                        multiple peers side-by-side.</p>
+                    <div class="skill-examples">
+                        <span class="example-query"
+                            onclick="event.stopPropagation(); setQuery('INTC profitability analysis')">INTC
+                            profitability</span>
+                        <span class="example-query"
+                            onclick="event.stopPropagation(); setQuery('QCOM vs AVGO margins')">QCOM vs AVGO
+                            margins</span>
+                    </div>
+                </div>
+
+                <div class="skill-card compare" onclick="setQuery('Compare AMD vs INTC revenue')">
+                    <div class="skill-icon">⚖️</div>
+                    <h3 class="skill-name">Peer Comparison</h3>
+                    <p class="skill-desc">Side-by-side comparison of revenue, stock performance, and correlation
+                        matrices.</p>
+                    <div class="skill-examples">
+                        <span class="example-query"
+                            onclick="event.stopPropagation(); setQuery('Compare AMD vs INTC')">AMD vs INTC</span>
+                        <span class="example-query"
+                            onclick="event.stopPropagation(); setQuery('NVDA vs AMD vs QCOM performance')">Multi-ticker
+                            compare</span>
+                    </div>
+                </div>
+
+                <div class="skill-card trend" onclick="setQuery('NVDA revenue trend')">
+                    <div class="skill-icon">📈</div>
+                    <h3 class="skill-name">Revenue Trend</h3>
+                    <p class="skill-desc">Visualize revenue growth over time with year-over-year comparisons and
+                        quarterly breakdowns.</p>
+                    <div class="skill-examples">
+                        <span class="example-query"
+                            onclick="event.stopPropagation(); setQuery('AMD revenue growth')">AMD growth</span>
+                        <span class="example-query"
+                            onclick="event.stopPropagation(); setQuery('How has QCOM revenue changed?')">QCOM
+                            trend</span>
+                    </div>
+                </div>
+
+                <div class="skill-card explain" onclick="setQuery('Why did NVDA drop?')">
+                    <div class="skill-icon">💡</div>
+                    <h3 class="skill-name">Explain Movement</h3>
+                    <p class="skill-desc">Understand price movements with KPIs, news sentiment, and AI-generated
+                        explanations.</p>
+                    <div class="skill-examples">
+                        <span class="example-query"
+                            onclick="event.stopPropagation(); setQuery('What caused AMD to rise?')">AMD movement</span>
+                        <span class="example-query"
+                            onclick="event.stopPropagation(); setQuery('Explain INTC price change')">INTC explain</span>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Architecture Section -->
+        <section class="architecture-section">
+            <h2 class="section-title">🏗️ How It Works</h2>
+            <div class="flow-diagram">
+                <div class="flow-step">
+                    <div class="flow-step-icon">💬</div>
+                    <div class="flow-step-label">User Question</div>
+                    <div class="flow-step-desc">Natural language</div>
+                </div>
+                <div class="flow-arrow">→</div>
+                <div class="flow-step">
+                    <div class="flow-step-icon">🤖</div>
+                    <div class="flow-step-label">Claude Agent</div>
+                    <div class="flow-step-desc">Selects skill</div>
+                </div>
+                <div class="flow-arrow">→</div>
+                <div class="flow-step">
+                    <div class="flow-step-icon">🛠️</div>
+                    <div class="flow-step-label">SQL + Tools</div>
+                    <div class="flow-step-desc">Fetch data</div>
+                </div>
+                <div class="flow-arrow">→</div>
+                <div class="flow-step">
+                    <div class="flow-step-icon">📦</div>
+                    <div class="flow-step-label">A2UI Stream</div>
+                    <div class="flow-step-desc">Widget layout</div>
+                </div>
+                <div class="flow-arrow">→</div>
+                <div class="flow-step">
+                    <div class="flow-step-icon">✨</div>
+                    <div class="flow-step-label">Dashboard</div>
+                    <div class="flow-step-desc">Interactive UI</div>
+                </div>
+            </div>
+
+            <div class="widgets-preview">
+                <div class="widget-preview">
+                    <div class="widget-icon">📊</div>
+                    <div class="widget-name">KPI Cards</div>
+                    <div class="widget-type">Metrics with deltas</div>
+                </div>
+                <div class="widget-preview">
+                    <div class="widget-icon">📈</div>
+                    <div class="widget-name">Price Chart</div>
+                    <div class="widget-type">TradingView embed</div>
+                </div>
+                <div class="widget-preview">
+                    <div class="widget-icon">🗃️</div>
+                    <div class="widget-name">Data Table</div>
+                    <div class="widget-type">Sortable rows</div>
+                </div>
+                <div class="widget-preview">
+                    <div class="widget-icon">🔥</div>
+                    <div class="widget-name">Correlation Matrix</div>
+                    <div class="widget-type">Heatmap</div>
+                </div>
+                <div class="widget-preview">
+                    <div class="widget-icon">📰</div>
+                    <div class="widget-name">News Timeline</div>
+                    <div class="widget-type">Sentiment cards</div>
+                </div>
+                <div class="widget-preview">
+                    <div class="widget-icon">💡</div>
+                    <div class="widget-name">Explain Panel</div>
+                    <div class="widget-type">AI narrative</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- CTA -->
+        <section class="cta-section">
+            <a href="/gen-ui" class="cta-button">
+                Launch Dashboard →
+            </a>
+        </section>
+    </div>
+
+    <script>
+        function setQuery(query) {
+            document.getElementById('query-input').value = query;
+        }
+
+        function tryQuery() {
+            const query = document.getElementById('query-input').value.trim();
+            if (query) {
+                // Redirect to gen-ui page with query param
+                window.location.href = `/gen-ui?q=${encodeURIComponent(query)}`;
+            }
+        }
+
+        // Handle enter key
+        document.getElementById('query-input').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') tryQuery();
+        });
+    </script>
+</body>
+
+</html>
