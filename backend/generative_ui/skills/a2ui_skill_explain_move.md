@@ -15,6 +15,10 @@ widgets:
   - NewsTimeline
   - ExplainMovePanel
 layout: split-view
+layout_variants:
+  - split-view
+  - focus_news
+default_variant: split-view
 ---
 
 # A2UI Skill: Price Movement Analysis

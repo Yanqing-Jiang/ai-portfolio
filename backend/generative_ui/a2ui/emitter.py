@@ -71,7 +71,9 @@ A2UI message emitter for skill-driven dashboards.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional
 
 from .catalog import get_catalog
@@ -128,6 +130,16 @@ class A2UIMessageEmitter:
         msg = DataModelUpdate(surfaceId=self.surface_id, contents=contents, path=path)
         return msg.to_json()
 
+    def audit(self, event: str, details: Optional[str] = None) -> str:
+        """Create a custom audit event message (non-standard A2UI)."""
+        return json.dumps({
+            "audit": {
+                "event": event,
+                "details": details,
+                "timestamp": datetime.now().isoformat()
+            }
+        })
+
     def error_surface(self, code: str, message: str) -> List[str]:
         """Create error layout + data payloads."""
         components = [
@@ -140,8 +152,10 @@ class A2UIMessageEmitter:
         data_msg = self.data_update({"error": {"code": code, "message": message}})
         return [surface_msg, data_msg]
 
-    def build_components_for_skill(self, skill: A2UISkillMeta, context: SkillRenderContext) -> List[A2UIComponent]:
-        """Build the component tree for a given skill."""
+    def build_components_for_skill(self, skill: A2UISkillMeta, context: SkillRenderContext, variant: str | None = None) -> List[A2UIComponent]:
+        """Build the component tree for a given skill (variant is optional hook)."""
+        # Currently variants are not differentiated; this hook allows future
+        # variant-specific builders without changing the call sites.
         if skill.skill_id == "a2ui_explain_move":
             return self._build_explain_move_layout(context)
         if skill.skill_id == "a2ui_peer_compare":
@@ -178,13 +192,13 @@ class A2UIMessageEmitter:
         header = A2UIComponent.row("header_row", ["title_text"])
 
         price_chart = A2UIComponent.price_chart(
-            "price_chart",
+            "main_visual",
             ticker_path="/data/ticker",
             interval=context.time_range,
             show_volume=True,
             interval_path="/data/time_range",
         )
-        price_card = A2UIComponent.card("price_chart_card", "price_chart")
+        price_card = A2UIComponent.card("main_visual_card", "main_visual")
 
         kpi_revenue = A2UIComponent.kpi_card(
             "kpi_revenue",
@@ -212,7 +226,7 @@ class A2UIMessageEmitter:
         news_card = A2UIComponent.card("news_card", "news_timeline")
         right_panel = A2UIComponent.column("right_panel", ["kpi_row", "news_card"])
 
-        main_row = A2UIComponent.row("main_row", ["price_chart_card", "right_panel"])
+        main_row = A2UIComponent.row("main_row", ["main_visual_card", "right_panel"])
 
         explain = A2UIComponent.explain_move_panel(
             "explain_panel",
@@ -244,60 +258,29 @@ class A2UIMessageEmitter:
         ]
 
     def _build_peer_compare_layout(self, context: SkillRenderContext) -> List[A2UIComponent]:
-        """Layout for peer comparison dashboards."""
+        """Layout for peer comparison dashboards - uses consolidated PeerComparePanel."""
         title = A2UIComponent.text_bound("title_text", "/data/title", "h2")
         header = A2UIComponent.row("header_row", ["title_text"])
 
-        metric_chart = A2UIComponent.metric_chart(
-            "peer_metric_chart",
-            series_path="/data/chart/series",
-            title_literal=f"{context.metric} Comparison",
-            metric=context.metric,
-            chart_type="line",
-            annotations_path="/data/chart/annotations",
+        # Single consolidated panel for entire comparison
+        peer_panel = A2UIComponent.peer_compare_panel(
+            "peer_compare_panel",
+            title_path="/data/title",
+            metric_literal=context.metric,
+            tickers_path="/data/tickers",
+            chart_series_path="/data/chart/series",
+            table_columns_path="/data/table/columns",
+            table_rows_path="/data/table/rows",
+            explanation_title_path="/data/explanation/title",
+            explanation_text_path="/data/explanation/text",
         )
-        metric_card = A2UIComponent.card("metric_chart_card", "peer_metric_chart")
 
-        correlation = A2UIComponent.correlation_matrix(
-            "correlation_matrix",
-            tickers_path="/data/correlation/tickers",
-            matrix_path="/data/correlation/matrix",
-        )
-        correlation_card = A2UIComponent.card("correlation_card", "correlation_matrix")
-
-        charts_row = A2UIComponent.row("charts_row", ["metric_chart_card", "correlation_card"])
-
-        table = A2UIComponent.data_table(
-            "metrics_table",
-            columns_path="/data/table/columns",
-            data_path="/data/table/rows",
-            sortable=True,
-        )
-        table_card = A2UIComponent.card("table_card", "metrics_table")
-        
-        explain = A2UIComponent.explain_move_panel(
-            "explain_panel",
-            title_path="/data/explanation/title",
-            explanation_path="/data/explanation/text",
-            factors_path="/data/explanation/factors",
-            citations_path="/data/explanation/citations",
-        )
-        explain_card = A2UIComponent.card("explain_card", "explain_panel")
-
-        root = A2UIComponent.column("layout_root", ["header_row", "charts_row", "table_card", "explain_card"])
+        root = A2UIComponent.column("layout_root", ["header_row", "peer_compare_panel"])
 
         return [
             title,
             header,
-            metric_chart,
-            metric_card,
-            correlation,
-            correlation_card,
-            charts_row,
-            table,
-            table_card,
-            explain,
-            explain_card,
+            peer_panel,
             root,
         ]
 
@@ -328,22 +311,22 @@ class A2UIMessageEmitter:
 
         # Add MetricChart for margin trends over time
         margin_chart = A2UIComponent.metric_chart(
-            "margin_chart",
+            "main_visual",
             series_path="/data/chart/series",
             title_literal=f"{context.primary_ticker} Margin Trends",
             metric="Margin %",
             chart_type="line",
             annotations_path="/data/chart/annotations",
         )
-        chart_card = A2UIComponent.card("margin_chart_card", "margin_chart")
+        chart_card = A2UIComponent.card("main_visual_card", "main_visual")
 
         table = A2UIComponent.data_table(
-            "margin_table",
+            "main_data_table",
             columns_path="/data/table/columns",
             data_path="/data/table/rows",
             sortable=True,
         )
-        table_card = A2UIComponent.card("table_card", "margin_table")
+        table_card = A2UIComponent.card("table_card", "main_data_table")
 
         explain = A2UIComponent.explain_move_panel(
             "explain_panel",
@@ -354,7 +337,7 @@ class A2UIMessageEmitter:
         )
         explain_card = A2UIComponent.card("explain_card", "explain_panel")
 
-        root = A2UIComponent.column("layout_root", ["header_row", "kpi_row", "margin_chart_card", "table_card", "explain_card"])
+        root = A2UIComponent.column("layout_root", ["header_row", "kpi_row", "main_visual_card", "table_card", "explain_card"])
 
         return [
             title,
@@ -379,14 +362,14 @@ class A2UIMessageEmitter:
 
         # Use MetricChart (ECharts) instead of PriceChart (TradingView) for revenue data
         metric_chart = A2UIComponent.metric_chart(
-            "revenue_chart",
+            "main_visual",
             series_path="/data/chart/series",
             title_literal=f"{context.primary_ticker} Revenue Trend",
             metric="Revenue",
             chart_type="area",
             annotations_path="/data/chart/annotations",
         )
-        chart_card = A2UIComponent.card("revenue_chart_card", "revenue_chart")
+        chart_card = A2UIComponent.card("main_visual_card", "main_visual")
 
         kpi_latest = A2UIComponent.kpi_card(
             "kpi_latest_revenue",
@@ -402,15 +385,15 @@ class A2UIMessageEmitter:
         )
         kpi_column = A2UIComponent.column("kpi_column", ["kpi_latest_revenue", "kpi_yoy_growth"])
 
-        main_row = A2UIComponent.row("main_row", ["revenue_chart_card", "kpi_column"])
+        main_row = A2UIComponent.row("main_row", ["main_visual_card", "kpi_column"])
 
         table = A2UIComponent.data_table(
-            "revenue_table",
+            "main_data_table",
             columns_path="/data/table/columns",
             data_path="/data/table/rows",
             sortable=True,
         )
-        table_card = A2UIComponent.card("table_card", "revenue_table")
+        table_card = A2UIComponent.card("table_card", "main_data_table")
 
         explain = A2UIComponent.explain_move_panel(
             "explain_panel",

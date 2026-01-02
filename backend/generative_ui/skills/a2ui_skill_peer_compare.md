@@ -18,6 +18,10 @@ widgets:
   - DataTable
   - CorrelationMatrix
 layout: grid-3
+layout_variants:
+  - grid-3
+  - grid_focus_chart
+default_variant: grid-3
 ---
 
 # A2UI Skill: Peer Comparison

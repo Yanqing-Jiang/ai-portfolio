@@ -15,6 +15,10 @@ widgets:
   - KpiCard
   - DataTable
 layout: standard
+layout_variants:
+  - standard
+  - focus_chart
+default_variant: standard
 ---
 
 # A2UI Skill: Revenue Trend

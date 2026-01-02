@@ -20,6 +20,10 @@ widgets:
   - KpiCard
   - DataTable
 layout: compact
+layout_variants:
+  - compact
+  - focus_table
+default_variant: compact
 ---
 
 # A2UI Skill: Margin Analysis

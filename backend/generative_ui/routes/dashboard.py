@@ -29,24 +29,15 @@
 #   Called from: stream_dashboard
 #   Invokes: n/a
 #   Why: Keeps SSE formatting consistent for A2UI messages.
-# Function: _needs_peer_compare_clarification
-#   Role: Determine whether peer comparisons need metric clarification.
-#   Called from: _build_visual_clarification
-#   Invokes: n/a
-#   Why: Avoids unnecessary clarification prompts.
-# Function: _needs_margin_clarification
-#   Role: Determine whether margin analysis needs more detail.
-#   Called from: _build_visual_clarification
-#   Invokes: n/a
-#   Why: Requests margin specificity only when needed.
-# Function: _build_visual_clarification
+# (moved to clarification module) _needs_* helpers handle clarification heuristics.
+# Function: build_visual_clarification
 #   Role: Create per-visual clarification requests for streaming.
-#   Called from: stream_dashboard
+#   Called from: stream_dashboard (runtime handles pause/resume)
 #   Invokes: build_clarification_for_ambiguous_comparison, build_clarification_for_margin_detail
 #   Why: Ties clarification prompts to specific dashboard visuals.
-# Function: _await_clarification_response
+# Function: await_clarification_response
 #   Role: Poll dashboard state for clarification responses.
-#   Called from: stream_dashboard
+#   Called from: runtime orchestrator
 #   Invokes: asyncio.sleep
 #   Why: Blocks streaming until clarifications resolve or time out.
 # Function: create_dashboard
@@ -116,11 +107,12 @@ from pydantic import BaseModel
 from ..models import get_dashboard_store
 from ..agent_v2 import DEFAULT_METRIC, get_a2ui_agent, A2UIAgentError
 from ..a2ui.emitter import A2UIMessageEmitter
+from ..layout_planner import LayoutPlanner
+from ..runtime import A2UIRuntime
 from ..clarification import (
-    ClarificationRequest,
     ClarificationResponse,
-    build_clarification_for_ambiguous_comparison,
-    build_clarification_for_margin_detail,
+    await_clarification_response,
+    build_visual_clarification,
     clarification_to_sse_event,
     validate_clarification_response,
 )
@@ -129,86 +121,9 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/dash", tags=["dashboard"])
 
-COMPARISON_KEYWORDS = ("revenue", "margin", "profit", "stock", "price", "earnings", "eps", "income", "growth")
-MARGIN_KEYWORDS = ("gross", "operating", "net")
-
-
 def _sse_data(payload: str) -> str:
     """Wrap a JSON payload for SSE delivery."""
     return f"data: {payload}\n\n"
-
-
-def _needs_peer_compare_clarification(question: str, plan: Dict[str, Any], params: Dict[str, Any]) -> bool:
-    """Return True when peer comparisons need metric clarification."""
-    if params.get("clarified") or params.get("pending_clarification"):
-        return False
-    if plan.get("comparison_type"):
-        return False
-    question_lower = question.lower()
-    if not any(token in question_lower for token in ("compare", "vs", "versus")):
-        return False
-    return not any(token in question_lower for token in COMPARISON_KEYWORDS)
-
-
-def _needs_margin_clarification(question: str, plan: Dict[str, Any], params: Dict[str, Any]) -> bool:
-    """Return True when margin analysis needs more specificity."""
-    if params.get("clarified") or params.get("pending_clarification"):
-        return False
-    if plan.get("margin_types"):
-        return False
-    question_lower = question.lower()
-    if "margin" not in question_lower:
-        return False
-    return not any(token in question_lower for token in MARGIN_KEYWORDS)
-
-
-def _build_visual_clarification(
-    question: str,
-    selection: Any,
-    plan: Dict[str, Any],
-    params: Dict[str, Any],
-) -> Optional[ClarificationRequest]:
-    """Create a clarification request scoped to a specific visual."""
-    if selection.skill_id == "a2ui_peer_compare" and _needs_peer_compare_clarification(question, plan, params):
-        request_id = f"clarify_{uuid.uuid4().hex}"
-        return build_clarification_for_ambiguous_comparison(
-            selection.tickers,
-            question,
-            request_id,
-            target_component_id="peer_metric_chart",
-        )
-    if selection.skill_id == "a2ui_margin_analysis" and _needs_margin_clarification(question, plan, params):
-        request_id = f"clarify_{uuid.uuid4().hex}"
-        ticker = selection.tickers[0] if selection.tickers else "Selected ticker"
-        return build_clarification_for_margin_detail(
-            ticker,
-            request_id,
-            target_component_id="margin_chart",
-        )
-    return None
-
-
-async def _await_clarification_response(
-    state: Any,
-    request_id: str,
-    timeout_seconds: int,
-) -> Dict[str, Any]:
-    """Poll the dashboard state for a clarification response or timeout."""
-    deadline = time.monotonic() + max(timeout_seconds, 1)
-    while time.monotonic() < deadline:
-        responses = state.params.get("clarification_responses") or {}
-        if isinstance(responses, dict) and request_id in responses:
-            payload = responses.get(request_id, {})
-            next_responses = dict(responses)
-            next_responses.pop(request_id, None)
-            state.update_params({
-                "clarification_responses": next_responses,
-                "pending_clarification": None,
-            })
-            return payload if isinstance(payload, dict) else {}
-        await asyncio.sleep(0.2)
-    state.update_params({"pending_clarification": None})
-    return {"values": {}, "skipped": True}
 
 
 # ============================================================================
@@ -294,63 +209,13 @@ async def stream_dashboard(dashboard_id: str):
     
     async def generate():
         agent = get_a2ui_agent()
-        emitter = A2UIMessageEmitter(surface_id=state.surface_id, catalog_id=state.catalog_id)
-        yield _sse_data(emitter.begin_rendering())
-
-        try:
-            selection = agent.selection_from_plan(state.plan_json)
-            agent._validate_selection(selection)
-            skill = agent.skill_lookup[selection.skill_id]
-            context = agent._build_render_context(selection, skill)
-
-            components = emitter.build_components_for_skill(skill, context)
-            yield _sse_data(emitter.surface_update(components))
-
-            seed_data = {
-                "title": context.title,
-                "ticker": context.primary_ticker,
-                "primary_ticker": context.primary_ticker,
-                "tickers": context.tickers,
-                "time_range": context.time_range,
-                "metric": context.metric,
-            }
-            yield _sse_data(emitter.data_update(seed_data))
-
-            clarification = _build_visual_clarification(state.question, selection, state.plan_json, state.params)
-            if clarification:
-                state.update_params({
-                    "pending_clarification": clarification.model_dump(),
-                    "clarification_responses": state.params.get("clarification_responses") or {},
-                })
-                yield clarification_to_sse_event(clarification)
-                await _await_clarification_response(state, clarification.request_id, clarification.timeout_seconds)
-
-                selection = agent.selection_from_plan(state.plan_json)
-                agent._validate_selection(selection)
-                skill = agent.skill_lookup[selection.skill_id]
-                context = agent._build_render_context(selection, skill)
-
-                components = emitter.build_components_for_skill(skill, context)
-                yield _sse_data(emitter.surface_update(components))
-
-                seed_data = {
-                    "title": context.title,
-                    "ticker": context.primary_ticker,
-                    "primary_ticker": context.primary_ticker,
-                    "tickers": context.tickers,
-                    "time_range": context.time_range,
-                    "metric": context.metric,
-                }
-                yield _sse_data(emitter.data_update(seed_data))
-
-            result = await agent.execute_skill(skill, selection)
-            yield _sse_data(emitter.data_update(result.data_model))
-            state.add_run(result.data_model, result.citations)
-            yield _sse_data(json.dumps({"done": True}))
-        except Exception as exc:
-            for msg in emitter.error_surface("agent_error", str(exc)):
-                yield _sse_data(msg)
-            yield _sse_data(json.dumps({"done": True}))
+        runtime = A2UIRuntime(agent=agent, layout_planner=LayoutPlanner())
+        async for message in runtime.stream_dashboard(state):
+            if message.startswith("event:"):
+                # Already SSE-formatted (clarification_request)
+                yield message
+            else:
+                yield _sse_data(message)
     
     return StreamingResponse(
         generate(),
@@ -451,12 +316,21 @@ async def handle_action(dashboard_id: str, request: ActionRequest):
                 state.plan_json["tickers"] = tickers
                 state.update_params({"peers": tickers[1:]})
         
-        return {
-            "status": "success",
-            "action": action_name,
-            "updated_params": {"peers": state.params.get("peers", [])},
-            "refresh_data": True,
-        }
+        try:
+            agent = get_a2ui_agent()
+            selection = agent.selection_from_plan(state.plan_json)
+            skill = agent.skill_lookup[selection.skill_id]
+            result = await agent.execute_skill(skill, selection)
+            state.add_run(result.data_model, result.citations)
+            return {
+                "status": "success",
+                "action": action_name,
+                "updated_params": {"peers": state.params.get("peers", [])},
+                "data": result.data_model,
+                "data_path": "/data",
+            }
+        except A2UIAgentError as e:
+            raise HTTPException(status_code=500, detail=str(e))
     
     elif action_name == "export_csv":
         # TODO: Generate CSV export
@@ -491,7 +365,7 @@ class FollowUpSuggestion(BaseModel):
     id: str
     label: str
     query: str
-    icon: str = "NEXT"
+    icon: str = "✨"
 
 
 @router.get("/{dashboard_id}/follow-ups")
@@ -517,34 +391,34 @@ async def get_follow_up_suggestions(dashboard_id: str):
     # Skill-specific suggestions
     if skill_id == "a2ui_explain_move":
         suggestions = [
-            FollowUpSuggestion(id="1", label="Margin analysis", query=f"Show {primary_ticker} margin analysis", icon="MARG"),
-            FollowUpSuggestion(id="2", label="Compare peers", query=f"Compare {primary_ticker} to its peers", icon="PEER"),
-            FollowUpSuggestion(id="3", label="Revenue trend", query=f"Show {primary_ticker} revenue trend", icon="REV"),
+            FollowUpSuggestion(id="1", label="Margin analysis", query=f"Show {primary_ticker} margin analysis", icon="📊"),
+            FollowUpSuggestion(id="2", label="Compare peers", query=f"Compare {primary_ticker} to its peers", icon="👥"),
+            FollowUpSuggestion(id="3", label="Revenue trend", query=f"Show {primary_ticker} revenue trend", icon="💰"),
         ]
     elif skill_id == "a2ui_margin_analysis":
         suggestions = [
-            FollowUpSuggestion(id="1", label="Revenue breakdown", query=f"Show {primary_ticker} revenue trend", icon="REV"),
-            FollowUpSuggestion(id="2", label="Compare margins", query=f"Compare {primary_ticker} margins vs AMD", icon="MARG"),
-            FollowUpSuggestion(id="3", label="Stock movement", query=f"Explain recent {primary_ticker} stock movement", icon="PRICE"),
+            FollowUpSuggestion(id="1", label="Revenue breakdown", query=f"Show {primary_ticker} revenue trend", icon="💰"),
+            FollowUpSuggestion(id="2", label="Compare margins", query=f"Compare {primary_ticker} margins vs AMD", icon="📊"),
+            FollowUpSuggestion(id="3", label="Stock movement", query=f"Explain recent {primary_ticker} stock movement", icon="📈"),
         ]
     elif skill_id == "a2ui_revenue_trend":
         suggestions = [
-            FollowUpSuggestion(id="1", label="Margin analysis", query=f"Show {primary_ticker} margin analysis", icon="MARG"),
-            FollowUpSuggestion(id="2", label="YoY comparison", query=f"Compare {primary_ticker} revenue year over year", icon="YOY"),
-            FollowUpSuggestion(id="3", label="Peer comparison", query=f"Compare {primary_ticker} vs INTC revenue", icon="PEER"),
+            FollowUpSuggestion(id="1", label="Margin analysis", query=f"Show {primary_ticker} margin analysis", icon="📊"),
+            FollowUpSuggestion(id="2", label="YoY comparison", query=f"Compare {primary_ticker} revenue year over year", icon="🔄"),
+            FollowUpSuggestion(id="3", label="Peer comparison", query=f"Compare {primary_ticker} vs INTC revenue", icon="👥"),
         ]
     elif skill_id == "a2ui_peer_compare":
         peer_list = ", ".join(tickers[:3]) if len(tickers) > 1 else f"{primary_ticker} and INTC"
         suggestions = [
-            FollowUpSuggestion(id="1", label="Deeper on leader", query=f"Show {primary_ticker} detailed analysis", icon="DEEP"),
-            FollowUpSuggestion(id="2", label="Stock comparison", query=f"Compare {peer_list} stock performance", icon="PRICE"),
-            FollowUpSuggestion(id="3", label="Margin comparison", query=f"Compare {peer_list} margins", icon="MARG"),
+            FollowUpSuggestion(id="1", label="Deeper on leader", query=f"Show {primary_ticker} detailed analysis", icon="🔍"),
+            FollowUpSuggestion(id="2", label="Stock comparison", query=f"Compare {peer_list} stock performance", icon="📈"),
+            FollowUpSuggestion(id="3", label="Margin comparison", query=f"Compare {peer_list} margins", icon="📊"),
         ]
     else:
         # Default suggestions
         suggestions = [
-            FollowUpSuggestion(id="1", label="Deeper analysis", query=f"Tell me more about {primary_ticker}", icon="DEEP"),
-            FollowUpSuggestion(id="2", label="Compare peers", query=f"Compare to industry peers", icon="PEER"),
+            FollowUpSuggestion(id="1", label="Deeper analysis", query=f"Tell me more about {primary_ticker}", icon="🔍"),
+            FollowUpSuggestion(id="2", label="Compare peers", query=f"Compare to industry peers", icon="👥"),
         ]
     
     return {"suggestions": [s.model_dump() for s in suggestions]}

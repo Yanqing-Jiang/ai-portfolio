@@ -55,6 +55,8 @@ class A2UISkillMeta:
     description: str
     widgets: List[str]
     layout: str
+    layout_variants: List[str]
+    default_variant: str
     source_path: Path
     body: str
 
@@ -78,6 +80,8 @@ def load_a2ui_skill(path: Path) -> A2UISkillMeta:
     description = str(meta.get("description", "")).strip()
     widgets_raw = meta.get("widgets", [])
     layout = str(meta.get("layout", "")).strip()
+    layout_variants_raw = meta.get("layout_variants", []) or []
+    default_variant = str(meta.get("default_variant", "")).strip()
 
     if not skill_id or not name:
         raise ValueError(f"Skill file missing required fields: {path}")
@@ -93,12 +97,21 @@ def load_a2ui_skill(path: Path) -> A2UISkillMeta:
     else:
         raise ValueError(f"Skill file widgets must be list or string: {path}")
 
+    if isinstance(layout_variants_raw, str):
+        layout_variants = [layout_variants_raw]
+    elif isinstance(layout_variants_raw, Iterable):
+        layout_variants = [str(item) for item in layout_variants_raw]
+    else:
+        layout_variants = []
+
     return A2UISkillMeta(
         skill_id=skill_id,
         name=name,
         description=description,
         widgets=widgets,
         layout=layout,
+        layout_variants=layout_variants,
+        default_variant=default_variant,
         source_path=path,
         body=body,
     )
@@ -135,6 +148,8 @@ def build_a2ui_skill_catalog(skills: Sequence[A2UISkillMeta]) -> str:
         lines.append(f"  Description: {skill.description}")
         lines.append(f"  Widgets: {', '.join(skill.widgets)}")
         lines.append(f"  Layout: {skill.layout}")
+        if skill.layout_variants:
+            lines.append(f"  Layout Variants: {', '.join(skill.layout_variants)}")
     return "\n".join(lines)
 
 
