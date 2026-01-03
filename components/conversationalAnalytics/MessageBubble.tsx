@@ -1,18 +1,19 @@
 /**
- * Function: MessageBubble — Renders individual chat messages with modern ChatGPT/Claude styling
- * Called from: ConversationalAnalyticsPage for each message in thread
- * Purpose: Displays user/assistant messages with charts, data, news, and markdown content
+ * Function: MessageBubble — Renders individual chat messages with charts, tables, news, skills, and artifacts.
+ * Called from: ConversationalAnalyticsPage for both historical and streaming message rows.
+ * Invokes: Helper format/preview components below plus ProcessPanel when process nodes stream in.
+ * Purpose: Prevent runtime crashes during streaming while presenting rich agent responses inside the Next Gen Analytics experience.
  */
 
-import React, { useState, useRef, useEffect, useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 import ReactECharts from 'echarts-for-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { ThinkingStep, NewsResult, NewsArticle, HtmlArtifact, SkillInfo } from './hooks/useSSEStream';
+import { ThinkingStep, NewsResult, HtmlArtifact, SkillInfo, ProcessNode, ProcessEdge, AgentInfo, DebugLog } from './hooks/useSSEStream';
 import { configService } from '../../services/config';
 import { theme, motionVariants } from './styles';
-import SkillModal from './SkillModal';
+import ProcessPanel from './ProcessPanel';
 
 type ValueMeta = {
   unit?: string;
@@ -23,654 +24,259 @@ type ValueMeta = {
   from_ratio?: boolean;
 };
 
-// Function: getNumericValue — helper used by label/tooltip formatters to coerce ECharts values to numbers.
+/**
+ * Function: getNumericValue — called by formatValueWithUnit to coerce incoming cell values to numbers.
+ * Invokes: Number/parseFloat to allow formatted strings like "1,234" or "12.3%".
+ * Purpose: Avoid NaN/ReferenceError when rendering streaming data tables.
+ */
 const getNumericValue = (value: unknown): number | null => {
-  if (Array.isArray(value)) {
-    const last = value[value.length - 1];
-    return typeof last === 'number' && Number.isFinite(last) ? last : null;
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'number') return value;
+  if (typeof value === 'string') {
+    const cleaned = value.replace(/[%$,]/g, '');
+    const parsed = parseFloat(cleaned);
+    return Number.isFinite(parsed) ? parsed : null;
   }
-  if (typeof value === 'number' && Number.isFinite(value)) return value;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
+  return null;
 };
 
-// Function: resolveValueMeta — derives unit/scale metadata from backend-provided value_meta or chart title hints.
-const resolveValueMeta = (option: Record<string, any>): ValueMeta => {
-  const rawMeta = (option.value_meta || option.valueMeta || option.meta || {}) as Record<string, any>;
-  const unit = (rawMeta.unit || rawMeta.value_unit || rawMeta.valueUnit || rawMeta.metric_unit) as string | undefined;
-  const titleText = String(option?.title?.text || '').toLowerCase();
-  let resolvedUnit = unit ? unit.toLowerCase() : 'auto';
-
-  if (resolvedUnit === 'auto' || !resolvedUnit) {
-    if (titleText.includes('margin') || titleText.includes('%')) {
-      resolvedUnit = 'percentage';
-    } else if (titleText.includes('revenue') || titleText.includes('sales')) {
-      resolvedUnit = 'millions_usd';
-    } else {
-      resolvedUnit = 'auto';
-    }
+/**
+ * Function: resolveValueMeta — called by DataPreview to infer display metadata per column name.
+ * Invokes: simple heuristics (suffix detection) then merges any explicit meta overrides provided with rows.
+ * Purpose: Keep numeric rendering legible without depending on backend-provided formatting.
+ */
+const resolveValueMeta = (column: string, meta?: ValueMeta): ValueMeta => {
+  if (meta) return meta;
+  const name = column.toLowerCase();
+  if (name.includes('margin') || name.includes('growth') || name.includes('pct') || name.includes('%')) {
+    return { suffix: '%', decimals: 1 };
   }
-
-  const suffix =
-    rawMeta.suffix ??
-    (resolvedUnit === 'percentage'
-      ? '%'
-      : resolvedUnit === 'millions_usd'
-        ? 'M'
-        : resolvedUnit === 'billions_usd'
-          ? 'B'
-          : '');
-
-  const prefix =
-    rawMeta.prefix ??
-    (resolvedUnit === 'millions_usd' || resolvedUnit === 'billions_usd' ? '$' : '');
-
-  const scale =
-    rawMeta.scale ??
-    (resolvedUnit === 'millions_usd'
-      ? 1_000_000
-      : resolvedUnit === 'billions_usd'
-        ? 1_000_000_000
-        : 1);
-
-  const decimals = rawMeta.decimals ?? (resolvedUnit === 'percentage' ? 1 : 1);
-  const fromRatio = rawMeta.from_ratio ?? resolvedUnit === 'percentage';
-
-  return { unit: resolvedUnit, suffix, prefix, decimals, scale, from_ratio: fromRatio };
+  if (name.includes('revenue') || name.includes('sales') || name.includes('amount') || name.includes('usd')) {
+    return { prefix: '$', decimals: 0 };
+  }
+  return { decimals: 2 };
 };
 
-// Function: formatValueWithUnit — applies UOM/decimal rules before labels/tooltips render.
-const formatValueWithUnit = (value: unknown, meta: ValueMeta): string => {
+/**
+ * Function: formatValueWithUnit — called by DataPreview cell renderer.
+ * Invokes: getNumericValue + resolveValueMeta to apply scaling/units/decimals.
+ * Purpose: Present numeric cells consistently while leaving non-numeric values untouched.
+ */
+const formatValueWithUnit = (value: unknown, column: string, meta?: ValueMeta): string => {
+  if (value === null || value === undefined) return '—';
   const numeric = getNumericValue(value);
-  if (numeric === null) return '';
+  const finalMeta = resolveValueMeta(column, meta);
 
-  let display = numeric;
-  if (meta.unit === 'percentage' && meta.from_ratio && Math.abs(display) <= 1.5) {
-    display = display * 100;
+  if (numeric === null) {
+    return String(value);
   }
 
-  if (meta.scale && meta.scale > 1) {
-    display = display / meta.scale;
-  }
-
-  const decimals = typeof meta.decimals === 'number' && meta.decimals >= 0 ? meta.decimals : 1;
-  const prefix = meta.prefix ?? '';
-  const suffix = meta.suffix ?? '';
-
-  return `${prefix}${display.toFixed(decimals)}${suffix}`;
-};
-
-// Function: enhanceEChartsConfig — used before rendering to force right-side legend and data labels with units.
-const enhanceEChartsConfig = (config: Record<string, unknown>): Record<string, unknown> => {
-  const option: any = { ...(config as any) };
-  const seriesArray = Array.isArray(option.series) ? option.series.map((s: any) => ({ ...s })) : [];
-  option.series = seriesArray;
-
-  const isPie = seriesArray.some((s: any) => s.type === 'pie');
-  const valueMeta = resolveValueMeta(option);
-
-  const legendSource = Array.isArray(option.legend) ? option.legend[0] || {} : option.legend || {};
-  const legendData =
-    legendSource.data ??
-    seriesArray
-      .map((s: any) => s.name)
-      .filter((name: any) => typeof name === 'string' && name.length > 0);
-
-  option.legend = {
-    ...legendSource,
-    orient: 'vertical',
-    right: legendSource.right ?? '2%',
-    top: legendSource.top ?? 'middle',
-    textStyle: { color: '#374151', ...(legendSource.textStyle || {}) },
-    data: legendData,
-  };
-
-  if (!isPie) {
-    option.grid = {
-      left: (option.grid && option.grid.left) || '3%',
-      right: '22%',
-      bottom: (option.grid && option.grid.bottom) || '3%',
-      containLabel: true,
-      ...(option.grid || {}),
-    };
-  }
-
-  const formatWithMeta = (val: any) => formatValueWithUnit(val, valueMeta);
-
-  option.tooltip = {
-    ...(option.tooltip || {}),
-    valueFormatter: (val: any) => formatWithMeta(val),
-  };
-
-  seriesArray.forEach((series: any) => {
-    const labelBase = series.label || {};
-    if (series.type === 'pie') {
-      series.label = {
-        ...labelBase,
-        show: labelBase.show ?? true,
-        formatter: (params: any) => `${params.name}: ${formatWithMeta(params.value)}`,
-      };
-    } else {
-      series.label = {
-        ...labelBase,
-        show: labelBase.show ?? true,
-        position: labelBase.position ?? 'top',
-        formatter: (params: any) => formatWithMeta(params.value),
-        color: (labelBase as any)?.color || '#111827',
-      };
-    }
+  const scaled = finalMeta.scale ? numeric * finalMeta.scale : numeric;
+  const decimals = typeof finalMeta.decimals === 'number' ? finalMeta.decimals : 2;
+  const formatted = scaled.toLocaleString(undefined, {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
   });
 
-  if (!isPie) {
-    const yAxisConfig = option.yAxis ?? { type: 'value' };
-    if (Array.isArray(yAxisConfig)) {
-      option.yAxis = yAxisConfig.map((axis: any) => ({
-        ...axis,
-        axisLabel: {
-          ...(axis.axisLabel || {}),
-          formatter: (val: any) => formatWithMeta(val),
-          color: (axis.axisLabel && axis.axisLabel.color) || '#111827',
-        },
-      }));
-    } else {
-      option.yAxis = {
-        ...yAxisConfig,
-        axisLabel: {
-          ...(yAxisConfig.axisLabel || {}),
-          formatter: (val: any) => formatWithMeta(val),
-          color: (yAxisConfig.axisLabel && yAxisConfig.axisLabel.color) || '#111827',
-        },
-      };
-    }
-  }
-
-  return option;
+  return `${finalMeta.prefix ?? ''}${formatted}${finalMeta.suffix ?? ''}`;
 };
 
-// Function: TradingViewWidget — called when chartConfig.widget_type === 'tradingview' to render the Advanced Chart widget.
-// Called from: MessageBubble render path inside ConversationalAnalyticsPage message list.
-// Purpose: Mounts TradingView's latest advanced-chart embed with the required container structure to avoid blank renders.
-const TradingViewWidget: React.FC<{ config: Record<string, unknown> }> = ({ config }) => {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const widgetId = useRef(`tradingview_${Date.now()}`);
-  const rawHeight = Number((config as any).height);
-  const widgetHeight = Number.isFinite(rawHeight) ? rawHeight : 380;
-
-  useEffect(() => {
-    if (!containerRef.current) return;
-
-    const container = containerRef.current;
-    container.innerHTML = '';
-
-    const widgetContainer = document.createElement('div');
-    widgetContainer.className = 'tradingview-widget-container';
-    widgetContainer.style.height = `${widgetHeight}px`;
-    widgetContainer.style.width = '100%';
-
-    const innerDiv = document.createElement('div');
-    innerDiv.id = widgetId.current;
-    innerDiv.className = 'tradingview-widget-container__widget';
-    innerDiv.style.height = 'calc(100% - 32px)';
-    innerDiv.style.width = '100%';
-
-    const copyright = document.createElement('div');
-    copyright.className = 'tradingview-widget-copyright';
-    copyright.style.fontSize = '10px';
-    copyright.innerHTML =
-      '<span>Quotes by <a href="https://www.tradingview.com" rel="noopener nofollow" target="_blank">TradingView</a></span>';
-
-    const script = document.createElement('script');
-    script.src = 'https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js';
-    script.type = 'text/javascript';
-    script.async = true;
-    script.innerHTML = JSON.stringify({
-      autosize: true,
-      symbol: config.symbol || 'NASDAQ:NVDA',
-      interval: config.interval || 'D',
-      timezone: config.timezone || 'Etc/UTC',
-      theme: (config.theme as string) || 'dark',
-      style: String(config.style || '1'),
-      locale: (config.locale as string) || 'en',
-      hide_top_toolbar: Boolean((config as any).hide_top_toolbar ?? false),
-      hide_side_toolbar: Boolean((config as any).hide_side_toolbar ?? false),
-      allow_symbol_change: true,
-      withdateranges: (config as any).withdateranges ?? true,
-      save_image: (config as any).save_image ?? false,
-      studies: Array.isArray((config as any).studies) ? (config as any).studies : [],
-      support_host: 'https://www.tradingview.com',
-    });
-
-    widgetContainer.appendChild(innerDiv);
-    widgetContainer.appendChild(copyright);
-    widgetContainer.appendChild(script);
-    container.appendChild(widgetContainer);
-
-    return () => {
-      if (container) {
-        container.innerHTML = '';
-      }
-    };
-  }, [config, widgetHeight]);
-
-  return (
-    <motion.div
-      initial={{ opacity: 0, scale: 0.98 }}
-      animate={{ opacity: 1, scale: 1 }}
-      className="mb-4 rounded-xl overflow-hidden"
-      style={{
-        border: `1px solid ${theme.colors.border.medium}`,
-        backgroundColor: '#131722',
-      }}
-    >
-      <div
-        className="px-4 py-2.5 flex items-center gap-2"
-        style={{
-          backgroundColor: theme.colors.bg.elevated,
-          borderBottom: `1px solid ${theme.colors.border.subtle}`,
-        }}
-      >
-        <span className="text-lg">📈</span>
-        <span className="text-sm font-medium" style={{ color: theme.colors.text.secondary }}>
-          TradingView Chart
-        </span>
-        <span className="text-sm font-semibold" style={{ color: theme.colors.text.primary }}>
-          {String(config.symbol)}
-        </span>
-      </div>
-      <div ref={containerRef} style={{ height: '380px' }} />
-    </motion.div>
-  );
-};
-
-// News Card Component
-const NewsCard: React.FC<{ news: NewsResult }> = ({ news }) => {
-  const [isExpanded, setIsExpanded] = useState(false);
-
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      className="mb-4 rounded-xl overflow-hidden"
-      style={{
-        backgroundColor: theme.colors.bg.elevated,
-        border: `1px solid ${theme.colors.border.medium}`,
-      }}
-    >
-      <div
-        className="px-4 py-3 flex items-center justify-between"
-        style={{ borderBottom: `1px solid ${theme.colors.border.subtle}` }}
-      >
-        <div className="flex items-center gap-3">
-          <span className="text-xl">📰</span>
-          <div>
-            <span className="text-sm font-medium" style={{ color: theme.colors.text.primary }}>
-              News Sentiment: {news.ticker}
-            </span>
-            <span className="text-xs ml-2" style={{ color: theme.colors.text.muted }}>
-              {news.articles.length} articles
-            </span>
-          </div>
-        </div>
-        <div
-          className="px-3 py-1 rounded-full text-xs font-semibold"
-          style={{
-            backgroundColor:
-              news.aggregate_sentiment >= 0.15
-                ? theme.colors.status.success + '20'
-                : news.aggregate_sentiment > -0.15
-                  ? theme.colors.status.warning + '20'
-                  : theme.colors.status.error + '20',
-            color:
-              news.aggregate_sentiment >= 0.15
-                ? theme.colors.status.success
-                : news.aggregate_sentiment > -0.15
-                  ? theme.colors.status.warning
-                  : theme.colors.status.error,
-          }}
-        >
-          {news.aggregate_label} ({news.aggregate_sentiment > 0 ? '+' : ''}
-          {news.aggregate_sentiment.toFixed(2)})
-        </div>
-      </div>
-
-      <button
-        onClick={() => setIsExpanded(!isExpanded)}
-        className="w-full px-4 py-2 text-left flex items-center gap-2 transition-colors"
-        style={{ backgroundColor: 'transparent' }}
-      >
-        <motion.span
-          animate={{ rotate: isExpanded ? 90 : 0 }}
-          className="text-xs"
-          style={{ color: theme.colors.text.muted }}
-        >
-          ▶
-        </motion.span>
-        <span className="text-xs" style={{ color: theme.colors.text.secondary }}>
-          {isExpanded ? 'Hide' : 'Show'} articles with citations
-        </span>
-      </button>
-
-      {isExpanded && (
-        <motion.div
-          initial={{ height: 0, opacity: 0 }}
-          animate={{ height: 'auto', opacity: 1 }}
-          className="px-4 pb-4 space-y-3"
-        >
-          {news.articles.map((article: NewsArticle, idx: number) => (
-            <div
-              key={idx}
-              className="p-3 rounded-lg"
-              style={{
-                backgroundColor: theme.colors.bg.tertiary,
-                border: `1px solid ${theme.colors.border.subtle}`,
-              }}
-            >
-              <div className="flex items-start justify-between gap-3">
-                <a
-                  href={article.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-sm font-medium hover:underline"
-                  style={{ color: theme.colors.status.info }}
-                >
-                  {article.title}
-                </a>
-                <span
-                  className="shrink-0 text-xs px-2 py-0.5 rounded-full"
-                  style={{
-                    backgroundColor: article.sentiment_color + '20',
-                    color: article.sentiment_color,
-                  }}
-                >
-                  {article.sentiment_label}
-                </span>
-              </div>
-              <p className="text-xs mt-2" style={{ color: theme.colors.text.muted }}>
-                {article.summary}
-              </p>
-              <div className="flex items-center gap-2 mt-2">
-                <span className="text-xs" style={{ color: theme.colors.text.muted }}>
-                  📌 {article.source}
-                </span>
-                {article.topics.length > 0 && (
-                  <span className="text-xs" style={{ color: theme.colors.text.muted }}>
-                    • {article.topics.join(', ')}
-                  </span>
-                )}
-              </div>
-            </div>
-          ))}
-        </motion.div>
-      )}
-    </motion.div>
-  );
-};
-
-// SQL Preview Component - Collapsible widget showing executed SQL query
-const SQLPreview: React.FC<{ sql: string }> = ({ sql }) => {
-  const [isExpanded, setIsExpanded] = useState(false);
-  const [copied, setCopied] = useState(false);
-
-  const handleCopy = async (e: React.MouseEvent) => {
-    e.stopPropagation();
-    try {
-      await navigator.clipboard.writeText(sql);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch (err) {
-      console.error('Failed to copy SQL:', err);
-    }
+/**
+ * Function: enhanceEChartsConfig — called by MessageBubble before passing chart options to ECharts.
+ * Invokes: shallow merge to add dark theming and responsive defaults.
+ * Purpose: Prevent undefined helper crash and keep charts readable in the dark theme.
+ */
+const enhanceEChartsConfig = (config: Record<string, unknown>): Record<string, unknown> => {
+  const base = {
+    backgroundColor: theme.colors.bg.elevated,
+    textStyle: { color: theme.colors.text.primary },
+    grid: { left: 50, right: 20, top: 40, bottom: 50 },
+    tooltip: { trigger: 'axis', backgroundColor: '#0b1224', borderColor: theme.colors.border.medium },
   };
+  return {
+    ...base,
+    ...config,
+    textStyle: { ...base.textStyle, ...(config as any).textStyle },
+    grid: { ...base.grid, ...(config as any).grid },
+    tooltip: { ...base.tooltip, ...(config as any).tooltip },
+  };
+};
+
+/**
+ * Function: TradingViewWidget — called from MessageBubble when chartConfig.widget_type === 'tradingview'.
+ * Invokes: renders an iframe embed using the provided symbol/URL.
+ * Purpose: Replace missing helper that previously crashed rendering when trading widgets streamed in.
+ */
+const TradingViewWidget: React.FC<{ config: Record<string, unknown> }> = ({ config }) => {
+  const symbol = (config.symbol as string) || (config.ticker as string) || 'NASDAQ:NVDA';
+  const range = (config.range as string) || '1M';
+  const embedUrl =
+    (config.embed_url as string) ||
+    `https://s.tradingview.com/widgetembed/?symbol=${encodeURIComponent(symbol)}&interval=60&range=${range}&hidesidetoolbar=1&symboledit=1&saveimage=0&toolbarbg=f1f3f6&studies=[]&hideideas=1&theme=dark`;
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      className="mb-4 rounded-xl overflow-hidden"
-      style={{
-        backgroundColor: theme.colors.bg.elevated,
-        border: `1px solid ${theme.colors.border.medium}`,
-      }}
-    >
-      <button
-        onClick={() => setIsExpanded(!isExpanded)}
-        className="w-full px-4 py-2.5 flex items-center justify-between transition-colors hover:bg-opacity-80"
-        style={{ backgroundColor: 'transparent' }}
-      >
-        <div className="flex items-center gap-2">
-          <motion.span
-            animate={{ rotate: isExpanded ? 90 : 0 }}
-            className="text-xs"
-            style={{ color: theme.colors.text.muted }}
-          >
-            ▶
-          </motion.span>
-          <span className="text-lg">💾</span>
-          <span className="text-sm font-medium" style={{ color: theme.colors.text.secondary }}>
-            SQL Query
-          </span>
-        </div>
-      </button>
-
-      {isExpanded && (
-        <motion.div
-          initial={{ height: 0, opacity: 0 }}
-          animate={{ height: 'auto', opacity: 1 }}
-          exit={{ height: 0, opacity: 0 }}
-          className="px-4 pb-4"
-        >
-          <div className="flex justify-end mb-2">
-            <button
-              onClick={handleCopy}
-              className="px-3 py-1 rounded-lg text-xs font-medium transition-all flex items-center gap-1.5"
-              style={{
-                backgroundColor: copied ? theme.colors.status.success + '20' : theme.colors.bg.tertiary,
-                color: copied ? theme.colors.status.success : theme.colors.text.secondary,
-                border: `1px solid ${copied ? theme.colors.status.success + '40' : theme.colors.border.subtle}`,
-              }}
-            >
-              {copied ? (
-                <>
-                  <span>✓</span>
-                  Copied
-                </>
-              ) : (
-                <>
-                  <span>📋</span>
-                  Copy
-                </>
-              )}
-            </button>
-          </div>
-          <pre
-            className="p-4 rounded-lg overflow-x-auto text-sm"
-            style={{
-              backgroundColor: theme.colors.bg.tertiary,
-              border: `1px solid ${theme.colors.border.subtle}`,
-              color: theme.colors.text.primary,
-              fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace',
-              whiteSpace: 'pre-wrap',
-              wordBreak: 'break-word',
-            }}
-          >
-            <code>{sql}</code>
-          </pre>
-        </motion.div>
-      )}
-    </motion.div>
+    <div className="rounded-xl overflow-hidden border border-gray-800">
+      <iframe
+        title={`TradingView ${symbol}`}
+        src={embedUrl}
+        style={{ width: '100%', height: 420, border: '0' }}
+        loading="lazy"
+        allow="fullscreen"
+      />
+    </div>
   );
 };
 
-// Data Preview Table - Collapsible widget showing query results
-const DataPreview: React.FC<{ data: { rows: unknown[]; columns: string[]; sql?: string } }> = ({ data }) => {
-  const [isExpanded, setIsExpanded] = useState(false);
-
+/**
+ * Function: NewsCard — called from MessageBubble when newsResult stream arrives.
+ * Invokes: Maps articles into compact cards.
+ * Purpose: Prevent undefined component crash and keep news readable during streaming.
+ */
+const NewsCard: React.FC<{ news: NewsResult }> = ({ news }) => {
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      className="mb-4 rounded-xl overflow-hidden"
-      style={{
-        backgroundColor: theme.colors.bg.elevated,
-        border: `1px solid ${theme.colors.border.medium}`,
-      }}
+    <div
+      className="rounded-xl border p-4 space-y-3"
+      style={{ backgroundColor: theme.colors.bg.elevated, borderColor: theme.colors.border.medium }}
+    >
+      <div className="flex items-center gap-2">
+        <span style={{ color: theme.colors.accent.primary }}>News</span>
+        <span className="text-xs" style={{ color: theme.colors.text.muted }}>
+          {news.ticker}
+        </span>
+      </div>
+      {news.articles.slice(0, 3).map((article, idx) => (
+        <div key={idx} className="text-sm space-y-1">
+          <a
+            href={article.url}
+            target="_blank"
+            rel="noreferrer"
+            className="font-semibold"
+            style={{ color: theme.colors.text.primary }}
+          >
+            {article.title}
+          </a>
+          <p style={{ color: theme.colors.text.secondary }} className="text-xs leading-relaxed">
+            {article.summary}
+          </p>
+          <div className="text-[11px]" style={{ color: theme.colors.text.muted }}>
+            {article.source} • {article.published_at}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+};
+
+/**
+ * Function: SQLPreview — called from MessageBubble when dataResult.sql is present.
+ * Invokes: Collapsible disclosure to show executed SQL.
+ * Purpose: Restore missing helper so SQL streams don’t crash the UI.
+ */
+const SQLPreview: React.FC<{ sql: string }> = ({ sql }) => {
+  const [open, setOpen] = useState(false);
+  return (
+    <div
+      className="rounded-xl border"
+      style={{ backgroundColor: theme.colors.bg.elevated, borderColor: theme.colors.border.medium }}
     >
       <button
-        onClick={() => setIsExpanded(!isExpanded)}
-        className="w-full px-4 py-2.5 flex items-center justify-between transition-colors hover:bg-opacity-80"
-        style={{ backgroundColor: 'transparent' }}
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center justify-between px-4 py-3 text-sm font-semibold"
+        style={{ color: theme.colors.text.primary }}
       >
-        <div className="flex items-center gap-2">
-          <motion.span
-            animate={{ rotate: isExpanded ? 90 : 0 }}
-            className="text-xs"
-            style={{ color: theme.colors.text.muted }}
-          >
-            ▶
-          </motion.span>
-          <span className="text-lg">📑</span>
-          <span className="text-sm font-medium" style={{ color: theme.colors.text.secondary }}>
-            Data Preview
-          </span>
-          <span className="text-xs px-2 py-0.5 rounded-full" style={{ backgroundColor: theme.colors.bg.tertiary, color: theme.colors.text.muted }}>
-            {data.rows.length} rows
-          </span>
-        </div>
+        SQL Preview
+        <span style={{ color: theme.colors.text.muted }}>{open ? 'Hide' : 'Show'}</span>
       </button>
-
-      {isExpanded && (
-        <motion.div
-          initial={{ height: 0, opacity: 0 }}
-          animate={{ height: 'auto', opacity: 1 }}
-          exit={{ height: 0, opacity: 0 }}
-          className="overflow-x-auto px-4 pb-4"
+      {open && (
+        <pre
+          className="px-4 pb-4 text-xs overflow-x-auto whitespace-pre-wrap"
+          style={{ color: theme.colors.text.secondary }}
         >
-          <table className="w-full text-sm">
-            <thead>
-              <tr>
-                {data.columns.map((col) => (
-                  <th
-                    key={col}
-                    className="text-left px-3 py-2 text-xs font-semibold"
-                    style={{ color: theme.colors.text.muted, borderBottom: `1px solid ${theme.colors.border.subtle}` }}
-                  >
-                    {col}
-                  </th>
+          {sql}
+        </pre>
+      )}
+    </div>
+  );
+};
+
+/**
+ * Function: DataPreview — called from MessageBubble when tabular data streams in.
+ * Invokes: formatValueWithUnit for each cell; renders lightweight table with sticky header.
+ * Purpose: Replace missing helper so dataResult rendering no longer throws during streaming.
+ */
+const DataPreview: React.FC<{ data: { rows: unknown[]; columns: string[] } }> = ({ data }) => {
+  const columns = data.columns && data.columns.length > 0
+    ? data.columns
+    : Object.keys((data.rows?.[0] as Record<string, unknown>) || {});
+
+  return (
+    <div
+      className="rounded-xl border overflow-auto"
+      style={{ borderColor: theme.colors.border.medium }}
+    >
+      <table className="min-w-full text-left text-sm">
+        <thead style={{ backgroundColor: theme.colors.bg.elevated }}>
+          <tr>
+            {columns.map((col) => (
+              <th key={col} className="px-3 py-2 font-semibold" style={{ color: theme.colors.text.primary }}>
+                {col}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {(data.rows || []).slice(0, 20).map((row, idx) => {
+            const record = row as Record<string, unknown>;
+            return (
+              <tr key={idx} style={{ backgroundColor: idx % 2 === 0 ? theme.colors.bg.primary : theme.colors.bg.tertiary }}>
+                {columns.map((col) => (
+                  <td key={col} className="px-3 py-2 text-xs" style={{ color: theme.colors.text.secondary }}>
+                    {formatValueWithUnit(record[col], col)}
+                  </td>
                 ))}
               </tr>
-            </thead>
-            <tbody>
-              {data.rows.slice(0, 5).map((row: Record<string, unknown>, idx: number) => (
-                <tr key={idx}>
-                  {data.columns.map((col) => (
-                    <td
-                      key={col}
-                      className="px-3 py-2 text-sm"
-                      style={{ color: theme.colors.text.secondary, borderBottom: `1px solid ${theme.colors.border.subtle}` }}
-                    >
-                      {String(row[col] ?? '')}
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </motion.div>
-      )}
-    </motion.div>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
   );
 };
 
-// Skill Preview Component - Collapsible widget showing detected SKILL.md
+/**
+ * Function: SkillPreview — called from MessageBubble when skillInfo is present.
+ * Invokes: simple download link to the SKILL.md served by backend.
+ * Purpose: Ensure skill payloads don’t crash the UI and remain discoverable inline.
+ */
 const SkillPreview: React.FC<{ skill: SkillInfo }> = ({ skill }) => {
-  const [isExpanded, setIsExpanded] = useState(false);
-  const [isModalOpen, setIsModalOpen] = useState(false);
+  const backendUrl = configService.getBackendUrl();
+  const resolvedUrl = skill.download_url?.startsWith('http')
+    ? skill.download_url
+    : `${backendUrl}${skill.download_url}`;
 
   return (
-    <>
-      <motion.div
-        initial={{ opacity: 0, y: 10 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="mb-4 rounded-xl overflow-hidden"
-        style={{
-          backgroundColor: theme.colors.bg.elevated,
-          border: `1px solid ${theme.colors.border.medium}`,
-        }}
+    <div
+      className="rounded-xl border p-4 flex items-center justify-between"
+      style={{ backgroundColor: theme.colors.bg.elevated, borderColor: theme.colors.border.medium }}
+    >
+      <div>
+        <div className="text-sm font-semibold" style={{ color: theme.colors.text.primary }}>
+          Active Skill: {skill.name}
+        </div>
+        <div className="text-xs" style={{ color: theme.colors.text.muted }}>
+          ID: {skill.id}
+        </div>
+      </div>
+      <a
+        href={resolvedUrl}
+        target="_blank"
+        rel="noreferrer"
+        className="text-xs font-semibold"
+        style={{ color: theme.colors.accent.primary }}
       >
-        <button
-          onClick={() => setIsExpanded(!isExpanded)}
-          className="w-full px-4 py-2.5 flex items-center justify-between transition-colors hover:bg-opacity-80"
-          style={{ backgroundColor: 'transparent' }}
-        >
-          <div className="flex items-center gap-2">
-            <motion.span
-              animate={{ rotate: isExpanded ? 90 : 0 }}
-              className="text-xs"
-              style={{ color: theme.colors.text.muted }}
-            >
-              ▶
-            </motion.span>
-            <span className="text-lg">⚡</span>
-            <span className="text-sm font-medium" style={{ color: theme.colors.text.secondary }}>
-              SKILL.md
-            </span>
-            <span
-              className="text-xs px-2 py-0.5 rounded-full"
-              style={{
-                backgroundColor: theme.colors.accent.muted,
-                color: theme.colors.accent.primary,
-              }}
-            >
-              {skill.name}
-            </span>
-          </div>
-        </button>
-
-        {isExpanded && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: 'auto', opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            className="px-4 pb-4"
-          >
-            <div
-              className="p-3 rounded-lg"
-              style={{
-                backgroundColor: theme.colors.bg.tertiary,
-                border: `1px solid ${theme.colors.border.subtle}`,
-              }}
-            >
-              <p className="text-xs mb-3" style={{ color: theme.colors.text.secondary }}>
-                This response was guided by the <strong style={{ color: theme.colors.accent.primary }}>{skill.name}</strong> skill,
-                which provides structured instructions for accurate analysis.
-              </p>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setIsModalOpen(true);
-                }}
-                className="px-3 py-1.5 rounded-lg text-xs font-medium transition-all flex items-center gap-1.5"
-                style={{
-                  backgroundColor: theme.colors.accent.muted,
-                  color: theme.colors.accent.primary,
-                  border: `1px solid ${theme.colors.accent.primary}40`,
-                }}
-              >
-                <span>📄</span>
-                View Skill Details
-              </button>
-            </div>
-          </motion.div>
-        )}
-      </motion.div>
-
-      <SkillModal
-        skill={skill}
-        isOpen={isModalOpen}
-        onClose={() => setIsModalOpen(false)}
-        initialTab="current"
-      />
-    </>
+        View SKILL.md
+      </a>
+    </div>
   );
 };
 
@@ -686,8 +292,22 @@ interface MessageBubbleProps {
   agentLabel?: string | null;
   htmlArtifact?: HtmlArtifact | null;
   skillInfo?: SkillInfo | null;
+
+  // Agent Process Props
+  processNodes?: ProcessNode[];
+  processEdges?: ProcessEdge[];
+  activeAgent?: AgentInfo | null;
+  agentMode?: string;
+  debugLogs?: DebugLog[];
+  runId?: string | null;
+  permissionState?: string | null;
 }
 
+/**
+ * Function: MessageBubble — Called from ConversationalAnalyticsPage message history and active stream.
+ * Invokes: ProcessPanel (inline mode) plus TradingViewWidget/NewsCard/SQLPreview/DataPreview/SkillPreview renderers.
+ * Purpose: Render rich assistant/user bubbles without crashing when new agent payloads stream in.
+ */
 const MessageBubble: React.FC<MessageBubbleProps> = ({
   role,
   content,
@@ -698,9 +318,17 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
   agentLabel,
   htmlArtifact,
   skillInfo,
+  processNodes,
+  processEdges,
+  activeAgent,
+  agentMode,
+  debugLogs,
+  runId,
+  permissionState,
 }) => {
   const isUser = role === 'user';
-  const isTradingView = chartConfig?.widget_type === 'tradingview';
+  const isTradingView = (chartConfig as any)?.widget_type === 'tradingview';
+
   const chartOptions = useMemo(
     () =>
       chartConfig && !isTradingView
@@ -708,6 +336,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
         : chartConfig,
     [chartConfig, isTradingView],
   );
+
   const resolvedHtmlUrl = useMemo(() => {
     if (!htmlArtifact?.url) return null;
     const backendUrl = configService.getBackendUrl();
@@ -749,6 +378,22 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
         {/* Assistant message */}
         {!isUser && (
           <div className="space-y-4">
+            {/* Agent Process Flow (Inline) */}
+            {processNodes && processNodes.length > 0 && (
+              <ProcessPanel
+                mode="inline"
+                isStreaming={!!isStreaming}
+                processNodes={processNodes}
+                processEdges={processEdges || []}
+                activeAgent={activeAgent || null}
+                agentMode={agentMode || 'single'}
+                skillInfo={skillInfo}
+                debugLogs={debugLogs || []}
+                runId={runId}
+                permissionState={permissionState}
+              />
+            )}
+
             {/* TradingView Widget */}
             {chartConfig && isTradingView && <TradingViewWidget config={chartConfig} />}
 
@@ -767,7 +412,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
                   className="px-4 py-2.5 flex items-center gap-2"
                   style={{ borderBottom: `1px solid ${theme.colors.border.subtle}` }}
                 >
-                  <span className="text-lg">📊</span>
+                  <span className="text-lg">dY"S</span>
                   <span className="text-sm font-medium" style={{ color: theme.colors.text.secondary }}>
                     Chart
                   </span>
@@ -818,7 +463,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
                   className="px-4 py-2.5 flex items-center gap-2"
                   style={{ borderBottom: `1px solid ${theme.colors.border.subtle}` }}
                 >
-                  <span className="text-lg">🗂️</span>
+                  <span className="text-lg">dY-,‹,?</span>
                   <div className="flex-1 min-w-0">
                     <div className="text-sm font-medium" style={{ color: theme.colors.text.secondary }}>
                       {htmlArtifact.title || 'Showcase'}
@@ -834,7 +479,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
                     className="text-xs font-semibold"
                     style={{ color: theme.colors.accent.primary }}
                   >
-                    Open →
+                    Open ƒ+'
                   </a>
                 </div>
                 <div className="bg-black" style={{ aspectRatio: '16 / 10', minHeight: 260 }}>
@@ -881,4 +526,3 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
 };
 
 export default MessageBubble;
-

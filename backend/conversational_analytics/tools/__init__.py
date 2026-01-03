@@ -1,10 +1,22 @@
-"""Tools module for Conversational Analytics."""
-from .sql_tool import SQL_TOOL_DEFINITION, execute_sql_tool
+"""Tools module for Conversational Analytics.
+
+This module re-exports shared tools from backend.shared_tools for backward compatibility.
+New code should import directly from shared_tools.
+"""
+# Re-export shared tools for backward compatibility
+from shared_tools import (
+    execute_sql_tool,
+    execute_news_tool,
+    execute_analysis_tool,
+)
+from shared_tools.sql_executor import SQL_TOOL_DEFINITION
+from shared_tools.news_service import NEWS_TOOL_DEFINITION
+from shared_tools.analysis_service import ANALYSIS_TOOL_DEFINITION
+
+# Local tools (not shared)
 from .tradingview_tool import TRADINGVIEW_TOOL_DEFINITION, execute_tradingview_tool, generate_tradingview_config
-from .analysis_tool import ANALYSIS_TOOL_DEFINITION, execute_analysis_tool
 from .echarts_tool import ECHARTS_TOOL_DEFINITION, execute_echarts_tool, generate_echarts_spec
 from .web_search import WEB_SEARCH_TOOL_DEFINITION, format_web_search_results, is_web_search_tool
-from .news_tool import NEWS_TOOL_DEFINITION, execute_news_tool
 from .showcase_tool import SHOWCASE_TOOL_DEFINITION, execute_showcase_tool
 
 # Custom tool definitions for Claude (excludes web_search which is a server tool)

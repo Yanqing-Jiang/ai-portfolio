@@ -33,6 +33,7 @@ interface ProcessPanelProps {
   lastAgentLabel?: string | null;
   runId?: string | null;
   permissionState?: string | null;
+  mode?: 'modal' | 'inline';
 }
 
 // Node type configuration with icons and colors
@@ -78,16 +79,16 @@ const deriveMajorSteps = (
 ): MajorStep[] => {
   const steps: MajorStep[] = [];
   const sortedNodes = [...processNodes].sort((a, b) => a.timestamp - b.timestamp);
-  
+
   // Track if we've added a skill step
   let skillStepAdded = false;
-  
+
   for (const node of sortedNodes) {
     // Skip internal/minor nodes - only show significant ones
     if (node.node_id.includes('_internal') || node.node_id.includes('_helper')) {
       continue;
     }
-    
+
     // Handle input nodes
     if (node.node_type === 'input') {
       steps.push({
@@ -100,7 +101,7 @@ const deriveMajorSteps = (
       });
       continue;
     }
-    
+
     // Handle skill detection/decision nodes
     if (node.node_type === 'decision' || node.node_id.includes('skill')) {
       if (!skillStepAdded && skillInfo) {
@@ -126,7 +127,7 @@ const deriveMajorSteps = (
       }
       continue;
     }
-    
+
     // Handle tool nodes
     if (node.node_type === 'tool') {
       // Extract tool name from label or node_id
@@ -142,7 +143,7 @@ const deriveMajorSteps = (
       });
       continue;
     }
-    
+
     // Handle agent nodes (for multi-agent)
     if (node.node_type === 'agent') {
       const agentName = node.label || node.node_id.replace('agent_', '').replace(/_/g, ' ');
@@ -156,7 +157,7 @@ const deriveMajorSteps = (
       });
       continue;
     }
-    
+
     // Handle routing nodes (for multi-agent handoffs)
     if (node.node_type === 'routing') {
       steps.push({
@@ -169,7 +170,7 @@ const deriveMajorSteps = (
       });
       continue;
     }
-    
+
     // Handle output nodes
     if (node.node_type === 'output') {
       steps.push({
@@ -182,7 +183,7 @@ const deriveMajorSteps = (
       });
       continue;
     }
-    
+
     // Handle action nodes (generic actions)
     if (node.node_type === 'action') {
       steps.push({
@@ -195,7 +196,7 @@ const deriveMajorSteps = (
       });
     }
   }
-  
+
   // If we have skill info but no skill step was added from nodes, add it at the start
   if (skillInfo && !skillStepAdded && steps.length > 0) {
     steps.splice(1, 0, {
@@ -207,7 +208,7 @@ const deriveMajorSteps = (
       type: 'skill',
     });
   }
-  
+
   return steps;
 };
 
@@ -344,7 +345,7 @@ const SkillDetailsPanel: React.FC<{
                     </div>
                   </div>
                 ) : (
-                  <div 
+                  <div
                     className="prose prose-sm max-w-none prose-invert
                       prose-headings:text-slate-100 prose-headings:font-semibold
                       prose-h1:text-base prose-h2:text-sm prose-h3:text-sm
@@ -370,23 +371,23 @@ const SkillDetailsPanel: React.FC<{
                 transition={{ duration: 0.15 }}
               >
                 <div className="space-y-3">
-                  <div 
+                  <div
                     className="p-3 rounded-lg"
                     style={{ backgroundColor: theme.colors.bg.elevated }}
                   >
-                    <h3 
+                    <h3
                       className="text-sm font-semibold mb-1.5 flex items-center gap-2"
                       style={{ color: theme.colors.text.primary }}
                     >
                       <span style={{ color: theme.colors.accent.primary }}>📄</span>
                       What is a SKILL.md file?
                     </h3>
-                    <p 
+                    <p
                       className="text-xs leading-relaxed mb-2"
                       style={{ color: theme.colors.text.secondary }}
                     >
-                      A <strong style={{ color: theme.colors.text.primary }}>SKILL.md</strong> file is a 
-                      structured markdown document that defines how the AI agent should handle specific 
+                      A <strong style={{ color: theme.colors.text.primary }}>SKILL.md</strong> file is a
+                      structured markdown document that defines how the AI agent should handle specific
                       types of requests. It acts as a "playbook" that guides the agent's behavior.
                     </p>
                     <a
@@ -408,19 +409,19 @@ const SkillDetailsPanel: React.FC<{
                       { icon: '📊', title: 'Chart Guidance', desc: 'Visualization rules' },
                       { icon: '📰', title: 'News Hooks', desc: 'When to fetch context' },
                     ].map((item, idx) => (
-                      <div 
+                      <div
                         key={idx}
                         className="p-3 rounded-lg"
                         style={{ backgroundColor: theme.colors.bg.elevated }}
                       >
                         <div className="text-xl mb-1">{item.icon}</div>
-                        <h4 
+                        <h4
                           className="text-xs font-medium mb-0.5"
                           style={{ color: theme.colors.text.primary }}
                         >
                           {item.title}
                         </h4>
-                        <p 
+                        <p
                           className="text-[10px]"
                           style={{ color: theme.colors.text.muted }}
                         >
@@ -430,14 +431,14 @@ const SkillDetailsPanel: React.FC<{
                     ))}
                   </div>
 
-                  <div 
+                  <div
                     className="p-3 rounded-lg border"
-                    style={{ 
+                    style={{
                       backgroundColor: theme.colors.thinking.bg,
                       borderColor: theme.colors.thinking.border,
                     }}
                   >
-                    <p 
+                    <p
                       className="text-xs"
                       style={{ color: theme.colors.text.secondary }}
                     >
@@ -469,7 +470,7 @@ const FlowchartNode: React.FC<{
   const isSkillNode = node.node_id === 'skill_detection' || node.node_id === 'skill_active';
   const isSpecialistNode = node.node_id.startsWith('specialist_');
   const showSkill = isSkillNode && skillInfo && showSkillDetails;
-  
+
   return (
     <div className="flex flex-col items-center">
       {/* Node Card */}
@@ -509,7 +510,7 @@ const FlowchartNode: React.FC<{
                   borderColor: theme.colors.bg.elevated,
                   color: 'white',
                 }}
-                animate={node.status === 'running' ? { 
+                animate={node.status === 'running' ? {
                   scale: [1, 1.2, 1],
                   boxShadow: [`0 0 0 0 ${statusConfig.color}`, `0 0 0 8px ${statusConfig.color}00`]
                 } : {}}
@@ -518,7 +519,7 @@ const FlowchartNode: React.FC<{
                 {statusConfig.icon}
               </motion.div>
             </div>
-            
+
             {/* Content */}
             <div className="flex-1 min-w-0 text-left">
               <div className="flex items-center gap-2 flex-wrap">
@@ -564,7 +565,7 @@ const FlowchartNode: React.FC<{
                   </span>
                 )}
               </div>
-              
+
               {node.description && (
                 <p
                   className="text-xs mt-1 line-clamp-2"
@@ -574,7 +575,7 @@ const FlowchartNode: React.FC<{
                 </p>
               )}
             </div>
-            
+
             {/* Expand indicator */}
             {(node.data || (isSkillNode && skillInfo)) && (
               <motion.div
@@ -588,7 +589,7 @@ const FlowchartNode: React.FC<{
             )}
           </div>
         </motion.button>
-        
+
         {/* Expanded Content */}
         <AnimatePresence>
           {isExpanded && (
@@ -603,7 +604,7 @@ const FlowchartNode: React.FC<{
               {showSkill && (
                 <SkillDetailsPanel skill={skillInfo} isExpanded={true} />
               )}
-              
+
               {/* Node Data */}
               {node.data && !showSkill && (
                 <div
@@ -634,11 +635,11 @@ const FlowchartNode: React.FC<{
           )}
         </AnimatePresence>
       </motion.div>
-      
+
       {/* Connector to next node */}
       {!isLast && (
-        <FlowConnector 
-          animated={node.status === 'running'} 
+        <FlowConnector
+          animated={node.status === 'running'}
           color={node.status === 'completed' ? theme.colors.status.success : theme.colors.border.medium}
         />
       )}
@@ -661,35 +662,37 @@ const ProcessPanel: React.FC<ProcessPanelProps> = ({
   lastAgentLabel,
   runId,
   permissionState,
+  mode = 'modal',
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
   const [skillExpanded, setSkillExpanded] = useState(false);
   
-  // Handle ESC key to close the panel
+  // Handle ESC key to close the panel (only in modal mode)
   useEffect(() => {
+    if (mode !== 'modal') return;
+
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && isExpanded) {
         setIsExpanded(false);
       }
     };
-    
     if (isExpanded) {
       document.addEventListener('keydown', handleKeyDown);
       document.body.style.overflow = 'hidden';
     }
-    
+
     return () => {
       document.removeEventListener('keydown', handleKeyDown);
       document.body.style.overflow = '';
     };
   }, [isExpanded]);
-  
+
   // Build node hierarchy from edges for multi-agent mode
   const { rootNodes, childrenMap } = useMemo(() => {
     const childrenMap = new Map<string, ProcessNode[]>();
     const hasParent = new Set<string>();
-    
+
     processEdges.forEach(edge => {
       hasParent.add(edge.to_node);
       const children = childrenMap.get(edge.from_node) || [];
@@ -699,16 +702,16 @@ const ProcessPanel: React.FC<ProcessPanelProps> = ({
         childrenMap.set(edge.from_node, children);
       }
     });
-    
+
     const rootNodes = processNodes.filter(n => !hasParent.has(n.node_id));
     return { rootNodes, childrenMap };
   }, [processNodes, processEdges]);
-  
+
   // Sort nodes by timestamp for linear view
   const linearNodes = useMemo(() => {
     return [...processNodes].sort((a, b) => a.timestamp - b.timestamp);
   }, [processNodes]);
-  
+
   // Count stats
   const stats = useMemo(() => {
     const running = processNodes.filter(n => n.status === 'running').length;
@@ -719,7 +722,7 @@ const ProcessPanel: React.FC<ProcessPanelProps> = ({
 
   const isSingleAgent = agentMode === 'single' || !agentMode;
   const isMultiAgent = !isSingleAgent;
-  
+
   const toggleNode = useCallback((nodeId: string) => {
     setExpandedNodes(prev => {
       const next = new Set(prev);
@@ -731,14 +734,14 @@ const ProcessPanel: React.FC<ProcessPanelProps> = ({
       return next;
     });
   }, []);
-  
+
   // Recursive render for hierarchical tree (multi-agent)
   const renderNodeTree = useCallback((nodes: ProcessNode[], depth: number = 0): React.ReactNode => {
     return nodes.map((node, idx) => {
       const children = childrenMap.get(node.node_id) || [];
       const isLast = idx === nodes.length - 1 && children.length === 0;
       const isSkillNode = node.node_id === 'skill_detection' || node.node_id === 'skill_active';
-      
+
       return (
         <div key={node.node_id} style={{ marginLeft: depth > 0 ? 32 : 0 }}>
           <FlowchartNode
@@ -768,7 +771,7 @@ const ProcessPanel: React.FC<ProcessPanelProps> = ({
     () => processNodes.filter(n => !(n.node_id.startsWith('supervisor') || n.node_id === 'auto_routing')),
     [processNodes]
   );
-  
+
   /**
    * Derive major steps from processNodes for compact display
    * Shows key workflow steps: Input → Skill → Tool(s) → Agent(s) → Output
@@ -776,17 +779,17 @@ const ProcessPanel: React.FC<ProcessPanelProps> = ({
   const majorSteps = useMemo(() => {
     return deriveMajorSteps(processNodes, skillInfo);
   }, [processNodes, skillInfo]);
-  
+
   // Find current active step (running) or latest completed step
   const currentStep = useMemo(() => {
     const runningStep = majorSteps.find(s => s.status === 'running');
     if (runningStep) return runningStep;
-    
+
     // Find the last completed step if no running step
     const completedSteps = majorSteps.filter(s => s.status === 'completed');
     return completedSteps[completedSteps.length - 1] || majorSteps[0] || null;
   }, [majorSteps]);
-  
+
   // Calculate step progress
   const stepProgress = useMemo(() => {
     if (majorSteps.length === 0) return { current: 0, total: 0 };
@@ -795,7 +798,7 @@ const ProcessPanel: React.FC<ProcessPanelProps> = ({
     const currentIndex = runningIndex >= 0 ? runningIndex + 1 : completedCount;
     return { current: currentIndex, total: majorSteps.length };
   }, [majorSteps]);
-  
+
   // Get current status text for the compact chip
   const statusText = useMemo(() => {
     if (!isStreaming && processNodes.length === 0) return 'Connected';
@@ -804,406 +807,471 @@ const ProcessPanel: React.FC<ProcessPanelProps> = ({
     if (isStreaming) return 'Processing...';
     return 'Ready';
   }, [isStreaming, processNodes.length, stats, currentStep]);
-  
-  return (
-    <>
-      {/* Compact Status Indicator with Dynamic Steps */}
-      <motion.button
-        onClick={() => setIsExpanded(true)}
-        className="flex items-center gap-2 px-3 py-1.5 rounded-lg transition-all group"
-        style={{
-          backgroundColor: theme.colors.bg.elevated,
-          border: `1px solid ${isStreaming ? theme.colors.accent.primary + '40' : theme.colors.border.subtle}`,
-        }}
-        whileHover={{
-          borderColor: theme.colors.accent.primary + '60',
-          boxShadow: theme.shadows.glow,
-        }}
-        whileTap={{ scale: 0.98 }}
-      >
-        {/* Status dot with animation */}
-        <div className="relative">
-          {isStreaming ? (
-            <motion.div
-              className="w-2 h-2 rounded-full"
-              style={{ backgroundColor: theme.colors.accent.primary }}
-              animate={{ scale: [1, 1.3, 1], opacity: [1, 0.7, 1] }}
-              transition={{ duration: 0.8, repeat: Infinity }}
-            />
-          ) : stats.total > 0 && stats.completed === stats.total ? (
-            <div
-              className="w-2 h-2 rounded-full"
-              style={{ backgroundColor: theme.colors.status.success }}
-            />
-          ) : (
-            <div
-              className="w-2 h-2 rounded-full"
-              style={{ backgroundColor: theme.colors.status.success }}
-            />
-          )}
-        </div>
-        
-        {/* Current step icon when streaming */}
-        {isStreaming && currentStep && (
-          <span className="text-sm">{currentStep.icon}</span>
-        )}
-        
-        {/* Status/Step label */}
-        <span 
-          className="text-xs font-medium max-w-[120px] truncate"
-          style={{ color: isStreaming ? theme.colors.text.primary : theme.colors.text.muted }}
-        >
-          {statusText}
-        </span>
-        
-        {/* Progress counter when there are steps */}
-        {majorSteps.length > 0 && (isStreaming || stats.completed > 0) && (
-          <span
-            className="text-[10px] px-1.5 py-0.5 rounded-full font-medium"
-            style={{
-              backgroundColor: isStreaming ? theme.colors.accent.muted : theme.colors.bg.tertiary,
-              color: isStreaming ? theme.colors.accent.primary : theme.colors.text.muted,
-            }}
-          >
-            {stepProgress.current}/{stepProgress.total}
-          </span>
-        )}
-        
-        {/* Arrow indicator */}
-        <motion.span
-          className="text-xs opacity-0 group-hover:opacity-100 transition-opacity"
-          style={{ color: theme.colors.accent.primary }}
-        >
-          →
-        </motion.span>
-      </motion.button>
-      
-      {/* Full-screen Panel Overlay */}
-      <AnimatePresence>
-        {isExpanded && (
-          <motion.div
-            className="fixed inset-0 z-50 flex flex-col"
-            {...motionVariants.backdrop}
-          >
-            {/* Backdrop */}
-            <motion.div
-              className="absolute inset-0"
-              style={{
-                backgroundColor: 'rgba(10, 15, 26, 0.95)',
-                backdropFilter: 'blur(8px)',
-              }}
-              onClick={() => setIsExpanded(false)}
-            />
-            
-            {/* Panel Content */}
-            <motion.div
-              className="relative flex flex-col h-full max-w-3xl mx-auto w-full"
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 20 }}
-              transition={{ duration: 0.3 }}
-            >
-              {/* Header */}
-              <header
-                className="flex items-center justify-between px-6 py-4 shrink-0"
-                style={{ borderBottom: `1px solid ${theme.colors.border.subtle}` }}
-              >
-                <div className="flex items-center gap-4">
-                  <div
-                    className="w-12 h-12 rounded-xl flex items-center justify-center"
-                    style={{
-                      background: `linear-gradient(135deg, ${theme.colors.accent.muted} 0%, ${theme.colors.bg.elevated} 100%)`,
-                      border: `1px solid ${theme.colors.border.medium}`,
-                    }}
-                  >
-                    <span className="text-2xl">🧠</span>
-                  </div>
-                  <div>
-                    <h2
-                      className="text-lg font-semibold"
-                      style={{ color: theme.colors.text.primary }}
-                    >
-                      Agent Process Flow
-                    </h2>
-                    <p className="text-xs" style={{ color: theme.colors.text.muted }}>
-                      {isSingleAgent ? 'Single Agent' : 'Multi-agent (Specialist routing)'}
-                      {lastAgentLabel ? ` • Active: ${lastAgentLabel}` : activeAgent ? ` • Active: ${activeAgent.name}` : ''}
-                    </p>
-                  </div>
-                </div>
-                
-                <div className="flex items-center gap-4">
-                  {/* Stats */}
-                  <div className="flex items-center gap-6">
-                    <div className="text-center">
-                      <div className="text-xl font-bold" style={{ color: theme.colors.status.success }}>
-                        {stats.completed}
-                      </div>
-                      <div className="text-[10px] uppercase tracking-wide" style={{ color: theme.colors.text.muted }}>
-                        Done
-                      </div>
-                    </div>
-                    <div className="text-center">
-                      <div className="text-xl font-bold" style={{ color: theme.colors.accent.primary }}>
-                        {stats.running}
-                      </div>
-                      <div className="text-[10px] uppercase tracking-wide" style={{ color: theme.colors.text.muted }}>
-                        Active
-                      </div>
-                    </div>
-                    <div className="text-center">
-                      <div className="text-xl font-bold" style={{ color: theme.colors.text.secondary }}>
-                        {stats.total}
-                      </div>
-                      <div className="text-[10px] uppercase tracking-wide" style={{ color: theme.colors.text.muted }}>
-                        Total
-                      </div>
-                    </div>
-                  </div>
-                  
-                  {/* Close */}
-                  <motion.button
-                    onClick={() => setIsExpanded(false)}
-                    className="w-10 h-10 rounded-xl flex items-center justify-center transition-colors"
-                    style={{
-                      backgroundColor: theme.colors.bg.elevated,
-                      color: theme.colors.text.muted,
-                    }}
-                    whileHover={{
-                      backgroundColor: theme.colors.bg.tertiary,
-                      color: theme.colors.text.primary,
-                    }}
-                    whileTap={{ scale: 0.95 }}
-                  >
-                    ✕
-                  </motion.button>
-                </div>
-              </header>
-              
-              {/* Flowchart Area */}
-              <div className="flex-1 overflow-y-auto p-6">
-                {processNodes.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center h-full">
-                    <div
-                      className="w-24 h-24 rounded-2xl flex items-center justify-center text-5xl mb-6"
-                      style={{
-                        background: `linear-gradient(135deg, ${theme.colors.accent.muted} 0%, ${theme.colors.bg.tertiary} 100%)`,
-                        border: `2px solid ${theme.colors.border.medium}`,
-                      }}
-                    >
-                      {isStreaming ? (
-                        <motion.span
-                          animate={{ rotate: 360 }}
-                          transition={{ duration: 2, repeat: Infinity, ease: 'linear' }}
-                        >
-                          🔄
-                        </motion.span>
-                      ) : '🧠'}
-                    </div>
-                    <h3
-                      className="text-xl font-semibold mb-2"
-                      style={{ color: theme.colors.text.primary }}
-                    >
-                      {isStreaming ? 'Initializing Agent...' : 'Agent Process Visualization'}
-                    </h3>
-                    <p
-                      className="text-sm text-center max-w-md"
-                      style={{ color: theme.colors.text.muted }}
-                    >
-                      {isStreaming
-                        ? 'The agent is starting to process your request. Watch the flowchart build in real-time.'
-                        : 'Send a message to see the agent\'s decision-making process visualized as an interactive flowchart.'}
-                    </p>
-                  </div>
-                ) : (
-                <div className="flex flex-col items-center space-y-4">
-                  {/* Skill section replaces status legend */}
-                  {skillInfo && (
-                    <div
-                      className="w-full max-w-2xl"
-                    >
-                      <button
-                        onClick={() => setSkillExpanded(prev => !prev)}
-                        className="w-full flex items-center justify-between px-4 py-3 rounded-xl transition-colors"
-                        style={{
-                          backgroundColor: theme.colors.bg.tertiary,
-                          border: `1px solid ${theme.colors.border.subtle}`,
-                        }}
-                      >
-                        <div className="flex items-center gap-3">
-                          <span
-                            className="text-sm font-semibold px-2 py-1 rounded-lg"
-                            style={{
-                              backgroundColor: theme.colors.accent.muted,
-                              color: theme.colors.accent.primary,
-                            }}
-                          >
-                            ⚡ Active Skill: {skillInfo.name}
-                          </span>
-                          <span className="text-xs" style={{ color: theme.colors.text.muted }}>
-                            Skill guidance is applied to the current run.
-                          </span>
-                        </div>
-                        <motion.span
-                          animate={{ rotate: skillExpanded ? 180 : 0 }}
-                          transition={{ duration: 0.2 }}
-                          className="text-sm"
-                          style={{ color: theme.colors.text.muted }}
-                        >
-                          ▼
-                        </motion.span>
-                      </button>
-                      <AnimatePresence>
-                        {skillExpanded && (
-                          <motion.div
-                            initial={{ height: 0, opacity: 0 }}
-                            animate={{ height: 'auto', opacity: 1 }}
-                            exit={{ height: 0, opacity: 0 }}
-                            transition={{ duration: 0.2 }}
-                            className="mt-2"
-                          >
-                            <SkillDetailsPanel skill={skillInfo} isExpanded={true} />
-                          </motion.div>
-                        )}
-                      </AnimatePresence>
-                    </div>
-                  )}
 
-                  {/* Flowchart */}
-                  {isSingleAgent ? (
-                    // Linear flow for single agent
-                    linearNodes.map((node, idx) => {
-                      const isSkillNode = node.node_id === 'skill_detection' || node.node_id === 'skill_active';
-                      return (
-                        <FlowchartNode
-                          key={node.node_id}
-                          node={node}
-                          isExpanded={expandedNodes.has(node.node_id)}
-                          onToggle={() => toggleNode(node.node_id)}
-                          isLast={idx === linearNodes.length - 1}
-                          skillInfo={isSkillNode ? skillInfo : null}
-                          showSkillDetails={isSkillNode && expandedNodes.has(node.node_id)}
-                        />
-                      );
-                    })
-                  ) : (
-                    // Multi-lane layout: Supervisor | Specialist(s)
-                    <div className="w-full grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div>
-                        <div className="flex items-center justify-between mb-2">
-                          <h4 className="text-sm font-semibold" style={{ color: theme.colors.text.primary }}>
-                            Supervisor Lane
-                          </h4>
-                          <span
-                            className="text-[10px] px-2 py-0.5 rounded-full"
-                            style={{
-                              backgroundColor: theme.colors.accent.muted,
-                              color: theme.colors.accent.primary,
-                            }}
-                          >
-                            Routing + Handoff
-                          </span>
-                        </div>
-                        {supervisorLaneNodes.length === 0 ? (
-                          <p className="text-xs" style={{ color: theme.colors.text.muted }}>Waiting for supervisor routing...</p>
-                        ) : (
-                          renderNodeTree(supervisorLaneNodes)
-                        )}
-                      </div>
-                      <div>
-                        <div className="flex items-center justify-between mb-2">
-                          <h4 className="text-sm font-semibold" style={{ color: theme.colors.text.primary }}>
-                            Specialist Lane
-                          </h4>
-                          {activeAgent && (
-                            <span
-                              className="text-[10px] px-2 py-0.5 rounded-full"
-                              style={{
-                                backgroundColor: theme.colors.bg.elevated,
-                                color: theme.colors.text.secondary,
-                                border: `1px solid ${theme.colors.border.subtle}`,
-                              }}
-                            >
-                              Active: {activeAgent.name}
-                            </span>
-                          )}
-                        </div>
-                        {specialistLaneNodes.length === 0 ? (
-                          <p className="text-xs" style={{ color: theme.colors.text.muted }}>Awaiting handoff...</p>
-                        ) : (
-                          renderNodeTree(specialistLaneNodes)
-                        )}
-                      </div>
-                    </div>
-                  )}
+  // Render Content Block (Flowchart)
+    const renderContent = () => (
+      <div className={`flex-1 ${mode === 'modal' ? 'overflow-y-auto p-6' : 'p-4 overflow-y-auto max-h-[500px]'}`}>
+        {processNodes.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-full py-8">
+            <div
+              className="w-16 h-16 rounded-2xl flex items-center justify-center text-3xl mb-4"
+              style={{
+                background: `linear-gradient(135deg, ${theme.colors.accent.muted} 0%, ${theme.colors.bg.tertiary} 100%)`,
+                border: `2px solid ${theme.colors.border.medium}`,
+              }}
+            >
+              {isStreaming ? (
+                <motion.span
+                  animate={{ rotate: 360 }}
+                  transition={{ duration: 2, repeat: Infinity, ease: 'linear' }}
+                >
+                  🔄
+                </motion.span>
+              ) : '🧠'}
+            </div>
+            <h3
+              className="text-base font-semibold mb-1"
+              style={{ color: theme.colors.text.primary }}
+            >
+              {isStreaming ? 'Initializing Agent...' : 'Agent Process Visualization'}
+            </h3>
+            <p
+              className="text-xs text-center max-w-xs"
+              style={{ color: theme.colors.text.muted }}
+            >
+              {isStreaming
+                ? 'Watch the flowchart build in real-time.'
+                : 'Flowchart visualization of the agent\'s decision path.'}
+            </p>
+          </div>
+        ) : (
+        <div className="flex flex-col items-center space-y-4">
+          {/* Skill section replaces status legend */}
+          {skillInfo && (
+            <div className="w-full max-w-2xl">
+              <button
+                onClick={() => setSkillExpanded(prev => !prev)}
+                className="w-full flex items-center justify-between px-4 py-3 rounded-xl transition-colors"
+                style={{
+                  backgroundColor: theme.colors.bg.tertiary,
+                  border: `1px solid ${theme.colors.border.subtle}`,
+                }}
+              >
+                <div className="flex items-center gap-3">
+                  <span
+                    className="text-sm font-semibold px-2 py-1 rounded-lg"
+                    style={{
+                      backgroundColor: theme.colors.accent.muted,
+                      color: theme.colors.accent.primary,
+                    }}
+                  >
+                    ⚡ Active Skill: {skillInfo.name}
+                  </span>
+                  <span className="text-xs" style={{ color: theme.colors.text.muted }}>
+                    Skill guidance applied.
+                  </span>
                 </div>
+                <motion.span
+                  animate={{ rotate: skillExpanded ? 180 : 0 }}
+                  transition={{ duration: 0.2 }}
+                  className="text-sm"
+                  style={{ color: theme.colors.text.muted }}
+                >
+                  ▼
+                </motion.span>
+              </button>
+              <AnimatePresence>
+                {skillExpanded && (
+                  <motion.div
+                    initial={{ height: 0, opacity: 0 }}
+                    animate={{ height: 'auto', opacity: 1 }}
+                    exit={{ height: 0, opacity: 0 }}
+                    transition={{ duration: 0.2 }}
+                    className="mt-2"
+                  >
+                    <SkillDetailsPanel skill={skillInfo} isExpanded={true} />
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+          )}
+  
+          {/* Flowchart */}
+          {isSingleAgent ? (
+            // Linear flow for single agent
+            linearNodes.map((node, idx) => {
+              const isSkillNode = node.node_id === 'skill_detection' || node.node_id === 'skill_active';
+              return (
+                <FlowchartNode
+                  key={node.node_id}
+                  node={node}
+                  isExpanded={expandedNodes.has(node.node_id)}
+                  onToggle={() => toggleNode(node.node_id)}
+                  isLast={idx === linearNodes.length - 1}
+                  skillInfo={isSkillNode ? skillInfo : null}
+                  showSkillDetails={isSkillNode && expandedNodes.has(node.node_id)}
+                />
+              );
+            })
+          ) : (
+            // Multi-lane layout: Supervisor | Specialist(s)
+            <div className="w-full grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <h4 className="text-sm font-semibold" style={{ color: theme.colors.text.primary }}>
+                    Supervisor Lane
+                  </h4>
+                  <span
+                    className="text-[10px] px-2 py-0.5 rounded-full"
+                    style={{
+                      backgroundColor: theme.colors.accent.muted,
+                      color: theme.colors.accent.primary,
+                    }}
+                  >
+                    Routing + Handoff
+                  </span>
+                </div>
+                {supervisorLaneNodes.length === 0 ? (
+                  <p className="text-xs" style={{ color: theme.colors.text.muted }}>Waiting for routing...</p>
+                ) : (
+                  renderNodeTree(supervisorLaneNodes)
                 )}
               </div>
-              
-              {/* Footer */}
-              <footer
-                className="px-6 py-4 shrink-0 flex items-center justify-between"
-                style={{ borderTop: `1px solid ${theme.colors.border.subtle}` }}
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <h4 className="text-sm font-semibold" style={{ color: theme.colors.text.primary }}>
+                    Specialist Lane
+                  </h4>
+                  {activeAgent && (
+                    <span
+                      className="text-[10px] px-2 py-0.5 rounded-full"
+                      style={{
+                        backgroundColor: theme.colors.bg.elevated,
+                        color: theme.colors.text.secondary,
+                        border: `1px solid ${theme.colors.border.subtle}`,
+                      }}
+                    >
+                      Active: {activeAgent.name}
+                    </span>
+                  )}
+                </div>
+                {specialistLaneNodes.length === 0 ? (
+                  <p className="text-xs" style={{ color: theme.colors.text.muted }}>Awaiting handoff...</p>
+                ) : (
+                  renderNodeTree(specialistLaneNodes)
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+        )}
+      </div>
+    );
+  
+    // If Inline Mode
+    if (mode === 'inline') {
+      if (processNodes.length === 0 && !isStreaming) return null; // Don't show empty inline panel if not streaming
+  
+      return (
+        <div className="mb-4 rounded-xl overflow-hidden border border-gray-800 bg-gray-900/50">
+          <button
+            onClick={() => setIsExpanded(!isExpanded)}
+            className="w-full flex items-center justify-between px-4 py-3 hover:bg-gray-800/50 transition-colors"
+          >
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2">
+                {isStreaming ? (
+                  <motion.div
+                    className="w-2 h-2 rounded-full bg-sky-500"
+                    animate={{ scale: [1, 1.2, 1], opacity: [1, 0.7, 1] }}
+                    transition={{ duration: 1, repeat: Infinity }}
+                  />
+                ) : (
+                   <div className="w-2 h-2 rounded-full bg-emerald-500" />
+                )}
+                <span className="text-sm font-medium text-gray-200">
+                  Agent Process
+                </span>
+              </div>
+              {currentStep && (
+                <span className="text-xs text-gray-400 bg-gray-800 px-2 py-0.5 rounded-full">
+                  {currentStep.shortLabel}
+                </span>
+              )}
+              {majorSteps.length > 0 && (
+                 <span className="text-xs text-gray-500">
+                   {stepProgress.current}/{stepProgress.total} steps
+                 </span>
+              )}
+            </div>
+            <motion.div
+              animate={{ rotate: isExpanded ? 180 : 0 }}
+              className="text-gray-500"
+            >
+              ▼
+            </motion.div>
+          </button>
+  
+          <AnimatePresence>
+            {isExpanded && (
+              <motion.div
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: 'auto', opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                transition={{ duration: 0.2 }}
+                className="border-t border-gray-800 bg-gray-900/30"
               >
-                <button
-                  onClick={() => {
-                    const supervisorLogs = debugLogs.filter(log =>
-                      log.category === 'agent' &&
-                      ((log as any).data?.agent_mode === 'supervisor' ||
-                        (log.message || '').toLowerCase().includes('supervisor'))
-                    );
-                    const specialistLogs = debugLogs.filter(log => {
-                      const mode = (log as any).data?.agent_mode;
-                      return log.category === 'agent' && mode && mode !== 'supervisor';
-                    });
-                    const payload = {
-                      generated_at: new Date().toISOString(),
-                      run_id: runId,
-                      permission_state: permissionState,
-                      blocked: permissionState ? ['permission_denied', 'run_timeout', 'cancelled'].includes(permissionState) : false,
-                      process_nodes: processNodes,
-                      process_edges: processEdges,
-                      supervisor_logs: supervisorLogs,
-                      specialist_logs: specialistLogs,
-                      all_logs: debugLogs,
-                    };
-                    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = 'agent-debug-log.json';
-                    a.click();
-                    URL.revokeObjectURL(url);
-                  }}
-                  className="px-3 py-2 rounded-lg text-xs font-semibold transition-colors"
-                  style={{
-                    backgroundColor: theme.colors.accent.muted,
-                    color: theme.colors.text.primary,
-                    border: `1px solid ${theme.colors.border.subtle}`,
-                  }}
+                {renderContent()}
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+      );
+    }
+  
+    // Default Modal Mode
+    return (
+      <>
+        {/* Compact Status Indicator with Dynamic Steps */}
+        <motion.button
+          onClick={() => setIsExpanded(true)}
+          className="flex items-center gap-2 px-3 py-1.5 rounded-lg transition-all group"
+          style={{
+            backgroundColor: theme.colors.bg.elevated,
+            border: `1px solid ${isStreaming ? theme.colors.accent.primary + '40' : theme.colors.border.subtle}`,
+          }}
+          whileHover={{
+            borderColor: theme.colors.accent.primary + '60',
+            boxShadow: theme.shadows.glow,
+          }}
+          whileTap={{ scale: 0.98 }}
+        >
+          {/* Status dot with animation */}
+          <div className="relative">
+            {isStreaming ? (
+              <motion.div
+                className="w-2 h-2 rounded-full"
+                style={{ backgroundColor: theme.colors.accent.primary }}
+                animate={{ scale: [1, 1.3, 1], opacity: [1, 0.7, 1] }}
+                transition={{ duration: 0.8, repeat: Infinity }}
+              />
+            ) : stats.total > 0 && stats.completed === stats.total ? (
+              <div
+                className="w-2 h-2 rounded-full"
+                style={{ backgroundColor: theme.colors.status.success }}
+              />
+            ) : (
+              <div
+                className="w-2 h-2 rounded-full"
+                style={{ backgroundColor: theme.colors.status.success }}
+              />
+            )}
+          </div>
+  
+          {/* Current step icon when streaming */}
+          {isStreaming && currentStep && (
+            <span className="text-sm">{currentStep.icon}</span>
+          )}
+  
+          {/* Status/Step label */}
+          <span
+            className="text-xs font-medium max-w-[120px] truncate"
+            style={{ color: isStreaming ? theme.colors.text.primary : theme.colors.text.muted }}
+          >
+            {statusText}
+          </span>
+  
+          {/* Progress counter when there are steps */}
+          {majorSteps.length > 0 && (isStreaming || stats.completed > 0) && (
+            <span
+              className="text-[10px] px-1.5 py-0.5 rounded-full font-medium"
+              style={{
+                backgroundColor: isStreaming ? theme.colors.accent.muted : theme.colors.bg.tertiary,
+                color: isStreaming ? theme.colors.accent.primary : theme.colors.text.muted,
+              }}
+            >
+              {stepProgress.current}/{stepProgress.total}
+            </span>
+          )}
+  
+          {/* Arrow indicator */}
+          <motion.span
+            className="text-xs opacity-0 group-hover:opacity-100 transition-opacity"
+            style={{ color: theme.colors.accent.primary }}
+          >
+            →
+          </motion.span>
+        </motion.button>
+  
+        {/* Full-screen Panel Overlay */}
+        <AnimatePresence>
+          {isExpanded && (
+            <motion.div
+              className="fixed inset-0 z-50 flex flex-col"
+              {...motionVariants.backdrop}
+            >
+              {/* Backdrop */}
+              <motion.div
+                className="absolute inset-0"
+                style={{
+                  backgroundColor: 'rgba(10, 15, 26, 0.95)',
+                  backdropFilter: 'blur(8px)',
+                }}
+                onClick={() => setIsExpanded(false)}
+              />
+  
+              {/* Panel Content */}
+              <motion.div
+                className="relative flex flex-col h-full max-w-3xl mx-auto w-full"
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: 20 }}
+                transition={{ duration: 0.3 }}
+              >
+                {/* Header */}
+                <header
+                  className="flex items-center justify-between px-6 py-4 shrink-0"
+                  style={{ borderBottom: `1px solid ${theme.colors.border.subtle}` }}
                 >
-                  Download JSON Logs
-                </button>
-                <div className="flex items-center gap-2">
-                  <kbd
-                    className="px-2 py-1 rounded text-[10px] font-mono"
+                  <div className="flex items-center gap-4">
+                    <div
+                      className="w-12 h-12 rounded-xl flex items-center justify-center"
+                      style={{
+                        background: `linear-gradient(135deg, ${theme.colors.accent.muted} 0%, ${theme.colors.bg.elevated} 100%)`,
+                        border: `1px solid ${theme.colors.border.medium}`,
+                      }}
+                    >
+                      <span className="text-2xl">🧠</span>
+                    </div>
+                    <div>
+                      <h2
+                        className="text-lg font-semibold"
+                        style={{ color: theme.colors.text.primary }}
+                      >
+                        Agent Process Flow
+                      </h2>
+                      <p className="text-xs" style={{ color: theme.colors.text.muted }}>
+                        {isSingleAgent ? 'Single Agent' : 'Multi-agent (Specialist routing)'}
+                        {lastAgentLabel ? ` • Active: ${lastAgentLabel}` : activeAgent ? ` • Active: ${activeAgent.name}` : ''}
+                      </p>
+                    </div>
+                  </div>
+  
+                  <div className="flex items-center gap-4">
+                    {/* Stats */}
+                    <div className="flex items-center gap-6">
+                      <div className="text-center">
+                        <div className="text-xl font-bold" style={{ color: theme.colors.status.success }}>
+                          {stats.completed}
+                        </div>
+                        <div className="text-[10px] uppercase tracking-wide" style={{ color: theme.colors.text.muted }}>
+                          Done
+                        </div>
+                      </div>
+                      <div className="text-center">
+                        <div className="text-xl font-bold" style={{ color: theme.colors.accent.primary }}>
+                          {stats.running}
+                        </div>
+                        <div className="text-[10px] uppercase tracking-wide" style={{ color: theme.colors.text.muted }}>
+                          Active
+                        </div>
+                      </div>
+                      <div className="text-center">
+                        <div className="text-xl font-bold" style={{ color: theme.colors.text.secondary }}>
+                          {stats.total}
+                        </div>
+                        <div className="text-[10px] uppercase tracking-wide" style={{ color: theme.colors.text.muted }}>
+                          Total
+                        </div>
+                      </div>
+                    </div>
+  
+                    {/* Close */}
+                    <motion.button
+                      onClick={() => setIsExpanded(false)}
+                      className="w-10 h-10 rounded-xl flex items-center justify-center transition-colors"
+                      style={{
+                        backgroundColor: theme.colors.bg.elevated,
+                        color: theme.colors.text.muted,
+                      }}
+                      whileHover={{
+                        backgroundColor: theme.colors.bg.tertiary,
+                        color: theme.colors.text.primary,
+                      }}
+                      whileTap={{ scale: 0.95 }}
+                    >
+                      ✕
+                    </motion.button>
+                  </div>
+                </header>
+  
+                {/* Flowchart Area */}
+                {renderContent()}
+  
+                {/* Footer */}
+                <footer
+                  className="px-6 py-4 shrink-0 flex items-center justify-between"
+                  style={{ borderTop: `1px solid ${theme.colors.border.subtle}` }}
+                >
+                  <button
+                    onClick={() => {
+                      const supervisorLogs = debugLogs.filter(log =>
+                        log.category === 'agent' &&
+                        ((log as any).data?.agent_mode === 'supervisor' ||
+                          (log.message || '').toLowerCase().includes('supervisor'))
+                      );
+                      const specialistLogs = debugLogs.filter(log => {
+                        const mode = (log as any).data?.agent_mode;
+                        return log.category === 'agent' && mode && mode !== 'supervisor';
+                      });
+                      const payload = {
+                        generated_at: new Date().toISOString(),
+                        run_id: runId,
+                        permission_state: permissionState,
+                        blocked: permissionState ? ['permission_denied', 'run_timeout', 'cancelled'].includes(permissionState) : false,
+                        process_nodes: processNodes,
+                        process_edges: processEdges,
+                        supervisor_logs: supervisorLogs,
+                        specialist_logs: specialistLogs,
+                        all_logs: debugLogs,
+                      };
+                      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement('a');
+                      a.href = url;
+                      a.download = 'agent-debug-log.json';
+                      a.click();
+                      URL.revokeObjectURL(url);
+                    }}
+                    className="px-3 py-2 rounded-lg text-xs font-semibold transition-colors"
                     style={{
-                      backgroundColor: theme.colors.bg.elevated,
+                      backgroundColor: theme.colors.accent.muted,
+                      color: theme.colors.text.primary,
                       border: `1px solid ${theme.colors.border.subtle}`,
-                      color: theme.colors.text.muted,
                     }}
                   >
-                    Esc
-                  </kbd>
-                  <span className="text-xs" style={{ color: theme.colors.text.muted }}>to close</span>
-                </div>
-              </footer>
+                    Download JSON Logs
+                  </button>
+                  <div className="flex items-center gap-2">
+                    <kbd
+                      className="px-2 py-1 rounded text-[10px] font-mono"
+                      style={{
+                        backgroundColor: theme.colors.bg.elevated,
+                        border: `1px solid ${theme.colors.border.subtle}`,
+                        color: theme.colors.text.muted,
+                      }}
+                    >
+                      Esc
+                    </kbd>
+                    <span className="text-xs" style={{ color: theme.colors.text.muted }}>to close</span>
+                  </div>
+                </footer>
+              </motion.div>
             </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </>
-  );
-};
-
-export default ProcessPanel;
+          )}
+        </AnimatePresence>
+      </>
+    );
+  };
+  
+  export default ProcessPanel;
