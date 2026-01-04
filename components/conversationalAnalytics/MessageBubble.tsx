@@ -7,13 +7,13 @@
 
 import React, { useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
-import ReactECharts from 'echarts-for-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { ThinkingStep, NewsResult, HtmlArtifact, SkillInfo, ProcessNode, ProcessEdge, AgentInfo, DebugLog } from './hooks/useSSEStream';
 import { configService } from '../../services/config';
 import { theme, motionVariants } from './styles';
 import ProcessPanel from './ProcessPanel';
+import LazyECharts from '../shared/LazyECharts';
 
 type ValueMeta = {
   unit?: string;
@@ -203,79 +203,199 @@ const SQLPreview: React.FC<{ sql: string }> = ({ sql }) => {
  * Function: DataPreview — called from MessageBubble when tabular data streams in.
  * Invokes: formatValueWithUnit for each cell; renders lightweight table with sticky header.
  * Purpose: Replace missing helper so dataResult rendering no longer throws during streaming.
+ * Now includes collapsible state (default collapsed) with row count.
  */
 const DataPreview: React.FC<{ data: { rows: unknown[]; columns: string[] } }> = ({ data }) => {
+  const [isExpanded, setIsExpanded] = useState(false);
+
   const columns = data.columns && data.columns.length > 0
     ? data.columns
     : Object.keys((data.rows?.[0] as Record<string, unknown>) || {});
 
+  const rowCount = data.rows?.length || 0;
+
   return (
     <div
-      className="rounded-xl border overflow-auto"
-      style={{ borderColor: theme.colors.border.medium }}
+      className="rounded-xl border overflow-hidden"
+      style={{ backgroundColor: theme.colors.bg.elevated, borderColor: theme.colors.border.medium }}
     >
-      <table className="min-w-full text-left text-sm">
-        <thead style={{ backgroundColor: theme.colors.bg.elevated }}>
-          <tr>
-            {columns.map((col) => (
-              <th key={col} className="px-3 py-2 font-semibold" style={{ color: theme.colors.text.primary }}>
-                {col}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {(data.rows || []).slice(0, 20).map((row, idx) => {
-            const record = row as Record<string, unknown>;
-            return (
-              <tr key={idx} style={{ backgroundColor: idx % 2 === 0 ? theme.colors.bg.primary : theme.colors.bg.tertiary }}>
+      {/* Collapsible Header */}
+      <button
+        onClick={() => setIsExpanded((v) => !v)}
+        className="w-full flex items-center justify-between px-4 py-3 text-sm font-semibold transition-colors hover:bg-white/5"
+        style={{ color: theme.colors.text.primary }}
+      >
+        <div className="flex items-center gap-2">
+          <span>📊</span>
+          <span>Data Preview</span>
+          <span className="text-xs font-normal px-2 py-0.5 rounded-full" style={{ backgroundColor: theme.colors.bg.tertiary, color: theme.colors.text.muted }}>
+            {rowCount} rows
+          </span>
+        </div>
+        <span style={{ color: theme.colors.text.muted }} className="transition-transform" data-expanded={isExpanded}>
+          {isExpanded ? '▲ Hide' : '▼ Show'}
+        </span>
+      </button>
+
+      {/* Collapsible Table Content */}
+      {isExpanded && (
+        <div className="overflow-auto" style={{ maxHeight: '400px' }}>
+          <table className="min-w-full text-left text-sm">
+            <thead style={{ backgroundColor: theme.colors.bg.tertiary, position: 'sticky', top: 0 }}>
+              <tr>
                 {columns.map((col) => (
-                  <td key={col} className="px-3 py-2 text-xs" style={{ color: theme.colors.text.secondary }}>
-                    {formatValueWithUnit(record[col], col)}
-                  </td>
+                  <th key={col} className="px-3 py-2 font-semibold" style={{ color: theme.colors.text.primary }}>
+                    {col}
+                  </th>
                 ))}
               </tr>
-            );
-          })}
-        </tbody>
-      </table>
+            </thead>
+            <tbody>
+              {(data.rows || []).slice(0, 50).map((row, idx) => {
+                const record = row as Record<string, unknown>;
+                return (
+                  <tr key={idx} style={{ backgroundColor: idx % 2 === 0 ? theme.colors.bg.primary : theme.colors.bg.tertiary }}>
+                    {columns.map((col) => (
+                      <td key={col} className="px-3 py-2 text-xs" style={{ color: theme.colors.text.secondary }}>
+                        {formatValueWithUnit(record[col], col)}
+                      </td>
+                    ))}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 };
 
 /**
  * Function: SkillPreview — called from MessageBubble when skillInfo is present.
- * Invokes: simple download link to the SKILL.md served by backend.
- * Purpose: Ensure skill payloads don’t crash the UI and remain discoverable inline.
+ * Invokes: fetches SKILL.md content from backend and renders inline with expand/collapse.
+ * Purpose: Merge skill info with active skill display, showing full skill details on expand.
  */
 const SkillPreview: React.FC<{ skill: SkillInfo }> = ({ skill }) => {
+  const [isExpanded, setIsExpanded] = useState(false);
+  const [activeTab, setActiveTab] = useState<'content' | 'what'>('content');
+  const [skillContent, setSkillContent] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+
   const backendUrl = configService.getBackendUrl();
-  const resolvedUrl = skill.download_url?.startsWith('http')
-    ? skill.download_url
-    : `${backendUrl}${skill.download_url}`;
+
+  // Fetch skill content when expanded
+  React.useEffect(() => {
+    if (isExpanded && !skillContent && !isLoading) {
+      setIsLoading(true);
+      fetch(`${backendUrl}/api/conv-analytics/skills/${skill.id}`)
+        .then(res => res.text())
+        .then(content => {
+          setSkillContent(content);
+          setIsLoading(false);
+        })
+        .catch(() => {
+          setSkillContent('Failed to load skill content.');
+          setIsLoading(false);
+        });
+    }
+  }, [isExpanded, skillContent, isLoading, backendUrl, skill.id]);
 
   return (
     <div
-      className="rounded-xl border p-4 flex items-center justify-between"
+      className="rounded-xl border overflow-hidden"
       style={{ backgroundColor: theme.colors.bg.elevated, borderColor: theme.colors.border.medium }}
     >
-      <div>
-        <div className="text-sm font-semibold" style={{ color: theme.colors.text.primary }}>
-          Active Skill: {skill.name}
-        </div>
-        <div className="text-xs" style={{ color: theme.colors.text.muted }}>
-          ID: {skill.id}
-        </div>
-      </div>
-      <a
-        href={resolvedUrl}
-        target="_blank"
-        rel="noreferrer"
-        className="text-xs font-semibold"
-        style={{ color: theme.colors.accent.primary }}
+      {/* Header - Clickable to expand */}
+      <button
+        onClick={() => setIsExpanded(v => !v)}
+        className="w-full flex items-center justify-between p-4 transition-colors hover:bg-white/5"
       >
-        View SKILL.md
-      </a>
+        <div className="flex items-center gap-3">
+          <span className="text-lg">⚡</span>
+          <div className="text-left">
+            <div className="text-sm font-semibold" style={{ color: theme.colors.text.primary }}>
+              Active Skill: {skill.name}
+            </div>
+            <div className="text-xs" style={{ color: theme.colors.text.muted }}>
+              ID: {skill.id}
+            </div>
+          </div>
+        </div>
+        <span style={{ color: theme.colors.text.muted }} className="text-xs">
+          {isExpanded ? '▲' : '▼'}
+        </span>
+      </button>
+
+      {/* Expanded Content */}
+      {isExpanded && (
+        <div style={{ borderTop: `1px solid ${theme.colors.border.subtle}` }}>
+          {/* Tabs */}
+          <div className="flex gap-1 px-4 py-2" style={{ backgroundColor: theme.colors.bg.tertiary }}>
+            <button
+              onClick={() => setActiveTab('content')}
+              className="px-3 py-1.5 rounded-md text-xs font-medium transition-all"
+              style={{
+                backgroundColor: activeTab === 'content' ? theme.colors.accent.muted : 'transparent',
+                color: activeTab === 'content' ? theme.colors.accent.primary : theme.colors.text.secondary,
+              }}
+            >
+              📄 Skill Details
+            </button>
+            <button
+              onClick={() => setActiveTab('what')}
+              className="px-3 py-1.5 rounded-md text-xs font-medium transition-all"
+              style={{
+                backgroundColor: activeTab === 'what' ? theme.colors.accent.muted : 'transparent',
+                color: activeTab === 'what' ? theme.colors.accent.primary : theme.colors.text.secondary,
+              }}
+            >
+              ❓ What is a Skill?
+            </button>
+          </div>
+
+          {/* Tab Content */}
+          <div className="p-4 max-h-[300px] overflow-y-auto">
+            {activeTab === 'content' ? (
+              isLoading ? (
+                <div className="flex items-center justify-center py-8">
+                  <span className="text-xs" style={{ color: theme.colors.text.muted }}>Loading skill content...</span>
+                </div>
+              ) : (
+                <div className="prose prose-sm max-w-none prose-invert prose-headings:text-slate-100 prose-p:text-slate-300 prose-p:text-xs prose-li:text-xs">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{skillContent || ''}</ReactMarkdown>
+                </div>
+              )
+            ) : (
+              <div className="space-y-3">
+                <div className="p-3 rounded-lg" style={{ backgroundColor: theme.colors.bg.tertiary }}>
+                  <h3 className="text-sm font-semibold mb-1.5 flex items-center gap-2" style={{ color: theme.colors.text.primary }}>
+                    <span style={{ color: theme.colors.accent.primary }}>📄</span>
+                    What is a SKILL.md file?
+                  </h3>
+                  <p className="text-xs leading-relaxed" style={{ color: theme.colors.text.secondary }}>
+                    A <strong style={{ color: theme.colors.text.primary }}>SKILL.md</strong> file is a structured markdown document that defines how the AI agent should handle specific types of requests. It acts as a "playbook" that guides the agent's behavior, including which tools to use, how to format responses, and what data to fetch.
+                  </p>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  {[
+                    { icon: '🎯', title: 'Intent & Triggers', desc: 'Keywords that activate this skill' },
+                    { icon: '🛡️', title: 'Guardrails', desc: 'Safety rules and constraints' },
+                    { icon: '📊', title: 'Chart Guidance', desc: 'Visualization specifications' },
+                    { icon: '📰', title: 'News Hooks', desc: 'When to fetch market context' },
+                  ].map((item, idx) => (
+                    <div key={idx} className="p-2 rounded-lg" style={{ backgroundColor: theme.colors.bg.tertiary }}>
+                      <div className="text-base mb-0.5">{item.icon}</div>
+                      <h4 className="text-xs font-medium" style={{ color: theme.colors.text.primary }}>{item.title}</h4>
+                      <p className="text-[10px]" style={{ color: theme.colors.text.muted }}>{item.desc}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 };
@@ -418,11 +538,12 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
                   </span>
                 </div>
                 <div className="p-3">
-                  <ReactECharts
+                  <LazyECharts
                     option={chartOptions as Record<string, unknown>}
                     style={{ height: '340px', width: '100%' }}
                     theme="light"
                     opts={{ renderer: 'canvas' }}
+                    fallbackHeight={340}
                   />
                 </div>
               </motion.div>

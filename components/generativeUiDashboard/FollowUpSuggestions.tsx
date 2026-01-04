@@ -60,7 +60,7 @@ const theme = {
 };
 
 const ICONS = {
-    header: 'NEXT',
+    header: '>>',
     action: '>',
 };
 

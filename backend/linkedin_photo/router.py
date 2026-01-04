@@ -6,7 +6,7 @@ try:
     from rate_limiter import smart_rate_limit, RateLimitScope, who_am_i, redis_pool
 except ImportError:  # pragma: no cover - support module execution
     from ..rate_limiter import smart_rate_limit, RateLimitScope, who_am_i, redis_pool  # type: ignore
-from .schemas import LinkedInPhotoResponse
+from .schemas import LinkedInPhotoResponse, PhotoAnalysisResponse
 from .service import LinkedInPhotoService
 from .fixed_prompts import load_fixed_prompts
 
@@ -19,7 +19,7 @@ from .fixed_prompts import load_fixed_prompts
 # Helper: _get_credit_usage/_consume_credit_if_available — Redis/in-memory tracking of lifetime 2-credit allowance.
 # Purpose: API surface for LinkedIn photo generation with auth gating, quota enforcement, and preset hydration.
 
-router = APIRouter(prefix="/api/linkedin-photo", tags=["linkedin-photo"])
+router = APIRouter(prefix="/api/headshot-studio", tags=["headshot-studio"])
 service = LinkedInPhotoService()
 LINKEDIN_PROMPT_WEIGHT = 10
 LINKEDIN_CREDIT_LIMIT = 2
@@ -29,7 +29,7 @@ _in_memory_credits: Dict[str, int] = {}
 
 
 def _credit_key(user_id: str) -> str:
-    return f"linkedin-photo:credits:{user_id}"
+    return f"headshot-studio:credits:{user_id}"
 
 
 async def _require_authenticated_user(request: Request) -> str:
@@ -106,6 +106,25 @@ async def list_linkedin_prompts() -> Dict[str, str]:
 async def get_linkedin_credits(request: Request) -> Dict[str, int]:
     user_id = await _require_authenticated_user(request)
     return await _get_credit_response(user_id)
+
+
+@router.post(
+    "/analyze",
+    response_model=PhotoAnalysisResponse,
+    summary="Analyze a portrait for LinkedIn-readiness",
+)
+async def analyze_photo(
+    request: Request,
+    photo: UploadFile = File(..., description="Portrait image to analyze (JPEG or PNG)"),
+) -> PhotoAnalysisResponse:
+    """
+    Analyze an uploaded portrait and return quality scores for LinkedIn-readiness.
+
+    This powers the AI Quality Scorecard feature, providing scores for lighting,
+    angle, background, expression, and overall professional readiness.
+    """
+    await smart_rate_limit(request, scope=RateLimitScope.GLOBAL, weight=2)
+    return await service.analyze_photo(photo)
 
 
 @router.post(

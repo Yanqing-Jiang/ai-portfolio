@@ -315,11 +315,20 @@ export interface ErrorMessage {
     };
 }
 
+export interface AuditMessage {
+    audit: {
+        event: 'skill_selected' | 'stream_started' | 'data_received' | 'layout_updated' | 'tool_execution' | 'stream_complete' | 'error';
+        details?: string;
+        timestamp: string;
+    };
+}
+
 export type A2UIServerMessage =
     | BeginRenderingMessage
     | SurfaceUpdateMessage
     | DataModelUpdateMessage
-    | DeleteSurfaceMessage;
+    | DeleteSurfaceMessage
+    | AuditMessage;
 
 export type A2UIClientMessage =
     | UserActionMessage

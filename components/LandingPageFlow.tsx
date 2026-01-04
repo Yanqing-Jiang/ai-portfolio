@@ -4,7 +4,7 @@ import gsap from 'gsap';
 import { ScrollTrigger } from 'gsap/ScrollTrigger';
 import { useGSAP } from '@gsap/react';
 import type { Project, ProjectYear } from '../types';
-import { motion } from 'framer-motion';
+import { motion, useMotionValue, useSpring, useTransform } from 'framer-motion';
 // @ts-ignore
 import { Helmet } from 'react-helmet-async';
 import Lenis from 'lenis';
@@ -22,46 +22,7 @@ import { buildLandingSchemas, toNavigationFromProjects } from '../constants/stru
 // Register GSAP plugins
 gsap.registerPlugin(ScrollTrigger);
 
-// Tech badge styling
-type TechCategory = 'ai' | 'data' | 'frontend' | 'infra' | 'ml' | 'default';
 
-const TECH_CATEGORY_CLASSES: Record<TechCategory, string> = {
-    ai: 'border bg-emerald-600/20 text-emerald-300 border-emerald-500/30 hover:bg-emerald-600/30',
-    data: 'border bg-emerald-500/20 text-emerald-200 border-emerald-500/30 hover:bg-emerald-500/30',
-    frontend: 'border bg-purple-500/20 text-purple-200 border-purple-500/30 hover:bg-purple-500/30',
-    infra: 'border bg-orange-500/20 text-orange-200 border-orange-500/30 hover:bg-orange-500/30',
-    ml: 'border bg-pink-500/20 text-pink-200 border-pink-500/30 hover:bg-pink-500/30',
-    default: 'border bg-sky-500/15 text-sky-200 border-sky-500/30 hover:bg-sky-500/25',
-};
-
-const TECH_EXACT_CATEGORIES: Record<string, TechCategory> = {
-    'single agent workflow': 'ai',
-    'multi-agent workflow': 'ai',
-    'human-in-the-loop': 'frontend',
-    'rag': 'ml',
-    'langgraph': 'ai',
-    'agent orchestration': 'ai',
-    'agentic workflow': 'ai',
-    'vector search': 'data',
-    'faiss': 'data',
-    'function calling': 'ai',
-    'supabase': 'data',
-    'postgresql': 'data',
-    'fastapi': 'data',
-    'react': 'frontend',
-    'typescript': 'frontend',
-    'power bi': 'data',
-    'azure': 'infra',
-    'docker': 'infra',
-};
-
-const TECH_CATEGORY_KEYWORDS: Array<{ category: TechCategory; keywords: string[] }> = [
-    { category: 'ai', keywords: ['agent', 'workflow', 'rag', 'memory', 'orchestration', 'automation', 'copilot'] },
-    { category: 'data', keywords: ['sql', 'database', 'supabase', 'postgres', 'fastapi', 'data', 'bi', 'analytics'] },
-    { category: 'frontend', keywords: ['react', 'typescript', 'tailwind', 'echarts', 'ui', 'frontend', 'javascript'] },
-    { category: 'infra', keywords: ['azure', 'docker', 'api', 'cloud', 'platform'] },
-    { category: 'ml', keywords: ['model', 'forecast', 'ml', 'machine learning', 'science'] },
-];
 
 // Year-specific visual themes for Project Evolution section
 // Year-specific visual themes for Project Evolution section
@@ -97,6 +58,16 @@ const YEAR_THEMES: Record<number | string, YearTheme> = {
         cardBorderHover: 'hover:border-cyan-500/50',
         cardShadowHover: 'hover:shadow-cyan-500/20',
     },
+    'hero': {
+        gradient: 'from-sky-400 to-purple-600',
+        bgGradient: 'radial-gradient(circle at 50% 50%, rgba(14, 165, 233, 0.15), rgba(147, 51, 234, 0.05) 50%, transparent 100%)',
+        accent: '#38bdf8',
+        headingGradient: 'from-sky-300 via-sky-400 to-purple-500',
+        nodeGradient: 'from-sky-400 to-purple-600',
+        glowColor: 'rgba(56, 189, 248, 0.4)',
+        cardBorderHover: 'hover:border-sky-500/50',
+        cardShadowHover: 'hover:shadow-sky-500/20',
+    },
     2024: {
         gradient: 'from-emerald-400 to-teal-600',
         bgGradient: 'radial-gradient(circle at 50% 50%, rgba(52, 211, 153, 0.15), rgba(13, 148, 136, 0.05) 50%, transparent 100%)',
@@ -124,18 +95,7 @@ const getYearTheme = (year: number | string): YearTheme => {
 };
 
 
-const getTechBadgeClass = (tech: string) => {
-    const normalized = tech.trim().toLowerCase();
-    if (TECH_EXACT_CATEGORIES[normalized]) {
-        return TECH_CATEGORY_CLASSES[TECH_EXACT_CATEGORIES[normalized]];
-    }
-    for (const { category, keywords } of TECH_CATEGORY_KEYWORDS) {
-        if (keywords.some(keyword => normalized.includes(keyword))) {
-            return TECH_CATEGORY_CLASSES[category];
-        }
-    }
-    return TECH_CATEGORY_CLASSES.default;
-};
+
 
 interface LandingPageFlowProps {
     projectData: ProjectYear[];
@@ -152,6 +112,26 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
 
     const [pageMouse, setPageMouse] = useState<{ x: number; y: number } | null>(null);
     const lenisRef = useRef<Lenis | null>(null);
+
+    // Tilt Effect Logic for Hero Dashboard
+    const heroMouseX = useMotionValue(0);
+    const heroMouseY = useMotionValue(0);
+    const mouseSpringConfig = { stiffness: 150, damping: 20 };
+    const heroRotateX = useSpring(useTransform(heroMouseY, [-0.5, 0.5], [10, -10]), mouseSpringConfig);
+    const heroRotateY = useSpring(useTransform(heroMouseX, [-0.5, 0.5], [-10, 10]), mouseSpringConfig);
+
+    const handleHeroMouseMove = (e: React.MouseEvent) => {
+        const rect = e.currentTarget.getBoundingClientRect();
+        const centerX = rect.left + rect.width / 2;
+        const centerY = rect.top + rect.height / 2;
+        heroMouseX.set((e.clientX - centerX) / (rect.width / 2));
+        heroMouseY.set((e.clientY - centerY) / (rect.height / 2));
+    };
+
+    const handleHeroMouseLeave = () => {
+        heroMouseX.set(0);
+        heroMouseY.set(0);
+    };
 
     // Separate AI projects from Pre-AI projects
     const displayYears = useMemo(
@@ -278,9 +258,12 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                             scrub: 1,
                             invalidateOnRefresh: true,
                             onToggle: (self) => {
-                                // Performance: Hide hero background canvas when timeline is active
-                                gsap.set("#neural-field-canvas", {
-                                    display: self.isActive ? "none" : "block"
+                                // Performance: Lower neural field visibility instead of hiding it
+                                gsap.to("#neural-field-canvas", {
+                                    opacity: self.isActive ? 0.3 : 1,
+                                    scale: self.isActive ? 0.9 : 1,
+                                    duration: 1,
+                                    overwrite: true
                                 });
                             }
                         },
@@ -303,12 +286,13 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                     });
 
                     // 2. Atmosphere Shift (Background Gradients)
-                    displayYears.forEach((yearData) => {
+                    const yearsWithHero = [{ year: 'hero' }, ...displayYears];
+                    yearsWithHero.forEach((yearData) => {
                         const yearSection = document.getElementById(`year-section-${yearData.year}`);
                         const bgLayer = document.getElementById(`bg-layer-${yearData.year}`);
                         if (yearSection && bgLayer) {
                             gsap.to(bgLayer, {
-                                opacity: 1,
+                                opacity: yearData.year === 'hero' ? 0 : 1, // Hero fades out, others fade in
                                 duration: 1,
                                 scrollTrigger: {
                                     trigger: yearSection,
@@ -422,6 +406,67 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                 });
             }
 
+            // 4. Projects: 3D Tilt & Inner Glow
+            const cards = gsap.utils.toArray<HTMLElement>('.stream-card');
+            cards.forEach(card => {
+                const inner = card.querySelector('div') as HTMLElement;
+
+                card.addEventListener('mousemove', (e) => {
+                    const rect = card.getBoundingClientRect();
+                    const x = e.clientX - rect.left;
+                    const y = e.clientY - rect.top;
+
+                    // Update Inner Glow
+                    const xPct = (x / rect.width) * 100;
+                    const yPct = (y / rect.height) * 100;
+                    inner.style.setProperty('--mouse-x', `${xPct}%`);
+                    inner.style.setProperty('--mouse-y', `${yPct}%`);
+
+                    // GSAP Tilt
+                    const centerX = rect.width / 2;
+                    const centerY = rect.height / 2;
+                    const rotateX = ((y - centerY) / centerY) * -10;
+                    const rotateY = ((x - centerX) / centerX) * 10;
+
+                    gsap.to(inner, {
+                        rotateX: rotateX,
+                        rotateY: rotateY,
+                        duration: 0.1, // Snappy response
+                        ease: 'power1.out',
+                        overwrite: true
+                    });
+                });
+
+                card.addEventListener('mouseleave', () => {
+                    gsap.to(inner, {
+                        rotateX: 0,
+                        rotateY: 0,
+                        duration: 1,
+                        ease: 'elastic.out(1, 0.3)',
+                        overwrite: true
+                    });
+                });
+            });
+
+            // 5. Chromatic Aberration based on Scroll Velocity
+            const mainScroller = document.querySelector('main');
+            if (mainScroller) {
+                let lastScroll = 0;
+                const updateAberration = () => {
+                    const currentScroll = lenisRef.current?.scroll || 0;
+                    const velocity = Math.abs(currentScroll - lastScroll);
+                    const shift = Math.min(velocity * 0.1, 5); // Max 5px shift
+
+                    gsap.set('.stream-card img', {
+                        filter: velocity > 5 ? `drop-shadow(${shift}px 0 rgba(255,0,0,0.3)) drop-shadow(-${shift}px 0 rgba(0,255,255,0.3))` : 'none'
+                    });
+
+                    lastScroll = currentScroll;
+                    requestAnimationFrame(updateAberration);
+                };
+                requestAnimationFrame(updateAberration);
+            }
+
         }, containerRef);
 
         // CRITICAL: Refresh ScrollTrigger after a short delay to ensure DOM is fully rendered
@@ -469,6 +514,10 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                 onMouseMove={(e) => setPageMouse({ x: e.clientX, y: e.clientY })}
                 className="relative min-h-screen bg-slate-950 text-gray-300"
             >
+                {/* Global Neural Field (Background) */}
+                <div className="fixed inset-0 z-0 pointer-events-none">
+                    <AdvancedNeuralField />
+                </div>
                 {/* Mouse follower glow with parallax */}
                 <div
                     aria-hidden
@@ -482,11 +531,9 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
 
                 <div className="relative z-20">
                     {/* Hero Section with 3D Holographic Dashboard */}
-                    <section ref={heroRef} className="relative min-h-screen flex flex-col items-center justify-center overflow-hidden py-12 px-4 sm:px-6 lg:px-8 border-b border-white/5 bg-slate-950">
+                    <section ref={heroRef} className="relative min-h-screen flex flex-col items-center justify-center overflow-hidden py-12 px-4 sm:px-6 lg:px-8 border-b border-white/5">
                         {/* Noise Texture (Consistent with Sidebar & Rest of Page) */}
                         <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-20 pointer-events-none" />
-
-                        <AdvancedNeuralField />
 
                         {/* Ambient Nebula Glows */}
                         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full h-full pointer-events-none">
@@ -515,6 +562,9 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                             {/* VISUAL SECTION: WIDE 3D DASHBOARD */}
                             <div className="terminal-entrance relative flex items-center justify-center perspective-2000">
                                 <motion.div
+                                    onMouseMove={handleHeroMouseMove}
+                                    onMouseLeave={handleHeroMouseLeave}
+                                    style={{ rotateX: heroRotateX, rotateY: heroRotateY }}
                                     className="relative z-20 w-full max-w-[750px] aspect-[1.6/1]"
                                 >
                                     <div className="absolute inset-0 bg-sky-500/10 blur-[150px] rounded-full opacity-30 pointer-events-none" />
@@ -525,7 +575,7 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                     </section>
 
                     {/* HORIZONTAL SCROLL "NEURAL STREAM" SECTION - DESKTOP ONLY */}
-                    <div ref={horizontalSectionRef} className="hidden md:block relative h-screen w-screen bg-slate-950 z-30 overflow-hidden">
+                    <div ref={horizontalSectionRef} className="hidden md:block relative h-screen w-screen z-30 overflow-hidden">
                         {/* GLOBAL ATMOSPHERE LAYERS (Fixed behind track) */}
                         <div className="absolute inset-0 w-full h-full pointer-events-none z-0">
                             {displayYears.map(y => (
@@ -539,6 +589,14 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                                     }}
                                 />
                             ))}
+                            <div
+                                id="bg-layer-hero"
+                                className="absolute inset-0 w-full h-full opacity-1 will-change-[opacity]"
+                                style={{
+                                    background: getYearTheme('hero').bgGradient,
+                                    filter: 'blur(60px)'
+                                }}
+                            />
                             {/* NOISE OVERLAY */}
                             <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-20" />
                         </div>
@@ -547,14 +605,14 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                             {/* The Track - full width without constraints */}
                             <div ref={trackRef} className="flex h-full items-center gap-0 w-max relative pl-20 will-change-transform shrink-0">
                                 {/* THE LIVING TIMELINE LINE */}
-                                <div className="absolute top-1/2 left-0 right-0 h-px bg-slate-800 w-full pointer-events-none">
-                                    <div className="timeline-pulse absolute top-1/2 left-0 -translate-y-1/2 w-32 h-1 bg-gradient-to-r from-transparent via-white to-transparent blur-[2px]" />
+                                <div className="absolute top-1/2 left-0 right-0 h-px bg-slate-800/50 w-full pointer-events-none">
+                                    <div className="timeline-pulse absolute top-1/2 left-0 -translate-y-1/2 w-32 h-1 bg-gradient-to-r from-transparent via-sky-400 to-transparent blur-[2px]" />
                                 </div>
 
                                 {/* Introduction / Start Node */}
-                                <div className="w-[30vw] shrink-0 px-10">
-                                    <h2 className="text-6xl font-black mb-4">The Work</h2>
-                                    <p className="text-slate-400">A journey through generative UI, agents, and data.</p>
+                                <div id="year-section-hero" className="w-[40vw] shrink-0 px-20">
+                                    <h2 className="text-8xl font-black mb-6 tracking-tighter text-white/90">The <span className="text-sky-500">Work</span></h2>
+                                    <p className="text-slate-400 text-xl font-mono">Exploring the evolution of Generative UI & Neural Analytics.</p>
                                 </div>
 
                                 {/* Years Loop */}
@@ -587,9 +645,18 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                                             {yearGroup.projects.map((project) => (
                                                 <div
                                                     key={project.id}
-                                                    className="stream-card relative w-[600px] h-[450px] shrink-0 group perspective-1000"
+                                                    className="stream-card relative w-[600px] h-[450px] shrink-0 group perspective-1000 transform-style-3d"
                                                 >
-                                                    <div className="relative w-full h-full bg-slate-900/40 backdrop-blur-md border border-white/10 rounded-3xl overflow-hidden hover:border-white/30 transition-all duration-500 hover:shadow-2xl hover:shadow-cyan-500/10 group-hover:-translate-y-2">
+                                                    <div className="relative w-full h-full bg-slate-900/10 backdrop-blur-2xl border border-white/5 rounded-3xl overflow-hidden hover:border-white/20 transition-shadow duration-700 hover:shadow-[0_0_50px_rgba(56,189,248,0.15)] group-hover:-translate-y-4 will-change-transform">
+                                                        {/* GLOW FOLLOWER (Inner Card) */}
+                                                        <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-700 pointer-events-none z-10"
+                                                            style={{
+                                                                background: `radial-gradient(circle at var(--mouse-x) var(--mouse-y), rgba(255,255,255,0.12), transparent 40%)`,
+                                                                // @ts-ignore
+                                                                '--mouse-x': '50%',
+                                                                '--mouse-y': '50%'
+                                                            }}
+                                                        />
                                                         {/* PARALLAX IMAGE CONTAINER */}
                                                         <div className="absolute inset-0 overflow-hidden pointer-events-none">
                                                             <div className="absolute inset-0 grayscale group-hover:grayscale-0 opacity-60 group-hover:opacity-80 transition-opacity duration-700">
@@ -728,7 +795,7 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
 
                     {/* Pre-AI Projects Section - Distinct "Nostalgic" Style */}
                     {preAiProjects.length > 0 && (
-                        <section ref={preAiSectionRef} className="relative bg-gradient-to-b from-slate-950 via-amber-950/10 to-slate-950 border-t border-amber-900/30">
+                        <section ref={preAiSectionRef} className="relative bg-gradient-to-b from-transparent via-amber-950/10 to-transparent border-t border-amber-900/30">
                             {/* Vintage overlay texture */}
                             <div className="absolute inset-0 opacity-5 pointer-events-none"
                                 style={{ backgroundImage: 'url("data:image/svg+xml,%3Csvg viewBox=\'0 0 200 200\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cfilter id=\'noise\'%3E%3CfeTurbulence type=\'fractalNoise\' baseFrequency=\'0.65\' numOctaves=\'3\' stitchTiles=\'stitch\'/%3E%3C/filter%3E%3Crect width=\'100%25\' height=\'100%25\' filter=\'url(%23noise)\'/%3E%3C/svg%3E")' }}
@@ -825,6 +892,9 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
 
                 {/* Gradient animation styles */}
                 <style>{`
+                    .perspective-2000 { perspective: 2000px; }
+                    .transform-style-3d { transform-style: preserve-3d; }
+                    .will-change-transform { will-change: transform; }
                     @keyframes gradient-x {
                         0%, 100% { background-position: 0% 50%; }
                         50% { background-position: 100% 50%; }

@@ -16,17 +16,9 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 
-interface ClarificationOption {
-    label: string;
-    value: string;
-    description?: string;
-}
-
-interface ClarificationRequest {
-    /** Unique ID for this clarification request */
-    id: string;
+interface ClarificationField {
     /** Field ID used for backend submission */
-    fieldId?: string;
+    id: string;
     /** Type of clarification */
     type: 'single_choice' | 'multi_choice' | 'freeform';
     /** Question or prompt to show the user */
@@ -37,6 +29,17 @@ interface ClarificationRequest {
     maxSelections?: number;
     /** Optional placeholder for freeform input */
     placeholder?: string;
+}
+
+interface ClarificationRequest {
+    /** Unique ID for this clarification request */
+    id: string;
+    /** Title of the clarification card */
+    title?: string;
+    /** Subtitle or description */
+    subtitle?: string;
+    /** Fields in this clarification request */
+    fields: ClarificationField[];
     /** Optional component ID this clarification targets (for individual widget overlay) */
     targetComponentId?: string;
 }
@@ -44,8 +47,8 @@ interface ClarificationRequest {
 interface ClarificationOverlayProps {
     /** The clarification request to display */
     request: ClarificationRequest | null;
-    /** Callback when user submits their response */
-    onSubmit: (requestId: string, response: string | string[]) => void;
+    /** Callback when user submits their responses (fieldId -> response) */
+    onSubmit: (requestId: string, responses: Record<string, string | string[]>, skipped: boolean) => void;
     /** Callback when user dismisses without answering */
     onDismiss: (requestId: string) => void;
     /** Whether this is targeting the whole dashboard or a specific component */
@@ -58,6 +61,7 @@ const theme = {
             overlay: 'rgba(10, 15, 26, 0.85)',
             card: '#1e293b',
             cardBorder: 'rgba(148, 163, 184, 0.2)',
+            input: 'rgba(30, 41, 59, 0.8)',
         },
         accent: {
             primary: '#f43f5e',
@@ -85,10 +89,16 @@ export function ClarificationOverlay({
     onDismiss,
     fullScreen = true,
 }: ClarificationOverlayProps): React.ReactElement | null {
-    const [selectedValues, setSelectedValues] = useState<string[]>([]);
-    const [freeformValue, setFreeformValue] = useState('');
+    const [responses, setResponses] = useState<Record<string, string | string[]>>({});
     const overlayRef = useRef<HTMLDivElement>(null);
     const [anchorStyle, setAnchorStyle] = useState<React.CSSProperties | null>(null);
+
+    // Reset responses when request changes
+    useEffect(() => {
+        if (request) {
+            setResponses({});
+        }
+    }, [request?.id]);
 
     useEffect(() => {
         if (!request?.targetComponentId) {
@@ -124,50 +134,53 @@ export function ClarificationOverlay({
 
     const isAnchored = Boolean(request?.targetComponentId && anchorStyle);
 
-    const handleOptionClick = useCallback((value: string) => {
-        if (!request) return;
-
-        if (request.type === 'single_choice') {
-            setSelectedValues([value]);
-        } else if (request.type === 'multi_choice') {
-            setSelectedValues((prev) => {
-                if (prev.includes(value)) {
-                    return prev.filter((v) => v !== value);
+    const handleOptionClick = useCallback((fieldId: string, value: string, type: 'single_choice' | 'multi_choice', maxSelections?: number) => {
+        setResponses((prev) => {
+            const current = prev[fieldId] || (type === 'multi_choice' ? [] : '');
+            
+            if (type === 'single_choice') {
+                return { ...prev, [fieldId]: value };
+            } else {
+                const currentArr = Array.isArray(current) ? current : [];
+                if (currentArr.includes(value)) {
+                    return { ...prev, [fieldId]: currentArr.filter((v) => v !== value) };
                 }
-                if (request.maxSelections && prev.length >= request.maxSelections) {
+                if (maxSelections && currentArr.length >= maxSelections) {
                     return prev;
                 }
-                return [...prev, value];
-            });
-        }
-    }, [request]);
+                return { ...prev, [fieldId]: [...currentArr, value] };
+            }
+        });
+    }, []);
+
+    const handleFreeformChange = useCallback((fieldId: string, value: string) => {
+        setResponses((prev) => ({ ...prev, [fieldId]: value }));
+    }, []);
 
     const handleSubmit = useCallback(() => {
         if (!request) return;
+        onSubmit(request.id, responses, false);
+    }, [request, responses, onSubmit]);
 
-        if (request.type === 'freeform') {
-            onSubmit(request.id, freeformValue);
-        } else if (request.type === 'single_choice') {
-            onSubmit(request.id, selectedValues[0] || '');
-        } else {
-            onSubmit(request.id, selectedValues);
-        }
-
-        // Reset state
-        setSelectedValues([]);
-        setFreeformValue('');
-    }, [request, selectedValues, freeformValue, onSubmit]);
+    const handleSkip = useCallback(() => {
+        if (!request) return;
+        onSubmit(request.id, {}, true);
+    }, [request, onSubmit]);
 
     const handleDismiss = useCallback(() => {
         if (!request) return;
         onDismiss(request.id);
-        setSelectedValues([]);
-        setFreeformValue('');
     }, [request, onDismiss]);
 
-    const canSubmit = request?.type === 'freeform'
-        ? freeformValue.trim().length > 0
-        : selectedValues.length > 0;
+    const isFieldValid = (field: ClarificationField) => {
+        const response = responses[field.id];
+        if (field.type === 'freeform') {
+            return typeof response === 'string' && response.trim().length > 0;
+        }
+        return Array.isArray(response) ? response.length > 0 : (typeof response === 'string' && response.length > 0);
+    };
+
+    const canSubmit = request?.fields.every(f => isFieldValid(f));
 
     return (
         <AnimatePresence>
@@ -215,7 +228,7 @@ export function ClarificationOverlay({
                                     className="text-lg font-semibold"
                                     style={{ color: theme.colors.text.primary }}
                                 >
-                                    Quick Question
+                                    {request.title || 'Quick Question'}
                                 </h3>
                             </div>
                             <button
@@ -227,69 +240,89 @@ export function ClarificationOverlay({
                             </button>
                         </div>
 
-                        {/* Prompt */}
-                        <p
-                            className="mb-4"
-                            style={{ color: theme.colors.text.secondary, lineHeight: 1.6 }}
-                        >
-                            {request.prompt}
-                        </p>
+                        {/* Subtitle */}
+                        {request.subtitle && (
+                            <p
+                                className="mb-4 text-sm"
+                                style={{ color: theme.colors.text.secondary, lineHeight: 1.6 }}
+                            >
+                                {request.subtitle}
+                            </p>
+                        )}
 
-                        {/* Options (for single/multi choice) */}
-                        {(request.type === 'single_choice' || request.type === 'multi_choice') && request.options && (
-                            <div className="flex flex-wrap gap-2 mb-4">
-                                {request.options.map((opt) => {
-                                    const isSelected = selectedValues.includes(opt.value);
-                                    return (
-                                        <motion.button
-                                            key={opt.value}
-                                            onClick={() => handleOptionClick(opt.value)}
-                                            whileHover={{ scale: 1.02 }}
-                                            whileTap={{ scale: 0.98 }}
+                        {/* Fields */}
+                        <div className="space-y-6 mb-6">
+                            {request.fields.map((field) => (
+                                <div key={field.id} className="clarification-field">
+                                    <label
+                                        className="block text-sm font-medium mb-2"
+                                        style={{ color: theme.colors.text.secondary }}
+                                    >
+                                        {field.prompt}
+                                    </label>
+
+                                    {/* Options (for single/multi choice) */}
+                                    {(field.type === 'single_choice' || field.type === 'multi_choice') && field.options && (
+                                        <div className="flex flex-wrap gap-2">
+                                            {field.options.map((opt) => {
+                                                const currentResponse = responses[field.id];
+                                                const isSelected = Array.isArray(currentResponse)
+                                                    ? currentResponse.includes(opt.value)
+                                                    : currentResponse === opt.value;
+                                                return (
+                                                    <motion.button
+                                                        key={opt.value}
+                                                        onClick={() => handleOptionClick(field.id, opt.value, field.type as any, field.maxSelections)}
+                                                        whileHover={{ scale: 1.02 }}
+                                                        whileTap={{ scale: 0.98 }}
+                                                        style={{
+                                                            padding: '0.5rem 1rem',
+                                                            borderRadius: '999px',
+                                                            border: isSelected
+                                                                ? `2px solid ${theme.colors.accent.primary}`
+                                                                : `1px solid ${theme.colors.bg.cardBorder}`,
+                                                            background: isSelected
+                                                                ? theme.colors.accent.muted
+                                                                : 'transparent',
+                                                            color: isSelected
+                                                                ? theme.colors.accent.primary
+                                                                : theme.colors.text.primary,
+                                                            cursor: 'pointer',
+                                                            fontSize: '0.85rem',
+                                                            transition: 'all 0.2s',
+                                                        }}
+                                                    >
+                                                        {opt.label}
+                                                    </motion.button>
+                                                );
+                                            })}
+                                        </div>
+                                    )}
+
+                                    {/* Freeform input */}
+                                    {field.type === 'freeform' && (
+                                        <textarea
+                                            value={(responses[field.id] as string) || ''}
+                                            onChange={(e) => handleFreeformChange(field.id, e.target.value)}
+                                            placeholder={field.placeholder || 'Type your response...'}
+                                            rows={2}
+                                            className="w-full p-3 rounded-lg resize-none outline-none text-sm"
                                             style={{
-                                                padding: '0.5rem 1rem',
-                                                borderRadius: '999px',
-                                                border: isSelected
-                                                    ? `2px solid ${theme.colors.accent.primary}`
-                                                    : `1px solid ${theme.colors.bg.cardBorder}`,
-                                                background: isSelected
-                                                    ? theme.colors.accent.muted
-                                                    : 'transparent',
-                                                color: isSelected
-                                                    ? theme.colors.accent.primary
-                                                    : theme.colors.text.primary,
-                                                cursor: 'pointer',
-                                                transition: 'all 0.2s',
+                                                backgroundColor: theme.colors.bg.input,
+                                                border: `1px solid ${theme.colors.bg.cardBorder}`,
+                                                color: theme.colors.text.primary,
                                             }}
-                                        >
-                                            {opt.label}
-                                        </motion.button>
-                                    );
-                                })}
-                            </div>
-                        )}
-
-                        {/* Freeform input */}
-                        {request.type === 'freeform' && (
-                            <textarea
-                                value={freeformValue}
-                                onChange={(e) => setFreeformValue(e.target.value)}
-                                placeholder={request.placeholder || 'Type your response...'}
-                                rows={3}
-                                className="w-full mb-4 p-3 rounded-lg resize-none outline-none"
-                                style={{
-                                    backgroundColor: 'rgba(30, 41, 59, 0.8)',
-                                    border: `1px solid ${theme.colors.bg.cardBorder}`,
-                                    color: theme.colors.text.primary,
-                                }}
-                            />
-                        )}
+                                        />
+                                    )}
+                                </div>
+                            ))}
+                        </div>
 
                         {/* Actions */}
-                        <div className="flex justify-end gap-3">
+                        <div className="flex justify-end gap-3 pt-2">
                             <button
-                                onClick={handleDismiss}
-                                className="px-4 py-2 rounded-lg transition-colors"
+                                onClick={handleSkip}
+                                className="px-4 py-2 rounded-lg transition-colors text-sm"
                                 style={{
                                     backgroundColor: 'transparent',
                                     border: `1px solid ${theme.colors.bg.cardBorder}`,
@@ -303,7 +336,7 @@ export function ClarificationOverlay({
                                 disabled={!canSubmit}
                                 whileHover={canSubmit ? { scale: 1.02 } : {}}
                                 whileTap={canSubmit ? { scale: 0.98 } : {}}
-                                className="px-4 py-2 rounded-lg font-medium transition-all"
+                                className="px-6 py-2 rounded-lg font-medium transition-all text-sm"
                                 style={{
                                     background: canSubmit
                                         ? `linear-gradient(135deg, ${theme.colors.accent.primary}, #f59e0b)`
@@ -322,5 +355,5 @@ export function ClarificationOverlay({
     );
 }
 
-export type { ClarificationRequest, ClarificationOption };
+export type { ClarificationRequest, ClarificationOption, ClarificationField };
 export default ClarificationOverlay;

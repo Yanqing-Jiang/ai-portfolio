@@ -39,3 +39,6 @@ __pycache__/
 
 # Claude local settings
 .claude/
+# Temporary runtime files
+*_pid.txt
+temp_view.txt

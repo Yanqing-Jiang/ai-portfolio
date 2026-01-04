@@ -87,6 +87,8 @@ export interface UseA2UIStreamOptions {
     dashboardId?: string;
     /** Base URL for API endpoints */
     apiBaseUrl?: string;
+    /** Callback for audit events */
+    onAudit?: (event: any) => void;
 }
 
 const DEFAULT_OPTIONS: UseA2UIStreamOptions = {
@@ -193,7 +195,7 @@ export function useA2UIStream(
         }
 
         // Create processor
-        processorRef.current = createMessageProcessor(syncState);
+        processorRef.current = createMessageProcessor(syncState, opts.onAudit);
 
         // Reset state
         setState((prev) => ({

@@ -1,14 +1,15 @@
 /**
- * CorrelationMatrix Widget
- *
- * ECharts heatmap for asset correlations.
+ * Function: CorrelationMatrix — renders an ECharts heatmap for asset correlations.
+ * Called from: ComponentRenderer via Registry when the A2UI catalog type `CorrelationMatrix` is present.
+ * Invokes: LazyECharts (shared Suspense loader) to code-split the echarts bundle shared across Conversational Analytics and A2UI widgets.
+ * Purpose: Visualize cross-asset correlations with shared loader + dark styling while keeping the initial dashboard bundle light.
  */
 
 import React from 'react';
-import ReactECharts from 'echarts-for-react';
 import type { A2UIRendererProps } from '../Registry';
 import { resolveArray } from '../../a2ui/DataBinder';
 import type { CorrelationMatrixProps } from '../../a2ui/types';
+import LazyECharts from '../../../shared/LazyECharts';
 
 export function CorrelationMatrix({
     componentId,
@@ -139,10 +140,11 @@ export function CorrelationMatrix({
                 height: '400px',
             }}
         >
-            <ReactECharts
+            <LazyECharts
                 option={option}
                 style={{ height: '100%', width: '100%' }}
                 theme="dark"
+                fallbackHeight="100%"
             />
         </div>
     );

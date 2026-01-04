@@ -60,11 +60,16 @@
 #   Called from: FastAPI GET /api/dash/{dashboard_id}/data
 #   Invokes: backend.generative_ui.models.get_dashboard_store
 #   Why: Supports debugging and data export workflows.
+# Function: download_debug_bundle
+#   Role: Downloadable JSON bundle of trace + plan + latest data.
+#   Called from: FastAPI GET /api/dash/{dashboard_id}/debug/download
+#   Invokes: TraceStore.get_debug_bundle
+#   Why: Shareable debug artifacts without logs access.
 # Function: handle_action
 #   Role: Process incoming A2UI userAction requests.
 #   Called from: FastAPI POST /api/dash/{dashboard_id}/action
-#   Invokes: backend.generative_ui.agent_v2.A2UIAgent.execute_skill
-#   Why: Keeps dashboard interactions aligned with the A2UI agent pipeline.
+#   Invokes: backend.generative_ui.runtime.A2UIRuntime.process_action
+#   Why: Keeps dashboard interactions aligned with the runtime + tracing pipeline.
 # Function: delete_dashboard
 #   Role: Delete a dashboard state entry.
 #   Called from: FastAPI DELETE /api/dash/{dashboard_id}
@@ -101,7 +106,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, Optional
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import StreamingResponse, HTMLResponse
+from fastapi.responses import StreamingResponse, HTMLResponse, Response
 from pydantic import BaseModel
 
 from ..models import get_dashboard_store
@@ -209,7 +214,7 @@ async def stream_dashboard(dashboard_id: str):
     
     async def generate():
         agent = get_a2ui_agent()
-        runtime = A2UIRuntime(agent=agent, layout_planner=LayoutPlanner())
+        runtime = A2UIRuntime(agent=agent, layout_planner=LayoutPlanner(use_model=True))
         async for message in runtime.stream_dashboard(state):
             if message.startswith("event:"):
                 # Already SSE-formatted (clarification_request)
@@ -280,71 +285,13 @@ async def handle_action(dashboard_id: str, request: ActionRequest):
     if not state:
         raise HTTPException(status_code=404, detail="Dashboard not found")
     
-    action = request.userAction
-    action_name = action.get("name")
-    context = action.get("context", {})
-    
-    # Route to action handlers
-    if action_name == "change_timeframe":
-        new_timeframe = context.get("timeframe", "1M")
-        state.update_params({"timeRange": new_timeframe})
-
-        try:
-            state.plan_json["time_range"] = new_timeframe
-            agent = get_a2ui_agent()
-            selection = agent.selection_from_plan(state.plan_json)
-            skill = agent.skill_lookup[selection.skill_id]
-            result = await agent.execute_skill(skill, selection)
-            result.data_model["time_range"] = new_timeframe
-            state.add_run(result.data_model, result.citations)
-            return {
-                "status": "success",
-                "action": action_name,
-                "updated_params": {"timeRange": new_timeframe},
-                "data": result.data_model,
-                "data_path": "/data",
-            }
-        except A2UIAgentError as e:
-            raise HTTPException(status_code=500, detail=str(e))
-    
-    elif action_name == "add_ticker":
-        new_ticker = context.get("ticker")
-        if new_ticker:
-            tickers = list(state.plan_json.get("tickers") or [])
-            if new_ticker not in tickers:
-                tickers.append(new_ticker)
-                state.plan_json["tickers"] = tickers
-                state.update_params({"peers": tickers[1:]})
-        
-        try:
-            agent = get_a2ui_agent()
-            selection = agent.selection_from_plan(state.plan_json)
-            skill = agent.skill_lookup[selection.skill_id]
-            result = await agent.execute_skill(skill, selection)
-            state.add_run(result.data_model, result.citations)
-            return {
-                "status": "success",
-                "action": action_name,
-                "updated_params": {"peers": state.params.get("peers", [])},
-                "data": result.data_model,
-                "data_path": "/data",
-            }
-        except A2UIAgentError as e:
-            raise HTTPException(status_code=500, detail=str(e))
-    
-    elif action_name == "export_csv":
-        # TODO: Generate CSV export
-        return {
-            "status": "success",
-            "action": action_name,
-            "download_url": f"/api/dash/{dashboard_id}/export/csv",
-        }
-    
-    else:
-        return {
-            "status": "unknown_action",
-            "action": action_name,
-        }
+    runtime = A2UIRuntime(agent=get_a2ui_agent(), layout_planner=LayoutPlanner(use_model=True))
+    try:
+        return await runtime.process_action(state, request.userAction)
+    except A2UIAgentError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 @router.delete("/{dashboard_id}")
@@ -365,7 +312,7 @@ class FollowUpSuggestion(BaseModel):
     id: str
     label: str
     query: str
-    icon: str = "✨"
+    icon: str = ">"  # ASCII-safe icon placeholder
 
 
 @router.get("/{dashboard_id}/follow-ups")
@@ -391,34 +338,34 @@ async def get_follow_up_suggestions(dashboard_id: str):
     # Skill-specific suggestions
     if skill_id == "a2ui_explain_move":
         suggestions = [
-            FollowUpSuggestion(id="1", label="Margin analysis", query=f"Show {primary_ticker} margin analysis", icon="📊"),
-            FollowUpSuggestion(id="2", label="Compare peers", query=f"Compare {primary_ticker} to its peers", icon="👥"),
-            FollowUpSuggestion(id="3", label="Revenue trend", query=f"Show {primary_ticker} revenue trend", icon="💰"),
+            FollowUpSuggestion(id="1", label="Margin analysis", query=f"Show {primary_ticker} margin analysis", icon="[kpi]"),
+            FollowUpSuggestion(id="2", label="Compare peers", query=f"Compare {primary_ticker} to its peers", icon="[peers]"),
+            FollowUpSuggestion(id="3", label="Revenue trend", query=f"Show {primary_ticker} revenue trend", icon="[trend]"),
         ]
     elif skill_id == "a2ui_margin_analysis":
         suggestions = [
-            FollowUpSuggestion(id="1", label="Revenue breakdown", query=f"Show {primary_ticker} revenue trend", icon="💰"),
-            FollowUpSuggestion(id="2", label="Compare margins", query=f"Compare {primary_ticker} margins vs AMD", icon="📊"),
-            FollowUpSuggestion(id="3", label="Stock movement", query=f"Explain recent {primary_ticker} stock movement", icon="📈"),
+            FollowUpSuggestion(id="1", label="Revenue breakdown", query=f"Show {primary_ticker} revenue trend", icon="[trend]"),
+            FollowUpSuggestion(id="2", label="Compare margins", query=f"Compare {primary_ticker} margins vs AMD", icon="[peers]"),
+            FollowUpSuggestion(id="3", label="Stock movement", query=f"Explain recent {primary_ticker} stock movement", icon="[price]"),
         ]
     elif skill_id == "a2ui_revenue_trend":
         suggestions = [
-            FollowUpSuggestion(id="1", label="Margin analysis", query=f"Show {primary_ticker} margin analysis", icon="📊"),
-            FollowUpSuggestion(id="2", label="YoY comparison", query=f"Compare {primary_ticker} revenue year over year", icon="🔄"),
-            FollowUpSuggestion(id="3", label="Peer comparison", query=f"Compare {primary_ticker} vs INTC revenue", icon="👥"),
+            FollowUpSuggestion(id="1", label="Margin analysis", query=f"Show {primary_ticker} margin analysis", icon="[kpi]"),
+            FollowUpSuggestion(id="2", label="YoY comparison", query=f"Compare {primary_ticker} revenue year over year", icon="[trend]"),
+            FollowUpSuggestion(id="3", label="Peer comparison", query=f"Compare {primary_ticker} vs INTC revenue", icon="[peers]"),
         ]
     elif skill_id == "a2ui_peer_compare":
         peer_list = ", ".join(tickers[:3]) if len(tickers) > 1 else f"{primary_ticker} and INTC"
         suggestions = [
-            FollowUpSuggestion(id="1", label="Deeper on leader", query=f"Show {primary_ticker} detailed analysis", icon="🔍"),
-            FollowUpSuggestion(id="2", label="Stock comparison", query=f"Compare {peer_list} stock performance", icon="📈"),
-            FollowUpSuggestion(id="3", label="Margin comparison", query=f"Compare {peer_list} margins", icon="📊"),
+            FollowUpSuggestion(id="1", label="Deeper on leader", query=f"Show {primary_ticker} detailed analysis", icon="[deep]"),
+            FollowUpSuggestion(id="2", label="Stock comparison", query=f"Compare {peer_list} stock performance", icon="[price]"),
+            FollowUpSuggestion(id="3", label="Margin comparison", query=f"Compare {peer_list} margins", icon="[kpi]"),
         ]
     else:
         # Default suggestions
         suggestions = [
-            FollowUpSuggestion(id="1", label="Deeper analysis", query=f"Tell me more about {primary_ticker}", icon="🔍"),
-            FollowUpSuggestion(id="2", label="Compare peers", query=f"Compare to industry peers", icon="👥"),
+            FollowUpSuggestion(id="1", label="Deeper analysis", query=f"Tell me more about {primary_ticker}", icon="[analysis]"),
+            FollowUpSuggestion(id="2", label="Compare peers", query=f"Compare to industry peers", icon="[peers]"),
         ]
     
     return {"suggestions": [s.model_dump() for s in suggestions]}
@@ -535,3 +482,85 @@ async def get_showcase():
 
 
 # helper removed in favor of a2ui.error_surface
+
+
+@router.get("/{dashboard_id}/debug")
+async def get_debug_bundle(dashboard_id: str):
+    """
+    Get a complete debug bundle for a dashboard.
+    
+    Returns structured trace data for debugging without reading logs.
+    """
+    from ..traces import get_trace_store
+    
+    store = get_dashboard_store()
+    state = store.get(dashboard_id)
+    
+    if not state:
+        raise HTTPException(status_code=404, detail="Dashboard not found")
+    
+    trace_store = get_trace_store()
+    bundle = trace_store.get_debug_bundle(dashboard_id)
+    
+    # Merge in plan data
+    bundle["plan"] = state.plan_json
+    bundle["params"] = state.params
+    
+    return bundle
+
+
+@router.get("/{dashboard_id}/debug/download")
+async def download_debug_bundle(dashboard_id: str):
+    """
+    Download the debug bundle as a JSON attachment.
+    
+    Includes trace data, plan, params, and latest run snapshot for offline triage.
+    """
+    from ..traces import get_trace_store
+
+    store = get_dashboard_store()
+    state = store.get(dashboard_id)
+
+    if not state:
+        raise HTTPException(status_code=404, detail="Dashboard not found")
+
+    trace_store = get_trace_store()
+    bundle = trace_store.get_debug_bundle(dashboard_id)
+    payload = {
+        "dashboard_id": dashboard_id,
+        "plan": state.plan_json,
+        "params": state.params,
+        "latest_run": state.latest_run.model_dump() if state.latest_run else None,
+        "trace_bundle": bundle,
+    }
+    content = json.dumps(payload, default=str)
+    return Response(
+        content=content,
+        media_type="application/json",
+        headers={
+            "Content-Disposition": f'attachment; filename=\"dashboard-{dashboard_id}-debug.json\"'
+        },
+    )
+
+
+@router.get("/{dashboard_id}/traces")
+async def get_traces(dashboard_id: str):
+    """
+    Get all traces for a dashboard.
+    """
+    from ..traces import get_trace_store
+    
+    store = get_dashboard_store()
+    state = store.get(dashboard_id)
+    
+    if not state:
+        raise HTTPException(status_code=404, detail="Dashboard not found")
+    
+    trace_store = get_trace_store()
+    traces = trace_store.get_for_dashboard(dashboard_id)
+    
+    return {
+        "dashboard_id": dashboard_id,
+        "trace_count": len(traces),
+        "traces": [t.to_dict() for t in traces],
+    }

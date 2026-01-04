@@ -667,7 +667,7 @@ const ProcessPanel: React.FC<ProcessPanelProps> = ({
   const [isExpanded, setIsExpanded] = useState(false);
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
   const [skillExpanded, setSkillExpanded] = useState(false);
-  
+
   // Handle ESC key to close the panel (only in modal mode)
   useEffect(() => {
     if (mode !== 'modal') return;
@@ -809,42 +809,42 @@ const ProcessPanel: React.FC<ProcessPanelProps> = ({
   }, [isStreaming, processNodes.length, stats, currentStep]);
 
   // Render Content Block (Flowchart)
-    const renderContent = () => (
-      <div className={`flex-1 ${mode === 'modal' ? 'overflow-y-auto p-6' : 'p-4 overflow-y-auto max-h-[500px]'}`}>
-        {processNodes.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full py-8">
-            <div
-              className="w-16 h-16 rounded-2xl flex items-center justify-center text-3xl mb-4"
-              style={{
-                background: `linear-gradient(135deg, ${theme.colors.accent.muted} 0%, ${theme.colors.bg.tertiary} 100%)`,
-                border: `2px solid ${theme.colors.border.medium}`,
-              }}
-            >
-              {isStreaming ? (
-                <motion.span
-                  animate={{ rotate: 360 }}
-                  transition={{ duration: 2, repeat: Infinity, ease: 'linear' }}
-                >
-                  🔄
-                </motion.span>
-              ) : '🧠'}
-            </div>
-            <h3
-              className="text-base font-semibold mb-1"
-              style={{ color: theme.colors.text.primary }}
-            >
-              {isStreaming ? 'Initializing Agent...' : 'Agent Process Visualization'}
-            </h3>
-            <p
-              className="text-xs text-center max-w-xs"
-              style={{ color: theme.colors.text.muted }}
-            >
-              {isStreaming
-                ? 'Watch the flowchart build in real-time.'
-                : 'Flowchart visualization of the agent\'s decision path.'}
-            </p>
+  const renderContent = () => (
+    <div className={`flex-1 ${mode === 'modal' ? 'overflow-y-auto p-6' : 'p-4 overflow-y-auto max-h-[500px]'}`}>
+      {processNodes.length === 0 ? (
+        <div className="flex flex-col items-center justify-center h-full py-8">
+          <div
+            className="w-16 h-16 rounded-2xl flex items-center justify-center text-3xl mb-4"
+            style={{
+              background: `linear-gradient(135deg, ${theme.colors.accent.muted} 0%, ${theme.colors.bg.tertiary} 100%)`,
+              border: `2px solid ${theme.colors.border.medium}`,
+            }}
+          >
+            {isStreaming ? (
+              <motion.span
+                animate={{ rotate: 360 }}
+                transition={{ duration: 2, repeat: Infinity, ease: 'linear' }}
+              >
+                🔄
+              </motion.span>
+            ) : '🧠'}
           </div>
-        ) : (
+          <h3
+            className="text-base font-semibold mb-1"
+            style={{ color: theme.colors.text.primary }}
+          >
+            {isStreaming ? 'Initializing Agent...' : 'Agent Process Visualization'}
+          </h3>
+          <p
+            className="text-xs text-center max-w-xs"
+            style={{ color: theme.colors.text.muted }}
+          >
+            {isStreaming
+              ? 'Watch the flowchart build in real-time.'
+              : 'Flowchart visualization of the agent\'s decision path.'}
+          </p>
+        </div>
+      ) : (
         <div className="flex flex-col items-center space-y-4">
           {/* Skill section replaces status legend */}
           {skillInfo && (
@@ -895,7 +895,7 @@ const ProcessPanel: React.FC<ProcessPanelProps> = ({
               </AnimatePresence>
             </div>
           )}
-  
+
           {/* Flowchart */}
           {isSingleAgent ? (
             // Linear flow for single agent
@@ -964,314 +964,362 @@ const ProcessPanel: React.FC<ProcessPanelProps> = ({
             </div>
           )}
         </div>
-        )}
-      </div>
-    );
-  
-    // If Inline Mode
-    if (mode === 'inline') {
-      if (processNodes.length === 0 && !isStreaming) return null; // Don't show empty inline panel if not streaming
-  
-      return (
-        <div className="mb-4 rounded-xl overflow-hidden border border-gray-800 bg-gray-900/50">
-          <button
-            onClick={() => setIsExpanded(!isExpanded)}
-            className="w-full flex items-center justify-between px-4 py-3 hover:bg-gray-800/50 transition-colors"
-          >
-            <div className="flex items-center gap-3">
-              <div className="flex items-center gap-2">
-                {isStreaming ? (
-                  <motion.div
-                    className="w-2 h-2 rounded-full bg-sky-500"
-                    animate={{ scale: [1, 1.2, 1], opacity: [1, 0.7, 1] }}
-                    transition={{ duration: 1, repeat: Infinity }}
-                  />
-                ) : (
-                   <div className="w-2 h-2 rounded-full bg-emerald-500" />
-                )}
-                <span className="text-sm font-medium text-gray-200">
-                  Agent Process
-                </span>
-              </div>
-              {currentStep && (
-                <span className="text-xs text-gray-400 bg-gray-800 px-2 py-0.5 rounded-full">
-                  {currentStep.shortLabel}
-                </span>
-              )}
-              {majorSteps.length > 0 && (
-                 <span className="text-xs text-gray-500">
-                   {stepProgress.current}/{stepProgress.total} steps
-                 </span>
-              )}
-            </div>
-            <motion.div
-              animate={{ rotate: isExpanded ? 180 : 0 }}
-              className="text-gray-500"
-            >
-              ▼
-            </motion.div>
-          </button>
-  
-          <AnimatePresence>
-            {isExpanded && (
-              <motion.div
-                initial={{ height: 0, opacity: 0 }}
-                animate={{ height: 'auto', opacity: 1 }}
-                exit={{ height: 0, opacity: 0 }}
-                transition={{ duration: 0.2 }}
-                className="border-t border-gray-800 bg-gray-900/30"
-              >
-                {renderContent()}
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </div>
-      );
-    }
-  
-    // Default Modal Mode
+      )}
+    </div>
+  );
+
+  // If Inline Mode
+  if (mode === 'inline') {
+    if (processNodes.length === 0 && !isStreaming) return null; // Don't show empty inline panel if not streaming
+
     return (
-      <>
-        {/* Compact Status Indicator with Dynamic Steps */}
-        <motion.button
-          onClick={() => setIsExpanded(true)}
-          className="flex items-center gap-2 px-3 py-1.5 rounded-lg transition-all group"
-          style={{
-            backgroundColor: theme.colors.bg.elevated,
-            border: `1px solid ${isStreaming ? theme.colors.accent.primary + '40' : theme.colors.border.subtle}`,
-          }}
-          whileHover={{
-            borderColor: theme.colors.accent.primary + '60',
-            boxShadow: theme.shadows.glow,
-          }}
-          whileTap={{ scale: 0.98 }}
+      <div className="mb-4 rounded-xl overflow-hidden border border-gray-800 bg-gray-900/50">
+        <button
+          onClick={() => setIsExpanded(!isExpanded)}
+          className="w-full flex items-center justify-between px-4 py-3 hover:bg-gray-800/50 transition-colors"
         >
-          {/* Status dot with animation */}
-          <div className="relative">
-            {isStreaming ? (
-              <motion.div
-                className="w-2 h-2 rounded-full"
-                style={{ backgroundColor: theme.colors.accent.primary }}
-                animate={{ scale: [1, 1.3, 1], opacity: [1, 0.7, 1] }}
-                transition={{ duration: 0.8, repeat: Infinity }}
-              />
-            ) : stats.total > 0 && stats.completed === stats.total ? (
-              <div
-                className="w-2 h-2 rounded-full"
-                style={{ backgroundColor: theme.colors.status.success }}
-              />
-            ) : (
-              <div
-                className="w-2 h-2 rounded-full"
-                style={{ backgroundColor: theme.colors.status.success }}
-              />
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2">
+              {isStreaming ? (
+                <motion.div
+                  className="w-2 h-2 rounded-full bg-sky-500"
+                  animate={{ scale: [1, 1.2, 1], opacity: [1, 0.7, 1] }}
+                  transition={{ duration: 1, repeat: Infinity }}
+                />
+              ) : (
+                <div className="w-2 h-2 rounded-full bg-emerald-500" />
+              )}
+              <span className="text-sm font-medium text-gray-200">
+                Agent Process
+              </span>
+            </div>
+            {currentStep && (
+              <span className="text-xs text-gray-400 bg-gray-800 px-2 py-0.5 rounded-full">
+                {currentStep.shortLabel}
+              </span>
+            )}
+            {majorSteps.length > 0 && (
+              <span className="text-xs text-gray-500">
+                {stepProgress.current}/{stepProgress.total} steps
+              </span>
             )}
           </div>
-  
-          {/* Current step icon when streaming */}
-          {isStreaming && currentStep && (
-            <span className="text-sm">{currentStep.icon}</span>
-          )}
-  
-          {/* Status/Step label */}
-          <span
-            className="text-xs font-medium max-w-[120px] truncate"
-            style={{ color: isStreaming ? theme.colors.text.primary : theme.colors.text.muted }}
+          <motion.div
+            animate={{ rotate: isExpanded ? 180 : 0 }}
+            className="text-gray-500"
           >
-            {statusText}
-          </span>
-  
-          {/* Progress counter when there are steps */}
-          {majorSteps.length > 0 && (isStreaming || stats.completed > 0) && (
-            <span
-              className="text-[10px] px-1.5 py-0.5 rounded-full font-medium"
-              style={{
-                backgroundColor: isStreaming ? theme.colors.accent.muted : theme.colors.bg.tertiary,
-                color: isStreaming ? theme.colors.accent.primary : theme.colors.text.muted,
-              }}
-            >
-              {stepProgress.current}/{stepProgress.total}
-            </span>
-          )}
-  
-          {/* Arrow indicator */}
-          <motion.span
-            className="text-xs opacity-0 group-hover:opacity-100 transition-opacity"
-            style={{ color: theme.colors.accent.primary }}
-          >
-            →
-          </motion.span>
-        </motion.button>
-  
-        {/* Full-screen Panel Overlay */}
+            ▼
+          </motion.div>
+        </button>
+
         <AnimatePresence>
           {isExpanded && (
             <motion.div
-              className="fixed inset-0 z-50 flex flex-col"
-              {...motionVariants.backdrop}
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: 'auto', opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              transition={{ duration: 0.2 }}
+              className="border-t border-gray-800 bg-gray-900/30"
             >
-              {/* Backdrop */}
-              <motion.div
-                className="absolute inset-0"
-                style={{
-                  backgroundColor: 'rgba(10, 15, 26, 0.95)',
-                  backdropFilter: 'blur(8px)',
-                }}
-                onClick={() => setIsExpanded(false)}
-              />
-  
-              {/* Panel Content */}
-              <motion.div
-                className="relative flex flex-col h-full max-w-3xl mx-auto w-full"
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: 20 }}
-                transition={{ duration: 0.3 }}
+              {renderContent()}
+
+              {/* Footer with JSON Download */}
+              <div
+                className="flex items-center justify-between px-4 py-3 border-t"
+                style={{ borderColor: theme.colors.border.subtle, backgroundColor: theme.colors.bg.tertiary }}
               >
-                {/* Header */}
-                <header
-                  className="flex items-center justify-between px-6 py-4 shrink-0"
-                  style={{ borderBottom: `1px solid ${theme.colors.border.subtle}` }}
+                <div className="flex items-center gap-4 text-xs" style={{ color: theme.colors.text.muted }}>
+                  <span>{processNodes.length} nodes</span>
+                  <span>{processEdges.length} edges</span>
+                  {runId && <span>Run: {runId.slice(0, 8)}...</span>}
+                </div>
+                <button
+                  onClick={() => {
+                    const debugPayload = {
+                      exportedAt: new Date().toISOString(),
+                      runId,
+                      agentMode,
+                      skillInfo,
+                      processNodes,
+                      processEdges,
+                      debugLogs,
+                      activeAgent,
+                      stats: {
+                        totalNodes: processNodes.length,
+                        completedNodes: processNodes.filter(n => n.status === 'completed').length,
+                        runningNodes: processNodes.filter(n => n.status === 'running').length,
+                      },
+                    };
+                    const blob = new Blob([JSON.stringify(debugPayload, null, 2)], { type: 'application/json' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `agent-process-${runId || 'session'}-${Date.now()}.json`;
+                    a.click();
+                    URL.revokeObjectURL(url);
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all hover:scale-105"
+                  style={{
+                    backgroundColor: theme.colors.bg.elevated,
+                    border: `1px solid ${theme.colors.border.medium}`,
+                    color: theme.colors.text.secondary,
+                  }}
+                  title="Download process details as JSON"
                 >
-                  <div className="flex items-center gap-4">
-                    <div
-                      className="w-12 h-12 rounded-xl flex items-center justify-center"
-                      style={{
-                        background: `linear-gradient(135deg, ${theme.colors.accent.muted} 0%, ${theme.colors.bg.elevated} 100%)`,
-                        border: `1px solid ${theme.colors.border.medium}`,
-                      }}
-                    >
-                      <span className="text-2xl">🧠</span>
-                    </div>
-                    <div>
-                      <h2
-                        className="text-lg font-semibold"
-                        style={{ color: theme.colors.text.primary }}
-                      >
-                        Agent Process Flow
-                      </h2>
-                      <p className="text-xs" style={{ color: theme.colors.text.muted }}>
-                        {isSingleAgent ? 'Single Agent' : 'Multi-agent (Specialist routing)'}
-                        {lastAgentLabel ? ` • Active: ${lastAgentLabel}` : activeAgent ? ` • Active: ${activeAgent.name}` : ''}
-                      </p>
-                    </div>
-                  </div>
-  
-                  <div className="flex items-center gap-4">
-                    {/* Stats */}
-                    <div className="flex items-center gap-6">
-                      <div className="text-center">
-                        <div className="text-xl font-bold" style={{ color: theme.colors.status.success }}>
-                          {stats.completed}
-                        </div>
-                        <div className="text-[10px] uppercase tracking-wide" style={{ color: theme.colors.text.muted }}>
-                          Done
-                        </div>
-                      </div>
-                      <div className="text-center">
-                        <div className="text-xl font-bold" style={{ color: theme.colors.accent.primary }}>
-                          {stats.running}
-                        </div>
-                        <div className="text-[10px] uppercase tracking-wide" style={{ color: theme.colors.text.muted }}>
-                          Active
-                        </div>
-                      </div>
-                      <div className="text-center">
-                        <div className="text-xl font-bold" style={{ color: theme.colors.text.secondary }}>
-                          {stats.total}
-                        </div>
-                        <div className="text-[10px] uppercase tracking-wide" style={{ color: theme.colors.text.muted }}>
-                          Total
-                        </div>
-                      </div>
-                    </div>
-  
-                    {/* Close */}
-                    <motion.button
-                      onClick={() => setIsExpanded(false)}
-                      className="w-10 h-10 rounded-xl flex items-center justify-center transition-colors"
-                      style={{
-                        backgroundColor: theme.colors.bg.elevated,
-                        color: theme.colors.text.muted,
-                      }}
-                      whileHover={{
-                        backgroundColor: theme.colors.bg.tertiary,
-                        color: theme.colors.text.primary,
-                      }}
-                      whileTap={{ scale: 0.95 }}
-                    >
-                      ✕
-                    </motion.button>
-                  </div>
-                </header>
-  
-                {/* Flowchart Area */}
-                {renderContent()}
-  
-                {/* Footer */}
-                <footer
-                  className="px-6 py-4 shrink-0 flex items-center justify-between"
-                  style={{ borderTop: `1px solid ${theme.colors.border.subtle}` }}
-                >
-                  <button
-                    onClick={() => {
-                      const supervisorLogs = debugLogs.filter(log =>
-                        log.category === 'agent' &&
-                        ((log as any).data?.agent_mode === 'supervisor' ||
-                          (log.message || '').toLowerCase().includes('supervisor'))
-                      );
-                      const specialistLogs = debugLogs.filter(log => {
-                        const mode = (log as any).data?.agent_mode;
-                        return log.category === 'agent' && mode && mode !== 'supervisor';
-                      });
-                      const payload = {
-                        generated_at: new Date().toISOString(),
-                        run_id: runId,
-                        permission_state: permissionState,
-                        blocked: permissionState ? ['permission_denied', 'run_timeout', 'cancelled'].includes(permissionState) : false,
-                        process_nodes: processNodes,
-                        process_edges: processEdges,
-                        supervisor_logs: supervisorLogs,
-                        specialist_logs: specialistLogs,
-                        all_logs: debugLogs,
-                      };
-                      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-                      const url = URL.createObjectURL(blob);
-                      const a = document.createElement('a');
-                      a.href = url;
-                      a.download = 'agent-debug-log.json';
-                      a.click();
-                      URL.revokeObjectURL(url);
-                    }}
-                    className="px-3 py-2 rounded-lg text-xs font-semibold transition-colors"
-                    style={{
-                      backgroundColor: theme.colors.accent.muted,
-                      color: theme.colors.text.primary,
-                      border: `1px solid ${theme.colors.border.subtle}`,
-                    }}
-                  >
-                    Download JSON Logs
-                  </button>
-                  <div className="flex items-center gap-2">
-                    <kbd
-                      className="px-2 py-1 rounded text-[10px] font-mono"
-                      style={{
-                        backgroundColor: theme.colors.bg.elevated,
-                        border: `1px solid ${theme.colors.border.subtle}`,
-                        color: theme.colors.text.muted,
-                      }}
-                    >
-                      Esc
-                    </kbd>
-                    <span className="text-xs" style={{ color: theme.colors.text.muted }}>to close</span>
-                  </div>
-                </footer>
-              </motion.div>
+                  <span>📥</span>
+                  JSON
+                </button>
+              </div>
             </motion.div>
           )}
         </AnimatePresence>
-      </>
+      </div>
     );
-  };
-  
-  export default ProcessPanel;
+  }
+
+  // Default Modal Mode
+  return (
+    <>
+      {/* Compact Status Indicator with Dynamic Steps */}
+      <motion.button
+        onClick={() => setIsExpanded(true)}
+        className="flex items-center gap-2 px-3 py-1.5 rounded-lg transition-all group"
+        style={{
+          backgroundColor: theme.colors.bg.elevated,
+          border: `1px solid ${isStreaming ? theme.colors.accent.primary + '40' : theme.colors.border.subtle}`,
+        }}
+        whileHover={{
+          borderColor: theme.colors.accent.primary + '60',
+          boxShadow: theme.shadows.glow,
+        }}
+        whileTap={{ scale: 0.98 }}
+      >
+        {/* Status dot with animation */}
+        <div className="relative">
+          {isStreaming ? (
+            <motion.div
+              className="w-2 h-2 rounded-full"
+              style={{ backgroundColor: theme.colors.accent.primary }}
+              animate={{ scale: [1, 1.3, 1], opacity: [1, 0.7, 1] }}
+              transition={{ duration: 0.8, repeat: Infinity }}
+            />
+          ) : stats.total > 0 && stats.completed === stats.total ? (
+            <div
+              className="w-2 h-2 rounded-full"
+              style={{ backgroundColor: theme.colors.status.success }}
+            />
+          ) : (
+            <div
+              className="w-2 h-2 rounded-full"
+              style={{ backgroundColor: theme.colors.status.success }}
+            />
+          )}
+        </div>
+
+        {/* Current step icon when streaming */}
+        {isStreaming && currentStep && (
+          <span className="text-sm">{currentStep.icon}</span>
+        )}
+
+        {/* Status/Step label */}
+        <span
+          className="text-xs font-medium max-w-[120px] truncate"
+          style={{ color: isStreaming ? theme.colors.text.primary : theme.colors.text.muted }}
+        >
+          {statusText}
+        </span>
+
+        {/* Progress counter when there are steps */}
+        {majorSteps.length > 0 && (isStreaming || stats.completed > 0) && (
+          <span
+            className="text-[10px] px-1.5 py-0.5 rounded-full font-medium"
+            style={{
+              backgroundColor: isStreaming ? theme.colors.accent.muted : theme.colors.bg.tertiary,
+              color: isStreaming ? theme.colors.accent.primary : theme.colors.text.muted,
+            }}
+          >
+            {stepProgress.current}/{stepProgress.total}
+          </span>
+        )}
+
+        {/* Arrow indicator */}
+        <motion.span
+          className="text-xs opacity-0 group-hover:opacity-100 transition-opacity"
+          style={{ color: theme.colors.accent.primary }}
+        >
+          →
+        </motion.span>
+      </motion.button>
+
+      {/* Full-screen Panel Overlay */}
+      <AnimatePresence>
+        {isExpanded && (
+          <motion.div
+            className="fixed inset-0 z-50 flex flex-col"
+            {...motionVariants.backdrop}
+          >
+            {/* Backdrop */}
+            <motion.div
+              className="absolute inset-0"
+              style={{
+                backgroundColor: 'rgba(10, 15, 26, 0.95)',
+                backdropFilter: 'blur(8px)',
+              }}
+              onClick={() => setIsExpanded(false)}
+            />
+
+            {/* Panel Content */}
+            <motion.div
+              className="relative flex flex-col h-full max-w-3xl mx-auto w-full"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 20 }}
+              transition={{ duration: 0.3 }}
+            >
+              {/* Header */}
+              <header
+                className="flex items-center justify-between px-6 py-4 shrink-0"
+                style={{ borderBottom: `1px solid ${theme.colors.border.subtle}` }}
+              >
+                <div className="flex items-center gap-4">
+                  <div
+                    className="w-12 h-12 rounded-xl flex items-center justify-center"
+                    style={{
+                      background: `linear-gradient(135deg, ${theme.colors.accent.muted} 0%, ${theme.colors.bg.elevated} 100%)`,
+                      border: `1px solid ${theme.colors.border.medium}`,
+                    }}
+                  >
+                    <span className="text-2xl">🧠</span>
+                  </div>
+                  <div>
+                    <h2
+                      className="text-lg font-semibold"
+                      style={{ color: theme.colors.text.primary }}
+                    >
+                      Agent Process Flow
+                    </h2>
+                    <p className="text-xs" style={{ color: theme.colors.text.muted }}>
+                      {isSingleAgent ? 'Single Agent' : 'Multi-agent (Specialist routing)'}
+                      {lastAgentLabel ? ` • Active: ${lastAgentLabel}` : activeAgent ? ` • Active: ${activeAgent.name}` : ''}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-4">
+                  {/* Stats */}
+                  <div className="flex items-center gap-6">
+                    <div className="text-center">
+                      <div className="text-xl font-bold" style={{ color: theme.colors.status.success }}>
+                        {stats.completed}
+                      </div>
+                      <div className="text-[10px] uppercase tracking-wide" style={{ color: theme.colors.text.muted }}>
+                        Done
+                      </div>
+                    </div>
+                    <div className="text-center">
+                      <div className="text-xl font-bold" style={{ color: theme.colors.accent.primary }}>
+                        {stats.running}
+                      </div>
+                      <div className="text-[10px] uppercase tracking-wide" style={{ color: theme.colors.text.muted }}>
+                        Active
+                      </div>
+                    </div>
+                    <div className="text-center">
+                      <div className="text-xl font-bold" style={{ color: theme.colors.text.secondary }}>
+                        {stats.total}
+                      </div>
+                      <div className="text-[10px] uppercase tracking-wide" style={{ color: theme.colors.text.muted }}>
+                        Total
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Close */}
+                  <motion.button
+                    onClick={() => setIsExpanded(false)}
+                    className="w-10 h-10 rounded-xl flex items-center justify-center transition-colors"
+                    style={{
+                      backgroundColor: theme.colors.bg.elevated,
+                      color: theme.colors.text.muted,
+                    }}
+                    whileHover={{
+                      backgroundColor: theme.colors.bg.tertiary,
+                      color: theme.colors.text.primary,
+                    }}
+                    whileTap={{ scale: 0.95 }}
+                  >
+                    ✕
+                  </motion.button>
+                </div>
+              </header>
+
+              {/* Flowchart Area */}
+              {renderContent()}
+
+              {/* Footer */}
+              <footer
+                className="px-6 py-4 shrink-0 flex items-center justify-between"
+                style={{ borderTop: `1px solid ${theme.colors.border.subtle}` }}
+              >
+                <button
+                  onClick={() => {
+                    const supervisorLogs = debugLogs.filter(log =>
+                      log.category === 'agent' &&
+                      ((log as any).data?.agent_mode === 'supervisor' ||
+                        (log.message || '').toLowerCase().includes('supervisor'))
+                    );
+                    const specialistLogs = debugLogs.filter(log => {
+                      const mode = (log as any).data?.agent_mode;
+                      return log.category === 'agent' && mode && mode !== 'supervisor';
+                    });
+                    const payload = {
+                      generated_at: new Date().toISOString(),
+                      run_id: runId,
+                      permission_state: permissionState,
+                      blocked: permissionState ? ['permission_denied', 'run_timeout', 'cancelled'].includes(permissionState) : false,
+                      process_nodes: processNodes,
+                      process_edges: processEdges,
+                      supervisor_logs: supervisorLogs,
+                      specialist_logs: specialistLogs,
+                      all_logs: debugLogs,
+                    };
+                    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'agent-debug-log.json';
+                    a.click();
+                    URL.revokeObjectURL(url);
+                  }}
+                  className="px-3 py-2 rounded-lg text-xs font-semibold transition-colors"
+                  style={{
+                    backgroundColor: theme.colors.accent.muted,
+                    color: theme.colors.text.primary,
+                    border: `1px solid ${theme.colors.border.subtle}`,
+                  }}
+                >
+                  Download JSON Logs
+                </button>
+                <div className="flex items-center gap-2">
+                  <kbd
+                    className="px-2 py-1 rounded text-[10px] font-mono"
+                    style={{
+                      backgroundColor: theme.colors.bg.elevated,
+                      border: `1px solid ${theme.colors.border.subtle}`,
+                      color: theme.colors.text.muted,
+                    }}
+                  >
+                    Esc
+                  </kbd>
+                  <span className="text-xs" style={{ color: theme.colors.text.muted }}>to close</span>
+                </div>
+              </footer>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </>
+  );
+};
+
+export default ProcessPanel;

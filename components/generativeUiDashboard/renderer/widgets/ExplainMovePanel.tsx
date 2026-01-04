@@ -1,5 +1,15 @@
-import React from 'react';
-import { motion } from 'framer-motion';
+/**
+ * Function: ExplainMovePanel — Displays AI-generated explanation for stock movements
+ * Called from: Registry.tsx when rendering a2ui_explain_move skill dashboards
+ * Invokes: useStreamingText hook for typewriter effect
+ * Purpose: Shows factors, citations, and narrative explanation with skill-inspired design
+ * 
+ * Design Pattern: Modeled after SkillModal.tsx from conversational_analytics for
+ * consistent visual language across the portfolio
+ */
+
+import React, { useState } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 import type { A2UIRendererProps } from '../Registry';
 import { resolveArray, resolveString } from '../../a2ui/DataBinder';
 import type { ExplainMovePanelProps } from '../../a2ui/types';
@@ -11,6 +21,7 @@ interface Factor {
     description: string;
     impact: 'positive' | 'negative' | 'neutral';
     source?: string;
+    icon?: string;
 }
 
 interface Citation {
@@ -19,23 +30,38 @@ interface Citation {
     date?: string;
 }
 
+// Enhanced theme inspired by SkillModal.tsx
 const theme = {
-    bg: {
-        card: 'rgba(30, 41, 59, 0.8)',
+    colors: {
+        bg: {
+            card: 'rgba(15, 23, 42, 0.95)',
+            elevated: 'rgba(30, 41, 59, 0.8)',
+            section: 'rgba(51, 65, 85, 0.4)',
+        },
+        border: {
+            subtle: 'rgba(148, 163, 184, 0.15)',
+            medium: 'rgba(148, 163, 184, 0.25)',
+        },
+        text: {
+            primary: '#f8fafc',
+            secondary: '#94a3b8',
+            muted: '#64748b',
+        },
+        accent: {
+            primary: '#f43f5e',
+            secondary: '#f59e0b',
+            info: '#38bdf8',
+            muted: 'rgba(244, 63, 94, 0.15)',
+        },
+        impact: {
+            positive: { bg: 'rgba(16, 185, 129, 0.15)', text: '#10b981', icon: '📈' },
+            negative: { bg: 'rgba(239, 68, 68, 0.15)', text: '#ef4444', icon: '📉' },
+            neutral: { bg: 'rgba(245, 158, 11, 0.15)', text: '#f59e0b', icon: '➡️' },
+        },
     },
-    border: {
-        subtle: 'rgba(148, 163, 184, 0.15)',
+    shadows: {
+        lg: '0 10px 15px -3px rgba(0, 0, 0, 0.3), 0 4px 6px -2px rgba(0, 0, 0, 0.15)',
     },
-    text: {
-        primary: '#f8fafc',
-        secondary: '#94a3b8',
-        muted: '#64748b',
-    },
-    impact: {
-        positive: '#10b981',
-        negative: '#ef4444',
-        neutral: '#f59e0b',
-    }
 };
 
 const DEFAULT_FACTORS: Factor[] = [
@@ -44,212 +70,430 @@ const DEFAULT_FACTORS: Factor[] = [
         description: 'Broader market sentiment and sector rotation affecting price action',
         impact: 'neutral',
         source: 'Market Analysis',
+        icon: '🌍',
     },
     {
         title: 'Earnings & Guidance',
         description: 'Recent earnings report and forward guidance expectations',
         impact: 'negative',
         source: 'Company Filings',
+        icon: '📊',
+    },
+    {
+        title: 'Sector Dynamics',
+        description: 'Industry-specific trends and competitive positioning',
+        impact: 'positive',
+        source: 'Industry Reports',
+        icon: '🏭',
     }
 ];
+
+// Tabs for enhanced navigation (inspired by SkillModal)
+type TabId = 'analysis' | 'factors' | 'sources';
 
 export function ExplainMovePanel({
     componentId,
     props,
     dataModel,
 }: A2UIRendererProps): React.ReactElement {
+    const [activeTab, setActiveTab] = useState<TabId>('analysis');
+
     const panelProps = props as unknown as ExplainMovePanelProps;
-    const title = resolveString(panelProps.title, dataModel, 'Insight Analysis');
-    const fullExplanation = resolveString(panelProps.explanation, dataModel, 'Analysis in progress...');
+    const title = resolveString(panelProps.title, dataModel, 'AI Insight Analysis');
+    const fullExplanation = resolveString(panelProps.explanation, dataModel, 'Analyzing market conditions...');
     const factors = resolveArray<Factor>(panelProps.factors, dataModel, []);
     const citations = resolveArray<Citation>(panelProps.citations, dataModel, []);
 
     // Use streaming text hook for the narrative
-    const { displayText, isComplete } = useStreamingText(fullExplanation, { speed: 25 });
+    const { displayText, isComplete } = useStreamingText(fullExplanation, { speed: 20 });
 
     const displayFactors = factors.length > 0 ? factors : DEFAULT_FACTORS;
     const showCitations = citations.length > 0;
+
+    // Tab configuration
+    const tabs: { id: TabId; label: string; icon: string }[] = [
+        { id: 'analysis', label: 'Analysis', icon: '✨' },
+        { id: 'factors', label: 'Key Factors', icon: '🎯' },
+        ...(showCitations ? [{ id: 'sources' as TabId, label: 'Sources', icon: '📚' }] : []),
+    ];
 
     return (
         <motion.div
             layout
             layoutId={componentId}
-            initial={{ opacity: 0, scale: 0.98 }}
-            animate={{ opacity: 1, scale: 1 }}
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ type: 'spring', stiffness: 300, damping: 30 }}
             className="a2ui-explain-panel"
             style={{
-                backgroundColor: theme.bg.card,
-                padding: '1.5rem',
+                backgroundColor: theme.colors.bg.card,
                 borderRadius: '16px',
-                border: `1px solid ${theme.border.subtle}`,
-                boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
-                backdropFilter: 'blur(12px)',
-                marginBottom: '1rem',
+                border: `1px solid ${theme.colors.border.medium}`,
+                boxShadow: theme.shadows.lg,
+                backdropFilter: 'blur(16px)',
+                overflow: 'hidden',
             }}
         >
-            {/* Header */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem' }}>
-                <div style={{
-                    width: '32px',
-                    height: '32px',
-                    borderRadius: '50%',
-                    backgroundColor: 'rgba(56, 189, 248, 0.1)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    color: '#38bdf8'
-                }}>
-                    ✨
-                </div>
-                <h3 style={{
-                    fontSize: '1.125rem',
-                    fontWeight: 600,
-                    color: theme.text.primary,
-                    margin: 0
-                }}>
-                    {title}
-                </h3>
-            </div>
-
-            {/* Narrative Summary with Streaming Effect */}
-            <div style={{ marginBottom: '1.5rem', position: 'relative' }}>
-                <p style={{
-                    fontSize: '1rem',
-                    lineHeight: '1.6',
-                    color: theme.text.secondary,
-                    margin: 0,
-                    minHeight: '3em'
-                }}>
-                    {displayText}
-                    {!isComplete && (
-                        <motion.span
-                            animate={{ opacity: [0, 1, 0] }}
-                            transition={{ repeat: Infinity, duration: 0.8 }}
+            {/* Enhanced Header with Gradient Accent */}
+            <div
+                style={{
+                    padding: '1rem 1.25rem',
+                    borderBottom: `1px solid ${theme.colors.border.subtle}`,
+                    background: `linear-gradient(180deg, ${theme.colors.bg.elevated} 0%, ${theme.colors.bg.card} 100%)`,
+                }}
+            >
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                        <div
                             style={{
-                                display: 'inline-block',
-                                width: '2px',
-                                height: '1.2em',
-                                backgroundColor: '#38bdf8',
-                                marginLeft: '2px',
-                                verticalAlign: 'middle'
+                                width: '36px',
+                                height: '36px',
+                                borderRadius: '10px',
+                                background: theme.colors.accent.muted,
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                fontSize: '1.25rem',
                             }}
-                        />
-                    )}
-                </p>
-            </div>
-
-            {/* Key Factors */}
-            <div style={{ display: 'grid', gap: '1rem', marginBottom: '1.5rem' }}>
-                {displayFactors.map((factor, idx) => (
-                    <motion.div
-                        key={`${factor.title}-${idx}`}
-                        initial={{ opacity: 0, x: -10 }}
-                        animate={{ opacity: 1, x: 0 }}
-                        transition={{ delay: 0.1 * idx }}
-                        style={{
-                            display: 'flex',
-                            gap: '1rem',
-                            padding: '1rem',
-                            borderRadius: '12px',
-                            backgroundColor: 'rgba(15, 23, 42, 0.3)',
-                            border: `1px solid ${theme.border.subtle}`,
-                        }}
-                    >
-                        <div style={{
-                            width: '8px',
-                            height: '8px',
-                            borderRadius: '50%',
-                            marginTop: '0.5rem',
-                            flexShrink: 0,
-                            backgroundColor: theme.impact[factor.impact] || theme.impact.neutral,
-                            boxShadow: `0 0 10px ${theme.impact[factor.impact] || theme.impact.neutral}`,
-                        }} />
-                        <div style={{ flex: 1 }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.25rem' }}>
-                                <h4 style={{ fontSize: '0.9rem', fontWeight: 500, color: theme.text.primary, margin: 0 }}>
-                                    {factor.title}
-                                </h4>
-                                {factor.source && (
-                                    <span style={{
-                                        fontSize: '0.75rem',
-                                        padding: '2px 8px',
-                                        borderRadius: '4px',
-                                        backgroundColor: 'rgba(148, 163, 184, 0.1)',
-                                        color: theme.text.muted,
-                                    }}>
-                                        {factor.source}
-                                    </span>
-                                )}
-                            </div>
-                            <p style={{ fontSize: '0.85rem', color: theme.text.secondary, margin: 0 }}>
-                                {factor.description}
+                        >
+                            🔮
+                        </div>
+                        <div>
+                            <h3
+                                style={{
+                                    fontSize: '1rem',
+                                    fontWeight: 600,
+                                    color: theme.colors.text.primary,
+                                    margin: 0,
+                                }}
+                            >
+                                {title}
+                            </h3>
+                            <p
+                                style={{
+                                    fontSize: '0.75rem',
+                                    color: theme.colors.text.muted,
+                                    margin: 0,
+                                }}
+                            >
+                                AI-powered market analysis
                             </p>
                         </div>
-                    </motion.div>
+                    </div>
+
+                    {/* Streaming indicator */}
+                    {!isComplete && (
+                        <motion.div
+                            animate={{ opacity: [0.5, 1, 0.5] }}
+                            transition={{ duration: 1.5, repeat: Infinity }}
+                            style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '0.5rem',
+                                padding: '0.25rem 0.75rem',
+                                borderRadius: '9999px',
+                                backgroundColor: theme.colors.accent.muted,
+                            }}
+                        >
+                            <motion.div
+                                animate={{ scale: [1, 1.2, 1] }}
+                                transition={{ duration: 0.6, repeat: Infinity }}
+                                style={{
+                                    width: '6px',
+                                    height: '6px',
+                                    borderRadius: '50%',
+                                    backgroundColor: theme.colors.accent.primary,
+                                }}
+                            />
+                            <span style={{ fontSize: '0.7rem', color: theme.colors.accent.primary, fontWeight: 500 }}>
+                                Analyzing...
+                            </span>
+                        </motion.div>
+                    )}
+                </div>
+            </div>
+
+            {/* Tab Navigation (inspired by SkillModal) */}
+            <div
+                style={{
+                    display: 'flex',
+                    gap: '0.25rem',
+                    padding: '0.5rem 1rem',
+                    borderBottom: `1px solid ${theme.colors.border.subtle}`,
+                }}
+            >
+                {tabs.map((tab) => (
+                    <button
+                        key={tab.id}
+                        onClick={() => setActiveTab(tab.id)}
+                        style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.375rem',
+                            padding: '0.5rem 0.75rem',
+                            borderRadius: '8px',
+                            border: 'none',
+                            cursor: 'pointer',
+                            fontSize: '0.75rem',
+                            fontWeight: 500,
+                            transition: 'all 0.15s ease',
+                            backgroundColor: activeTab === tab.id ? theme.colors.accent.muted : 'transparent',
+                            color: activeTab === tab.id ? theme.colors.accent.primary : theme.colors.text.secondary,
+                        }}
+                    >
+                        <span>{tab.icon}</span>
+                        {tab.label}
+                    </button>
                 ))}
             </div>
 
-            {/* Citations */}
-            {showCitations && (
-                <div style={{ borderTop: `1px solid ${theme.border.subtle}`, paddingTop: '1rem' }}>
-                    <p style={{
-                        fontSize: '0.75rem',
-                        textTransform: 'uppercase',
-                        letterSpacing: '0.05em',
-                        color: theme.text.muted,
-                        marginBottom: '0.5rem'
-                    }}>
-                        Sources
-                    </p>
-                    <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
-                        {citations.map((citation, idx) => (
-                            <li key={idx}>
-                                {citation.url ? (
-                                    <a
-                                        href={citation.url}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
+            {/* Tab Content */}
+            <div style={{ padding: '1rem 1.25rem' }}>
+                <AnimatePresence mode="wait">
+                    {activeTab === 'analysis' && (
+                        <motion.div
+                            key="analysis"
+                            initial={{ opacity: 0, x: -10 }}
+                            animate={{ opacity: 1, x: 0 }}
+                            exit={{ opacity: 0, x: 10 }}
+                            transition={{ duration: 0.15 }}
+                        >
+                            {/* Narrative Summary with Streaming Effect */}
+                            <div
+                                style={{
+                                    padding: '1rem',
+                                    borderRadius: '12px',
+                                    backgroundColor: theme.colors.bg.section,
+                                    marginBottom: '1rem',
+                                }}
+                            >
+                                <p
+                                    style={{
+                                        fontSize: '0.9rem',
+                                        lineHeight: 1.7,
+                                        color: theme.colors.text.secondary,
+                                        margin: 0,
+                                        minHeight: '4em',
+                                    }}
+                                >
+                                    {displayText}
+                                    {!isComplete && (
+                                        <motion.span
+                                            animate={{ opacity: [0, 1, 0] }}
+                                            transition={{ repeat: Infinity, duration: 0.8 }}
+                                            style={{
+                                                display: 'inline-block',
+                                                width: '2px',
+                                                height: '1em',
+                                                backgroundColor: theme.colors.accent.info,
+                                                marginLeft: '2px',
+                                                verticalAlign: 'middle',
+                                            }}
+                                        />
+                                    )}
+                                </p>
+                            </div>
+
+                            {/* Quick Stats Grid */}
+                            <div
+                                style={{
+                                    display: 'grid',
+                                    gridTemplateColumns: 'repeat(3, 1fr)',
+                                    gap: '0.75rem',
+                                }}
+                            >
+                                {displayFactors.slice(0, 3).map((factor, idx) => (
+                                    <motion.div
+                                        key={`quick-${idx}`}
+                                        initial={{ opacity: 0, y: 10 }}
+                                        animate={{ opacity: 1, y: 0 }}
+                                        transition={{ delay: 0.1 * idx }}
                                         style={{
-                                            fontSize: '0.75rem',
-                                            color: '#38bdf8',
-                                            textDecoration: 'none',
-                                            padding: '4px 10px',
-                                            borderRadius: '6px',
-                                            backgroundColor: 'rgba(56, 189, 248, 0.1)',
-                                            border: '1px solid rgba(56, 189, 248, 0.2)',
-                                            transition: 'all 0.2s',
-                                        }}
-                                        onMouseOver={(e) => {
-                                            e.currentTarget.style.backgroundColor = 'rgba(56, 189, 248, 0.2)';
-                                        }}
-                                        onMouseOut={(e) => {
-                                            e.currentTarget.style.backgroundColor = 'rgba(56, 189, 248, 0.1)';
+                                            padding: '0.75rem',
+                                            borderRadius: '10px',
+                                            backgroundColor: theme.colors.impact[factor.impact].bg,
+                                            border: `1px solid ${theme.colors.border.subtle}`,
                                         }}
                                     >
-                                        {citation.title}
-                                    </a>
-                                ) : (
-                                    <span style={{ fontSize: '0.75rem', color: theme.text.secondary }}>
-                                        {citation.title}
-                                    </span>
-                                )}
-                            </li>
-                        ))}
-                    </ul>
-                </div>
-            )}
+                                        <div style={{ fontSize: '1.25rem', marginBottom: '0.25rem' }}>
+                                            {factor.icon || theme.colors.impact[factor.impact].icon}
+                                        </div>
+                                        <p
+                                            style={{
+                                                fontSize: '0.7rem',
+                                                fontWeight: 600,
+                                                color: theme.colors.impact[factor.impact].text,
+                                                margin: 0,
+                                            }}
+                                        >
+                                            {factor.title}
+                                        </p>
+                                    </motion.div>
+                                ))}
+                            </div>
+                        </motion.div>
+                    )}
 
-            {/* Disclaimer */}
-            <p style={{
-                fontSize: '0.7rem',
-                marginTop: '1.5rem',
-                opacity: 0.4,
-                color: theme.text.muted,
-                textAlign: 'center',
-                fontStyle: 'italic'
-            }}>
-                AI-generated analysis. For information purposes only.
-            </p>
+                    {activeTab === 'factors' && (
+                        <motion.div
+                            key="factors"
+                            initial={{ opacity: 0, x: 10 }}
+                            animate={{ opacity: 1, x: 0 }}
+                            exit={{ opacity: 0, x: -10 }}
+                            transition={{ duration: 0.15 }}
+                        >
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                                {displayFactors.map((factor, idx) => (
+                                    <motion.div
+                                        key={`factor-${idx}`}
+                                        initial={{ opacity: 0, x: -10 }}
+                                        animate={{ opacity: 1, x: 0 }}
+                                        transition={{ delay: 0.05 * idx }}
+                                        style={{
+                                            display: 'flex',
+                                            gap: '0.75rem',
+                                            padding: '0.875rem',
+                                            borderRadius: '12px',
+                                            backgroundColor: theme.colors.bg.section,
+                                            border: `1px solid ${theme.colors.border.subtle}`,
+                                        }}
+                                    >
+                                        {/* Impact Indicator */}
+                                        <div
+                                            style={{
+                                                width: '36px',
+                                                height: '36px',
+                                                borderRadius: '10px',
+                                                backgroundColor: theme.colors.impact[factor.impact].bg,
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                justifyContent: 'center',
+                                                flexShrink: 0,
+                                            }}
+                                        >
+                                            <span style={{ fontSize: '1rem' }}>
+                                                {factor.icon || theme.colors.impact[factor.impact].icon}
+                                            </span>
+                                        </div>
+
+                                        <div style={{ flex: 1, minWidth: 0 }}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.25rem' }}>
+                                                <h4 style={{ fontSize: '0.85rem', fontWeight: 600, color: theme.colors.text.primary, margin: 0 }}>
+                                                    {factor.title}
+                                                </h4>
+                                                {factor.source && (
+                                                    <span
+                                                        style={{
+                                                            fontSize: '0.65rem',
+                                                            padding: '0.125rem 0.5rem',
+                                                            borderRadius: '4px',
+                                                            backgroundColor: theme.colors.bg.elevated,
+                                                            color: theme.colors.text.muted,
+                                                        }}
+                                                    >
+                                                        {factor.source}
+                                                    </span>
+                                                )}
+                                            </div>
+                                            <p style={{ fontSize: '0.8rem', color: theme.colors.text.secondary, margin: 0, lineHeight: 1.5 }}>
+                                                {factor.description}
+                                            </p>
+                                        </div>
+                                    </motion.div>
+                                ))}
+                            </div>
+                        </motion.div>
+                    )}
+
+                    {activeTab === 'sources' && showCitations && (
+                        <motion.div
+                            key="sources"
+                            initial={{ opacity: 0, x: 10 }}
+                            animate={{ opacity: 1, x: 0 }}
+                            exit={{ opacity: 0, x: -10 }}
+                            transition={{ duration: 0.15 }}
+                        >
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+                                {citations.map((citation, idx) => (
+                                    <motion.div
+                                        key={idx}
+                                        initial={{ opacity: 0, scale: 0.9 }}
+                                        animate={{ opacity: 1, scale: 1 }}
+                                        transition={{ delay: 0.05 * idx }}
+                                    >
+                                        {citation.url ? (
+                                            <a
+                                                href={citation.url}
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                style={{
+                                                    display: 'inline-flex',
+                                                    alignItems: 'center',
+                                                    gap: '0.375rem',
+                                                    padding: '0.5rem 0.75rem',
+                                                    borderRadius: '8px',
+                                                    backgroundColor: theme.colors.bg.section,
+                                                    border: `1px solid ${theme.colors.border.subtle}`,
+                                                    color: theme.colors.accent.info,
+                                                    fontSize: '0.75rem',
+                                                    textDecoration: 'none',
+                                                    transition: 'all 0.2s',
+                                                }}
+                                            >
+                                                <span>📄</span>
+                                                {citation.title}
+                                                {citation.date && (
+                                                    <span style={{ color: theme.colors.text.muted, fontSize: '0.65rem' }}>
+                                                        · {citation.date}
+                                                    </span>
+                                                )}
+                                            </a>
+                                        ) : (
+                                            <span
+                                                style={{
+                                                    display: 'inline-flex',
+                                                    alignItems: 'center',
+                                                    gap: '0.375rem',
+                                                    padding: '0.5rem 0.75rem',
+                                                    borderRadius: '8px',
+                                                    backgroundColor: theme.colors.bg.section,
+                                                    border: `1px solid ${theme.colors.border.subtle}`,
+                                                    color: theme.colors.text.secondary,
+                                                    fontSize: '0.75rem',
+                                                }}
+                                            >
+                                                <span>📄</span>
+                                                {citation.title}
+                                            </span>
+                                        )}
+                                    </motion.div>
+                                ))}
+                            </div>
+                        </motion.div>
+                    )}
+                </AnimatePresence>
+            </div>
+
+            {/* Footer with Disclaimer */}
+            <div
+                style={{
+                    padding: '0.75rem 1.25rem',
+                    borderTop: `1px solid ${theme.colors.border.subtle}`,
+                    backgroundColor: theme.colors.bg.elevated,
+                }}
+            >
+                <p
+                    style={{
+                        fontSize: '0.65rem',
+                        color: theme.colors.text.muted,
+                        margin: 0,
+                        textAlign: 'center',
+                        fontStyle: 'italic',
+                    }}
+                >
+                    💡 AI-generated analysis based on market data and news. For informational purposes only.
+                </p>
+            </div>
         </motion.div>
     );
 }

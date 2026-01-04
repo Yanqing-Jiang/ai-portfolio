@@ -616,6 +616,38 @@ class A2UIComponent(BaseModel):
             
         return cls(id=id, component={"MetricChart": comp})
 
+    @classmethod
+    def peer_compare_panel(
+        cls,
+        id: str,
+        title_path: str,
+        metric_literal: str,
+        tickers_path: str,
+        chart_series_path: str,
+        table_columns_path: str,
+        table_rows_path: str,
+        explanation_title_path: str,
+        explanation_text_path: str,
+    ) -> "A2UIComponent":
+        """Create a PeerComparePanel component - consolidated comparison view."""
+        comp: Dict[str, Any] = {
+            "title": {"path": title_path},
+            "metric": {"literalString": metric_literal},
+            "tickers": {"path": tickers_path},
+            "chart": {
+                "series": {"path": chart_series_path},
+            },
+            "table": {
+                "columns": {"path": table_columns_path},
+                "rows": {"path": table_rows_path},
+            },
+            "explanation": {
+                "title": {"path": explanation_title_path},
+                "text": {"path": explanation_text_path},
+            },
+        }
+        return cls(id=id, component={"PeerComparePanel": comp})
+
 
 # ============================================================================
 # A2UI Messages

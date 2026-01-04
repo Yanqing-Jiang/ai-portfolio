@@ -82,9 +82,11 @@ export class MessageProcessor {
     private surfaces: Map<string, Surface> = new Map();
     private dataModels: Map<string, DataModel> = new Map();
     private onUpdate: (() => void) | null = null;
+    private onAudit: ((event: any) => void) | null = null;
 
-    constructor(onUpdate?: () => void) {
+    constructor(onUpdate?: () => void, onAudit?: (event: any) => void) {
         this.onUpdate = onUpdate || null;
+        this.onAudit = onAudit || null;
     }
 
     /**
@@ -132,6 +134,8 @@ export class MessageProcessor {
             const { surfaceId } = message.deleteSurface;
             this.surfaces.delete(surfaceId);
             this.dataModels.delete(surfaceId);
+        } else if ('audit' in message) {
+            this.onAudit?.(message.audit);
         }
 
         // Trigger update callback
@@ -189,6 +193,6 @@ export class MessageProcessor {
 /**
  * Create a new message processor instance.
  */
-export function createMessageProcessor(onUpdate?: () => void): MessageProcessor {
-    return new MessageProcessor(onUpdate);
+export function createMessageProcessor(onUpdate?: () => void, onAudit?: (event: any) => void): MessageProcessor {
+    return new MessageProcessor(onUpdate, onAudit);
 }

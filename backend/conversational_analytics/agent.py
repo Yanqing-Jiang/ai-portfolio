@@ -231,6 +231,8 @@ class ConversationalAnalyticsAgent:
         self.default_tool_timeout: Optional[int] = timeouts.get("default_tool_seconds")
         self.per_tool_timeout: Dict[str, Any] = timeouts.get("per_tool", {})
         self.tool_failures: Dict[str, int] = {}
+        self.tool_block_until: Dict[str, float] = {}
+        self.tool_block_cooldown_seconds: int = 300  # 5-minute cooldown after repeated failures
         self.max_tool_failures = 3
         if not self.use_sdk_assets:
             logger.info("SDK assets disabled or missing; using legacy prompt path.")
@@ -748,10 +750,29 @@ class ConversationalAnalyticsAgent:
     async def _execute_tool(self, tool_name: str, tool_input: Dict[str, Any]) -> Dict[str, Any]:
         """Function: _execute_tool — invoked by run_with_tools to dispatch domain tools.
         Called from: run_with_tools after a Claude tool_use event.
-        Invokes: TOOL_EXECUTORS registry to execute the requested tool.
-        Purpose: Centralizes tool execution and error handling for conversational analytics."""
+        Invokes: TOOL_EXECUTORS registry to execute the requested tool with a cooldown-based circuit breaker.
+        Purpose: Centralizes tool execution, resets on success, and prevents permanent tool lockouts after transient failures."""
+        now = time.monotonic()
+        block_until = self.tool_block_until.get(tool_name)
+        if block_until:
+            if now < block_until:
+                retry_in = int(block_until - now)
+                return {
+                    "success": False,
+                    "error": f"{tool_name} temporarily blocked after repeated failures; retry in {retry_in}s",
+                }
+            # Cooldown expired; clear counters and allow execution
+            self.tool_failures[tool_name] = 0
+            self.tool_block_until.pop(tool_name, None)
+
         if self.tool_failures.get(tool_name, 0) >= self.max_tool_failures:
-            return {"success": False, "error": f"{tool_name} temporarily blocked after repeated failures"}
+            cooldown_until = now + self.tool_block_cooldown_seconds
+            self.tool_block_until[tool_name] = cooldown_until
+            retry_in = int(cooldown_until - now)
+            return {
+                "success": False,
+                "error": f"{tool_name} temporarily blocked after repeated failures; retry in {retry_in}s",
+            }
 
         executor = TOOL_EXECUTORS.get(tool_name)
         if not executor:
@@ -765,10 +786,19 @@ class ConversationalAnalyticsAgent:
             result = await asyncio.wait_for(coro, timeout=timeout) if timeout else await coro
             # Reset circuit breaker on success
             self.tool_failures[tool_name] = 0
+            self.tool_block_until.pop(tool_name, None)
             return result
         except asyncio.TimeoutError:
-            self.tool_failures[tool_name] = self.tool_failures.get(tool_name, 0) + 1
+            failure_count = self.tool_failures.get(tool_name, 0) + 1
+            self.tool_failures[tool_name] = failure_count
             logger.warning("Tool execution timeout (%s) after %ss", tool_name, timeout)
+            if failure_count >= self.max_tool_failures:
+                cooldown_until = time.monotonic() + self.tool_block_cooldown_seconds
+                self.tool_block_until[tool_name] = cooldown_until
+                return {
+                    "success": False,
+                    "error": f"{tool_name} temporarily blocked for {self.tool_block_cooldown_seconds}s after repeated failures",
+                }
             return {
                 "success": False,
                 "error": f"{tool_name} timed out after {timeout}s",
@@ -777,10 +807,16 @@ class ConversationalAnalyticsAgent:
             import traceback
             error_details = traceback.format_exc()
             logger.error("Tool execution error (%s): %s\n%s", tool_name, e, error_details)
-            self.tool_failures[tool_name] = self.tool_failures.get(tool_name, 0) + 1
+            failure_count = self.tool_failures.get(tool_name, 0) + 1
+            self.tool_failures[tool_name] = failure_count
+            error_message = str(e)
+            if failure_count >= self.max_tool_failures:
+                cooldown_until = time.monotonic() + self.tool_block_cooldown_seconds
+                self.tool_block_until[tool_name] = cooldown_until
+                error_message = f"{tool_name} temporarily blocked for {self.tool_block_cooldown_seconds}s after repeated failures: {error_message}"
             return {
                 "success": False,
-                "error": str(e),
+                "error": error_message,
                 "traceback": error_details if settings.debug_mode else None,
             }
 

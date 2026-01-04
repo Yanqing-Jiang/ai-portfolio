@@ -45,3 +45,57 @@ class LinkedInPhotoResponse(BaseModel):
         ge=0,
         description="Total processing time for the request in milliseconds."
     )
+
+
+class PhotoScores(BaseModel):
+    """AI Quality Scorecard scores for a portrait photo."""
+
+    lighting: int = Field(
+        ...,
+        ge=1,
+        le=10,
+        description="Lighting quality score (1-10). Evaluates even lighting, shadows, and highlights."
+    )
+    angle: int = Field(
+        ...,
+        ge=1,
+        le=10,
+        description="Camera angle score (1-10). Evaluates flattering angle and lens distortion."
+    )
+    background: int = Field(
+        ...,
+        ge=1,
+        le=10,
+        description="Background cleanliness score (1-10). Evaluates clutter-free, professional setting."
+    )
+    expression: int = Field(
+        ...,
+        ge=1,
+        le=10,
+        description="Facial expression and outfit score (1-10). Evaluates confidence, approachability, and attire."
+    )
+    overall: int = Field(
+        ...,
+        ge=1,
+        le=10,
+        description="Overall professional readiness score (1-10). The main headline score."
+    )
+
+
+class PhotoAnalysisResponse(BaseModel):
+    """Response payload for the AI Quality Scorecard analysis."""
+
+    scores: PhotoScores = Field(
+        ...,
+        description="Detailed quality scores for the uploaded photo."
+    )
+    tips: List[str] = Field(
+        ...,
+        description="List of 2-3 improvement suggestions or affirmations."
+    )
+    processing_ms: int = Field(
+        ...,
+        ge=0,
+        description="Total processing time for the analysis in milliseconds."
+    )
+

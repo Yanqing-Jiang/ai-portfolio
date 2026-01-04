@@ -34,6 +34,7 @@ import { DataTable } from './widgets/DataTable';
 import { NewsTimeline } from './widgets/NewsTimeline';
 import { CorrelationMatrix } from './widgets/CorrelationMatrix';
 import { ExplainMovePanel } from './widgets/ExplainMovePanel';
+import { PeerComparePanel } from './widgets/PeerComparePanel';
 import { ErrorPanel } from './widgets/ErrorPanel';
 import { MetricChart } from './widgets/MetricChart';
 
@@ -89,6 +90,7 @@ export const componentRegistry: Record<
     NewsTimeline,
     CorrelationMatrix,
     ExplainMovePanel,
+    PeerComparePanel,
     ErrorPanel,
     MetricChart,
 };

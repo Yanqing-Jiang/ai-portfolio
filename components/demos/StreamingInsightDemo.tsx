@@ -211,6 +211,7 @@ export const AdvancedNeuralField: React.FC = () => {
             x: number; y: number; originX: number; originY: number;
             vx: number; vy: number; friction: number; ease: number;
             size: number; color: string;
+            driftX: number; driftY: number; driftSpeed: number;
 
             constructor() {
                 this.x = Math.random() * canvas!.width;
@@ -223,6 +224,9 @@ export const AdvancedNeuralField: React.FC = () => {
                 this.ease = 0.08;
                 this.size = Math.random() * 2 + 0.5;
                 this.color = Math.random() > 0.5 ? '#0ea5e9' : '#6366f1';
+                this.driftX = Math.random() * 2000;
+                this.driftY = Math.random() * 2000;
+                this.driftSpeed = 0.001 + Math.random() * 0.002;
             }
 
             update() {
@@ -239,8 +243,16 @@ export const AdvancedNeuralField: React.FC = () => {
 
                 this.vx *= this.friction;
                 this.vy *= this.friction;
-                this.x += this.vx + (this.originX - this.x) * this.ease;
-                this.y += this.vy + (this.originY - this.y) * this.ease;
+
+                // Add autonomous drift
+                const driftAmount = 0.5;
+                const dx_drift = Math.cos(this.driftX) * driftAmount;
+                const dy_drift = Math.sin(this.driftY) * driftAmount;
+                this.driftX += this.driftSpeed;
+                this.driftY += this.driftSpeed;
+
+                this.x += this.vx + dx_drift + (this.originX - this.x) * this.ease;
+                this.y += this.vy + dy_drift + (this.originY - this.y) * this.ease;
             }
 
             draw() {
@@ -410,7 +422,7 @@ export const HolographicTerminal: React.FC = () => {
                             {item.icon}
                         </div>
                         {/* Hover Tooltip */}
-                        <div className="absolute -top-8 left-1/2 -translate-x-1/2 px-2 py-0.5 bg-slate-900 border border-white/10 text-white text-[7px] rounded opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none uppercase font-mono tracking-widest whitespace-nowrap">
+                        <div className="absolute -top-12 left-1/2 -translate-x-1/2 px-4 py-1.5 bg-slate-900 border border-white/30 text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none uppercase font-mono tracking-[0.2em] whitespace-nowrap shadow-[0_0_20px_rgba(0,0,0,0.5)]">
                             {item.label}
                         </div>
                     </motion.a>

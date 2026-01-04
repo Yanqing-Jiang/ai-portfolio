@@ -4,6 +4,9 @@ import { StylePresetCard, INITIAL_STYLE_PRESETS, type StylePreset } from './Styl
 import { ImageVariationGallery, type ImageVariation } from './ImageVariationGallery';
 import { VariationControls, type VariationRequestOptions } from './VariationControls';
 import { CustomStyleBuilder, buildCustomPromptFromParams, type CustomStyleParams } from './CustomStyleBuilder';
+import { MagicScanAnimation } from './MagicScanAnimation';
+import { PhotoScorecard, type PhotoScores } from './PhotoScorecard';
+import { HolographicButton } from './HolographicButton';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
@@ -16,7 +19,7 @@ import { authService, type AuthState } from '@/services/auth';
 
 // --- Function/Class Map ---
 // Component: LinkedInPhotoPage — mounted by ProjectView for the LinkedIn photo project; handles upload → prompt selection → generation/variation.
-// Helper: fetchCredits — fetches LinkedIn photo credits for signed-in users from /api/linkedin-photo/credits.
+// Helper: fetchCredits — fetches LinkedIn photo credits for signed-in users from /api/headshot-studio/credits.
 // Helper: ensureAuthenticated/ensureCreditsAvailable — gates actions to logged-in users with remaining credits; shows auth or follow modals when blocked.
 // Purpose: Deliver the LinkedIn photo generator experience with credit gating, hero imagery, and preset loading.
 
@@ -30,33 +33,34 @@ const STEPS = [
   { number: 3, label: 'Review Results' },
 ];
 
-const LINKEDIN_PHOTO_THEME: React.CSSProperties = {
-  '--background': '222 47% 7%',
+// Premium "Luxury Executive" theme: Midnight Navy + Champagne Gold
+const HEADSHOT_STUDIO_THEME: React.CSSProperties = {
+  '--background': '222 71% 4%',
   '--foreground': '210 40% 96%',
-  '--card': '222 47% 11%',
+  '--card': '222 50% 8%',
   '--card-foreground': '210 40% 96%',
-  '--popover': '222 47% 12%',
+  '--popover': '222 50% 10%',
   '--popover-foreground': '210 40% 96%',
-  '--primary': '199 89% 63%',
-  '--primary-foreground': '210 40% 98%',
-  '--secondary': '222 30% 18%',
+  '--primary': '43 74% 49%',
+  '--primary-foreground': '222 71% 4%',
+  '--secondary': '222 30% 14%',
   '--secondary-foreground': '210 40% 96%',
-  '--muted': '217 28% 20%',
-  '--muted-foreground': '214 20% 72%',
-  '--accent': '199 89% 63%',
-  '--accent-foreground': '222 47% 12%',
+  '--muted': '217 28% 16%',
+  '--muted-foreground': '214 20% 68%',
+  '--accent': '210 100% 40%',
+  '--accent-foreground': '210 40% 98%',
   '--destructive': '0 62.8% 45%',
   '--destructive-foreground': '210 40% 98%',
-  '--border': '222 32% 24%',
-  '--input': '222 32% 24%',
-  '--ring': '199 89% 63%',
+  '--border': '222 32% 20%',
+  '--input': '222 32% 20%',
+  '--ring': '43 74% 49%',
 };
 
-const VARIATION_API_PATH = '/api/linkedin-photo/variation';
+const VARIATION_API_PATH = '/api/headshot-studio/variation';
 const LINKEDIN_CREDIT_LIMIT = 2;
 const LINKEDIN_FOLLOW_URL = 'https://www.linkedin.com/in/jiangyanqing/';
 
-const LinkedInPhotoPage: React.FC<LinkedInPhotoPageProps> = ({ apiPath = '/api/linkedin-photo/generate' }) => {
+const LinkedInPhotoPage: React.FC<LinkedInPhotoPageProps> = ({ apiPath = '/api/headshot-studio/generate' }) => {
   const [currentStep, setCurrentStep] = useState(1);
   const [photoFile, setPhotoFile] = useState<File | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
@@ -88,6 +92,9 @@ const LinkedInPhotoPage: React.FC<LinkedInPhotoPageProps> = ({ apiPath = '/api/l
   const [creditsError, setCreditsError] = useState<string | null>(null);
   const [showFollowModal, setShowFollowModal] = useState(false);
   const [followMessage, setFollowMessage] = useState<string | null>(null);
+  // AI Quality Scorecard state
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysisResult, setAnalysisResult] = useState<{ scores: PhotoScores; tips: string[]; processingMs: number } | null>(null);
   const isSignedIn = !!authState.user;
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -112,7 +119,7 @@ const LinkedInPhotoPage: React.FC<LinkedInPhotoPageProps> = ({ apiPath = '/api/l
 
     try {
       const headers = await authService.getAuthHeaders();
-      const response = await fetch(`${backendBaseRef.current}/api/linkedin-photo/credits`, {
+      const response = await fetch(`${backendBaseRef.current}/api/headshot-studio/credits`, {
         headers,
       });
 
@@ -210,7 +217,7 @@ const LinkedInPhotoPage: React.FC<LinkedInPhotoPageProps> = ({ apiPath = '/api/l
         setIsLoadingPresets(true);
         setPresetLoadError(null);
 
-        const targetUrl = `${backendBaseRef.current}/api/linkedin-photo/prompts`;
+        const targetUrl = `${backendBaseRef.current}/api/headshot-studio/prompts`;
         const response = await fetch(targetUrl);
 
         if (!response.ok) {
@@ -317,8 +324,9 @@ const LinkedInPhotoPage: React.FC<LinkedInPhotoPageProps> = ({ apiPath = '/api/l
       .filter((variation: ImageVariation) => variation.imageBase64.length > 0);
   };
 
-  const handleFileChange = (file: File | null) => {
+  const handleFileChange = async (file: File | null) => {
     setError(null);
+    setAnalysisResult(null);
     if (!file) {
       setPhotoFile(null);
       if (photoPreview) {
@@ -334,6 +342,33 @@ const LinkedInPhotoPage: React.FC<LinkedInPhotoPageProps> = ({ apiPath = '/api/l
     setPhotoFile(file);
     setCurrentStep(2);
     setTimeout(() => scrollToRef(step2Ref), 100);
+
+    // Trigger AI Quality Scorecard analysis
+    setIsAnalyzing(true);
+    try {
+      const formData = new FormData();
+      formData.append('photo', file);
+
+      const response = await fetch(`${backendBaseRef.current}/api/headshot-studio/analyze`, {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setAnalysisResult({
+          scores: data.scores,
+          tips: data.tips || [],
+          processingMs: data.processing_ms || 0,
+        });
+      } else {
+        console.warn('Photo analysis failed:', response.status);
+      }
+    } catch (err) {
+      console.warn('Photo analysis error:', err);
+    } finally {
+      setIsAnalyzing(false);
+    }
   };
 
   const handleInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -661,57 +696,72 @@ const LinkedInPhotoPage: React.FC<LinkedInPhotoPageProps> = ({ apiPath = '/api/l
   };
 
   return (
-    <div className="relative min-h-screen overflow-hidden" style={LINKEDIN_PHOTO_THEME}>
-      <div className="absolute inset-0 bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950" />
-      <div className="pointer-events-none absolute -top-40 right-[-25%] h-[520px] w-[520px] rounded-full bg-cyan-500/15 blur-3xl" />
-      <div className="pointer-events-none absolute -bottom-48 left-[-20%] h-[560px] w-[560px] rounded-full bg-blue-500/10 blur-3xl" />
+    <div className="relative min-h-screen overflow-hidden" style={HEADSHOT_STUDIO_THEME}>
+      <div className="absolute inset-0 bg-gradient-to-br from-[#0B1120] via-slate-900 to-[#0B1120]" />
+      <div className="pointer-events-none absolute -top-40 right-[-25%] h-[520px] w-[520px] rounded-full bg-amber-500/10 blur-3xl" />
+      <div className="pointer-events-none absolute -bottom-48 left-[-20%] h-[560px] w-[560px] rounded-full bg-blue-600/10 blur-3xl" />
+
+      {/* Google Fonts for premium typography */}
+      <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600;700&display=swap" rel="stylesheet" />
+
       <div className="relative z-10 py-16 sm:py-20 px-4 sm:px-6 lg:px-8">
         <div className="max-w-6xl mx-auto space-y-12 text-foreground">
-          {/* Header */}
-          <header className="text-center space-y-6 mb-4">
+          {/* Header - fades away when photo is uploaded */}
+          <header className={cn(
+            "text-center space-y-6 mb-4 transition-all duration-500",
+            photoFile && "opacity-0 h-0 overflow-hidden !mb-0 !space-y-0"
+          )}>
             <div className="space-y-4">
-              <h1 className="text-5xl sm:text-6xl lg:text-7xl font-extrabold tracking-tight text-foreground leading-[1.1]">
-                LinkedIn Profile Picture Generator
+              <h1
+                className="text-5xl sm:text-6xl lg:text-7xl font-bold tracking-tight text-foreground leading-[1.1]"
+                style={{ fontFamily: "'Cormorant Garamond', 'Playfair Display', Georgia, serif" }}
+              >
+                The Headshot Studio
               </h1>
-              <p className="text-xl sm:text-2xl text-muted-foreground/90 max-w-3xl mx-auto font-light leading-relaxed">
-                Powered by <span className="text-primary font-semibold">Nano Banana Pro by Gemini 3</span>
+              <p className="text-xl sm:text-2xl text-muted-foreground/90 max-w-3xl mx-auto font-light leading-relaxed flex items-center justify-center gap-2 flex-wrap">
+                <span className="text-primary font-medium">Executive-grade AI portraits</span>
+                <span>powered by</span>
+                <a
+                  href="https://deepmind.google/technologies/gemini/"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="relative inline-flex items-center group"
+                >
+                  <img
+                    src="https://www.gstatic.com/lamda/images/gemini_sparkle_v002_d4735304ff6292a690345.svg"
+                    alt="Google Gemini"
+                    className="h-6 w-6 mr-1"
+                  />
+                  <span className="text-primary font-semibold hover:underline">
+                    Gemini 3 Image
+                  </span>
+                  {/* Tooltip */}
+                  <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-2 bg-slate-800 text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none whitespace-nowrap border border-amber-500/30 shadow-xl z-50">
+                    Also known as "Nano Banana Pro" (experimental image generation model)
+                  </span>
+                </a>
               </p>
               <div className="flex justify-center">
                 <img
-                  src="https://yanqinghot.blob.core.windows.net/public-access/linkedin-photo-generator.jpg"
-                  alt="LinkedIn photo generator hero"
-                  className="w-full max-w-3xl rounded-2xl shadow-2xl border border-border/60"
+                  src="https://yanqinghot.blob.core.windows.net/public-access/3-photo-rotate.gif"
+                  alt="Before and after transformation showcase"
+                  className="w-full max-w-3xl rounded-2xl shadow-2xl border-2 border-amber-500/40"
                   loading="lazy"
                 />
               </div>
             </div>
-            {isSignedIn ? (
+            {/* Only show credits badge when signed in - no sign-in banner here */}
+            {isSignedIn && (
               <div className="flex justify-center">
                 <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-primary/10 border border-primary/30 text-primary-foreground">
                   <Sparkles className="w-4 h-4" />
                   <span>
                     {creditsLoading
                       ? 'Loading credits...'
-                      : `${credits?.remaining ?? LINKEDIN_CREDIT_LIMIT}/${credits?.limit ?? LINKEDIN_CREDIT_LIMIT} LinkedIn photo credits left`}
+                      : `${credits?.remaining ?? LINKEDIN_CREDIT_LIMIT}/${credits?.limit ?? LINKEDIN_CREDIT_LIMIT} headshot credits left`}
                   </span>
                 </div>
               </div>
-            ) : (
-              !authState.loading && (
-                <div className="max-w-3xl mx-auto p-4 rounded-xl border border-amber-500/40 bg-amber-500/10 text-amber-100">
-                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                    <div className="space-y-1 text-left">
-                      <p className="font-semibold text-lg">Sign in to use the LinkedIn Photo Generator</p>
-                      <p className="text-sm text-amber-100/90">
-                        Uploads and generations are available to signed-in users with 2 credits.
-                      </p>
-                    </div>
-                    <Button onClick={() => setShowAuthModal(true)} variant="default" className="bg-primary text-primary-foreground">
-                      Sign in
-                    </Button>
-                  </div>
-                </div>
-              )
             )}
             {creditsError && isSignedIn && (
               <div className="max-w-3xl mx-auto p-3 rounded-lg border border-destructive/30 bg-destructive/10 text-sm text-destructive text-left">
@@ -720,12 +770,12 @@ const LinkedInPhotoPage: React.FC<LinkedInPhotoPageProps> = ({ apiPath = '/api/l
             )}
           </header>
 
-          {/* Step Indicator */}
+          {/* Step Indicator - always visible */}
           <StepIndicator steps={STEPS} currentStep={currentStep} />
 
           <div className="grid gap-8 lg:grid-cols-2 lg:items-start">
             {/* Step 1: Upload Photo */}
-            <Card className={cn('h-full border-border/50 shadow-xl', !isSignedIn && 'opacity-40 pointer-events-none')}>
+            <Card className="h-full border-border/50 shadow-xl">
               <CardHeader className="space-y-3 pb-6">
                 <CardTitle className="flex items-center gap-3 text-2xl">
                   <span className="flex items-center justify-center w-10 h-10 rounded-full bg-primary text-primary-foreground text-base font-bold">
@@ -734,7 +784,25 @@ const LinkedInPhotoPage: React.FC<LinkedInPhotoPageProps> = ({ apiPath = '/api/l
                   Upload Photo
                 </CardTitle>
                 <CardDescription className="text-base leading-relaxed">
-                  Upload a clear photo. Best results with good lighting and plain background.
+                  Get a{' '}
+                  <span className="relative inline-block group cursor-help">
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-gradient-to-r from-violet-500/15 to-blue-500/15 text-blue-300 font-medium rounded-full border border-blue-400/30 text-sm hover:border-blue-400/50 transition-colors">
+                      <Sparkles className="w-3.5 h-3.5 text-violet-400" />
+                      Professional Readiness Score
+                    </span>
+                    {/* Tooltip explaining scoring */}
+                    <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 p-3 bg-slate-800 text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none w-64 border border-amber-500/30 shadow-xl z-50">
+                      <strong className="block mb-1 text-amber-400">AI Quality Scores (1-10):</strong>
+                      <ul className="space-y-0.5 text-slate-300">
+                        <li>• <span className="text-white">Lighting</span> - Even illumination, no harsh shadows</li>
+                        <li>• <span className="text-white">Angle</span> - Flattering camera height and position</li>
+                        <li>• <span className="text-white">Background</span> - Clean, professional setting</li>
+                        <li>• <span className="text-white">Expression</span> - Confident, approachable look</li>
+                        <li>• <span className="text-white">Outfit</span> - Professional attire assessment</li>
+                      </ul>
+                    </span>
+                  </span>
+                  {' '}for free.
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
@@ -758,23 +826,65 @@ const LinkedInPhotoPage: React.FC<LinkedInPhotoPageProps> = ({ apiPath = '/api/l
                     className="hidden"
                   />
                   {photoPreview ? (
-                    <div className="flex flex-col md:flex-row items-center gap-6">
-                      <img src={photoPreview} alt="Preview" className="w-32 h-32 object-cover rounded-xl border shadow-md" />
-                      <div className="flex-1 text-center md:text-left space-y-1">
-                        <p className="font-semibold text-base">Photo uploaded successfully!</p>
-                        <p className="text-sm text-muted-foreground">Click or drag to replace</p>
+                    <div className="flex flex-col gap-6">
+                      <div className="flex flex-col md:flex-row items-center gap-6">
+                        <div className="relative">
+                          <img src={photoPreview} alt="Preview" className="w-32 h-32 object-cover rounded-xl border shadow-md" />
+                          <MagicScanAnimation isActive={isAnalyzing} />
+                        </div>
+                        <div className="flex-1 text-center md:text-left space-y-2">
+                          {isAnalyzing ? (
+                            <div className="space-y-3">
+                              <div className="flex items-center gap-2">
+                                <div className="animate-spin rounded-full h-4 w-4 border-2 border-primary border-t-transparent" />
+                                <p className="font-semibold text-base text-primary animate-pulse">
+                                  Analyzing Readiness Score...
+                                </p>
+                              </div>
+                              <div className="w-full max-w-xs">
+                                <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
+                                  <div className="h-full bg-gradient-to-r from-amber-500 to-primary rounded-full animate-pulse" style={{ width: '60%' }} />
+                                </div>
+                                <p className="text-xs text-muted-foreground mt-1">AI is evaluating your photo...</p>
+                              </div>
+                            </div>
+                          ) : (
+                            <>
+                              <p className="font-semibold text-base text-emerald-400">
+                                ✓ Photo uploaded successfully!
+                              </p>
+                              <p className="text-sm text-muted-foreground">Click or drag to replace</p>
+                            </>
+                          )}
+                        </div>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleFileChange(null);
+                          }}
+                        >
+                          <X className="w-4 h-4" />
+                          Remove
+                        </Button>
                       </div>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleFileChange(null);
-                        }}
-                      >
-                        <X className="w-4 h-4" />
-                        Remove
-                      </Button>
+                      {/* AI Quality Scorecard */}
+                      {analysisResult && (
+                        <PhotoScorecard
+                          scores={analysisResult.scores}
+                          tips={analysisResult.tips}
+                          processingMs={analysisResult.processingMs}
+                          onStyleRecommendation={(styleId) => {
+                            // Find and select the recommended style
+                            const style = presetOptions.find(p => p.id === styleId);
+                            if (style) {
+                              handlePresetSelect(style);
+                              setTimeout(() => scrollToRef(step2Ref), 100);
+                            }
+                          }}
+                        />
+                      )}
                     </div>
                   ) : (
                     <div className="text-center space-y-4">
@@ -790,11 +900,10 @@ const LinkedInPhotoPage: React.FC<LinkedInPhotoPageProps> = ({ apiPath = '/api/l
             </Card>
 
             {/* Step 2: Choose Style */}
-            <div ref={step2Ref} className="h-full">
+            <div ref={step2Ref} className="h-full relative">
               <Card className={cn(
                 'h-full border-border/50 shadow-xl',
-                !photoFile && 'opacity-50 pointer-events-none',
-                !isSignedIn && 'opacity-40 pointer-events-none'
+                !photoFile && 'opacity-50 pointer-events-none'
               )}>
                 <CardHeader className="space-y-3 pb-6">
                   <CardTitle className="flex items-center gap-3 text-2xl">
@@ -808,7 +917,7 @@ const LinkedInPhotoPage: React.FC<LinkedInPhotoPageProps> = ({ apiPath = '/api/l
                     </span>
                     Choose Your Style
                   </CardTitle>
-                  <CardDescription className="text-base leading-relaxed">Select a preset or write your own custom style description.</CardDescription>
+                  <CardDescription className="text-base leading-relaxed">Select an Executive Suite preset or create your own custom style.</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-6">
                   {isLoadingPresets && (
@@ -843,15 +952,15 @@ const LinkedInPhotoPage: React.FC<LinkedInPhotoPageProps> = ({ apiPath = '/api/l
                   )}
 
 
-                  <Button
+                  <HolographicButton
                     onClick={handleGenerate}
                     disabled={!photoFile || (!selectedPreset) || isGenerating || (!stylePrompt.trim() && selectedPreset?.id !== 'custom')}
                     size="lg"
                     className="w-full text-base font-semibold h-14"
                   >
-                    <Sparkles className="w-5 h-5" />
-                    {isGenerating ? 'Creating Your Portrait...' : 'Generate LinkedIn Headshot'}
-                  </Button>
+                    <Sparkles className="w-5 h-5 mr-2" />
+                    {isGenerating ? 'Creating Your Portrait...' : 'Generate Executive Headshot'}
+                  </HolographicButton>
 
                   {isGenerating && (
                     <div className="space-y-2">
@@ -869,6 +978,49 @@ const LinkedInPhotoPage: React.FC<LinkedInPhotoPageProps> = ({ apiPath = '/api/l
                   )}
                 </CardContent>
               </Card>
+
+              {/* Premium Sign-in Overlay - appears after photo upload for non-signed-in users */}
+              {photoFile && !isSignedIn && (
+                <div className="absolute inset-0 z-20 flex items-center justify-center bg-slate-950/80 backdrop-blur-md rounded-xl">
+                  <div className="max-w-md mx-4 p-8 bg-gradient-to-br from-slate-900 to-slate-800 rounded-2xl border-2 border-amber-500/40 shadow-2xl text-center space-y-6">
+                    {/* Premium badge */}
+                    <div className="inline-flex items-center gap-2 px-4 py-2 bg-amber-500/20 rounded-full border border-amber-500/30">
+                      <Sparkles className="w-4 h-4 text-amber-400" />
+                      <span className="text-sm font-semibold text-amber-300">Exclusive Access</span>
+                    </div>
+
+                    <div className="space-y-2">
+                      <h3 className="text-2xl font-bold text-white" style={{ fontFamily: "'Playfair Display', serif" }}>
+                        Unlock Your Professional Look
+                      </h3>
+                      <p className="text-slate-400 text-sm leading-relaxed">
+                        Sign in to access the Executive Suite styles and transform your photo into a professional headshot.
+                      </p>
+                    </div>
+
+                    {/* Benefits list */}
+                    <div className="text-left space-y-2 py-2">
+                      {['AI Quality Scorecard analysis', 'Executive Suite style presets', '2 free headshot generations'].map((benefit, i) => (
+                        <div key={i} className="flex items-center gap-2 text-sm text-slate-300">
+                          <svg className="w-4 h-4 text-emerald-400" fill="currentColor" viewBox="0 0 20 20">
+                            <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                          </svg>
+                          <span>{benefit}</span>
+                        </div>
+                      ))}
+                    </div>
+
+                    <Button
+                      onClick={() => setShowAuthModal(true)}
+                      size="lg"
+                      className="w-full h-12 bg-gradient-to-r from-amber-600 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-white font-semibold shadow-lg hover:shadow-amber-500/25"
+                    >
+                      <Sparkles className="w-4 h-4 mr-2" />
+                      Sign In to Continue
+                    </Button>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 
@@ -905,11 +1057,43 @@ const LinkedInPhotoPage: React.FC<LinkedInPhotoPageProps> = ({ apiPath = '/api/l
                     onShare={handleShareVariation}
                   />
 
-                  <VariationControls
-                    disabled={isGenerating || isCreatingVariation}
-                    isSubmitting={isCreatingVariation}
-                    onCreateVariation={handleCreateVariation}
-                  />
+                  {/* Variation Controls - Mobile-friendly collapsible */}
+                  <div className="lg:block">
+                    {/* Desktop: always visible */}
+                    <div className="hidden lg:block">
+                      <VariationControls
+                        disabled={isGenerating || isCreatingVariation}
+                        isSubmitting={isCreatingVariation}
+                        onCreateVariation={handleCreateVariation}
+                      />
+                    </div>
+                    {/* Mobile: collapsible bottom sheet style */}
+                    <div className="lg:hidden">
+                      <details className="group rounded-2xl border border-border/40 bg-secondary/40 shadow-inner shadow-black/30">
+                        <summary className="flex cursor-pointer items-center justify-between p-4 text-foreground list-none">
+                          <div className="flex items-center gap-3">
+                            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/15 text-primary">
+                              <Sparkles className="h-5 w-5" />
+                            </div>
+                            <div>
+                              <p className="text-base font-semibold">Guided Variation Builder</p>
+                              <p className="text-xs text-muted-foreground">Tap to customize your next variation</p>
+                            </div>
+                          </div>
+                          <svg className="h-5 w-5 text-muted-foreground transition-transform group-open:rotate-180" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                          </svg>
+                        </summary>
+                        <div className="p-4 pt-0">
+                          <VariationControls
+                            disabled={isGenerating || isCreatingVariation}
+                            isSubmitting={isCreatingVariation}
+                            onCreateVariation={handleCreateVariation}
+                          />
+                        </div>
+                      </details>
+                    </div>
+                  </div>
 
                   {error && currentStep === 3 && (
                     <div className="p-4 bg-destructive/10 border border-destructive/20 rounded-lg">

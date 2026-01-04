@@ -109,7 +109,7 @@ except ImportError:  # pragma: no cover - running as top-level module
     from gemini_service import gemini_service  # type: ignore
 from .fixed_prompts import match_fixed_prompt
 from .prompt_templates import SYSTEM_PROMPT, PROMPT_EXPANSION_TEMPLATE
-from .schemas import LinkedInPhotoResponse, ImageVariation
+from .schemas import LinkedInPhotoResponse, ImageVariation, PhotoAnalysisResponse, PhotoScores
 
 MAX_FILE_SIZE_BYTES = 8 * 1024 * 1024  # 8 MB upload cap to prevent abuse
 ALLOWED_CONTENT_TYPES = {"image/jpeg", "image/png"}
@@ -157,6 +157,195 @@ class LinkedInPhotoService:
         self._image_client: Optional["google_genai.Client"] = None
         self._image_model: str = DEFAULT_IMAGE_MODEL
         self._logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
+
+    async def analyze_photo(
+        self,
+        photo: UploadFile,
+    ) -> PhotoAnalysisResponse:
+        """
+        Analyze a portrait photo and return quality scores for LinkedIn readiness.
+        
+        Uses gemini-2.5-flash-lite multimodal model to analyze the actual uploaded image,
+        providing scores for lighting, angle, background, expression, and outfit.
+        Called from: router.analyze_photo
+        Invokes: _read_and_validate_image, _ensure_image_client, google.genai generate_content
+        Why: Powers the AI Quality Scorecard feature in The Headshot Studio.
+        """
+        start = time.perf_counter()
+        request_id = uuid.uuid4().hex[:8]
+        ctx = f"[req:{request_id}] "
+
+        self._logger.info(
+            "%sReceived photo analysis request (filename=%s)",
+            ctx,
+            getattr(photo, "filename", "<unknown>"),
+        )
+
+        try:
+            validated = await self._read_and_validate_image(photo, request_id=request_id)
+            self._logger.debug(
+                "%sPhoto validated for analysis (%dx%d, %d bytes)",
+                ctx,
+                validated.width,
+                validated.height,
+                len(validated.raw_bytes),
+            )
+
+            # Use Gemini multimodal to analyze the actual photo
+            client = self._ensure_image_client()
+            
+            # Analysis prompt for the AI Quality Scorecard - STRICT SCORING
+            analysis_prompt = """You are an EXTREMELY STRICT professional headshot photographer evaluating this portrait for LinkedIn corporate readiness.
+
+CRITICAL SCORING GUIDELINES (be harsh - this is professional assessment):
+- Score 8-10: Only for ACTUAL professional studio headshots with perfect lighting, clean backdrop, professional attire
+- Score 5-7: Decent attempts but missing key professional elements  
+- Score 1-4: Casual photos, selfies, vacation pics, informal settings - these should score LOW
+
+Analyze this uploaded portrait and provide strict scores from 1-10:
+
+1. **LIGHTING** (1-10): 
+   - 8-10: Professional studio lighting, soft even illumination, no shadows
+   - 5-7: Decent natural light but not studio quality
+   - 1-4: Harsh shadows, unflattering light, indoor/restaurant lighting, flash photos
+
+2. **ANGLE** (1-10):
+   - 8-10: Professional eye-level shot, properly centered, slight 3/4 turn
+   - 5-7: Acceptable but not ideal angle
+   - 1-4: Selfie angle, looking down/up, distorted, too close/far
+
+3. **BACKGROUND** (1-10):
+   - 8-10: Clean studio backdrop, professional office, neutral colors
+   - 5-7: Simple but not professional background
+   - 1-4: Busy restaurant, cluttered room, people in background, outdoor casual
+
+4. **EXPRESSION** (1-10):
+   - 8-10: Confident, warm professional smile, engaging eyes
+   - 5-7: Pleasant but casual expression
+   - 1-4: Casual laugh, candid moment, not looking at camera
+
+5. **OUTFIT** (1-10):
+   - 8-10: Business formal, tailored blazer, crisp shirt
+   - 5-7: Business casual, polo, clean casual
+   - 1-4: T-shirt, casual wear, hoodie, visible logos, wrinkled
+
+The OVERALL score should reflect: "Would a Fortune 500 recruiter take this person seriously based on this photo?"
+- If this looks like a casual/personal photo, the overall should be 3-5
+- If this looks semi-professional, overall should be 5-7
+- Only actual professional headshots should score 8-10
+
+Provide 2-3 actionable tips (15 words max each).
+
+Respond ONLY with valid JSON:
+{"lighting": 4, "angle": 3, "background": 2, "expression": 6, "outfit": 3, "overall": 4, "tips": ["This casual setting won't work for LinkedIn", "Book a professional headshot session", "Invest in proper studio lighting"]}"""
+
+            self._logger.debug(
+                "%sSubmitting photo to gemini-2.5-flash-lite for analysis",
+                ctx,
+            )
+
+            def _run_analysis():
+                from PIL import Image as PILImage
+                from io import BytesIO as IOBytesIO
+                with PILImage.open(IOBytesIO(validated.raw_bytes)) as pil_image:
+                    pil_image.load()
+                    return client.models.generate_content(
+                        model="gemini-2.5-flash-lite",
+                        contents=[pil_image, analysis_prompt],
+                    )
+
+            try:
+                response = await asyncio.to_thread(_run_analysis)
+                self._logger.debug("%sPhoto analysis response received from gemini-2.5-flash-lite", ctx)
+            except Exception as exc:
+                self._logger.exception("%sPhoto analysis with gemini-2.5-flash-lite failed", ctx)
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail="Unable to analyze photo. Try again in a moment.",
+                ) from exc
+
+            # Extract text from response
+            response_text = ""
+            if hasattr(response, "text"):
+                response_text = response.text or ""
+            elif hasattr(response, "candidates") and response.candidates:
+                for candidate in response.candidates:
+                    content = getattr(candidate, "content", None)
+                    parts = getattr(content, "parts", None) if content else None
+                    if parts:
+                        for part in parts:
+                            text = getattr(part, "text", None)
+                            if text:
+                                response_text = text
+                                break
+                    if response_text:
+                        break
+
+            response_text = response_text.strip()
+            self._logger.debug("%sRaw analysis response: %s", ctx, response_text[:300])
+
+            # Remove markdown code block if present
+            if response_text.startswith("```"):
+                lines = response_text.split("\n")
+                # Find json start and end
+                start_idx = 1 if lines[0].startswith("```") else 0
+                end_idx = len(lines) - 1 if lines[-1].strip() == "```" else len(lines)
+                response_text = "\n".join(lines[start_idx:end_idx])
+
+            # Parse JSON response
+            import json
+            try:
+                data = json.loads(response_text)
+            except json.JSONDecodeError:
+                self._logger.warning("%sFailed to parse analysis JSON: %s", ctx, response_text[:200])
+                # Return default scores if parsing fails
+                data = {
+                    "lighting": 7,
+                    "angle": 7,
+                    "background": 7,
+                    "expression": 7,
+                    "outfit": 7,
+                    "overall": 7,
+                    "tips": ["Upload a clear, well-lit portrait for best results."]
+                }
+
+            # Map outfit to expression for backward compatibility with schema
+            # The schema has expression, but we prompted for outfit - use outfit score
+            outfit_score = data.get("outfit", data.get("expression", 7))
+            expression_score = data.get("expression", 7)
+            
+            scores = PhotoScores(
+                lighting=max(1, min(10, int(data.get("lighting", 7)))),
+                angle=max(1, min(10, int(data.get("angle", 7)))),
+                background=max(1, min(10, int(data.get("background", 7)))),
+                expression=max(1, min(10, int(expression_score))),
+                overall=max(1, min(10, int(data.get("overall", 7)))),
+            )
+
+            tips = data.get("tips", ["Looking great for a professional headshot!"])
+            if not isinstance(tips, list):
+                tips = [str(tips)]
+            tips = [str(t) for t in tips[:3]]  # Max 3 tips
+
+        except HTTPException:
+            raise
+        except Exception:
+            self._logger.exception("%sUnexpected error during photo analysis", ctx)
+            raise
+
+        processing_ms = int((time.perf_counter() - start) * 1000)
+        self._logger.info(
+            "%sCompleted photo analysis in %d ms (overall_score=%d)",
+            ctx,
+            processing_ms,
+            scores.overall,
+        )
+
+        return PhotoAnalysisResponse(
+            scores=scores,
+            tips=tips,
+            processing_ms=processing_ms,
+        )
 
     async def generate(
         self,

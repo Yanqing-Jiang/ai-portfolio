@@ -1,20 +1,21 @@
 /**
  * MetricChart Component
- * 
+ *
  * Data-driven time-series chart for financial metrics (revenue, margins, etc.)
- * using ECharts for multi-ticker and multi-series visualization.
- * 
+ * using LazyECharts (Suspense-wrapped) for multi-ticker and multi-series visualization.
+ *
  * Called from: ComponentRenderer.tsx via Registry
- * Why: PriceChart uses TradingView (single-ticker price only); MetricChart 
- *      handles multi-series metric data from comp_financials
+ * Invokes next: Shared LazyECharts loader to code-split the echarts bundle and render the series chart.
+ * Why: PriceChart uses TradingView (single-ticker price only); MetricChart
+ *      handles multi-series metric data from comp_financials with the shared chart loader used by Conversational Analytics.
  */
 
 import React, { useMemo } from 'react';
-import ReactECharts from 'echarts-for-react';
 import { motion } from 'framer-motion';
 import type { A2UIRendererProps } from '../Registry';
 import type { BoundValue } from '../../a2ui/types';
 import { resolveBoundValue } from '../../a2ui/DataBinder';
+import LazyECharts from '../../../shared/LazyECharts';
 
 // Color palette for multi-series
 const SERIES_COLORS = [
@@ -261,11 +262,12 @@ export function MetricChart({
             transition={{ type: 'spring', stiffness: 300, damping: 30 }}
             data-component-id={componentId}
         >
-            <ReactECharts
+            <LazyECharts
                 option={option}
                 style={{ height: '320px', width: '100%' }}
                 opts={{ renderer: 'svg' }}
                 theme="dark"
+                fallbackHeight={320}
             />
         </motion.div>
     );

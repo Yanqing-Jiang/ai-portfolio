@@ -216,6 +216,41 @@ FINANCIAL_CATALOG = CatalogDefinition(
                 ),
             }
         ),
+        "PeerComparePanel": ComponentDefinition(
+            description="Consolidated peer comparison panel with chart, stats, table, and AI insight",
+            properties={
+                "title": ComponentProperty(
+                    type="BoundString",
+                    required=True,
+                    description="Panel title (e.g., 'Comparing AMD, INTC')"
+                ),
+                "metric": ComponentProperty(
+                    type="BoundString",
+                    required=True,
+                    description="Metric being compared (e.g., 'Revenue')"
+                ),
+                "tickers": ComponentProperty(
+                    type="BoundArray",
+                    required=True,
+                    description="Array of ticker symbols being compared"
+                ),
+                "chart": ComponentProperty(
+                    type="BoundArray",
+                    required=True,
+                    description="Object with 'series' array of chart data"
+                ),
+                "table": ComponentProperty(
+                    type="BoundArray",
+                    required=True,
+                    description="Object with 'columns' and 'rows' for table data"
+                ),
+                "explanation": ComponentProperty(
+                    type="BoundArray",
+                    required=False,
+                    description="Object with 'title' and 'text' for AI insight"
+                ),
+            }
+        ),
     }
 )
 

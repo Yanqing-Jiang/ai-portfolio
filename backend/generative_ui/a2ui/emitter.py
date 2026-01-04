@@ -152,18 +152,49 @@ class A2UIMessageEmitter:
         data_msg = self.data_update({"error": {"code": code, "message": message}})
         return [surface_msg, data_msg]
 
-    def build_components_for_skill(self, skill: A2UISkillMeta, context: SkillRenderContext, variant: str | None = None) -> List[A2UIComponent]:
-        """Build the component tree for a given skill (variant is optional hook)."""
-        # Currently variants are not differentiated; this hook allows future
-        # variant-specific builders without changing the call sites.
+    def build_components_for_skill(
+        self,
+        skill: A2UISkillMeta,
+        context: SkillRenderContext,
+        *,
+        variant: str | None = None,
+        widget_order: Optional[List[str]] = None,
+        hidden_widgets: Optional[List[str]] = None,
+        emphasis: Optional[str] = None,
+    ) -> List[A2UIComponent]:
+        """Build the component tree for a given skill with optional overrides."""
         if skill.skill_id == "a2ui_explain_move":
-            return self._build_explain_move_layout(context)
+            return self._build_explain_move_layout(
+                context,
+                variant=variant,
+                widget_order=widget_order,
+                hidden_widgets=hidden_widgets,
+                emphasis=emphasis,
+            )
         if skill.skill_id == "a2ui_peer_compare":
-            return self._build_peer_compare_layout(context)
+            return self._build_peer_compare_layout(
+                context,
+                variant=variant,
+                widget_order=widget_order,
+                hidden_widgets=hidden_widgets,
+                emphasis=emphasis,
+            )
         if skill.skill_id == "a2ui_margin_analysis":
-            return self._build_margin_analysis_layout(context)
+            return self._build_margin_analysis_layout(
+                context,
+                variant=variant,
+                widget_order=widget_order,
+                hidden_widgets=hidden_widgets,
+                emphasis=emphasis,
+            )
         if skill.skill_id == "a2ui_revenue_trend":
-            return self._build_revenue_trend_layout(context)
+            return self._build_revenue_trend_layout(
+                context,
+                variant=variant,
+                widget_order=widget_order,
+                hidden_widgets=hidden_widgets,
+                emphasis=emphasis,
+            )
         raise ValueError(f"Unsupported skill_id for layout: {skill.skill_id}")
 
     def _data_entries_from_dict(self, data: Dict[str, Any]) -> List[DataEntry]:
@@ -186,241 +217,486 @@ class A2UIMessageEmitter:
                 entries.append(DataEntry(key=key, valueString=str(value)))
         return entries
 
-    def _build_explain_move_layout(self, context: SkillRenderContext) -> List[A2UIComponent]:
-        """Layout for explain-move dashboards."""
+    def _build_explain_move_layout(
+        self,
+        context: SkillRenderContext,
+        *,
+        variant: Optional[str] = None,
+        widget_order: Optional[List[str]] = None,
+        hidden_widgets: Optional[List[str]] = None,
+        emphasis: Optional[str] = None,
+    ) -> List[A2UIComponent]:
+        """Layout for explain-move dashboards with variant/order/hide support."""
+        hidden = set(hidden_widgets or [])
+        order = widget_order or []
+        order_index = {name: idx for idx, name in enumerate(order)}
+        active_variant = variant or "split-view"
+        if emphasis == "focus_news" and variant is None:
+            active_variant = "focus_news"
+
+        def priority(name: str, default: int) -> int:
+            return order_index.get(name, default)
+
         title = A2UIComponent.text_bound("title_text", "/data/title", "h2")
         header = A2UIComponent.row("header_row", ["title_text"])
 
-        price_chart = A2UIComponent.price_chart(
-            "main_visual",
-            ticker_path="/data/ticker",
-            interval=context.time_range,
-            show_volume=True,
-            interval_path="/data/time_range",
-        )
-        price_card = A2UIComponent.card("main_visual_card", "main_visual")
+        components: List[A2UIComponent] = [title, header]
 
-        kpi_revenue = A2UIComponent.kpi_card(
-            "kpi_revenue",
-            label="Revenue",
-            value_path="/data/kpis/revenue",
-            unit="$",
-            delta_path="/data/kpis/revenue_delta",
-        )
-        kpi_net_income = A2UIComponent.kpi_card(
-            "kpi_net_income",
-            label="Net Income",
-            value_path="/data/kpis/net_income",
-            unit="$",
-            delta_path="/data/kpis/net_income_delta",
-        )
-        kpi_margin = A2UIComponent.kpi_card(
-            "kpi_gross_margin",
-            label="Gross Margin",
-            value_path="/data/kpis/gross_margin",
-            unit="%",
-        )
-        kpi_row = A2UIComponent.row("kpi_row", ["kpi_revenue", "kpi_net_income", "kpi_gross_margin"])
+        # Price chart
+        if "PriceChart" not in hidden:
+            price_chart = A2UIComponent.price_chart(
+                "main_visual",
+                ticker_path="/data/ticker",
+                interval=context.time_range,
+                show_volume=True,
+                interval_path="/data/time_range",
+            )
+            price_card = A2UIComponent.card("main_visual_card", "main_visual")
+            components.extend([price_chart, price_card])
+        else:
+            price_card = None
 
-        news = A2UIComponent.news_timeline("news_timeline", "/data/news/events")
-        news_card = A2UIComponent.card("news_card", "news_timeline")
-        right_panel = A2UIComponent.column("right_panel", ["kpi_row", "news_card"])
+        # KPIs
+        if "KpiCard" not in hidden:
+            kpi_revenue = A2UIComponent.kpi_card(
+                "kpi_revenue",
+                label="Revenue",
+                value_path="/data/kpis/revenue",
+                unit="$",
+                delta_path="/data/kpis/revenue_delta",
+            )
+            kpi_net_income = A2UIComponent.kpi_card(
+                "kpi_net_income",
+                label="Net Income",
+                value_path="/data/kpis/net_income",
+                unit="$",
+                delta_path="/data/kpis/net_income_delta",
+            )
+            kpi_margin = A2UIComponent.kpi_card(
+                "kpi_gross_margin",
+                label="Gross Margin",
+                value_path="/data/kpis/gross_margin",
+                unit="%",
+            )
+            kpi_row = A2UIComponent.row("kpi_row", ["kpi_revenue", "kpi_net_income", "kpi_gross_margin"])
+            components.extend([kpi_revenue, kpi_net_income, kpi_margin, kpi_row])
+        else:
+            kpi_row = None
 
-        main_row = A2UIComponent.row("main_row", ["main_visual_card", "right_panel"])
+        # News
+        if "NewsTimeline" not in hidden:
+            news = A2UIComponent.news_timeline("news_timeline", "/data/news/events")
+            news_card = A2UIComponent.card("news_card", "news_timeline")
+            components.extend([news, news_card])
+        else:
+            news_card = None
 
-        explain = A2UIComponent.explain_move_panel(
-            "explain_panel",
-            title_path="/data/explanation/title",
-            explanation_path="/data/explanation/text",
-            factors_path="/data/explanation/factors",
-            citations_path="/data/explanation/citations",
-        )
-        explain_card = A2UIComponent.card("explain_card", "explain_panel")
+        # Right panel assembly
+        right_panel_children: List[str] = []
+        if kpi_row:
+            right_panel_children.append("kpi_row")
+        if news_card:
+            right_panel_children.append("news_card")
 
-        root = A2UIComponent.column("layout_root", ["header_row", "main_row", "explain_card"])
+        if len(right_panel_children) > 1 and order_index:
+            right_panel_children.sort(
+                key=lambda cid: priority("NewsTimeline" if "news" in cid else "KpiCard", 50)
+            )
 
-        return [
-            title,
-            header,
-            price_chart,
-            price_card,
-            kpi_revenue,
-            kpi_net_income,
-            kpi_margin,
-            kpi_row,
-            news,
-            news_card,
-            right_panel,
-            main_row,
-            explain,
-            explain_card,
-            root,
-        ]
+        right_panel = None
+        if right_panel_children:
+            right_panel = A2UIComponent.column("right_panel", right_panel_children)
+            components.append(right_panel)
 
-    def _build_peer_compare_layout(self, context: SkillRenderContext) -> List[A2UIComponent]:
-        """Layout for peer comparison dashboards - uses consolidated PeerComparePanel."""
+        # Main row assembly
+        main_children: List[str] = []
+        if price_card:
+            main_children.append("main_visual_card")
+        if right_panel:
+            main_children.append("right_panel")
+
+        if active_variant == "focus_news" or emphasis == "focus_news":
+            # Put right panel (news) first if present
+            main_children = sorted(main_children, key=lambda cid: 0 if cid == "right_panel" else 1)
+
+        main_row = None
+        if main_children:
+            main_row = A2UIComponent.row("main_row", main_children)
+            components.append(main_row)
+
+        # Explain panel
+        explain_card = None
+        if "ExplainMovePanel" not in hidden:
+            explain = A2UIComponent.explain_move_panel(
+                "explain_panel",
+                title_path="/data/explanation/title",
+                explanation_path="/data/explanation/text",
+                factors_path="/data/explanation/factors",
+                citations_path="/data/explanation/citations",
+            )
+            explain_card = A2UIComponent.card("explain_card", "explain_panel")
+            components.extend([explain, explain_card])
+
+        # Root ordering using widget_order hints
+        body_blocks: List[tuple[str, str]] = []
+        if main_row:
+            body_blocks.append(("PriceChart", "main_row"))
+        if explain_card:
+            body_blocks.append(("ExplainMovePanel", "explain_card"))
+
+        body_blocks.sort(key=lambda pair: priority(pair[0], 100))
+        root_children = ["header_row"] + [block[1] for block in body_blocks if block[1]]
+        root = A2UIComponent.column("layout_root", root_children)
+        components.append(root)
+
+        return components
+
+    def _build_peer_compare_layout(
+        self,
+        context: SkillRenderContext,
+        *,
+        variant: Optional[str] = None,
+        widget_order: Optional[List[str]] = None,
+        hidden_widgets: Optional[List[str]] = None,
+        emphasis: Optional[str] = None,
+    ) -> List[A2UIComponent]:
+        """Layout for peer comparison dashboards with variant/order/hide support."""
+        hidden = set(hidden_widgets or [])
+        order = widget_order or []
+        order_index = {name: idx for idx, name in enumerate(order)}
+        use_expanded = (variant == "grid_focus_chart") or (emphasis == "focus_chart") or ("PeerComparePanel" in hidden)
+
+        def priority(name: str, default: int) -> int:
+            return order_index.get(name, default)
+
         title = A2UIComponent.text_bound("title_text", "/data/title", "h2")
         header = A2UIComponent.row("header_row", ["title_text"])
+        components: List[A2UIComponent] = [title, header]
 
-        # Single consolidated panel for entire comparison
-        peer_panel = A2UIComponent.peer_compare_panel(
-            "peer_compare_panel",
-            title_path="/data/title",
-            metric_literal=context.metric,
-            tickers_path="/data/tickers",
-            chart_series_path="/data/chart/series",
-            table_columns_path="/data/table/columns",
-            table_rows_path="/data/table/rows",
-            explanation_title_path="/data/explanation/title",
-            explanation_text_path="/data/explanation/text",
-        )
+        if not use_expanded:
+            if "PeerComparePanel" in hidden:
+                # Fallback to expanded layout if panel is hidden
+                use_expanded = True
 
-        root = A2UIComponent.column("layout_root", ["header_row", "peer_compare_panel"])
+        if not use_expanded:
+            peer_panel = A2UIComponent.peer_compare_panel(
+                "peer_compare_panel",
+                title_path="/data/title",
+                metric_literal=context.metric,
+                tickers_path="/data/tickers",
+                chart_series_path="/data/chart/series",
+                table_columns_path="/data/table/columns",
+                table_rows_path="/data/table/rows",
+                explanation_title_path="/data/explanation/title",
+                explanation_text_path="/data/explanation/text",
+            )
+            components.append(peer_panel)
+            root = A2UIComponent.column("layout_root", ["header_row", "peer_compare_panel"])
+            components.append(root)
+            return components
 
-        return [
-            title,
-            header,
-            peer_panel,
-            root,
-        ]
+        # Expanded layout: explicit chart + correlation + table
+        chart = None
+        if "PriceChart" not in hidden:
+            chart = A2UIComponent.metric_chart(
+                "peer_metric_chart",
+                series_path="/data/chart/series",
+                title_literal=f"{context.metric} Comparison",
+                metric=context.metric,
+                chart_type="line",
+                annotations_path="/data/chart/annotations",
+            )
+            chart_card = A2UIComponent.card("peer_chart_card", "peer_metric_chart")
+            components.extend([chart, chart_card])
+        else:
+            chart_card = None
 
-    def _build_margin_analysis_layout(self, context: SkillRenderContext) -> List[A2UIComponent]:
-        """Layout for margin analysis dashboards."""
+        corr = None
+        correlation_card = None
+        if "CorrelationMatrix" not in hidden:
+            corr = A2UIComponent.correlation_matrix(
+                "correlation_matrix",
+                tickers_path="/data/correlation/tickers",
+                matrix_path="/data/correlation/matrix",
+            )
+            correlation_card = A2UIComponent.card("correlation_card", "correlation_matrix")
+            components.extend([corr, correlation_card])
+
+        table = None
+        table_card = None
+        if "DataTable" not in hidden:
+            table = A2UIComponent.data_table(
+                "peer_table",
+                columns_path="/data/table/columns",
+                data_path="/data/table/rows",
+                sortable=True,
+            )
+            table_card = A2UIComponent.card("peer_table_card", "peer_table")
+            components.extend([table, table_card])
+
+        chart_row_children: List[str] = []
+        if chart_card:
+            chart_row_children.append("peer_chart_card")
+        if correlation_card:
+            chart_row_children.append("correlation_card")
+
+        if len(chart_row_children) > 1 and order_index:
+            chart_row_children.sort(
+                key=lambda cid: priority("PriceChart" if "chart" in cid else "CorrelationMatrix", 50)
+            )
+
+        body_blocks: List[tuple[str, str]] = []
+        charts_row = None
+        if chart_row_children:
+            charts_row = A2UIComponent.row("charts_row", chart_row_children)
+            components.append(charts_row)
+            # Use generic names for ordering
+            for cid in chart_row_children:
+                if "chart" in cid:
+                    body_blocks.append(("PriceChart", "charts_row"))
+                elif "correlation" in cid:
+                    body_blocks.append(("CorrelationMatrix", "charts_row"))
+
+        if table_card:
+            body_blocks.append(("DataTable", "peer_table_card"))
+
+        # Deduplicate body blocks while preserving ordering priority
+        seen = set()
+        dedup_blocks: List[tuple[str, str]] = []
+        for name, cid in body_blocks:
+            if cid in seen:
+                continue
+            seen.add(cid)
+            dedup_blocks.append((name, cid))
+
+        dedup_blocks.sort(key=lambda pair: priority(pair[0], 100))
+        root_children = ["header_row"] + [cid for _name, cid in dedup_blocks]
+        root = A2UIComponent.column("layout_root", root_children)
+        components.append(root)
+
+        return components
+
+    def _build_margin_analysis_layout(
+        self,
+        context: SkillRenderContext,
+        *,
+        variant: Optional[str] = None,
+        widget_order: Optional[List[str]] = None,
+        hidden_widgets: Optional[List[str]] = None,
+        emphasis: Optional[str] = None,
+    ) -> List[A2UIComponent]:
+        """Layout for margin analysis dashboards with variant/order/hide support."""
+        hidden = set(hidden_widgets or [])
+        order = widget_order or []
+        order_index = {name: idx for idx, name in enumerate(order)}
+        active_variant = variant or "compact"
+        if emphasis == "focus_table" and variant is None:
+            active_variant = "focus_table"
+
+        def priority(name: str) -> int:
+            base_priority = {
+                "KpiCard": 0,
+                "MetricChart": 1,
+                "PriceChart": 1,
+                "DataTable": 2,
+                "ExplainMovePanel": 3,
+            }
+            if active_variant == "focus_table":
+                base_priority["DataTable"] = 0
+                base_priority["MetricChart"] = 1
+            return order_index.get(name, base_priority.get(name, 99))
+
         title = A2UIComponent.text_bound("title_text", "/data/title", "h2")
         header = A2UIComponent.row("header_row", ["title_text"])
+        components: List[A2UIComponent] = [title, header]
 
-        kpi_gross = A2UIComponent.kpi_card(
-            "kpi_gross_margin",
-            label="Gross Margin",
-            value_path="/data/kpis/gross_margin",
-            unit="%",
-        )
-        kpi_operating = A2UIComponent.kpi_card(
-            "kpi_operating_margin",
-            label="Operating Margin",
-            value_path="/data/kpis/operating_margin",
-            unit="%",
-        )
-        kpi_net = A2UIComponent.kpi_card(
-            "kpi_net_margin",
-            label="Net Margin",
-            value_path="/data/kpis/net_margin",
-            unit="%",
-        )
-        kpi_row = A2UIComponent.row("kpi_row", ["kpi_gross_margin", "kpi_operating_margin", "kpi_net_margin"])
+        kpi_row = None
+        if "KpiCard" not in hidden:
+            kpi_gross = A2UIComponent.kpi_card(
+                "kpi_gross_margin",
+                label="Gross Margin",
+                value_path="/data/kpis/gross_margin",
+                unit="%",
+            )
+            kpi_operating = A2UIComponent.kpi_card(
+                "kpi_operating_margin",
+                label="Operating Margin",
+                value_path="/data/kpis/operating_margin",
+                unit="%",
+            )
+            kpi_net = A2UIComponent.kpi_card(
+                "kpi_net_margin",
+                label="Net Margin",
+                value_path="/data/kpis/net_margin",
+                unit="%",
+            )
+            kpi_row = A2UIComponent.row("kpi_row", ["kpi_gross_margin", "kpi_operating_margin", "kpi_net_margin"])
+            components.extend([kpi_gross, kpi_operating, kpi_net, kpi_row])
 
-        # Add MetricChart for margin trends over time
-        margin_chart = A2UIComponent.metric_chart(
-            "main_visual",
-            series_path="/data/chart/series",
-            title_literal=f"{context.primary_ticker} Margin Trends",
-            metric="Margin %",
-            chart_type="line",
-            annotations_path="/data/chart/annotations",
-        )
-        chart_card = A2UIComponent.card("main_visual_card", "main_visual")
+        chart_card = None
+        if "PriceChart" not in hidden and "MetricChart" not in hidden:
+            margin_chart = A2UIComponent.metric_chart(
+                "main_visual",
+                series_path="/data/chart/series",
+                title_literal=f"{context.primary_ticker} Margin Trends",
+                metric="Margin %",
+                chart_type="line",
+                annotations_path="/data/chart/annotations",
+            )
+            chart_card = A2UIComponent.card("main_visual_card", "main_visual")
+            components.extend([margin_chart, chart_card])
 
-        table = A2UIComponent.data_table(
-            "main_data_table",
-            columns_path="/data/table/columns",
-            data_path="/data/table/rows",
-            sortable=True,
-        )
-        table_card = A2UIComponent.card("table_card", "main_data_table")
+        table_card = None
+        if "DataTable" not in hidden:
+            table = A2UIComponent.data_table(
+                "main_data_table",
+                columns_path="/data/table/columns",
+                data_path="/data/table/rows",
+                sortable=True,
+            )
+            table_card = A2UIComponent.card("table_card", "main_data_table")
+            components.extend([table, table_card])
 
-        explain = A2UIComponent.explain_move_panel(
-            "explain_panel",
-            title_path="/data/explanation/title",
-            explanation_path="/data/explanation/text",
-            factors_path="/data/explanation/factors",
-            citations_path="/data/explanation/citations",
-        )
-        explain_card = A2UIComponent.card("explain_card", "explain_panel")
+        explain_card = None
+        if "ExplainMovePanel" not in hidden:
+            explain = A2UIComponent.explain_move_panel(
+                "explain_panel",
+                title_path="/data/explanation/title",
+                explanation_path="/data/explanation/text",
+                factors_path="/data/explanation/factors",
+                citations_path="/data/explanation/citations",
+            )
+            explain_card = A2UIComponent.card("explain_card", "explain_panel")
+            components.extend([explain, explain_card])
 
-        root = A2UIComponent.column("layout_root", ["header_row", "kpi_row", "main_visual_card", "table_card", "explain_card"])
+        body_blocks: List[tuple[str, str]] = []
+        if kpi_row:
+            body_blocks.append(("KpiCard", "kpi_row"))
+        if chart_card:
+            body_blocks.append(("MetricChart", "main_visual_card"))
+        if table_card:
+            body_blocks.append(("DataTable", "table_card"))
+        if explain_card:
+            body_blocks.append(("ExplainMovePanel", "explain_card"))
 
-        return [
-            title,
-            header,
-            kpi_gross,
-            kpi_operating,
-            kpi_net,
-            kpi_row,
-            margin_chart,
-            chart_card,
-            table,
-            table_card,
-            explain,
-            explain_card,
-            root,
-        ]
+        body_blocks.sort(key=lambda pair: priority(pair[0]))
+        root_children = ["header_row"] + [cid for _name, cid in body_blocks]
+        root = A2UIComponent.column("layout_root", root_children)
+        components.append(root)
 
-    def _build_revenue_trend_layout(self, context: SkillRenderContext) -> List[A2UIComponent]:
-        """Layout for revenue trend dashboards."""
+        return components
+
+    def _build_revenue_trend_layout(
+        self,
+        context: SkillRenderContext,
+        *,
+        variant: Optional[str] = None,
+        widget_order: Optional[List[str]] = None,
+        hidden_widgets: Optional[List[str]] = None,
+        emphasis: Optional[str] = None,
+    ) -> List[A2UIComponent]:
+        """Layout for revenue trend dashboards with variant/order/hide support."""
+        hidden = set(hidden_widgets or [])
+        order = widget_order or []
+        order_index = {name: idx for idx, name in enumerate(order)}
+        active_variant = variant or "standard"
+        if emphasis == "focus_chart" and variant is None:
+            active_variant = "focus_chart"
+
+        def priority(name: str) -> int:
+            base_priority = {
+                "MetricChart": 0 if active_variant == "focus_chart" else 1,
+                "PriceChart": 0 if active_variant == "focus_chart" else 1,
+                "KpiCard": 1,
+                "DataTable": 2,
+                "ExplainMovePanel": 3,
+            }
+            return order_index.get(name, base_priority.get(name, 99))
+
         title = A2UIComponent.text_bound("title_text", "/data/title", "h2")
         header = A2UIComponent.row("header_row", ["title_text"])
+        components: List[A2UIComponent] = [title, header]
 
-        # Use MetricChart (ECharts) instead of PriceChart (TradingView) for revenue data
-        metric_chart = A2UIComponent.metric_chart(
-            "main_visual",
-            series_path="/data/chart/series",
-            title_literal=f"{context.primary_ticker} Revenue Trend",
-            metric="Revenue",
-            chart_type="area",
-            annotations_path="/data/chart/annotations",
-        )
-        chart_card = A2UIComponent.card("main_visual_card", "main_visual")
+        chart_card = None
+        if "PriceChart" not in hidden and "MetricChart" not in hidden:
+            metric_chart = A2UIComponent.metric_chart(
+                "main_visual",
+                series_path="/data/chart/series",
+                title_literal=f"{context.primary_ticker} Revenue Trend",
+                metric="Revenue",
+                chart_type="area",
+                annotations_path="/data/chart/annotations",
+            )
+            chart_card = A2UIComponent.card("main_visual_card", "main_visual")
+            components.extend([metric_chart, chart_card])
 
-        kpi_latest = A2UIComponent.kpi_card(
-            "kpi_latest_revenue",
-            label="Latest Revenue",
-            value_path="/data/kpis/latest_revenue",
-            unit="$",
-        )
-        kpi_yoy = A2UIComponent.kpi_card(
-            "kpi_yoy_growth",
-            label="YoY Growth",
-            value_path="/data/kpis/yoy_growth",
-            unit="%",
-        )
-        kpi_column = A2UIComponent.column("kpi_column", ["kpi_latest_revenue", "kpi_yoy_growth"])
+        kpi_column = None
+        if "KpiCard" not in hidden:
+            kpi_latest = A2UIComponent.kpi_card(
+                "kpi_latest_revenue",
+                label="Latest Revenue",
+                value_path="/data/kpis/latest_revenue",
+                unit="$",
+            )
+            kpi_yoy = A2UIComponent.kpi_card(
+                "kpi_yoy_growth",
+                label="YoY Growth",
+                value_path="/data/kpis/yoy_growth",
+                unit="%",
+            )
+            kpi_column = A2UIComponent.column("kpi_column", ["kpi_latest_revenue", "kpi_yoy_growth"])
+            components.extend([kpi_latest, kpi_yoy, kpi_column])
 
-        main_row = A2UIComponent.row("main_row", ["main_visual_card", "kpi_column"])
+        main_row = None
+        if chart_card or kpi_column:
+            row_children = []
+            if chart_card:
+                row_children.append("main_visual_card")
+            if kpi_column:
+                row_children.append("kpi_column")
+            # Keep chart first when focus_chart is active
+            if active_variant == "focus_chart":
+                row_children.sort(key=lambda cid: 0 if "visual" in cid else 1)
+            main_row = A2UIComponent.row("main_row", row_children)
+            components.append(main_row)
 
-        table = A2UIComponent.data_table(
-            "main_data_table",
-            columns_path="/data/table/columns",
-            data_path="/data/table/rows",
-            sortable=True,
-        )
-        table_card = A2UIComponent.card("table_card", "main_data_table")
+        table_card = None
+        if "DataTable" not in hidden:
+            table = A2UIComponent.data_table(
+                "main_data_table",
+                columns_path="/data/table/columns",
+                data_path="/data/table/rows",
+                sortable=True,
+            )
+            table_card = A2UIComponent.card("table_card", "main_data_table")
+            components.extend([table, table_card])
 
-        explain = A2UIComponent.explain_move_panel(
-            "explain_panel",
-            title_path="/data/explanation/title",
-            explanation_path="/data/explanation/text",
-            factors_path="/data/explanation/factors",
-            citations_path="/data/explanation/citations",
-        )
-        explain_card = A2UIComponent.card("explain_card", "explain_panel")
+        explain_card = None
+        if "ExplainMovePanel" not in hidden:
+            explain = A2UIComponent.explain_move_panel(
+                "explain_panel",
+                title_path="/data/explanation/title",
+                explanation_path="/data/explanation/text",
+                factors_path="/data/explanation/factors",
+                citations_path="/data/explanation/citations",
+            )
+            explain_card = A2UIComponent.card("explain_card", "explain_panel")
+            components.extend([explain, explain_card])
 
-        root = A2UIComponent.column("layout_root", ["header_row", "main_row", "table_card", "explain_card"])
+        body_blocks: List[tuple[str, str]] = []
+        if main_row:
+            body_blocks.append(("MetricChart", "main_row"))
+        if table_card:
+            body_blocks.append(("DataTable", "table_card"))
+        if explain_card:
+            body_blocks.append(("ExplainMovePanel", "explain_card"))
 
-        return [
-            title,
-            header,
-            metric_chart,
-            chart_card,
-            kpi_latest,
-            kpi_yoy,
-            kpi_column,
-            main_row,
-            table,
-            table_card,
-            explain,
-            explain_card,
-            root,
-        ]
+        body_blocks.sort(key=lambda pair: priority(pair[0]))
+        root_children = ["header_row"] + [cid for _name, cid in body_blocks]
+        root = A2UIComponent.column("layout_root", root_children)
+        components.append(root)
+
+        return components
 
 
 __all__ = [

@@ -228,6 +228,68 @@ def _build_skill_selection_tool(skill_ids: Sequence[str]) -> Dict[str, Any]:
         },
     }
 
+# ============================================================================
+# Prompt Caching Helpers (Claude Prompt Caching for reduced costs/latency)
+# ============================================================================
+
+SKILL_ROUTING_SYSTEM = (
+    "You are an A2UI skill router. Choose exactly one skill_id from the catalog "
+    "and extract tickers, metric, and time range if present. "
+    "Only use the allowed ticker list. time_range must be one of: 1M, 3M, 6M, 1Y."
+)
+
+NARRATIVE_SYSTEM = """You are a Senior Financial Analyst providing a concise but insightful analysis.
+
+Your task:
+- Write exactly 4-6 sentences analyzing the provided financial data
+- Include specific numbers and percentages when available
+- Highlight key trends, comparisons, or anomalies
+- Provide brief context on what the numbers mean for investors
+- Use professional but accessible language
+- Do NOT use markdown formatting, bullet points, or lists
+- Write in paragraph form as continuous prose"""
+
+
+def _build_cached_system_blocks(
+    base_system_prompt: str,
+    catalog_or_context: Optional[str] = None,
+    cache_base: bool = True,
+    cache_context: bool = True,
+) -> List[Dict[str, Any]]:
+    """
+    Build system blocks with cache_control for Claude Prompt Caching.
+    
+    Function: _build_cached_system_blocks — creates cache-enabled system content blocks.
+    Called from: A2UIAgent.select_skill, A2UIAgent._execute_narrative
+    Purpose: Enable prompt caching to reduce API costs (up to 90%) and latency (up to 85%)
+    for repeated prompts like skill routing and narrative generation.
+    
+    Args:
+        base_system_prompt: The stable base system instruction (should be cached).
+        catalog_or_context: Optional additional context like skill catalog (should be cached).
+        cache_base: Whether to cache the base prompt (default True).
+        cache_context: Whether to cache the context block (default True).
+    
+    Returns:
+        List of content blocks suitable for the `system` parameter in messages.create().
+    """
+    blocks: List[Dict[str, Any]] = []
+    
+    # Base system prompt with optional caching
+    base_block: Dict[str, Any] = {"type": "text", "text": base_system_prompt}
+    if cache_base:
+        base_block["cache_control"] = {"type": "ephemeral"}
+    blocks.append(base_block)
+    
+    # Optional context (skill catalog, etc.) with optional caching
+    if catalog_or_context:
+        context_block: Dict[str, Any] = {"type": "text", "text": catalog_or_context}
+        if cache_context:
+            context_block["cache_control"] = {"type": "ephemeral"}
+        blocks.append(context_block)
+    
+    return blocks
+
 
 def _extract_tool_input(response: Any, tool_name: str) -> Dict[str, Any]:
     content = getattr(response, "content", []) or []
@@ -294,12 +356,17 @@ class A2UIAgent:
         Raises:
             A2UIAgentError: If skill selection fails after all retries.
         """
-        system_prompt = (
-            "You are an A2UI skill router. Choose exactly one skill_id from the catalog and extract tickers, metric, and time range if present. "
-            "Only use the allowed ticker list. time_range must be one of: 1M, 3M, 6M, 1Y."
-        )
         if not self.allowed_tool_names:
             raise A2UIAgentError("Claude SDK allowlist blocks A2UI skill routing tool.")
+        
+        # Build cache-enabled system blocks for prompt caching
+        # The system prompt and skill catalog are stable and should be cached
+        system_blocks = _build_cached_system_blocks(
+            base_system_prompt=SKILL_ROUTING_SYSTEM,
+            catalog_or_context=self.skill_catalog,
+            cache_base=True,
+            cache_context=True,
+        )
         
         tool = _build_skill_selection_tool(self.skill_lookup.keys())
         last_error: Optional[Exception] = None
@@ -313,7 +380,7 @@ class A2UIAgent:
                     model=self.model,
                     max_tokens=512,
                     temperature=temperature,
-                    system=f"{system_prompt}\n\n{self.skill_catalog}",
+                    system=system_blocks,  # Cache-enabled system blocks
                     tools=[tool],
                     tool_choice={"type": "tool", "name": SKILL_SELECTION_TOOL_NAME},
                     messages=[

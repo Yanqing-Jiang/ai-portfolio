@@ -70,14 +70,14 @@ Protocol: A2UI v0.8 with custom financial component catalog extension
     projects: [
       {
         id: 'linkedin-photo',
-        title: 'LinkedIn Photo Generator',
+        title: 'The Headshot Studio',
 
         description: `Three-step UX flow that turns a casual portrait into a LinkedIn-ready headshot.
 Step 1 �?" Upload: validate JPEG or PNG up to 8 MB, show an inline preview, and prep metadata.
 Step 2 �?" Describe: capture a single style sentence and expand it with Gemini into a photography-grade brief (lighting, background, wardrobe) that preserves identity.
 Step 3 �?" Generate: FastAPI validates the file, expands the prompt, calls Gemini Nano Banana image editing, and returns the professional headshot alongside the transparent prompt display with download/share actions.`,
         cardDescription:
-          'Upload any causal photos, choose a template, and watch Gemini 3 Pro Image deliver a LinkedIn headshot with professional studio level setup.',
+          'Upload any photo, get instant AI quality feedback, choose an Executive Suite style, and generate a premium professional headshot.',
         technologies: [
           'Google Gemini 3',
           'Dynamic Prompts',
@@ -107,9 +107,9 @@ Backend: FastAPI router /api/linkedin-photo/generate, Gemini LLM for prompt expa
           'How does the FastAPI backend validate uploads before calling Gemini Nano Banana?',
           'What transparency do users get after generation finishes?',
         ],
-        coverUrl: 'https://yanqinghot.blob.core.windows.net/public-access/linkedin-photo-generator.jpg',
-        imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/linkedin-photo-generator.jpg',
-        ogImage: 'https://yanqinghot.blob.core.windows.net/public-access/linkedin-photo-generator.jpg',
+        coverUrl: 'https://yanqinghot.blob.core.windows.net/public-access/3-photo-rotate.gif',
+        imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/3-photo-rotate.gif',
+        ogImage: 'https://yanqinghot.blob.core.windows.net/public-access/3-photo-rotate.gif',
         seoTitle: 'LinkedIn Photo Generator | Gemini Pro 3 image model',
         seoDescription:
           'Upload any causal photos, choose a template, and watch Gemini 3 Pro Image deliver a LinkedIn headshot with professional studio level setup.',
