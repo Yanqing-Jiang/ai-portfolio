@@ -86,7 +86,7 @@ export const LANDING_SEO = {
   canonical: `${SITE_BASE_URL}/`,
   locale: 'en_US',
   sameAs: DEFAULT_SAME_AS,
-  updatedTime: '2025-10-01T00:00:00Z',
+  updatedTime: '2026-01-05T00:00:00Z',
 };
 
 export const LANDING_FAQ = [

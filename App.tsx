@@ -13,11 +13,7 @@ import Sidebar from './components/SidebarV2';
 import ProjectView from './components/ProjectView';
 import LandingPageFlow from './components/LandingPageFlow';
 import { GenerativeUIPage } from './components/generativeUiDashboard';
-import NeuralWebDemo from './components/demos/NeuralWebDemo';
-import StreamingInsightDemo from './components/demos/StreamingInsightDemo';
-import BentoPulseDemo from './components/demos/BentoPulseDemo';
-import TimelineDemo from './components/demos/TimelineDemo';
-import SidebarRedesignDemo from './components/demos/SidebarRedesignDemo';
+
 import { PROJECT_DATA } from './constants';
 import type { Project } from './types';
 import { ChevronLeftIcon } from './components/icons/ChevronLeftIcon';
@@ -210,12 +206,7 @@ const Layout: React.FC = () => {
             {/* 2026 Agent to UI - Custom full-page experience */}
             <Route path="/project/agent-to-ui" element={<GenerativeUIPage />} />
 
-            {/* Design Demos */}
-            <Route path="/demo/neural-web" element={<NeuralWebDemo />} />
-            <Route path="/demo/streaming-insight" element={<StreamingInsightDemo />} />
-            <Route path="/demo/bento-pulse" element={<BentoPulseDemo />} />
-            <Route path="/demo/timeline" element={<TimelineDemo />} />
-            <Route path="/demo/sidebar-redesign" element={<SidebarRedesignDemo />} />
+
 
             <Route path="/project/:projectId" element={<ProjectRoute />} />
             <Route path="*" element={<Navigate to="/" replace />} />

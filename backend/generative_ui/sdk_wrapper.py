@@ -1,35 +1,100 @@
+# --- SDK Wrapper Function/Class Map ---
+# Dataclass: SDKToolCall
+#   Role: Normalize SDK tool-call payloads for agent consumers.
+#   Called from: backend.generative_ui.sdk_wrapper.A2UISDKWrapper._query_sdk,
+#   backend.generative_ui.sdk_wrapper.A2UISDKWrapper._stream_sdk
+#   Invokes: n/a
+#   Why: Standardizes tool call shape for downstream handling.
+# Dataclass: SDKResponse
+#   Role: Structured response container for SDK query/stream results.
+#   Called from: backend.generative_ui.sdk_wrapper.A2UISDKWrapper.query,
+#   backend.generative_ui.sdk_wrapper.A2UISDKWrapper._query_sdk,
+#   backend.generative_ui.sdk_wrapper.A2UISDKWrapper._stream_sdk
+#   Invokes: n/a
+#   Why: Keeps SDK responses consistent across blocking/streaming modes.
+# Dataclass: SDKMessage
+#   Role: Reserve a message container for SDK conversations.
+#   Called from: n/a (reserved for future SDK message handling)
+#   Invokes: n/a
+#   Why: Aligns with SDK message payload structure for future extensions.
+# Class: A2UISDKWrapper
+#   Role: SDK-only wrapper for initialization, query, and streaming hooks.
+#   Called from: backend.generative_ui.agent_v2 (via get_sdk_wrapper)
+#   Invokes: ClaudeSDKClient, ClaudeAgentOptions, create_sdk_mcp_server
+#   Why: Centralizes SDK client lifecycle and MCP wiring for A2UI.
+# Method: A2UISDKWrapper.__init__
+#   Role: Configure SDK wrapper state and settings.
+#   Called from: backend.generative_ui.sdk_wrapper.get_sdk_wrapper
+#   Invokes: backend.generative_ui.config.get_settings
+#   Why: Binds model/API key/cwd defaults for SDK usage.
+# Method: A2UISDKWrapper.is_sdk_available
+#   Role: Report if claude-agent-sdk is installed.
+#   Called from: diagnostics or tests (not used in runtime flow).
+#   Invokes: n/a
+#   Why: Supports readiness checks for the SDK-only path.
+# Method: A2UISDKWrapper.initialize
+#   Role: Initialize Claude Agent SDK client with MCP servers/tools.
+#   Called from: backend.generative_ui.agent_v2.A2UIAgent._ensure_sdk_initialized
+#   Invokes: ClaudeAgentOptions, ClaudeSDKClient, create_sdk_mcp_server
+#   Why: Ensures SDK client is ready for routing and future tool calls.
+# Method: A2UISDKWrapper.query
+#   Role: Execute a single SDK query and return the normalized response.
+#   Called from: backend.generative_ui.agent_v2.A2UIAgent.select_skill
+#   Invokes: A2UISDKWrapper._query_sdk
+#   Why: Provides a clean async interface for non-streaming queries.
+# Method: A2UISDKWrapper._query_sdk
+#   Role: Run the SDK query loop and collect tool/text blocks.
+#   Called from: backend.generative_ui.sdk_wrapper.A2UISDKWrapper.query
+#   Invokes: ClaudeSDKClient.query, ClaudeSDKClient.receive_response
+#   Why: Adapts SDK streaming messages into a single response payload.
+# Method: A2UISDKWrapper.stream_query
+#   Role: Yield SDK response chunks as they arrive.
+#   Called from: n/a (reserved for streaming hooks)
+#   Invokes: A2UISDKWrapper._stream_sdk
+#   Why: Enables future streaming integrations without rewrites.
+# Method: A2UISDKWrapper._stream_sdk
+#   Role: Stream SDK messages and emit incremental SDKResponse chunks.
+#   Called from: backend.generative_ui.sdk_wrapper.A2UISDKWrapper.stream_query
+#   Invokes: ClaudeSDKClient.query, ClaudeSDKClient.receive_response
+#   Why: Supports progressive UI updates for long-running SDK calls.
+# Method: A2UISDKWrapper.close
+#   Role: Clear SDK client resources for shutdown or reset.
+#   Called from: n/a (reserved for lifecycle management)
+#   Invokes: n/a
+#   Why: Ensures clean teardown of SDK state.
+# Function: get_sdk_wrapper
+#   Role: Return the singleton SDK wrapper instance.
+#   Called from: backend.generative_ui.agent_v2.get_a2ui_agent
+#   Invokes: backend.generative_ui.sdk_wrapper.A2UISDKWrapper
+#   Why: Reuses the SDK wrapper across requests.
+# --- End SDK Wrapper Function/Class Map ---
 """
 Claude Agent SDK wrapper for FastAPI backend integration.
 
 Module: sdk_wrapper.py
 Role: Provides an adapter layer between the Claude Agent SDK and the A2UI dashboard runtime.
-Called from: agent_v2.py, runtime.py
-Invokes: claude_agent_sdk (ClaudeSDKClient, query, tool), anthropic.Anthropic (fallback)
-Why: Enables SDK-native execution while maintaining backward compatibility for environments
-     without the SDK CLI installed.
+Called from: agent_v2.py
+Invokes: claude_agent_sdk (ClaudeSDKClient, ClaudeAgentOptions, create_sdk_mcp_server)
+Why: Centralizes SDK initialization and query/stream handling for A2UI flows.
 """
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, AsyncIterator, Callable, Dict, List, Optional, TYPE_CHECKING
+from typing import Any, AsyncIterator, Dict, List, Optional
 
 # Try importing Claude Agent SDK
 try:
     from claude_agent_sdk import (
         ClaudeSDKClient,
         ClaudeAgentOptions,
-        query as sdk_query,
-        tool,
         create_sdk_mcp_server,
         AssistantMessage,
         TextBlock,
         ToolUseBlock,
         ResultMessage,
-        PermissionMode,
     )
     SDK_AVAILABLE = True
 except ImportError:
@@ -37,22 +102,11 @@ except ImportError:
     # Provide stubs for type checking
     ClaudeSDKClient = None  # type: ignore
     ClaudeAgentOptions = None  # type: ignore
-    sdk_query = None  # type: ignore
-    tool = None  # type: ignore
     create_sdk_mcp_server = None  # type: ignore
     AssistantMessage = None  # type: ignore
     TextBlock = None  # type: ignore
     ToolUseBlock = None  # type: ignore
     ResultMessage = None  # type: ignore
-    PermissionMode = None  # type: ignore
-
-# Fallback to anthropic Messages API
-try:
-    import anthropic
-    ANTHROPIC_AVAILABLE = True
-except ImportError:
-    anthropic = None  # type: ignore
-    ANTHROPIC_AVAILABLE = False
 
 from .config import get_settings
 
@@ -86,13 +140,11 @@ class SDKMessage:
 class A2UISDKWrapper:
     """
     Wraps Claude Agent SDK for A2UI skill execution.
-    
+
     Class: A2UISDKWrapper
-    Role: Provides SDK-native execution with fallback to anthropic Messages API.
-    Called from: A2UIAgent in agent_v2.py for skill selection and tool execution.
-    Why: The Claude Agent SDK provides richer agentic capabilities (skills, hooks, 
-         permissions) but requires the Claude Code CLI. This wrapper enables SDK 
-         usage when available while falling back gracefully.
+    Role: Provides SDK-native execution for A2UI routing and future tool calls.
+    Called from: A2UIAgent in agent_v2.py for skill selection.
+    Why: Centralizes Claude Agent SDK initialization and response parsing for A2UI.
     """
 
     def __init__(
@@ -113,9 +165,8 @@ class A2UISDKWrapper:
         self.settings = get_settings()
         self.model = model or self.settings.claude_model or "claude-haiku-4-5-20251001"
         self.api_key = api_key or self.settings.claude_api_key
-        
+
         self._sdk_client: Optional[Any] = None
-        self._anthropic_client: Optional[Any] = None
         self._mcp_server: Optional[Any] = None
         self._initialized = False
 
@@ -124,112 +175,86 @@ class A2UISDKWrapper:
         """Check if Claude Agent SDK is available."""
         return SDK_AVAILABLE
 
-    @property
-    def is_anthropic_available(self) -> bool:
-        """Check if anthropic fallback is available."""
-        return ANTHROPIC_AVAILABLE
-
-    def _ensure_anthropic_client(self) -> Any:
-        """Lazily initialize anthropic client for fallback."""
-        if self._anthropic_client is None:
-            if not ANTHROPIC_AVAILABLE:
-                raise RuntimeError("Neither claude-agent-sdk nor anthropic package available")
-            self._anthropic_client = anthropic.Anthropic(api_key=self.api_key)
-        return self._anthropic_client
-
     async def initialize(
         self,
-        system_prompt: Optional[str] = None,
+        system_prompt: Optional[str | Dict[str, Any]] = None,
         allowed_tools: Optional[List[str]] = None,
         mcp_tools: Optional[List[Any]] = None,
         use_sdk: bool = True,
     ) -> bool:
         """
-        Initialize the SDK client or fallback.
-        
+        Initialize the SDK client.
+
         Args:
             system_prompt: System prompt for the agent.
             allowed_tools: List of allowed tool names.
             mcp_tools: List of MCP tools (created with @tool decorator).
-            use_sdk: Whether to prefer SDK over fallback.
-            
+            use_sdk: Must be True (SDK-only runtime).
+
         Returns:
-            True if SDK was initialized, False if using fallback.
+            True if SDK client is ready after initialization check.
         """
         if self._initialized:
             return self._sdk_client is not None
 
-        if use_sdk:
-            if not SDK_AVAILABLE:
-                raise RuntimeError("Claude Agent SDK not available; install claude-agent-sdk.")
-            mcp_servers = {}
-            if mcp_tools:
-                self._mcp_server = create_sdk_mcp_server(
-                    name="a2ui_tools",
-                    version="1.0.0",
-                    tools=mcp_tools,
-                )
-                mcp_servers["a2ui"] = self._mcp_server
+        if not use_sdk:
+            raise RuntimeError("SDK-only runtime: use_sdk=False is not supported.")
 
-            options = ClaudeAgentOptions(
-                system_prompt=system_prompt,
-                allowed_tools=allowed_tools or [],
-                mcp_servers=mcp_servers,
-                permission_mode="default",
-                setting_sources=["user", "project"],
-                cwd=str(self.cwd),
+        if not SDK_AVAILABLE:
+            raise RuntimeError("Claude Agent SDK not available; install claude-agent-sdk.")
+
+        mcp_servers: Dict[str, Any] = {}
+        if mcp_tools:
+            self._mcp_server = create_sdk_mcp_server(
+                name="a2ui_tools",
+                version="1.0.0",
+                tools=mcp_tools,
             )
+            mcp_servers["a2ui"] = self._mcp_server
 
-            self._sdk_client = ClaudeSDKClient(options=options)
-            self._initialized = True
-            logger.info("Claude Agent SDK initialized successfully")
-            return True
+        options_kwargs: Dict[str, Any] = {
+            "permission_mode": "default",
+            "setting_sources": ["user", "project"],
+            "cwd": str(self.cwd),
+        }
+        if system_prompt is not None:
+            options_kwargs["system_prompt"] = system_prompt
+        if allowed_tools:
+            options_kwargs["allowed_tools"] = allowed_tools
+        if mcp_servers:
+            options_kwargs["mcp_servers"] = mcp_servers
 
-        # Explicit fallback path (only when use_sdk is False)
-        self._ensure_anthropic_client()
+        options = ClaudeAgentOptions(**options_kwargs)
+        self._sdk_client = ClaudeSDKClient(options=options)
         self._initialized = True
-        logger.info("Using anthropic Messages API (fallback path explicitly requested)")
-        return False
+        logger.info("Claude Agent SDK initialized successfully")
+        return True
 
     async def query(
         self,
         prompt: str,
-        system_prompt: Optional[str] = None,
-        tools: Optional[List[Dict[str, Any]]] = None,
-        tool_choice: Optional[Dict[str, Any]] = None,
         max_tokens: int = 1024,
         temperature: float = 0.7,
     ) -> SDKResponse:
         """
-        Execute a query using SDK or fallback.
-        
+        Execute a query using the Claude Agent SDK.
+
         Method: query
-        Role: Unified interface for executing Claude queries.
-        Called from: A2UIAgent.select_skill, A2UIAgent._execute_narrative
-        Why: Abstracts away SDK vs Messages API differences.
-        
+        Role: Unified interface for executing Claude queries via SDK.
+        Called from: A2UIAgent.select_skill
+        Why: Keeps SDK usage centralized and easy to swap for streaming later.
+
         Args:
             prompt: User prompt to send.
-            system_prompt: Optional system prompt (used for fallback).
-            tools: Optional list of tool definitions (used for fallback).
-            tool_choice: Optional tool choice config (used for fallback).
             max_tokens: Maximum tokens in response.
             temperature: Sampling temperature.
-            
+
         Returns:
             SDKResponse with content, tool calls, and completion status.
         """
-        if self._sdk_client and SDK_AVAILABLE:
-            return await self._query_sdk(prompt)
-        else:
-            return await self._query_fallback(
-                prompt=prompt,
-                system_prompt=system_prompt,
-                tools=tools,
-                tool_choice=tool_choice,
-                max_tokens=max_tokens,
-                temperature=temperature,
-            )
+        if not self._sdk_client:
+            raise RuntimeError("SDK client not initialized")
+        return await self._query_sdk(prompt)
 
     async def _query_sdk(self, prompt: str) -> SDKResponse:
         """Execute query using Claude Agent SDK."""
@@ -267,82 +292,25 @@ class A2UISDKWrapper:
             logger.error(f"SDK query failed: {e}")
             return SDKResponse(error=str(e), is_complete=True)
 
-    async def _query_fallback(
-        self,
-        prompt: str,
-        system_prompt: Optional[str] = None,
-        tools: Optional[List[Dict[str, Any]]] = None,
-        tool_choice: Optional[Dict[str, Any]] = None,
-        max_tokens: int = 1024,
-        temperature: float = 0.7,
-    ) -> SDKResponse:
-        """Execute query using anthropic Messages API (fallback)."""
-        client = self._ensure_anthropic_client()
-
-        try:
-            kwargs: Dict[str, Any] = {
-                "model": self.model,
-                "max_tokens": max_tokens,
-                "temperature": temperature,
-                "messages": [{"role": "user", "content": prompt}],
-            }
-            
-            if system_prompt:
-                kwargs["system"] = system_prompt
-            if tools:
-                kwargs["tools"] = tools
-            if tool_choice:
-                kwargs["tool_choice"] = tool_choice
-
-            response = client.messages.create(**kwargs)
-
-            content_parts = []
-            tool_calls = []
-
-            for block in getattr(response, "content", []):
-                block_type = getattr(block, "type", None)
-                if block_type == "text":
-                    content_parts.append(getattr(block, "text", ""))
-                elif block_type == "tool_use":
-                    tool_calls.append(SDKToolCall(
-                        id=getattr(block, "id", ""),
-                        name=getattr(block, "name", ""),
-                        input=getattr(block, "input", {}),
-                    ))
-
-            return SDKResponse(
-                content="".join(content_parts),
-                tool_calls=tool_calls,
-                is_complete=True,
-            )
-
-        except Exception as e:
-            logger.error(f"Fallback query failed: {e}")
-            return SDKResponse(error=str(e), is_complete=True)
-
     async def stream_query(
         self,
         prompt: str,
-        system_prompt: Optional[str] = None,
     ) -> AsyncIterator[SDKResponse]:
         """
-        Stream responses from SDK or fallback.
-        
+        Stream responses from the SDK.
+
         Method: stream_query
         Role: Streaming interface for real-time response handling.
-        Called from: A2UIAgent for streaming skill execution.
-        Why: Enables progressive UI updates during long-running queries.
-        
+        Called from: n/a (reserved for streaming integrations).
+        Why: Enables progressive UI updates during long-running SDK queries.
+
         Yields:
             SDKResponse chunks as they arrive.
         """
-        if self._sdk_client and SDK_AVAILABLE:
-            async for chunk in self._stream_sdk(prompt):
-                yield chunk
-        else:
-            # Fallback doesn't support true streaming, yield single response
-            response = await self._query_fallback(prompt, system_prompt)
-            yield response
+        if not self._sdk_client:
+            raise RuntimeError("SDK client not initialized")
+        async for chunk in self._stream_sdk(prompt):
+            yield chunk
 
     async def _stream_sdk(self, prompt: str) -> AsyncIterator[SDKResponse]:
         """Stream from Claude Agent SDK."""
@@ -379,7 +347,6 @@ class A2UISDKWrapper:
     async def close(self) -> None:
         """Clean up resources."""
         self._sdk_client = None
-        self._anthropic_client = None
         self._mcp_server = None
         self._initialized = False
 
@@ -398,7 +365,7 @@ def get_sdk_wrapper(
     
     Function: get_sdk_wrapper
     Role: Provide a singleton SDK wrapper instance.
-    Called from: A2UIAgent, routes/dashboard.py
+    Called from: backend.generative_ui.agent_v2.get_a2ui_agent
     Why: Avoids reinitializing SDK client on every request.
     """
     global _sdk_wrapper
@@ -409,7 +376,6 @@ def get_sdk_wrapper(
 
 __all__ = [
     "SDK_AVAILABLE",
-    "ANTHROPIC_AVAILABLE",
     "SDKToolCall",
     "SDKResponse",
     "SDKMessage",

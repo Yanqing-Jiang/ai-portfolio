@@ -9,6 +9,12 @@
 #   Called from: backend.generative_ui.agent_v2.A2UIAgent.execute_skill, backend.generative_ui.routes.dashboard
 #   Invokes: n/a
 #   Why: Provides a consistent payload for streaming + storage.
+# Dataclass: SkillExecutionChunk
+#   Role: Stream incremental data patches and audit events during execution.
+#   Called from: backend.generative_ui.agent_v2.A2UIAgent.execute_skill_streaming,
+#   backend.generative_ui.runtime.A2UIRuntime
+#   Invokes: n/a
+#   Why: Enables partial UI updates before full skill completion.
 # Pydantic Model: SkillSelection
 #   Role: Structured skill routing output for the model.
 #   Called from: backend.generative_ui.agent_v2.A2UIAgent.select_skill, backend.generative_ui.agent_v2.A2UIAgent.selection_from_plan
@@ -22,12 +28,12 @@
 # Method: A2UIAgent.__init__
 #   Role: Configure model + skill registry references.
 #   Called from: backend.generative_ui.agent_v2.get_a2ui_agent
-#   Invokes: backend.generative_ui.skills.get_a2ui_skills
+#   Invokes: backend.generative_ui.skills.get_a2ui_skills, A2UIAgent._build_selection_system_prompt
 #   Why: Shares cached skill metadata across requests.
 # Method: A2UIAgent.select_skill
 #   Role: Use the Claude Agent SDK to select a skill and extract slots.
 #   Called from: backend.generative_ui.routes.dashboard.create_dashboard        
-#   Invokes: A2UISDKWrapper.query
+#   Invokes: A2UIAgent._ensure_sdk_initialized, A2UISDKWrapper.query
 #   Why: Keeps routing logic centralized and model-driven via the SDK.
 # Method: A2UIAgent.selection_to_plan
 #   Role: Convert a SkillSelection into a plan dict for storage.
@@ -36,12 +42,23 @@
 #   Why: Preserves routing outputs for downstream stream usage.
 # Method: A2UIAgent.selection_from_plan
 #   Role: Rehydrate a SkillSelection from stored plan JSON.
-#   Called from: backend.generative_ui.routes.dashboard.stream_dashboard
+#   Called from: backend.generative_ui.routes.dashboard.stream_dashboard        
 #   Invokes: cached skill lookup
 #   Why: Avoids re-calling the model during streaming.
+# Method: A2UIAgent._build_selection_system_prompt
+#   Role: Build the stable system prompt used for SDK-backed skill routing.
+#   Called from: backend.generative_ui.agent_v2.A2UIAgent.__init__
+#   Invokes: n/a (uses prebuilt skill catalog)
+#   Why: Separates cacheable routing context from per-request user prompts.
+# Method: A2UIAgent._ensure_sdk_initialized
+#   Role: Initialize the Claude Agent SDK with MCP tools and cacheable prompts.
+#   Called from: backend.generative_ui.agent_v2.A2UIAgent.select_skill,
+#   backend.generative_ui.agent_v2.A2UIAgent.execute_skill_streaming
+#   Invokes: A2UISDKWrapper.initialize
+#   Why: Ensures SDK + MCP tool configuration is ready for routing/streaming.
 # Method: A2UIAgent.stream_dashboard
 #   Role: Emit A2UI messages for a full dashboard session.
-#   Called from: backend.generative_ui.routes.dashboard.stream_dashboard
+#   Called from: backend.generative_ui.routes.dashboard.stream_dashboard        
 #   Invokes: backend.generative_ui.a2ui.emitter.A2UIMessageEmitter, A2UIAgent.execute_skill
 #   Why: Provides the streaming backbone for the dashboard UI.
 # Method: A2UIAgent.execute_skill
@@ -49,11 +66,17 @@
 #   Called from: backend.generative_ui.agent_v2.A2UIAgent.stream_dashboard, backend.generative_ui.routes.dashboard.handle_action
 #   Invokes: A2UIAgent._execute_explain_move/_execute_peer_compare/_execute_margin_analysis/_execute_revenue_trend, A2UIAgent._execute_narrative
 #   Why: Keeps tool usage aligned with skill intent.
+# Method: A2UIAgent.execute_skill_streaming
+#   Role: Yield incremental data patches during skill execution.
+#   Called from: backend.generative_ui.runtime.A2UIRuntime.stream_dashboard,
+#   backend.generative_ui.runtime.A2UIRuntime.process_action
+#   Invokes: A2UIAgent.execute_skill, A2UISDKWrapper.initialize
+#   Why: Streams partial updates and ensures SDK tool wiring for runtime flows.
 # Method: A2UIAgent._execute_narrative
-#   Role: Generate concise narrative summaries for non-explain-move skills.
+#   Role: Generate concise narrative summaries for non-explain-move skills.     
 #   Called from: backend.generative_ui.agent_v2.A2UIAgent.execute_skill
 #   Invokes: conversational_analytics.tools.execute_analysis_tool
-#   Why: Supplies summary copy for ExplainMovePanel on metric dashboards.
+#   Why: Supplies summary copy for ExplainMovePanel on metric dashboards.       
 # Method: A2UIAgent._execute_chart_annotations
 #   Role: Build chart annotations from recent news events.
 #   Called from: backend.generative_ui.agent_v2.A2UIAgent._execute_margin_analysis, backend.generative_ui.agent_v2.A2UIAgent._execute_revenue_trend
@@ -112,6 +135,8 @@ A2UI-native agent for skill-driven dashboard streaming.
 from __future__ import annotations
 
 import json
+import hashlib
+import logging
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
@@ -140,6 +165,8 @@ from .utils import (
 )
 from conversational_analytics.tools import execute_sql_tool, execute_news_tool, execute_analysis_tool
 
+
+logger = logging.getLogger(__name__)
 
 ALLOWED_TIME_RANGES = {"1M", "3M", "6M", "1Y"}
 DEFAULT_TIME_RANGE = "3M"
@@ -171,7 +198,7 @@ class SkillExecutionChunk:
     """
     step: str  # e.g., "sql_query", "news_fetch", "narrative", "complete"
     data_patch: Optional[Dict[str, Any]] = None
-    data_path: Optional[str] = None  # JSON path like "/kpis" or "/chart"
+    data_path: Optional[str] = None  # JSON path like "/data/kpis" or "/data/chart"
     audit_event: Optional[str] = None
     audit_details: Optional[str] = None
     final_result: Optional[A2UIRunResult] = None
@@ -198,9 +225,59 @@ class A2UIAgent:
         self.skills = get_a2ui_skills()
         self.skill_catalog = build_a2ui_skill_catalog(self.skills)
         self.skill_lookup = {skill.skill_id: skill for skill in self.skills}
+        self._selection_system_prompt = self._build_selection_system_prompt()
+        self._selection_prompt_cache_key = hashlib.sha256(
+            self._selection_system_prompt.encode("utf-8")
+        ).hexdigest()
+        self._selection_prompt_initialized = False
         self.sdk_wrapper: A2UISDKWrapper = get_sdk_wrapper(
             model=self.model,
             api_key=self.settings.claude_api_key,
+        )
+
+    def _build_selection_system_prompt(self) -> str:
+        """
+        Build the stable system prompt used for skill routing.
+
+        Method: A2UIAgent._build_selection_system_prompt
+        Called from: A2UIAgent.__init__
+        Invokes: n/a (uses prebuilt skill catalog)
+        Purpose: Keeps routing context cacheable and consistent across requests.
+        """
+        base_prompt = (
+            "You route financial dashboard requests to predefined A2UI skills.\n"
+            "Choose the best matching skill_id from the catalog and fill slots."
+        )
+        return "\n".join([base_prompt, self.skill_catalog])
+
+    async def _ensure_sdk_initialized(self) -> None:
+        """
+        Initialize the Claude Agent SDK with MCP tools and cacheable prompts.
+
+        Method: A2UIAgent._ensure_sdk_initialized
+        Called from: A2UIAgent.select_skill, A2UIAgent.execute_skill_streaming
+        Invokes: A2UISDKWrapper.initialize
+        Purpose: Ensures SDK + MCP tool wiring is ready for routing/streaming.
+        """
+        if self._selection_prompt_initialized:
+            logger.debug(
+                "selection_prompt_cache=hit key=%s",
+                self._selection_prompt_cache_key,
+            )
+        else:
+            logger.debug(
+                "selection_prompt_cache=miss key=%s",
+                self._selection_prompt_cache_key,
+            )
+            self._selection_prompt_initialized = True
+
+        allowed_tools = A2UI_MCP_TOOL_NAMES or None
+        mcp_tools = A2UI_MCP_TOOLS or None
+        await self.sdk_wrapper.initialize(
+            system_prompt=self._selection_system_prompt,
+            allowed_tools=allowed_tools,
+            mcp_tools=mcp_tools,
+            use_sdk=True,
         )
 
     async def select_skill(self, question: str, max_retries: int = 2) -> SkillSelection:
@@ -217,33 +294,23 @@ class A2UIAgent:
             A2UIAgentError: If skill selection fails after all retries.
         """
         last_error: Optional[Exception] = None
-        skill_ids = ", ".join(self.skill_lookup.keys())
         allowed_ranges = ", ".join(sorted(ALLOWED_TIME_RANGES))
 
         for attempt in range(max_retries):
             try:
-                await self.sdk_wrapper.initialize(use_sdk=True, allowed_tools=[])
+                await self._ensure_sdk_initialized()
 
-                system_prompt = (
-                    "You route financial dashboard requests to predefined skills. "
-                    "Only return compact JSON with fields: "
-                    "skill_id (one of the allowed IDs), "
-                    "tickers (array of uppercase symbols, min 1, max 6), "
-                    "metric (string, default 'Revenue'), "
-                    "time_range (one of allowed ranges). "
-                    "Do not add prose or code fences."
-                )
                 user_prompt = (
                     f"Question: {question}\n"
-                    f"Allowed skill_ids: {skill_ids}\n"
                     f"Allowed tickers: {', '.join(AVAILABLE_TICKERS)}\n"
                     f"Allowed time_range values: {allowed_ranges}\n"
-                    "Respond with JSON only."
+                    "Return JSON only with keys: skill_id, tickers, metric, time_range.\n"
+                    "Tickers must be uppercase (min 1, max 6). Default metric is 'Revenue'.\n"
+                    "No code fences or extra text."
                 )
 
                 response: SDKResponse = await self.sdk_wrapper.query(
                     prompt=user_prompt,
-                    system_prompt=system_prompt,
                     max_tokens=256,
                     temperature=0.3 if attempt else 0.7,
                 )
@@ -394,7 +461,9 @@ class A2UIAgent:
             SkillExecutionChunk objects with incremental data patches and the final result.
         """
         from typing import AsyncGenerator  # Import here to avoid circular imports
-        
+
+        await self._ensure_sdk_initialized()
+
         # Emit start of skill execution
         yield SkillExecutionChunk(
             step="skill_start",
