@@ -1,3 +1,7 @@
+// Function: ProjectHelmet — called from ProjectView, GenerativeUIPage, and any project route to emit canonical SEO tags; invokes buildArticleSchema/buildBreadcrumbList plus Open Graph/Twitter meta; exists to keep project metadata consistent for prerender, sitemaps, and social previews.
+// Helper: toAbsoluteUrl — normalizes relative/partial asset URLs for OG/Twitter cards; used inside ProjectHelmet.
+// Helper: truncate — trims meta descriptions to safe lengths for SERP/OG tags; used inside ProjectHelmet.
+
 import React, { useMemo } from 'react';
 import { Helmet } from 'react-helmet-async';
 import type { Project } from '../types';

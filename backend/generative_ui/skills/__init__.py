@@ -4,20 +4,20 @@
 #   Called from: backend.generative_ui.skills.load_a2ui_skill, backend.generative_ui.agent_v2.A2UIAgent
 #   Invokes: n/a
 #   Why: Centralizes skill metadata for selection and rendering.
-# Function: load_a2ui_skill
-#   Role: Parse YAML frontmatter + body from a skill markdown file into A2UISkillMeta.
-#   Called from: backend.generative_ui.skills.load_a2ui_skills
-#   Invokes: yaml.safe_load, A2UISkillMeta
-#   Why: Provides a single parser for skill.md files.
-# Function: load_a2ui_skills
-#   Role: Load all A2UI skill markdown files from the skills directory.
+# Function: load_claude_skill
+#   Role: Parse skill.md from official .claude/skills/<name>/skill.md format.
+#   Called from: backend.generative_ui.skills.load_claude_skills
+#   Invokes: yaml.safe_load, json.load, A2UISkillMeta
+#   Why: Supports the official Claude Agent Skills format.
+# Function: load_all_skills
+#   Role: Load skills from both .claude/skills/ and legacy directories.
 #   Called from: backend.generative_ui.skills.get_a2ui_skills
-#   Invokes: backend.generative_ui.skills.load_a2ui_skill, pathlib.Path.glob
-#   Why: Builds the skill registry used by the agent.
+#   Invokes: load_claude_skills, load_legacy_skills
+#   Why: Enables gradual migration to new format while maintaining backward compat.
 # Function: get_a2ui_skills
 #   Role: Return cached list of skills for reuse across requests.
 #   Called from: backend.generative_ui.agent_v2.A2UIAgent
-#   Invokes: backend.generative_ui.skills.load_a2ui_skills
+#   Invokes: backend.generative_ui.skills.load_all_skills
 #   Why: Avoids re-reading skill files on every request.
 # Function: get_a2ui_skill
 #   Role: Look up a skill by id from the cached registry.
@@ -32,19 +32,29 @@
 # --- End A2UI Skill Function/Class Map ---
 """
 A2UI skill registry and loader utilities.
+
+Supports both:
+1. Official Claude Agent Skills format: .claude/skills/<name>/skill.md
+2. Legacy A2UI format: backend/generative_ui/skills/a2ui_skill_*.md
 """
 
 from __future__ import annotations
 
+import json
+import logging
+import os
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Sequence
+from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 import yaml
 
-_SKILL_DIR = Path(__file__).resolve().parent
+logger = logging.getLogger(__name__)
 
+# Directory paths
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]
+_CLAUDE_SKILLS_DIR = _PROJECT_ROOT / ".claude" / "skills"
 
 @dataclass(frozen=True)
 class A2UISkillMeta:
@@ -59,77 +69,167 @@ class A2UISkillMeta:
     default_variant: str
     source_path: Path
     body: str
+    tools: List[str] = None  # type: ignore  # Tools declared in skill.md
+    layout_config: Optional[Dict[str, Any]] = None  # From claude_assets/layout.json
 
 
-def load_a2ui_skill(path: Path) -> A2UISkillMeta:
-    """Parse a single skill markdown file into A2UISkillMeta."""
-    raw = path.read_text(encoding="utf-8")
-    if not raw.startswith("---"):
-        raise ValueError(f"Skill file missing YAML frontmatter: {path}")
+def _parse_yaml_frontmatter(raw_content: str, file_path: Path) -> tuple[Dict[str, Any], str]:
+    """Parse YAML frontmatter from markdown content."""
+    if not raw_content.startswith("---"):
+        raise ValueError(f"Skill file missing YAML frontmatter: {file_path}")
 
-    parts = raw.split("---", 2)
+    parts = raw_content.split("---", 2)
     if len(parts) < 3:
-        raise ValueError(f"Skill file has incomplete frontmatter: {path}")
+        raise ValueError(f"Skill file has incomplete frontmatter: {file_path}")
 
     frontmatter = parts[1].strip()
     body = parts[2].lstrip("\n")
     meta = yaml.safe_load(frontmatter) or {}
+    return meta, body
 
-    skill_id = str(meta.get("skill_id", "")).strip()
-    name = str(meta.get("name", "")).strip()
-    description = str(meta.get("description", "")).strip()
-    widgets_raw = meta.get("widgets", [])
-    layout = str(meta.get("layout", "")).strip()
-    layout_variants_raw = meta.get("layout_variants", []) or []
-    default_variant = str(meta.get("default_variant", "")).strip()
 
-    if not skill_id or not name:
-        raise ValueError(f"Skill file missing required fields: {path}")
-    if not description:
-        raise ValueError(f"Skill file missing description: {path}")
-    if not layout:
-        raise ValueError(f"Skill file missing layout: {path}")
-
+def _parse_widgets(widgets_raw: Any, file_path: Path) -> List[str]:
+    """Parse widgets field which can be a list or string."""
     if isinstance(widgets_raw, str):
-        widgets = [widgets_raw]
+        return [widgets_raw]
     elif isinstance(widgets_raw, Iterable):
-        widgets = [str(item) for item in widgets_raw]
+        return [str(item) for item in widgets_raw]
     else:
-        raise ValueError(f"Skill file widgets must be list or string: {path}")
+        raise ValueError(f"Skill file widgets must be list or string: {file_path}")
 
-    if isinstance(layout_variants_raw, str):
-        layout_variants = [layout_variants_raw]
-    elif isinstance(layout_variants_raw, Iterable):
-        layout_variants = [str(item) for item in layout_variants_raw]
+
+def _parse_list_field(field_raw: Any) -> List[str]:
+    """Parse a field that should be a list of strings."""
+    if isinstance(field_raw, str):
+        return [field_raw]
+    elif isinstance(field_raw, Iterable):
+        return [str(item) for item in field_raw]
+    return []
+
+
+def load_claude_skill(skill_dir: Path) -> A2UISkillMeta:
+    """
+    Parse a skill from the official Claude Agent Skills format.
+    
+    Expected structure:
+    .claude/skills/<skill-name>/
+        skill.md          # Required: skill definition
+        claude_assets/    # Optional: additional assets
+            layout.json   # Optional: A2UI layout configuration
+    
+    The skill.md frontmatter uses:
+    - name: skill name (matches directory name, hyphenated)
+    - description: skill description
+    - tools: list of tools the skill uses
+    """
+    skill_md_path = skill_dir / "skill.md"
+    if not skill_md_path.exists():
+        raise ValueError(f"Missing skill.md in skill directory: {skill_dir}")
+
+    raw = skill_md_path.read_text(encoding="utf-8")
+    meta, body = _parse_yaml_frontmatter(raw, skill_md_path)
+
+    # Claude Agent Skills uses 'name' field for the skill name (hyphenated)
+    name_raw = str(meta.get("name", "")).strip()
+    if not name_raw:
+        raise ValueError(f"Skill file missing name: {skill_md_path}")
+    
+    # Convert hyphenated name to skill_id format (a2ui_<name> with underscores)
+    # e.g., "a2ui-explain-move" -> "a2ui_explain_move"
+    skill_id = name_raw.replace("-", "_")
+    
+    # For display, convert to Title Case
+    name_display = name_raw.replace("a2ui-", "").replace("-", " ").title()
+    
+    description = str(meta.get("description", "")).strip()
+    if not description:
+        raise ValueError(f"Skill file missing description: {skill_md_path}")
+    
+    # Tools is a new field in Claude Agent Skills format
+    tools = _parse_list_field(meta.get("tools", []))
+
+    # Try to load layout configuration from claude_assets/layout.json
+    layout_config = None
+    layout_json_path = skill_dir / "claude_assets" / "layout.json"
+    if layout_json_path.exists():
+        try:
+            with open(layout_json_path, "r", encoding="utf-8") as f:
+                layout_config = json.load(f)
+        except Exception as e:
+            logger.warning(f"Failed to load layout.json for {skill_dir}: {e}")
+
+    # Extract A2UI-specific fields from layout_config or use defaults
+    if layout_config:
+        widgets = layout_config.get("widgets", [])
+        layout = layout_config.get("layout", "standard")
+        layout_variants = layout_config.get("layout_variants", [layout])
+        default_variant = layout_config.get("default_variant", layout)
+        # Use skill_id from layout.json if present (canonical)
+        if layout_config.get("skill_id"):
+            skill_id = layout_config["skill_id"]
     else:
-        layout_variants = []
+        # Fallback defaults
+        widgets = []
+        layout = "standard"
+        layout_variants = ["standard"]
+        default_variant = "standard"
 
     return A2UISkillMeta(
         skill_id=skill_id,
-        name=name,
+        name=name_display,
         description=description,
         widgets=widgets,
         layout=layout,
         layout_variants=layout_variants,
         default_variant=default_variant,
-        source_path=path,
+        source_path=skill_md_path,
         body=body,
+        tools=tools,
+        layout_config=layout_config,
     )
 
 
-def load_a2ui_skills(directory: Path | None = None) -> List[A2UISkillMeta]:
-    """Load all A2UI skill markdown files from disk."""
-    directory = directory or _SKILL_DIR
-    skill_files = sorted(directory.glob("a2ui_skill_*.md"))
-    if not skill_files:
-        raise ValueError(f"No A2UI skill files found in {directory}")
-    return [load_a2ui_skill(path) for path in skill_files]
+def load_legacy_skills(directory: Path | None = None) -> List[A2UISkillMeta]:
+    """Legacy loader removed after full SDK adoption."""
+    raise RuntimeError("Legacy skill format is no longer supported.")
+
+
+def load_claude_skills(directory: Path | None = None) -> List[A2UISkillMeta]:
+    """Load all skills from .claude/skills/ directory."""
+    directory = directory or _CLAUDE_SKILLS_DIR
+    if not directory.exists():
+        return []
+    
+    skills = []
+    for skill_dir in sorted(directory.iterdir()):
+        if not skill_dir.is_dir():
+            continue
+        skill_md = skill_dir / "skill.md"
+        if skill_md.exists():
+            try:
+                skills.append(load_claude_skill(skill_dir))
+            except Exception as e:
+                logger.warning(f"Failed to load skill from {skill_dir}: {e}")
+    
+    return skills
+
+
+def load_all_skills() -> List[A2UISkillMeta]:
+    """
+    Load skills from .claude/skills/ directory only (authoritative source).
+    """
+    claude_skills = load_claude_skills()
+    if claude_skills:
+        logger.info(f"Loaded {len(claude_skills)} skills from .claude/skills/")
+        return claude_skills
+
+    raise ValueError("No A2UI skills found in .claude/skills/")
 
 
 @lru_cache(maxsize=1)
 def get_a2ui_skills() -> List[A2UISkillMeta]:
     """Return cached list of parsed A2UI skills."""
-    return load_a2ui_skills()
+    return load_all_skills()
 
 
 def get_a2ui_skill(skill_id: str) -> A2UISkillMeta:
@@ -150,13 +250,16 @@ def build_a2ui_skill_catalog(skills: Sequence[A2UISkillMeta]) -> str:
         lines.append(f"  Layout: {skill.layout}")
         if skill.layout_variants:
             lines.append(f"  Layout Variants: {', '.join(skill.layout_variants)}")
+        if skill.tools:
+            lines.append(f"  Tools: {', '.join(skill.tools)}")
     return "\n".join(lines)
 
 
 __all__ = [
     "A2UISkillMeta",
-    "load_a2ui_skill",
-    "load_a2ui_skills",
+    "load_claude_skill",
+    "load_claude_skills",
+    "load_all_skills",
     "get_a2ui_skills",
     "get_a2ui_skill",
     "build_a2ui_skill_catalog",

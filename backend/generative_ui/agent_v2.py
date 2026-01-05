@@ -14,31 +14,21 @@
 #   Called from: backend.generative_ui.agent_v2.A2UIAgent.select_skill, backend.generative_ui.agent_v2.A2UIAgent.selection_from_plan
 #   Invokes: pydantic validation
 #   Why: Enforces the selection contract used by skill routing.
-# Function: _build_skill_selection_tool
-#   Role: Build the Claude tool schema for skill selection.
-#   Called from: backend.generative_ui.agent_v2.A2UIAgent.select_skill
-#   Invokes: n/a
-#   Why: Encapsulates the selection tool schema with allowed skill IDs.
-# Function: _extract_tool_input
-#   Role: Extract the tool input payload from a Claude response.
-#   Called from: backend.generative_ui.agent_v2.A2UIAgent.select_skill
-#   Invokes: n/a
-#   Why: Pulls structured selection output from Claude tool-use blocks.
 # Class: A2UIAgent
-#   Role: Orchestrate skill selection, tool execution, and A2UI streaming.
+#   Role: Orchestrate skill selection, tool execution, and A2UI streaming.      
 #   Called from: backend.generative_ui.routes.dashboard
-#   Invokes: anthropic ClaudeSDKClient, conversational_analytics.tools, backend.generative_ui.a2ui.emitter.A2UIMessageEmitter
-#   Why: Implements the A2UI-native agent flow.
+#   Invokes: Claude Agent SDK client, conversational_analytics.tools, backend.generative_ui.a2ui.emitter.A2UIMessageEmitter
+#   Why: Implements the A2UI-native agent flow with SDK-backed selection and data streaming.
 # Method: A2UIAgent.__init__
 #   Role: Configure model + skill registry references.
 #   Called from: backend.generative_ui.agent_v2.get_a2ui_agent
 #   Invokes: backend.generative_ui.skills.get_a2ui_skills
 #   Why: Shares cached skill metadata across requests.
 # Method: A2UIAgent.select_skill
-#   Role: Use the model to select a skill and extract slots.
-#   Called from: backend.generative_ui.routes.dashboard.create_dashboard
-#   Invokes: anthropic ClaudeSDKClient.messages.create
-#   Why: Keeps routing logic centralized and model-driven.
+#   Role: Use the Claude Agent SDK to select a skill and extract slots.
+#   Called from: backend.generative_ui.routes.dashboard.create_dashboard        
+#   Invokes: A2UISDKWrapper.query
+#   Why: Keeps routing logic centralized and model-driven via the SDK.
 # Method: A2UIAgent.selection_to_plan
 #   Role: Convert a SkillSelection into a plan dict for storage.
 #   Called from: backend.generative_ui.routes.dashboard.create_dashboard
@@ -122,29 +112,17 @@ A2UI-native agent for skill-driven dashboard streaming.
 from __future__ import annotations
 
 import json
-import math
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from pydantic import BaseModel, Field
 
-try:
-    import anthropic  # type: ignore
-    _anthropic_import_error: Optional[ImportError] = None
-except ImportError as exc:  # pragma: no cover - optional dependency
-    anthropic = None  # type: ignore
-    _anthropic_import_error = exc
-
-try:
-    from anthropic import ClaudeSDKClient, ClaudeAgentOptions  # type: ignore
-except Exception:  # pragma: no cover - SDK may be unavailable
-    ClaudeSDKClient = None  # type: ignore
-    ClaudeAgentOptions = None  # type: ignore
-
 from .config import get_settings
 from .skills import A2UISkillMeta, build_a2ui_skill_catalog, get_a2ui_skill, get_a2ui_skills
 from .a2ui.emitter import A2UIMessageEmitter, SkillRenderContext
+from .sdk_wrapper import A2UISDKWrapper, get_sdk_wrapper, SDKResponse
+from .mcp_tools import A2UI_MCP_TOOLS, A2UI_MCP_TOOL_NAMES
 from .utils import (
     AVAILABLE_TICKERS,
     normalize_tickers,
@@ -161,19 +139,12 @@ from .utils import (
     map_news_event,
 )
 from conversational_analytics.tools import execute_sql_tool, execute_news_tool, execute_analysis_tool
-from conversational_analytics.sdk_assets import (
-    CLAUDE_DIR,
-    get_allowed_tools,
-    load_project_settings,
-    should_use_sdk_assets,
-)
 
 
 ALLOWED_TIME_RANGES = {"1M", "3M", "6M", "1Y"}
 DEFAULT_TIME_RANGE = "3M"
 DEFAULT_METRIC = "Revenue"
 DEFAULT_MODEL = "claude-haiku-4-5-20251001"
-SKILL_SELECTION_TOOL_NAME = "select_a2ui_skill"
 
 
 class A2UIAgentError(Exception):
@@ -188,6 +159,24 @@ class A2UIRunResult:
     citations: List[Dict[str, Any]]
 
 
+@dataclass
+class SkillExecutionChunk:
+    """
+    Chunk emitted during streaming skill execution.
+    
+    Dataclass: SkillExecutionChunk — holds incremental data for streaming.
+    Called from: A2UIAgent.execute_skill_streaming
+    Purpose: Enables the runtime to yield partial results (data patches, audit events)
+    before the full skill execution completes.
+    """
+    step: str  # e.g., "sql_query", "news_fetch", "narrative", "complete"
+    data_patch: Optional[Dict[str, Any]] = None
+    data_path: Optional[str] = None  # JSON path like "/kpis" or "/chart"
+    audit_event: Optional[str] = None
+    audit_details: Optional[str] = None
+    final_result: Optional[A2UIRunResult] = None
+
+
 class SkillSelection(BaseModel):
     """Structured output for skill routing."""
 
@@ -197,125 +186,11 @@ class SkillSelection(BaseModel):
     time_range: str = Field(default=DEFAULT_TIME_RANGE, description="Requested time range for charts")
 
 
-def _build_skill_selection_tool(skill_ids: Sequence[str]) -> Dict[str, Any]:
-    return {
-        "name": SKILL_SELECTION_TOOL_NAME,
-        "description": "Select the best A2UI skill and extract slots.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "skill_id": {
-                    "type": "string",
-                    "enum": list(skill_ids),
-                    "description": "Selected skill_id from the catalog",
-                },
-                "tickers": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Ticker symbols mentioned by the user",
-                },
-                "metric": {
-                    "type": "string",
-                    "description": "Primary metric for comparison (e.g., Revenue, Net Income)",
-                },
-                "time_range": {
-                    "type": "string",
-                    "enum": sorted(ALLOWED_TIME_RANGES),
-                    "description": "Requested chart time range",
-                },
-            },
-            "required": ["skill_id", "tickers", "metric", "time_range"],
-        },
-    }
-
-# ============================================================================
-# Prompt Caching Helpers (Claude Prompt Caching for reduced costs/latency)
-# ============================================================================
-
-SKILL_ROUTING_SYSTEM = (
-    "You are an A2UI skill router. Choose exactly one skill_id from the catalog "
-    "and extract tickers, metric, and time range if present. "
-    "Only use the allowed ticker list. time_range must be one of: 1M, 3M, 6M, 1Y."
-)
-
-NARRATIVE_SYSTEM = """You are a Senior Financial Analyst providing a concise but insightful analysis.
-
-Your task:
-- Write exactly 4-6 sentences analyzing the provided financial data
-- Include specific numbers and percentages when available
-- Highlight key trends, comparisons, or anomalies
-- Provide brief context on what the numbers mean for investors
-- Use professional but accessible language
-- Do NOT use markdown formatting, bullet points, or lists
-- Write in paragraph form as continuous prose"""
-
-
-def _build_cached_system_blocks(
-    base_system_prompt: str,
-    catalog_or_context: Optional[str] = None,
-    cache_base: bool = True,
-    cache_context: bool = True,
-) -> List[Dict[str, Any]]:
-    """
-    Build system blocks with cache_control for Claude Prompt Caching.
-    
-    Function: _build_cached_system_blocks — creates cache-enabled system content blocks.
-    Called from: A2UIAgent.select_skill, A2UIAgent._execute_narrative
-    Purpose: Enable prompt caching to reduce API costs (up to 90%) and latency (up to 85%)
-    for repeated prompts like skill routing and narrative generation.
-    
-    Args:
-        base_system_prompt: The stable base system instruction (should be cached).
-        catalog_or_context: Optional additional context like skill catalog (should be cached).
-        cache_base: Whether to cache the base prompt (default True).
-        cache_context: Whether to cache the context block (default True).
-    
-    Returns:
-        List of content blocks suitable for the `system` parameter in messages.create().
-    """
-    blocks: List[Dict[str, Any]] = []
-    
-    # Base system prompt with optional caching
-    base_block: Dict[str, Any] = {"type": "text", "text": base_system_prompt}
-    if cache_base:
-        base_block["cache_control"] = {"type": "ephemeral"}
-    blocks.append(base_block)
-    
-    # Optional context (skill catalog, etc.) with optional caching
-    if catalog_or_context:
-        context_block: Dict[str, Any] = {"type": "text", "text": catalog_or_context}
-        if cache_context:
-            context_block["cache_control"] = {"type": "ephemeral"}
-        blocks.append(context_block)
-    
-    return blocks
-
-
-def _extract_tool_input(response: Any, tool_name: str) -> Dict[str, Any]:
-    content = getattr(response, "content", []) or []
-    for block in content:
-        block_type = getattr(block, "type", None)
-        block_name = getattr(block, "name", None)
-        block_input = getattr(block, "input", None)
-        if block_type == "tool_use" and block_name == tool_name and isinstance(block_input, dict):
-            return block_input
-        if isinstance(block, dict):
-            if block.get("type") == "tool_use" and block.get("name") == tool_name:
-                tool_input = block.get("input")
-                if isinstance(tool_input, dict):
-                    return tool_input
-    raise A2UIAgentError("Claude response missing skill selection tool output")
-
-
 class A2UIAgent:
     """A2UI-native agent that streams dashboard messages."""
 
     def __init__(self, model: Optional[str] = None) -> None:
         """Initialize the agent with model + skill catalog."""
-        if anthropic is None or _anthropic_import_error:
-            raise A2UIAgentError(
-                "A2UI agent requires the 'anthropic' package. Install backend dependencies (pip install -r backend/requirements.txt)."
-            )
         self.settings = get_settings()
         if not self.settings.claude_api_key:
             raise A2UIAgentError("Claude API key not configured")
@@ -323,25 +198,10 @@ class A2UIAgent:
         self.skills = get_a2ui_skills()
         self.skill_catalog = build_a2ui_skill_catalog(self.skills)
         self.skill_lookup = {skill.skill_id: skill for skill in self.skills}
-        self.use_sdk_assets = should_use_sdk_assets(True)
-        self.sdk_settings = load_project_settings() if self.use_sdk_assets else {}
-        self.allowed_tool_names = (
-            get_allowed_tools([SKILL_SELECTION_TOOL_NAME])
-            if self.use_sdk_assets
-            else [SKILL_SELECTION_TOOL_NAME]
+        self.sdk_wrapper: A2UISDKWrapper = get_sdk_wrapper(
+            model=self.model,
+            api_key=self.settings.claude_api_key,
         )
-
-        if self.use_sdk_assets and ClaudeSDKClient and ClaudeAgentOptions:
-            self.client = ClaudeSDKClient(
-                api_key=self.settings.claude_api_key,
-                options=ClaudeAgentOptions(
-                    setting_sources=["project"],
-                    allowed_tools=self.allowed_tool_names,
-                    project_path=str(CLAUDE_DIR),
-                ),
-            )
-        else:
-            self.client = anthropic.Anthropic(api_key=self.settings.claude_api_key)
 
     async def select_skill(self, question: str, max_retries: int = 2) -> SkillSelection:
         """Select a skill and slots using the model with retry logic.
@@ -356,60 +216,58 @@ class A2UIAgent:
         Raises:
             A2UIAgentError: If skill selection fails after all retries.
         """
-        if not self.allowed_tool_names:
-            raise A2UIAgentError("Claude SDK allowlist blocks A2UI skill routing tool.")
-        
-        # Build cache-enabled system blocks for prompt caching
-        # The system prompt and skill catalog are stable and should be cached
-        system_blocks = _build_cached_system_blocks(
-            base_system_prompt=SKILL_ROUTING_SYSTEM,
-            catalog_or_context=self.skill_catalog,
-            cache_base=True,
-            cache_context=True,
-        )
-        
-        tool = _build_skill_selection_tool(self.skill_lookup.keys())
         last_error: Optional[Exception] = None
-        
+        skill_ids = ", ".join(self.skill_lookup.keys())
+        allowed_ranges = ", ".join(sorted(ALLOWED_TIME_RANGES))
+
         for attempt in range(max_retries):
             try:
-                # Use lower temperature on retry for more deterministic output
-                temperature = 0.7 if attempt == 0 else 0.3
-                
-                response = self.client.messages.create(
-                    model=self.model,
-                    max_tokens=512,
-                    temperature=temperature,
-                    system=system_blocks,  # Cache-enabled system blocks
-                    tools=[tool],
-                    tool_choice={"type": "tool", "name": SKILL_SELECTION_TOOL_NAME},
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": (
-                                f"Question: {question}\n\n"
-                                f"Allowed tickers: {', '.join(AVAILABLE_TICKERS)}"
-                            ),
-                        }
-                    ],
+                await self.sdk_wrapper.initialize(use_sdk=True, allowed_tools=[])
+
+                system_prompt = (
+                    "You route financial dashboard requests to predefined skills. "
+                    "Only return compact JSON with fields: "
+                    "skill_id (one of the allowed IDs), "
+                    "tickers (array of uppercase symbols, min 1, max 6), "
+                    "metric (string, default 'Revenue'), "
+                    "time_range (one of allowed ranges). "
+                    "Do not add prose or code fences."
                 )
-                
-                tool_input = _extract_tool_input(response, SKILL_SELECTION_TOOL_NAME)
-                selection = SkillSelection(**tool_input)
+                user_prompt = (
+                    f"Question: {question}\n"
+                    f"Allowed skill_ids: {skill_ids}\n"
+                    f"Allowed tickers: {', '.join(AVAILABLE_TICKERS)}\n"
+                    f"Allowed time_range values: {allowed_ranges}\n"
+                    "Respond with JSON only."
+                )
+
+                response: SDKResponse = await self.sdk_wrapper.query(
+                    prompt=user_prompt,
+                    system_prompt=system_prompt,
+                    max_tokens=256,
+                    temperature=0.3 if attempt else 0.7,
+                )
+                if response.error:
+                    raise A2UIAgentError(response.error)
+                parsed = json.loads(response.content or "{}")
+                selection = SkillSelection(
+                    skill_id=str(parsed.get("skill_id", "")).strip(),
+                    tickers=normalize_tickers(parsed.get("tickers") or []),
+                    metric=str(parsed.get("metric") or DEFAULT_METRIC),
+                    time_range=str(parsed.get("time_range") or DEFAULT_TIME_RANGE),
+                )
                 self._validate_selection(selection)
                 return selection
-                
+
             except (ValueError, A2UIAgentError, Exception) as exc:
                 last_error = exc
-                # Log retry attempt (avoid duplicate logging on final attempt)
                 if attempt < max_retries - 1:
                     import logging
                     logging.getLogger(__name__).warning(
                         f"Skill selection attempt {attempt + 1} failed: {exc}. Retrying..."
                     )
                 continue
-        
-        # All retries exhausted
+
         raise A2UIAgentError(
             f"Skill selection failed after {max_retries} attempts: {last_error}"
         )
@@ -520,6 +378,88 @@ class A2UIAgent:
             result.data_model["explanation"] = narrative
             
         return result
+
+    async def execute_skill_streaming(
+        self, skill: A2UISkillMeta, selection: SkillSelection
+    ) -> "AsyncGenerator[SkillExecutionChunk, None]":
+        """
+        Execute a skill and yield incremental streaming chunks.
+        
+        Method: A2UIAgent.execute_skill_streaming — streaming wrapper for execute_skill.
+        Called from: runtime.py (A2UIRuntime.stream_dashboard, A2UIRuntime.process_action)
+        Purpose: Enables the runtime to yield partial results (data patches, audit events)
+        as skill execution progresses, providing real-time feedback to the UI.
+        
+        Yields:
+            SkillExecutionChunk objects with incremental data patches and the final result.
+        """
+        from typing import AsyncGenerator  # Import here to avoid circular imports
+        
+        # Emit start of skill execution
+        yield SkillExecutionChunk(
+            step="skill_start",
+            audit_event="skill_execution_started",
+            audit_details=f"Executing {skill.skill_id}",
+        )
+        
+        try:
+            # Execute the skill (this is the heavy lifting)
+            result = await self.execute_skill(skill, selection)
+            
+            # Emit data patches for key sections of the result
+            if result.data_model.get("kpis"):
+                yield SkillExecutionChunk(
+                    step="kpis",
+                    data_patch=result.data_model["kpis"],
+                    data_path="/data/kpis",
+                    audit_event="data_loaded",
+                    audit_details="KPIs loaded",
+                )
+
+            if result.data_model.get("chart"):
+                yield SkillExecutionChunk(
+                    step="chart",
+                    data_patch=result.data_model["chart"],
+                    data_path="/data/chart",
+                    audit_event="data_loaded",
+                    audit_details="Chart data loaded",
+                )
+
+            if result.data_model.get("table"):
+                yield SkillExecutionChunk(
+                    step="table",
+                    data_patch=result.data_model["table"],
+                    data_path="/data/table",
+                    audit_event="data_loaded",
+                    audit_details="Table data loaded",
+                )
+
+            if result.data_model.get("explanation"):
+                yield SkillExecutionChunk(
+                    step="narrative",
+                    data_patch=result.data_model["explanation"],
+                    data_path="/data/explanation",
+                    audit_event="narrative_generated",
+                    audit_details="AI narrative complete",
+                )
+
+            # Emit final complete chunk with the full result
+            yield SkillExecutionChunk(
+                step="complete",
+                data_patch=result.data_model,
+                data_path="/data",
+                audit_event="skill_execution_complete",
+                audit_details=f"{skill.skill_id} execution complete",
+                final_result=result,
+            )
+            
+        except Exception as exc:
+            yield SkillExecutionChunk(
+                step="error",
+                audit_event="skill_execution_error",
+                audit_details=str(exc),
+            )
+            raise
 
     async def _execute_narrative(self, selection: SkillSelection, data_model: Dict[str, Any]) -> Dict[str, Any]:
         """Generate a concise AI narrative summarizing the data results."""

@@ -340,8 +340,8 @@ const LinkedInPhotoPage: React.FC<LinkedInPhotoPageProps> = ({ apiPath = '/api/h
     if (photoPreview) URL.revokeObjectURL(photoPreview);
     setPhotoPreview(nextPreview);
     setPhotoFile(file);
-    setCurrentStep(2);
-    setTimeout(() => scrollToRef(step2Ref), 100);
+    // Stay on Step 1 - let user review their score before proceeding
+    // setCurrentStep(2) is removed - user will move to Step 2 manually
 
     // Trigger AI Quality Scorecard analysis
     setIsAnalyzing(true);

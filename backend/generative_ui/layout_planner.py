@@ -25,6 +25,7 @@ component tree so that the renderer can stay deterministic and catalog-safe.
 from __future__ import annotations
 
 import logging
+import os
 import re
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
@@ -33,6 +34,10 @@ from .skills import A2UISkillMeta
 from .config import get_settings
 
 logger = logging.getLogger(__name__)
+
+# Environment variable to enable LLM-based layout planning (default: False for cost/latency)
+# Set GENUI_LAYOUT_USE_MODEL=true to enable Claude-driven layout proposals
+LAYOUT_USE_MODEL_ENV = os.getenv("GENUI_LAYOUT_USE_MODEL", "false").lower() == "true"
 
 # Allowed emphasis values
 VALID_EMPHASIS = {"focus_chart", "focus_table", "focus_news", "balanced", None}
@@ -189,15 +194,17 @@ class LayoutPlanner:
     Purpose: Propose context-aware layouts while maintaining catalog safety.
     """
 
-    def __init__(self, *, use_model: bool = False) -> None:
+    def __init__(self, *, use_model: Optional[bool] = None) -> None:
         """
         Initialize planner.
         
         Args:
-            use_model: Whether to call Claude via Agent SDK for overrides (falls back to heuristics).
+            use_model: Whether to call Claude for overrides. If None, uses GENUI_LAYOUT_USE_MODEL env var.
+                       Defaults to False (heuristics-only) for cost/latency optimization.
         """
         self.enabled = True
-        self.use_model = use_model
+        # Use explicit parameter if provided, otherwise fall back to environment variable
+        self.use_model = use_model if use_model is not None else LAYOUT_USE_MODEL_ENV
         self.validator = LayoutOverrideValidator()
         try:
             import anthropic  # type: ignore

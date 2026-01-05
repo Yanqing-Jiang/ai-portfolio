@@ -10,10 +10,10 @@
 //   Invokes: onSelect callback
 //   Why: Helps users discover example prompts quickly.
 // Component: GenerativeUIPage
-//   Role: Orchestrate A2UI streaming, clarifications, and dashboard layout.
+//   Role: Orchestrate A2UI streaming, clarifications, SEO head tags, and dashboard layout.
 //   Called from: App routing
-//   Invokes: useA2UIStream, useSurface, ProcessPanel, ClarificationOverlay, FollowUpSuggestions
-//   Why: Main A2UI experience container for the portfolio.
+//   Invokes: ProjectHelmet, useA2UIStream, useSurface, ProcessPanel, ClarificationOverlay, FollowUpSuggestions
+//   Why: Main A2UI experience container with crawlable marketing context for the portfolio.
 // --- End Function/Class Map ---
 /**
  * Generative UI Project Page (2026) - Award-Winning Redesign v2
@@ -25,7 +25,7 @@
  * - Premium glassmorphism + Framer Motion orchestration
  */
 
-import React, { useState, useCallback, useRef, useEffect } from 'react';
+import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 // @ts-ignore
 import { Helmet } from 'react-helmet-async';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -43,6 +43,9 @@ import { FollowUpSuggestions, type FollowUpSuggestion } from './FollowUpSuggesti
 import type { SkillInfo } from './SkillHeaderBadge';
 import { ContextRibbon, type HistoryItem } from './ContextRibbon';
 import { ProcessPanel, type AuditEvent } from './ProcessPanel';
+import { ProjectHelmet } from '../ProjectHelmet';
+import { PROJECT_DATA } from '../../constants';
+import type { Project } from '../../types';
 
 // ============================================================================
 // Theme Tokens (Premium Rose/Amber)
@@ -258,6 +261,12 @@ export function GenerativeUIPage(): React.ReactElement {
     const [question, setQuestion] = useState('');
     const [dashboardId, setDashboardId] = useState<string | null>(null);
     const [isMobile, setIsMobile] = useState(false);
+    const allProjects = useMemo<Project[]>(() => PROJECT_DATA.flatMap((year) => year.projects), []);
+    const a2uiProject = useMemo<Project | undefined>(
+        () => allProjects.find((proj) => proj.id === 'agent-to-ui'),
+        [allProjects]
+    );
+    const showA2UISeoSummary = false;
 
     useEffect(() => {
         const checkMobile = () => setIsMobile(window.innerWidth < 640);
@@ -265,7 +274,7 @@ export function GenerativeUIPage(): React.ReactElement {
         window.addEventListener('resize', checkMobile);
         return () => window.removeEventListener('resize', checkMobile);
     }, []);
-    
+
     useEffect(() => {
         console.log('GenerativeUIPage Rendered:', { dashboardId, question });
     }, [dashboardId, question]);
@@ -704,285 +713,350 @@ export function GenerativeUIPage(): React.ReactElement {
 
     return (
         <>
-            <Helmet>
-                <title>Generative Financial Dashboard | A2UI Protocol</title>
-                <meta
-                    name="description"
-                    content="Ask a question and watch AI generate a custom financial dashboard in real-time using the A2UI protocol."
-                />
-            </Helmet>
+            {a2uiProject ? (
+                <ProjectHelmet project={a2uiProject} />
+            ) : (
+                <Helmet>
+                    <title>Agent to UI | Agentic UI UX Design | A2UI</title>
+                    <meta
+                        name="description"
+                        content="Agent-guided A2UI dashboard generation that streams widgets, KPIs, and news from finance questions using Claude Agent SDK, FastAPI SSE, and a custom React renderer."
+                    />
+                </Helmet>
+            )}
 
-                        <div className="generative-ui-page relative min-h-screen overflow-hidden" style={{ backgroundColor: theme.colors.bg.primary }}>
+            <div className="generative-ui-page relative min-h-screen overflow-hidden" style={{ backgroundColor: theme.colors.bg.primary }}>
 
-                            {/* Ambient Background */}
+                {/* Ambient Background */}
 
-                            <div className="absolute inset-0 pointer-events-none overflow-hidden">
+                <div className="absolute inset-0 pointer-events-none overflow-hidden">
 
-                                <div
+                    <div
+                        className="absolute -top-1/2 -right-1/4 w-[800px] h-[800px] rounded-full opacity-20"
+                        style={{
+                            background: `radial-gradient(circle, ${theme.colors.accent.primary} 0%, transparent 70%)`,
+                            filter: 'blur(120px)',
+                        }}
+                    />
 
-                                    className="absolute -top-1/2 -right-1/4 w-[800px] h-[800px] rounded-full opacity-20"
+                    <div
+                        className="absolute -bottom-1/4 -left-1/4 w-[600px] h-[600px] rounded-full opacity-15"
+                        style={{
+                            background: `radial-gradient(circle, ${theme.colors.accent.secondary} 0%, transparent 70%)`,
+                            filter: 'blur(100px)',
+                        }}
+                    />
 
-                                    style={{
+                </div>
 
-                                        background: `radial-gradient(circle, ${theme.colors.accent.primary} 0%, transparent 70%)`,
 
-                                        filter: 'blur(120px)',
 
-                                    }}
+                {/* Main Content - Split Screen */}
 
-                                />
-
-                                <div
-
-                                    className="absolute -bottom-1/4 -left-1/4 w-[600px] h-[600px] rounded-full opacity-15"
-
-                                    style={{
-
-                                        background: `radial-gradient(circle, ${theme.colors.accent.secondary} 0%, transparent 70%)`,
-
-                                        filter: 'blur(100px)',
-
-                                    }}
-
-                                />
-
+                <div className="relative z-10 flex flex-col min-h-screen overflow-hidden">
+                    {showA2UISeoSummary && (
+                        <section className="px-4 sm:px-8 pt-10 pb-6 max-w-6xl mx-auto space-y-4 text-slate-100">
+                            <div className="flex flex-wrap items-start gap-4 justify-between">
+                                <div className="space-y-3 max-w-3xl">
+                                    <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-white">
+                                        {a2uiProject?.title ?? 'Agent to UI'}
+                                    </h1>
+                                    <p className="text-sm sm:text-base text-slate-300 leading-relaxed">
+                                        {a2uiProject?.seoDescription ??
+                                            'Agent-guided A2UI dashboard generation that streams widgets, KPIs, and news from finance questions using Claude Agent SDK, FastAPI SSE, and a custom React renderer.'}
+                                    </p>
+                                    <div className="flex flex-wrap gap-2">
+                                        {(a2uiProject?.serviceTags ?? ['Generative UI', 'Agent UX', 'Financial Analytics']).map((tag) => (
+                                            <span
+                                                key={tag}
+                                                className="px-3 py-1 rounded-full text-xs font-semibold bg-rose-500/20 border border-rose-400/30 text-rose-100"
+                                            >
+                                                {tag}
+                                            </span>
+                                        ))}
+                                    </div>
+                                </div>
+                                {a2uiProject?.ogImage && (
+                                    <figure className="w-full sm:w-64 rounded-xl overflow-hidden border border-white/10 shadow-lg bg-slate-900/60">
+                                        <img
+                                            src={a2uiProject.ogImage}
+                                            alt="Generative financial dashboard rendered via the A2UI protocol"
+                                            className="w-full h-full object-cover"
+                                            loading="lazy"
+                                        />
+                                    </figure>
+                                )}
                             </div>
 
-            
+                            <div className="grid gap-4 md:grid-cols-3">
+                                <div className="p-4 rounded-xl border border-white/10 bg-slate-900/60 backdrop-blur">
+                                    <h2 className="text-sm font-semibold text-rose-200 mb-2">Agentic workflow</h2>
+                                    <ul className="space-y-1 text-slate-300 text-sm leading-relaxed list-disc list-inside">
+                                        <li>Clarifies finance intent, streams A2UI surfaceUpdate + dataModelUpdate phases.</li>
+                                        <li>SQL + chart toolchain via FastAPI SSE, Claude Agent SDK, and ECharts/TradingView rendering.</li>
+                                        <li>Follow-ups reuse conversation memory, audit trail, and bound values.</li>
+                                    </ul>
+                                </div>
+                                <div className="p-4 rounded-xl border border-white/10 bg-slate-900/60 backdrop-blur">
+                                    <h2 className="text-sm font-semibold text-rose-200 mb-2">Data coverage</h2>
+                                    <ul className="space-y-1 text-slate-300 text-sm leading-relaxed list-disc list-inside">
+                                        <li>Default prompts cover NVDA, AMD, INTC, AVGO, QCOM, MU, TXN.</li>
+                                        <li>Supports comparative KPIs, margins, cash flow, and earnings timelines.</li>
+                                        <li>Server-side summary + h1 ensure crawlers see finance context instantly.</li>
+                                    </ul>
+                                </div>
+                                <div className="p-4 rounded-xl border border-white/10 bg-slate-900/60 backdrop-blur">
+                                    <h2 className="text-sm font-semibold text-rose-200 mb-2">Crawl-ready facts</h2>
+                                    <ul className="space-y-1 text-slate-300 text-sm leading-relaxed list-disc list-inside">
+                                        {(a2uiProject?.statHighlights ?? [
+                                            'Streams custom dashboards from natural language queries via A2UI protocol',
+                                            'Renders TradingView charts, ECharts visualizations, and real-time KPIs',
+                                        ]).map((fact) => (
+                                            <li key={fact}>{fact}</li>
+                                        ))}
+                                        <li>
+                                            Architecture: <a
+                                                className="text-rose-200 underline decoration-rose-400/50 hover:text-white"
+                                                href="https://github.com/Yanqing-Jiang/ai-portfolio/blob/main/docs/architecture-generative-ui.md"
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                            >docs/architecture-generative-ui.md</a>
+                                        </li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </section>
+                    )}
 
-                            {/* Main Content - Split Screen */}
+                    {/* Dashboard Area (70%) */}
 
-                            <div className="relative z-10 flex flex-col h-screen overflow-hidden">
+                    <div className="flex-1 flex flex-col min-h-0">
 
-                                {/* Dashboard Area (70%) */}
+                        <div className="flex-1 p-3 sm:p-6 flex flex-col min-h-0">
 
-                                <div className="flex-1 flex flex-col min-h-0">
+                            <div
 
-                                    <div className="flex-1 p-3 sm:p-6 flex flex-col min-h-0">
+                                className="flex-1 rounded-2xl relative flex flex-col min-h-0"
 
-                                        <div
+                                style={{
 
-                                            className="flex-1 rounded-2xl relative flex flex-col min-h-0"
+                                    backgroundColor: theme.colors.bg.secondary + 'cc',
 
-                                            style={{
+                                    border: `1px solid ${theme.colors.border.medium}`,
 
-                                                backgroundColor: theme.colors.bg.secondary + 'cc',
+                                    backdropFilter: 'blur(16px)',
 
-                                                border: `1px solid ${theme.colors.border.medium}`,
+                                }}
 
-                                                backdropFilter: 'blur(16px)',
+                            >
 
-                                            }}
+                                {/* Streaming border animation */}
 
-                                        >
+                                {streamState.isConnected && (
 
-                                            {/* Streaming border animation */}
+                                    <motion.div
 
-                                            {streamState.isConnected && (
+                                        className="absolute inset-0 rounded-2xl pointer-events-none"
+
+                                        animate={{ opacity: [0.3, 0.6, 0.3] }}
+
+                                        transition={{ duration: 2, repeat: Infinity }}
+
+                                        style={{
+
+                                            border: `2px solid ${theme.colors.accent.primary}`,
+
+                                            boxShadow: theme.shadows.glow,
+
+                                        }}
+
+                                    />
+
+                                )}
+
+
+
+                                <div className="flex-1 overflow-auto p-4 sm:p-6 flex flex-col min-h-0">
+
+                                    {/* History Ribbon */}
+
+                                    <ContextRibbon
+
+                                        history={history}
+
+                                        currentId={dashboardId}
+
+                                        onSelect={handleHistorySelect}
+
+                                    />
+
+
+
+                                    {/* Process Panel - Collapsible Status at Top */}
+
+                                    <ProcessPanel
+
+                                        isExpanded={isProcessPanelExpanded}
+
+                                        onToggle={() => setIsProcessPanelExpanded(!isProcessPanelExpanded)}
+
+                                        streamState={{
+
+                                            isConnected: streamState.isConnected,
+
+                                            isDone: streamState.isDone,
+
+                                            isLoading: streamState.isLoading,
+
+                                            connectionStatus: streamState.connectionStatus,
+
+                                            surfaceCount: streamState.surfaces.size,
+
+                                            error: streamState.error?.message ?? null,
+
+                                        }}
+
+                                        activeSkill={activeSkill}
+
+                                        query={question}
+
+                                        dashboardId={dashboardId}
+
+                                        auditTrail={auditTrail}
+
+                                        dataModel={dataModel}
+
+                                        onViewFullDebug={() => setShowDebugPanel(true)}
+
+                                    />
+
+
+
+                                    {/* Empty State / Welcome Screen - Future of Analytics */}
+
+                                    {!dashboardId && (
+
+                                        <div className="flex-1 flex flex-col items-center justify-center relative overflow-hidden py-8">
+
+                                            {/* Animated Background Layers */}
+
+                                            <div className="absolute inset-0 pointer-events-none overflow-hidden">
+
+                                                {/* Gradient Orbs */}
 
                                                 <motion.div
 
-                                                    className="absolute inset-0 rounded-2xl pointer-events-none"
+                                                    className="absolute top-1/4 left-1/4 w-[500px] h-[500px] rounded-full"
 
-                                                    animate={{ opacity: [0.3, 0.6, 0.3] }}
+                                                    animate={{
 
-                                                    transition={{ duration: 2, repeat: Infinity }}
+                                                        x: [0, 50, 0, -50, 0],
+
+                                                        y: [0, -30, 0, 30, 0],
+
+                                                        scale: [1, 1.1, 1, 0.9, 1],
+
+                                                    }}
+
+                                                    transition={{ duration: 20, repeat: Infinity, ease: "easeInOut" }}
 
                                                     style={{
 
-                                                        border: `2px solid ${theme.colors.accent.primary}`,
+                                                        background: 'radial-gradient(circle, rgba(244, 63, 94, 0.15) 0%, transparent 70%)',
 
-                                                        boxShadow: theme.shadows.glow,
+                                                        filter: 'blur(80px)',
+
+                                                    }}
+
+                                                />
+
+                                                <motion.div
+
+                                                    className="absolute bottom-1/4 right-1/4 w-[400px] h-[400px] rounded-full"
+
+                                                    animate={{
+
+                                                        x: [0, -40, 0, 40, 0],
+
+                                                        y: [0, 40, 0, -40, 0],
+
+                                                        scale: [1, 0.9, 1, 1.1, 1],
+
+                                                    }}
+
+                                                    transition={{ duration: 15, repeat: Infinity, ease: "easeInOut" }}
+
+                                                    style={{
+
+                                                        background: 'radial-gradient(circle, rgba(245, 158, 11, 0.12) 0%, transparent 70%)',
+
+                                                        filter: 'blur(60px)',
 
                                                     }}
 
                                                 />
 
-                                            )}
 
-            
 
-                                            <div className="flex-1 overflow-auto p-4 sm:p-6 flex flex-col min-h-0">
+                                                {/* Floating Particles */}
 
-                                                {/* History Ribbon */}
+                                                {[...Array(12)].map((_, i) => (
 
-                                                <ContextRibbon
+                                                    <motion.div
 
-                                                    history={history}
+                                                        key={i}
 
-                                                    currentId={dashboardId}
+                                                        className="absolute w-1 h-1 rounded-full"
 
-                                                    onSelect={handleHistorySelect}
+                                                        style={{
 
-                                                />
+                                                            left: `${10 + (i * 7) % 80}%`,
 
-            
+                                                            top: `${15 + (i * 11) % 70}%`,
 
-                                                {/* Process Panel - Collapsible Status at Top */}
+                                                            backgroundColor: i % 2 === 0 ? 'rgba(244, 63, 94, 0.6)' : 'rgba(245, 158, 11, 0.5)',
 
-                                                <ProcessPanel
+                                                        }}
 
-                                                    isExpanded={isProcessPanelExpanded}
+                                                        animate={{
 
-                                                    onToggle={() => setIsProcessPanelExpanded(!isProcessPanelExpanded)}
+                                                            y: [0, -30, 0],
 
-                                                    streamState={{
+                                                            x: [0, i % 2 === 0 ? 15 : -15, 0],
 
-                                                        isConnected: streamState.isConnected,
+                                                            opacity: [0.2, 0.8, 0.2],
 
-                                                        isDone: streamState.isDone,
+                                                            scale: [1, 1.5, 1],
 
-                                                        isLoading: streamState.isLoading,
+                                                        }}
 
-                                                        connectionStatus: streamState.connectionStatus,
+                                                        transition={{
 
-                                                        surfaceCount: streamState.surfaces.size,
+                                                            duration: 4 + (i % 3),
 
-                                                        error: streamState.error?.message ?? null,
+                                                            repeat: Infinity,
 
-                                                    }}
+                                                            delay: i * 0.3,
 
-                                                    activeSkill={activeSkill}
+                                                            ease: "easeInOut",
 
-                                                    query={question}
+                                                        }}
 
-                                                    dashboardId={dashboardId}
+                                                    />
 
-                                                    auditTrail={auditTrail}
+                                                ))}
 
-                                                    dataModel={dataModel}
 
-                                                    onViewFullDebug={() => setShowDebugPanel(true)}
 
-                                                />
+                                                {/* Grid Pattern Overlay */}
 
-            
+                                                <div
 
-                                                {/* Empty State / Welcome Screen - Future of Analytics */}
+                                                    className="absolute inset-0 opacity-[0.03]"
 
-                                                {!dashboardId && (
+                                                    style={{
 
-                                                    <div className="flex-1 flex flex-col items-center justify-center relative overflow-hidden py-8">
-
-                                                        {/* Animated Background Layers */}
-
-                                                        <div className="absolute inset-0 pointer-events-none overflow-hidden">
-
-                                                            {/* Gradient Orbs */}
-
-                                                            <motion.div
-
-                                                                className="absolute top-1/4 left-1/4 w-[500px] h-[500px] rounded-full"
-
-                                                                animate={{
-
-                                                                    x: [0, 50, 0, -50, 0],
-
-                                                                    y: [0, -30, 0, 30, 0],
-
-                                                                    scale: [1, 1.1, 1, 0.9, 1],
-
-                                                                }}
-
-                                                                transition={{ duration: 20, repeat: Infinity, ease: "easeInOut" }}
-
-                                                                style={{
-
-                                                                    background: 'radial-gradient(circle, rgba(244, 63, 94, 0.15) 0%, transparent 70%)',
-
-                                                                    filter: 'blur(80px)',
-
-                                                                }}
-
-                                                            />
-
-                                                            <motion.div
-
-                                                                className="absolute bottom-1/4 right-1/4 w-[400px] h-[400px] rounded-full"
-
-                                                                animate={{
-
-                                                                    x: [0, -40, 0, 40, 0],
-
-                                                                    y: [0, 40, 0, -40, 0],
-
-                                                                    scale: [1, 0.9, 1, 1.1, 1],
-
-                                                                }}
-
-                                                                transition={{ duration: 15, repeat: Infinity, ease: "easeInOut" }}
-
-                                                                style={{
-
-                                                                    background: 'radial-gradient(circle, rgba(245, 158, 11, 0.12) 0%, transparent 70%)',
-
-                                                                    filter: 'blur(60px)',
-
-                                                                }}
-
-                                                            />
-
-            
-
-                                                            {/* Floating Particles */}
-
-                                                            {[...Array(12)].map((_, i) => (
-
-                                                                <motion.div
-
-                                                                    key={i}
-
-                                                                    className="absolute w-1 h-1 rounded-full"
-
-                                                                    style={{
-
-                                                                        left: `${10 + (i * 7) % 80}%`,
-
-                                                                        top: `${15 + (i * 11) % 70}%`,
-
-                                                                        backgroundColor: i % 2 === 0 ? 'rgba(244, 63, 94, 0.6)' : 'rgba(245, 158, 11, 0.5)',
-
-                                                                    }}
-
-                                                                    animate={{
-
-                                                                        y: [0, -30, 0],
-
-                                                                        x: [0, i % 2 === 0 ? 15 : -15, 0],
-
-                                                                        opacity: [0.2, 0.8, 0.2],
-
-                                                                        scale: [1, 1.5, 1],
-
-                                                                    }}
-
-                                                                    transition={{
-
-                                                                        duration: 4 + (i % 3),
-
-                                                                        repeat: Infinity,
-
-                                                                        delay: i * 0.3,
-
-                                                                        ease: "easeInOut",
-
-                                                                    }}
-
-                                                                />
-
-                                                            ))}
-
-            
-
-                                                            {/* Grid Pattern Overlay */}
-
-                                                            <div
-
-                                                                className="absolute inset-0 opacity-[0.03]"
-
-                                                                style={{
-
-                                                                    backgroundImage: `
+                                                        backgroundImage: `
 
                                                                         linear-gradient(rgba(244, 63, 94, 0.5) 1px, transparent 1px),
 
@@ -990,191 +1064,191 @@ export function GenerativeUIPage(): React.ReactElement {
 
                                                                     `,
 
-                                                                    backgroundSize: '60px 60px',
+                                                        backgroundSize: '60px 60px',
 
-                                                                }}
+                                                    }}
 
-                                                            />
+                                                />
 
-                                                        </div>
+                                            </div>
 
-            
 
-                                                                                                    {/* Main Content */}
 
-            
+                                            {/* Main Content */}
 
-                                                                                                    <motion.div
 
-            
 
-                                                                                                        initial={{ y: 30, opacity: 0 }}
+                                            <motion.div
 
-            
 
-                                                                                                        animate={{ y: 0, opacity: 1 }}
 
-            
+                                                initial={{ y: 30, opacity: 0 }}
 
-                                                                                                        transition={{ duration: 1, ease: [0.22, 1, 0.36, 1] }}
 
-            
 
-                                                                                                        className="relative z-10 text-center max-w-4xl px-4 w-full"
+                                                animate={{ y: 0, opacity: 1 }}
 
-            
 
-                                                                                                    >
 
-            
+                                                transition={{ duration: 1, ease: [0.22, 1, 0.36, 1] }}
 
-                                                                                                        {/* Main Headline */}
 
-            
 
-                                                                                                        <motion.h2
+                                                className="relative z-10 text-center max-w-4xl px-4 w-full"
 
-            
 
-                                                                                                            initial={{ y: 20, opacity: 0 }}
 
-            
+                                            >
 
-                                                                                                            animate={{ y: 0, opacity: 1 }}
 
-            
 
-                                                                                                            transition={{ delay: 0.3, duration: 0.8 }}
+                                                {/* Main Headline */}
 
-            
 
-                                                                                                            className="text-3xl sm:text-5xl md:text-6xl font-black tracking-tight leading-tight sm:leading-snug mb-6"
 
-            
+                                                <motion.h2
 
-                                                                                                            style={{ color: 'rgba(248, 250, 252, 0.95)' }}
 
-            
 
-                                                                                                        >
+                                                    initial={{ y: 20, opacity: 0 }}
 
-            
 
-                                                                                                                                                                Agent to UI.
 
-            
+                                                    animate={{ y: 0, opacity: 1 }}
 
-                                                                                                                                                                <br />
 
-            
 
-                                                                                                                                                                <span
+                                                    transition={{ delay: 0.3, duration: 0.8 }}
 
-            
 
-                                                                                                                                                                    className="bg-clip-text text-transparent"
 
-            
+                                                    className="text-3xl sm:text-5xl md:text-6xl font-black tracking-tight leading-tight sm:leading-snug mb-6"
 
-                                                                                                                                                                    style={{
 
-            
 
-                                                                                                                                                                        backgroundImage: 'linear-gradient(135deg, #f43f5e 0%, #f59e0b 50%, #f43f5e 100%)',
+                                                    style={{ color: 'rgba(248, 250, 252, 0.95)' }}
 
-            
 
-                                                                                                                                                                        backgroundSize: '200% 100%',
 
-            
+                                                >
 
-                                                                                                                                                                        animation: 'gradientShift 3s ease infinite',
 
-            
 
-                                                                                                                                                                    }}
+                                                    Agent to UI.
 
-            
 
-                                                                                                                                                                >
 
-            
+                                                    <br />
 
-                                                                                                                                                                    Live Dashboard Generation.
 
-            
 
-                                                                                                                                                                </span>
+                                                    <span
 
-            
 
-                                                                                                                                                            </motion.h2>
 
-            
+                                                        className="bg-clip-text text-transparent"
 
-                                                                                                            
 
-            
 
-                                                                                                                                                                                                            {/* Subtitle */}
+                                                        style={{
 
-            
 
-                                                                                                            
 
-            
+                                                            backgroundImage: 'linear-gradient(135deg, #f43f5e 0%, #f59e0b 50%, #f43f5e 100%)',
 
-                                                                                                                                                                                                            <motion.p
 
-            
 
-                                                                                                            
+                                                            backgroundSize: '200% 100%',
 
-            
 
-                                                                                                                                                                                                                initial={{ y: 20, opacity: 0 }}
 
-            
+                                                            animation: 'gradientShift 3s ease infinite',
 
-                                                                                                            
 
-            
 
-                                                                                                                                                                                                                animate={{ y: 0, opacity: 1 }}
+                                                        }}
 
-            
 
-                                                                                                            
 
-            
+                                                    >
 
-                                                                                                                                                                                                                transition={{ delay: 0.4, duration: 0.8 }}
 
-            
 
-                                                                                                            
+                                                        Live Dashboard Generation.
 
-            
 
-                                                                                                                                                                                                                className="flex flex-wrap justify-center items-center gap-4 max-w-2xl mx-auto mb-12"
 
-            
+                                                    </span>
 
-                                                                                                            
 
-            
 
-                                                                                                                                                                                                            >
+                                                </motion.h2>
 
-            
 
-                                                                                                            
 
-            
 
-                                                                                                                                                                                                                {/* Rolling News Bar / Ticker */}
-                                                                                                                                                                                                                <div className="relative h-10 w-[200px] sm:w-[400px] overflow-hidden flex items-center" style={{ maskImage: 'linear-gradient(to right, transparent, black 10%, black 90%, transparent)', WebkitMaskImage: 'linear-gradient(to right, transparent, black 10%, black 90%, transparent)' }}>
-                                                                                                                                                                                                                    <style>{`
+
+
+
+                                                {/* Subtitle */}
+
+
+
+
+
+
+
+                                                <motion.p
+
+
+
+
+
+
+
+                                                    initial={{ y: 20, opacity: 0 }}
+
+
+
+
+
+
+
+                                                    animate={{ y: 0, opacity: 1 }}
+
+
+
+
+
+
+
+                                                    transition={{ delay: 0.4, duration: 0.8 }}
+
+
+
+
+
+
+
+                                                    className="flex flex-wrap justify-center items-center gap-4 max-w-2xl mx-auto mb-12"
+
+
+
+
+
+
+
+                                                >
+
+
+
+
+
+
+
+                                                    {/* Rolling News Bar / Ticker */}
+                                                    <div className="relative h-10 w-[200px] sm:w-[400px] overflow-hidden flex items-center" style={{ maskImage: 'linear-gradient(to right, transparent, black 10%, black 90%, transparent)', WebkitMaskImage: 'linear-gradient(to right, transparent, black 10%, black 90%, transparent)' }}>
+                                                        <style>{`
                                                                                                                                                                                                                         @keyframes marquee {
                                                                                                                                                                                                                             0% { transform: translateX(0); }
                                                                                                                                                                                                                             100% { transform: translateX(-50%); }
@@ -1186,1014 +1260,1014 @@ export function GenerativeUIPage(): React.ReactElement {
                                                                                                                                                                                                                             animation-play-state: paused;
                                                                                                                                                                                                                         }
                                                                                                                                                                                                                     `}</style>
-                                                                                                                                                                                                                    
-                                                                                                                                                                                                                    <div className="flex gap-4 animate-marquee whitespace-nowrap px-4">
-                                                                                                                                                                                                                        {[
-                                                                                                                                                                                                                            { label: 'Google A2UI Framework', desc: "Open standard for agent-driven interfaces.", color: 'blue' },
-                                                                                                                                                                                                                            { label: 'Claude Agent SDK', desc: "The core framework driving the agent's logic and capabilities.", color: 'orange' },
-                                                                                                                                                                                                                            { label: 'Agent Guided UI Generation', desc: "Dynamically constructing interfaces based on user needs in real-time.", color: 'emerald' },
-                                                                                                                                                                                                                            { label: 'Agent Runtime Loop', desc: "Continuous cycle of reasoning, action, and observation.", color: 'rose' },
-                                                                                                                                                                                                                            { label: 'Agentic Analytics', desc: "Deep insights derived by autonomous agents analyzing data patterns.", color: 'cyan' },
-                                                                                                                                                                                                                            { label: 'Google A2UI Framework', desc: "Open standard for agent-driven interfaces.", color: 'blue' },
-                                                                                                                                                                                                                            { label: 'Claude Agent SDK', desc: "The core framework driving the agent's logic and capabilities.", color: 'orange' },
-                                                                                                                                                                                                                            { label: 'Agent Guided UI Generation', desc: "Dynamically constructing interfaces based on user needs in real-time.", color: 'emerald' },
-                                                                                                                                                                                                                            { label: 'Agent Runtime Loop', desc: "Continuous cycle of reasoning, action, and observation.", color: 'rose' },
-                                                                                                                                                                                                                            { label: 'Agentic Analytics', desc: "Deep insights derived by autonomous agents analyzing data patterns.", color: 'cyan' },
-                                                                                                                                                                                                                        ].map((tag, i) => {
-                                                                                                                                                                                                                            const colors: any = {
-                                                                                                                                                                                                                                blue: { bg: 'bg-blue-500/10', text: 'text-blue-400', border: 'border-blue-500/20', hoverBg: 'hover:bg-blue-500/20', hoverBorder: 'hover:border-blue-500/30' },
-                                                                                                                                                                                                                                orange: { bg: 'bg-orange-500/10', text: 'text-orange-400', border: 'border-orange-500/20', hoverBg: 'hover:bg-orange-500/20', hoverBorder: 'hover:border-orange-500/30' },
-                                                                                                                                                                                                                                emerald: { bg: 'bg-emerald-500/10', text: 'text-emerald-400', border: 'border-emerald-500/20', hoverBg: 'hover:bg-emerald-500/20', hoverBorder: 'hover:border-emerald-500/30' },
-                                                                                                                                                                                                                                rose: { bg: 'bg-rose-500/10', text: 'text-rose-400', border: 'border-rose-500/20', hoverBg: 'hover:bg-rose-500/20', hoverBorder: 'hover:border-rose-500/30' },
-                                                                                                                                                                                                                                cyan: { bg: 'bg-cyan-500/10', text: 'text-cyan-400', border: 'border-cyan-500/20', hoverBg: 'hover:bg-cyan-500/20', hoverBorder: 'hover:border-cyan-500/30' },
-                                                                                                                                                                                                                            }[tag.color];
-                                                                                                                                                                                                                
-                                                                                                                                                                                                                            return (
-                                                                                                                                                                                                                                <div key={i} className="group relative inline-block">
-                                                                                                                                                                                                                                    <span 
-                                                                                                                                                                                                                                        onMouseEnter={(e) => {
-                                                                                                                                                                                                                                            const rect = e.currentTarget.getBoundingClientRect();
-                                                                                                                                                                                                                                            setActiveTooltip({
-                                                                                                                                                                                                                                                x: rect.left + rect.width / 2,
-                                                                                                                                                                                                                                                y: rect.top,
-                                                                                                                                                                                                                                                content: tag.desc,
-                                                                                                                                                                                                                                                color: tag.color
-                                                                                                                                                                                                                                            });
-                                                                                                                                                                                                                                        }}
-                                                                                                                                                                                                                                        onMouseLeave={() => setActiveTooltip(null)}
-                                                                                                                                                                                                                                        className={`inline-flex items-center gap-2 px-4 py-1.5 rounded-full text-sm font-medium border transition-all cursor-default whitespace-nowrap ${colors.bg} ${colors.text} ${colors.border} ${colors.hoverBg} ${colors.hoverBorder}`}
-                                                                                                                                                                                                                                    >
-                                                                                                                                                                                                                                        {tag.label}
-                                                                                                                                                                                                                                    </span>
-                                                                                                                                                                                                                                </div>
-                                                                                                                                                                                                                            );
-                                                                                                                                                                                                                        })}
-                                                                                                                                                                                                                    </div>
-                                                                                                                                                                                                                </div>
 
-            
+                                                        <div className="flex gap-4 animate-marquee whitespace-nowrap px-4">
+                                                            {[
+                                                                { label: 'Google A2UI Framework', desc: "Open standard for agent-driven interfaces.", color: 'blue' },
+                                                                { label: 'Claude Agent SDK', desc: "The core framework driving the agent's logic and capabilities.", color: 'orange' },
+                                                                { label: 'Agent Guided UI Generation', desc: "Dynamically constructing interfaces based on user needs in real-time.", color: 'emerald' },
+                                                                { label: 'Agent Runtime Loop', desc: "Continuous cycle of reasoning, action, and observation.", color: 'rose' },
+                                                                { label: 'Agentic Analytics', desc: "Deep insights derived by autonomous agents analyzing data patterns.", color: 'cyan' },
+                                                                { label: 'Google A2UI Framework', desc: "Open standard for agent-driven interfaces.", color: 'blue' },
+                                                                { label: 'Claude Agent SDK', desc: "The core framework driving the agent's logic and capabilities.", color: 'orange' },
+                                                                { label: 'Agent Guided UI Generation', desc: "Dynamically constructing interfaces based on user needs in real-time.", color: 'emerald' },
+                                                                { label: 'Agent Runtime Loop', desc: "Continuous cycle of reasoning, action, and observation.", color: 'rose' },
+                                                                { label: 'Agentic Analytics', desc: "Deep insights derived by autonomous agents analyzing data patterns.", color: 'cyan' },
+                                                            ].map((tag, i) => {
+                                                                const colors: any = {
+                                                                    blue: { bg: 'bg-blue-500/10', text: 'text-blue-400', border: 'border-blue-500/20', hoverBg: 'hover:bg-blue-500/20', hoverBorder: 'hover:border-blue-500/30' },
+                                                                    orange: { bg: 'bg-orange-500/10', text: 'text-orange-400', border: 'border-orange-500/20', hoverBg: 'hover:bg-orange-500/20', hoverBorder: 'hover:border-orange-500/30' },
+                                                                    emerald: { bg: 'bg-emerald-500/10', text: 'text-emerald-400', border: 'border-emerald-500/20', hoverBg: 'hover:bg-emerald-500/20', hoverBorder: 'hover:border-emerald-500/30' },
+                                                                    rose: { bg: 'bg-rose-500/10', text: 'text-rose-400', border: 'border-rose-500/20', hoverBg: 'hover:bg-rose-500/20', hoverBorder: 'hover:border-rose-500/30' },
+                                                                    cyan: { bg: 'bg-cyan-500/10', text: 'text-cyan-400', border: 'border-cyan-500/20', hoverBg: 'hover:bg-cyan-500/20', hoverBorder: 'hover:border-cyan-500/30' },
+                                                                }[tag.color];
 
-                                                                                                                                                                                                            </motion.p>
+                                                                return (
+                                                                    <div key={i} className="group relative inline-block">
+                                                                        <span
+                                                                            onMouseEnter={(e) => {
+                                                                                const rect = e.currentTarget.getBoundingClientRect();
+                                                                                setActiveTooltip({
+                                                                                    x: rect.left + rect.width / 2,
+                                                                                    y: rect.top,
+                                                                                    content: tag.desc,
+                                                                                    color: tag.color
+                                                                                });
+                                                                            }}
+                                                                            onMouseLeave={() => setActiveTooltip(null)}
+                                                                            className={`inline-flex items-center gap-2 px-4 py-1.5 rounded-full text-sm font-medium border transition-all cursor-default whitespace-nowrap ${colors.bg} ${colors.text} ${colors.border} ${colors.hoverBg} ${colors.hoverBorder}`}
+                                                                        >
+                                                                            {tag.label}
+                                                                        </span>
+                                                                    </div>
+                                                                );
+                                                            })}
+                                                        </div>
+                                                    </div>
 
-            
 
-                                                                                                            
 
-            
+                                                </motion.p>
 
-                                                                                                                                                            {/* Simplified "You Ask -> Generative UI" Visual */}
 
-            
 
-                                                                                                                                                            <motion.div
 
-            
 
-                                                                                                                                                                                                                                initial={{ y: 30, opacity: 0 }}
 
-            
 
-                                                                                                                                                                
+                                                {/* Simplified "You Ask -> Generative UI" Visual */}
 
-            
 
-                                                                                                                                                                                                                                animate={{ y: 0, opacity: 1 }}
 
-            
+                                                <motion.div
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                                                                                transition={{ delay: 0.5, duration: 0.8 }}
+                                                    initial={{ y: 30, opacity: 0 }}
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                                                                                className="flex items-center justify-center gap-2 sm:gap-6 mb-16"
 
-            
 
-                                                                                                                                                                
 
-            
+                                                    animate={{ y: 0, opacity: 1 }}
 
-                                                                                                                                                                                                                            >
 
-            
 
-                                                                                                                                                                                                                                                                                                {/* Step 1: Input */}
 
-            
 
-                                                                                                                                                                                                                                
 
-            
 
-                                                                                                                                                                                                                                                                                                <div className="flex flex-col items-center gap-3 group relative cursor-help">
+                                                    transition={{ delay: 0.5, duration: 0.8 }}
 
-            
 
-                                                                                                                                                                                                                                
 
-            
 
-                                                                                                                                                                                                                                                                                                    <div className="w-16 h-16 rounded-2xl bg-slate-800 border border-slate-700 flex items-center justify-center text-3xl shadow-xl group-hover:border-rose-500/50 transition-colors duration-300">
 
-            
 
-                                                                                                                                                                                                                                
 
-            
+                                                    className="flex items-center justify-center gap-2 sm:gap-6 mb-16"
 
-                                                                                                                                                                                                                                                                                                        💬
 
-            
 
-                                                                                                                                                                                                                                
 
-            
 
-                                                                                                                                                                                                                                                                                                    </div>
 
-            
 
-                                                                                                                                                                                                                                
+                                                >
 
-            
 
-                                                                                                                                                                                                                                                                                                    <p className="text-sm font-medium text-slate-400 group-hover:text-rose-400 transition-colors">Your Question</p>
 
-            
+                                                    {/* Step 1: Input */}
 
-                                                                                                                                                                                                                                
 
-            
 
-                                                                                                                                                                                                                                                                                                    
 
-            
 
-                                                                                                                                                                                                                                
 
-            
 
-                                                                                                                                                                                                                                                                                                    {/* Tooltip */}
+                                                    <div className="flex flex-col items-center gap-3 group relative cursor-help">
 
-            
 
-                                                                                                                                                                                                                                
 
-            
 
-                                                                                                                                                                                                                                                                                                    <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-3 w-64 p-3 bg-slate-900/95 backdrop-blur-xl border border-rose-500/30 rounded-lg shadow-2xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-300 z-50 pointer-events-none transform translate-y-2 group-hover:translate-y-0">
 
-            
 
-                                                                                                                                                                                                                                
 
-            
+                                                        <div className="w-16 h-16 rounded-2xl bg-slate-800 border border-slate-700 flex items-center justify-center text-3xl shadow-xl group-hover:border-rose-500/50 transition-colors duration-300">
 
-                                                                                                                                                                                                                                                                                                        <div className="text-xs text-slate-300 leading-relaxed">
 
-            
 
-                                                                                                                                                                                                                                
 
-            
 
-                                                                                                                                                                                                                                                                                                            <span className="text-rose-400 font-semibold block mb-1">Financial Queries</span>
 
-            
 
-                                                                                                                                                                                                                                
+                                                            💬
 
-            
 
-                                                                                                                                                                                                                                                                                                            "Analyze NVDA's price movement", "Compare AMD vs Intel", "Show me revenue trends for Broadcom..."
 
-            
 
-                                                                                                                                                                                                                                
 
-            
 
-                                                                                                                                                                                                                                                                                                        </div>
 
-            
+                                                        </div>
 
-                                                                                                                                                                                                                                
 
-            
 
-                                                                                                                                                                                                                                                                                                        <div className="absolute inset-0 rounded-lg bg-gradient-to-tr from-rose-500/5 to-purple-500/5 pointer-events-none" />
 
-            
 
-                                                                                                                                                                                                                                
 
-            
 
-                                                                                                                                                                                                                                                                                                    </div>
+                                                        <p className="text-sm font-medium text-slate-400 group-hover:text-rose-400 transition-colors">Your Question</p>
 
-            
 
-                                                                                                                                                                                                                                
 
-            
 
-                                                                                                                                                                                                                                                                                                </div>
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                            
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                                                                                {/* Plus Sign */}
 
-            
 
-                                                                                                                                                                
 
-            
+                                                        {/* Tooltip */}
 
-                                                                                                                                                                                                                                <div className="flex flex-col items-center justify-center">
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                                                                                    <div className="text-slate-600 text-2xl font-light">
 
-            
 
-                                                                                                                                                                
+                                                        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-3 w-64 p-3 bg-slate-900/95 backdrop-blur-xl border border-rose-500/30 rounded-lg shadow-2xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-300 z-50 pointer-events-none transform translate-y-2 group-hover:translate-y-0">
 
-            
 
-                                                                                                                                                                                                                                        +
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                                                                                    </div>
 
-            
+                                                            <div className="text-xs text-slate-300 leading-relaxed">
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                                                                                </div>
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                            
+                                                                <span className="text-rose-400 font-semibold block mb-1">Financial Queries</span>
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                                                                                                                                                {/* Step: Agent */}
 
-            
 
-                                                                                                                                                                
 
-            
+                                                                "Analyze NVDA's price movement", "Compare AMD vs Intel", "Show me revenue trends for Broadcom..."
 
-                                                                                                                                                                            
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                                                                                
 
-            
 
-                                                                                                                                                                
+                                                            </div>
 
-            
 
-                                                                                                                                                                            
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                                                                                                                                                <div className="flex flex-col items-center gap-3 group relative cursor-help">
 
-            
+                                                            <div className="absolute inset-0 rounded-lg bg-gradient-to-tr from-rose-500/5 to-purple-500/5 pointer-events-none" />
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                            
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                                                                                
+                                                        </div>
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                            
 
-            
 
-                                                                                                                                                                
 
-            
+                                                    </div>
 
-                                                                                                                                                                                                                                                                                                    <div className="w-16 h-16 rounded-2xl bg-slate-800 border border-slate-700 flex items-center justify-center text-3xl shadow-xl group-hover:border-emerald-500/50 transition-colors duration-300">
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                            
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                                                                                
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                            
 
-            
 
-                                                                                                                                                                
+                                                    {/* Plus Sign */}
 
-            
 
-                                                                                                                                                                                                                                                                                                        🤖
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                            
 
-            
+                                                    <div className="flex flex-col items-center justify-center">
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                                                                                
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                            
+                                                        <div className="text-slate-600 text-2xl font-light">
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                                                                                                                                                    </div>
 
-            
 
-                                                                                                                                                                
 
-            
+                                                            +
 
-                                                                                                                                                                            
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                                                                                
 
-            
 
-                                                                                                                                                                
+                                                        </div>
 
-            
 
-                                                                                                                                                                            
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                                                                                                                                                    <p className="text-sm font-medium text-slate-400 group-hover:text-emerald-400 transition-colors">Agent</p>
 
-            
+                                                    </div>
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                            
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                                                                                
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                            
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                                                                                
+                                                    {/* Step: Agent */}
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                            
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                                                                                
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                            
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                                                                                                                                                    {/* Tooltip */}
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                            
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                                                                                
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                            
 
-            
 
-                                                                                                                                                                
 
-            
+                                                    <div className="flex flex-col items-center gap-3 group relative cursor-help">
 
-                                                                                                                                                                                                                                                                                                    <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-3 w-64 p-3 bg-slate-900/95 backdrop-blur-xl border border-emerald-500/30 rounded-lg shadow-2xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-300 z-50 pointer-events-none transform translate-y-2 group-hover:translate-y-0">
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                            
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                                                                                
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                            
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                                                                                                                                                        <div className="text-xs text-slate-300 leading-relaxed">
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                            
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                                                                                
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                            
 
-            
 
-                                                                                                                                                                
+                                                        <div className="w-16 h-16 rounded-2xl bg-slate-800 border border-slate-700 flex items-center justify-center text-3xl shadow-xl group-hover:border-emerald-500/50 transition-colors duration-300">
 
-            
 
-                                                                                                                                                                                                                                                                                                            <span className="text-emerald-400 font-semibold block mb-1">Agent Loop</span>
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                            
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                                                                                
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                            
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                                                                                                                                                            Claude Code-style execution: Plans actions, calls tools (SQL, Search), and iteratively refines the dashboard.
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                            
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                                                                                
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                            
 
-            
+                                                            🤖
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                                                                                                                                                        </div>
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                            
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                                                                                
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                            
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                                                                                                                                                        <div className="absolute inset-0 rounded-lg bg-gradient-to-tr from-emerald-500/5 to-cyan-500/5 pointer-events-none" />
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                            
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                                                                                
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                            
+                                                        </div>
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                                                                                                                                                    </div>
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                            
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                                                                                
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                            
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                                                                                                                                                </div>
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                            
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                                                                                {/* Equal Sign */}
 
-            
 
-                                                                                                                                                                
 
-            
+                                                        <p className="text-sm font-medium text-slate-400 group-hover:text-emerald-400 transition-colors">Agent</p>
 
-                                                                                                                                                                                                                                <div className="flex flex-col items-center justify-center">
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                                                                                    <div className="text-slate-600 text-2xl font-light">
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                                                                                        =
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                                                                                    </div>
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                                                                                </div>
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                            
 
-            
 
-                                                                                                                                                                
 
-            
 
-                                                                                                                                                                                                                                {/* Step 2: Generative Dashboard Visual */}
 
-                                                                <div className="flex flex-col items-center gap-3">
 
-                                                                    <motion.div 
 
-                                                                        className="relative w-64 h-40 bg-slate-900 rounded-xl border border-slate-700 overflow-hidden shadow-2xl group"
 
-                                                                        whileHover={{ scale: 1.05 }}
 
-                                                                        style={{ boxShadow: '0 0 30px rgba(244, 63, 94, 0.15)' }}
 
-                                                                    >
 
-                                                                        {/* Abstract UI Elements */}
 
-                                                                        <div className="absolute top-3 left-3 right-3 h-2 bg-slate-800 rounded-full w-1/3" />
 
-                                                                        <div className="absolute top-8 left-3 w-12 h-12 bg-slate-800/50 rounded-lg border border-slate-700/50" />
 
-                                                                        <div className="absolute top-8 left-18 right-3 h-12 bg-slate-800/30 rounded-lg border border-slate-700/30">
 
-                                                                            {/* Mock Chart Line */}
 
-                                                                            <svg className="w-full h-full p-2 opacity-50" viewBox="0 0 100 40" preserveAspectRatio="none">
 
-                                                                                <path d="M0 30 Q 20 10, 40 25 T 100 5" fill="none" stroke="#f43f5e" strokeWidth="2" />
 
-                                                                            </svg>
 
-                                                                        </div>
 
-                                                                        <div className="absolute bottom-3 left-3 right-3 h-8 bg-slate-800/50 rounded-lg flex items-center gap-2 px-2">
 
-                                                                            <div className="w-1/4 h-2 bg-slate-700 rounded-full" />
 
-                                                                            <div className="w-1/4 h-2 bg-slate-700 rounded-full" />
 
-                                                                        </div>
 
-            
 
-                                                                        {/* Scanning Effect */}
 
-                                                                        <motion.div
 
-                                                                            className="absolute inset-0 bg-gradient-to-r from-transparent via-rose-500/10 to-transparent"
 
-                                                                            animate={{ x: ['-100%', '200%'] }}
 
-                                                                            transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
 
-                                                                        />
 
-                                                                    </motion.div>
 
-                                                                    <p className="text-sm font-bold bg-gradient-to-r from-rose-400 to-amber-400 bg-clip-text text-transparent">
 
-                                                                        Generative UI
 
-                                                                    </p>
 
-                                                                </div>
 
-                                                            </motion.div>
 
-            
 
-                                                            {/* Animated Capability Badges - Functional & Tamed */}
+
+
+
+
+                                                        {/* Tooltip */}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                                        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-3 w-64 p-3 bg-slate-900/95 backdrop-blur-xl border border-emerald-500/30 rounded-lg shadow-2xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-300 z-50 pointer-events-none transform translate-y-2 group-hover:translate-y-0">
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                                            <div className="text-xs text-slate-300 leading-relaxed">
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                                                <span className="text-emerald-400 font-semibold block mb-1">Agent Loop</span>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                                                Claude Code-style execution: Plans actions, calls tools (SQL, Search), and iteratively refines the dashboard.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                                            </div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                                            <div className="absolute inset-0 rounded-lg bg-gradient-to-tr from-emerald-500/5 to-cyan-500/5 pointer-events-none" />
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                                        </div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                                    </div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                                    {/* Equal Sign */}
+
+
+
+
+
+
+
+                                                    <div className="flex flex-col items-center justify-center">
+
+
+
+
+
+
+
+                                                        <div className="text-slate-600 text-2xl font-light">
+
+
+
+
+
+
+
+                                                            =
+
+
+
+
+
+
+
+                                                        </div>
+
+
+
+
+
+
+
+                                                    </div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                                    {/* Step 2: Generative Dashboard Visual */}
+
+                                                    <div className="flex flex-col items-center gap-3">
+
+                                                        <motion.div
+
+                                                            className="relative w-64 h-40 bg-slate-900 rounded-xl border border-slate-700 overflow-hidden shadow-2xl group"
+
+                                                            whileHover={{ scale: 1.05 }}
+
+                                                            style={{ boxShadow: '0 0 30px rgba(244, 63, 94, 0.15)' }}
+
+                                                        >
+
+                                                            {/* Abstract UI Elements */}
+
+                                                            <div className="absolute top-3 left-3 right-3 h-2 bg-slate-800 rounded-full w-1/3" />
+
+                                                            <div className="absolute top-8 left-3 w-12 h-12 bg-slate-800/50 rounded-lg border border-slate-700/50" />
+
+                                                            <div className="absolute top-8 left-18 right-3 h-12 bg-slate-800/30 rounded-lg border border-slate-700/30">
+
+                                                                {/* Mock Chart Line */}
+
+                                                                <svg className="w-full h-full p-2 opacity-50" viewBox="0 0 100 40" preserveAspectRatio="none">
+
+                                                                    <path d="M0 30 Q 20 10, 40 25 T 100 5" fill="none" stroke="#f43f5e" strokeWidth="2" />
+
+                                                                </svg>
+
+                                                            </div>
+
+                                                            <div className="absolute bottom-3 left-3 right-3 h-8 bg-slate-800/50 rounded-lg flex items-center gap-2 px-2">
+
+                                                                <div className="w-1/4 h-2 bg-slate-700 rounded-full" />
+
+                                                                <div className="w-1/4 h-2 bg-slate-700 rounded-full" />
+
+                                                            </div>
+
+
+
+                                                            {/* Scanning Effect */}
 
                                                             <motion.div
 
-                                                                initial={{ y: 20, opacity: 0 }}
+                                                                className="absolute inset-0 bg-gradient-to-r from-transparent via-rose-500/10 to-transparent"
 
-                                                                animate={{ y: 0, opacity: 1 }}
+                                                                animate={{ x: ['-100%', '200%'] }}
 
-                                                                transition={{ delay: 1.2, duration: 0.6 }}
+                                                                transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
 
-                                                                className="flex flex-wrap justify-center gap-3 mb-4"
-
-                                                            >
-
-                                                                {[].map((feature, i) => (
-
-                                                                    <motion.button
-
-                                                                        key={feature.label}
-
-                                                                        initial={{ scale: 0, opacity: 0 }}
-
-                                                                        animate={{ scale: 1, opacity: 1 }}
-
-                                                                        transition={{ 
-
-                                                                            delay: 1.3 + i * 0.1,
-
-                                                                            type: "spring",
-
-                                                                            stiffness: 260,
-
-                                                                            damping: 20
-
-                                                                        }}
-
-                                                                        onClick={() => {
-
-                                                                            setQuestion(feature.prompt);
-
-                                                                            textareaRef.current?.focus();
-
-                                                                        }}
-
-                                                                        whileHover={{ 
-
-                                                                            scale: 1.05, 
-
-                                                                            y: -2,
-
-                                                                            backgroundColor: feature.color + '15', // Subtle tint on hover
-
-                                                                            borderColor: feature.color + '40',
-
-                                                                            boxShadow: `0 4px 20px ${feature.color}10`
-
-                                                                        }}
-
-                                                                        whileTap={{ scale: 0.95 }}
-
-                                                                        className="flex items-center gap-2 px-5 py-2.5 rounded-full text-sm cursor-pointer transition-all group"
-
-                                                                        style={{
-
-                                                                            background: 'rgba(255, 255, 255, 0.02)', // Very subtle default
-
-                                                                            border: '1px solid rgba(255, 255, 255, 0.05)',
-
-                                                                        }}
-
-                                                                    >
-
-                                                                        <span className="text-lg opacity-60 group-hover:opacity-100 transition-opacity grayscale group-hover:grayscale-0">{feature.icon}</span>
-
-                                                                        <span className="text-slate-400 font-medium group-hover:text-slate-100 transition-colors">{feature.label}</span>
-
-                                                                        <motion.div 
-
-                                                                            className="w-1.5 h-1.5 rounded-full opacity-20 group-hover:opacity-100 transition-all"
-
-                                                                            style={{ backgroundColor: feature.color }}
-
-                                                                        />
-
-                                                                    </motion.button>
-
-                                                                ))}
-
-                                                            </motion.div>
+                                                            />
 
                                                         </motion.div>
 
-            
+                                                        <p className="text-sm font-bold bg-gradient-to-r from-rose-400 to-amber-400 bg-clip-text text-transparent">
 
-                                                        {/* CSS Animation for gradient shift */}
+                                                            Generative UI
 
-                                                        <style>{`
+                                                        </p>
+
+                                                    </div>
+
+                                                </motion.div>
+
+
+
+                                                {/* Animated Capability Badges - Functional & Tamed */}
+
+                                                <motion.div
+
+                                                    initial={{ y: 20, opacity: 0 }}
+
+                                                    animate={{ y: 0, opacity: 1 }}
+
+                                                    transition={{ delay: 1.2, duration: 0.6 }}
+
+                                                    className="flex flex-wrap justify-center gap-3 mb-4"
+
+                                                >
+
+                                                    {[].map((feature, i) => (
+
+                                                        <motion.button
+
+                                                            key={feature.label}
+
+                                                            initial={{ scale: 0, opacity: 0 }}
+
+                                                            animate={{ scale: 1, opacity: 1 }}
+
+                                                            transition={{
+
+                                                                delay: 1.3 + i * 0.1,
+
+                                                                type: "spring",
+
+                                                                stiffness: 260,
+
+                                                                damping: 20
+
+                                                            }}
+
+                                                            onClick={() => {
+
+                                                                setQuestion(feature.prompt);
+
+                                                                textareaRef.current?.focus();
+
+                                                            }}
+
+                                                            whileHover={{
+
+                                                                scale: 1.05,
+
+                                                                y: -2,
+
+                                                                backgroundColor: feature.color + '15', // Subtle tint on hover
+
+                                                                borderColor: feature.color + '40',
+
+                                                                boxShadow: `0 4px 20px ${feature.color}10`
+
+                                                            }}
+
+                                                            whileTap={{ scale: 0.95 }}
+
+                                                            className="flex items-center gap-2 px-5 py-2.5 rounded-full text-sm cursor-pointer transition-all group"
+
+                                                            style={{
+
+                                                                background: 'rgba(255, 255, 255, 0.02)', // Very subtle default
+
+                                                                border: '1px solid rgba(255, 255, 255, 0.05)',
+
+                                                            }}
+
+                                                        >
+
+                                                            <span className="text-lg opacity-60 group-hover:opacity-100 transition-opacity grayscale group-hover:grayscale-0">{feature.icon}</span>
+
+                                                            <span className="text-slate-400 font-medium group-hover:text-slate-100 transition-colors">{feature.label}</span>
+
+                                                            <motion.div
+
+                                                                className="w-1.5 h-1.5 rounded-full opacity-20 group-hover:opacity-100 transition-all"
+
+                                                                style={{ backgroundColor: feature.color }}
+
+                                                            />
+
+                                                        </motion.button>
+
+                                                    ))}
+
+                                                </motion.div>
+
+                                            </motion.div>
+
+
+
+                                            {/* CSS Animation for gradient shift */}
+
+                                            <style>{`
 
                                                             @keyframes gradientShift {
 
@@ -2205,9 +2279,9 @@ export function GenerativeUIPage(): React.ReactElement {
 
                                                         `}</style>
 
-                                                    </div>
+                                        </div>
 
-                                                )}
+                                    )}
 
                                     {/* Loading State */}
                                     {dashboardId && streamState.isLoading && !surface?.root && (
@@ -2477,21 +2551,21 @@ export function GenerativeUIPage(): React.ReactElement {
 
                 {/* Floating Tooltip Portal */}
                 {activeTooltip && (() => {
-                     const colors: any = {
+                    const colors: any = {
                         blue: { tooltipTitle: 'text-blue-300', tooltipDot: 'bg-blue-400', tooltipBorder: 'border-blue-500/30', tooltipGradient: 'from-blue-500/5 to-purple-500/5' },
                         orange: { tooltipTitle: 'text-orange-300', tooltipDot: 'bg-orange-400', tooltipBorder: 'border-orange-500/30', tooltipGradient: 'from-orange-500/5 to-red-500/5' },
                         emerald: { tooltipTitle: 'text-emerald-300', tooltipDot: 'bg-emerald-400', tooltipBorder: 'border-emerald-500/30', tooltipGradient: 'from-emerald-500/5 to-teal-500/5' },
                         rose: { tooltipTitle: 'text-rose-300', tooltipDot: 'bg-rose-400', tooltipBorder: 'border-rose-500/30', tooltipGradient: 'from-rose-500/5 to-pink-500/5' },
                         cyan: { tooltipTitle: 'text-cyan-300', tooltipDot: 'bg-cyan-400', tooltipBorder: 'border-cyan-500/30', tooltipGradient: 'from-cyan-500/5 to-blue-500/5' },
                     }[activeTooltip.color] || { tooltipTitle: 'text-slate-300', tooltipDot: 'bg-slate-400', tooltipBorder: 'border-slate-500/30', tooltipGradient: 'from-slate-500/5 to-gray-500/5' };
-                    
+
                     return (
-                        <div 
+                        <div
                             className={`fixed z-[100] w-64 p-3 bg-slate-900/90 backdrop-blur-xl border rounded-lg shadow-2xl transition-opacity duration-200 pointer-events-none text-left whitespace-normal ${colors.tooltipBorder}`}
-                            style={{ 
-                                left: activeTooltip.x, 
-                                top: activeTooltip.y - 12, 
-                                transform: 'translate(-50%, -100%)' 
+                            style={{
+                                left: activeTooltip.x,
+                                top: activeTooltip.y - 12,
+                                transform: 'translate(-50%, -100%)'
                             }}
                         >
                             <div className="flex items-center justify-between mb-1">

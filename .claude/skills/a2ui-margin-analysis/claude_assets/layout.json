@@ -1,0 +1,23 @@
+{
+    "skill_id": "a2ui_margin_analysis",
+    "surface_id": "dashboard_main",
+    "root": "layout_root",
+    "widgets": [
+        "KpiCard",
+        "DataTable",
+        "MetricChart"
+    ],
+    "layout": "compact",
+    "layout_variants": [
+        "compact",
+        "focus_table"
+    ],
+    "default_variant": "compact",
+    "data_paths": {
+        "ticker": "/data/ticker",
+        "kpis": "/data/kpis",
+        "table": "/data/table",
+        "chart": "/data/chart",
+        "explanation": "/data/explanation"
+    }
+}

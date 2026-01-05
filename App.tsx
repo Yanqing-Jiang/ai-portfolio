@@ -26,11 +26,11 @@ import { ChevronRightIcon } from './components/icons/ChevronRightIcon';
 import { HelmetProvider } from 'react-helmet-async';
 
 
-// --- helper to look up a project by id ---
+// Function: findProject - called from ProjectRoute and Layout to resolve a Project by id; forwards the Project into ProjectView for rendering and into SidebarV2 for active highlighting; exists to centralize project lookup for routing.
 const ALL_PROJECTS = PROJECT_DATA.flatMap((y) => y.projects);
 const findProject = (id: string) => ALL_PROJECTS.find((p) => p.id === id);
 
-// --- <ProjectRoute/> wrapper for the /project/:id path ---
+// Function: ProjectRoute - mounted by the /project/:id route; looks up the requested project and renders ProjectView or redirects home if missing; exists to keep route elements thin.
 const ProjectRoute: React.FC = () => {
   const { projectId } = useParams<{ projectId: string }>();
   const project = useMemo(() => (projectId ? findProject(projectId) : undefined), [projectId]);
@@ -38,11 +38,12 @@ const ProjectRoute: React.FC = () => {
   return <ProjectView project={project} />;
 };
 
-// --- main layout that stays the same on every page ---
+// Function: Layout - shell used by AppRoutes to hold the sidebar, routing, and shared UI chrome; called from AppRoutes; invokes goHome/goProject for navigation; exists to keep router wiring in one place.
 const Layout: React.FC = () => {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false); // Always default closed
   const [isMobile, setIsMobile] = useState(false);
   const [showSidebarHint, setShowSidebarHint] = useState(false);
+  const [activeProject, setActiveProject] = useState<Project | null>(null);
   const navigate = useNavigate();
   const location = useLocation();
   const mainContentRef = useRef<HTMLDivElement>(null);
@@ -102,15 +103,36 @@ const Layout: React.FC = () => {
     return () => cancelAnimationFrame(frame);
   }, [location.pathname]);
 
+  useEffect(() => {
+    const match = location.pathname.match(/^\/project\/([^/]+)/);
+    if (match?.[1]) {
+      setActiveProject(findProject(match[1]) ?? null);
+    } else {
+      setActiveProject(null);
+    }
+  }, [location.pathname]);
+
   // navigation helpers
+  // Function: goHome - triggered by sidebar brand/backdrop to return to landing; called from SidebarV2 on logo/backdrop click; clears active project state, closes sidebar on mobile; exists to reset layout from a project view.
   const goHome = () => {
     navigate('/');
+    setActiveProject(null);
     if (isMobile) setIsSidebarOpen(false); // Close sidebar on mobile after navigation
   };
 
+  // Function: goProject - used by SidebarV2 and LandingPageFlow; navigates to the requested project, treats repeat clicks as a full refresh, and collapses the sidebar on mobile; exists to centralize project navigation semantics.
   const goProject = (p: Project) => {
-    navigate(`/project/${p.id}`);
+    const targetPath = `/project/${p.id}`;
+    const isCurrent = location.pathname === targetPath;
+    setActiveProject(findProject(p.id) ?? p);
     if (isMobile) setIsSidebarOpen(false); // Close sidebar on mobile after navigation
+
+    if (isCurrent) {
+      navigate(0); // force refresh when clicking the current project
+      return;
+    }
+
+    navigate(targetPath);
   };
 
   return (
@@ -118,7 +140,7 @@ const Layout: React.FC = () => {
       <Sidebar
         isSidebarOpen={isSidebarOpen}
         projectData={PROJECT_DATA}
-        selectedProject={null}
+        selectedProject={activeProject}
         onSelectProject={goProject}
         onGoHome={goHome}
       />
@@ -185,8 +207,8 @@ const Layout: React.FC = () => {
                 />
               }
             />
-            {/* 2026 Generative UI - Custom full-page experience */}
-            <Route path="/project/generative-ui-a2ui" element={<GenerativeUIPage />} />
+            {/* 2026 Agent to UI - Custom full-page experience */}
+            <Route path="/project/agent-to-ui" element={<GenerativeUIPage />} />
 
             {/* Design Demos */}
             <Route path="/demo/neural-web" element={<NeuralWebDemo />} />
@@ -205,9 +227,10 @@ const Layout: React.FC = () => {
   );
 };
 
-// Root component -------------------------------------------------
+// Function: AppRoutes - exported for tests/demos; renders the shared Layout inside the router context; exists to keep routing tree modular.
 export const AppRoutes: React.FC = () => <Layout />;
 
+// Function: App - application root used by Vite entry; wraps the router with HelmetProvider; exists to set up providers once.
 const App: React.FC = () => (
   <HelmetProvider>
     <BrowserRouter>

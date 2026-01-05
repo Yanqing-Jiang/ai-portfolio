@@ -37,8 +37,9 @@ __pycache__/
 *.sln
 *.sw?
 
-# Claude local settings
-.claude/
+# Claude local settings (keep skills tracked)
+.claude/*
+!.claude/skills/
 # Temporary runtime files
 *_pid.txt
 temp_view.txt

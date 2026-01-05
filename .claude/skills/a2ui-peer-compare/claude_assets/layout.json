@@ -1,0 +1,25 @@
+{
+    "skill_id": "a2ui_peer_compare",
+    "surface_id": "dashboard_main",
+    "root": "layout_root",
+    "widgets": [
+        "PriceChart",
+        "DataTable",
+        "CorrelationMatrix",
+        "PeerComparePanel"
+    ],
+    "layout": "grid-3",
+    "layout_variants": [
+        "grid-3",
+        "grid_focus_chart"
+    ],
+    "default_variant": "grid-3",
+    "data_paths": {
+        "tickers": "/data/tickers",
+        "primary_ticker": "/data/primary_ticker",
+        "correlation": "/data/correlation",
+        "table": "/data/table",
+        "chart": "/data/chart",
+        "explanation": "/data/explanation"
+    }
+}

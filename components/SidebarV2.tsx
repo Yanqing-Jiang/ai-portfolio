@@ -17,14 +17,25 @@ interface SidebarV2Props {
 }
 
 /**
- * SidebarV2 - "The Neural Portal" Redesign.
- * 
+ * Function: SidebarV2 - called from Layout in App.tsx to render the project navigation shell; renders project list, interactive hologram preview, and auth entry; forwards selection to onSelectProject and active state via selectedProject; exists to provide the "Neural Portal" sidebar UX.
+ *
  * FEATURES:
  * - Pure Visuals: No year headers or bullets. The year exists solely as a 3D watermark.
  * - Interactive Portal: Hovering project titles creates a "Holographic Preview Portal".
  * - Clean Typography: Zero subtitles or descriptive text clutter.
  * - Motion-Reactive: Deep parallax and mouse-following lighting.
  */
+
+const YEAR_COLORS: Record<number | string, { accent: string, glow: string }> = {
+    2026: { accent: '#fb923c', glow: 'rgba(251, 146, 60, 0.5)' }, // Orange-Rose (Future Era)
+    2025: { accent: '#22d3ee', glow: 'rgba(34, 211, 238, 0.5)' }, // Cyan-Blue (Current Era)
+    2024: { accent: '#34d399', glow: 'rgba(52, 211, 153, 0.5)' }, // Emerald-Teal (Agentic Era)
+    2023: { accent: '#a855f7', glow: 'rgba(168, 85, 247, 0.5)' }, // Purple-Indigo (Foundation Era)
+    2022: { accent: '#f43f5e', glow: 'rgba(244, 63, 94, 0.5)' },  // Rose (Genesis)
+    2021: { accent: '#f59e0b', glow: 'rgba(245, 158, 11, 0.5)' }, // Amber (Pre-AI/Legacy)
+    default: { accent: '#0ea5e9', glow: 'rgba(14, 165, 233, 0.5)' }
+};
+
 const SidebarV2: React.FC<SidebarV2Props> = ({
     projectData,
     selectedProject,
@@ -52,6 +63,12 @@ const SidebarV2: React.FC<SidebarV2Props> = ({
     const mouseY = useSpring(0, { stiffness: 50, damping: 20 });
 
     const sidebarRef = useRef<HTMLDivElement>(null);
+
+    // Function: handleProjectClick - called from sidebar project links; clears the hologram preview then forwards the project to the parent onSelectProject so navigation/refresh logic can run; exists to hide the preview when a project is chosen.
+    const handleProjectClick = (project: Project) => {
+        setHoveredProject(null); // hide hologram preview on click/refresh
+        onSelectProject(project);
+    };
 
     useEffect(() => {
         const unsubscribe = authService.subscribe(setAuthState);
@@ -134,12 +151,33 @@ const SidebarV2: React.FC<SidebarV2Props> = ({
                     >
                         <button onClick={onGoHome} className="flex items-center gap-5 group transition-all">
                             <div className="relative w-14 h-14">
-                                <div className="absolute inset-0 bg-sky-500/10 blur-xl rounded-full group-hover:bg-sky-500/30 transition-colors duration-700" />
-                                <img
-                                    src="https://yanqinghot.blob.core.windows.net/public-access/Profile%20Logo%20black.png"
-                                    alt="Logo"
-                                    className="w-full h-full object-contain relative z-10 brightness-110 contrast-125"
-                                />
+                                {/* 1. HUD Orbitals (Creative Fix) */}
+                                <motion.div
+                                    className="absolute inset-[-4px] border border-sky-400/20 rounded-full z-0"
+                                    animate={{ rotate: 360 }}
+                                    transition={{ duration: 15, repeat: Infinity, ease: 'linear' }}
+                                >
+                                    <div className="absolute top-0 left-1/2 -translate-x-1/2 w-1.5 h-1.5 bg-sky-400 rounded-full shadow-[0_0_10px_#38bdf8]" />
+                                </motion.div>
+
+                                {/* 2. Main Portal Container */}
+                                <div className="relative w-full h-full rounded-full overflow-hidden border border-white/10 bg-slate-900/40 backdrop-blur-sm z-10 shadow-[inner_0_0_20px_rgba(14,165,233,0.2)]">
+                                    {/* Atmospheric Glow */}
+                                    <div className="absolute inset-0 bg-sky-500/10 blur-md" />
+
+                                    {/* THE FIX: mix-blend-screen makes the black background of the image transparent */}
+                                    <img
+                                        src="https://yanqinghot.blob.core.windows.net/public-access/Profile%20Logo%20black.png"
+                                        alt="Logo"
+                                        className="w-full h-full object-contain relative z-20 mix-blend-screen scale-110 brightness-110 contrast-125"
+                                    />
+
+                                    {/* 4. Glass Reflection Overlay */}
+                                    <div className="absolute inset-0 z-40 bg-gradient-to-tr from-transparent via-white/5 to-white/10 pointer-events-none" />
+                                </div>
+
+                                {/* 5. Exterior Glow */}
+                                <div className="absolute inset-0 bg-sky-500/20 blur-2xl rounded-full opacity-0 group-hover:opacity-100 transition-opacity duration-700" />
                             </div>
                             <div className="flex flex-col">
                                 <h1 className="text-2xl font-black italic tracking-tighter uppercase text-white leading-[0.8]">
@@ -185,29 +223,80 @@ const SidebarV2: React.FC<SidebarV2Props> = ({
                                                     transition={{ duration: 0.3, ease: "easeInOut" }}
                                                     className="relative space-y-1 border-l border-white/10 ml-2 pl-6 overflow-hidden"
                                                 >
-                                                    {projects.map((project, idx) => (
-                                                        <motion.li
-                                                            key={project.id}
-                                                            initial={{ opacity: 0, x: -10 }}
-                                                            animate={{ opacity: 1, x: 0 }}
-                                                            transition={{ delay: idx * 0.03 }}
-                                                        >
-                                                            <Link
-                                                                to={`/project/${project.id}`}
-                                                                onClick={() => onSelectProject(project)}
-                                                                onMouseEnter={() => setHoveredProject(project)}
-                                                                onMouseLeave={() => setHoveredProject(null)}
-                                                                className={`
-                                                                    group/link block py-0.5 transition-all duration-300
-                                                                    ${selectedProject?.id === project.id ? 'opacity-100' : 'opacity-70 hover:opacity-100'}
-                                                                `}
+                                                    {projects.map((project, idx) => {
+                                                        const isActive = selectedProject?.id === project.id;
+                                                        const theme = YEAR_COLORS[year] || YEAR_COLORS.default;
+
+                                                        return (
+                                                            <motion.li
+                                                                key={project.id}
+                                                                initial={{ opacity: 0, x: -10 }}
+                                                                animate={{ opacity: 1, x: 0 }}
+                                                                transition={{ delay: idx * 0.03 }}
                                                             >
-                                                                <span className={`text-[14px] font-medium tracking-tight transition-all duration-300 ${selectedProject?.id === project.id ? 'text-sky-400' : 'text-slate-200 group-hover/link:text-white group-hover/link:translate-x-1'}`}>
-                                                                    {project.title}
-                                                                </span>
-                                                            </Link>
-                                                        </motion.li>
-                                                    ))}
+                                                                <Link
+                                                                    to={`/project/${project.id}`}
+                                                                    onClick={() => handleProjectClick(project)}
+                                                                    onMouseEnter={() => setHoveredProject(project)}
+                                                                    onMouseLeave={() => setHoveredProject(null)}
+                                                                    className={`
+                                                                    group/link relative block py-1 px-4 -mx-2 rounded-xl transition-all duration-500 border border-transparent
+                                                                    ${isActive
+                                                                            ? 'bg-white/[0.03] border-white/10 shadow-[inner_0_0_20px_rgba(255,255,255,0.02)] overflow-hidden'
+                                                                            : 'opacity-70 hover:opacity-100 hover:bg-white/5'}
+                                                                `}
+                                                                >
+                                                                    {/* 1. SOPHISTICATED INDICATOR NODE */}
+                                                                    {isActive && (
+                                                                        <>
+                                                                            {/* Left Vertical Bar */}
+                                                                            <motion.div
+                                                                                layoutId="active-pill"
+                                                                                className="absolute left-0 top-[20%] bottom-[20%] w-1 rounded-r-full z-20"
+                                                                                style={{
+                                                                                    background: theme.accent,
+                                                                                    boxShadow: `0 0 15px ${theme.accent}, 0 0 30px ${theme.accent}40`
+                                                                                }}
+                                                                                initial={{ opacity: 0, scaleY: 0 }}
+                                                                                animate={{ opacity: 1, scaleY: 1 }}
+                                                                                transition={{ type: 'spring', damping: 15, stiffness: 200 }}
+                                                                            />
+                                                                            {/* Subtle Gradient Wash */}
+                                                                            <div
+                                                                                className="absolute inset-0 pointer-events-none opacity-20"
+                                                                                style={{
+                                                                                    background: `linear-gradient(90deg, ${theme.accent}40 0%, transparent 60%)`
+                                                                                }}
+                                                                            />
+                                                                            {/* Moving Pulse Scanline */}
+                                                                            <motion.div
+                                                                                className="absolute inset-x-0 h-px bg-white/20 z-10 pointer-events-none"
+                                                                                animate={{ top: ['0%', '100%'], opacity: [0, 0.5, 0] }}
+                                                                                transition={{ duration: 3, repeat: Infinity, ease: 'linear' }}
+                                                                            />
+                                                                        </>
+                                                                    )}
+
+                                                                    <span className={`text-[14px] font-bold tracking-tight transition-all duration-500 relative z-10 block
+                                                                        ${isActive
+                                                                            ? 'text-white translate-x-1'
+                                                                            : 'text-slate-400 group-hover/link:text-white group-hover/link:translate-x-1'}`}>
+                                                                        {project.title}
+                                                                        {isActive && (
+                                                                            <motion.span
+                                                                                layoutId="active-dot"
+                                                                                className="inline-block ml-2 w-1 h-1 rounded-full mb-0.5"
+                                                                                style={{ background: theme.accent, boxShadow: `0 0 8px ${theme.accent}` }}
+                                                                                animate={{ opacity: [0.4, 1, 0.4] }}
+                                                                                transition={{ duration: 2, repeat: Infinity }}
+                                                                            />
+                                                                        )}
+                                                                    </span>
+                                                                </Link>
+                                                            </motion.li>
+                                                        );
+                                                    })}
+
                                                 </motion.ul>
                                             )}
                                         </AnimatePresence>
@@ -271,7 +360,7 @@ const SidebarV2: React.FC<SidebarV2Props> = ({
 
             {/* 4. HOLOGRAPHIC PORTAL PREVIEW (Moved outside sidebar container to avoid clipping) */}
             <AnimatePresence>
-                {hoveredProject && (
+                {hoveredProject && hoveredProject.id !== selectedProject?.id && (
                     <motion.div
                         initial={{ opacity: 0, scale: 0.5, rotateY: -30, x: -50 }}
                         animate={{ opacity: 1, scale: 1, rotateY: 0, x: 0 }}

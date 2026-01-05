@@ -1,0 +1,162 @@
+{
+    "skill_id": "a2ui_explain_move",
+    "surface_id": "dashboard_main",
+    "root": "layout_root",
+    "widgets": [
+        "PriceChart",
+        "KpiCard",
+        "NewsTimeline",
+        "ExplainMovePanel"
+    ],
+    "layout": "split-view",
+    "layout_variants": [
+        "split-view",
+        "focus_news"
+    ],
+    "default_variant": "split-view",
+    "data_paths": {
+        "ticker": "/data/ticker",
+        "kpis": "/data/kpis",
+        "news": "/data/news/events",
+        "explanation": "/data/explanation"
+    },
+    "component_tree": {
+        "layout_root": {
+            "type": "Column",
+            "children": [
+                "header_row",
+                "main_content",
+                "explanation_panel"
+            ]
+        },
+        "header_row": {
+            "type": "Row",
+            "children": [
+                "title"
+            ]
+        },
+        "title": {
+            "type": "Text",
+            "props": {
+                "content": {
+                    "path": "/data/title"
+                },
+                "variant": "h1"
+            }
+        },
+        "main_content": {
+            "type": "Row",
+            "children": [
+                "left_panel",
+                "right_panel"
+            ]
+        },
+        "left_panel": {
+            "type": "Column",
+            "weight": 2,
+            "children": [
+                "price_chart"
+            ]
+        },
+        "price_chart": {
+            "type": "PriceChart",
+            "props": {
+                "ticker": {
+                    "path": "/data/ticker"
+                },
+                "interval": {
+                    "literalString": "1M"
+                }
+            }
+        },
+        "right_panel": {
+            "type": "Column",
+            "weight": 1,
+            "children": [
+                "kpi_row",
+                "news_timeline"
+            ]
+        },
+        "kpi_row": {
+            "type": "Row",
+            "children": [
+                "kpi_revenue",
+                "kpi_net_income",
+                "kpi_margin"
+            ]
+        },
+        "kpi_revenue": {
+            "type": "KpiCard",
+            "props": {
+                "label": {
+                    "literalString": "Revenue"
+                },
+                "value": {
+                    "path": "/data/kpis/revenue"
+                },
+                "delta": {
+                    "path": "/data/kpis/revenue_delta"
+                },
+                "deltaType": {
+                    "literalString": "percentage"
+                }
+            }
+        },
+        "kpi_net_income": {
+            "type": "KpiCard",
+            "props": {
+                "label": {
+                    "literalString": "Net Income"
+                },
+                "value": {
+                    "path": "/data/kpis/net_income"
+                },
+                "delta": {
+                    "path": "/data/kpis/net_income_delta"
+                },
+                "deltaType": {
+                    "literalString": "percentage"
+                }
+            }
+        },
+        "kpi_margin": {
+            "type": "KpiCard",
+            "props": {
+                "label": {
+                    "literalString": "Gross Margin"
+                },
+                "value": {
+                    "path": "/data/kpis/gross_margin"
+                },
+                "unit": {
+                    "literalString": "%"
+                }
+            }
+        },
+        "news_timeline": {
+            "type": "NewsTimeline",
+            "props": {
+                "items": {
+                    "path": "/data/news/events"
+                }
+            }
+        },
+        "explanation_panel": {
+            "type": "ExplainMovePanel",
+            "props": {
+                "title": {
+                    "path": "/data/explanation/title"
+                },
+                "explanation": {
+                    "path": "/data/explanation/text"
+                },
+                "factors": {
+                    "path": "/data/explanation/factors"
+                },
+                "citations": {
+                    "path": "/data/explanation/citations"
+                }
+            }
+        }
+    }
+}

@@ -6,8 +6,8 @@ export const PROJECT_DATA: ProjectYear[] = [
     subtitle: '(Generative UI & Agent UX)',
     projects: [
       {
-        id: 'generative-ui-a2ui',
-        title: 'Generative Financial Dashboard',
+        id: 'agent-to-ui',
+        title: 'Agent to UI',
         description: `AI-powered dashboard generation using the A2UI v0.8 protocol.
 
 Ask a question about any stock, and watch as Claude analyzes your query and streams a custom dashboard in real-time. The system:
@@ -20,7 +20,7 @@ Ask a question about any stock, and watch as Claude analyzes your query and stre
 Built with Claude Agent SDK, FastAPI SSE streaming, and a custom React A2UI renderer.`,
         cardDescription: 'Ask a question, watch Claude generate a custom financial dashboard in real-time using the A2UI protocol.',
         technologies: ['A2UI Protocol', 'Claude Agent SDK', 'React Renderer', 'SSE Streaming', 'Generative UX'],
-        systemInstruction: `You are the AI assistant for **Generative Financial Dashboard**. You have full knowledge of the A2UI protocol and how this project works. Use the details below to answer questions.
+        systemInstruction: `You are the AI assistant for **Agent to UI**. You have full knowledge of the A2UI protocol and how this project works. Use the details below to answer questions.
 
 +--------------------
 FEATURE OVERVIEW
@@ -41,21 +41,21 @@ Protocol: A2UI v0.8 with custom financial component catalog extension
           'QCOM vs AVGO profit margin trends',
         ],
 
-        coverUrl: 'https://yanqinghot.blob.core.windows.net/public-access/generative-ui-hero.png',
-        imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/generative-ui-hero.png',
-        ogImage: 'https://yanqinghot.blob.core.windows.net/public-access/generative-ui-hero.png',
-        seoTitle: 'Generative Financial Dashboard | A2UI Protocol + Claude Agent SDK',
+        coverUrl: 'https://yanqinghot.blob.core.windows.net/public-access/a2ui-hero.gif',
+        imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/a2ui-hero.gif',
+        ogImage: 'https://yanqinghot.blob.core.windows.net/public-access/a2ui-hero.gif',
+        seoTitle: 'Agent to UI | Agentic UI UX Design | A2UI',
         seoDescription:
-          'Ask a question and watch AI generate a custom financial dashboard in real-time using the A2UI protocol, Claude Agent SDK, and streaming React components.',
+          'Agent-guided A2UI dashboard generation that streams widgets, KPIs, and news from finance questions using Claude Agent SDK, FastAPI SSE, and a custom React renderer.',
         seoKeywords: [
           'A2UI protocol',
-          'generative UI',
+          'agent-guided UI',
           'Claude Agent SDK',
           'streaming dashboard',
-          'financial analytics AI',
+          'financial data visualization',
         ],
         datePublished: '2026-01-01',
-        dateModified: '2026-01-01',
+        dateModified: '2026-01-05',
         serviceTags: ['Generative UI', 'Agent UX', 'Financial Analytics'],
         statHighlights: [
           'Streams custom dashboards from natural language queries via A2UI protocol',
@@ -66,7 +66,7 @@ Protocol: A2UI v0.8 with custom financial component catalog extension
   },
   {
     year: 2025,
-    subtitle: '(Agentic AI & Autonomous Trading)',
+    subtitle: '(Agent Development & Context Engineering)',
     projects: [
       {
         id: 'linkedin-photo',
@@ -110,22 +110,22 @@ Backend: FastAPI router /api/linkedin-photo/generate, Gemini LLM for prompt expa
         coverUrl: 'https://yanqinghot.blob.core.windows.net/public-access/3-photo-rotate.gif',
         imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/3-photo-rotate.gif',
         ogImage: 'https://yanqinghot.blob.core.windows.net/public-access/3-photo-rotate.gif',
-        seoTitle: 'LinkedIn Photo Generator | Gemini Pro 3 image model',
+        seoTitle: 'AI LinkedIn Headshot Generator | Gemini Image Editing | Yanqing Jiang',
         seoDescription:
-          'Upload any causal photos, choose a template, and watch Gemini 3 Pro Image deliver a LinkedIn headshot with professional studio level setup.',
+          'Upload a portrait, choose an executive style, and generate a LinkedIn-ready headshot with FastAPI + Gemini image editing and transparent prompts.',
         seoKeywords: [
           'LinkedIn headshot generator',
-          'Gemini Nano Banana',
+          'Gemini image editing',
+          'professional headshot AI',
           'FastAPI image workflow',
-          'LLM prompt expansion',
-          'React wizard UI',
+          'prompt transparency',
         ],
         datePublished: '2025-06-01',
-        dateModified: '2025-09-15',
-        serviceTags: ['Analytics Automation', 'AI Agents', 'Decision Intelligence'],
+        dateModified: '2026-01-05',
+        serviceTags: ['AI Image Editing', 'UX Wizard Design', 'Prompt Engineering'],
         statHighlights: [
-          'Supports direct, single-agent, and supervisor-led workflows in one UI',
-          'Caches SQL, RAG, and visualization context for repeatable market insights',
+          'Three-step wizard keeps upload, style prompt, and review on a single focused screen',
+          'Displays the expanded prompt beside the generated headshot for transparency and trust',
         ],
       },
       {
@@ -143,22 +143,22 @@ Backend: FastAPI router /api/linkedin-photo/generate, Gemini LLM for prompt expa
         coverUrl: 'https://yanqing.app/next-gen-analytics-agent-hero.gif',
         imageUrl: 'https://yanqing.app/next-gen-analytics-agent-hero.gif',
         ogImage: 'https://yanqing.app/next-gen-analytics-agent-hero.gif',
-        seoTitle: 'Next Gen Analytics Agent | SKILL.MD driven Analytics | Claude Agent SDK',
+        seoTitle: 'Conversational Analytics Agent | Claude Agent SDK + SQL + Charts | Yanqing Jiang',
         seoDescription:
-          'Skill.md driven analytics build on the Claude Agent SDK framework that clarifies intent, pulls from SQL database, build charts, run latest sentiment analysis',
+          'Conversational analytics agent that clarifies intent, queries a Postgres financial dataset, generates SQL and charts, and delivers analyst-grade explanations with traceable steps.',
         seoKeywords: [
-          'LangGraph analytics',
-          'analytics agents',
-          'agentic copilot',
-          'FastAPI Supabase',
-          'multi-agent workflow',
+          'conversational analytics agent',
+          'Claude Agent SDK',
+          'SQL copilot',
+          'agentic analytics',
+          'chart generation',
         ],
         datePublished: '2025-11-01',
-        dateModified: '2025-11-01',
-        serviceTags: ['AI Image Editing', 'UX Wizard Design', 'Prompt Engineering'],
+        dateModified: '2026-01-05',
+        serviceTags: ['Analytics Automation', 'AI Agents', 'Decision Intelligence'],
         statHighlights: [
-          'Three-step wizard keeps upload, style prompt, and review on a single focused screen',
-          'Displays the expanded prompt beside the generated headshot for transparency and trust',
+          'Supports direct, single-agent, and supervisor-led workflows in one UI',
+          'Caches SQL, RAG, and visualization context for repeatable market insights',
         ],
       },
       {
@@ -204,7 +204,7 @@ Backend: FastAPI router /api/linkedin-photo/generate, Gemini LLM for prompt expa
   },
   {
     year: 2024,
-    subtitle: '(Cutting-Edge AI & Automation)',
+    subtitle: '(Early Stage Agent & AI Automation)',
     projects: [
       {
         id: 'next-gen-analytics-sql',
@@ -430,7 +430,7 @@ This production-grade web application automates the invoice validation and match
   },
   {
     year: 2022,
-    subtitle: '(GPT-3.5 & Foundational Agent Logic)',
+    subtitle: '(GPT Foundation & LLM Adoption)',
     projects: [
       {
         id: 'research-gpt',

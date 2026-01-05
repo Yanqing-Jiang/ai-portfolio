@@ -1,7 +1,33 @@
+# Updated: 2026-01-04
+# Policy: allow search + user browsing; block model training crawlers.
+
 User-agent: *
 Allow: /
-
 Disallow: /signin
 Disallow: /auth
+Disallow: /api/
+
+# OpenAI search & browsing
+User-agent: OAI-SearchBot
+Allow: /
+User-agent: ChatGPT-User
+Allow: /
+
+# OpenAI training (blocked)
+User-agent: GPTBot
+Disallow: /
+
+# Anthropic search & browsing
+User-agent: Claude-SearchBot
+Allow: /
+User-agent: Claude-User
+Allow: /
+# Anthropic training (blocked)
+User-agent: ClaudeBot
+Disallow: /
+
+# Google: opt out of training only (search still allowed)
+User-agent: Google-Extended
+Disallow: /
 
 Sitemap: https://yanqing.app/sitemap.xml

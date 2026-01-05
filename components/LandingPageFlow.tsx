@@ -612,7 +612,7 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                                 {/* Introduction / Start Node */}
                                 <div id="year-section-hero" className="w-[40vw] shrink-0 px-20">
                                     <h2 className="text-8xl font-black mb-6 tracking-tighter text-white/90">The <span className="text-sky-500">Work</span></h2>
-                                    <p className="text-slate-400 text-xl font-mono">Exploring the evolution of Generative UI & Neural Analytics.</p>
+                                    <p className="text-slate-400 text-xl font-mono">Exploring the evolution of Yanqing's AI Projects.</p>
                                 </div>
 
                                 {/* Years Loop */}
@@ -659,12 +659,12 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                                                         />
                                                         {/* PARALLAX IMAGE CONTAINER */}
                                                         <div className="absolute inset-0 overflow-hidden pointer-events-none">
-                                                            <div className="absolute inset-0 grayscale group-hover:grayscale-0 opacity-60 group-hover:opacity-80 transition-opacity duration-700">
+                                                            <div className="absolute -inset-4 grayscale group-hover:grayscale-0 opacity-60 group-hover:opacity-80 transition-opacity duration-700">
                                                                 <img
                                                                     src={project.coverUrl ?? project.imageUrl}
                                                                     alt={project.title}
-                                                                    className="parallax-img w-[120%] h-full object-cover grayscale group-hover:grayscale-0"
-                                                                    style={{ transform: 'translateX(-50px)' }}
+                                                                    className="parallax-img w-full h-full object-cover grayscale group-hover:grayscale-0"
+                                                                    style={{ transform: 'scale(1.15)' }}
                                                                 />
                                                             </div>
                                                             <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/20 to-transparent" />

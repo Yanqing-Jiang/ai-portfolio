@@ -50,6 +50,10 @@ class A2UIRuntime:
     Invokes: A2UIAgent, LayoutPlanner, TraceStore, clarification helpers
     Purpose: Structured runtime with tracing, layout planning, and incremental streaming.
     """
+    
+    # SSE Heartbeat configuration (prevents proxy timeouts)
+    HEARTBEAT_INTERVAL_SECONDS = 15.0
+    HEARTBEAT_EVENT_NAME = "heartbeat"
 
     def __init__(self, agent: A2UIAgent, layout_planner: Optional[LayoutPlanner] = None) -> None:
         """
@@ -62,6 +66,20 @@ class A2UIRuntime:
         self.agent = agent
         self.layout_planner = layout_planner or LayoutPlanner()
         self.trace_store = get_trace_store()
+        self._last_heartbeat = 0.0
+
+    def _maybe_heartbeat(self) -> Optional[str]:
+        """
+        Emit a heartbeat event if enough time has passed since the last one.
+        
+        Returns SSE-formatted heartbeat string or None if not needed.
+        Prevents proxy/load balancer timeouts during long-running operations.
+        """
+        now = time.time()
+        if now - self._last_heartbeat >= self.HEARTBEAT_INTERVAL_SECONDS:
+            self._last_heartbeat = now
+            return f"event: {self.HEARTBEAT_EVENT_NAME}\ndata: {{}}\n\n"
+        return None
 
     async def stream_dashboard(self, state: DashboardState) -> AsyncGenerator[str, None]:
         """
@@ -85,14 +103,20 @@ class A2UIRuntime:
             question=state.question
         )
         message_count = 0
+        self._last_heartbeat = time.time()
+        
         try:
             from .models.dashboard_state import RuntimeStatus
             state.transition(RuntimeStatus.streaming)
         except Exception:
             pass
 
-        # 1) beginRendering
+        # 1) beginRendering + stream_started audit event
         yield emitter.begin_rendering()
+        message_count += 1
+        
+        # Emit standardized stream_started audit event
+        yield emitter.audit("stream_started", f"dashboard_id={state.dashboard_id}")
         message_count += 1
 
         try:
@@ -119,6 +143,10 @@ class A2UIRuntime:
                 },
                 duration_ms=(time.time() - step_start) * 1000
             )
+            
+            # Emit skill_selected audit event for frontend progress feedback
+            yield emitter.audit("skill_selected", f"skill={skill.name} ({selection.skill_id})")
+            message_count += 1
 
             # Layout planning
             step_start = time.time()
@@ -338,6 +366,10 @@ class A2UIRuntime:
             except Exception:
                 pass
             
+            # Emit stream_completed audit event
+            yield emitter.audit("stream_completed", "success=true")
+            message_count += 1
+            
             yield json.dumps({"done": True})
             
         except Exception as exc:
@@ -351,9 +383,13 @@ class A2UIRuntime:
             except Exception:
                 pass
             
+            # Emit dedicated error audit event for frontend error handling
+            yield emitter.audit("error", f"type=agent_error, message={str(exc)[:200]}")
+            message_count += 1
+            
             for msg in emitter.error_surface("agent_error", str(exc)):
                 yield msg
-            yield json.dumps({"done": True})
+            yield json.dumps({"done": True, "error": True})
 
     async def process_action(self, state: DashboardState, action: Dict[str, Any]) -> Dict[str, Any]:
         """

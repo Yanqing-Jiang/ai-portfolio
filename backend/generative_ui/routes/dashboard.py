@@ -43,12 +43,12 @@
 # Function: create_dashboard
 #   Role: Create a dashboard state and preselect an A2UI skill.
 #   Called from: FastAPI POST /api/dash/create
-#   Invokes: backend.generative_ui.agent_v2.A2UIAgent.select_skill, backend.generative_ui.models.get_dashboard_store
+#   Invokes: rate_limiter.smart_rate_limit (chat scope), backend.generative_ui.agent_v2.A2UIAgent.select_skill, backend.generative_ui.models.get_dashboard_store
 #   Why: Persists dashboard metadata before streaming begins.
 # Function: stream_dashboard
 #   Role: Stream A2UI messages for a dashboard session.
 #   Called from: FastAPI GET /api/dash/{dashboard_id}/stream
-#   Invokes: backend.generative_ui.agent_v2.A2UIAgent.execute_skill, backend.generative_ui.a2ui.emitter.A2UIMessageEmitter
+#   Invokes: rate_limiter.smart_rate_limit (chat scope), backend.generative_ui.agent_v2.A2UIAgent.execute_skill, backend.generative_ui.a2ui.emitter.A2UIMessageEmitter
 #   Why: Drives the live A2UI SSE stream with clarification gating.
 # Function: get_dashboard_spec
 #   Role: Return stored dashboard plan metadata.
@@ -68,7 +68,7 @@
 # Function: handle_action
 #   Role: Process incoming A2UI userAction requests.
 #   Called from: FastAPI POST /api/dash/{dashboard_id}/action
-#   Invokes: backend.generative_ui.runtime.A2UIRuntime.process_action
+#   Invokes: rate_limiter.smart_rate_limit (chat scope), backend.generative_ui.runtime.A2UIRuntime.process_action
 #   Why: Keeps dashboard interactions aligned with the runtime + tracing pipeline.
 # Function: delete_dashboard
 #   Role: Delete a dashboard state entry.
@@ -105,9 +105,14 @@ import time
 import uuid
 from pathlib import Path
 from typing import Any, Dict, Optional
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse, HTMLResponse, Response
 from pydantic import BaseModel
+
+try:
+    from rate_limiter import smart_rate_limit, RateLimitScope
+except ImportError:  # pragma: no cover - support module execution
+    from ..rate_limiter import smart_rate_limit, RateLimitScope  # type: ignore
 
 from ..models import get_dashboard_store
 from ..agent_v2 import DEFAULT_METRIC, get_a2ui_agent, A2UIAgentError
@@ -125,6 +130,11 @@ from ..clarification import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/dash", tags=["dashboard"])
+
+A2UI_RATE_LIMIT_SCOPE = RateLimitScope.CHAT
+A2UI_CREATE_WEIGHT = 1
+A2UI_STREAM_WEIGHT = 1
+A2UI_ACTION_WEIGHT = 1
 
 def _sse_data(payload: str) -> str:
     """Wrap a JSON payload for SSE delivery."""
@@ -164,31 +174,36 @@ class ClarificationSubmitRequest(BaseModel):
 # ============================================================================
 
 @router.post("/create", response_model=CreateDashboardResponse)
-async def create_dashboard(request: CreateDashboardRequest):
+async def create_dashboard(payload: CreateDashboardRequest, request: Request):
     """
     Create a new dashboard from a user question.
-    
+
     This endpoint:
     1. Selects an A2UI skill and stores the plan
     2. Creates a dashboard state
     3. Returns the dashboard ID for streaming
     """
+    await smart_rate_limit(
+        request,
+        scope=A2UI_RATE_LIMIT_SCOPE,
+        weight=A2UI_CREATE_WEIGHT,
+    )
     store = get_dashboard_store()
-    
+
     try:
         agent = get_a2ui_agent()
-        selection = await agent.select_skill(request.question)
-        if request.ticker:
-            selection = selection.model_copy(update={"tickers": [request.ticker]})
+        selection = await agent.select_skill(payload.question)
+        if payload.ticker:
+            selection = selection.model_copy(update={"tickers": [payload.ticker]})
         plan = agent.selection_to_plan(selection)
         logger.info("[DASHBOARD] Selected skill: %s", plan.get("skill_id"))
     except A2UIAgentError as e:
         logger.warning("[DASHBOARD] Agent error: %s", e)
         raise HTTPException(status_code=500, detail=f"Skill selection failed: {e}")
-    
+
     # Create dashboard state
     state = store.create(
-        question=request.question,
+        question=payload.question,
         plan=plan
     )
     
@@ -200,18 +215,24 @@ async def create_dashboard(request: CreateDashboardRequest):
 
 
 @router.get("/{dashboard_id}/stream")
-async def stream_dashboard(dashboard_id: str):
+async def stream_dashboard(dashboard_id: str, request: Request):
     """
     Stream A2UI messages for a dashboard.
-    
+
     Returns Server-Sent Events with A2UI JSONL payloads.
     """
     store = get_dashboard_store()
     state = store.get(dashboard_id)
-    
+
     if not state:
         raise HTTPException(status_code=404, detail="Dashboard not found")
-    
+
+    await smart_rate_limit(
+        request,
+        scope=A2UI_RATE_LIMIT_SCOPE,
+        weight=A2UI_STREAM_WEIGHT,
+    )
+
     async def generate():
         agent = get_a2ui_agent()
         runtime = A2UIRuntime(agent=agent, layout_planner=LayoutPlanner(use_model=True))
@@ -273,21 +294,27 @@ async def get_dashboard_data(dashboard_id: str):
 
 
 @router.post("/{dashboard_id}/action")
-async def handle_action(dashboard_id: str, request: ActionRequest):
+async def handle_action(dashboard_id: str, action: ActionRequest, request: Request):
     """
     Handle a user action (A2UI userAction message).
-    
+
     Processes the action and returns updated data or layout.
     """
     store = get_dashboard_store()
     state = store.get(dashboard_id)
-    
+
     if not state:
         raise HTTPException(status_code=404, detail="Dashboard not found")
-    
+
+    await smart_rate_limit(
+        request,
+        scope=A2UI_RATE_LIMIT_SCOPE,
+        weight=A2UI_ACTION_WEIGHT,
+    )
+
     runtime = A2UIRuntime(agent=get_a2ui_agent(), layout_planner=LayoutPlanner(use_model=True))
     try:
-        return await runtime.process_action(state, request.userAction)
+        return await runtime.process_action(state, action.userAction)
     except A2UIAgentError as e:
         raise HTTPException(status_code=500, detail=str(e))
     except Exception as exc:

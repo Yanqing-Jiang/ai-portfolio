@@ -352,7 +352,7 @@ function ExpandableStage({ stage, status, index, events, isOpen, onToggle, userQ
         if (stage.id === 'query') {
             const simulatedSQL = `SELECT * FROM financial_metrics\nWHERE ticker IN ('AMD', 'NVDA')\nAND period >= '2023-Q1'\nORDER BY period DESC;`;
             return (
-                <div className="mt-3 mb-2 rounded-xl overflow-hidden border w-full md:w-96 transition-all"
+                <div className="mt-3 mb-2 rounded-xl overflow-hidden border w-full md:w-80 transition-all"
                     style={panelStyle}>
                     <div className="flex items-center justify-between px-3 py-2 border-b" style={{ backgroundColor: 'rgba(0,0,0,0.2)', borderColor: theme.colors.border.subtle }}>
                         <div className="flex items-center gap-2 text-[10px] uppercase tracking-widest font-bold" style={{ color: theme.colors.text.muted }}>
@@ -406,7 +406,7 @@ function ExpandableStage({ stage, status, index, events, isOpen, onToggle, userQ
         }
         if (stage.id === 'skill') {
             return (
-                <div className="mt-3 mb-2 rounded-xl overflow-hidden border w-full md:w-72 transition-all"
+                <div className="mt-3 mb-2 rounded-xl overflow-hidden border w-full md:w-80 transition-all"
                     style={panelStyle}>
                     <div className="flex items-center justify-between px-3 py-2 border-b" style={{ backgroundColor: 'rgba(0,0,0,0.2)', borderColor: theme.colors.border.subtle }}>
                         <div className="flex items-center gap-2 text-[10px] uppercase tracking-widest font-bold" style={{ color: theme.colors.text.muted }}>
@@ -652,12 +652,29 @@ export function ProcessPanel({
                         {/* Mini Stage Indicators (Visible when collapsed only) */}
                         {!isExpanded && (
                             <div className="hidden md:flex items-center gap-1">
-                                {STAGES.map((stage, idx) => (
-                                    <div key={stage.id} className="flex items-center">
-                                        {idx > 0 && <div className={`w-3 h-0.5 mx-1 ${getStageStatus(stage.id) !== 'pending' ? 'bg-indigo-500' : 'bg-slate-700'}`} />}
-                                        <div className={`w-2 h-2 rounded-full ${getStageStatus(stage.id) === 'complete' ? 'bg-emerald-400' : getStageStatus(stage.id) === 'active' ? 'bg-indigo-400 animate-pulse' : 'bg-slate-700'}`} />
-                                    </div>
-                                ))}
+                                {STAGES.map((stage, idx) => {
+                                    const stageStatus = getStageStatus(stage.id);
+                                    const connectorStyle = stageStatus !== 'pending' ? theme.colors.accent.primary : theme.colors.border.medium;
+                                    const dotStyle = stageStatus === 'complete'
+                                        ? theme.colors.status.complete
+                                        : stageStatus === 'active'
+                                            ? theme.colors.status.streaming
+                                            : theme.colors.status.idle;
+                                    return (
+                                        <div key={stage.id} className="flex items-center">
+                                            {idx > 0 && (
+                                                <div
+                                                    className="w-3 h-0.5 mx-1"
+                                                    style={{ backgroundColor: connectorStyle }}
+                                                />
+                                            )}
+                                            <div
+                                                className={`w-2 h-2 rounded-full ${stageStatus === 'active' ? 'animate-pulse' : ''}`}
+                                                style={{ backgroundColor: dotStyle }}
+                                            />
+                                        </div>
+                                    );
+                                })}
                             </div>
                         )}
 

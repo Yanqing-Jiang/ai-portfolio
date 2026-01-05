@@ -1,0 +1,23 @@
+{
+    "skill_id": "a2ui_revenue_trend",
+    "surface_id": "dashboard_main",
+    "root": "layout_root",
+    "widgets": [
+        "MetricChart",
+        "KpiCard",
+        "DataTable"
+    ],
+    "layout": "standard",
+    "layout_variants": [
+        "standard",
+        "focus_chart"
+    ],
+    "default_variant": "standard",
+    "data_paths": {
+        "ticker": "/data/ticker",
+        "kpis": "/data/kpis",
+        "chart": "/data/chart",
+        "table": "/data/table",
+        "explanation": "/data/explanation"
+    }
+}
