@@ -304,6 +304,7 @@ export function PeerComparePanel({
     }
 
     function formatPercentage(value: number): string {
+        if (value === null || value === undefined) return 'N/A';
         const sign = value >= 0 ? '+' : '';
         return `${sign}${value.toFixed(1)}%`;
     }
@@ -526,12 +527,16 @@ export function PeerComparePanel({
                                                 fontWeight: 600,
                                                 padding: '0.125rem 0.5rem',
                                                 borderRadius: '4px',
-                                                backgroundColor: row.yoy_change >= 0
+                                                backgroundColor: row.yoy_change != null && row.yoy_change >= 0
                                                     ? `${theme.colors.accent.positive}22`
-                                                    : `${theme.colors.accent.negative}22`,
-                                                color: row.yoy_change >= 0
+                                                    : row.yoy_change != null
+                                                        ? `${theme.colors.accent.negative}22`
+                                                        : `${theme.colors.text.muted}22`,
+                                                color: row.yoy_change != null && row.yoy_change >= 0
                                                     ? theme.colors.accent.positive
-                                                    : theme.colors.accent.negative,
+                                                    : row.yoy_change != null
+                                                        ? theme.colors.accent.negative
+                                                        : theme.colors.text.muted,
                                             }}>
                                                 {formatPercentage(row.yoy_change)} YoY
                                             </span>

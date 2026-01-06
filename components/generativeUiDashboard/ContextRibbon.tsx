@@ -27,8 +27,8 @@ const theme = {
     colors: {
         bg: 'rgba(30, 41, 59, 0.4)',
         border: 'rgba(148, 163, 184, 0.1)',
-        activeBg: 'rgba(244, 63, 94, 0.15)',
-        activeBorder: 'rgba(244, 63, 94, 0.4)',
+        activeBg: 'rgba(99, 102, 241, 0.15)',  // Blue tint instead of red
+        activeBorder: 'rgba(99, 102, 241, 0.4)',  // Blue border
         text: {
             primary: '#f8fafc',
             secondary: '#94a3b8',
@@ -77,9 +77,9 @@ export function ContextRibbon({
                                         backdropFilter: 'blur(8px)',
                                     }}
                                 >
-                                    <span 
+                                    <span
                                         className="text-xs font-medium"
-                                        style={{ color: isActive ? '#f43f5e' : theme.colors.text.secondary }}
+                                        style={{ color: isActive ? '#6366f1' : theme.colors.text.secondary }}
                                     >
                                         {item.query}
                                     </span>

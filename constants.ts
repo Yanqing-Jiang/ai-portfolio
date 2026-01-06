@@ -53,6 +53,11 @@ Protocol: A2UI v0.8 with custom financial component catalog extension
           'Claude Agent SDK',
           'streaming dashboard',
           'financial data visualization',
+          'Generative UI',
+          'A2UI',
+          'Real-time UI generation',
+          'Generative UI/UX',
+          'Agentic UI design',
         ],
         datePublished: '2026-01-01',
         dateModified: '2026-01-05',
@@ -73,9 +78,9 @@ Protocol: A2UI v0.8 with custom financial component catalog extension
         title: 'The Headshot Studio',
 
         description: `Three-step UX flow that turns a casual portrait into a LinkedIn-ready headshot.
-Step 1 �?" Upload: validate JPEG or PNG up to 8 MB, show an inline preview, and prep metadata.
-Step 2 �?" Describe: capture a single style sentence and expand it with Gemini into a photography-grade brief (lighting, background, wardrobe) that preserves identity.
-Step 3 �?" Generate: FastAPI validates the file, expands the prompt, calls Gemini Nano Banana image editing, and returns the professional headshot alongside the transparent prompt display with download/share actions.`,
+Step 1 ?" Upload: validate JPEG or PNG up to 8 MB, show an inline preview, and prep metadata.
+Step 2 ?" Describe: capture a single style sentence and expand it with Gemini into a photography-grade brief (lighting, background, wardrobe) that preserves identity.
+Step 3 ?" Generate: FastAPI validates the file, expands the prompt, calls Gemini Nano Banana image editing, and returns the professional headshot alongside the transparent prompt display with download/share actions.`,
         cardDescription:
           'Upload any photo, get instant AI quality feedback, choose an Executive Suite style, and generate a premium professional headshot.',
         technologies: [
@@ -89,9 +94,9 @@ Step 3 �?" Generate: FastAPI validates the file, expands the prompt, calls Gem
 
 +--------------------
 FEATURE OVERVIEW
-Step 1 �?" Upload: drag-and-drop interface, JPEG/PNG up to 8 MB, EXIF stripped, portrait preview.
-Step 2 �?" Style Prompt: single control, hints for wardrobe/background, Gemini text model expands into full photography instructions.
-Step 3 �?" Generate: FastAPI validates the file, expands the prompt, calls Gemini image model with reference photo, returns headshot and displays the prompt for transparency.
+Step 1 ?" Upload: drag-and-drop interface, JPEG/PNG up to 8 MB, EXIF stripped, portrait preview.
+Step 2 ?" Style Prompt: single control, hints for wardrobe/background, Gemini text model expands into full photography instructions.
+Step 3 ?" Generate: FastAPI validates the file, expands the prompt, calls Gemini image model with reference photo, returns headshot and displays the prompt for transparency.
 
 SECURITY & TRUST
 - Pillow ensures the upload is truly an image and enforces size/type limits.
@@ -152,6 +157,12 @@ Backend: FastAPI router /api/linkedin-photo/generate, Gemini LLM for prompt expa
           'SQL copilot',
           'agentic analytics',
           'chart generation',
+          'Agent in Production',
+          'Claude Code Agent',
+          'Supervisor Agents',
+          'Multi-agent systems',
+          'Tool calling',
+          'Human-in-the-loop',
         ],
         datePublished: '2025-11-01',
         dateModified: '2026-01-05',
@@ -186,6 +197,8 @@ Backend: FastAPI router /api/linkedin-photo/generate, Gemini LLM for prompt expa
           'IBKR API',
           'options flow intelligence',
           'AI trading copilot',
+          'Autonomous agents',
+          'Multi-agent trading platform',
         ],
         datePublished: '2025-05-10',
         dateModified: '2025-09-12',

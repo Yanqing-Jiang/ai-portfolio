@@ -13,7 +13,7 @@ langchain-community==0.3.30
 langchain-openai==0.3.34
 google-genai
 anthropic>=0.39.0
-claude-agent-sdk>=1.0.0
+claude-agent-sdk>=0.1.18
 python-multipart
 fastapi-limiter
 redis

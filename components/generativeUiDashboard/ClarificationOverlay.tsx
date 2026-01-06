@@ -16,6 +16,15 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 
+interface ClarificationOption {
+    /** Value submitted to backend */
+    value: string;
+    /** Display label */
+    label: string;
+    /** Optional icon */
+    icon?: string;
+}
+
 interface ClarificationField {
     /** Field ID used for backend submission */
     id: string;
@@ -137,7 +146,7 @@ export function ClarificationOverlay({
     const handleOptionClick = useCallback((fieldId: string, value: string, type: 'single_choice' | 'multi_choice', maxSelections?: number) => {
         setResponses((prev) => {
             const current = prev[fieldId] || (type === 'multi_choice' ? [] : '');
-            
+
             if (type === 'single_choice') {
                 return { ...prev, [fieldId]: value };
             } else {
@@ -189,15 +198,21 @@ export function ClarificationOverlay({
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
                     exit={{ opacity: 0 }}
-                    className={`clarification-overlay ${fullScreen ? 'fixed inset-0 z-50' : 'absolute inset-0'}`}
+                    className={`clarification-overlay ${fullScreen ? 'fixed inset-0 z-[100]' : 'absolute inset-0'}`}
                     ref={overlayRef}
                     style={{
                         backgroundColor: theme.colors.bg.overlay,
                         backdropFilter: 'blur(8px)',
-                        display: isAnchored ? 'block' : 'flex',
-                        alignItems: isAnchored ? 'stretch' : 'center',
-                        justifyContent: isAnchored ? 'flex-start' : 'center',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
                         padding: '1rem',
+                        // Ensure overlay covers entire viewport and prevents scroll
+                        top: 0,
+                        left: 0,
+                        right: 0,
+                        bottom: 0,
+                        overflow: 'auto',
                     }}
                     onClick={handleDismiss}
                 >
@@ -216,7 +231,10 @@ export function ClarificationOverlay({
                             maxWidth: '480px',
                             width: '100%',
                             boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)',
+                            // For anchored mode, use absolute positioning; otherwise flex handles centering
                             position: isAnchored ? 'absolute' : 'relative',
+                            // Ensure card stays in visible area
+                            margin: isAnchored ? 0 : 'auto',
                             ...(isAnchored && anchorStyle ? anchorStyle : {}),
                         }}
                     >

@@ -135,6 +135,7 @@ A2UI-native agent for skill-driven dashboard streaming.
 from __future__ import annotations
 
 import json
+import re
 import hashlib
 import logging
 from dataclasses import dataclass
@@ -178,6 +179,72 @@ class A2UIAgentError(Exception):
     """Raised when the A2UI agent fails."""
 
 
+def extract_json_from_response(content: str) -> Dict[str, Any]:
+    """
+    Extract JSON from Claude's response, handling various formats.
+    
+    Function: extract_json_from_response
+    Role: Parse JSON from model output that may include prose or code fences.
+    Called from: A2UIAgent.select_skill
+    Why: Claude may return JSON wrapped in prose or markdown code blocks.
+    
+    Args:
+        content: Raw response text from Claude
+        
+    Returns:
+        Parsed JSON dict
+        
+    Raises:
+        ValueError: If no valid JSON found
+    """
+    if not content or not content.strip():
+        raise ValueError("Empty response from model")
+    
+    content = content.strip()
+    
+    # Try direct JSON parse first (most efficient case)
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError:
+        pass
+    
+    # Try to extract JSON from code blocks (```json ... ``` or ``` ... ```)
+    code_block_pattern = r'```(?:json)?\s*([\s\S]*?)```'
+    match = re.search(code_block_pattern, content)
+    if match:
+        try:
+            return json.loads(match.group(1).strip())
+        except json.JSONDecodeError:
+            pass
+    
+    # Try to find JSON object anywhere in the response
+    # Look for { ... } pattern
+    json_pattern = r'\{[\s\S]*?\}'
+    matches = re.findall(json_pattern, content)
+    for m in matches:
+        try:
+            parsed = json.loads(m)
+            # Verify it has expected keys
+            if "skill_id" in parsed or "tickers" in parsed:
+                return parsed
+        except json.JSONDecodeError:
+            continue
+    
+    # Last resort: try cleaning up common issues
+    # Remove leading/trailing text before/after JSON
+    content_cleaned = content
+    if '{' in content_cleaned:
+        start = content_cleaned.find('{')
+        end = content_cleaned.rfind('}') + 1
+        if start < end:
+            try:
+                return json.loads(content_cleaned[start:end])
+            except json.JSONDecodeError:
+                pass
+    
+    raise ValueError(f"Could not parse JSON from response: {content[:200]}...")
+
+
 @dataclass(frozen=True)
 class A2UIRunResult:
     """Container for skill execution results."""
@@ -211,6 +278,24 @@ class SkillSelection(BaseModel):
     tickers: List[str] = Field(default_factory=list, description="Ticker symbols referenced by the user")
     metric: str = Field(default=DEFAULT_METRIC, description="Primary metric for comparison")
     time_range: str = Field(default=DEFAULT_TIME_RANGE, description="Requested time range for charts")
+
+    # JSON Schema examples for better Claude invocation (Optimization #10)
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {"skill_id": "explain_move", "tickers": ["NVDA"], "metric": "Revenue", "time_range": "3M"},
+                {"skill_id": "peer_compare", "tickers": ["NVDA", "AMD", "INTC"], "metric": "Gross Margin", "time_range": "1Y"}
+            ]
+        }
+    }
+
+    @classmethod
+    def get_json_schema_prompt(cls) -> str:
+        """Get a prompt snippet with the JSON schema for Claude."""
+        return (
+            "Return JSON with keys: skill_id, tickers, metric, time_range.\n"
+            'Example: {"skill_id": "explain_move", "tickers": ["NVDA"], "metric": "Revenue", "time_range": "3M"}'
+        )
 
 
 class A2UIAgent:
@@ -316,7 +401,8 @@ class A2UIAgent:
                 )
                 if response.error:
                     raise A2UIAgentError(response.error)
-                parsed = json.loads(response.content or "{}")
+                # Extract JSON from the response (handles prose, code fences, etc.)
+                parsed = extract_json_from_response(response.content or "")
                 selection = SkillSelection(
                     skill_id=str(parsed.get("skill_id", "")).strip(),
                     tickers=normalize_tickers(parsed.get("tickers") or []),
@@ -531,65 +617,256 @@ class A2UIAgent:
             raise
 
     async def _execute_narrative(self, selection: SkillSelection, data_model: Dict[str, Any]) -> Dict[str, Any]:
-        """Generate a concise AI narrative summarizing the data results."""
-        ticker = selection.tickers[0] if selection.tickers else "the company"
+        """
+        Generate a concise AI narrative summarizing the data results with dynamic factors.
         
-        # Prepare a concise data summary for the LLM
-        # We exclude large lists like table rows to keep the prompt small
-        data_summary = {
-            "ticker": ticker,
-            "metric": selection.metric,
-            "kpis": data_model.get("kpis", {}),
-            "correlation": data_model.get("correlation", {}),
-            "tickers": data_model.get("tickers", []),
-        }
-
-        system_prompt = (
-            "You are a Senior Financial Analyst briefing a high-stakes trader. "
-            "Write a concise, 2-3 sentence narrative summary based on the provided data. "
-            "Focus on the most interesting trend or anomaly. "
-            "Keep it professional, data-driven, and very concise. "
-            "Do not use markdown formatting like bolding or lists. "
-            f"The user asked about: {selection.skill_id} for {ticker}."
-        )
+        Function: _execute_narrative
+        Called from: A2UIAgent.execute_skill
+        Invokes: execute_analysis_tool, _generate_factors_from_data
+        Why: Provides intelligent, data-driven factors instead of generic placeholders.
+        """
+        primary_ticker = selection.tickers[0] if selection.tickers else "the company"
+        all_tickers = ", ".join(selection.tickers) if selection.tickers else primary_ticker
+        metric = selection.metric or "Revenue"
         
-        user_msg = f"Data Summary: {json.dumps(data_summary)}"
+        # Build findings based on available data (works for all skills)
+        findings = self._extract_findings(selection, data_model)
+        
+        # Generate dynamic factors from actual data
+        factors = self._generate_factors_from_data(selection, data_model)
+        
+        # Determine trend direction
+        trend = self._determine_trend(data_model)
+        
+        # Build data summary based on skill type
+        if selection.skill_id == "a2ui_peer_compare":
+            data_summary_text = f"Comparing {metric} for {all_tickers}. " + " ".join(findings[:2])
+        elif selection.skill_id == "a2ui_margin_analysis":
+            data_summary_text = f"Margin analysis for {primary_ticker}. " + " ".join(findings[:2])
+        else:
+            data_summary_text = f"{metric} analysis for {primary_ticker}. " + " ".join(findings[:2])
         
         try:
-            # We reuse execute_analysis_tool if it's available and suitable, 
-            # or we could use _call_claude directly. 
-            # Given explain_move uses execute_analysis_tool, let's stick to that for consistency
-            # but wrap it to provide the specific format ExplainPanel expects.
-            
-            findings = [f"Analyzing {selection.metric} data for {ticker}."]
-            for k, v in data_summary["kpis"].items():
-                findings.append(f"{k.replace('_', ' ').title()}: {v}")
-
             analysis_result = await execute_analysis_tool(
-                data_summary=f"Financial data for {ticker}.",
+                data_summary=data_summary_text,
                 key_findings=findings,
-                trend_direction="neutral",
+                trend_direction=trend,
             )
             
-            text = "Analysis pending."
+            text = " ".join(findings) if findings else "Analysis pending."
             if analysis_result.get("success"):
                 text = analysis_result.get("analysis", {}).get("summary", text)
             
             return {
-                "title": f"Insight: {selection.metric} for {ticker}",
+                "title": f"Insight: {metric} for {primary_ticker}",
                 "text": text,
-                "factors": [],
+                "factors": factors,  # NOW POPULATED WITH REAL DATA!
                 "citations": [],
             }
         except Exception as e:
-            import logging
-            logging.getLogger(__name__).warning("Narrative generation failed: %s", e)
+            logger.warning("Narrative generation failed: %s", e)
             return {
-                "title": "Analysis Summary",
-                "text": "Data visualized below. Summarization currently unavailable.",
-                "factors": [],
+                "title": f"Insight: {metric} for {primary_ticker}",
+                "text": " ".join(findings) if findings else "Data visualized below.",
+                "factors": factors,  # Still use generated factors even on AI failure
                 "citations": [],
             }
+
+    def _extract_findings(self, selection: SkillSelection, data_model: Dict[str, Any]) -> List[str]:
+        """
+        Extract key findings from the data model.
+        
+        Function: _extract_findings
+        Called from: _execute_narrative
+        Why: Builds structured findings for AI summarization.
+        """
+        findings = []
+        metric = selection.metric or "Revenue"
+        
+        # Extract KPI findings
+        kpis = data_model.get("kpis", {})
+        for k, v in kpis.items():
+            if v is not None and v != 0:
+                label = k.replace('_', ' ').title()
+                if "margin" in k.lower():
+                    findings.append(f"{label}: {v:.1f}%")
+                elif isinstance(v, (int, float)) and v >= 1e6:
+                    findings.append(f"{label}: ${v/1e9:.2f}B" if v >= 1e9 else f"{label}: ${v/1e6:.1f}M")
+                elif isinstance(v, float):
+                    findings.append(f"{label}: {v:.2f}")
+                else:
+                    findings.append(f"{label}: {v}")
+        
+        # Extract table data findings
+        table_rows = data_model.get("table", {}).get("rows", [])
+        for row in table_rows[:3]:
+            ticker = row.get("ticker", "")
+            latest_value = row.get("latest_value")
+            yoy_change = row.get("yoy_change")
+            
+            if ticker and latest_value is not None:
+                if latest_value >= 1e9:
+                    value_str = f"${latest_value/1e9:.2f}B"
+                elif latest_value >= 1e6:
+                    value_str = f"${latest_value/1e6:.1f}M"
+                else:
+                    value_str = f"{latest_value:.2f}%"
+                
+                finding = f"{ticker}: Latest {metric} of {value_str}"
+                if yoy_change is not None:
+                    direction = "up" if yoy_change > 0 else "down" if yoy_change < 0 else "flat"
+                    finding += f" ({direction} {abs(yoy_change):.1f}% YoY)"
+                findings.append(finding)
+        
+        # Extract correlation findings
+        correlation = data_model.get("correlation", {})
+        if correlation.get("matrix") and len(correlation.get("tickers", [])) > 1:
+            matrix = correlation["matrix"]
+            tickers_list = correlation["tickers"]
+            if len(tickers_list) >= 2 and len(matrix) >= 2 and len(matrix[0]) > 1:
+                corr_val = matrix[0][1]
+                findings.append(f"Correlation between {tickers_list[0]} and {tickers_list[1]}: {corr_val:.2f}")
+        
+        return findings or [f"Analyzed {metric} data."]
+
+    def _generate_factors_from_data(
+        self, 
+        selection: SkillSelection, 
+        data_model: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        """
+        Generate factor cards based on actual data, not generic placeholders.
+        
+        Function: _generate_factors_from_data
+        Called from: _execute_narrative
+        Why: Provides meaningful, data-driven insight factors for the UI.
+        
+        Returns list of factors like:
+        [{"title": "AMD Performance", "description": "...", "impact": "positive", "icon": "📊"}, ...]
+        """
+        factors = []
+        primary_ticker = selection.tickers[0] if selection.tickers else "N/A"
+        metric = selection.metric or "Revenue"
+        
+        table_rows = data_model.get("table", {}).get("rows", [])
+        kpis = data_model.get("kpis", {})
+        
+        # Factor 1: Primary ticker performance
+        primary_row = next((r for r in table_rows if r.get("ticker") == primary_ticker), None)
+        if primary_row:
+            yoy = primary_row.get("yoy_change")
+            latest = primary_row.get("latest_value", 0)
+            
+            if latest and latest != 0:
+                if latest >= 1e9:
+                    formatted = f"${latest/1e9:.2f}B"
+                elif latest >= 1e6:
+                    formatted = f"${latest/1e6:.2f}M"
+                else:
+                    formatted = f"{latest:.1f}%"
+                
+                yoy_str = f" ({yoy:+.1f}% YoY)" if yoy is not None else ""
+                factors.append({
+                    "title": f"{primary_ticker} {metric}",
+                    "description": f"Latest {metric}: {formatted}{yoy_str}",
+                    "impact": "positive" if (yoy or 0) > 0 else "negative" if (yoy or 0) < 0 else "neutral",
+                    "source": "Financial Data",
+                    "icon": "📊",
+                })
+        
+        # Factor 2: Market leader insight (for multi-ticker comparisons)
+        if len(table_rows) >= 2:
+            sorted_rows = sorted(
+                [r for r in table_rows if r.get("latest_value")], 
+                key=lambda r: r.get("latest_value", 0) or 0, 
+                reverse=True
+            )
+            if sorted_rows:
+                leader = sorted_rows[0]
+                if leader.get("ticker") != primary_ticker:
+                    factors.append({
+                        "title": "Market Leader",
+                        "description": f"{leader.get('ticker')} leads the peer group in {metric}.",
+                        "impact": "neutral",
+                        "source": "Peer Analysis",
+                        "icon": "🏆",
+                    })
+                elif len(sorted_rows) > 1:
+                    # Primary ticker IS the leader
+                    factors.append({
+                        "title": "Market Leader",
+                        "description": f"{primary_ticker} leads the peer group in {metric}.",
+                        "impact": "positive",
+                        "source": "Peer Analysis",
+                        "icon": "🏆",
+                    })
+        
+        # Factor 3: Margin-specific insights
+        gm = kpis.get("gross_margin", 0)
+        om = kpis.get("operating_margin", 0)
+        nm = kpis.get("net_margin", 0)
+        
+        if gm or om or nm:
+            if gm and gm != 0:
+                factors.append({
+                    "title": "Gross Margin",
+                    "description": f"{primary_ticker} gross margin of {gm:.1f}% indicates cost efficiency.",
+                    "impact": "positive" if gm > 40 else "neutral" if gm > 20 else "negative",
+                    "source": "Profitability Analysis",
+                    "icon": "💰",
+                })
+            elif nm and nm != 0:
+                factors.append({
+                    "title": "Net Profitability",
+                    "description": f"Net margin of {nm:.1f}% shows bottom-line profitability.",
+                    "impact": "positive" if nm > 10 else "neutral" if nm > 0 else "negative",
+                    "source": "Profitability Analysis",
+                    "icon": "📈",
+                })
+        
+        # Factor 4: YoY trend
+        if primary_row and primary_row.get("yoy_change") is not None:
+            yoy = primary_row["yoy_change"]
+            factors.append({
+                "title": "Year-over-Year Trend",
+                "description": f"{primary_ticker} {metric} {'grew' if yoy > 0 else 'declined'} {abs(yoy):.1f}% compared to last year.",
+                "impact": "positive" if yoy > 5 else "negative" if yoy < -5 else "neutral",
+                "source": "Historical Analysis",
+                "icon": "📈" if yoy > 0 else "📉",
+            })
+        
+        # Ensure at least 2-3 factors
+        if len(factors) < 2:
+            factors.append({
+                "title": "Data Analysis",
+                "description": f"Comprehensive {metric} analysis based on latest available data.",
+                "impact": "neutral",
+                "source": "Financial Data",
+                "icon": "✅",
+            })
+        
+        return factors[:4]  # Limit to 4 factors for clean UI
+
+    def _determine_trend(self, data_model: Dict[str, Any]) -> str:
+        """
+        Analyze overall trend from data.
+        
+        Function: _determine_trend
+        Called from: _execute_narrative
+        Why: Provides trend context for AI summarization.
+        """
+        table_rows = data_model.get("table", {}).get("rows", [])
+        if not table_rows:
+            return "stable"
+        
+        positive = sum(1 for r in table_rows if (r.get("yoy_change") or 0) > 0)
+        negative = sum(1 for r in table_rows if (r.get("yoy_change") or 0) < 0)
+        
+        if positive > negative:
+            return "upward"
+        elif negative > positive:
+            return "downward"
+        return "mixed"
 
     async def _execute_chart_annotations(self, tickers: List[str], period_set: set[str]) -> List[Dict[str, Any]]:
         """Fetch news and map to chart annotations if they land on valid chart periods."""
@@ -778,29 +1055,66 @@ class A2UIAgent:
         if len(tickers) > 1:
             return await self._execute_multi_ticker_margins(tickers)
 
-        # Single ticker margin analysis (original logic)
+        # Single ticker margin analysis - fetch all possible margin metrics
         ticker = tickers[0]
         sql = (
             "SELECT ticker, calendar_year, calendar_quarter_num, calendar_quarter, metric, value "
             "FROM comp_financials "
-            f"WHERE ticker = '{ticker}' AND metric IN ('Gross Margin', 'Operating Margin', 'Net Income', 'Revenue') "
+            f"WHERE ticker = '{ticker}' AND metric IN "
+            "('Gross Margin', 'Operating Margin', 'Net Income', 'Revenue', "
+            "'Gross Profit', 'Operating Income', 'Cost of Revenue') "
             "ORDER BY calendar_year DESC, calendar_quarter_num DESC "
-            "LIMIT 48"
+            "LIMIT 80"
         )
         sql_result = await execute_sql_tool(sql, reason="Margin analysis")
         if not sql_result.get("success"):
             raise A2UIAgentError(sql_result.get("error", "SQL query failed"))
 
         rows = sorted_rows(sql_result.get("rows", []))
+        
+        # Try direct margin values first, then calculate from components
         gross_series = metric_series(rows, "Gross Margin")
         operating_series = metric_series(rows, "Operating Margin")
         revenue_series = metric_series(rows, "Revenue")
         net_income_series = metric_series(rows, "Net Income")
+        gross_profit_series = metric_series(rows, "Gross Profit")
+        operating_income_series = metric_series(rows, "Operating Income")
+        cost_of_revenue_series = metric_series(rows, "Cost of Revenue")
+        
+        # Build period-based lookup for calculations
+        revenue_by_period = {entry["period"]: entry["value"] for entry in revenue_series}
         net_income_by_period = {entry["period"]: entry["value"] for entry in net_income_series}
-
+        gross_profit_by_period = {entry["period"]: entry["value"] for entry in gross_profit_series}
+        operating_income_by_period = {entry["period"]: entry["value"] for entry in operating_income_series}
+        cost_of_revenue_by_period = {entry["period"]: entry["value"] for entry in cost_of_revenue_series}
+        
+        # Calculate Gross Margin if not directly available
+        if not gross_series:
+            for entry in revenue_series:
+                period = entry["period"]
+                revenue = entry["value"]
+                if revenue == 0:
+                    continue
+                gross_profit = gross_profit_by_period.get(period)
+                cost = cost_of_revenue_by_period.get(period)
+                if gross_profit is not None:
+                    gross_series.append({"period": period, "value": (gross_profit / revenue) * 100})
+                elif cost is not None:
+                    gross_series.append({"period": period, "value": ((revenue - cost) / revenue) * 100})
+        
+        # Calculate Operating Margin if not directly available
+        if not operating_series:
+            for entry in revenue_series:
+                period = entry["period"]
+                revenue = entry["value"]
+                op_income = operating_income_by_period.get(period)
+                if op_income is not None and revenue != 0:
+                    operating_series.append({"period": period, "value": (op_income / revenue) * 100})
+        
         gross_latest, _ = latest_and_previous(gross_series)
         operating_latest, _ = latest_and_previous(operating_series)
 
+        # Calculate Net Margin from Net Income / Revenue
         net_margin_series: List[Dict[str, Any]] = []
         for entry in revenue_series:
             period = entry["period"]
@@ -858,14 +1172,16 @@ class A2UIAgent:
         return A2UIRunResult(data_model=data_model, citations=[])
 
     async def _execute_multi_ticker_margins(self, tickers: List[str]) -> A2UIRunResult:
-        """Fetch margin comparison data for multiple tickers."""
+        """Fetch margin comparison data for multiple tickers with fallback calculations."""
         tickers_sql = ", ".join([f"'{t}'" for t in tickers])
         sql = (
             "SELECT ticker, calendar_year, calendar_quarter_num, calendar_quarter, metric, value "
             "FROM comp_financials "
-            f"WHERE ticker IN ({tickers_sql}) AND metric IN ('Gross Margin', 'Operating Margin', 'Net Income', 'Revenue') "
+            f"WHERE ticker IN ({tickers_sql}) AND metric IN "
+            "('Gross Margin', 'Operating Margin', 'Net Income', 'Revenue', "
+            "'Gross Profit', 'Operating Income', 'Cost of Revenue') "
             "ORDER BY ticker, calendar_year DESC, calendar_quarter_num DESC "
-            "LIMIT 200"
+            "LIMIT 400"
         )
         sql_result = await execute_sql_tool(sql, reason="Multi-ticker margin comparison")
         if not sql_result.get("success"):
@@ -881,15 +1197,49 @@ class A2UIAgent:
         table_rows = []
         chart_series: List[Dict[str, Any]] = []
         for ticker, ticker_rows in rows_by_ticker.items():
+            # Get direct margin values first
             gross_series = metric_series(ticker_rows, "Gross Margin")
             operating_series = metric_series(ticker_rows, "Operating Margin")
             revenue_series = metric_series(ticker_rows, "Revenue")
             net_income_series = metric_series(ticker_rows, "Net Income")
-            net_income_by_period = {entry["period"]: entry["value"] for entry in net_income_series}
+            gross_profit_series = metric_series(ticker_rows, "Gross Profit")
+            operating_income_series = metric_series(ticker_rows, "Operating Income")
+            cost_of_revenue_series = metric_series(ticker_rows, "Cost of Revenue")
+            
+            # Build period lookups
+            revenue_by_period = {e["period"]: e["value"] for e in revenue_series}
+            net_income_by_period = {e["period"]: e["value"] for e in net_income_series}
+            gross_profit_by_period = {e["period"]: e["value"] for e in gross_profit_series}
+            operating_income_by_period = {e["period"]: e["value"] for e in operating_income_series}
+            cost_by_period = {e["period"]: e["value"] for e in cost_of_revenue_series}
+            
+            # Calculate Gross Margin if not directly available
+            if not gross_series:
+                for entry in revenue_series:
+                    period = entry["period"]
+                    revenue = entry["value"]
+                    if revenue == 0:
+                        continue
+                    gp = gross_profit_by_period.get(period)
+                    cost = cost_by_period.get(period)
+                    if gp is not None:
+                        gross_series.append({"period": period, "value": (gp / revenue) * 100})
+                    elif cost is not None:
+                        gross_series.append({"period": period, "value": ((revenue - cost) / revenue) * 100})
+            
+            # Calculate Operating Margin if not directly available
+            if not operating_series:
+                for entry in revenue_series:
+                    period = entry["period"]
+                    revenue = entry["value"]
+                    op_income = operating_income_by_period.get(period)
+                    if op_income is not None and revenue != 0:
+                        operating_series.append({"period": period, "value": (op_income / revenue) * 100})
 
             gross_latest, _ = latest_and_previous(gross_series)
             operating_latest, _ = latest_and_previous(operating_series)
 
+            # Calculate Net Margin from Net Income / Revenue
             net_margin_series: List[Dict[str, Any]] = []
             for entry in revenue_series:
                 period = entry["period"]

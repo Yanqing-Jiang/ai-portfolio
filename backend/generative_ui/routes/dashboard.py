@@ -120,6 +120,7 @@ from ..a2ui.emitter import A2UIMessageEmitter
 from ..layout_planner import LayoutPlanner
 from ..runtime import A2UIRuntime
 from ..clarification import (
+    ClarificationRequest,
     ClarificationResponse,
     await_clarification_response,
     build_visual_clarification,
@@ -131,10 +132,49 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/dash", tags=["dashboard"])
 
+# Rate limiting configuration (Optimization #22)
 A2UI_RATE_LIMIT_SCOPE = RateLimitScope.CHAT
 A2UI_CREATE_WEIGHT = 1
-A2UI_STREAM_WEIGHT = 1
+A2UI_STREAM_WEIGHT = 3  # Streams are more resource-intensive
 A2UI_ACTION_WEIGHT = 1
+
+# Concurrent stream limiting (Optimization #22)
+MAX_CONCURRENT_STREAMS_PER_IP = 5
+_active_streams: Dict[str, int] = {}
+_stream_lock = asyncio.Lock()
+
+
+async def _acquire_stream_slot(client_ip: str) -> bool:
+    """
+    Acquire a stream slot for the client IP.
+    
+    Function: _acquire_stream_slot — limits concurrent streams per IP.
+    Called from: stream_dashboard
+    Why: Prevents resource exhaustion from too many concurrent SSE connections.
+    
+    Returns:
+        True if slot acquired, False if limit reached.
+    """
+    async with _stream_lock:
+        current = _active_streams.get(client_ip, 0)
+        if current >= MAX_CONCURRENT_STREAMS_PER_IP:
+            return False
+        _active_streams[client_ip] = current + 1
+        return True
+
+
+async def _release_stream_slot(client_ip: str) -> None:
+    """
+    Release a stream slot for the client IP.
+    
+    Function: _release_stream_slot — frees stream slot on completion.
+    Called from: stream_dashboard generator
+    """
+    async with _stream_lock:
+        current = _active_streams.get(client_ip, 0)
+        if current > 0:
+            _active_streams[client_ip] = current - 1
+
 
 def _sse_data(payload: str) -> str:
     """Wrap a JSON payload for SSE delivery."""
@@ -220,6 +260,8 @@ async def stream_dashboard(dashboard_id: str, request: Request):
     Stream A2UI messages for a dashboard.
 
     Returns Server-Sent Events with A2UI JSONL payloads.
+    
+    Includes concurrent stream limiting per IP (Optimization #22).
     """
     store = get_dashboard_store()
     state = store.get(dashboard_id)
@@ -232,16 +274,28 @@ async def stream_dashboard(dashboard_id: str, request: Request):
         scope=A2UI_RATE_LIMIT_SCOPE,
         weight=A2UI_STREAM_WEIGHT,
     )
+    
+    # Check concurrent stream limit (Optimization #22)
+    client_ip = request.client.host if request.client else "unknown"
+    if not await _acquire_stream_slot(client_ip):
+        raise HTTPException(
+            status_code=429,
+            detail=f"Too many active streams (max {MAX_CONCURRENT_STREAMS_PER_IP} per IP)"
+        )
 
     async def generate():
-        agent = get_a2ui_agent()
-        runtime = A2UIRuntime(agent=agent, layout_planner=LayoutPlanner(use_model=True))
-        async for message in runtime.stream_dashboard(state):
-            if message.startswith("event:"):
-                # Already SSE-formatted (clarification_request)
-                yield message
-            else:
-                yield _sse_data(message)
+        try:
+            agent = get_a2ui_agent()
+            runtime = A2UIRuntime(agent=agent, layout_planner=LayoutPlanner(use_model=True))
+            async for message in runtime.stream_dashboard(state):
+                if message.startswith("event:"):
+                    # Already SSE-formatted (clarification_request)
+                    yield message
+                else:
+                    yield _sse_data(message)
+        finally:
+            # Always release the stream slot when done
+            await _release_stream_slot(client_ip)
     
     return StreamingResponse(
         generate(),
@@ -324,14 +378,35 @@ async def handle_action(dashboard_id: str, action: ActionRequest, request: Reque
 @router.delete("/{dashboard_id}")
 async def delete_dashboard(dashboard_id: str):
     """
-    Delete a dashboard.
+    Delete a dashboard and emit A2UI deleteSurface message.
+    
+    Per A2UI v0.8 spec, emits deleteSurface to notify connected clients
+    to clean up the surface from their UI.
+    
+    Function: delete_dashboard — deletes dashboard state and emits cleanup message.
+    Called from: FastAPI DELETE /api/dash/{dashboard_id}
+    Invokes: A2UIMessageEmitter.delete_surface, get_dashboard_store
+    Why: Proper surface lifecycle cleanup per A2UI specification.
     """
     store = get_dashboard_store()
+    state = store.get(dashboard_id)
     
-    if store.delete(dashboard_id):
-        return {"status": "deleted", "dashboard_id": dashboard_id}
-    else:
+    if not state:
         raise HTTPException(status_code=404, detail="Dashboard not found")
+    
+    # Create deleteSurface message for clients
+    emitter = A2UIMessageEmitter(surface_id=state.surface_id)
+    delete_message = emitter.delete_surface()
+    
+    # Delete the dashboard state
+    store.delete(dashboard_id)
+    
+    return {
+        "status": "deleted",
+        "dashboard_id": dashboard_id,
+        "surface_id": state.surface_id,
+        "a2ui_message": delete_message,  # Client can broadcast this to clean up UI
+    }
 
 
 class FollowUpSuggestion(BaseModel):
@@ -345,10 +420,12 @@ class FollowUpSuggestion(BaseModel):
 @router.get("/{dashboard_id}/follow-ups")
 async def get_follow_up_suggestions(dashboard_id: str):
     """
-    Get AI-generated follow-up suggestions based on the current dashboard.
+    Get AI-enhanced follow-up suggestions based on the current dashboard data.
     
-    Uses the dashboard's skill and tickers to generate contextual next steps.
+    Function: get_follow_up_suggestions
     Called from: GenerativeUIPage.tsx after dashboard completes
+    Invokes: Dashboard state analysis
+    Why: Provides contextual next steps based on actual analysis results.
     """
     store = get_dashboard_store()
     state = store.get(dashboard_id)
@@ -356,38 +433,129 @@ async def get_follow_up_suggestions(dashboard_id: str):
     if not state:
         raise HTTPException(status_code=404, detail="Dashboard not found")
     
-    # Generate contextual follow-ups based on the dashboard plan
-    suggestions = []
+    # Extract context from dashboard
     skill_id = state.plan.skill_id if state.plan else None
     tickers = state.plan.tickers if state.plan else []
     primary_ticker = tickers[0] if tickers else "NVDA"
+    metric = state.plan.metric if state.plan and hasattr(state.plan, 'metric') else "Revenue"
     
-    # Skill-specific suggestions
+    # Try to extract data context from state (use latest_data from most recent run)
+    data_model = state.latest_data.get("data", {}) if state.latest_data else {}
+    kpis = data_model.get("kpis", {})
+    table_rows = data_model.get("table", {}).get("rows", [])
+    
+    # Generate contextual follow-ups based on data findings
+    suggestions = _generate_data_aware_follow_ups(
+        skill_id=skill_id,
+        primary_ticker=primary_ticker,
+        tickers=tickers,
+        metric=metric,
+        kpis=kpis,
+        table_rows=table_rows,
+    )
+    
+    return {"suggestions": [s.model_dump() for s in suggestions]}
+
+
+def _generate_data_aware_follow_ups(
+    skill_id: str,
+    primary_ticker: str,
+    tickers: list,
+    metric: str,
+    kpis: dict,
+    table_rows: list,
+) -> list:
+    """
+    Generate follow-up suggestions based on actual data findings.
+    
+    Function: _generate_data_aware_follow_ups
+    Called from: get_follow_up_suggestions
+    Why: Creates intelligent follow-ups that reference specific data points.
+    """
+    suggestions = []
+    
+    # Find interesting data points for contextual follow-ups
+    significant_decline = None
+    leader_ticker = None
+    
+    for row in table_rows:
+        ticker = row.get("ticker", "")
+        yoy = row.get("yoy_change")
+        latest = row.get("latest_value")
+        
+        # Track significant declines
+        if yoy is not None and yoy < -20:
+            significant_decline = {"ticker": ticker, "change": yoy}
+        
+        # Track leader (highest value)
+        if latest is not None:
+            if leader_ticker is None or latest > leader_ticker.get("value", 0):
+                leader_ticker = {"ticker": ticker, "value": latest}
+    
+    # Skill-specific base suggestions
     if skill_id == "a2ui_explain_move":
         suggestions = [
             FollowUpSuggestion(id="1", label="Margin analysis", query=f"Show {primary_ticker} margin analysis", icon="[kpi]"),
             FollowUpSuggestion(id="2", label="Compare peers", query=f"Compare {primary_ticker} to its peers", icon="[peers]"),
             FollowUpSuggestion(id="3", label="Revenue trend", query=f"Show {primary_ticker} revenue trend", icon="[trend]"),
         ]
+        
     elif skill_id == "a2ui_margin_analysis":
+        # Add context-aware suggestions based on margin values
+        gm = kpis.get("gross_margin", 0)
+        nm = kpis.get("net_margin", 0)
+        
         suggestions = [
             FollowUpSuggestion(id="1", label="Revenue breakdown", query=f"Show {primary_ticker} revenue trend", icon="[trend]"),
-            FollowUpSuggestion(id="2", label="Compare margins", query=f"Compare {primary_ticker} margins vs AMD", icon="[peers]"),
-            FollowUpSuggestion(id="3", label="Stock movement", query=f"Explain recent {primary_ticker} stock movement", icon="[price]"),
         ]
+        
+        # Add peer comparison if there's only one ticker
+        if len(tickers) <= 1:
+            suggestions.append(
+                FollowUpSuggestion(id="2", label="Compare margins", query=f"Compare {primary_ticker} margins vs AMD and NVDA", icon="[peers]")
+            )
+        else:
+            peer_list = ", ".join(tickers[:3])
+            suggestions.append(
+                FollowUpSuggestion(id="2", label="Deeper comparison", query=f"Why does {tickers[0] if tickers else primary_ticker} have different margins than {tickers[1] if len(tickers) > 1 else 'peers'}?", icon="[deep]")
+            )
+        
+        suggestions.append(
+            FollowUpSuggestion(id="3", label="Stock movement", query=f"Explain recent {primary_ticker} stock movement", icon="[price]")
+        )
+        
     elif skill_id == "a2ui_revenue_trend":
         suggestions = [
             FollowUpSuggestion(id="1", label="Margin analysis", query=f"Show {primary_ticker} margin analysis", icon="[kpi]"),
             FollowUpSuggestion(id="2", label="YoY comparison", query=f"Compare {primary_ticker} revenue year over year", icon="[trend]"),
             FollowUpSuggestion(id="3", label="Peer comparison", query=f"Compare {primary_ticker} vs INTC revenue", icon="[peers]"),
         ]
+        
     elif skill_id == "a2ui_peer_compare":
         peer_list = ", ".join(tickers[:3]) if len(tickers) > 1 else f"{primary_ticker} and INTC"
-        suggestions = [
-            FollowUpSuggestion(id="1", label="Deeper on leader", query=f"Show {primary_ticker} detailed analysis", icon="[deep]"),
+        
+        suggestions = []
+        
+        # If there's a significant decline, suggest investigating it
+        if significant_decline:
+            suggestions.append(
+                FollowUpSuggestion(
+                    id="1", 
+                    label=f"Why {significant_decline['ticker']} declined", 
+                    query=f"Why did {significant_decline['ticker']} {metric} decline {abs(significant_decline['change']):.0f}%?", 
+                    icon="[deep]"
+                )
+            )
+        else:
+            suggestions.append(
+                FollowUpSuggestion(id="1", label="Deeper on leader", query=f"Show {leader_ticker['ticker'] if leader_ticker else primary_ticker} detailed analysis", icon="[deep]")
+            )
+        
+        suggestions.extend([
             FollowUpSuggestion(id="2", label="Stock comparison", query=f"Compare {peer_list} stock performance", icon="[price]"),
             FollowUpSuggestion(id="3", label="Margin comparison", query=f"Compare {peer_list} margins", icon="[kpi]"),
-        ]
+        ])
+        
     else:
         # Default suggestions
         suggestions = [
@@ -395,7 +563,7 @@ async def get_follow_up_suggestions(dashboard_id: str):
             FollowUpSuggestion(id="2", label="Compare peers", query=f"Compare to industry peers", icon="[peers]"),
         ]
     
-    return {"suggestions": [s.model_dump() for s in suggestions]}
+    return suggestions
 
 
 @router.post("/{dashboard_id}/clarification")
@@ -506,6 +674,46 @@ async def get_showcase():
         raise HTTPException(status_code=404, detail="Showcase not found")
     
     return HTMLResponse(content=showcase_path.read_text(encoding="utf-8"))
+
+
+@router.get("/catalog")
+async def get_catalog():
+    """
+    Get the A2UI component catalog definition.
+    
+    Per A2UI v0.8 spec (Section 3.2), this endpoint provides catalog negotiation
+    allowing clients to discover available components before rendering.
+    
+    Function: get_catalog — returns A2UI component catalog for client negotiation.
+    Called from: Frontend A2UI clients during initialization
+    Invokes: backend.generative_ui.a2ui.catalog.get_catalog
+    Why: Enables proper A2UI client-server catalog negotiation per spec.
+    
+    See: https://a2ui.org/specification/v0.8-a2ui/#section-3-basic-concepts
+    """
+    from ..a2ui.catalog import get_catalog as get_a2ui_catalog
+    catalog = get_a2ui_catalog()
+    
+    return {
+        "catalogId": catalog.catalog_id,
+        "extends": catalog.definition.extends,
+        "components": {
+            name: {
+                "description": comp.description,
+                "properties": {
+                    prop_name: {
+                        "type": prop.type,
+                        "required": prop.required,
+                        **({"default": prop.default} if prop.default else {}),
+                        **({"enum": prop.enum} if prop.enum else {}),
+                        **({"description": prop.description} if prop.description else {}),
+                    }
+                    for prop_name, prop in comp.properties.items()
+                }
+            }
+            for name, comp in catalog.definition.components.items()
+        },
+    }
 
 
 # helper removed in favor of a2ui.error_surface

@@ -575,7 +575,7 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                     </section>
 
                     {/* HORIZONTAL SCROLL "NEURAL STREAM" SECTION - DESKTOP ONLY */}
-                    <div ref={horizontalSectionRef} className="hidden md:block relative h-screen w-screen z-30 overflow-hidden">
+                    <div ref={horizontalSectionRef} className="hidden md:block relative h-screen w-screen z-30 overflow-hidden left-0 right-0" style={{ marginLeft: 'calc(-50vw + 50%)', width: '100vw' }}>
                         {/* GLOBAL ATMOSPHERE LAYERS (Fixed behind track) */}
                         <div className="absolute inset-0 w-full h-full pointer-events-none z-0">
                             {displayYears.map(y => (

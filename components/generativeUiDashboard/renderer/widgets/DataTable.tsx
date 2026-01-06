@@ -4,11 +4,18 @@
 //   Called from: components/generativeUiDashboard/renderer/Registry.tsx
 //   Invokes: resolveArray, resolveBoolean
 //   Why: Displays KPI and comparison tables with sorting.
+//
+// Accessibility (Optimization #15):
+//   - role="region" for the collapsible container
+//   - aria-expanded for collapsible state
+//   - aria-sort on sortable columns
+//   - scope="col" on th elements
+//   - Keyboard navigation support
 // --- End Function/Class Map ---
 /**
  * DataTable Widget
  *
- * Sortable financial data table.
+ * Sortable financial data table with accessibility support.
  */
 
 import React, { useState, useMemo } from 'react';
@@ -139,9 +146,17 @@ export function DataTable({
         URL.revokeObjectURL(url);
     };
 
+    // Accessibility: Generate unique IDs for ARIA
+    const tableId = `${componentId}-table`;
+    const headerId = `${componentId}-header`;
+
     return (
         <div
             className="a2ui-data-table-wrapper"
+            data-component-id={componentId}
+            // Accessibility: Region with label
+            role="region"
+            aria-labelledby={headerId}
             style={{
                 marginBottom: '1rem',
                 border: '1px solid rgba(148, 163, 184, 0.2)',
@@ -163,20 +178,33 @@ export function DataTable({
                 }}
             >
                 <div
+                    id={headerId}
                     onClick={() => setIsExpanded(!isExpanded)}
+                    onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            setIsExpanded(!isExpanded);
+                        }
+                    }}
+                    // Accessibility: Button-like behavior for expand/collapse
+                    role="button"
+                    tabIndex={0}
+                    aria-expanded={isExpanded}
+                    aria-controls={tableId}
                     style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', flex: 1 }}
                 >
-                    <span style={{ fontSize: '0.875rem' }}>📊</span>
+                    <span style={{ fontSize: '0.875rem' }} aria-hidden="true">📊</span>
                     <span style={{ fontSize: '0.875rem', fontWeight: 600, color: '#f8fafc' }}>
                         Data Preview
                     </span>
-                    <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>
+                    <span style={{ fontSize: '0.75rem', color: '#94a3b8' }} aria-label={`${sortedData.length} rows of data`}>
                         ({sortedData.length} rows)
                     </span>
                     <motion.span
                         animate={{ rotate: isExpanded ? 180 : 0 }}
                         transition={{ duration: 0.2 }}
                         style={{ fontSize: '0.65rem', color: '#64748b', marginLeft: '0.25rem' }}
+                        aria-hidden="true"
                     >
                         ▼
                     </motion.span>
@@ -199,8 +227,9 @@ export function DataTable({
                             transition: 'all 0.2s',
                         }}
                         title="Download as CSV"
+                        aria-label="Download table data as CSV file"
                     >
-                        <span>📥</span> CSV
+                        <span aria-hidden="true">📥</span> CSV
                     </button>
                     <button
                         onClick={() => setIsExpanded(!isExpanded)}
@@ -228,14 +257,17 @@ export function DataTable({
                         style={{ overflow: 'hidden' }}
                     >
                         <div
+                            id={tableId}
                             className="a2ui-data-table"
-                            data-component-id={componentId}
                             style={{
                                 overflowX: 'auto',
                                 maxHeight: '400px', // Limit height for large datasets
                             }}
                         >
                             <table
+                                // Accessibility: Proper table role and caption
+                                role="table"
+                                aria-label={`Data table with ${sortedData.length} rows and ${columns.length} columns`}
                                 style={{
                                     width: '100%',
                                     borderCollapse: 'collapse',
@@ -247,7 +279,24 @@ export function DataTable({
                                         {columns.map((col) => (
                                             <th
                                                 key={col.key}
+                                                // Accessibility: Column scope and sort state
+                                                scope="col"
+                                                aria-sort={
+                                                    sortKey === col.key
+                                                        ? sortDir === 'asc'
+                                                            ? 'ascending'
+                                                            : 'descending'
+                                                        : undefined
+                                                }
                                                 onClick={() => handleSort(col.key)}
+                                                onKeyDown={(e) => {
+                                                    if (sortable && (e.key === 'Enter' || e.key === ' ')) {
+                                                        e.preventDefault();
+                                                        handleSort(col.key);
+                                                    }
+                                                }}
+                                                tabIndex={sortable ? 0 : undefined}
+                                                role={sortable ? 'columnheader button' : 'columnheader'}
                                                 style={{
                                                     padding: '0.75rem 1rem',
                                                     textAlign: col.align || 'left',
@@ -259,11 +308,11 @@ export function DataTable({
                                                     cursor: sortable ? 'pointer' : 'default',
                                                     userSelect: 'none',
                                                     borderBottom: '1px solid rgba(99, 102, 241, 0.2)',
-                                                    backgroundColor: 'rgba(30, 41, 59, 0.95)', // Ensure header covers content
+                                                    backgroundColor: 'rgba(30, 41, 59, 0.95)',
                                                 }}
                                             >
                                                 {col.label}
-                                                {getSortIndicator(col.key)}
+                                                <span aria-hidden="true">{getSortIndicator(col.key)}</span>
                                             </th>
                                         ))}
                                     </tr>

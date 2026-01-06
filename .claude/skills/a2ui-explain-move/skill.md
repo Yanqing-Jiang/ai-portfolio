@@ -14,7 +14,7 @@ tools:
 
 ## Intent
 
-Explain significant price movements for a stock by combining price data with news sentiment and AI-generated analysis.
+Explain significant price movements for a stock by combining financial data with news sentiment and AI-generated analysis.
 
 ## When to Invoke
 
@@ -31,6 +31,26 @@ DO NOT use this skill for:
 - Comparison requests (use peer-compare instead)
 - Margin or revenue trend analysis
 
+## Database Schema Reference
+
+The `comp_financials` table contains these relevant metrics:
+
+| Metric Name | Description | Unit |
+|-------------|-------------|------|
+| `Revenue` | Total revenue | USD |
+| `Net Income` | Bottom-line profit | USD |
+| `Gross Margin` | Gross profit as % of revenue | % |
+| `Operating Income` | Operating profit | USD |
+| `EPS` | Earnings per share | USD |
+
+### Standard Columns
+- `ticker` - Stock symbol
+- `calendar_year` - Year
+- `calendar_quarter_num` - Quarter number (1-4)
+- `calendar_quarter` - Quarter label (e.g., "Q2 2025")
+- `metric` - Metric name
+- `value` - Metric value
+
 ## Execution Steps
 
 ### Step 1: Extract Parameters
@@ -44,9 +64,15 @@ Extract the following from the user's question:
 Execute a SQL query to fetch recent financial metrics:
 
 ```sql
-SELECT ticker, calendar_year, calendar_quarter_num, calendar_quarter, metric, value
+SELECT ticker, 
+       calendar_year, 
+       calendar_quarter_num, 
+       calendar_quarter, 
+       metric, 
+       value
 FROM comp_financials
-WHERE ticker = '{ticker}' AND metric IN ('Revenue', 'Net Income', 'Gross Margin')
+WHERE ticker = '{ticker}' 
+  AND metric IN ('Revenue', 'Net Income', 'Gross Margin', 'EPS')
 ORDER BY calendar_year DESC, calendar_quarter_num DESC
 LIMIT 24
 ```
@@ -63,14 +89,76 @@ Extract from results:
 - Publication dates
 - Source URLs
 
-### Step 4: Generate Analysis Narrative
+### Step 4: Generate Dynamic Factors
 
-Call generate_analysis with:
-- data_summary: Summary of recent metrics and news
-- key_findings: List of key observations (revenue change %, sentiment, etc.)
-- trend_direction: "mixed" (or derived from data)
+Based on financial data AND news, create meaningful factors:
 
-The analysis should explain the price movement in 2-3 sentences.
+```json
+{
+  "factors": [
+    {
+      "title": "Revenue Performance",
+      "description": "{ticker} Q2 revenue of ${value/1e9:.2f}B ({yoy_change:+.1f}% YoY)",
+      "impact": "positive" if yoy_change > 0 else "negative",
+      "source": "Earnings Report",
+      "icon": "📊"
+    },
+    {
+      "title": "Earnings Impact",
+      "description": "Net income {'beat' if beat else 'missed'} expectations by {delta:.1f}%",
+      "impact": "positive" if beat else "negative",
+      "source": "Earnings Analysis",
+      "icon": "💰"
+    },
+    {
+      "title": "News Sentiment",
+      "description": "Recent news shows {sentiment} sentiment: \"{headline}\"",
+      "impact": sentiment_to_impact(sentiment),
+      "source": news_source,
+      "icon": "📰"
+    },
+    {
+      "title": "Market Reaction",
+      "description": "Stock {'gained' if up else 'declined'} {abs(change):.1f}% following announcements",
+      "impact": "positive" if up else "negative",
+      "source": "Price Action",
+      "icon": "📈" if up else "📉"
+    }
+  ]
+}
+```
+
+**CRITICAL: Factors must be derived from actual data. DO NOT use:**
+- "Market Conditions" (unless citing specific market event)
+- "Earnings & Guidance" (unless citing specific earnings data)
+- "Sector Dynamics" (unless comparing to sector metrics)
+
+### Step 5: Generate Follow-Up Suggestions
+
+```json
+{
+  "follow_ups": [
+    {
+      "label": "Revenue trend",
+      "query": "Show {ticker} revenue trend over 2 years",
+      "icon": "📊",
+      "category": "drill-down"
+    },
+    {
+      "label": "Compare to peers",
+      "query": "How does {ticker} compare to {peer1} and {peer2}?",
+      "icon": "📈",
+      "category": "compare"
+    },
+    {
+      "label": "Margin analysis",
+      "query": "What are {ticker}'s profit margins?",
+      "icon": "💵",
+      "category": "related"
+    }
+  ]
+}
+```
 
 ## Output Contract
 
@@ -79,52 +167,61 @@ The skill produces an A2UI dashboard with these components:
 | Component | Type | Data Path |
 |-----------|------|-----------|
 | Price Chart | `PriceChart` | `/data/ticker` |
-| Current Price | `KpiCard` | `/data/kpis/price` |
-| Change % | `KpiCard` | `/data/kpis/change_pct` |
-| Volume | `KpiCard` | `/data/kpis/volume` |
+| Revenue KPI | `KpiCard` | `/data/kpis/revenue` |
+| Revenue Change | `KpiCard` | `/data/kpis/revenue_delta` |
+| Net Income | `KpiCard` | `/data/kpis/net_income` |
 | News Timeline | `NewsTimeline` | `/data/news/events` |
 | Explanation Panel | `ExplainMovePanel` | `/data/explanation` |
+| Follow-Ups | `FollowUpSuggestions` | `/data/follow_ups` |
 
 ## Data Model Schema
 
 ```json
 {
-  "ticker": "string",
+  "ticker": "NVDA",
   "kpis": {
-    "revenue": "number",
-    "revenue_delta": "number",
-    "net_income": "number",
-    "net_income_delta": "number",
-    "gross_margin": "number"
+    "revenue": 22100000000,
+    "revenue_delta": 265.3,
+    "net_income": 12900000000,
+    "net_income_delta": 580.0,
+    "gross_margin": 74.5
   },
   "news": {
     "events": [
       {
-        "date": "string",
-        "title": "string",
-        "summary": "string",
-        "sentiment": "string",
-        "source": "string",
-        "url": "string"
+        "date": "2025-05-28",
+        "title": "NVIDIA Reports Record Q2 Revenue",
+        "summary": "NVIDIA announced quarterly revenue of $22.1B...",
+        "sentiment": "positive",
+        "source": "Reuters",
+        "url": "https://reuters.com/..."
       }
     ]
   },
   "explanation": {
-    "title": "string",
-    "text": "string",
+    "title": "Why NVDA Rose",
+    "text": "NVIDIA stock surged following Q2 earnings that beat expectations...",
     "factors": [
       {
-        "title": "string",
-        "description": "string",
-        "impact": "positive|negative|neutral",
-        "source": "string"
+        "title": "Revenue Performance",
+        "description": "Q2 revenue of $22.1B (+265% YoY) exceeded analyst estimates.",
+        "impact": "positive",
+        "source": "Earnings Report",
+        "icon": "📊"
+      },
+      {
+        "title": "AI Demand Surge",
+        "description": "Data center revenue up 171% driven by AI chip demand.",
+        "impact": "positive",
+        "source": "Segment Analysis",
+        "icon": "🤖"
       }
     ],
     "citations": [
       {
-        "title": "string",
-        "url": "string",
-        "date": "string"
+        "title": "NVIDIA Reports Record Q2 Revenue",
+        "url": "https://reuters.com/...",
+        "date": "2025-05-28"
       }
     ]
   }
@@ -136,8 +233,9 @@ The skill produces an A2UI dashboard with these components:
 - Only use `comp_financials` table for SQL queries
 - SELECT-only queries, no mutations
 - Limit news to 5 most recent items
-- ExplainMovePanel MUST cite news sources
-- If no news found, display "No recent news available" message
+- ExplainMovePanel MUST cite news sources when available
+- If no news found, display "No recent news available" but still show financial factors
+- All factors must reference actual data values
 
 ## Example Queries
 

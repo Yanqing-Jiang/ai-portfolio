@@ -26,9 +26,9 @@ except ImportError:
     sdk_tool = None
 
 # Import existing shared tools
-from backend.shared_tools.sql_tool import execute_sql_tool
-from backend.shared_tools.news_tool import execute_news_tool
-from backend.shared_tools.analysis_tool import execute_analysis_tool
+from backend.shared_tools.sql_executor import execute_sql_tool
+from backend.shared_tools.news_service import execute_news_tool
+from backend.shared_tools.analysis_service import execute_analysis_tool
 
 
 def _make_mcp_response(

@@ -1,0 +1,175 @@
+{
+  "trace_id": "a0448b78-44da-4140-9909-cad3b405000d",
+  "dashboard_id": "23a0a44f-3899-4864-b9cc-2871dde93515",
+  "question": "Why did NVDA drop recently?",
+  "skill_id": "a2ui_explain_move",
+  "tickers": [
+    "NVDA"
+  ],
+  "metric": "Revenue",
+  "time_range": "1M",
+  "layout_override": null,
+  "steps": [
+    {
+      "step_id": "89139340",
+      "step_type": "skill_selection",
+      "timestamp": "2026-01-06T06:25:30.982670",
+      "duration_ms": 0.025510787963867188,
+      "success": true,
+      "details": {
+        "skill_id": "a2ui_explain_move",
+        "tickers": [
+          "NVDA"
+        ],
+        "metric": "Revenue",
+        "time_range": "1M"
+      },
+      "error": null
+    },
+    {
+      "step_id": "83cba69e",
+      "step_type": "layout_planning",
+      "timestamp": "2026-01-06T06:25:31.535708",
+      "duration_ms": 552.8814792633057,
+      "success": true,
+      "details": {
+        "layout_override": null,
+        "component_count": 15
+      },
+      "error": null
+    },
+    {
+      "step_id": "e5f61e34",
+      "step_type": "seed_data",
+      "timestamp": "2026-01-06T06:25:31.536410",
+      "duration_ms": null,
+      "success": true,
+      "details": {
+        "keys": [
+          "title",
+          "ticker",
+          "primary_ticker",
+          "tickers",
+          "time_range",
+          "metric"
+        ]
+      },
+      "error": null
+    },
+    {
+      "step_id": "9e70a707",
+      "step_type": "clarification_request",
+      "timestamp": "2026-01-06T06:25:31.536511",
+      "duration_ms": null,
+      "success": true,
+      "details": {
+        "request_id": "clarify_time_1767680731536456900",
+        "fields": [
+          "time_period"
+        ]
+      },
+      "error": null
+    },
+    {
+      "step_id": "86abbd40",
+      "step_type": "clarification_response",
+      "timestamp": "2026-01-06T06:25:53.606750",
+      "duration_ms": 22070.025205612183,
+      "success": true,
+      "details": {},
+      "error": null
+    },
+    {
+      "step_id": "f0b77e40",
+      "step_type": "execute_skill::skill_start",
+      "timestamp": "2026-01-06T06:25:54.325128",
+      "duration_ms": null,
+      "success": true,
+      "details": {
+        "path": null,
+        "keys": [],
+        "audit": "skill_execution_started"
+      },
+      "error": null
+    },
+    {
+      "step_id": "eb9e60b3",
+      "step_type": "execute_skill::kpis",
+      "timestamp": "2026-01-06T06:25:54.704706",
+      "duration_ms": null,
+      "success": true,
+      "details": {
+        "path": "/data/kpis",
+        "keys": [
+          "revenue",
+          "revenue_delta",
+          "net_income",
+          "net_income_delta",
+          "gross_margin"
+        ],
+        "audit": "data_loaded"
+      },
+      "error": null
+    },
+    {
+      "step_id": "b7fba28a",
+      "step_type": "execute_skill::narrative",
+      "timestamp": "2026-01-06T06:25:54.704934",
+      "duration_ms": null,
+      "success": true,
+      "details": {
+        "path": "/data/explanation",
+        "keys": [
+          "title",
+          "text",
+          "factors",
+          "citations"
+        ],
+        "audit": "narrative_generated"
+      },
+      "error": null
+    },
+    {
+      "step_id": "aafc4f3d",
+      "step_type": "execute_skill::complete",
+      "timestamp": "2026-01-06T06:25:54.705201",
+      "duration_ms": null,
+      "success": true,
+      "details": {
+        "path": "/data",
+        "keys": [
+          "ticker",
+          "kpis",
+          "news",
+          "explanation"
+        ],
+        "audit": "skill_execution_complete"
+      },
+      "error": null
+    },
+    {
+      "step_id": "16397fd1",
+      "step_type": "execute_skill_complete",
+      "timestamp": "2026-01-06T06:25:54.705456",
+      "duration_ms": 380.3975582122803,
+      "success": true,
+      "details": {
+        "data_keys": [
+          "ticker",
+          "kpis",
+          "news",
+          "explanation"
+        ],
+        "citation_count": 3,
+        "execution_mode": "agent"
+      },
+      "error": null
+    }
+  ],
+  "started_at": "2026-01-06T06:25:30.982169",
+  "completed_at": "2026-01-06T06:25:54.705780",
+  "total_duration_ms": 23723.610999999997,
+  "message_count": 18,
+  "success": true,
+  "error": null
+}

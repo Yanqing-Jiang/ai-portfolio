@@ -14,7 +14,7 @@ tools:
 
 ## Intent
 
-Compare financial metrics across 2-6 companies with overlaid charts, data tables, and correlation analysis.
+Compare financial metrics across 2-6 companies with overlaid charts, data tables, correlation analysis, and intelligent insights.
 
 ## When to Invoke
 
@@ -31,6 +31,27 @@ DO NOT use this skill for:
 - Margin/profitability comparisons (use margin-analysis skill)
 - "X vs Y margins" or "X vs Y margin trend" → use margin-analysis
 
+## Database Schema Reference
+
+The `comp_financials` table contains these relevant metrics:
+
+| Metric Name | Description | Unit |
+|-------------|-------------|------|
+| `Revenue` | Total revenue | USD |
+| `Net Income` | Bottom-line profit | USD |
+| `Gross Profit` | Revenue minus costs | USD |
+| `Operating Income` | Operating profit | USD |
+| `Total Assets` | Total company assets | USD |
+| `Total Liabilities` | Total company liabilities | USD |
+
+### Standard Columns
+- `ticker` - Stock symbol (e.g., "AMD")
+- `calendar_year` - Year (e.g., 2025)
+- `calendar_quarter_num` - Quarter number (1-4)
+- `calendar_quarter` - Quarter label (e.g., "Q2 2025")
+- `metric` - Metric name
+- `value` - Metric value
+
 ## Execution Steps
 
 ### Step 1: Extract Parameters
@@ -38,38 +59,121 @@ DO NOT use this skill for:
 Extract the following from the user's question:
 - **tickers**: Array of 2-6 stock symbols (required)
 - **metric**: Primary metric for comparison (default: "Revenue")
-- **period**: "quarter" or "year" (default: "year")
+- **period**: "quarter" or "year" (default: "quarter")
 
 ### Step 2: Query Financial Database
 
 Execute a SQL query to fetch metrics for all tickers:
 
 ```sql
-SELECT ticker, metric, value, period_end,
-       LAG(value) OVER (PARTITION BY ticker ORDER BY period_end) as prev_value
+SELECT ticker, 
+       calendar_year, 
+       calendar_quarter_num, 
+       calendar_quarter, 
+       metric, 
+       value
 FROM comp_financials
-WHERE ticker IN ({tickers_list})
+WHERE ticker IN ('{ticker1}', '{ticker2}', ...)
   AND metric = '{metric}'
-  AND period_type = '{period}'
-ORDER BY ticker, period_end DESC
-LIMIT 100
+ORDER BY ticker, calendar_year DESC, calendar_quarter_num DESC
+LIMIT 200
 ```
 
-### Step 3: Calculate Correlation Matrix
+### Step 3: Process Results
 
-Compute price/metric correlations between all tickers:
-- Generate NxN matrix where N = number of tickers
-- Values range from -1 (inverse correlation) to 1 (perfect correlation)
+For each ticker:
+1. Extract time series data (period, value)
+2. Calculate latest value
+3. Calculate YoY change: `((latest - year_ago) / year_ago) * 100`
+4. Identify leader (highest latest value)
+5. Identify laggard (lowest latest value)
 
-### Step 4: Format DataTable Rows
+### Step 4: Calculate Correlation Matrix
 
-Build comparison table with:
-- Each row: { ticker, latest_value, yoy_change_pct }
-- Columns: [Ticker, {Metric}, YoY Change]
+Compute Pearson correlation between all ticker pairs:
+- Values range from -1 (inverse) to 1 (perfect correlation)
+- Matrix is NxN where N = number of tickers
 
-### Step 5: Generate Analysis (Optional)
+### Step 5: Generate Dynamic Factors
 
-Call generate_analysis to provide insight on the comparison.
+Based on the actual data, generate meaningful insight factors:
+
+```json
+{
+  "factors": [
+    {
+      "title": "{primary_ticker} Revenue",
+      "description": "Latest Revenue: ${value/1e9:.2f}B ({yoy_change:+.1f}% YoY)",
+      "impact": "positive" if yoy_change > 0 else "negative",
+      "source": "Financial Data",
+      "icon": "📊"
+    },
+    {
+      "title": "Market Leader",
+      "description": "{leader_ticker} leads the peer group in {metric}.",
+      "impact": "positive" if leader == primary else "neutral",
+      "source": "Peer Analysis",
+      "icon": "🏆"
+    },
+    {
+      "title": "Year-over-Year Trend",
+      "description": "{primary_ticker} {metric} {'grew' if yoy > 0 else 'declined'} {abs(yoy):.1f}% YoY.",
+      "impact": "positive" if yoy > 5 else "negative" if yoy < -5 else "neutral",
+      "source": "Historical Analysis",
+      "icon": "📈" if yoy > 0 else "📉"
+    },
+    {
+      "title": "Correlation Analysis",
+      "description": "{ticker1} and {ticker2} show {corr:.0%} correlation in {metric}.",
+      "impact": "neutral",
+      "source": "Statistical Analysis",
+      "icon": "🔗"
+    }
+  ]
+}
+```
+
+**CRITICAL: Do NOT use generic placeholders like:**
+- "Market Conditions" 
+- "Earnings & Guidance"
+- "Sector Dynamics"
+
+These must be replaced with data-driven insights.
+
+### Step 6: Generate Follow-Up Suggestions
+
+Based on findings, generate contextual follow-ups:
+
+```json
+{
+  "follow_ups": [
+    {
+      "label": "Deeper on {leader}",
+      "query": "Why is {leader} outperforming in {metric}?",
+      "icon": "🔍",
+      "category": "drill-down"
+    },
+    {
+      "label": "Compare margins",
+      "query": "Compare {ticker1} vs {ticker2} profit margins",
+      "icon": "📊",
+      "category": "compare"
+    },
+    {
+      "label": "Add {related_ticker}",
+      "query": "Add {related_ticker} to {ticker1} vs {ticker2} comparison",
+      "icon": "➕",
+      "category": "expand"
+    },
+    {
+      "label": "5-year trend",
+      "query": "Show {primary_ticker} {metric} trend over 5 years",
+      "icon": "📈",
+      "category": "time"
+    }
+  ]
+}
+```
 
 ## Output Contract
 
@@ -77,48 +181,66 @@ The skill produces an A2UI dashboard with these components:
 
 | Component | Type | Data Path |
 |-----------|------|-----------|
-| Price Chart | `PriceChart` | `/data/primary_ticker`, `/data/tickers` |
+| Comparison Chart | `MetricChart` | `/data/chart` |
 | Correlation Matrix | `CorrelationMatrix` | `/data/correlation` |
 | Metrics Table | `DataTable` | `/data/table` |
-| Explanation Panel | `PeerComparePanel` | `/data/explanation` |
+| Insight Panel | `ExplainMovePanel` | `/data/explanation` |
+| Follow-Ups | `FollowUpSuggestions` | `/data/follow_ups` |
 
 ## Data Model Schema
 
 ```json
 {
-  "tickers": ["AMD", "INTC", "NVDA"],
+  "tickers": ["AMD", "NVDA", "INTC"],
   "primary_ticker": "AMD",
   "metric": "Revenue",
   "kpis": {
-    "leader": "string",
-    "leader_value": "number",
-    "avg_growth": "number"
+    "primary_value": 7690000000,
+    "primary_yoy": -32.0,
+    "leader": "NVDA",
+    "leader_value": 22100000000
   },
   "correlation": {
-    "tickers": ["AMD", "INTC", "NVDA"],
-    "matrix": [[1, 0.85, 0.92], [0.85, 1, 0.78], [0.92, 0.78, 1]]
+    "tickers": ["AMD", "NVDA", "INTC"],
+    "matrix": [[1, 0.85, 0.72], [0.85, 1, 0.78], [0.72, 0.78, 1]]
   },
   "table": {
     "columns": [
-      {"key": "ticker", "label": "Ticker"},
-      {"key": "value", "label": "Revenue ($B)"},
-      {"key": "yoy_change", "label": "YoY Change"}
+      {"key": "ticker", "label": "Ticker", "type": "string"},
+      {"key": "latest_value", "label": "Latest Revenue", "type": "currency"},
+      {"key": "yoy_change", "label": "YoY %", "type": "percentage"}
     ],
     "rows": [
-      {"ticker": "AMD", "value": 5.6, "yoy_change": "+15.2%"},
-      {"ticker": "INTC", "value": 14.2, "yoy_change": "-8.1%"}
+      {"ticker": "AMD", "latest_value": 7690000000, "yoy_change": -32.0},
+      {"ticker": "NVDA", "latest_value": 22100000000, "yoy_change": 265.3}
     ]
   },
   "chart": {
     "series": [
-      {"ticker": "AMD", "data": [...]},
-      {"ticker": "INTC", "data": [...]}
-    ]
+      {"ticker": "AMD", "data": [{"period": "Q2 2025", "value": 7690000000}]},
+      {"ticker": "NVDA", "data": [{"period": "Q2 2025", "value": 22100000000}]}
+    ],
+    "annotations": []
   },
   "explanation": {
-    "title": "string",
-    "text": "string",
-    "factors": [],
+    "title": "Insight: Revenue for AMD",
+    "text": "AMD latest Revenue of $7.69B (down 32.0% YoY). NVDA leads peers...",
+    "factors": [
+      {
+        "title": "AMD Revenue",
+        "description": "Latest Revenue: $7.69B (-32.0% YoY)",
+        "impact": "negative",
+        "source": "Financial Data",
+        "icon": "📊"
+      },
+      {
+        "title": "Market Leader",
+        "description": "NVDA leads the peer group in Revenue.",
+        "impact": "neutral",
+        "source": "Peer Analysis",
+        "icon": "🏆"
+      }
+    ],
     "citations": []
   }
 }
@@ -131,6 +253,7 @@ The skill produces an A2UI dashboard with these components:
 - Only use `comp_financials` table
 - SELECT-only queries
 - Correlation values must be -1 to 1
+- Handle null/missing values gracefully (display "N/A")
 
 ## Example Queries
 

@@ -26,6 +26,8 @@ pause/resume on clarifications, execution traces, etc.).
 from __future__ import annotations
 
 import json
+import logging
+import os
 import time
 from typing import AsyncGenerator, Optional, Dict, List, Any
 
@@ -39,6 +41,17 @@ from .clarification import (
 )
 from .models.dashboard_state import DashboardState
 from .traces import RunTrace, get_trace_store
+
+# SDK Flow feature flag (Optimization #1: Activate SDK-Native Tool Execution)
+# SDK flow is EXPERIMENTAL - set USE_SDK_FLOW=true to test LLM-driven execution
+# Default: false (uses proven standard agent execution path)
+USE_SDK_FLOW = os.getenv("USE_SDK_FLOW", "false").lower() in ("true", "1", "yes")
+
+logger = logging.getLogger(__name__)
+if USE_SDK_FLOW:
+    logger.info("SDK Flow enabled: EXPERIMENTAL LLM-driven execution path")
+else:
+    logger.info("SDK Flow disabled: Using standard agent execution path (production)")
 
 
 class A2UIRuntime:
@@ -67,6 +80,20 @@ class A2UIRuntime:
         self.layout_planner = layout_planner or LayoutPlanner()
         self.trace_store = get_trace_store()
         self._last_heartbeat = 0.0
+        
+        # Optional SDK Flow for LLM-driven execution (Optimization #1)
+        # Uses ClaudeSDKClient with automatic MCP tool execution
+        self._sdk_flow = None
+        if USE_SDK_FLOW:
+            try:
+                from .sdk_flow import create_sdk_flow
+                self._sdk_flow = create_sdk_flow()
+                if self._sdk_flow:
+                    logger.info("SDK Flow initialized for runtime (ClaudeSDKClient mode)")
+                else:
+                    logger.warning("SDK Flow not available - SDK not installed")
+            except ImportError as e:
+                logger.warning("SDK Flow import failed: %s", e)
 
     def _maybe_heartbeat(self) -> Optional[str]:
         """
@@ -80,6 +107,93 @@ class A2UIRuntime:
             self._last_heartbeat = now
             return f"event: {self.HEARTBEAT_EVENT_NAME}\ndata: {{}}\n\n"
         return None
+
+    async def _execute_via_sdk_flow(
+        self,
+        skill_id: str,
+        user_query: str,
+        parameters: Dict[str, Any],
+        emitter: "A2UIMessageEmitter",
+        trace: "RunTrace",
+        data_model_out: Dict[str, Any],  # Mutable output container
+    ) -> AsyncGenerator[str, None]:
+        """
+        Execute skill using SDK flow for LLM-driven component generation.
+        
+        Function: _execute_via_sdk_flow
+        Called from: stream_dashboard (when USE_SDK_FLOW enabled)
+        Invokes: A2UISDKFlow.execute_with_skill_context
+        Why: Enables LLM to see data and generate intelligent A2UI outputs.
+        
+        Args:
+            skill_id: Skill identifier (e.g., 'a2ui_margin_analysis')
+            user_query: Original user question
+            parameters: Extracted slots (tickers, metric, time_range, etc.)
+            emitter: A2UI message emitter for this surface
+            trace: Run trace for debugging
+            data_model_out: Mutable dict to populate with collected data model
+            
+        Yields:
+            A2UI JSON messages (audit, data_update, surface_update)
+        """
+        if not self._sdk_flow:
+            raise RuntimeError("SDK flow not initialized")
+        
+        message_count = 0
+        
+        yield emitter.audit("sdk_flow_started", f"skill={skill_id}")
+        message_count += 1
+        
+        trace.add_step("sdk_flow_execute", details={
+            "skill_id": skill_id,
+            "parameters": parameters,
+        })
+        
+        async for chunk in self._sdk_flow.execute_with_skill_context(
+            skill_id=skill_id,
+            user_query=user_query,
+            parameters=parameters,
+        ):
+            chunk_type = chunk.get("type")
+            
+            if chunk_type == "audit":
+                yield emitter.audit(chunk.get("event", "sdk_event"), chunk.get("details"))
+                message_count += 1
+                trace.add_step(f"sdk_audit::{chunk.get('event', 'unknown')}")
+                
+            elif chunk_type == "data_update":
+                # Extract data payload and emit
+                data = chunk.get("data", {})
+                data_model_out.update(data)  # Update the mutable output container
+                yield emitter.data_update(data, path=chunk.get("path", "/data"))
+                message_count += 1
+                trace.add_step("sdk_data_update", details={"keys": list(data.keys())})
+                
+            elif chunk_type == "surface_update":
+                # SDK flow can emit layout changes
+                components = chunk.get("components", [])
+                if components:
+                    yield emitter.surface_update(components)
+                    message_count += 1
+                    trace.add_step("sdk_surface_update", details={"count": len(components)})
+                    
+            elif chunk_type == "follow_ups":
+                # Store follow-ups in data model
+                suggestions = chunk.get("suggestions", [])
+                if suggestions:
+                    data_model_out["follow_ups"] = suggestions
+                    yield emitter.data_update({"follow_ups": suggestions}, path="/data")
+                    message_count += 1
+                    
+            elif chunk_type == "error":
+                error_msg = chunk.get("message", "Unknown SDK flow error")
+                trace.add_step("sdk_error", error=error_msg, success=False)
+                raise RuntimeError(error_msg)
+                
+            elif chunk_type == "done":
+                trace.add_step("sdk_flow_complete", success=chunk.get("success", True))
+        
+        yield emitter.audit("sdk_flow_completed", f"messages={message_count}")
 
     async def stream_dashboard(self, state: DashboardState) -> AsyncGenerator[str, None]:
         """
@@ -233,7 +347,7 @@ class A2UIRuntime:
                     "clarification_request",
                     details={
                         "request_id": clarification.request_id,
-                        "field": clarification.field,
+                        "fields": [f.field_id for f in clarification.fields],
                     }
                 )
                 try:
@@ -305,30 +419,63 @@ class A2UIRuntime:
                 # Recompute signature after clarification adjustments
                 run_signature = state.signature()
 
-            # Execute skill with per-tool streaming
+            # Execute skill - use SDK flow if enabled, else standard agent execution
             yield emitter.audit("runtime_step_started", "execute_skill")
             message_count += 1
 
             step_start = time.time()
             result = None
-            async for chunk in self.agent.execute_skill_streaming(skill, selection):
-                if chunk.audit_event:
-                    yield emitter.audit(chunk.audit_event, chunk.audit_details)
-                    message_count += 1
-                if chunk.data_patch is not None:
-                    yield emitter.data_update(chunk.data_patch, path=chunk.data_path)
-                    message_count += 1
-                trace.add_step(
-                    f"execute_skill::{chunk.step}",
-                    details={
-                        "path": chunk.data_path,
-                        "keys": list((chunk.data_patch or {}).keys()),
-                        "audit": chunk.audit_event,
+            
+            # SDK Flow path: LLM-driven execution (Optimization #1)
+            if self._sdk_flow and USE_SDK_FLOW:
+                yield emitter.audit("execution_mode", "sdk_flow")
+                message_count += 1
+                
+                sdk_data_model: Dict[str, Any] = {}
+                async for sdk_msg in self._execute_via_sdk_flow(
+                    skill_id=selection.skill_id,
+                    user_query=state.question,
+                    parameters={
+                        "tickers": selection.tickers,
+                        "metric": selection.metric,
+                        "time_range": selection.time_range,
                     },
-                    success=True,
+                    emitter=emitter,
+                    trace=trace,
+                    data_model_out=sdk_data_model,  # Collect data model here
+                ):
+                    yield sdk_msg
+                    message_count += 1
+                
+                # Create a synthetic result for state persistence
+                from .agent_v2 import A2UIRunResult
+                result = A2UIRunResult(
+                    data_model=sdk_data_model,
+                    citations=[],
                 )
-                if chunk.final_result:
-                    result = chunk.final_result
+            else:
+                # Standard agent execution path
+                yield emitter.audit("execution_mode", "agent")
+                message_count += 1
+                
+                async for chunk in self.agent.execute_skill_streaming(skill, selection):
+                    if chunk.audit_event:
+                        yield emitter.audit(chunk.audit_event, chunk.audit_details)
+                        message_count += 1
+                    if chunk.data_patch is not None:
+                        yield emitter.data_update(chunk.data_patch, path=chunk.data_path)
+                        message_count += 1
+                    trace.add_step(
+                        f"execute_skill::{chunk.step}",
+                        details={
+                            "path": chunk.data_path,
+                            "keys": list((chunk.data_patch or {}).keys()),
+                            "audit": chunk.audit_event,
+                        },
+                        success=True,
+                    )
+                    if chunk.final_result:
+                        result = chunk.final_result
 
             skill_duration = (time.time() - step_start) * 1000
             yield emitter.audit("runtime_step_completed", "execute_skill")
@@ -339,6 +486,7 @@ class A2UIRuntime:
                 details={
                     "data_keys": list(result.data_model.keys()) if result else [],
                     "citation_count": len(result.citations) if result else 0,
+                    "execution_mode": "sdk_flow" if (self._sdk_flow and USE_SDK_FLOW) else "agent",
                 },
                 duration_ms=skill_duration,
                 success=result is not None,

@@ -4,6 +4,12 @@
 //   Called from: components/generativeUiDashboard/GenerativeUIPage.tsx
 //   Invokes: createMessageProcessor, EventSource, mergeDataAtPath
 //   Why: Centralizes A2UI streaming state management for the dashboard UI.
+//
+// Optimization #16: Performance improvements
+//   - AbortController for proper connection cleanup
+//   - useMemo for derived state to prevent re-renders
+//   - Debounced state syncing
+//
 // Function: useSurface
 //   Role: Select a single surface + data model from stream state.
 //   Called from: components/generativeUiDashboard/GenerativeUIPage.tsx
@@ -19,9 +25,10 @@
  * useA2UIStream Hook
  *
  * React hook for consuming A2UI SSE streams with automatic state management.
+ * Optimized for performance with AbortController cleanup and memoized state.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createMessageProcessor, MessageProcessor } from './MessageProcessor';
 import type { Surface, DataModel, UserActionMessage } from './types';
 
@@ -166,17 +173,29 @@ export function useA2UIStream(
     const eventSourceRef = useRef<EventSource | null>(null);
     const processorRef = useRef<MessageProcessor | null>(null);
     const retryTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+    // Optimization #16: AbortController for fetch cleanup
+    const abortControllerRef = useRef<AbortController | null>(null);
+    // Debounce timer for state sync
+    const syncTimerRef = useRef<NodeJS.Timeout | null>(null);
 
-    // Update state from processor
+    // Update state from processor (debounced for performance)
     const syncState = useCallback(() => {
         if (!processorRef.current) return;
 
-        const { surfaces, dataModels } = processorRef.current.getState();
-        setState((prev) => ({
-            ...prev,
-            surfaces: new Map(surfaces),
-            dataModels: new Map(dataModels),
-        }));
+        // Debounce: cancel pending sync and schedule new one
+        if (syncTimerRef.current) {
+            clearTimeout(syncTimerRef.current);
+        }
+
+        syncTimerRef.current = setTimeout(() => {
+            if (!processorRef.current) return;
+            const { surfaces, dataModels } = processorRef.current.getState();
+            setState((prev) => ({
+                ...prev,
+                surfaces: new Map(surfaces),
+                dataModels: new Map(dataModels),
+            }));
+        }, 16); // ~1 frame at 60fps
     }, []);
 
     // Connect to the stream
@@ -312,6 +331,16 @@ export function useA2UIStream(
             clearTimeout(retryTimeoutRef.current);
             retryTimeoutRef.current = null;
         }
+        // Clear sync timer
+        if (syncTimerRef.current) {
+            clearTimeout(syncTimerRef.current);
+            syncTimerRef.current = null;
+        }
+        // Abort any pending fetch requests (Optimization #16)
+        if (abortControllerRef.current) {
+            abortControllerRef.current.abort();
+            abortControllerRef.current = null;
+        }
         if (eventSourceRef.current) {
             eventSourceRef.current.close();
             eventSourceRef.current = null;
@@ -330,40 +359,54 @@ export function useA2UIStream(
                 throw new Error('Dashboard ID not set');
             }
 
-            const response = await fetch(`${opts.apiBaseUrl}/${opts.dashboardId}/action`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({ userAction: action }),
-            });
+            // Create new AbortController for this request (Optimization #16)
+            const controller = new AbortController();
+            abortControllerRef.current = controller;
 
-            if (!response.ok) {
-                throw new Error(`Action failed: ${response.statusText}`);
-            }
+            try {
+                const response = await fetch(`${opts.apiBaseUrl}/${opts.dashboardId}/action`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ userAction: action }),
+                    signal: controller.signal,
+                });
 
-            const result = await response.json();
-
-            // Apply data update from action response to the surface state
-            if (result.data && typeof result.data === 'object') {
-                const surfaceId = action.surfaceId;
-                const dataPath = typeof result.data_path === 'string' ? result.data_path : '/data';
-                if (surfaceId) {
-                    setState((prev) => {
-                        const newDataModels = new Map(prev.dataModels);
-                        const existingModel = prev.dataModels.get(surfaceId) || {};
-                        const updatedModel = mergeDataAtPath(
-                            existingModel,
-                            dataPath,
-                            result.data as Record<string, unknown>
-                        );
-                        newDataModels.set(surfaceId, updatedModel);
-                        return { ...prev, dataModels: newDataModels };
-                    });
+                if (!response.ok) {
+                    throw new Error(`Action failed: ${response.statusText}`);
                 }
-            }
 
-            return result;
+                const result = await response.json();
+
+                // Apply data update from action response to the surface state
+                if (result.data && typeof result.data === 'object') {
+                    const surfaceId = action.surfaceId;
+                    const dataPath = typeof result.data_path === 'string' ? result.data_path : '/data';
+                    if (surfaceId) {
+                        setState((prev) => {
+                            const newDataModels = new Map(prev.dataModels);
+                            const existingModel = prev.dataModels.get(surfaceId) || {};
+                            const updatedModel = mergeDataAtPath(
+                                existingModel,
+                                dataPath,
+                                result.data as Record<string, unknown>
+                            );
+                            newDataModels.set(surfaceId, updatedModel);
+                            return { ...prev, dataModels: newDataModels };
+                        });
+                    }
+                }
+
+                return result;
+            } catch (err) {
+                // Don't throw if aborted - component is unmounting
+                if (err instanceof Error && err.name === 'AbortError') {
+                    console.debug('Action request aborted');
+                    return null;
+                }
+                throw err;
+            }
         },
         [opts.dashboardId, opts.apiBaseUrl]
     );
@@ -384,12 +427,13 @@ export function useA2UIStream(
         setState((prev) => ({ ...prev, pendingClarification: null }));
     }, []);
 
-    const actions: A2UIStreamActions = {
+    // Memoize actions to prevent unnecessary re-renders (Optimization #16)
+    const actions: A2UIStreamActions = useMemo(() => ({
         sendAction,
         reconnect: () => connect(false),
         close,
         clearClarification,
-    };
+    }), [sendAction, connect, close, clearClarification]);
 
     return [state, actions];
 }

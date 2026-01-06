@@ -2,6 +2,14 @@
  * KPI Card Widget
  *
  * Single metric display with optional delta indicator.
+ * 
+ * Component: KpiCard — displays a key performance indicator.
+ * Called from: ComponentRenderer via Registry
+ * Invokes: DataBinder.resolveString, DataBinder.resolveNumber
+ * Why: Provides at-a-glance metrics in A2UI dashboards.
+ * 
+ * Accessibility: Implements optimization #15 with ARIA labels,
+ * keyboard navigation, and screen reader support.
  */
 
 import React from 'react';
@@ -52,10 +60,23 @@ export function KpiCard({
     const deltaColor = delta !== null ? (delta >= 0 ? '#22c55e' : '#ef4444') : '#94a3b8';
     const deltaIcon = delta !== null ? (delta >= 0 ? '↑' : '↓') : '';
 
+    // Accessibility: Build descriptive labels
+    const formattedValue = formatValue(value, unit);
+    const ariaLabel = `${label}: ${formattedValue}`;
+    const deltaId = `${componentId}-delta`;
+    const deltaAriaLabel = delta !== null
+        ? `Change: ${delta >= 0 ? 'up' : 'down'} ${formatDelta(Math.abs(delta), deltaType)}`
+        : undefined;
+
     return (
         <div
             className="a2ui-kpi-card"
             data-component-id={componentId}
+            // Accessibility: Role and labels (Optimization #15)
+            role="figure"
+            aria-label={ariaLabel}
+            aria-describedby={delta !== null ? deltaId : undefined}
+            tabIndex={0}
             style={{
                 padding: '1rem',
                 backgroundColor: 'rgba(30, 41, 59, 0.5)',
@@ -65,6 +86,8 @@ export function KpiCard({
         >
             <div
                 className="a2ui-kpi-card__label"
+                // Accessibility: Label is decorative, main info in aria-label
+                aria-hidden="true"
                 style={{
                     fontSize: '0.75rem',
                     color: '#94a3b8',
@@ -78,6 +101,9 @@ export function KpiCard({
 
             <div
                 className="a2ui-kpi-card__value"
+                // Accessibility: Announce value changes
+                aria-live="polite"
+                aria-atomic="true"
                 style={{
                     fontSize: '1.75rem',
                     fontWeight: 700,
@@ -85,22 +111,29 @@ export function KpiCard({
                     marginBottom: delta !== null ? '0.5rem' : 0,
                 }}
             >
-                {formatValue(value, unit)}
+                {formattedValue}
             </div>
 
             {delta !== null && (
                 <div
+                    id={deltaId}
                     className="a2ui-kpi-card__delta"
+                    // Accessibility: Describe the change direction and amount
+                    role="status"
+                    aria-label={deltaAriaLabel}
                     style={{
                         fontSize: '0.875rem',
                         color: deltaColor,
                         fontWeight: 500,
                     }}
                 >
-                    <span style={{ marginRight: '0.25rem' }}>{deltaIcon}</span>
+                    <span style={{ marginRight: '0.25rem' }} aria-hidden="true">
+                        {deltaIcon}
+                    </span>
                     {formatDelta(delta, deltaType)}
                 </div>
             )}
         </div>
     );
 }
+

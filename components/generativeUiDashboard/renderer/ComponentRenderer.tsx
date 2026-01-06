@@ -3,12 +3,14 @@
  *
  * Recursively renders A2UI components from the component tree.
  * Uses Framer Motion for smooth layout animations.
+ * Includes error boundaries to prevent cascade failures (optimization #14).
  */
 
 import React, { useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import type { ComponentType as A2UIComponentType, DataModel } from '../a2ui/types';
 import { extractComponent, resolveComponent, type A2UIRendererProps } from './Registry';
+import { WidgetErrorBoundary } from './WidgetErrorBoundary';
 
 export interface ComponentRendererProps {
     /** ID of the component to render */
@@ -99,19 +101,31 @@ export function ComponentRenderer({
     };
 
     return (
-        <motion.div
-            layout
-            layoutId={componentId}
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.95 }}
-            transition={springConfig}
-            className="a2ui-component-wrapper"
-            data-component-id={componentId}
-            data-component-type={type}
+        <WidgetErrorBoundary
+            componentId={componentId}
+            componentType={type}
+            onError={(error, errorInfo) => {
+                console.error(
+                    `[A2UI] Widget render error in ${type} (${componentId}):`,
+                    error,
+                    errorInfo
+                );
+            }}
         >
-            <Component {...rendererProps} />
-        </motion.div>
+            <motion.div
+                layout
+                layoutId={componentId}
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95 }}
+                transition={springConfig}
+                className="a2ui-component-wrapper"
+                data-component-id={componentId}
+                data-component-type={type}
+            >
+                <Component {...rendererProps} />
+            </motion.div>
+        </WidgetErrorBoundary>
     );
 }
 

@@ -51,18 +51,52 @@ def _format_analysis(
     trend_direction: Optional[str] = None
 ) -> Dict[str, Any]:
     """
-    Format analysis results.
+    Format analysis results and generate a narrative summary.
     
     Function: _format_analysis — structures analysis data.
     Called from: execute_analysis_tool
     Invokes: n/a
-    Purpose: Consistent analysis output format.
+    Purpose: Consistent analysis output format with AI-style narrative.
     """
     # Format key findings as bullet points
     findings_formatted = [f"• {finding}" for finding in key_findings]
     
+    # Generate a proper narrative summary from the findings
+    summary_parts = []
+    
+    # Add trend context if available
+    if trend_direction:
+        trend_phrases = {
+            "up": "shows positive momentum",
+            "down": "indicates challenges",
+            "stable": "remains steady",
+            "mixed": "presents a mixed picture"
+        }
+        trend_context = trend_phrases.get(trend_direction, "")
+        if trend_context:
+            summary_parts.append(f"The analysis {trend_context}.")
+    
+    # Incorporate key findings into narrative
+    if key_findings:
+        if len(key_findings) == 1:
+            summary_parts.append(key_findings[0])
+        elif len(key_findings) == 2:
+            summary_parts.append(f"{key_findings[0]} Additionally, {key_findings[1].lower()}")
+        else:
+            # For multiple findings, create a summary
+            summary_parts.append(f"Key observations: {key_findings[0]}")
+            for finding in key_findings[1:3]:  # Limit to first 3 findings
+                summary_parts.append(finding)
+    
+    # Add comparison context if provided
+    if comparison_context:
+        summary_parts.append(f"Context: {comparison_context}")
+    
+    # Combine into final summary
+    summary = " ".join(summary_parts) if summary_parts else data_summary
+    
     analysis = {
-        "summary": data_summary,
+        "summary": summary,
         "key_insights": key_findings,
         "findings_formatted": "\n".join(findings_formatted),
     }

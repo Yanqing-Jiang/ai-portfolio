@@ -69,7 +69,7 @@ export const LANDING_SERVICE_SUMMARY = [
 export const LANDING_SEO = {
   title: 'Yanqing Jiang | AI Systems & Analytics Automation Portfolio',
   description:
-    'Yanqing Jiang architects LangGraph-powered AI systems, analytics automation, and enterprise data workflows for commerce, retail media, and operations teams.',
+    'AI Portfolio of Yanqing Jiang, senior Advanced Analytics Manager, specializing in Enterprise Agentic Workflows, GenAI production systems and Advanced Analytics solutions.',
   keywords: [
     'AI systems engineer',
     'analytics automation',
@@ -79,6 +79,14 @@ export const LANDING_SEO = {
     'FastAPI Supabase stack',
     'enterprise analytics copilots',
     'forecasting automation',
+    'Context Engineering',
+    'RAG Systems',
+    'Multi-Agent Systems',
+    'AI Orchestration',
+    'Claude Code Production',
+    'A2UI',
+    'Generative UI',
+    'Skills.md management',
   ],
   author: 'Yanqing Jiang',
   subject: 'AI systems, analytics automation, and enterprise data workflows',

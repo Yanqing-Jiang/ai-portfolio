@@ -152,6 +152,22 @@ class A2UIMessageEmitter:
         data_msg = self.data_update({"error": {"code": code, "message": message}})
         return [surface_msg, data_msg]
 
+    def delete_surface(self) -> str:
+        """
+        Create a deleteSurface message to clean up the surface.
+        
+        Per A2UI v0.8 spec, this message removes a surface and its contents from the UI.
+        See: https://a2ui.org/specification/v0.8-a2ui/#section-5-event-handling
+        
+        Function: delete_surface
+        Called from: backend.generative_ui.routes.dashboard.delete_dashboard
+        Invokes: DeleteSurface.to_json
+        Why: Proper surface lifecycle cleanup per A2UI spec.
+        """
+        from .messages import DeleteSurface
+        msg = DeleteSurface(surfaceId=self.surface_id)
+        return msg.to_json()
+
     def build_components_for_skill(
         self,
         skill: A2UISkillMeta,
@@ -366,8 +382,17 @@ class A2UIMessageEmitter:
         order_index = {name: idx for idx, name in enumerate(order)}
         use_expanded = (variant == "grid_focus_chart") or (emphasis == "focus_chart") or ("PeerComparePanel" in hidden)
 
-        def priority(name: str, default: int) -> int:
-            return order_index.get(name, default)
+        # Standard layout priority: KPIs first, charts middle, analysis bottom
+        def priority(name: str) -> int:
+            base_priority = {
+                "KpiCard": 0,           # TOP
+                "MetricChart": 1,       # MIDDLE
+                "PriceChart": 1,        # MIDDLE
+                "CorrelationMatrix": 2, # MIDDLE
+                "DataTable": 3,         # MIDDLE-BOTTOM
+                "ExplainMovePanel": 4,  # BOTTOM
+            }
+            return order_index.get(name, base_priority.get(name, 99))
 
         title = A2UIComponent.text_bound("title_text", "/data/title", "h2")
         header = A2UIComponent.row("header_row", ["title_text"])
@@ -391,7 +416,24 @@ class A2UIMessageEmitter:
                 explanation_text_path="/data/explanation/text",
             )
             components.append(peer_panel)
-            root = A2UIComponent.column("layout_root", ["header_row", "peer_compare_panel"])
+            
+            # Add explanation panel after main panel
+            explain_card = None
+            if "ExplainMovePanel" not in hidden:
+                explain = A2UIComponent.explain_move_panel(
+                    "explain_panel",
+                    title_path="/data/explanation/title",
+                    explanation_path="/data/explanation/text",
+                    factors_path="/data/explanation/factors",
+                    citations_path="/data/explanation/citations",
+                )
+                explain_card = A2UIComponent.card("explain_card", "explain_panel")
+                components.extend([explain, explain_card])
+            
+            root_children = ["header_row", "peer_compare_panel"]
+            if explain_card:
+                root_children.append("explain_card")
+            root = A2UIComponent.column("layout_root", root_children)
             components.append(root)
             return components
 
@@ -442,35 +484,39 @@ class A2UIMessageEmitter:
 
         if len(chart_row_children) > 1 and order_index:
             chart_row_children.sort(
-                key=lambda cid: priority("PriceChart" if "chart" in cid else "CorrelationMatrix", 50)
+                key=lambda cid: priority("PriceChart" if "chart" in cid else "CorrelationMatrix")
             )
 
-        body_blocks: List[tuple[str, str]] = []
+        # Add explanation panel for analysis
+        explain_card = None
+        if "ExplainMovePanel" not in hidden:
+            explain = A2UIComponent.explain_move_panel(
+                "explain_panel",
+                title_path="/data/explanation/title",
+                explanation_path="/data/explanation/text",
+                factors_path="/data/explanation/factors",
+                citations_path="/data/explanation/citations",
+            )
+            explain_card = A2UIComponent.card("explain_card", "explain_panel")
+            components.extend([explain, explain_card])
+
+        # Create charts_row if we have chart components
         charts_row = None
         if chart_row_children:
             charts_row = A2UIComponent.row("charts_row", chart_row_children)
             components.append(charts_row)
-            # Use generic names for ordering
-            for cid in chart_row_children:
-                if "chart" in cid:
-                    body_blocks.append(("PriceChart", "charts_row"))
-                elif "correlation" in cid:
-                    body_blocks.append(("CorrelationMatrix", "charts_row"))
 
+        # Build body blocks with consistent ordering: charts first, then table, then analysis
+        body_blocks: List[tuple[str, str]] = []
+        if charts_row:
+            body_blocks.append(("MetricChart", "charts_row"))
         if table_card:
             body_blocks.append(("DataTable", "peer_table_card"))
+        if explain_card:
+            body_blocks.append(("ExplainMovePanel", "explain_card"))
 
-        # Deduplicate body blocks while preserving ordering priority
-        seen = set()
-        dedup_blocks: List[tuple[str, str]] = []
-        for name, cid in body_blocks:
-            if cid in seen:
-                continue
-            seen.add(cid)
-            dedup_blocks.append((name, cid))
-
-        dedup_blocks.sort(key=lambda pair: priority(pair[0], 100))
-        root_children = ["header_row"] + [cid for _name, cid in dedup_blocks]
+        body_blocks.sort(key=lambda pair: priority(pair[0]))
+        root_children = ["header_row"] + [cid for _name, cid in body_blocks]
         root = A2UIComponent.column("layout_root", root_children)
         components.append(root)
 
@@ -603,14 +649,19 @@ class A2UIMessageEmitter:
         if emphasis == "focus_chart" and variant is None:
             active_variant = "focus_chart"
 
+        # Standard layout priority: KPIs first, charts middle, analysis bottom
         def priority(name: str) -> int:
             base_priority = {
-                "MetricChart": 0 if active_variant == "focus_chart" else 1,
-                "PriceChart": 0 if active_variant == "focus_chart" else 1,
-                "KpiCard": 1,
-                "DataTable": 2,
-                "ExplainMovePanel": 3,
+                "KpiCard": 0,           # TOP
+                "MetricChart": 1,       # MIDDLE
+                "PriceChart": 1,        # MIDDLE
+                "DataTable": 2,         # MIDDLE-BOTTOM  
+                "ExplainMovePanel": 3,  # BOTTOM
             }
+            if active_variant == "focus_chart":
+                base_priority["MetricChart"] = 0
+                base_priority["PriceChart"] = 0
+                base_priority["KpiCard"] = 1
             return order_index.get(name, base_priority.get(name, 99))
 
         title = A2UIComponent.text_bound("title_text", "/data/title", "h2")

@@ -15,7 +15,7 @@ tools:
 
 ## Intent
 
-Display profit margins (gross, operating, net) for a target company, optionally compared to peer averages.
+Display profit margins (gross, operating, net) for a target company, with intelligent insights based on actual data.
 
 ## When to Invoke
 
@@ -34,54 +34,136 @@ DO NOT use this skill for:
 - Stock price comparisons
 - General "compare X vs Y" without margin/profitability keywords
 
+## Database Schema Reference
+
+The `comp_financials` table contains these metrics for margin calculations:
+
+| Metric Name | Description | Unit |
+|-------------|-------------|------|
+| `Revenue` | Total revenue | USD |
+| `Net Income` | Bottom-line profit | USD |
+| `Gross Profit` | Revenue minus Cost of Revenue | USD |
+| `Operating Income` | Operating profit | USD |
+| `Cost of Revenue` | Direct costs of goods sold | USD |
+| `Gross Margin` | Gross profit as % of revenue (if directly available) | % |
+| `Operating Margin` | Operating income as % of revenue (if directly available) | % |
+
+### Margin Calculation Formulas
+
+When direct margin percentages are not available, calculate from components:
+
+```
+Gross Margin = (Gross Profit / Revenue) × 100
+            OR ((Revenue - Cost of Revenue) / Revenue) × 100
+
+Operating Margin = (Operating Income / Revenue) × 100
+
+Net Margin = (Net Income / Revenue) × 100
+```
+
 ## Execution Steps
 
 ### Step 1: Extract Parameters
 
 Extract the following from the user's question:
 - **ticker**: Target company stock symbol (required)
-- **peers**: List of peer tickers for comparison (default: NVDA, AMD, INTC, QCOM, MU, AVGO)
-- **period**: "quarter" or "year" (default: "year")
+- **peers**: List of peer tickers for comparison (optional)
+- **period**: "quarter" or "year" (default: "quarter")
 
-### Step 2: Query Target Company Margins
+### Step 2: Query Financial Database
 
-Execute a SQL query to get target company margins:
+Execute a SQL query to fetch ALL margin-related metrics:
 
 ```sql
 SELECT ticker, 
-       metric,
-       value,
-       period_end
+       calendar_year,
+       calendar_quarter_num,
+       calendar_quarter,
+       metric, 
+       value
 FROM comp_financials
 WHERE ticker = '{ticker}'
-  AND metric IN ('Gross Margin', 'Operating Margin', 'Net Margin')
-  AND period_type = '{period}'
-ORDER BY period_end DESC
-LIMIT 12
+  AND metric IN ('Revenue', 'Net Income', 'Gross Profit', 
+                 'Operating Income', 'Cost of Revenue',
+                 'Gross Margin', 'Operating Margin')
+ORDER BY calendar_year DESC, calendar_quarter_num DESC
+LIMIT 80
 ```
 
-### Step 3: Query Peer Average Margins
+### Step 3: Calculate Margins
 
-Execute a SQL query to calculate peer averages:
+For each period:
+1. Try to use direct `Gross Margin` / `Operating Margin` values if available
+2. Otherwise calculate: `(Gross Profit / Revenue) × 100`
+3. Or calculate: `((Revenue - Cost of Revenue) / Revenue) × 100`
+4. Always calculate Net Margin: `(Net Income / Revenue) × 100`
 
-```sql
-SELECT metric,
-       AVG(value) as peer_avg
-FROM comp_financials
-WHERE ticker IN ({peer_list})
-  AND metric IN ('Gross Margin', 'Operating Margin', 'Net Margin')
-  AND period_type = '{period}'
-  AND period_end = (SELECT MAX(period_end) FROM comp_financials WHERE ticker = '{ticker}')
-GROUP BY metric
+### Step 4: Generate Dynamic Factors
+
+Based on the actual margin data, generate 3-4 insight factors:
+
+**Factor Examples (based on real data):**
+```json
+{
+  "factors": [
+    {
+      "title": "Gross Margin",
+      "description": "{ticker} gross margin of {value:.1f}% indicates cost efficiency.",
+      "impact": "positive" if value > 40 else "neutral" if value > 20 else "negative",
+      "source": "Profitability Analysis",
+      "icon": "💰"
+    },
+    {
+      "title": "Net Profitability",
+      "description": "Net margin of {value:.1f}% shows bottom-line profitability.",
+      "impact": "positive" if value > 10 else "neutral" if value > 0 else "negative",
+      "source": "Profitability Analysis",
+      "icon": "📈"
+    },
+    {
+      "title": "Operating Efficiency",
+      "description": "Operating margin of {value:.1f}% reflects operational control.",
+      "impact": "positive" if value > 20 else "neutral",
+      "source": "Profitability Analysis",
+      "icon": "⚙️"
+    }
+  ]
+}
 ```
 
-### Step 4: Calculate Deltas
+**DO NOT use generic placeholders like:**
+- "Market Conditions"
+- "Earnings & Guidance"
+- "Sector Dynamics"
 
-Compute: Target margin - Peer average for each margin type.
+### Step 5: Generate Follow-Up Suggestions
 
-### Step 5: Generate Analysis
+Based on the analysis, generate contextual follow-up questions:
 
-Call generate_analysis to provide insight on margin performance.
+```json
+{
+  "follow_ups": [
+    {
+      "label": "Revenue breakdown",
+      "query": "Show {ticker} revenue trend over 3 years",
+      "icon": "📊",
+      "category": "drill-down"
+    },
+    {
+      "label": "Compare margins",
+      "query": "Compare {ticker} margins to {peer1} and {peer2}",
+      "icon": "📈",
+      "category": "compare"
+    },
+    {
+      "label": "Cost analysis",
+      "query": "Why did {ticker} operating margin change?",
+      "icon": "💵",
+      "category": "explain"
+    }
+  ]
+}
+```
 
 ## Output Contract
 
@@ -95,38 +177,50 @@ The skill produces an A2UI dashboard with these components:
 | Margin History | `DataTable` | `/data/table` |
 | Margin Chart | `MetricChart` | `/data/chart` |
 | Explanation | `ExplainMovePanel` | `/data/explanation` |
+| Follow-Ups | `FollowUpSuggestions` | `/data/follow_ups` |
 
 ## Data Model Schema
 
 ```json
 {
-  "ticker": "NVDA",
-  "tickers": ["NVDA", "AMD", "INTC"],
+  "ticker": "AMD",
+  "tickers": ["AMD"],
   "kpis": {
-    "gross_margin": 64.2,
-    "operating_margin": 45.1,
-    "net_margin": 38.5,
-    "gross_vs_peer": 12.3,
-    "op_vs_peer": 20.4,
-    "net_vs_peer": 15.8
+    "gross_margin": 88.4,
+    "operating_margin": 8.7,
+    "net_margin": 20.5
   },
-  "peer_count": 5,
   "table": {
     "columns": [
-      {"key": "period", "label": "Period"},
-      {"key": "gross", "label": "Gross %"},
-      {"key": "operating", "label": "Operating %"},
-      {"key": "net", "label": "Net %"}
+      {"key": "period", "label": "Period", "type": "string"},
+      {"key": "gross_margin", "label": "Gross Margin", "type": "percentage"},
+      {"key": "operating_margin", "label": "Operating Margin", "type": "percentage"},
+      {"key": "net_margin", "label": "Net Margin", "type": "percentage"}
     ],
-    "rows": [...]
+    "rows": [
+      {"period": "Q2 2025", "gross_margin": 88.4, "operating_margin": 8.7, "net_margin": 20.5}
+    ]
   },
   "chart": {
-    "series": [...]
+    "series": [
+      {"ticker": "Gross Margin", "data": [{"period": "Q2 2025", "value": 88.4}]},
+      {"ticker": "Operating Margin", "data": [{"period": "Q2 2025", "value": 8.7}]},
+      {"ticker": "Net Margin", "data": [{"period": "Q2 2025", "value": 20.5}]}
+    ],
+    "annotations": []
   },
   "explanation": {
-    "title": "string",
-    "text": "string",
-    "factors": [],
+    "title": "Insight: Margins for AMD",
+    "text": "AMD demonstrates strong profitability with gross margin of 88.4%...",
+    "factors": [
+      {
+        "title": "Gross Margin",
+        "description": "AMD gross margin of 88.4% indicates excellent cost efficiency.",
+        "impact": "positive",
+        "source": "Profitability Analysis",
+        "icon": "💰"
+      }
+    ],
     "citations": []
   }
 }
@@ -136,19 +230,13 @@ The skill produces an A2UI dashboard with these components:
 
 - Only use `comp_financials` table
 - SELECT-only queries
-- Exclude target ticker from peer average calculation
-- Require revenue > 0 when computing margins (null otherwise)
-- Delta shows +/- percentage points vs peer average
-
-## Chart Guidance
-
-- KpiCard delta shows green if above peer avg, red if below
-- DataTable sorted by period_end descending (most recent first)
+- Always calculate margins when direct values unavailable
+- Handle zero revenue (set margin to null/N/A)
 - Percentages displayed with 1 decimal place (e.g., "45.2%")
 
 ## Example Queries
 
-- "What are NVDA's margins?"
-- "INTC profitability analysis"
-- "Compare AMD gross margin to peers"
-- "How profitable is QCOM vs industry?"
+- "What are AMD's margins?"
+- "NVDA profitability analysis"
+- "Compare AMD gross margin to NVDA"
+- "How profitable is QCOM?"

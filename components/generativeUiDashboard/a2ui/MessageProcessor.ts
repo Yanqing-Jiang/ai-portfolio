@@ -2,6 +2,8 @@
  * A2UI Message Processor
  *
  * Processes A2UI JSONL messages and updates surface/dataModel state.
+ * 
+ * Optimization #18: Supports JSON Patch (RFC 6902) for incremental updates.
  */
 
 import type {
@@ -10,6 +12,7 @@ import type {
     DataModel,
     DataEntry,
 } from './types';
+import { safeApplyPatch, type Patch } from './jsonPatch';
 
 
 /**
@@ -129,6 +132,16 @@ export class MessageProcessor {
             const { surfaceId, contents, path } = message.dataModelUpdate;
             const existing = this.dataModels.get(surfaceId) || {};
             const updated = applyDataUpdate(existing, path, contents);
+            this.dataModels.set(surfaceId, updated);
+        } else if ('dataPatch' in message) {
+            // Optimization #18: JSON Patch for incremental updates
+            const { surfaceId, patch, fallbackData } = message.dataPatch as {
+                surfaceId: string;
+                patch: Patch;
+                fallbackData?: Record<string, unknown>;
+            };
+            const existing = this.dataModels.get(surfaceId) || {};
+            const updated = safeApplyPatch(existing, patch, fallbackData);
             this.dataModels.set(surfaceId, updated);
         } else if ('deleteSurface' in message) {
             const { surfaceId } = message.deleteSurface;
