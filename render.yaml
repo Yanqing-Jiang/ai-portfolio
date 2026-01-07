@@ -25,8 +25,8 @@ services:
     
     # Environment variables
     envVars:
-      # Required: Set your Anthropic API key in Render dashboard
-      - key: ANTHROPIC_API_KEY
+      # Required: Set your Claude API key in Render dashboard
+      - key: CLAUDE_API_KEY
         sync: false  # Will prompt to set manually
       
       # Python path for imports (backend directory)

@@ -752,6 +752,15 @@ class A2UISDKWrapper:
         options = ClaudeAgentOptions(**options_kwargs)
         self._sdk_client = ClaudeSDKClient(options=options)
         self._initialized = True
+        
+        # Pre-initialize Anthropic client as fallback (in case SDK fails at runtime)
+        if ANTHROPIC_AVAILABLE and self.api_key and not self._anthropic_client:
+            try:
+                self._anthropic_client = anthropic.AsyncAnthropic(api_key=self.api_key)
+                logger.debug("Anthropic API fallback pre-initialized as backup")
+            except Exception as e:
+                logger.warning("Failed to pre-initialize Anthropic fallback: %s", e)
+        
         logger.info(
             "Claude Agent SDK initialized: hooks=%s mcp_servers=%s tools=%s",
             hooks is not None,
@@ -837,6 +846,9 @@ class A2UISDKWrapper:
             "permission denied",
             "failed to spawn process",
             "cannot execute binary file",
+            "circuit breaker",  # Circuit breaker is open - SDK repeatedly failing
+            "connection refused",
+            "timeout",
         ]
         return any(token in lowered for token in cli_error_tokens)
 
