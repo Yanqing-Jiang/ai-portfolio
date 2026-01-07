@@ -35,9 +35,8 @@ from .config import get_settings
 
 logger = logging.getLogger(__name__)
 
-# Environment variable to enable LLM-based layout planning (default: False for cost/latency)
-# Set GENUI_LAYOUT_USE_MODEL=true to enable Claude-driven layout proposals
-LAYOUT_USE_MODEL_ENV = os.getenv("GENUI_LAYOUT_USE_MODEL", "false").lower() == "true"
+# LLM-based layout planning: Always enabled for intelligent layouts
+LAYOUT_USE_MODEL_ENV = True
 
 # Allowed emphasis values
 VALID_EMPHASIS = {"focus_chart", "focus_table", "focus_news", "balanced", None}

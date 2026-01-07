@@ -29,11 +29,7 @@ services:
       - key: ANTHROPIC_API_KEY
         sync: false  # Will prompt to set manually
       
-      # Optional: Enable SDK flow (set to 'true' to use Claude CLI)
-      - key: USE_SDK_FLOW
-        value: "true"
-      
-      # Python path for imports
+      # Python path for imports (backend directory)
       - key: PYTHONPATH
         value: /opt/render/project/src/backend
       

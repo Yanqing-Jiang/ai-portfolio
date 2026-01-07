@@ -1,0 +1,154 @@
+{
+  "trace_id": "fcef5596-04b2-4c8c-9014-92c38b42b48a",
+  "dashboard_id": "5be50ee0-58d4-4b93-af2d-03ecbfb3e3c0",
+  "question": "Why did NVDA drop recently?",
+  "skill_id": "a2ui_explain_move",
+  "tickers": [
+    "NVDA"
+  ],
+  "metric": "Price",
+  "time_range": "1M",
+  "layout_override": {
+    "variant": "focus_news",
+    "emphasis": "focus_news",
+    "widget_order": [
+      "NewsTimeline",
+      "ExplainMovePanel",
+      "PriceChart",
+      "KpiCard"
+    ],
+    "hidden_widgets": null
+  },
+  "steps": [
+    {
+      "step_id": "e897a258",
+      "step_type": "skill_selection",
+      "timestamp": "2026-01-07T05:11:18.212070",
+      "duration_ms": 0.038623809814453125,
+      "success": true,
+      "details": {
+        "skill_id": "a2ui_explain_move",
+        "tickers": [
+          "NVDA"
+        ],
+        "metric": "Price",
+        "time_range": "1M"
+      },
+      "error": null
+    },
+    {
+      "step_id": "1ffad384",
+      "step_type": "layout_planning",
+      "timestamp": "2026-01-07T05:11:19.274512",
+      "duration_ms": 1062.1376037597656,
+      "success": true,
+      "details": {
+        "layout_override": {
+          "variant": "focus_news",
+          "emphasis": "focus_news",
+          "widget_order": [
+            "NewsTimeline",
+            "ExplainMovePanel",
+            "PriceChart",
+            "KpiCard"
+          ],
+          "hidden_widgets": null
+        },
+        "component_count": 15
+      },
+      "error": null
+    },
+    {
+      "step_id": "0487197a",
+      "step_type": "seed_data",
+      "timestamp": "2026-01-07T05:11:19.275292",
+      "duration_ms": null,
+      "success": true,
+      "details": {
+        "keys": [
+          "title",
+          "ticker",
+          "primary_ticker",
+          "tickers",
+          "time_range",
+          "metric"
+        ]
+      },
+      "error": null
+    },
+    {
+      "step_id": "ccd16b29",
+      "step_type": "clarification_request",
+      "timestamp": "2026-01-07T05:11:19.275369",
+      "duration_ms": null,
+      "success": true,
+      "details": {
+        "request_id": "clarify_time_1767762679275329900",
+        "fields": [
+          "time_period"
+        ]
+      },
+      "error": null
+    },
+    {
+      "step_id": "3de58009",
+      "step_type": "clarification_response",
+      "timestamp": "2026-01-07T05:11:21.320386",
+      "duration_ms": 2044.78120803833,
+      "success": true,
+      "details": {},
+      "error": null
+    },
+    {
+      "step_id": "f2ebc81b",
+      "step_type": "sdk_flow_execute",
+      "timestamp": "2026-01-07T05:11:22.477748",
+      "duration_ms": null,
+      "success": true,
+      "details": {
+        "skill_id": "a2ui_explain_move",
+        "parameters": {
+          "tickers": [
+            "NVDA"
+          ],
+          "metric": "Price",
+          "time_range": "1M"
+        }
+      },
+      "error": null
+    },
+    {
+      "step_id": "7838306a",
+      "step_type": "sdk_audit::sdk_flow_started",
+      "timestamp": "2026-01-07T05:11:22.478476",
+      "duration_ms": null,
+      "success": true,
+      "details": {},
+      "error": null
+    },
+    {
+      "step_id": "8766df63",
+      "step_type": "sdk_error",
+      "timestamp": "2026-01-07T05:11:22.484545",
+      "duration_ms": null,
+      "success": false,
+      "details": {},
+      "error": "Failed to start Claude Code: "
+    },
+    {
+      "step_id": "9c943fb0",
+      "step_type": "error",
+      "timestamp": "2026-01-07T05:11:22.484619",
+      "duration_ms": null,
+      "success": false,
+      "details": {},
+      "error": "Failed to start Claude Code: "
+    }
+  ],
+  "started_at": "2026-01-07T05:11:18.210884",
+  "completed_at": "2026-01-07T05:11:22.484625",
+  "total_duration_ms": 4273.741,
+  "message_count": 13,
+  "success": false,
+  "error": "Failed to start Claude Code: "
+}

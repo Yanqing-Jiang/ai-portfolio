@@ -48,10 +48,8 @@ from .clarification import (
 from .models.dashboard_state import DashboardState
 from .traces import RunTrace, get_trace_store
 
-# SDK Flow feature flag (Optimization #1: Activate SDK-Native Tool Execution)
-# SDK flow is EXPERIMENTAL - set USE_SDK_FLOW=true to test LLM-driven execution
-# Default: false (uses proven standard agent execution path)
-USE_SDK_FLOW = os.getenv("USE_SDK_FLOW", "false").lower() in ("true", "1", "yes")
+# SDK Flow: Always enabled (uses ClaudeSDKClient with automatic MCP tool execution)
+USE_SDK_FLOW = True
 
 logger = logging.getLogger(__name__)
 if USE_SDK_FLOW:

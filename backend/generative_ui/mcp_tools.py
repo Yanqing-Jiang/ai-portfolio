@@ -25,10 +25,16 @@ except ImportError:
     SDK_TOOL_AVAILABLE = False
     sdk_tool = None
 
-# Import existing shared tools
-from backend.shared_tools.sql_executor import execute_sql_tool
-from backend.shared_tools.news_service import execute_news_tool
-from backend.shared_tools.analysis_service import execute_analysis_tool
+# Import existing shared tools (using relative imports for within-backend execution)
+try:
+    from shared_tools.sql_executor import execute_sql_tool
+    from shared_tools.news_service import execute_news_tool
+    from shared_tools.analysis_service import execute_analysis_tool
+except ImportError:
+    # Fallback to absolute imports if running from parent directory
+    from backend.shared_tools.sql_executor import execute_sql_tool
+    from backend.shared_tools.news_service import execute_news_tool
+    from backend.shared_tools.analysis_service import execute_analysis_tool
 
 
 def _make_mcp_response(
