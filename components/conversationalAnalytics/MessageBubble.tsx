@@ -435,7 +435,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
   dataResult,
   newsResult,
   isStreaming,
-  agentLabel,
+  agentLabel: _agentLabel,
   htmlArtifact,
   skillInfo,
   processNodes,
@@ -532,7 +532,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
                   className="px-4 py-2.5 flex items-center gap-2"
                   style={{ borderBottom: `1px solid ${theme.colors.border.subtle}` }}
                 >
-                  <span className="text-lg">dY"S</span>
+                  <span className="text-lg">📊</span>
                   <span className="text-sm font-medium" style={{ color: theme.colors.text.secondary }}>
                     Chart
                   </span>
@@ -584,7 +584,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
                   className="px-4 py-2.5 flex items-center gap-2"
                   style={{ borderBottom: `1px solid ${theme.colors.border.subtle}` }}
                 >
-                  <span className="text-lg">dY-,‹,?</span>
+                  <span className="text-lg">🎨</span>
                   <div className="flex-1 min-w-0">
                     <div className="text-sm font-medium" style={{ color: theme.colors.text.secondary }}>
                       {htmlArtifact.title || 'Showcase'}
@@ -600,7 +600,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
                     className="text-xs font-semibold"
                     style={{ color: theme.colors.accent.primary }}
                   >
-                    Open ƒ+'
+                    Open ↗
                   </a>
                 </div>
                 <div className="bg-black" style={{ aspectRatio: '16 / 10', minHeight: 260 }}>

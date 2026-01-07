@@ -362,7 +362,7 @@ class A2UIAgent:
             system_prompt=self._selection_system_prompt,
             allowed_tools=allowed_tools,
             mcp_tools=mcp_tools,
-            use_sdk=True,
+            use_sdk=False,  # Use stable Anthropic API (SDK is experimental)
         )
 
     async def select_skill(self, question: str, max_retries: int = 2) -> SkillSelection:

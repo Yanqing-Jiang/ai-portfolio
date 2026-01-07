@@ -37,14 +37,20 @@
 Claude Agent SDK wrapper for FastAPI backend integration.
 
 Module: sdk_wrapper.py
-Role: Provides an adapter layer between the Claude Agent SDK and the A2UI dashboard runtime.
+Role: Provides an adapter layer between Claude APIs and the A2UI dashboard runtime.
 Called from: agent_v2.py
-Invokes: claude_agent_sdk (ClaudeSDKClient, ClaudeAgentOptions, create_sdk_mcp_server)
-Why: Centralizes SDK initialization and query/stream handling for A2UI flows.
+Invokes: anthropic (default) or claude_agent_sdk (experimental, use_sdk=True)
+Why: Centralizes API/SDK initialization and query/stream handling for A2UI flows.
+
+⚠️ NOTE: The Claude Agent SDK is EXPERIMENTAL and disabled by default.
+Default mode uses the standard Anthropic API (use_sdk=False).
+To experiment with SDK, set use_sdk=True in initialize() calls.
+See docs/sdk-issues-and-fixes.md for details on SDK issues.
 
 Implements optimizations:
 - #8: Improved System Prompt Caching with TTL
 - #12: Async Context Manager for SDK Sessions
+- #23: Circuit Breaker Pattern for API Resilience
 """
 
 from __future__ import annotations
@@ -611,48 +617,60 @@ class A2UISDKWrapper:
         return self._initialized and self._sdk_client is not None
 
     # ========================================================================
-    # Initialization
-    # ========================================================================
     
     async def initialize(
         self,
         system_prompt: Optional[str | Dict[str, Any]] = None,
         allowed_tools: Optional[List[str]] = None,
         mcp_tools: Optional[List[Any]] = None,
-        use_sdk: bool = True,
+        use_sdk: bool = False,  # EXPERIMENTAL: SDK disabled by default, use Anthropic API
     ) -> bool:
         """
-        Initialize the SDK client.
+        Initialize the client for A2UI execution.
 
         Args:
             system_prompt: System prompt for the agent.
-            allowed_tools: List of allowed tool names.
-            mcp_tools: List of MCP tools (created with @tool decorator).
-            use_sdk: Must be True (SDK-only runtime).
+            allowed_tools: List of allowed tool names (SDK only).
+            mcp_tools: List of MCP tools (SDK only, created with @tool decorator).
+            use_sdk: EXPERIMENTAL - If True, use Claude Agent SDK (has issues on Windows/Render).
+                     If False, use standard Anthropic API (default, stable).
 
         Returns:
-            True if SDK client is ready after initialization check.
+            True if client is ready after initialization.
         """
         if self._initialized:
             return self._sdk_client is not None or self._anthropic_client is not None
 
-        if not use_sdk:
-            raise RuntimeError("SDK-only runtime: use_sdk=False is not supported.")
-
-        # Store system prompt for fallback use
+        # Store system prompt for use in queries
         if system_prompt is not None:
             self._system_prompt = system_prompt if isinstance(system_prompt, str) else str(system_prompt)
 
-        # Try SDK first, fall back to Anthropic API
+        # Decide which client to use
+        if not use_sdk:
+            # Use Anthropic API directly (default, stable path)
+            if not ANTHROPIC_AVAILABLE:
+                raise RuntimeError(
+                    "Anthropic API not available; install anthropic package."
+                )
+            logger.info(
+                "Using Anthropic API (stable mode): model=%s",
+                self.model,
+            )
+            self._anthropic_client = anthropic.AsyncAnthropic(api_key=self.api_key)
+            self._using_fallback = True  # This flag indicates non-SDK mode
+            self._initialized = True
+            return True
+
+        # EXPERIMENTAL: Use Claude Agent SDK
         if not SDK_AVAILABLE:
             if not ANTHROPIC_AVAILABLE:
                 raise RuntimeError(
                     "Neither Claude Agent SDK nor Anthropic API available; "
                     "install claude-agent-sdk or anthropic."
                 )
-            # Use Anthropic API fallback
+            # Fall back to Anthropic API
             logger.warning(
-                "Claude Agent SDK not available, using Anthropic API fallback"
+                "Claude Agent SDK not available (use_sdk=True), falling back to Anthropic API"
             )
             self._anthropic_client = anthropic.AsyncAnthropic(api_key=self.api_key)
             self._using_fallback = True

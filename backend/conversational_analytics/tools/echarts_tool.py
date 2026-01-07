@@ -274,7 +274,42 @@ def generate_echarts_spec(
     
     # Add grid for better spacing
     if chart_type != "pie":
-        option["grid"] = {"left": "3%", "right": "18%", "bottom": "3%", "containLabel": True}
+        # Build Y-axis formatter based on value_meta
+        y_axis_config = {"type": "value"}
+        
+        # Scale the data and apply axis formatting based on value_meta
+        scale = value_meta.get("scale", 1)
+        suffix = value_meta.get("suffix", "")
+        prefix = "$" if "usd" in value_meta.get("unit", "") else ""
+        
+        if scale > 1:
+            # Scale down series data for cleaner display
+            for series in option.get("series", []):
+                if "data" in series:
+                    series["data"] = [v / scale if isinstance(v, (int, float)) else v for v in series["data"]]
+            
+            # Add axis name with unit
+            unit_label = ""
+            if value_meta.get("unit") == "billions_usd":
+                unit_label = "USD (Billions)"
+            elif value_meta.get("unit") == "millions_usd":
+                unit_label = "USD (Millions)"
+            elif value_meta.get("unit") == "percentage":
+                unit_label = "Percentage"
+            
+            if unit_label:
+                y_axis_config["name"] = unit_label
+                y_axis_config["nameLocation"] = "middle"
+                y_axis_config["nameGap"] = 50
+                y_axis_config["nameTextStyle"] = {"color": "#374151", "fontSize": 12}
+            
+            # Format axis labels with prefix/suffix
+            y_axis_config["axisLabel"] = {
+                "formatter": f"{prefix}{{value}}{suffix}"
+            }
+        
+        option["yAxis"] = y_axis_config
+        option["grid"] = {"left": "8%", "right": "18%", "bottom": "3%", "containLabel": True}
     
     return option
 

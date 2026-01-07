@@ -36,6 +36,14 @@ SKILLS_BETA_HEADERS = [
     "files-api-2025-04-14",        # Required for file handling
 ]
 
+# Code execution tool required by Skills beta API
+# This must be included in every request that uses container.skills
+# The type must match the beta header version (code-execution-2025-08-25 -> code_execution_20250825)
+CODE_EXECUTION_TOOL = {
+    "type": "code_execution_20250825",
+    "name": "code_execution",
+}
+
 
 @dataclass
 class SkillUseInfo:
@@ -165,9 +173,12 @@ class NativeSkillsClient:
         """
         container_skills = self._build_container_skills()
         
+        # Skills beta requires code_execution tool to be present
+        tools_with_code_exec = list(tools) + [CODE_EXECUTION_TOOL]
+        
         logger.debug(
             f"Calling beta.messages.stream with {len(container_skills)} skills, "
-            f"{len(tools)} tools, model={self.model}"
+            f"{len(tools_with_code_exec)} tools (including code_execution), model={self.model}"
         )
         
         return self.client.beta.messages.stream(
@@ -178,7 +189,7 @@ class NativeSkillsClient:
                 "skills": container_skills,
             },
             system=system,
-            tools=tools,
+            tools=tools_with_code_exec,
             messages=messages,
         )
     
@@ -203,6 +214,9 @@ class NativeSkillsClient:
         """
         container_skills = self._build_container_skills()
         
+        # Skills beta requires code_execution tool to be present
+        tools_with_code_exec = list(tools) + [CODE_EXECUTION_TOOL]
+        
         return self.client.beta.messages.create(
             model=self.model,
             max_tokens=max_tokens,
@@ -211,7 +225,7 @@ class NativeSkillsClient:
                 "skills": container_skills,
             },
             system=system,
-            tools=tools,
+            tools=tools_with_code_exec,
             messages=messages,
         )
     
@@ -314,4 +328,5 @@ __all__ = [
     "SkillUseInfo",
     "create_native_skills_client",
     "SKILLS_BETA_HEADERS",
+    "CODE_EXECUTION_TOOL",
 ]

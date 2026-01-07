@@ -146,11 +146,6 @@ const SUGGESTIONS = [
         icon: ICONS.suggestions.earnings,
         description: 'Quarterly KPIs and chart'
     },
-    {
-        text: 'TXN market position vs peers',
-        icon: ICONS.suggestions.position,
-        description: 'Competitive landscape'
-    },
 ];
 
 // Available tickers for the database

@@ -41,7 +41,9 @@ class Settings:
     sql_timeout_seconds: float = 15.0
     
     # Native Agent Skills configuration
-    # When enabled, uses Anthropic's container.skills API for Claude-native skill routing
+    # DISABLED BY DEFAULT: container.skills API requires skills registered with Anthropic
+    # (not local .md files). For custom skills, use the legacy [SKILL:] marker approach
+    # or the Claude Agent SDK with setting_sources=["project"].
     use_native_skills: bool = field(default_factory=lambda: os.getenv("CONV_ANALYTICS_NATIVE_SKILLS", "false").lower() in ("true", "1", "yes"))
     native_skills_dir: Optional[str] = field(default_factory=lambda: os.getenv("CONV_ANALYTICS_SKILLS_DIR"))
     

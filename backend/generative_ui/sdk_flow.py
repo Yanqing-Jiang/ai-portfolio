@@ -1,9 +1,13 @@
 """
-SDK Flow Integration - Official Claude Agent SDK Pattern
+⚠️ EXPERIMENTAL: SDK Flow Integration
+
+This module uses the Claude Agent SDK which has known issues with CLI subprocess
+spawning on both Windows development environments and Render.com deployments.
+USE_SDK_FLOW is disabled by default in runtime.py. See docs/sdk-issues-and-fixes.md.
 
 Module: sdk_flow.py
 Role: Execute A2UI skills using Claude Agent SDK with automatic MCP tool execution.
-Called from: A2UIRuntime.stream_dashboard (when USE_SDK_FLOW=true)
+Called from: A2UIRuntime.stream_dashboard (when USE_SDK_FLOW=True, experimental)
 Invokes: ClaudeSDKClient with MCP tools (query_database, get_news_sentiment, generate_analysis)
 Why: Enables true agent behavior - LLM autonomously calls tools and sees results.
 

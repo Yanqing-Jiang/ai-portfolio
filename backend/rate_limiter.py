@@ -63,9 +63,9 @@ if not SUPABASE_JWT_SECRET or SUPABASE_JWT_SECRET == "your-jwt-secret-here":
     SUPABASE_JWT_SECRET = "fallback-secret-key"
 
 # Rate limiting constants (prompt units)
-GUEST_LIMIT = 100  # default guest limit for non-chat scopes
+GUEST_LIMIT = 5  # default guest limit for non-chat scopes
 MEMBER_LIMIT = 20  # default member limit for non-chat scopes
-CHAT_GUEST_LIMIT = 100
+CHAT_GUEST_LIMIT = 5
 CHAT_MEMBER_LIMIT = 10
 LIMIT_WINDOW = 86400  # legacy fallback; real TTL is until midnight UTC
 

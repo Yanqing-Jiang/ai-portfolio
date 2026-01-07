@@ -48,8 +48,10 @@ from .clarification import (
 from .models.dashboard_state import DashboardState
 from .traces import RunTrace, get_trace_store
 
-# SDK Flow: Always enabled (uses ClaudeSDKClient with automatic MCP tool execution)
-USE_SDK_FLOW = True
+# SDK Flow: EXPERIMENTAL - disabled by default
+# The Claude Agent SDK has issues with CLI subprocess on both Windows dev and Render deployment.
+# See docs/sdk-issues-and-fixes.md for details. Set to True to experiment with SDK flow.
+USE_SDK_FLOW = False
 
 logger = logging.getLogger(__name__)
 if USE_SDK_FLOW:
