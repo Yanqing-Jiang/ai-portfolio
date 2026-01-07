@@ -1,0 +1,67 @@
+---
+name: revenue_comparison
+description: |
+  Compare absolute revenue totals across selected peer tickers over a time period.
+  
+  USE THIS SKILL WHEN the user asks about:
+  - Compare revenue between companies
+  - Revenue vs, revenue among, side-by-side revenue
+  - Which company has higher/lower revenue
+  - Revenue rankings or revenue leaders
+  
+  DO NOT USE for:
+  - Revenue growth rates or YoY/QoQ changes (use revenue_growth)
+  - Market share percentages (use market_share_single)
+  - Profit margins (use margins_vs_peers)
+tools:
+  - query_database
+  - generate_echarts
+  - generate_analysis
+  - get_news_sentiment
+---
+
+# Skill: Revenue Comparison (Peers)
+
+## Intent
+Compare revenue totals across selected peer tickers over a time period.
+
+## Triggers
+- "compare revenue", "revenue vs", "revenue between", "revenue among"
+
+## Inputs
+- `ticker_list` (2-6 tickers; default peer set if missing, required)
+- `years_back` (default: 5)
+- `period_filter` (quarter or year, required)
+
+## Outputs
+- SQL (SELECT-only) grouping by period and ticker
+- Chart intent: multi-series line for trends; grouped bar for single period snapshots
+- Narrative: call out leaders, laggards, and range
+
+## Guardrails
+- Only `comp_financials`; SELECT-only; limit rows ≤ 500.
+- Require ≥2 tickers; if missing, ask for clarification.
+- Use consistent period grouping (quarter/year) and ordering.
+
+## Chart Guidance
+- Time series → multi-line.
+- Single period snapshot → grouped bar.
+- Always place the legend on the right.
+- **UOM (Unit of Measure) Formatting:**
+  - Set `value_unit: "millions_usd"` in `value_meta` when calling `generate_echarts`.
+  - This tells the frontend to format y-axis, data labels, and tooltips with `$` prefix and `M` suffix.
+  - Example: `10670` → `$10,670.0M` or `$10.7B` depending on scale.
+  - Always enable data labels (`label: { show: true }`) for readability.
+- **Axis Formatting:**
+  - The y-axis should show abbreviated values (e.g., `$10B`, `$50B`) for large numbers.
+  - Use `axisLabel.formatter` to apply scaling (divide by 1,000,000 for millions).
+  - Include the unit in the axis name: `yAxis.name: "Revenue (Millions USD)"`.
+- **Tooltip Formatting:**
+  - Tooltips should show full formatted values with currency and unit.
+  - Include ticker name and period in tooltip for clarity.
+
+## News Hook
+- If user asks for context/why, call `get_news_sentiment` for the top 1–2 tickers mentioned.
+
+## Example Prompt Snippet
+"Use Revenue Comparison skill. Tickers: NVDA, AMD, INTC. Period: yearly. Provide chart intent (line). If user asks for reasons, call get_news_sentiment for NVDA and AMD."

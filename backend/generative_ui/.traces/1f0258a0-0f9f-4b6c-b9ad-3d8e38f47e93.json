@@ -1,0 +1,195 @@
+{
+  "trace_id": "1f0258a0-0f9f-4b6c-b9ad-3d8e38f47e93",
+  "dashboard_id": "bc6a1ffd-d0e7-4ce3-9c15-e6cfe7da4570",
+  "question": "Why did NVDA drop recently?",
+  "skill_id": "a2ui_explain_move",
+  "tickers": [
+    "NVDA"
+  ],
+  "metric": "Revenue",
+  "time_range": "1M",
+  "layout_override": {
+    "variant": "focus_news",
+    "emphasis": "focus_news",
+    "widget_order": [
+      "ExplainMovePanel",
+      "NewsTimeline",
+      "PriceChart",
+      "KpiCard"
+    ],
+    "hidden_widgets": null
+  },
+  "steps": [
+    {
+      "step_id": "ce6ba10a",
+      "step_type": "skill_selection",
+      "timestamp": "2026-01-06T22:48:46.075824",
+      "duration_ms": 1.0004043579101562,
+      "success": true,
+      "details": {
+        "skill_id": "a2ui_explain_move",
+        "tickers": [
+          "NVDA"
+        ],
+        "metric": "Revenue",
+        "time_range": "1M"
+      },
+      "error": null
+    },
+    {
+      "step_id": "1f7a9d80",
+      "step_type": "layout_planning",
+      "timestamp": "2026-01-06T22:48:48.286361",
+      "duration_ms": 2210.5374336242676,
+      "success": true,
+      "details": {
+        "layout_override": {
+          "variant": "focus_news",
+          "emphasis": "focus_news",
+          "widget_order": [
+            "NewsTimeline",
+            "ExplainMovePanel",
+            "PriceChart",
+            "KpiCard"
+          ],
+          "hidden_widgets": null
+        },
+        "component_count": 15
+      },
+      "error": null
+    },
+    {
+      "step_id": "0933a546",
+      "step_type": "seed_data",
+      "timestamp": "2026-01-06T22:48:48.288362",
+      "duration_ms": null,
+      "success": true,
+      "details": {
+        "keys": [
+          "title",
+          "ticker",
+          "primary_ticker",
+          "tickers",
+          "time_range",
+          "metric"
+        ]
+      },
+      "error": null
+    },
+    {
+      "step_id": "7dedf9e0",
+      "step_type": "clarification_request",
+      "timestamp": "2026-01-06T22:48:48.288362",
+      "duration_ms": null,
+      "success": true,
+      "details": {
+        "request_id": "clarify_time_1767739728288362000",
+        "fields": [
+          "time_period"
+        ]
+      },
+      "error": null
+    },
+    {
+      "step_id": "de239ab0",
+      "step_type": "clarification_response",
+      "timestamp": "2026-01-06T22:48:54.127681",
+      "duration_ms": 5839.319229125977,
+      "success": true,
+      "details": {},
+      "error": null
+    },
+    {
+      "step_id": "804fec46",
+      "step_type": "execute_skill::skill_start",
+      "timestamp": "2026-01-06T22:48:56.951078",
+      "duration_ms": null,
+      "success": true,
+      "details": {
+        "path": null,
+        "keys": [],
+        "audit": "skill_execution_started"
+      },
+      "error": null
+    },
+    {
+      "step_id": "404a6631",
+      "step_type": "execute_skill::kpis",
+      "timestamp": "2026-01-06T22:48:58.378755",
+      "duration_ms": null,
+      "success": true,
+      "details": {
+        "path": "/data/kpis",
+        "keys": [
+          "revenue",
+          "revenue_delta",
+          "net_income",
+          "net_income_delta",
+          "gross_margin"
+        ],
+        "audit": "data_loaded"
+      },
+      "error": null
+    },
+    {
+      "step_id": "ebf004fc",
+      "step_type": "execute_skill::narrative",
+      "timestamp": "2026-01-06T22:48:58.378755",
+      "duration_ms": null,
+      "success": true,
+      "details": {
+        "path": "/data/explanation",
+        "keys": [
+          "title",
+          "text",
+          "factors",
+          "citations"
+        ],
+        "audit": "narrative_generated"
+      },
+      "error": null
+    },
+    {
+      "step_id": "9cfa8691",
+      "step_type": "execute_skill::complete",
+      "timestamp": "2026-01-06T22:48:58.379755",
+      "duration_ms": null,
+      "success": true,
+      "details": {
+        "path": "/data",
+        "keys": [
+          "ticker",
+          "kpis",
+          "news",
+          "explanation"
+        ],
+        "audit": "skill_execution_complete"
+      },
+      "error": null
+    },
+    {
+      "step_id": "6b61dd02",
+      "step_type": "execute_skill_complete",
+      "timestamp": "2026-01-06T22:48:58.379755",
+      "duration_ms": 1428.6773204803467,
+      "success": true,
+      "details": {
+        "data_keys": [
+          "ticker",
+          "kpis",
+          "news",
+          "explanation"
+        ],
+        "citation_count": 3,
+        "execution_mode": "agent"
+      },
+      "error": null
+    }
+  ],
+  "started_at": "2026-01-06T22:48:46.073823",
+  "completed_at": "2026-01-06T22:48:58.379755",
+  "total_duration_ms": 12305.932,
+  "message_count": 19,
+  "success": true,
+  "error": null
+}

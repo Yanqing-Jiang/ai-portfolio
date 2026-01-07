@@ -118,30 +118,9 @@ Use this tool to answer analytics questions about semiconductor company financia
         },
         "required": ["sql"]
     },
-    # Tool use examples for better Claude invocation (Optimization #9)
-    "examples": [
-        {
-            "input": {
-                "sql": "SELECT ticker, calendar_year, SUM(value) as revenue FROM comp_financials WHERE metric = 'Revenue' GROUP BY ticker, calendar_year ORDER BY calendar_year DESC LIMIT 20",
-                "reason": "Aggregate annual revenue by company to compare historical performance"
-            },
-            "output_summary": "Returns rows with ticker, year, and total revenue"
-        },
-        {
-            "input": {
-                "sql": "SELECT * FROM comp_financials WHERE ticker = 'NVDA' AND metric IN ('Gross Margin', 'Operating Margin') ORDER BY calendar_year DESC, calendar_quarter_num DESC LIMIT 16",
-                "reason": "Fetch margin trends for NVIDIA over recent quarters"
-            },
-            "output_summary": "Returns quarterly margin values for charting"
-        },
-        {
-            "input": {
-                "sql": "SELECT ticker, calendar_year, calendar_quarter, metric, value FROM comp_financials WHERE ticker IN ('AMD', 'INTC', 'NVDA') AND metric = 'Revenue' ORDER BY ticker, calendar_year DESC, calendar_quarter_num DESC LIMIT 36",
-                "reason": "Compare quarterly revenue across three semiconductor peers"
-            },
-            "output_summary": "Returns quarterly revenue data for peer comparison charts"
-        }
-    ]
+    # Note: "examples" is not a valid Anthropic tool property and was removed.
+    # The Anthropic API now rejects extra fields in tool definitions (as of Nov 2025).
+    # Examples are documented in the description field above instead.
 }
 
 

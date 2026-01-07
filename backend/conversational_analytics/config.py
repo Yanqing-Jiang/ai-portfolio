@@ -40,6 +40,11 @@ class Settings:
     # Tool settings
     sql_timeout_seconds: float = 15.0
     
+    # Native Agent Skills configuration
+    # When enabled, uses Anthropic's container.skills API for Claude-native skill routing
+    use_native_skills: bool = field(default_factory=lambda: os.getenv("CONV_ANALYTICS_NATIVE_SKILLS", "false").lower() in ("true", "1", "yes"))
+    native_skills_dir: Optional[str] = field(default_factory=lambda: os.getenv("CONV_ANALYTICS_SKILLS_DIR"))
+    
     # Debug mode - enables verbose activity logging to frontend
     debug_mode: bool = field(default_factory=lambda: os.getenv("CONV_ANALYTICS_DEBUG", "true").lower() in ("true", "1", "yes"))
     

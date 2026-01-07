@@ -29,7 +29,13 @@ import json
 import logging
 import os
 import time
+from pathlib import Path
 from typing import AsyncGenerator, Optional, Dict, List, Any
+
+# Load .env before reading USE_SDK_FLOW
+from dotenv import load_dotenv
+_MODULE_DIR = Path(__file__).parent
+load_dotenv(dotenv_path=_MODULE_DIR.parent / ".env", override=False)
 
 from .a2ui.emitter import A2UIMessageEmitter
 from .agent_v2 import A2UIAgent

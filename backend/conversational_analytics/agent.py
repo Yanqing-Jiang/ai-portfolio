@@ -257,6 +257,25 @@ class ConversationalAnalyticsAgent:
             self.client = anthropic.Anthropic(api_key=settings.claude_api_key)
         self.model = settings.claude_model
         
+        # Native Agent Skills client (optional - enabled via CONV_ANALYTICS_NATIVE_SKILLS)
+        self.use_native_skills = settings.use_native_skills
+        self.native_skills_client = None
+        if self.use_native_skills:
+            try:
+                from .native_skills_client import NativeSkillsClient
+                self.native_skills_client = NativeSkillsClient(
+                    api_key=settings.claude_api_key,
+                    model=self.model,
+                    skills_dir=settings.native_skills_dir,
+                )
+                logger.info(
+                    f"Native skills enabled with {len(self.native_skills_client.skills)} skills: "
+                    f"{self.native_skills_client.skill_ids}"
+                )
+            except Exception as exc:
+                logger.warning("Failed to initialize native skills client: %s", exc)
+                self.use_native_skills = False
+        
     async def run_with_tools(
         self,
         message: str,
@@ -420,13 +439,32 @@ class ConversationalAnalyticsAgent:
                 
                 tool_call_count = 0
                 iter_start = time.monotonic()
-                with self.client.messages.stream(
-                    model=self.model,
-                    max_tokens=4096,
-                    system=system_blocks,
-                    tools=tools_to_use,
-                    messages=messages
-                ) as stream:
+                
+                # Use native skills client when enabled, otherwise use standard client
+                if self.use_native_skills and self.native_skills_client:
+                    # Native Agent Skills: Uses container.skills API for Claude-native routing
+                    stream_context = self.native_skills_client.stream_with_skills(
+                        messages=messages,
+                        system=system_blocks,
+                        tools=tools_to_use,
+                        max_tokens=4096,
+                    )
+                    if debug_mode:
+                        yield debug_event("agent", "Using native skills API", {
+                            "skill_count": len(self.native_skills_client.skills),
+                            "skill_ids": self.native_skills_client.skill_ids,
+                        })
+                else:
+                    # Standard Messages API (legacy skill detection from [SKILL:] markers)
+                    stream_context = self.client.messages.stream(
+                        model=self.model,
+                        max_tokens=4096,
+                        system=system_blocks,
+                        tools=tools_to_use,
+                        messages=messages
+                    )
+                
+                with stream_context as stream:
                     for event in stream:
                         # Stream text deltas as they arrive
                         if getattr(event, "type", None) == "content_block_delta":
@@ -649,19 +687,36 @@ class ConversationalAnalyticsAgent:
                 session.add_message("assistant", final_content)
             
             # Extract skill from response and emit skill_event if detected
-            # Use all_streamed_text since the [SKILL:] marker may come in early iterations
-            full_streamed_content = "".join(all_streamed_text)
-            detected_skill_id = extract_skill_from_response(full_streamed_content)
-            if detected_skill_id:
-                detected_skill = get_skill_by_id(detected_skill_id)
-                if detected_skill:
-                    skill_download_url = f"/api/conversational-analytics/skills/{detected_skill.filename}"
-                    yield skill_event(detected_skill_id, detected_skill.name, skill_download_url)
-                    if debug_mode:
-                        yield debug_event("skill", f"Detected skill: {detected_skill.name}", {
-                            "skill_id": detected_skill_id,
-                            "filename": detected_skill.filename,
-                        })
+            # With native skills, we extract from response metadata; otherwise parse [SKILL:] markers
+            detected_skill_id = None
+            detected_skill_name = None
+            skill_download_url = None
+            
+            if self.use_native_skills and self.native_skills_client:
+                # Native skills: Extract from response metadata (reliable)
+                detected_skill_id = self.native_skills_client.extract_skill_from_response(response)
+                if detected_skill_id:
+                    native_skill = self.native_skills_client.get_skill_by_id(detected_skill_id)
+                    if native_skill:
+                        detected_skill_name = native_skill.name
+                        skill_download_url = f"/api/conv-analytics/skills/{detected_skill_id}"
+            else:
+                # Legacy: Parse [SKILL:] marker from streamed text
+                full_streamed_content = "".join(all_streamed_text)
+                detected_skill_id = extract_skill_from_response(full_streamed_content)
+                if detected_skill_id:
+                    detected_skill = get_skill_by_id(detected_skill_id)
+                    if detected_skill:
+                        detected_skill_name = detected_skill.name
+                        skill_download_url = f"/api/conversational-analytics/skills/{detected_skill.filename}"
+            
+            if detected_skill_id and detected_skill_name and skill_download_url:
+                yield skill_event(detected_skill_id, detected_skill_name, skill_download_url)
+                if debug_mode:
+                    yield debug_event("skill", f"Detected skill: {detected_skill_name}", {
+                        "skill_id": detected_skill_id,
+                        "native_skills": self.use_native_skills,
+                    })
             
             # Emit final output node
             yield process_node_event(

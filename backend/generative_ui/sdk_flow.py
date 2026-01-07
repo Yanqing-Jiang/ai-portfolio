@@ -114,6 +114,26 @@ class A2UISDKFlow:
         
         self.logger.info(f"Created A2UI MCP server with {len(A2UI_MCP_TOOLS)} tools")
         return self._mcp_server
+
+    def _resolve_cli_path(self) -> Optional[str]:
+        """
+        Resolve the Claude CLI path for SDK flow execution.
+        
+        Function: _resolve_cli_path
+        Called from: execute_with_skill_context
+        Invokes: os.path, Path
+        Why: Forces SDK flow to use the npm-installed Claude CLI on Windows.
+        """
+        import os
+        
+        if os.name != "nt":
+            return None
+        
+        npm_claude = os.path.expandvars(r"%APPDATA%\npm\claude.cmd")
+        if os.path.exists(npm_claude):
+            return npm_claude
+        
+        return None
     
     def load_skill_content(self, skill_id: str) -> Optional[str]:
         """
@@ -251,15 +271,25 @@ Always use the tools to fetch real data before responding. Do not make up data."
         
         try:
             # Configure ClaudeSDKClient options
-            options = ClaudeAgentOptions(
-                system_prompt=system_prompt,
-                mcp_servers={"a2ui": mcp_server},
-                allowed_tools=[
+            cli_path = self._resolve_cli_path()
+            if cli_path:
+                self.logger.info("SDK Flow using Claude CLI path: %s", cli_path)
+            else:
+                self.logger.info("SDK Flow using default Claude CLI resolution")
+            
+            options_kwargs: Dict[str, Any] = {
+                "system_prompt": system_prompt,
+                "mcp_servers": {"a2ui": mcp_server},
+                "allowed_tools": [
                     "mcp__a2ui__query_database",
                     "mcp__a2ui__get_news_sentiment",
                     "mcp__a2ui__generate_analysis",
                 ],
-            )
+            }
+            if cli_path:
+                options_kwargs["cli_path"] = cli_path
+            
+            options = ClaudeAgentOptions(**options_kwargs)
             
             # Use ClaudeSDKClient for automatic tool execution
             async with ClaudeSDKClient(options=options) as client:

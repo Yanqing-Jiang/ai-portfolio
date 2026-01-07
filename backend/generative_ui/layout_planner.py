@@ -275,7 +275,8 @@ class LayoutPlanner:
                 "Choose a layout variant and optional widget ordering for the given skill. "
                 "Use only the allowed variants and widgets provided."
             ),
-            "strict": True,
+            # Note: "strict" is not a valid Anthropic tool property.
+            # For strict schema validation, use the structured-outputs beta header instead.
             "input_schema": {
                 "type": "object",
                 "properties": {

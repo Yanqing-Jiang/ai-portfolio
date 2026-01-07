@@ -704,6 +704,51 @@ class A2UISDKWrapper:
             options_kwargs["hooks"] = hooks
             logger.debug("SDK hooks enabled for observability")
 
+        # Windows fix: Prefer user-installed Claude CLI locations before bundled binary
+        # The bundled CLI often fails on Windows with "Failed to start Claude Code"
+        # See: https://github.com/anthropics/claude-agent-sdk/issues
+        import os
+        import shutil
+        cli_path = None
+        
+        if os.name == 'nt':
+            # Windows: Check for npm-installed Claude CLI (Roaming\npm) and user-local bin
+            npm_claude = os.path.expandvars(r'%APPDATA%\\npm\\claude.cmd')
+            home_local_bin = Path.home() / ".local" / "bin"
+            home_local_candidates = [
+                home_local_bin / "claude.exe",
+                home_local_bin / "claude.cmd",
+                home_local_bin / "claude",
+            ]
+            if os.path.exists(npm_claude):
+                cli_path = npm_claude
+                logger.info("Using npm-installed Claude CLI (Windows): %s", cli_path)
+            elif any(p.exists() for p in home_local_candidates):
+                cli_path = str(next(p for p in home_local_candidates if p.exists()))
+                logger.info("Using user-local Claude CLI (Windows): %s", cli_path)
+            else:
+                # Try to find claude.cmd in PATH
+                claude_cmd = shutil.which('claude.cmd')
+                if claude_cmd:
+                    cli_path = claude_cmd
+                    logger.info("Using Claude CLI from PATH (Windows): %s", cli_path)
+        else:
+            # Linux/Mac (Render.com, Docker, etc.): Check for npm global install
+            linux_paths = [
+                str(Path.home() / ".local" / "bin" / "claude"),  # user-local install
+                '/usr/local/bin/claude',  # npm global install location
+                '/opt/render/project/src/.render/claude',  # Render-specific
+                shutil.which('claude'),  # In PATH
+            ]
+            for path in linux_paths:
+                if path and os.path.exists(path):
+                    cli_path = path
+                    logger.info("Using npm-installed Claude CLI (Linux/Mac): %s", cli_path)
+                    break
+        
+        if cli_path:
+            options_kwargs["cli_path"] = cli_path
+
         options = ClaudeAgentOptions(**options_kwargs)
         self._sdk_client = ClaudeSDKClient(options=options)
         self._initialized = True
@@ -745,7 +790,55 @@ class A2UISDKWrapper:
             return await self._query_anthropic(prompt, max_tokens, temperature)
         if not self._sdk_client:
             raise RuntimeError("SDK client not initialized")
-        return await self._query_sdk(prompt)
+        
+        # Try SDK first, fall back to Anthropic API on runtime errors
+        result = await self._query_sdk(prompt)
+        
+        # If SDK failed with a subprocess/CLI error, switch to fallback and retry
+        if result.error and self._is_cli_runtime_error(result.error):
+            logger.warning(
+                "SDK runtime error detected, switching to Anthropic API fallback: %s",
+                result.error
+            )
+            # Initialize fallback client if not already done
+            if not self._anthropic_client and ANTHROPIC_AVAILABLE:
+                self._anthropic_client = anthropic.AsyncAnthropic(api_key=self.api_key)
+                self._using_fallback = True
+                logger.info("Anthropic API fallback initialized after SDK failure")
+            
+            if self._anthropic_client:
+                return await self._query_anthropic(prompt, max_tokens, temperature)
+        
+        return result
+
+    @staticmethod
+    def _is_cli_runtime_error(error_text: Optional[str]) -> bool:
+        """
+        Function: _is_cli_runtime_error
+        Called from: query
+        Invokes: n/a
+        Why: Detects broad SDK CLI/runtime failures so we can fall back to Anthropic.
+        """
+        if not error_text:
+            return False
+        
+        lowered = error_text.lower()
+        cli_error_tokens = [
+            "failed to start claude code",
+            "subprocess",
+            "clinotfound",
+            "cli not found",
+            "processerror",
+            "winerror",
+            "enoent",
+            "no such file or directory",
+            "not recognized as an internal or external command",
+            "exec format error",
+            "permission denied",
+            "failed to spawn process",
+            "cannot execute binary file",
+        ]
+        return any(token in lowered for token in cli_error_tokens)
 
     async def _query_sdk(self, prompt: str) -> SDKResponse:
         """
