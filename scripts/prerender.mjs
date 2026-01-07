@@ -1,3 +1,9 @@
+/**
+ * File: prerender.mjs
+ * Called from: npm run build (via npm run prerender)
+ * Purpose: Pre-renders all static routes from the SSR bundle, generates sitemap.xml,
+ *          and optionally pings search engines. Enables SEO crawling for SPA pages.
+ */
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -26,79 +32,6 @@ for (const route of routes) {
   const outputRelative =
     route === '/' ? 'index.html' : path.join(route.replace(/^\//, ''), 'index.html');
   const outputPath = path.join(distDir, outputRelative);
-
-  import { readFile, writeFile, mkdir } from 'node:fs/promises';
-  import path from 'node:path';
-  import { fileURLToPath, pathToFileURL } from 'node:url';
-
-  const __filename = fileURLToPath(import.meta.url);
-  const __dirname = path.dirname(__filename);
-
-  const distDir = path.resolve(__dirname, '../dist');
-  const ssrEntryPath = path.resolve(__dirname, '../dist-ssr/entry-server.js');
-
-  const template = await readFile(path.join(distDir, 'index.html'), 'utf-8');
-
-  const { render, getRoutes, getSitemapEntries } = await import(pathToFileURL(ssrEntryPath).href);
-
-  const routes = getRoutes();
-
-  for (const route of routes) {
-    const { html, headTags } = render(route);
-
-    const withHead = template.replace('</head>', `${headTags}\n</head>`);
-    const withAppHtml = withHead.replace(
-      /<div id="root"><\/div>/,
-      `<div id="root">${html}</div>`
-    );
-
-    const outputRelative =
-      route === '/' ? 'index.html' : path.join(route.replace(/^\//, ''), 'index.html');
-    const outputPath = path.join(distDir, outputRelative);
-
-    await mkdir(path.dirname(outputPath), { recursive: true });
-    await writeFile(outputPath, withAppHtml, 'utf-8');
-
-    console.log(`Prerendered ${route} -> ${outputRelative}`);
-  }
-
-  const { pages, projects } = getSitemapEntries();
-  const allEntries = [...pages, ...projects];
-  const today = new Date().toISOString().split('T')[0];
-
-  const formatDate = (value) => {
-    if (!value) return today;
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return today;
-    return date.toISOString().split('T')[0];
-  };
-
-  const buildUrlEntry = ({ loc, lastModified, changefreq, priority }) => {
-    const pieces = [
-      `  <url>`,
-      `    <loc>${loc}</loc>`,
-      `    <lastmod>${formatDate(lastModified)}</lastmod>`,
-    ];
-
-    if (changefreq) {
-      pieces.push(`    <changefreq>${changefreq}</changefreq>`);
-    }
-    if (typeof priority === 'number') {
-      pieces.push(`    <priority>${priority.toFixed(2)}</priority>`);
-    }
-
-    pieces.push('  </url>');
-    return pieces.join('\n');
-  };
-
-  const buildUrlSet = (entries) => [
-    '<?xml version="1.0" encoding="UTF-8"?>',
-    '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
-    ...entries.map(buildUrlEntry),
-    '</urlset>',
-  ].join('\n');
-
-  const sitemapXml = buildUrlSet(allEntries);
 
   await mkdir(path.dirname(outputPath), { recursive: true });
   await writeFile(outputPath, withAppHtml, 'utf-8');
