@@ -10,6 +10,15 @@ export * from './a2ui';
 // Renderer
 export * from './renderer';
 
+// Context Providers
+export * from './context';
+
+// Hooks
+export * from './hooks';
+
+// Widgets
+export * from './widgets';
+
 // Main Components
 export { DashboardViewer, CreateDashboardForm } from './DashboardViewer';
 export { DashboardPage } from './DashboardPage';
@@ -24,4 +33,5 @@ export type { SkillInfo } from './SkillHeaderBadge';
 
 // Styles
 export { dashboardStyles, theme } from './styles';
+
 

@@ -17,9 +17,14 @@
 //   Why: Simplifies surface access for renderers.
 // Function: mergeDataAtPath
 //   Role: Merge action response data into the data model at a JSON-pointer path.
-//   Called from: useA2UIStream.sendAction
+//   Called from: useA2UIStream.sendAction, useA2UIStream.sendQuery
 //   Invokes: n/a
 //   Why: Aligns action responses with /data-bound widgets.
+// Function: sendQuery
+//   Role: Send conversational query through LLM-driven intent classification.
+//   Called from: GenerativeUIPage.tsx chat handler
+//   Invokes: fetch /api/dash/{id}/query, window.dispatchEvent
+//   Why: Enables unified conversational control without hardcoded keywords.
 // --- End Function/Class Map ---
 /**
  * useA2UIStream Hook
@@ -76,9 +81,21 @@ export interface A2UIStreamState {
     pendingClarification: BackendClarificationRequest | null;
 }
 
+/** Response from the unified /query endpoint */
+export interface QueryResponse {
+    status: 'success' | 'new_dashboard' | 'error';
+    intent: 'new_analysis' | 'modify_layout' | 'modify_data' | 'switch_component' | 'follow_up' | 'unknown';
+    dashboard_id?: string;  // For new_analysis intent
+    result?: Record<string, unknown>;
+    rationale?: string;
+    message?: string;
+}
+
 export interface A2UIStreamActions {
     /** Send a user action to the server */
     sendAction: (action: UserActionMessage['userAction']) => Promise<unknown>;
+    /** Send a conversational query (LLM routes to appropriate action) */
+    sendQuery: (query: string) => Promise<QueryResponse>;
     /** Reconnect to the stream */
     reconnect: () => void;
     /** Close the stream */
@@ -427,13 +444,86 @@ export function useA2UIStream(
         setState((prev) => ({ ...prev, pendingClarification: null }));
     }, []);
 
+    // Send conversational query through LLM-driven intent classification
+    const sendQuery = useCallback(
+        async (query: string): Promise<QueryResponse> => {
+            if (!opts.dashboardId) {
+                throw new Error('No dashboard ID for query');
+            }
+
+            // Create new AbortController for this request
+            const controller = new AbortController();
+            abortControllerRef.current = controller;
+
+            try {
+                const response = await fetch(`${opts.apiBaseUrl}/${opts.dashboardId}/query`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ query }),
+                    signal: controller.signal,
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Query failed: ${response.statusText}`);
+                }
+
+                const result: QueryResponse = await response.json();
+
+                // If this creates a new dashboard, emit event for page to handle
+                if (result.status === 'new_dashboard' && result.dashboard_id) {
+                    window.dispatchEvent(new CustomEvent('a2ui:new-dashboard', {
+                        detail: {
+                            dashboardId: result.dashboard_id,
+                            surfaceId: result.result?.surface_id,
+                            intent: result.intent,
+                            rationale: result.rationale,
+                        }
+                    }));
+                }
+
+                // If data was modified, apply to current state
+                const details = result.result?.details as Record<string, unknown> | undefined;
+                const data = details?.data;
+                if (data && typeof data === 'object') {
+                    const surfaceId = Array.from(state.surfaces.keys())[0];
+                    if (surfaceId) {
+                        setState((prev) => {
+                            const newDataModels = new Map(prev.dataModels);
+                            const existingModel = prev.dataModels.get(surfaceId) || {};
+                            const updatedModel = mergeDataAtPath(
+                                existingModel,
+                                '/data',
+                                data as Record<string, unknown>
+                            );
+                            newDataModels.set(surfaceId, updatedModel);
+                            return { ...prev, dataModels: newDataModels };
+                        });
+                    }
+                }
+
+                return result;
+            } catch (err) {
+                // Don't throw if aborted - component is unmounting
+                if (err instanceof Error && err.name === 'AbortError') {
+                    console.debug('Query request aborted');
+                    return { status: 'error', intent: 'unknown', message: 'Request aborted' };
+                }
+                throw err;
+            }
+        },
+        [opts.dashboardId, opts.apiBaseUrl, state.surfaces]
+    );
+
     // Memoize actions to prevent unnecessary re-renders (Optimization #16)
     const actions: A2UIStreamActions = useMemo(() => ({
         sendAction,
+        sendQuery,
         reconnect: () => connect(false),
         close,
         clearClarification,
-    }), [sendAction, connect, close, clearClarification]);
+    }), [sendAction, sendQuery, connect, close, clearClarification]);
 
     return [state, actions];
 }

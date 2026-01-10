@@ -30,7 +30,7 @@ export type Patch = PatchOperation[];
 /**
  * Escape special characters in JSON Pointer keys per RFC 6901.
  */
-function _escapeKey(key: string): string {
+export function escapeKey(key: string): string {
     return key.replace(/~/g, '~0').replace(/\//g, '~1');
 }
 

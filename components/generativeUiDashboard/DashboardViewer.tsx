@@ -2,12 +2,18 @@
  * Dashboard Viewer
  *
  * Main component for rendering A2UI dashboards.
+ * Wraps content with LayoutProvider and ComponentSwapProvider for
+ * client-side layout switching and component swapping.
  */
 
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useState, useRef } from 'react';
 import { useA2UIStream, useSurface } from './a2ui';
 import { A2UISurface, A2UISurfaceLoading, A2UISurfaceError } from './renderer';
 import { dashboardStyles } from './styles';
+
+// Context providers for layout/swapping
+import { LayoutProvider, ComponentSwapProvider, ComponentSelectionProvider } from './context';
+import { LayoutSwitcher, ComponentActionMenu } from './widgets';
 
 export interface DashboardViewerProps {
     /** Dashboard ID to load */
@@ -18,20 +24,29 @@ export interface DashboardViewerProps {
     apiBaseUrl?: string;
     /** CSS class name */
     className?: string;
+    /** Enable layout switching controls */
+    enableLayoutControls?: boolean;
+    /** Enable component swapping */
+    enableSwapping?: boolean;
 }
 
 /**
  * Dashboard Viewer component.
  *
  * Connects to an A2UI stream and renders the dashboard.
+ * Now includes context providers for layout preferences and component swapping.
  */
 export function DashboardViewer({
     dashboardId,
     streamUrl,
     apiBaseUrl = '/api/dash',
     className = '',
+    enableLayoutControls = true,
+    enableSwapping = true,
 }: DashboardViewerProps): React.ReactElement {
     const url = streamUrl || `${apiBaseUrl}/${dashboardId}/stream`;
+    const containerRef = useRef<HTMLDivElement>(null);
+    const [currentLayout, setCurrentLayout] = useState('balanced');
 
     const [state, actions] = useA2UIStream(url, {
         autoConnect: true,
@@ -68,6 +83,11 @@ export function DashboardViewer({
         [actions, surfaceId]
     );
 
+    // Handle layout change
+    const handleLayoutChange = useCallback((emphasis: string) => {
+        setCurrentLayout(emphasis);
+    }, []);
+
     // Render loading state
     if (state.isLoading && !surface?.root) {
         return <A2UISurfaceLoading />;
@@ -84,28 +104,53 @@ export function DashboardViewer({
     }
 
     return (
-        <div className={`dashboard-viewer ${className}`} style={dashboardStyles.viewer}>
-            {/* Connection status indicator */}
-            <div style={dashboardStyles.statusBar}>
-                <span
-                    style={{
-                        ...dashboardStyles.statusDot,
-                        backgroundColor: state.isConnected ? '#22c55e' : '#fbbf24',
-                    }}
-                />
-                <span style={dashboardStyles.statusText}>
-                    {state.isConnected ? 'Connected' : state.isDone ? 'Complete' : 'Connecting...'}
-                </span>
-            </div>
+        <LayoutProvider initialPreferences={{ emphasis: currentLayout as 'balanced' | 'focus_chart' | 'focus_table' | 'focus_news' }}>
+            <ComponentSwapProvider>
+                <div
+                    ref={containerRef}
+                    className={`dashboard-viewer ${className}`}
+                    style={dashboardStyles.viewer}
+                >
+                    {/* Header with connection status and layout controls */}
+                    <div style={{ ...dashboardStyles.statusBar, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <span
+                                style={{
+                                    ...dashboardStyles.statusDot,
+                                    backgroundColor: state.isConnected ? '#22c55e' : '#fbbf24',
+                                }}
+                            />
+                            <span style={dashboardStyles.statusText}>
+                                {state.isConnected ? 'Connected' : state.isDone ? 'Complete' : 'Connecting...'}
+                            </span>
+                        </div>
 
-            {/* Main surface */}
-            <A2UISurface
-                surface={surface}
-                dataModel={dataModel}
-                onAction={handleAction}
-                className="dashboard-surface"
-            />
-        </div>
+                        {/* Layout Switcher */}
+                        {enableLayoutControls && (
+                            <LayoutSwitcher
+                                currentLayout={currentLayout}
+                                surfaceId={surfaceId}
+                                onLayoutChange={handleLayoutChange}
+                                disabled={!state.isDone}
+                            />
+                        )}
+                    </div>
+
+                    {/* Main surface with selection context for component targeting */}
+                    <ComponentSelectionProvider containerRef={containerRef}>
+                        <A2UISurface
+                            surface={surface}
+                            dataModel={dataModel}
+                            onAction={handleAction}
+                            className="dashboard-surface"
+                        />
+
+                        {/* Component action menu (appears when component is selected) */}
+                        {enableSwapping && <ComponentActionMenu />}
+                    </ComponentSelectionProvider>
+                </div>
+            </ComponentSwapProvider>
+        </LayoutProvider>
     );
 }
 

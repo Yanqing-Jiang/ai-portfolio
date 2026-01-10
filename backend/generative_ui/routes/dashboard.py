@@ -90,6 +90,31 @@
 #   Called from: FastAPI GET /api/dash/showcase
 #   Invokes: pathlib.Path.read_text
 #   Why: Exposes the A2UI demo landing page.
+# Function: handle_query
+#   Role: Unified entry point for conversational commands with LLM intent classification.
+#   Called from: FastAPI POST /api/dash/{dashboard_id}/query
+#   Invokes: CommandRouter.classify_intent, _handle_* helper functions
+#   Why: Replaces hardcoded keyword matching with LLM-driven intent detection.
+# Function: _handle_new_analysis
+#   Role: Create new dashboard for new analysis requests.
+#   Called from: handle_query when intent is new_analysis
+#   Invokes: A2UIAgent.select_skill, dashboard creation
+# Function: _handle_layout_modification
+#   Role: Handle layout modification commands (reorder, hide/show, emphasis).
+#   Called from: handle_query when intent is modify_layout
+#   Invokes: A2UIRuntime.process_action
+# Function: _handle_data_modification
+#   Role: Handle data modification commands (add ticker, change timeframe).
+#   Called from: handle_query when intent is modify_data
+#   Invokes: A2UIRuntime.process_action
+# Function: _handle_component_switch
+#   Role: Handle component type switching.
+#   Called from: handle_query when intent is switch_component
+#   Invokes: _transform_data_for_swap
+# Function: _handle_follow_up
+#   Role: Handle follow-up questions about current data.
+#   Called from: handle_query when intent is follow_up
+#   Invokes: Conversation state management
 # --- End Dashboard Route Function/Class Map ---
 """
 Dashboard API Routes
@@ -127,6 +152,9 @@ from ..clarification import (
     clarification_to_sse_event,
     validate_clarification_response,
 )
+from ..anomaly_detection import detect_anomalies, anomalies_to_suggestions
+from ..command_router import get_command_router, IntentClassification
+from ..conversation_state import get_conversation_store
 
 logger = logging.getLogger(__name__)
 
@@ -375,6 +403,400 @@ async def handle_action(dashboard_id: str, action: ActionRequest, request: Reque
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+# ============================================================================
+# Unified Query Endpoint (LLM-Driven Intent Classification)
+# ============================================================================
+
+class QueryRequest(BaseModel):
+    """Request for LLM-driven conversational query."""
+    query: str
+
+
+class QueryResponse(BaseModel):
+    """Response from unified query endpoint."""
+    status: str  # 'success', 'new_dashboard', 'error'
+    intent: str  # 'new_analysis', 'modify_layout', 'modify_data', 'switch_component', 'follow_up', 'unknown'
+    dashboard_id: Optional[str] = None  # For new_analysis intent
+    result: Optional[Dict[str, Any]] = None
+    rationale: Optional[str] = None
+    message: Optional[str] = None
+
+
+@router.post("/{dashboard_id}/query", response_model=QueryResponse)
+async def handle_query(dashboard_id: str, payload: QueryRequest, request: Request):
+    """
+    Handle all user text input through LLM-driven intent classification.
+    
+    This is the UNIFIED entry point for conversational control.
+    
+    Function: handle_query
+    Called from: Frontend chat input, follow-up suggestions
+    Invokes: CommandRouter.classify_intent, appropriate action handler
+    Why: Replaces hard-coded keyword matching with LLM-driven intent classification.
+    
+    Intent Routing:
+    - new_analysis -> Create new dashboard (returns new dashboard_id)
+    - modify_layout -> Modify existing dashboard layout
+    - modify_data -> Refine current analysis (add ticker, change timeframe)
+    - switch_component -> Change component visualization type
+    - follow_up -> Continue conversation with answer
+    """
+    await smart_rate_limit(
+        request,
+        scope=A2UI_RATE_LIMIT_SCOPE,
+        weight=A2UI_ACTION_WEIGHT,
+    )
+    
+    query = payload.query.strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="Query is required")
+    
+    store = get_dashboard_store()
+    state = store.get(dashboard_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Dashboard not found")
+    
+    # Get or create conversation state
+    conv_store = get_conversation_store()
+    conv_state = conv_store.get_or_create(dashboard_id)
+    
+    # Add user message to conversation
+    conv_state.add_message("user", query)
+    
+    # Update conversation context from dashboard state
+    if state.plan:
+        conv_state.update_context(
+            skill_id=state.plan.skill_id,
+            tickers=state.plan.tickers,
+            metric=getattr(state.plan, 'metric', None),
+            time_range=getattr(state.plan, 'time_range', None),
+        )
+    
+    # Classify intent using LLM
+    logger.info("[QUERY] Starting intent classification for: %s", query[:50])
+    router_inst = get_command_router()
+    try:
+        classification = await router_inst.classify_intent(
+            query=query,
+            dashboard_id=dashboard_id,
+            current_context=conv_state.get_context(),
+        )
+    except Exception as e:
+        logger.exception("[QUERY] Intent classification failed: %s", e)
+        return QueryResponse(
+            status="error",
+            intent="unknown",
+            message=f"Intent classification failed: {str(e)}",
+        )
+    
+    logger.info(
+        "[QUERY] Intent: %s, Action: %s, Rationale: %s",
+        classification.intent,
+        classification.action_name,
+        classification.rationale[:100] if classification.rationale else "N/A",
+    )
+    
+    # Route to appropriate handler based on intent
+    try:
+        if classification.intent == "new_analysis":
+            return await _handle_new_analysis(query, classification, request)
+        
+        elif classification.intent == "modify_layout":
+            result = await _handle_layout_modification(state, conv_state, classification)
+            return QueryResponse(
+                status="success",
+                intent=classification.intent,
+                result=result,
+                rationale=classification.rationale,
+            )
+        
+        elif classification.intent == "modify_data":
+            result = await _handle_data_modification(state, conv_state, classification)
+            return QueryResponse(
+                status="success",
+                intent=classification.intent,
+                result=result,
+                rationale=classification.rationale,
+            )
+        
+        elif classification.intent == "switch_component":
+            result = await _handle_component_switch(state, classification)
+            return QueryResponse(
+                status="success",
+                intent=classification.intent,
+                result=result,
+                rationale=classification.rationale,
+            )
+        
+        elif classification.intent == "follow_up":
+            result = await _handle_follow_up(state, conv_state, query, classification)
+            return QueryResponse(
+                status="success",
+                intent=classification.intent,
+                result=result,
+                rationale=classification.rationale,
+            )
+        
+        else:
+            # Unknown intent - default to new analysis
+            return await _handle_new_analysis(query, classification, request)
+            
+    except Exception as e:
+        logger.exception("Query handling failed: %s", e)
+        return QueryResponse(
+            status="error",
+            intent=classification.intent,
+            message=str(e),
+            rationale=classification.rationale,
+        )
+
+
+async def _handle_new_analysis(
+    query: str, 
+    classification: IntentClassification,
+    request: Request,
+) -> QueryResponse:
+    """
+    Create a new dashboard for a new analysis request.
+    
+    Function: _handle_new_analysis
+    Called from: handle_query when intent is new_analysis
+    Invokes: A2UIAgent.select_skill, dashboard creation
+    Why: Routes completely new analysis requests to dashboard creation.
+    """
+    try:
+        agent = get_a2ui_agent()
+        selection = await agent.select_skill(query)
+        plan = agent.selection_to_plan(selection)
+        
+        store = get_dashboard_store()
+        state = store.create(question=query, plan=plan)
+        
+        # Initialize conversation state for new dashboard
+        conv_store = get_conversation_store()
+        conv_state = conv_store.get_or_create(state.dashboard_id)
+        conv_state.update_context(
+            skill_id=plan.get("skill_id"),
+            tickers=plan.get("tickers", []),
+        )
+        
+        return QueryResponse(
+            status="new_dashboard",
+            intent=classification.intent,
+            dashboard_id=state.dashboard_id,
+            result={
+                "surface_id": state.surface_id,
+                "skill_id": plan.get("skill_id"),
+                "tickers": plan.get("tickers", []),
+            },
+            rationale=classification.rationale,
+        )
+        
+    except A2UIAgentError as e:
+        raise HTTPException(status_code=500, detail=f"Skill selection failed: {e}")
+
+
+async def _handle_layout_modification(
+    state,
+    conv_state,
+    classification: IntentClassification,
+) -> Dict[str, Any]:
+    """
+    Handle layout modification commands (reorder, hide/show, emphasis).
+    
+    Function: _handle_layout_modification
+    Called from: handle_query when intent is modify_layout
+    Why: Returns action params for client-side layout modification.
+    
+    Note: Layout changes are handled client-side via LayoutContext.
+    The backend only classifies intent and returns the action params.
+    The frontend's useLayoutEventListener applies the changes.
+    """
+    action_name = classification.action_name or classification.action_params.get("action", "unknown")
+    params = classification.action_params or {}
+    
+    # Map common action names to standardized format
+    action_mapping = {
+        "reorder_widgets": "reorder_widgets",
+        "reorder": "reorder_widgets",
+        "hide_component": "hide_widget",
+        "hide_widget": "hide_widget",
+        "show_component": "show_widget",
+        "show_widget": "show_widget",
+        "toggle_component": "toggle_widget",
+        "toggle_widget": "toggle_widget",
+        "change_emphasis": "set_emphasis",
+        "set_emphasis": "set_emphasis",
+        "focus_chart": "focus_chart",
+        "focus_table": "focus_table",
+        "focus_news": "focus_news",
+        "reset_layout": "reset_layout",
+        "reset": "reset_layout",
+    }
+    
+    # Normalize the action name
+    normalized_action = action_mapping.get(action_name, action_name)
+    
+    # Extract relevant parameters based on action type
+    action_details = {
+        "original_action": action_name,
+        **params,
+    }
+    
+    # Handle reorder specifically - determine the new order if possible
+    if normalized_action == "reorder_widgets":
+        # Try to parse order from params or infer from query
+        # If LLM provided widget_order, use it; otherwise mark as needs frontend inference
+        if "order" in params or "widget_order" in params or "new_order" in params:
+            action_details["order"] = params.get("order") or params.get("widget_order") or params.get("new_order")
+        else:
+            # Mark that frontend should infer order based on context
+            action_details["infer_order"] = True
+            action_details["hint"] = classification.rationale
+    
+    # Log for debugging
+    logger.info(
+        "[LAYOUT] Action: %s -> %s, Details: %s",
+        action_name,
+        normalized_action,
+        action_details,
+    )
+    
+    # Update conversation with result
+    conv_state.add_message(
+        "assistant", 
+        f"Layout updated: {normalized_action}", 
+        metadata=action_details
+    )
+    
+    return {
+        "action": normalized_action,
+        "applied": True,
+        "details": action_details,
+    }
+
+
+async def _handle_data_modification(
+    state,
+    conv_state,
+    classification: IntentClassification,
+) -> Dict[str, Any]:
+    """
+    Handle data modification commands (add ticker, change timeframe).
+    
+    Function: _handle_data_modification
+    Called from: handle_query when intent is modify_data
+    Invokes: A2UIRuntime.process_action
+    Why: Refines current analysis without creating new dashboard.
+    """
+    action_name = classification.action_name or classification.action_params.get("action")
+    params = classification.action_params
+    
+    action = {"name": action_name, "context": params}
+    
+    runtime = A2UIRuntime(
+        agent=get_a2ui_agent(), 
+        layout_planner=LayoutPlanner(use_model=True)
+    )
+    result = await runtime.process_action(state, action)
+    
+    # Update conversation context based on action
+    if action_name == "add_ticker" and params.get("ticker"):
+        conv_state.tickers.append(params["ticker"])
+    elif action_name == "change_timeframe" and params.get("timeframe"):
+        conv_state.time_range = params["timeframe"]
+    elif action_name == "change_metric" and params.get("metric"):
+        conv_state.metric = params["metric"]
+    
+    conv_state.add_message(
+        "assistant", 
+        f"Data updated: {action_name}", 
+        metadata=result
+    )
+    
+    return {
+        "action": action_name,
+        "params": params,
+        "applied": True,
+        "details": result,
+    }
+
+
+async def _handle_component_switch(
+    state,
+    classification: IntentClassification,
+) -> Dict[str, Any]:
+    """
+    Handle component type switching.
+    
+    Function: _handle_component_switch
+    Called from: handle_query when intent is switch_component
+    Invokes: swap_component logic
+    Why: Changes visualization type without changing data.
+    """
+    params = classification.action_params
+    
+    # Get the data model
+    data_model = state.latest_data.get("data", {}) if state.latest_data else {}
+    
+    # Transform data for the swap
+    transformed_data = _transform_data_for_swap(
+        data_model=data_model,
+        component_id=params.get("target_component", ""),
+        from_type=params.get("target_component", ""),  # Best guess
+        to_type=params.get("new_type", ""),
+    )
+    
+    return {
+        "from_type": params.get("target_component"),
+        "to_type": params.get("new_type"),
+        "transformed_data": transformed_data,
+        "message": f"Swapped to {params.get('new_type')}",
+    }
+
+
+async def _handle_follow_up(
+    state,
+    conv_state,
+    query: str,
+    classification: IntentClassification,
+) -> Dict[str, Any]:
+    """
+    Handle follow-up questions about current data.
+    
+    Function: _handle_follow_up
+    Called from: handle_query when intent is follow_up
+    Invokes: Could invoke LLM for answer generation
+    Why: Continues conversation without creating new dashboard.
+    """
+    # Get current data model for context
+    data_model = state.latest_data.get("data", {}) if state.latest_data else {}
+    
+    # For now, we'll return contextual information
+    # In a full implementation, this could generate an LLM answer
+    context = {
+        "skill_id": conv_state.skill_id,
+        "tickers": conv_state.tickers,
+        "question_type": classification.action_params.get("question_type"),
+        "target": classification.action_params.get("target_element"),
+    }
+    
+    # Add assistant response to conversation
+    answer = f"Based on the current {conv_state.skill_id or 'analysis'}: {classification.rationale}"
+    conv_state.add_message("assistant", answer)
+    
+    return {
+        "question_type": classification.action_params.get("question_type"),
+        "answer": answer,
+        "context": context,
+        "data_summary": {
+            "kpis": list(data_model.get("kpis", {}).keys()) if data_model.get("kpis") else [],
+            "has_chart": "chart" in data_model,
+            "has_table": "table" in data_model,
+        }
+    }
+
+
 @router.delete("/{dashboard_id}")
 async def delete_dashboard(dashboard_id: str):
     """
@@ -407,6 +829,180 @@ async def delete_dashboard(dashboard_id: str):
         "surface_id": state.surface_id,
         "a2ui_message": delete_message,  # Client can broadcast this to clean up UI
     }
+
+
+class SwapRequest(BaseModel):
+    """Request to swap a component type."""
+    component_id: str
+    from_type: str
+    to_type: str
+
+
+@router.post("/{dashboard_id}/swap")
+async def swap_component(dashboard_id: str, swap: SwapRequest, request: Request):
+    """
+    Handle component type swap with data transformation.
+    
+    Function: swap_component
+    Called from: Client-side SwapButton or ComponentActionMenu
+    Invokes: Data transformation logic
+    Why: Enables swapping between component types that require different data shapes.
+    
+    For simple swaps (same data shape), the client can handle it via ComponentSwapContext.
+    This endpoint is for swaps requiring backend data transformation.
+    
+    Examples:
+    - PriceChart -> DataTable: Convert timeseries to tabular format
+    - KpiCard -> MetricChart: Expand KPI with historical data
+    - DataTable -> PriceChart: Extract timeseries from table rows
+    """
+    await smart_rate_limit(
+        request,
+        scope=A2UI_RATE_LIMIT_SCOPE,
+        weight=A2UI_ACTION_WEIGHT,
+    )
+    
+    store = get_dashboard_store()
+    state = store.get(dashboard_id)
+    
+    if not state:
+        raise HTTPException(status_code=404, detail="Dashboard not found")
+    
+    # Get current component data from latest data model
+    data_model = state.latest_data.get("data", {}) if state.latest_data else {}
+    
+    # Transform data based on swap type
+    transformed_data = _transform_data_for_swap(
+        data_model=data_model,
+        component_id=swap.component_id,
+        from_type=swap.from_type,
+        to_type=swap.to_type,
+    )
+    
+    if transformed_data is None:
+        # No transformation needed - client handles simple swaps
+        return {
+            "status": "no_transform_needed",
+            "component_id": swap.component_id,
+            "from_type": swap.from_type,
+            "to_type": swap.to_type,
+            "message": "This swap can be handled client-side without data transformation",
+        }
+    
+    return {
+        "status": "success",
+        "component_id": swap.component_id,
+        "from_type": swap.from_type,
+        "to_type": swap.to_type,
+        "transformed_data": transformed_data,
+    }
+
+
+def _transform_data_for_swap(
+    data_model: Dict[str, Any],
+    component_id: str,
+    from_type: str,
+    to_type: str,
+) -> Optional[Dict[str, Any]]:
+    """
+    Transform data for component type swap.
+    
+    Function: _transform_data_for_swap
+    Called from: swap_component endpoint
+    Invokes: Type-specific transformation functions
+    Why: Different visualizations need different data shapes.
+    
+    Returns None if no transformation is needed (client can handle).
+    """
+    # PriceChart/MetricChart -> DataTable: Convert timeseries to rows
+    if from_type in ("PriceChart", "MetricChart") and to_type == "DataTable":
+        series_data = data_model.get("chart", {}).get("series", [])
+        if not series_data:
+            return None
+        
+        # Convert series data to table rows
+        rows = []
+        for series in series_data:
+            values = series.get("values", [])
+            labels = series.get("labels", [])
+            name = series.get("name", series.get("metric", "Value"))
+            
+            for i, value in enumerate(values):
+                label = labels[i] if i < len(labels) else f"Period {i+1}"
+                rows.append({
+                    "period": label,
+                    name: value,
+                })
+        
+        return {
+            "type": "DataTable",
+            "props": {
+                "columns": [
+                    {"key": "period", "label": "Period"},
+                    {"key": series_data[0].get("name", "Value"), "label": series_data[0].get("name", "Value")},
+                ],
+                "rows": rows,
+                "sortable": True,
+            }
+        }
+    
+    # DataTable -> MetricChart: Convert rows to series
+    if from_type == "DataTable" and to_type in ("MetricChart", "PriceChart"):
+        table_data = data_model.get("table", {})
+        rows = table_data.get("rows", [])
+        if not rows:
+            return None
+        
+        # Find numeric columns for chart series
+        numeric_cols = []
+        for key, val in rows[0].items():
+            if isinstance(val, (int, float)) and key.lower() not in ("year", "quarter", "period"):
+                numeric_cols.append(key)
+        
+        if not numeric_cols:
+            return None
+        
+        # Extract series from first numeric column
+        values = [row.get(numeric_cols[0]) for row in rows]
+        labels = [row.get("period", row.get("ticker", f"Row {i}")) for i, row in enumerate(rows)]
+        
+        return {
+            "type": to_type,
+            "props": {
+                "series": [{
+                    "name": numeric_cols[0],
+                    "values": values,
+                    "labels": labels,
+                }],
+                "title": f"{numeric_cols[0]} Over Time",
+                "chartType": "line",
+            }
+        }
+    
+    # KpiCard -> MetricChart: Need historical data from database
+    if from_type == "KpiCard" and to_type == "MetricChart":
+        kpis = data_model.get("kpis", {})
+        if not kpis:
+            return None
+        
+        # For now, return a placeholder indicating we'd need to fetch historical data
+        # In production, this would query the database for historical values
+        return {
+            "type": "MetricChart",
+            "props": {
+                "series": [{
+                    "name": "Historical Data",
+                    "values": [],  # Would be populated from database
+                    "labels": [],
+                }],
+                "title": "Historical Trend",
+                "chartType": "line",
+                "message": "Historical data would be fetched from database",
+            }
+        }
+    
+    # No transformation needed - client can handle this swap
+    return None
 
 
 class FollowUpSuggestion(BaseModel):
@@ -444,8 +1040,12 @@ async def get_follow_up_suggestions(dashboard_id: str):
     kpis = data_model.get("kpis", {})
     table_rows = data_model.get("table", {}).get("rows", [])
     
+    # Detect anomalies in the data (proactive insights)
+    anomalies = detect_anomalies(data_model, primary_ticker)
+    anomaly_suggestions = anomalies_to_suggestions(anomalies)
+    
     # Generate contextual follow-ups based on data findings
-    suggestions = _generate_data_aware_follow_ups(
+    skill_suggestions = _generate_data_aware_follow_ups(
         skill_id=skill_id,
         primary_ticker=primary_ticker,
         tickers=tickers,
@@ -454,7 +1054,26 @@ async def get_follow_up_suggestions(dashboard_id: str):
         table_rows=table_rows,
     )
     
-    return {"suggestions": [s.model_dump() for s in suggestions]}
+    # Merge anomaly suggestions (priority) with skill suggestions
+    all_suggestions = anomaly_suggestions + [s.model_dump() for s in skill_suggestions]
+    
+    return {
+        "suggestions": all_suggestions,
+        "anomalies": [{
+            "ticker": a.ticker,
+            "metric": a.metric,
+            "value": a.value,
+            "unit": a.unit,
+            "comparison": {
+                "type": a.comparison_type,
+                "baseline": a.baseline,
+                "percentageDiff": a.percentage_diff,
+                "description": a.description,
+            },
+            "importance": a.importance,
+            "explanation": a.explanation,
+        } for a in anomalies[:3]],  # Top 3 anomalies for UI display
+    }
 
 
 def _generate_data_aware_follow_ups(

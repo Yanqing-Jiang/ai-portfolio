@@ -15,6 +15,6 @@ export default defineConfig({
     setupFiles: './vitest.setup.ts',
     globals: true,
     css: true,
-    exclude: ['analytics-legacy/**', 'node_modules/**'],
+    exclude: ['analytics-legacy/**', 'node_modules/**', 'e2e/**', 'tests/e2e/**', '**/*.spec.ts'],
   },
 });

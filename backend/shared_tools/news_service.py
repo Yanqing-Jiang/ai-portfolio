@@ -5,13 +5,177 @@ Function: execute_news_tool — fetches news and sentiment for stock tickers.
 Called from: backend.generative_ui.agent_v2, backend.conversational_analytics.tools
 Invokes: Alpha Vantage News API or demo data.
 Purpose: Single implementation of news fetching for all projects.
+
+Optimizations:
+  - #3: Shared httpx.AsyncClient for connection reuse (avoids TCP handshake per request)
+  - #5: TTL-based response cache (5 minutes) to avoid redundant API calls
 """
 from __future__ import annotations
 
+import asyncio
+import hashlib
+import logging
 import os
-import httpx
+import time
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 from datetime import datetime
+
+import httpx
+
+logger = logging.getLogger(__name__)
+
+# ============================================================================
+# Optimization #3: Shared HTTP Client
+# ============================================================================
+
+_http_client: Optional[httpx.AsyncClient] = None
+_http_client_lock = asyncio.Lock()
+
+
+async def _get_http_client() -> httpx.AsyncClient:
+    """
+    Get or create a shared httpx.AsyncClient for connection reuse.
+
+    Function: _get_http_client — returns singleton HTTP client.
+    Called from: _fetch_news_from_api
+    Why: Reuses TCP connections to reduce latency on repeated API calls.
+    """
+    global _http_client
+    if _http_client is None:
+        async with _http_client_lock:
+            if _http_client is None:
+                _http_client = httpx.AsyncClient(
+                    timeout=10.0,
+                    limits=httpx.Limits(
+                        max_keepalive_connections=5,
+                        max_connections=10,
+                        keepalive_expiry=30.0,
+                    ),
+                )
+                logger.info("[NEWS_SERVICE] HTTP client initialized (keepalive enabled)")
+    return _http_client
+
+
+async def close_http_client() -> None:
+    """
+    Close the shared HTTP client. Call during application shutdown.
+
+    Function: close_http_client — gracefully closes HTTP client.
+    Called from: backend.main.shutdown_event
+    Why: Ensures clean resource cleanup.
+    """
+    global _http_client
+    if _http_client is not None:
+        await _http_client.aclose()
+        _http_client = None
+        logger.info("[NEWS_SERVICE] HTTP client closed")
+
+
+# ============================================================================
+# Optimization #5: TTL-based Response Cache
+# ============================================================================
+
+@dataclass
+class CachedNewsResponse:
+    """Cached news response with metadata."""
+    articles: List[Dict[str, Any]]
+    created_at: float = field(default_factory=time.time)
+    hit_count: int = 0
+
+
+class NewsCache:
+    """
+    TTL-based cache for news API responses.
+
+    Class: NewsCache
+    Role: Caches news responses to avoid redundant API calls.
+    Called from: _fetch_news_from_api
+    Why: Alpha Vantage has rate limits; caching reduces latency and costs.
+    """
+
+    def __init__(self, ttl_seconds: int = 300, max_size: int = 50):
+        """
+        Initialize news cache.
+
+        Args:
+            ttl_seconds: Cache entry TTL (default 5 minutes)
+            max_size: Maximum cache entries before eviction
+        """
+        self.ttl_seconds = ttl_seconds
+        self.max_size = max_size
+        self._cache: Dict[str, CachedNewsResponse] = {}
+
+    def _make_key(self, ticker: str, limit: int, topics: Optional[List[str]]) -> str:
+        """Generate cache key from request parameters."""
+        topic_str = ",".join(sorted(topics)) if topics else ""
+        key_str = f"{ticker.upper()}:{limit}:{topic_str}"
+        return hashlib.md5(key_str.encode()).hexdigest()[:16]
+
+    def get(self, ticker: str, limit: int, topics: Optional[List[str]] = None) -> Optional[List[Dict[str, Any]]]:
+        """
+        Get cached articles if not expired.
+
+        Returns:
+            List of articles if cache hit, None otherwise.
+        """
+        key = self._make_key(ticker, limit, topics)
+        cached = self._cache.get(key)
+
+        if cached is None:
+            return None
+
+        # Check expiration
+        if time.time() - cached.created_at > self.ttl_seconds:
+            del self._cache[key]
+            return None
+
+        cached.hit_count += 1
+        logger.debug("[NEWS_CACHE] Hit for %s (hits=%d)", ticker, cached.hit_count)
+        return cached.articles
+
+    def set(self, ticker: str, limit: int, topics: Optional[List[str]], articles: List[Dict[str, Any]]) -> None:
+        """
+        Cache articles for a request.
+
+        Evicts oldest entries if cache is full.
+        """
+        # Evict oldest entries if at capacity
+        if len(self._cache) >= self.max_size:
+            oldest_key = min(self._cache, key=lambda k: self._cache[k].created_at)
+            del self._cache[oldest_key]
+
+        key = self._make_key(ticker, limit, topics)
+        self._cache[key] = CachedNewsResponse(articles=articles)
+        logger.debug("[NEWS_CACHE] Cached %d articles for %s", len(articles), ticker)
+
+    def stats(self) -> Dict[str, Any]:
+        """Return cache statistics."""
+        now = time.time()
+        valid_entries = sum(
+            1 for c in self._cache.values()
+            if now - c.created_at <= self.ttl_seconds
+        )
+        return {
+            "size": len(self._cache),
+            "valid_entries": valid_entries,
+            "ttl_seconds": self.ttl_seconds,
+            "max_size": self.max_size,
+        }
+
+
+# Global cache instance
+_news_cache = NewsCache(ttl_seconds=300, max_size=50)
+
+
+def get_news_cache() -> NewsCache:
+    """Get the global news cache instance."""
+    return _news_cache
+
+
+# ============================================================================
+# Tool Definition
+# ============================================================================
 
 # Tool definition for Claude
 NEWS_TOOL_DEFINITION = {
@@ -46,6 +210,10 @@ Returns news articles with titles, summaries, sentiment scores, and source citat
     }
 }
 
+
+# ============================================================================
+# Sentiment Helpers
+# ============================================================================
 
 def _get_sentiment_label(score: float) -> str:
     """
@@ -85,65 +253,93 @@ def _get_sentiment_color(score: float) -> str:
         return "#ef4444"  # red
 
 
-async def _fetch_news_from_api(ticker: str, limit: int = 5) -> List[Dict[str, Any]]:
+# ============================================================================
+# API Fetch with Caching
+# ============================================================================
+
+async def _fetch_news_from_api(
+    ticker: str,
+    limit: int = 5,
+    topics: Optional[List[str]] = None,
+    skip_cache: bool = False,
+) -> List[Dict[str, Any]]:
     """
     Fetch news from Alpha Vantage News API.
     
-    Function: _fetch_news_from_api — calls external news API.
+    Function: _fetch_news_from_api — calls external news API with caching.
     Called from: execute_news_tool
-    Invokes: httpx.AsyncClient
-    Purpose: Real news data when API key is configured.
+    Invokes: _get_http_client, NewsCache
+    Purpose: Real news data when API key is configured; uses shared client + cache.
+
+    Optimizations:
+      - Uses shared httpx.AsyncClient (connection reuse)
+      - TTL cache for responses (5 min default)
     """
     api_key = os.getenv("ALPHA_VANTAGE_API_KEY", "")
     
     if not api_key:
         return _get_demo_news(ticker, limit)
     
+    # Check cache first (unless skip_cache is set)
+    if not skip_cache:
+        cached = _news_cache.get(ticker, limit, topics)
+        if cached is not None:
+            return cached
+    
     url = "https://www.alphavantage.co/query"
-    params = {
+    params: Dict[str, Any] = {
         "function": "NEWS_SENTIMENT",
         "tickers": ticker.upper(),
         "limit": min(limit, 50),
         "apikey": api_key
     }
+    if topics:
+        params["topics"] = ",".join(topics)
     
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(url, params=params)
-            response.raise_for_status()
-            data = response.json()
+        client = await _get_http_client()
+        response = await client.get(url, params=params)
+        response.raise_for_status()
+        data = response.json()
+        
+        if "feed" not in data:
+            return _get_demo_news(ticker, limit)
+        
+        articles = []
+        for item in data.get("feed", [])[:limit]:
+            # Find ticker-specific sentiment
+            ticker_sentiment = None
+            for ts in item.get("ticker_sentiment", []):
+                if ts.get("ticker", "").upper() == ticker.upper():
+                    ticker_sentiment = ts
+                    break
             
-            if "feed" not in data:
-                return _get_demo_news(ticker, limit)
+            sentiment_score = float(ticker_sentiment.get("ticker_sentiment_score", 0)) if ticker_sentiment else 0
             
-            articles = []
-            for item in data.get("feed", [])[:limit]:
-                # Find ticker-specific sentiment
-                ticker_sentiment = None
-                for ts in item.get("ticker_sentiment", []):
-                    if ts.get("ticker", "").upper() == ticker.upper():
-                        ticker_sentiment = ts
-                        break
-                
-                sentiment_score = float(ticker_sentiment.get("ticker_sentiment_score", 0)) if ticker_sentiment else 0
-                
-                articles.append({
-                    "title": item.get("title", ""),
-                    "summary": item.get("summary", "")[:300] + "..." if len(item.get("summary", "")) > 300 else item.get("summary", ""),
-                    "url": item.get("url", ""),
-                    "source": item.get("source", "Unknown"),
-                    "published_at": item.get("time_published", ""),
-                    "sentiment_score": round(sentiment_score, 3),
-                    "sentiment_label": _get_sentiment_label(sentiment_score),
-                    "sentiment_color": _get_sentiment_color(sentiment_score),
-                    "topics": [t.get("topic", "") for t in item.get("topics", [])][:3],
-                })
-            
-            return articles
-            
-    except Exception:
+            articles.append({
+                "title": item.get("title", ""),
+                "summary": item.get("summary", "")[:300] + "..." if len(item.get("summary", "")) > 300 else item.get("summary", ""),
+                "url": item.get("url", ""),
+                "source": item.get("source", "Unknown"),
+                "published_at": item.get("time_published", ""),
+                "sentiment_score": round(sentiment_score, 3),
+                "sentiment_label": _get_sentiment_label(sentiment_score),
+                "sentiment_color": _get_sentiment_color(sentiment_score),
+                "topics": [t.get("topic", "") for t in item.get("topics", [])][:3],
+            })
+        
+        # Cache the result
+        _news_cache.set(ticker, limit, topics, articles)
+        return articles
+        
+    except Exception as e:
+        logger.warning("[NEWS_SERVICE] API fetch failed: %s", e)
         return _get_demo_news(ticker, limit)
 
+
+# ============================================================================
+# Demo Data
+# ============================================================================
 
 def _get_demo_news(ticker: str, limit: int = 5) -> List[Dict[str, Any]]:
     """
@@ -261,6 +457,10 @@ def _get_demo_news(ticker: str, limit: int = 5) -> List[Dict[str, Any]]:
     return articles[:limit]
 
 
+# ============================================================================
+# Main Tool Entry Point
+# ============================================================================
+
 async def execute_news_tool(
     ticker: str,
     limit: int = 5,
@@ -286,7 +486,7 @@ async def execute_news_tool(
         # Clamp limit
         limit = max(1, min(limit or 5, 10))
         
-        articles = await _fetch_news_from_api(ticker, limit)
+        articles = await _fetch_news_from_api(ticker, limit, topics)
         
         if not articles:
             return {
@@ -322,4 +522,9 @@ async def execute_news_tool(
         }
 
 
-__all__ = ["NEWS_TOOL_DEFINITION", "execute_news_tool"]
+__all__ = [
+    "NEWS_TOOL_DEFINITION",
+    "execute_news_tool",
+    "close_http_client",
+    "get_news_cache",
+]

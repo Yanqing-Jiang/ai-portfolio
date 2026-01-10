@@ -14,14 +14,14 @@ langchain-community==0.3.30
 langchain-openai==0.3.34
 google-genai
 anthropic==0.75.0
-claude-agent-sdk==0.1.18
+# claude-agent-sdk removed: 2-12s cold boot overhead causes timeouts on Render.com
+# Using direct Anthropic Messages API instead (sdk_wrapper.py)
 python-multipart
 fastapi-limiter
 redis
 asyncpg
 sqlglot
 python-jose[cryptography]
-fakeredis
 pytest-asyncio>=0.23.6
 Pillow
 stripe

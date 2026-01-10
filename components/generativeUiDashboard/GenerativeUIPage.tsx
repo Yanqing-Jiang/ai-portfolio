@@ -43,6 +43,7 @@ import { FollowUpSuggestions, type FollowUpSuggestion } from './FollowUpSuggesti
 import type { SkillInfo } from './SkillHeaderBadge';
 import { ContextRibbon, type HistoryItem } from './ContextRibbon';
 import { ProcessPanel, type AuditEvent } from './ProcessPanel';
+import { DashboardWithLayout } from './DashboardWithLayout';
 import { ProjectHelmet } from '../ProjectHelmet';
 import { PROJECT_DATA } from '../../constants';
 import type { Project } from '../../types';
@@ -356,7 +357,7 @@ export function GenerativeUIPage(): React.ReactElement {
         }
     }, [question]);
 
-    // Handle dashboard creation
+    // Handle dashboard creation (always creates new dashboard)
     const handleSubmit = useCallback(async (overrideQuestion?: string) => {
         const nextQuestion = (overrideQuestion ?? question).trim();
         if (!nextQuestion || isCreating) return;
@@ -393,6 +394,81 @@ export function GenerativeUIPage(): React.ReactElement {
             setIsCreating(false);
         }
     }, [question, isCreating, addAuditEvent]);
+
+    /**
+     * handleInput - Unified input handler for chat input.
+     * 
+     * Function: handleInput
+     * Called from: Enter keypress, Generate button click
+     * Invokes: sendQuery (if dashboard exists) OR handleSubmit (no dashboard)
+     * Why: Routes user input through LLM intent classification to determine
+     *      whether to modify existing dashboard or create new one.
+     */
+    const handleInput = useCallback(async () => {
+        const nextQuestion = question.trim();
+        if (!nextQuestion || isCreating) return;
+
+        setShowSuggestions(false);
+
+        // If we have an active dashboard, use LLM-driven intent classification
+        // This lets the LLM decide if we need a new dashboard or modify current one
+        if (dashboardId && streamState.isDone) {
+            setIsCreating(true);
+            setError(null);
+
+            try {
+                addAuditEvent('stream_started', 'Query sent', nextQuestion);
+                const result = await streamActions.sendQuery(nextQuestion);
+
+                if (result.status === 'new_dashboard' && result.dashboard_id) {
+                    // LLM determined this needs a new dashboard
+                    setDashboardId(result.dashboard_id);
+                    setQuestion(nextQuestion);
+                    setHistory(prev => {
+                        if (prev.some(h => h.id === result.dashboard_id)) return prev;
+                        return [...prev, { id: result.dashboard_id!, query: nextQuestion, timestamp: new Date() }];
+                    });
+                    addAuditEvent('skill_selected', 'New analysis started', result.rationale || '');
+                } else if (result.status === 'success') {
+                    // LLM handled it within current dashboard context
+                    addAuditEvent('data_received', `Intent: ${result.intent}`, result.rationale || '');
+
+                    // Apply layout changes via custom event (listened by LayoutProvider components)
+                    if (result.intent === 'modify_layout' && result.result) {
+                        const layoutAction = result.result as { action?: string; details?: Record<string, unknown> };
+                        const actionName = layoutAction.action;
+                        const actionDetails = layoutAction.details || {};
+
+                        // Emit custom event for layout updates
+                        // This allows components within LayoutProvider to respond
+                        window.dispatchEvent(new CustomEvent('a2ui:layout-change', {
+                            detail: {
+                                action: actionName,
+                                params: actionDetails,
+                                dashboardId,
+                            }
+                        }));
+
+                        addAuditEvent('layout_updated', `Layout: ${actionName}`, JSON.stringify(actionDetails));
+                    }
+                } else if (result.status === 'error') {
+                    setError(result.message || 'Query failed');
+                    addAuditEvent('error', 'Query failed', result.message || 'Unknown error');
+                }
+            } catch (err) {
+                console.error('Query failed, falling back to new dashboard:', err);
+                setError(null); // Clear error before fallback
+                // Fall back to creating new dashboard
+                handleSubmit(nextQuestion);
+                return;
+            } finally {
+                setIsCreating(false);
+            }
+        } else {
+            // No active dashboard or still streaming - create new one
+            handleSubmit(nextQuestion);
+        }
+    }, [question, isCreating, dashboardId, streamState.isDone, streamActions, handleSubmit, addAuditEvent]);
 
     // Handle history selection
     const handleHistorySelect = useCallback((item: HistoryItem) => {
@@ -526,15 +602,47 @@ export function GenerativeUIPage(): React.ReactElement {
         streamActions.clearClarification();
     }, [streamActions]);
 
-    // Handle follow-up suggestion click
+    // Handle follow-up suggestion click (uses LLM-driven intent classification)
     const handleFollowUpSelect = useCallback(
-        (suggestion: FollowUpSuggestion) => {
+        async (suggestion: FollowUpSuggestion) => {
             setQuestion(suggestion.query);
             setFollowUpSuggestions([]);
-            // Auto-submit the follow-up
-            handleSubmit(suggestion.query);
+
+            // If we have an active dashboard, use the unified query endpoint
+            // This allows the LLM to decide if this should be a new dashboard
+            // or a modification to the current one
+            if (dashboardId) {
+                try {
+                    addAuditEvent('stream_started', 'Query sent', suggestion.query);
+                    const result = await streamActions.sendQuery(suggestion.query);
+
+                    if (result.status === 'new_dashboard' && result.dashboard_id) {
+                        // LLM determined this needs a new dashboard
+                        // The sendQuery event handler will emit 'a2ui:new-dashboard'
+                        setDashboardId(result.dashboard_id);
+                        setHistory(prev => {
+                            if (prev.some(h => h.id === result.dashboard_id)) return prev;
+                            return [...prev, { id: result.dashboard_id!, query: suggestion.query, timestamp: new Date() }];
+                        });
+                        addAuditEvent('skill_selected', 'New analysis started', result.rationale || '');
+                    } else if (result.status === 'success') {
+                        // LLM handled it within current dashboard context
+                        addAuditEvent('data_received', `Intent: ${result.intent}`, result.rationale || '');
+                    } else if (result.status === 'error') {
+                        addAuditEvent('error', 'Query failed', result.message || 'Unknown error');
+                    }
+                } catch (err) {
+                    console.error('Query failed:', err);
+                    addAuditEvent('error', 'Query failed', err instanceof Error ? err.message : 'Unknown error');
+                    // Fall back to creating new dashboard
+                    handleSubmit(suggestion.query);
+                }
+            } else {
+                // No active dashboard - create new one
+                handleSubmit(suggestion.query);
+            }
         },
-        [handleSubmit]
+        [dashboardId, streamActions, handleSubmit, addAuditEvent]
     );
 
     // Track stream completion
@@ -2180,7 +2288,7 @@ export function GenerativeUIPage(): React.ReactElement {
 
                                                 >
 
-                                                    {[].map((feature, i) => (
+                                                    {([] as Array<{ label: string; prompt: string; color: string; icon: string }>).map((feature, i) => (
 
                                                         <motion.button
 
@@ -2288,9 +2396,9 @@ export function GenerativeUIPage(): React.ReactElement {
                                         <A2UISurfaceError error={streamState.error} onRetry={streamActions.reconnect} />
                                     )}
 
-                                    {/* A2UI Surface */}
+                                    {/* A2UI Surface - Wrapped with LayoutProvider for LLM-driven layout control */}
                                     {surface?.root && (
-                                        <>
+                                        <DashboardWithLayout>
                                             <A2UISurface
                                                 surface={surface}
                                                 dataModel={dataModel}
@@ -2306,7 +2414,7 @@ export function GenerativeUIPage(): React.ReactElement {
                                                     />
                                                 </div>
                                             )}
-                                        </>
+                                        </DashboardWithLayout>
                                     )}
 
                                     {/* Clarification Overlay */}
@@ -2373,7 +2481,7 @@ export function GenerativeUIPage(): React.ReactElement {
                                         onKeyDown={(e) => {
                                             if (e.key === 'Enter' && !e.shiftKey) {
                                                 e.preventDefault();
-                                                handleSubmit();
+                                                handleInput();
                                             }
                                         }}
                                         onFocus={() => {
@@ -2425,7 +2533,7 @@ export function GenerativeUIPage(): React.ReactElement {
                                             initial={{ scale: 0.8, opacity: 0 }}
                                             animate={{ scale: 1, opacity: 1 }}
                                             exit={{ scale: 0.8, opacity: 0 }}
-                                            onClick={() => handleSubmit()}
+                                            onClick={() => handleInput()}
                                             disabled={isCreating || !question.trim()}
                                             className="px-6 py-3 rounded-xl font-semibold transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                                             style={{

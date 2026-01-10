@@ -1,0 +1,191 @@
+{
+  "trace_id": "3c36671e-bd98-4f1b-94ce-2f1c9f381d04",
+  "dashboard_id": "289e909a-fc1c-44e8-bf7d-9d5be418948a",
+  "question": "Why did NVDA drop recently?",
+  "skill_id": "a2ui_explain_move",
+  "tickers": [
+    "NVDA"
+  ],
+  "metric": "Revenue",
+  "time_range": "3M",
+  "layout_override": null,
+  "steps": [
+    {
+      "step_id": "c3665dbb",
+      "step_type": "skill_selection",
+      "timestamp": "2026-01-09T16:12:33.294162",
+      "duration_ms": 0.036716461181640625,
+      "success": true,
+      "details": {
+        "skill_id": "a2ui_explain_move",
+        "tickers": [
+          "NVDA"
+        ],
+        "metric": "Revenue",
+        "time_range": "3M"
+      },
+      "error": null
+    },
+    {
+      "step_id": "d29ee73a",
+      "step_type": "layout_planning",
+      "timestamp": "2026-01-09T16:12:43.373057",
+      "duration_ms": 10078.568935394287,
+      "success": true,
+      "details": {
+        "layout_override": null,
+        "component_count": 15
+      },
+      "error": null
+    },
+    {
+      "step_id": "8db33f75",
+      "step_type": "seed_data",
+      "timestamp": "2026-01-09T16:12:43.373606",
+      "duration_ms": null,
+      "success": true,
+      "details": {
+        "keys": [
+          "title",
+          "ticker",
+          "primary_ticker",
+          "tickers",
+          "time_range",
+          "metric"
+        ]
+      },
+      "error": null
+    },
+    {
+      "step_id": "d9155c56",
+      "step_type": "clarification_request",
+      "timestamp": "2026-01-09T16:12:43.373692",
+      "duration_ms": null,
+      "success": true,
+      "details": {
+        "request_id": "clarify_time_1767975163373644800",
+        "fields": [
+          "time_period"
+        ]
+      },
+      "error": null
+    },
+    {
+      "step_id": "d4e546c8",
+      "step_type": "clarification_response",
+      "timestamp": "2026-01-09T16:12:48.378004",
+      "duration_ms": 5004.16374206543,
+      "success": true,
+      "details": {},
+      "error": null
+    },
+    {
+      "step_id": "59ac6550",
+      "step_type": "sdk_flow_execute",
+      "timestamp": "2026-01-09T16:12:57.683394",
+      "duration_ms": null,
+      "success": true,
+      "details": {
+        "skill_id": "a2ui_explain_move",
+        "parameters": {
+          "tickers": [
+            "NVDA"
+          ],
+          "metric": "Revenue",
+          "time_range": "3M"
+        }
+      },
+      "error": null
+    },
+    {
+      "step_id": "6e5cef73",
+      "step_type": "sdk_audit::sdk_flow_started",
+      "timestamp": "2026-01-09T16:12:57.688594",
+      "duration_ms": null,
+      "success": true,
+      "details": {},
+      "error": null
+    },
+    {
+      "step_id": "f58f769a",
+      "step_type": "sdk_audit::sdk_session_started",
+      "timestamp": "2026-01-09T16:13:02.509320",
+      "duration_ms": null,
+      "success": true,
+      "details": {},
+      "error": null
+    },
+    {
+      "step_id": "1b70c36a",
+      "step_type": "sdk_audit::tool_called",
+      "timestamp": "2026-01-09T16:13:06.884936",
+      "duration_ms": null,
+      "success": true,
+      "details": {},
+      "error": null
+    },
+    {
+      "step_id": "1f63194e",
+      "step_type": "sdk_audit::tool_called",
+      "timestamp": "2026-01-09T16:13:07.250134",
+      "duration_ms": null,
+      "success": true,
+      "details": {},
+      "error": null
+    },
+    {
+      "step_id": "660689fe",
+      "step_type": "sdk_audit::sdk_conversation_complete",
+      "timestamp": "2026-01-09T16:13:07.737741",
+      "duration_ms": null,
+      "success": true,
+      "details": {},
+      "error": null
+    },
+    {
+      "step_id": "badb6e12",
+      "step_type": "sdk_data_update",
+      "timestamp": "2026-01-09T16:13:08.460795",
+      "duration_ms": null,
+      "success": true,
+      "details": {
+        "keys": [
+          "explanation",
+          "sdk_raw_response"
+        ]
+      },
+      "error": null
+    },
+    {
+      "step_id": "d0e88073",
+      "step_type": "sdk_flow_complete",
+      "timestamp": "2026-01-09T16:13:08.461163",
+      "duration_ms": null,
+      "success": true,
+      "details": {},
+      "error": null
+    },
+    {
+      "step_id": "3703632b",
+      "step_type": "execute_skill_complete",
+      "timestamp": "2026-01-09T16:13:08.533495",
+      "duration_ms": 10850.092887878418,
+      "success": true,
+      "details": {
+        "data_keys": [
+          "explanation",
+          "sdk_raw_response"
+        ],
+        "citation_count": 0,
+        "execution_mode": "sdk_flow"
+      },
+      "error": null
+    }
+  ],
+  "started_at": "2026-01-09T16:12:33.293408",
+  "completed_at": "2026-01-09T16:13:08.533554",
+  "total_duration_ms": 35240.146,
+  "message_count": 19,
+  "success": true,
+  "error": null
+}

@@ -1,15 +1,16 @@
 // --- Function/Class Map ---
 // Component: FollowUpSuggestions
-//   Role: Render follow-up suggestion chips with loading and empty states.
+//   Role: Render follow-up suggestion chips with loading, empty states, and anomaly alerts.
 //   Called from: components/generativeUiDashboard/GenerativeUIPage.tsx
-//   Invokes: onSelect callbacks, framer-motion animations
-//   Why: Keeps the analysis flow conversational with guided next steps.
+//   Invokes: onSelect callbacks, framer-motion animations, AnomalyAlert component
+//   Why: Keeps the analysis flow conversational with guided next steps and proactive insights.
 // --- End Function/Class Map ---
 /**
  * FollowUpSuggestions Component
  *
  * Displays AI-generated follow-up questions at the bottom of the dashboard.
  * Clicking a suggestion replaces this component with new dashboard content.
+ * Now includes anomaly alerts for proactive insights.
  * 
  * Called from: GenerativeUIPage.tsx after dashboard completes
  * Why: Enables conversational flow by suggesting next analytical steps
@@ -17,8 +18,9 @@
 
 import React from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { AnomalyAlertList, type AnomalyData } from './widgets/AnomalyAlert';
 
-interface FollowUpSuggestion {
+export interface FollowUpSuggestion {
     /** Unique ID for this suggestion */
     id: string;
     /** The question/query to execute */
@@ -27,9 +29,13 @@ interface FollowUpSuggestion {
     label: string;
     /** Optional icon */
     icon?: string;
+    /** Category for styling/prioritization */
+    category?: 'skill' | 'anomaly' | 'web_search' | 'insight';
+    /** Priority for ordering */
+    priority?: 'high' | 'medium' | 'low';
 }
 
-interface FollowUpSuggestionsProps {
+export interface FollowUpSuggestionsProps {
     /** List of suggestions to display */
     suggestions: FollowUpSuggestion[];
     /** Callback when user clicks a suggestion */
@@ -38,6 +44,14 @@ interface FollowUpSuggestionsProps {
     isLoading?: boolean;
     /** Optional title override */
     title?: string;
+    /** Anomalies to display as proactive alerts */
+    anomalies?: AnomalyData[];
+    /** Callback when user clicks "Investigate" on an anomaly */
+    onInvestigateAnomaly?: (anomaly: AnomalyData) => void;
+    /** Callback when user clicks "Compare" on an anomaly */
+    onCompareAnomaly?: (anomaly: AnomalyData, peerTicker: string) => void;
+    /** Callback when user dismisses an anomaly */
+    onDismissAnomaly?: (anomaly: AnomalyData) => void;
 }
 
 const theme = {
@@ -59,10 +73,38 @@ const theme = {
     },
 };
 
-const ICONS = {
+const ICONS: Record<string, string> = {
     header: '>>',
     action: '>',
+    skill: '🎯',
+    anomaly: '💡',
+    web_search: '🔍',
+    insight: '✨',
 };
+
+/**
+ * Get icon for suggestion based on category or explicit icon
+ */
+function getSuggestionIcon(suggestion: FollowUpSuggestion): string {
+    if (suggestion.icon) return suggestion.icon;
+    if (suggestion.category && ICONS[suggestion.category]) {
+        return ICONS[suggestion.category];
+    }
+    return ICONS.action;
+}
+
+/**
+ * Get priority styling for high-priority suggestions
+ */
+function getPriorityStyles(suggestion: FollowUpSuggestion): React.CSSProperties {
+    if (suggestion.priority === 'high' || suggestion.category === 'anomaly') {
+        return {
+            borderColor: 'rgba(244, 63, 94, 0.4)',
+            backgroundColor: 'rgba(244, 63, 94, 0.1)',
+        };
+    }
+    return {};
+}
 
 /**
  * FollowUpSuggestions Component
@@ -72,7 +114,43 @@ export function FollowUpSuggestions({
     onSelect,
     isLoading = false,
     title = 'Continue your analysis',
+    anomalies = [],
+    onInvestigateAnomaly,
+    onCompareAnomaly,
+    onDismissAnomaly,
 }: FollowUpSuggestionsProps): React.ReactElement {
+    // State for dismissed anomalies
+    const [dismissedAnomalies, setDismissedAnomalies] = React.useState<Set<string>>(new Set());
+
+    // Filter out dismissed anomalies
+    const visibleAnomalies = anomalies.filter(
+        a => !dismissedAnomalies.has(`${a.ticker}-${a.metric}`)
+    );
+
+    // Handle dismiss
+    const handleDismiss = (anomaly: AnomalyData) => {
+        setDismissedAnomalies(prev => new Set([...prev, `${anomaly.ticker}-${anomaly.metric}`]));
+        onDismissAnomaly?.(anomaly);
+    };
+
+    // Handle investigate - convert anomaly to suggestion and select it
+    const handleInvestigate = (anomaly: AnomalyData) => {
+        if (onInvestigateAnomaly) {
+            onInvestigateAnomaly(anomaly);
+        } else {
+            // Default behavior: create a suggestion and select it
+            const suggestion: FollowUpSuggestion = {
+                id: `anomaly-${anomaly.ticker}-${anomaly.metric}`,
+                label: `Investigate ${anomaly.metric}`,
+                query: `Explain why ${anomaly.ticker}'s ${anomaly.metric} is ${anomaly.comparison.percentageDiff > 0 ? 'high' : 'low'}`,
+                icon: ICONS.anomaly,
+                category: 'anomaly',
+                priority: 'high',
+            };
+            onSelect(suggestion);
+        }
+    };
+
     return (
         <motion.div
             initial={{ opacity: 0, y: 20 }}
@@ -88,6 +166,18 @@ export function FollowUpSuggestions({
                 backdropFilter: 'blur(8px)',
             }}
         >
+            {/* Anomaly Alerts (proactive insights) */}
+            {visibleAnomalies.length > 0 && (
+                <div className="mb-4">
+                    <AnomalyAlertList
+                        anomalies={visibleAnomalies}
+                        onInvestigate={handleInvestigate}
+                        onCompare={onCompareAnomaly}
+                        onDismiss={handleDismiss}
+                    />
+                </div>
+            )}
+
             {/* Header */}
             <div className="flex items-center gap-2 mb-3">
                 <span className="text-lg">{ICONS.header}</span>
@@ -126,6 +216,7 @@ export function FollowUpSuggestions({
                                 border: `1px solid ${theme.colors.bg.cardBorder}`,
                                 color: theme.colors.text.primary,
                                 cursor: 'pointer',
+                                ...getPriorityStyles(suggestion),
                             }}
                             whileHover={{
                                 backgroundColor: theme.colors.bg.chipHover,
@@ -134,9 +225,7 @@ export function FollowUpSuggestions({
                             }}
                             whileTap={{ scale: 0.98 }}
                         >
-                            {suggestion.icon && (
-                                <span className="text-sm">{suggestion.icon}</span>
-                            )}
+                            <span className="text-sm">{getSuggestionIcon(suggestion)}</span>
                             <span className="text-sm font-medium">{suggestion.label}</span>
                             <motion.span
                                 className="opacity-0 group-hover:opacity-100 transition-opacity"
@@ -187,5 +276,5 @@ export function FollowUpSuggestions({
     );
 }
 
-export type { FollowUpSuggestion };
 export default FollowUpSuggestions;
+

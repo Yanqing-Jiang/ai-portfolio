@@ -10,6 +10,7 @@ lerna-debug.log*
 # Dependencies
 node_modules/
 venv/
+.venv/
 
 # Production builds
 dist/
@@ -43,3 +44,35 @@ __pycache__/
 # Temporary runtime files
 *_pid.txt
 temp_view.txt
+
+# Secrets & Credentials
+*.pem
+*.key
+*.p12
+*.pfx
+*credentials*.json
+*serviceaccount*.json
+
+# Databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Testing
+coverage/
+.coverage
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+
+# Debug files (removed to allow tooling access)
+
+# OS generated
+Thumbs.db
+*.bak
+*.tmp
+
+# Python build
+*.egg-info/
+*.egg
+build/

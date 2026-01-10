@@ -21,18 +21,20 @@ export function A2UIColumn({
 
     // Get child IDs (supports ChildrenTemplate)
     const childIds: string[] = [];
+    let templateValue: string | undefined;
     if ('explicitList' in children) {
         childIds.push(...children.explicitList);
     } else if ('template' in children && children.template) {
+        templateValue = children.template;
         const dataArray = getByPath(dataModel, children.dataPath);
         const items = Array.isArray(dataArray) ? dataArray : [];
         items.forEach((item, idx) => {
             const childId =
                 typeof item === 'string'
                     ? item
-                    : children.template.includes('{index}')
-                        ? children.template.replace('{index}', String(idx))
-                        : `${children.template}_${idx}`;
+                    : templateValue!.includes('{index}')
+                        ? templateValue!.replace('{index}', String(idx))
+                        : `${templateValue}_${idx}`;
             childIds.push(childId);
         });
     }
@@ -63,7 +65,7 @@ export function A2UIColumn({
         >
             {childIds.map((childId) => (
                 <div key={childId} className="a2ui-column__item">
-                    {renderChild(componentsHasId(components, childId) ? childId : children.template || childId)}
+                    {renderChild(componentsHasId(components, childId) ? childId : templateValue || childId)}
                 </div>
             ))}
         </div>

@@ -2,18 +2,18 @@
 # Class: A2UIRuntime
 #   Role: Orchestrate the A2UI dashboard runtime loop (render -> clarifications -> data updates).
 #   Called from: backend.generative_ui.routes.dashboard; can be imported by tests.
-#   Invokes: A2UIMessageEmitter, A2UIAgent (selection/execute), LayoutPlanner, clarification helpers, TraceStore.
-#   Why: Centralizes the runtime loop to enable incremental streaming, layout overrides, and tracing.
+#   Invokes: A2UIMessageEmitter, A2UIAgent (selection), LayoutPlanner, clarification helpers, TraceStore.
+#   Why: Centralizes the runtime loop for streaming, layout overrides, and tracing.
 # Method: stream_dashboard
 #   Role: Async generator that yields A2UI/Audit messages for SSE streaming.
 #   Called from: A2UIRuntime consumers (routes/tests).
-#   Invokes: agent selection/validation, layout planner, clarifications, execute_skill, trace recording.
-#   Why: Provides a structured, step-aware runtime with full execution traces.
+#   Invokes: agent selection/validation, layout planner, clarifications, trace recording.
+#   Why: Provides a structured, step-aware stream with full execution traces.
 # Method: process_action
 #   Role: Handle user actions through the runtime (trace + incremental data patches).
 #   Called from: backend.generative_ui.routes.dashboard.handle_action
-#   Invokes: A2UIAgent.execute_skill_streaming, TraceStore
-#   Why: Ensures user actions respect runtime tracing + partial invalidation.
+#   Invokes: A2UIAgent.execute_skill, TraceStore
+#   Why: Ensures user actions respect execution flow and partial invalidation.
 # --- End Runtime Function/Class Map ---
 """
 Lightweight A2UI runtime orchestrator.
@@ -21,24 +21,27 @@ Lightweight A2UI runtime orchestrator.
 This module wraps the existing A2UI agent + emitter into a reusable runtime
 loop that can be incrementally extended (layout overrides, step-level audits,
 pause/resume on clarifications, execution traces, etc.).
+
+Note: This version uses direct agent execution instead of SDK flow to avoid
+cold-boot overhead (~2-12s) that causes timeouts on resource-constrained
+backends like Render.com.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import os
 import time
 from pathlib import Path
 from typing import AsyncGenerator, Optional, Dict, List, Any
 
-# Load .env before reading USE_SDK_FLOW
+# Load .env for runtime settings
 from dotenv import load_dotenv
 _MODULE_DIR = Path(__file__).parent
 load_dotenv(dotenv_path=_MODULE_DIR.parent / ".env", override=False)
 
 from .a2ui.emitter import A2UIMessageEmitter
-from .agent_v2 import A2UIAgent
+from .agent_v2 import A2UIAgent, A2UIRunResult
 from .layout_planner import LayoutOverride, LayoutPlanner
 from .clarification import (
     await_clarification_response,
@@ -48,26 +51,85 @@ from .clarification import (
 from .models.dashboard_state import DashboardState
 from .traces import RunTrace, get_trace_store
 
-# SDK Flow: EXPERIMENTAL - disabled by default
-# The Claude Agent SDK has issues with CLI subprocess on both Windows dev and Render deployment.
-# See docs/sdk-issues-and-fixes.md for details. Set to True to experiment with SDK flow.
-USE_SDK_FLOW = False
-
 logger = logging.getLogger(__name__)
-if USE_SDK_FLOW:
-    logger.info("SDK Flow enabled: EXPERIMENTAL LLM-driven execution path")
-else:
-    logger.info("SDK Flow disabled: Using standard agent execution path (production)")
+
+
+def _normalize_comparison_kpis(data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Function: _normalize_comparison_kpis — map ticker-prefixed KPIs to generic keys.
+    Called from: A2UIRuntime.stream_dashboard
+    Invokes: n/a
+    Why: The layout expects keys like 'gross_margin', but peer comparison skills
+         return 'qcom_gross_margin', 'avgo_gross_margin'. This adds generic keys
+         using the primary ticker's values and comparison delta for display.
+    
+    Example transformation:
+        Input:  {"qcom_gross_margin": 55.5, "avgo_gross_margin": 67.9, ...}
+        Output: {"qcom_gross_margin": 55.5, "avgo_gross_margin": 67.9, 
+                 "gross_margin": 55.5, "gross_margin_compare": 67.9, ...}
+    """
+    kpis = data.get("kpis")
+    if not isinstance(kpis, dict):
+        return data
+    
+    # Detect primary ticker from data
+    primary_ticker = data.get("primary_ticker", "").lower()
+    tickers = data.get("tickers", [])
+    
+    if not primary_ticker and tickers:
+        primary_ticker = tickers[0].lower()
+    
+    if not primary_ticker:
+        return data
+    
+    # Find secondary ticker for comparison
+    secondary_ticker = None
+    if isinstance(tickers, list) and len(tickers) >= 2:
+        for t in tickers:
+            if t.lower() != primary_ticker:
+                secondary_ticker = t.lower()
+                break
+    
+    # Map of generic key -> (primary_prefixed_key, secondary_prefixed_key)
+    margin_keys = ["gross_margin", "operating_margin", "net_margin"]
+    
+    normalized = dict(kpis)  # Copy original
+    
+    for base_key in margin_keys:
+        primary_key = f"{primary_ticker}_{base_key}"
+        
+        # Add generic key from primary ticker
+        if primary_key in kpis:
+            normalized[base_key] = kpis[primary_key]
+            
+            # Add comparison value from secondary ticker if available
+            if secondary_ticker:
+                secondary_key = f"{secondary_ticker}_{base_key}"
+                if secondary_key in kpis:
+                    # Store comparison value for potential delta display
+                    normalized[f"{base_key}_compare"] = kpis[secondary_key]
+                    # Calculate delta (primary - secondary)
+                    try:
+                        primary_val = float(kpis[primary_key])
+                        secondary_val = float(kpis[secondary_key])
+                        normalized[f"{base_key}_delta"] = round(primary_val - secondary_val, 2)
+                    except (TypeError, ValueError):
+                        pass
+    
+    data["kpis"] = normalized
+    return data
 
 
 class A2UIRuntime:
     """
     Runtime orchestrator for A2UI dashboards.
     
-    Class: A2UIRuntime — manages the full dashboard lifecycle.
+    Class: A2UIRuntime - manages the full dashboard lifecycle.
     Called from: backend.generative_ui.routes.dashboard.stream_dashboard
     Invokes: A2UIAgent, LayoutPlanner, TraceStore, clarification helpers
-    Purpose: Structured runtime with tracing, layout planning, and incremental streaming.
+    Purpose: Structured runtime with tracing, layout planning, and streaming.
+    
+    Note: Uses direct agent execution instead of SDK flow for faster response times.
     """
     
     # SSE Heartbeat configuration (prevents proxy timeouts)
@@ -76,37 +138,22 @@ class A2UIRuntime:
 
     def __init__(self, agent: A2UIAgent, layout_planner: Optional[LayoutPlanner] = None) -> None:
         """
-        Initialize runtime with agent and optional layout planner.
-        
-        Args:
-            agent: The A2UI agent for skill selection/execution
-            layout_planner: Optional layout planner (defaults to standard planner)
+        Method: A2UIRuntime.__init__ - configure runtime dependencies.
+        Called from: backend.generative_ui.routes.dashboard.stream_dashboard.
+        Invokes: backend.generative_ui.traces.get_trace_store.
+        Why: Prepares runtime state and tracing.
         """
         self.agent = agent
         self.layout_planner = layout_planner or LayoutPlanner()
         self.trace_store = get_trace_store()
         self._last_heartbeat = 0.0
-        
-        # Optional SDK Flow for LLM-driven execution (Optimization #1)
-        # Uses ClaudeSDKClient with automatic MCP tool execution
-        self._sdk_flow = None
-        if USE_SDK_FLOW:
-            try:
-                from .sdk_flow import create_sdk_flow
-                self._sdk_flow = create_sdk_flow()
-                if self._sdk_flow:
-                    logger.info("SDK Flow initialized for runtime (ClaudeSDKClient mode)")
-                else:
-                    logger.warning("SDK Flow not available - SDK not installed")
-            except ImportError as e:
-                logger.warning("SDK Flow import failed: %s", e)
 
     def _maybe_heartbeat(self) -> Optional[str]:
         """
-        Emit a heartbeat event if enough time has passed since the last one.
-        
-        Returns SSE-formatted heartbeat string or None if not needed.
-        Prevents proxy/load balancer timeouts during long-running operations.
+        Method: A2UIRuntime._maybe_heartbeat - emit SSE heartbeat when idle.
+        Called from: backend.generative_ui.runtime.A2UIRuntime.stream_dashboard.
+        Invokes: time.time.
+        Why: Prevents proxy timeouts during long-running streams.
         """
         now = time.time()
         if now - self._last_heartbeat >= self.HEARTBEAT_INTERVAL_SECONDS:
@@ -114,106 +161,12 @@ class A2UIRuntime:
             return f"event: {self.HEARTBEAT_EVENT_NAME}\ndata: {{}}\n\n"
         return None
 
-    async def _execute_via_sdk_flow(
-        self,
-        skill_id: str,
-        user_query: str,
-        parameters: Dict[str, Any],
-        emitter: "A2UIMessageEmitter",
-        trace: "RunTrace",
-        data_model_out: Dict[str, Any],  # Mutable output container
-    ) -> AsyncGenerator[str, None]:
-        """
-        Execute skill using SDK flow for LLM-driven component generation.
-        
-        Function: _execute_via_sdk_flow
-        Called from: stream_dashboard (when USE_SDK_FLOW enabled)
-        Invokes: A2UISDKFlow.execute_with_skill_context
-        Why: Enables LLM to see data and generate intelligent A2UI outputs.
-        
-        Args:
-            skill_id: Skill identifier (e.g., 'a2ui_margin_analysis')
-            user_query: Original user question
-            parameters: Extracted slots (tickers, metric, time_range, etc.)
-            emitter: A2UI message emitter for this surface
-            trace: Run trace for debugging
-            data_model_out: Mutable dict to populate with collected data model
-            
-        Yields:
-            A2UI JSON messages (audit, data_update, surface_update)
-        """
-        if not self._sdk_flow:
-            raise RuntimeError("SDK flow not initialized")
-        
-        message_count = 0
-        
-        yield emitter.audit("sdk_flow_started", f"skill={skill_id}")
-        message_count += 1
-        
-        trace.add_step("sdk_flow_execute", details={
-            "skill_id": skill_id,
-            "parameters": parameters,
-        })
-        
-        async for chunk in self._sdk_flow.execute_with_skill_context(
-            skill_id=skill_id,
-            user_query=user_query,
-            parameters=parameters,
-        ):
-            chunk_type = chunk.get("type")
-            
-            if chunk_type == "audit":
-                yield emitter.audit(chunk.get("event", "sdk_event"), chunk.get("details"))
-                message_count += 1
-                trace.add_step(f"sdk_audit::{chunk.get('event', 'unknown')}")
-                
-            elif chunk_type == "data_update":
-                # Extract data payload and emit
-                data = chunk.get("data", {})
-                data_model_out.update(data)  # Update the mutable output container
-                yield emitter.data_update(data, path=chunk.get("path", "/data"))
-                message_count += 1
-                trace.add_step("sdk_data_update", details={"keys": list(data.keys())})
-                
-            elif chunk_type == "surface_update":
-                # SDK flow can emit layout changes
-                components = chunk.get("components", [])
-                if components:
-                    yield emitter.surface_update(components)
-                    message_count += 1
-                    trace.add_step("sdk_surface_update", details={"count": len(components)})
-                    
-            elif chunk_type == "follow_ups":
-                # Store follow-ups in data model
-                suggestions = chunk.get("suggestions", [])
-                if suggestions:
-                    data_model_out["follow_ups"] = suggestions
-                    yield emitter.data_update({"follow_ups": suggestions}, path="/data")
-                    message_count += 1
-                    
-            elif chunk_type == "error":
-                error_msg = chunk.get("message", "Unknown SDK flow error")
-                trace.add_step("sdk_error", error=error_msg, success=False)
-                raise RuntimeError(error_msg)
-                
-            elif chunk_type == "done":
-                trace.add_step("sdk_flow_complete", success=chunk.get("success", True))
-        
-        yield emitter.audit("sdk_flow_completed", f"messages={message_count}")
-
     async def stream_dashboard(self, state: DashboardState) -> AsyncGenerator[str, None]:
         """
-        Stream the full dashboard lifecycle as JSON strings (ready for SSE wrapping).
-
-        Steps:
-        1) beginRendering + trace initialization
-        2) surfaceUpdate (with optional layout override)
-        3) seed data
-        4) optional clarification pause/resume
-        5) execute skill + incremental dataModelUpdate
-        6) done sentinel + trace completion
-        
-        All steps are recorded in a RunTrace for debugging.
+        Method: A2UIRuntime.stream_dashboard - stream dashboard lifecycle via direct agent execution.
+        Called from: backend.generative_ui.routes.dashboard.stream_dashboard.
+        Invokes: A2UIMessageEmitter, LayoutPlanner.propose_override, A2UIAgent.execute_skill.
+        Why: Emits SSE-ready A2UI messages with tracing and clarifications.
         """
         emitter = A2UIMessageEmitter(surface_id=state.surface_id, catalog_id=state.catalog_id)
         
@@ -270,7 +223,10 @@ class A2UIRuntime:
 
             # Layout planning
             step_start = time.time()
-            layout_override: Optional[LayoutOverride] = self.layout_planner.propose_override(skill, state.question)
+            layout_override: Optional[LayoutOverride] = await self.layout_planner.propose_override(
+                skill,
+                state.question,
+            )
             components = emitter.build_components_for_skill(
                 skill,
                 context,
@@ -387,7 +343,10 @@ class A2UIRuntime:
                 skill = self.agent.skill_lookup[selection.skill_id]
                 context = self.agent._build_render_context(selection, skill)
 
-                layout_override = self.layout_planner.propose_override(skill, state.question)
+                layout_override = await self.layout_planner.propose_override(
+                    skill,
+                    state.question,
+                )
                 components = emitter.build_components_for_skill(
                     skill,
                     context,
@@ -425,63 +384,38 @@ class A2UIRuntime:
                 # Recompute signature after clarification adjustments
                 run_signature = state.signature()
 
-            # Execute skill - use SDK flow if enabled, else standard agent execution
+            # Execute skill using direct agent execution (no SDK flow)
             yield emitter.audit("runtime_step_started", "execute_skill")
             message_count += 1
 
             step_start = time.time()
-            result = None
-            
-            # SDK Flow path: LLM-driven execution (Optimization #1)
-            if self._sdk_flow and USE_SDK_FLOW:
-                yield emitter.audit("execution_mode", "sdk_flow")
+            yield emitter.audit("execution_mode", "direct_agent")
+            message_count += 1
+
+            # Execute skill directly through agent
+            result = await self.agent.execute_skill(skill, selection)
+
+            # Normalize ticker-prefixed KPIs for the layout
+            if result.data_model.get("kpis"):
+                context_data = {
+                    "primary_ticker": result.data_model.get("primary_ticker") or (selection.tickers[0] if selection.tickers else ""),
+                    "tickers": result.data_model.get("tickers") or selection.tickers,
+                    "kpis": result.data_model["kpis"],
+                }
+                normalized = _normalize_comparison_kpis(context_data)
+                result.data_model["kpis"] = normalized["kpis"]
+
+            # Emit data update with full result
+            yield emitter.data_update(result.data_model, path="/data")
+            message_count += 1
+            trace.add_step("data_update", details={"keys": list(result.data_model.keys())})
+
+            # Generate follow-up suggestions
+            follow_ups = self._generate_follow_ups(selection, result.data_model)
+            if follow_ups:
+                result.data_model["follow_ups"] = follow_ups
+                yield emitter.data_update({"follow_ups": follow_ups}, path="/data")
                 message_count += 1
-                
-                sdk_data_model: Dict[str, Any] = {}
-                async for sdk_msg in self._execute_via_sdk_flow(
-                    skill_id=selection.skill_id,
-                    user_query=state.question,
-                    parameters={
-                        "tickers": selection.tickers,
-                        "metric": selection.metric,
-                        "time_range": selection.time_range,
-                    },
-                    emitter=emitter,
-                    trace=trace,
-                    data_model_out=sdk_data_model,  # Collect data model here
-                ):
-                    yield sdk_msg
-                    message_count += 1
-                
-                # Create a synthetic result for state persistence
-                from .agent_v2 import A2UIRunResult
-                result = A2UIRunResult(
-                    data_model=sdk_data_model,
-                    citations=[],
-                )
-            else:
-                # Standard agent execution path
-                yield emitter.audit("execution_mode", "agent")
-                message_count += 1
-                
-                async for chunk in self.agent.execute_skill_streaming(skill, selection):
-                    if chunk.audit_event:
-                        yield emitter.audit(chunk.audit_event, chunk.audit_details)
-                        message_count += 1
-                    if chunk.data_patch is not None:
-                        yield emitter.data_update(chunk.data_patch, path=chunk.data_path)
-                        message_count += 1
-                    trace.add_step(
-                        f"execute_skill::{chunk.step}",
-                        details={
-                            "path": chunk.data_path,
-                            "keys": list((chunk.data_patch or {}).keys()),
-                            "audit": chunk.audit_event,
-                        },
-                        success=True,
-                    )
-                    if chunk.final_result:
-                        result = chunk.final_result
 
             skill_duration = (time.time() - step_start) * 1000
             yield emitter.audit("runtime_step_completed", "execute_skill")
@@ -492,14 +426,11 @@ class A2UIRuntime:
                 details={
                     "data_keys": list(result.data_model.keys()) if result else [],
                     "citation_count": len(result.citations) if result else 0,
-                    "execution_mode": "sdk_flow" if (self._sdk_flow and USE_SDK_FLOW) else "agent",
+                    "execution_mode": "direct_agent",
                 },
                 duration_ms=skill_duration,
                 success=result is not None,
             )
-
-            if result is None:
-                raise RuntimeError("Skill execution returned no result")
 
             state.add_run(
                 result.data_model,
@@ -545,13 +476,56 @@ class A2UIRuntime:
                 yield msg
             yield json.dumps({"done": True, "error": True})
 
+    def _generate_follow_ups(
+        self,
+        selection: Any,
+        data_model: Dict[str, Any],
+    ) -> List[str]:
+        """
+        Method: A2UIRuntime._generate_follow_ups - generate rule-based follow-up suggestions.
+        Called from: backend.generative_ui.runtime.A2UIRuntime.stream_dashboard.
+        Invokes: n/a.
+        Why: Supplies contextual follow-up suggestions without LLM overhead.
+        """
+        tickers = getattr(selection, 'tickers', [])
+        primary = tickers[0] if tickers else "the stock"
+        skill_id = getattr(selection, 'skill_id', '')
+        
+        skill_suggestions = {
+            "a2ui_explain_move": [
+                f"What are analysts saying about {primary}?",
+                f"Compare {primary} to its competitors",
+                f"Show {primary} revenue trend",
+            ],
+            "a2ui_peer_compare": [
+                f"Explain {primary} stock movement",
+                "Which company has the best margins?",
+                "Show quarterly revenue breakdown",
+            ],
+            "a2ui_margin_analysis": [
+                f"Compare {primary} margins to peers",
+                f"What drove {primary} margin changes?",
+                "Show margin trend over time",
+            ],
+            "a2ui_revenue_trend": [
+                f"Explain {primary} growth drivers",
+                f"Compare {primary} revenue to peers",
+                "What's the earnings outlook?",
+            ],
+        }
+        
+        return skill_suggestions.get(skill_id, [
+            "Tell me more about this company",
+            "Compare to competitors",
+            "What's the outlook?",
+        ])
+
     async def process_action(self, state: DashboardState, action: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Handle a user action through the runtime pipeline (with tracing + streaming).
-
-        Returns a structured response containing the final data model and the
-        intermediate data patches applied, so the caller can apply partial
-        invalidation without reloading the whole dashboard.
+        Method: A2UIRuntime.process_action - apply user actions via direct agent execution.
+        Called from: backend.generative_ui.routes.dashboard.handle_action.
+        Invokes: A2UIAgent.execute_skill, TraceStore.
+        Why: Keeps action handling aligned with direct execution and tracing.
         """
         action_name = action.get("name")
         context = action.get("context", {}) or {}
@@ -563,7 +537,16 @@ class A2UIRuntime:
         except Exception:
             pass
 
-        known_actions = {"change_timeframe", "add_ticker", "export_csv"}
+        known_actions = {
+            "change_timeframe", 
+            "add_ticker", 
+            "export_csv",
+            # Layout switching actions (Jan 9, 2026)
+            "switch_layout",      # Change layout variant
+            "toggle_widget",      # Show/hide a specific widget
+            "set_emphasis",       # Focus on chart/table/news/balanced
+            "reorder_widgets",    # Change widget ordering
+        }
         if action_name not in known_actions:
             trace.add_step("action_unknown", details={"name": action_name})
             trace.complete(success=True)
@@ -591,6 +574,77 @@ class A2UIRuntime:
                 "action": action_name,
                 "download_url": f"/api/dash/{state.dashboard_id}/export/csv",
             }
+        # -------------------------------------------------------------------------
+        # Layout Switching Actions (Jan 9, 2026)
+        # -------------------------------------------------------------------------
+        elif action_name == "switch_layout":
+            # Change layout variant (e.g., "focus_chart", "split-view", "balanced")
+            new_variant = context.get("variant", "balanced")
+            current_override = state.params.model_dump().get("layout_override") or {}
+            current_override["variant"] = new_variant
+            state.update_params({"layout_override": current_override})
+            state.update_plan_fields(layout_variant=new_variant)
+            trace.add_step("switch_layout", details={"variant": new_variant})
+            trace.complete(success=True)
+            self.trace_store.persist(trace)
+            return {
+                "status": "success",
+                "action": action_name,
+                "layout_override": current_override,
+                "requires_rerender": True,
+            }
+        elif action_name == "toggle_widget":
+            # Show/hide a specific widget (e.g., "NewsTimeline", "DataTable")
+            widget_name = context.get("widget")
+            if widget_name:
+                current_override = state.params.model_dump().get("layout_override") or {}
+                hidden = set(current_override.get("hidden_widgets") or [])
+                if widget_name in hidden:
+                    hidden.discard(widget_name)
+                else:
+                    hidden.add(widget_name)
+                current_override["hidden_widgets"] = list(hidden)
+                state.update_params({"layout_override": current_override})
+                trace.add_step("toggle_widget", details={"widget": widget_name, "now_hidden": widget_name in hidden})
+            trace.complete(success=True)
+            self.trace_store.persist(trace)
+            return {
+                "status": "success",
+                "action": action_name,
+                "layout_override": current_override,
+                "requires_rerender": True,
+            }
+        elif action_name == "set_emphasis":
+            # Set emphasis mode (focus_chart, focus_table, focus_news, balanced)
+            emphasis = context.get("emphasis", "balanced")
+            current_override = state.params.model_dump().get("layout_override") or {}
+            current_override["emphasis"] = emphasis
+            state.update_params({"layout_override": current_override})
+            trace.add_step("set_emphasis", details={"emphasis": emphasis})
+            trace.complete(success=True)
+            self.trace_store.persist(trace)
+            return {
+                "status": "success",
+                "action": action_name,
+                "layout_override": current_override,
+                "requires_rerender": True,
+            }
+        elif action_name == "reorder_widgets":
+            # Change widget ordering
+            widget_order = context.get("widget_order", [])
+            if isinstance(widget_order, list):
+                current_override = state.params.model_dump().get("layout_override") or {}
+                current_override["widget_order"] = widget_order
+                state.update_params({"layout_override": current_override})
+                trace.add_step("reorder_widgets", details={"widget_order": widget_order})
+            trace.complete(success=True)
+            self.trace_store.persist(trace)
+            return {
+                "status": "success",
+                "action": action_name,
+                "layout_override": current_override,
+                "requires_rerender": True,
+            }
 
         run_signature = state.signature()
 
@@ -599,28 +653,32 @@ class A2UIRuntime:
         agent._validate_selection(selection)
         skill = agent.skill_lookup[selection.skill_id]
 
-        data_updates: List[Dict[str, Any]] = []
-        result = None
-        async for chunk in agent.execute_skill_streaming(skill, selection):
-            if chunk.data_patch is not None:
-                data_updates.append({"path": chunk.data_path, "data": chunk.data_patch})
-            trace.add_step(
-                f"action::{chunk.step}",
-                details={
-                    "path": chunk.data_path,
-                    "keys": list((chunk.data_patch or {}).keys()),
-                    "audit": chunk.audit_event,
-                },
-                success=True,
-            )
-            if chunk.final_result:
-                result = chunk.final_result
+        # Execute skill directly
+        result = await agent.execute_skill(skill, selection)
 
-        if not result:
-            trace.add_step("action_error", success=False, error="No result from action execution")
-            trace.complete(success=False, error="No result from action execution")
-            self.trace_store.persist(trace)
-            return {"status": "error", "action": action_name, "error": "No result produced"}
+        # Normalize KPIs
+        if result.data_model.get("kpis"):
+            context_data = {
+                "primary_ticker": result.data_model.get("primary_ticker") or (selection.tickers[0] if selection.tickers else ""),
+                "tickers": result.data_model.get("tickers") or selection.tickers,
+                "kpis": result.data_model["kpis"],
+            }
+            normalized = _normalize_comparison_kpis(context_data)
+            result.data_model["kpis"] = normalized["kpis"]
+
+        # Build data updates
+        data_updates = [{"path": "/data", "data": result.data_model}]
+        trace.add_step(
+            "action_data_update",
+            details={"path": "/data", "keys": list(result.data_model.keys())},
+            success=True,
+        )
+
+        # Add follow-ups
+        follow_ups = self._generate_follow_ups(selection, result.data_model)
+        if follow_ups:
+            result.data_model["follow_ups"] = follow_ups
+            data_updates.append({"path": "/data", "data": {"follow_ups": follow_ups}})
 
         state.add_run(
             result.data_model,

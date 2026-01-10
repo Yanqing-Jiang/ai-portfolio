@@ -239,13 +239,54 @@ def load_ai_facts_cache() -> List[Dict[str, Any]]:
 # Initialize rate limiter on startup
 @app.on_event("startup")
 async def startup_event():
+    """
+    Function: startup_event — initialize services on app startup.
+    Called from: FastAPI lifespan.
+    Invokes: init_rate_limiter, token_store.initialize, get_pool (prewarm), close_http_client.
+    Why: Prewarm DB pool to avoid first-query latency; initialize rate limiter and token store.
+    """
     await init_rate_limiter()
     await token_store.initialize()
+    
+    # Optimization #1: Prewarm DB pool to avoid first-query latency
+    try:
+        from shared_tools.sql_executor import get_pool
+        from shared_tools.db_config import get_db_config
+        config = get_db_config()
+        if config.database_url:
+            await get_pool()
+            logger.info("[STARTUP] DB connection pool prewarmed successfully")
+        else:
+            logger.info("[STARTUP] DATABASE_URL not set; skipping DB pool prewarm")
+    except Exception as e:
+        logger.warning("[STARTUP] DB pool prewarm failed (non-fatal): %s", e)
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
+    """
+    Function: shutdown_event — cleanup services on app shutdown.
+    Called from: FastAPI lifespan.
+    Invokes: token_store.shutdown, close_pool, close_http_client.
+    Why: Clean shutdown of DB pool and HTTP clients to release resources.
+    """
     await token_store.shutdown()
+    
+    # Close DB pool
+    try:
+        from shared_tools.sql_executor import close_pool
+        await close_pool()
+        logger.info("[SHUTDOWN] DB connection pool closed")
+    except Exception as e:
+        logger.warning("[SHUTDOWN] DB pool close failed: %s", e)
+    
+    # Close shared httpx client for news service
+    try:
+        from shared_tools.news_service import close_http_client
+        await close_http_client()
+        logger.info("[SHUTDOWN] News HTTP client closed")
+    except Exception as e:
+        logger.warning("[SHUTDOWN] News HTTP client close failed: %s", e)
 
 # Allow CORS for local frontend dev
 origins = [

@@ -12,7 +12,7 @@
 # Class: LayoutPlanner
 #   Role: Generate a LayoutOverride proposal for a given skill/plan.
 #   Called from: backend.generative_ui.runtime.A2UIRuntime.
-#   Invokes: _analyze_question_intent, optional model_proposer, LayoutOverrideValidator.validate.
+#   Invokes: _analyze_question_intent, SDK prompt override, LayoutOverrideValidator.validate.
 #   Why: Centralizes layout-planning logic behind a safe interface.
 # --- End Layout Planner Function/Class Map ---
 """
@@ -24,19 +24,29 @@ component tree so that the renderer can stay deterministic and catalog-safe.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import List, Optional, Tuple
+
+# Try importing anthropic for model-backed layout planning
+try:
+    import anthropic
+    ANTHROPIC_AVAILABLE = True
+except ImportError:
+    ANTHROPIC_AVAILABLE = False
+    anthropic = None  # type: ignore
 
 from .skills import A2UISkillMeta
 from .config import get_settings
 
 logger = logging.getLogger(__name__)
 
-# LLM-based layout planning: Always enabled for intelligent layouts
-LAYOUT_USE_MODEL_ENV = True
+# LLM-based layout planning: enabled by default, configurable via env
+LAYOUT_USE_MODEL_ENV = os.getenv("GENUI_LAYOUT_USE_MODEL", "true").lower() == "true"
 
 # Allowed emphasis values
 VALID_EMPHASIS = {"focus_chart", "focus_table", "focus_news", "balanced", None}
@@ -47,7 +57,7 @@ class LayoutOverride:
     """
     Constrained, catalog-safe layout override.
     
-    Dataclass: LayoutOverride — immutable override configuration.
+    Dataclass: LayoutOverride - immutable override configuration.
     Called from: LayoutPlanner.propose_override, A2UIRuntime.stream_dashboard
     Invokes: n/a
     Purpose: Pass constrained layout variants to the emitter without breaking catalog.
@@ -63,7 +73,7 @@ class LayoutOverrideValidator:
     """
     Validate layout overrides against skill constraints.
     
-    Class: LayoutOverrideValidator — guards against invalid overrides.
+    Class: LayoutOverrideValidator - guards against invalid overrides.
     Called from: LayoutPlanner.propose_override
     Invokes: skill metadata validation
     Purpose: Keep layout planning catalog-safe by rejecting invalid requests.
@@ -72,10 +82,10 @@ class LayoutOverrideValidator:
     @staticmethod
     def validate(override: LayoutOverride, skill: A2UISkillMeta) -> Tuple[bool, List[str]]:
         """
-        Validate a layout override against skill constraints.
-        
-        Returns:
-            Tuple of (is_valid, list_of_errors)
+        Function: LayoutOverrideValidator.validate - check overrides against skill constraints.
+        Called from: backend.generative_ui.layout_planner.LayoutPlanner.propose_override.
+        Invokes: skill metadata checks.
+        Why: Ensures overrides stay catalog-safe and within allowed variants/widgets.
         """
         errors = []
 
@@ -118,10 +128,10 @@ def _analyze_question_intent(question: str) -> dict:
     """
     Analyze the user's question to determine layout preferences.
     
-    Function: _analyze_question_intent — extracts layout hints from natural language.
-    Called from: LayoutPlanner.propose_override
-    Invokes: regex patterns
-    Purpose: Heuristic question analysis to suggest appropriate layouts.
+    Function: _analyze_question_intent - extract layout hints from natural language.
+    Called from: backend.generative_ui.layout_planner.LayoutPlanner._build_heuristic_override.
+    Invokes: re.search.
+    Why: Maps user phrasing to layout emphasis decisions.
     
     Returns dict with detected intents:
         - focus_news: bool - user wants news/sentiment emphasized
@@ -187,7 +197,7 @@ class LayoutPlanner:
     """
     Generate layout overrides for A2UI skills.
     
-    Class: LayoutPlanner — heuristic layout proposal and validation.
+    Class: LayoutPlanner - heuristic layout proposal and validation.
     Called from: backend.generative_ui.runtime.A2UIRuntime.stream_dashboard
     Invokes: _analyze_question_intent, optional model proposer, LayoutOverrideValidator.validate
     Purpose: Propose context-aware layouts while maintaining catalog safety.
@@ -195,37 +205,25 @@ class LayoutPlanner:
 
     def __init__(self, *, use_model: Optional[bool] = None) -> None:
         """
-        Initialize planner.
-        
-        Args:
-            use_model: Whether to call Claude for overrides. If None, uses GENUI_LAYOUT_USE_MODEL env var.
-                       Defaults to False (heuristics-only) for cost/latency optimization.
+        Method: LayoutPlanner.__init__ - configure layout planning strategy.
+        Called from: backend.generative_ui.runtime.A2UIRuntime.__init__.
+        Invokes: pathlib.Path.
+        Why: Sets model usage policy for layout overrides.
         """
         self.enabled = True
         # Use explicit parameter if provided, otherwise fall back to environment variable
         self.use_model = use_model if use_model is not None else LAYOUT_USE_MODEL_ENV
         self.validator = LayoutOverrideValidator()
-        try:
-            import anthropic  # type: ignore
-            self._anthropic = anthropic
-        except Exception:
-            self._anthropic = None
+        self._project_root = Path(__file__).parent.parent.parent
 
-    def propose_override(
+    async def propose_override(
         self, skill: A2UISkillMeta, question: str
     ) -> Optional[LayoutOverride]:
         """
-        Propose a layout override constrained by the skill's widget/layout set.
-        
-        Uses heuristic question analysis to suggest appropriate emphasis and variants.
-        All proposals are validated before returning to ensure catalog safety.
-        
-        Args:
-            skill: The selected skill with its layout constraints
-            question: The user's original question
-            
-        Returns:
-            A validated LayoutOverride or None if default layout should be used
+        Method: LayoutPlanner.propose_override - propose a validated layout override.
+        Called from: backend.generative_ui.runtime.A2UIRuntime.stream_dashboard.
+        Invokes: LayoutPlanner._build_heuristic_override, LayoutPlanner._propose_override_with_model, LayoutOverrideValidator.validate.
+        Why: Produces catalog-safe layout tweaks based on question intent.
         """
         if not self.enabled:
             return None
@@ -234,7 +232,7 @@ class LayoutPlanner:
 
         # Optional model proposal
         if self.use_model:
-            model_override = self._propose_override_with_model(skill, question)
+            model_override = await self._propose_override_with_model(skill, question)
             if model_override:
                 is_valid, errors = self.validator.validate(model_override, skill)
                 if is_valid:
@@ -267,7 +265,12 @@ class LayoutPlanner:
     # Model-backed planner helpers (Claude Agent SDK)
     # ------------------------------------------------------------------
     def _build_tool_schema(self, skill: A2UISkillMeta) -> dict:
-        """Define the Claude tool schema for layout override proposals."""
+        """
+        Method: LayoutPlanner._build_tool_schema - build JSON schema for layout overrides.
+        Called from: backend.generative_ui.layout_planner.LayoutPlanner._propose_override_with_model.
+        Invokes: n/a.
+        Why: Constrains model output to valid variants and widgets.
+        """
         return {
             "name": "propose_layout_override",
             "description": (
@@ -304,12 +307,23 @@ class LayoutPlanner:
             },
         }
 
-    def _propose_override_with_model(
+    async def _propose_override_with_model(
         self, skill: A2UISkillMeta, question: str
     ) -> Optional[LayoutOverride]:
-        """Call Claude to propose an override; falls back silently on errors."""
-        if self._anthropic is None:
+        """
+        Method: LayoutPlanner._propose_override_with_model - request model-driven overrides.
+        Called from: backend.generative_ui.layout_planner.LayoutPlanner.propose_override.
+        Invokes: anthropic.Anthropic.messages.create (direct API).
+        Why: Uses Anthropic API to propose higher quality layout adjustments.
+        
+        Note: This version uses direct Anthropic Messages API instead of Claude Agent SDK
+        to avoid cold-boot overhead (2-12s) that causes timeouts on Render.com.
+        """
+        # Check if Anthropic is available
+        if not ANTHROPIC_AVAILABLE or anthropic is None:
+            logger.debug("Anthropic not available for model-backed layout planning")
             return None
+            
         settings = get_settings()
         if not settings.claude_api_key:
             return None
@@ -319,34 +333,53 @@ class LayoutPlanner:
             "You are a layout planner for a catalog-safe A2UI dashboard. "
             "Use only allowed variants and widgets. Prefer balanced layouts unless "
             "the question clearly signals focus on news, charts, or tables. "
-            "Respond only via the provided tool."
+            "Return JSON only with keys: layout_variant, widget_order, hidden_widgets, emphasis."
         )
+        user_prompt = (
+            f"Question: {question}\n"
+            f"Skill: {skill.skill_id}\n"
+            f"Allowed variants: {tool['input_schema']['properties']['layout_variant']['enum']}\n"
+            f"Allowed widgets: {skill.widgets}\n"
+            "Return JSON only. No prose."
+        )
+        
         try:
-            client = self._anthropic.Anthropic(api_key=settings.claude_api_key)
+            # Initialize Anthropic client and make direct API call
+            client = anthropic.Anthropic(api_key=settings.claude_api_key)
+            
             response = client.messages.create(
                 model=settings.claude_model or "claude-haiku-4-5-20251001",
+                max_tokens=512,
                 system=system_prompt,
-                messages=[{"role": "user", "content": f"Question: {question}\nSkill: {skill.skill_id}"}],
-                tools=[tool],
-                tool_choice={"type": "tool", "name": tool["name"]},
-                max_tokens=256,
+                messages=[{"role": "user", "content": user_prompt}],
             )
-            for block in response.content or []:
-                if getattr(block, "type", None) == "tool_use" and getattr(block, "name", "") == tool["name"]:
-                    payload = getattr(block, "input", {}) or {}
-                    return LayoutOverride(
-                        layout_variant=payload.get("layout_variant"),
-                        widget_order=payload.get("widget_order"),
-                        emphasis=payload.get("emphasis"),
-                        hidden_widgets=payload.get("hidden_widgets"),
-                    )
-            return None
-        except Exception as exc:  # pragma: no cover - network/SDK errors
+            
+            # Extract text content from response
+            response_text = ""
+            for block in response.content:
+                if hasattr(block, 'text'):
+                    response_text += block.text
+            
+            payload = _extract_override_json(response_text)
+            if not payload:
+                return None
+            return LayoutOverride(
+                layout_variant=payload.get("layout_variant"),
+                widget_order=payload.get("widget_order"),
+                emphasis=payload.get("emphasis"),
+                hidden_widgets=payload.get("hidden_widgets"),
+            )
+        except Exception as exc:  # pragma: no cover - API errors
             logger.warning("Model planner failed: %s", exc)
             return None
 
     def _build_heuristic_override(self, skill: A2UISkillMeta, question: str) -> Optional[LayoutOverride]:
-        """Heuristic (regex) planner used as default and fallback."""
+        """
+        Method: LayoutPlanner._build_heuristic_override - produce regex-based overrides.
+        Called from: backend.generative_ui.layout_planner.LayoutPlanner.propose_override.
+        Invokes: backend.generative_ui.layout_planner._analyze_question_intent.
+        Why: Provides deterministic layout choices when the model yields no override.
+        """
         intents = _analyze_question_intent(question)
 
         emphasis = None
@@ -393,6 +426,34 @@ class LayoutPlanner:
             emphasis=emphasis,
             hidden_widgets=hidden_widgets,
         )
+
+
+def _extract_override_json(response_text: str) -> Optional[dict]:
+    """
+    Function: _extract_override_json - parse layout override JSON from model output.
+    Called from: backend.generative_ui.layout_planner.LayoutPlanner._propose_override_with_model.
+    Invokes: json.loads, re.search.
+    Why: Normalizes SDK output into a dict for LayoutOverride creation.
+    """
+    if not response_text:
+        return None
+    try:
+        return json.loads(response_text)
+    except json.JSONDecodeError:
+        pass
+    fence_match = re.search(r"```json\\s*([\\s\\S]*?)\\s*```", response_text, re.IGNORECASE)
+    if fence_match:
+        try:
+            return json.loads(fence_match.group(1))
+        except json.JSONDecodeError:
+            return None
+    brace_match = re.search(r"\\{[\\s\\S]*\\}", response_text)
+    if brace_match:
+        try:
+            return json.loads(brace_match.group(0))
+        except json.JSONDecodeError:
+            return None
+    return None
 
 
 __all__ = ["LayoutPlanner", "LayoutOverride", "LayoutOverrideValidator"]

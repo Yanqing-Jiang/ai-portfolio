@@ -1,12 +1,16 @@
 """
-MCP tool definitions for Claude Agent SDK integration.
+MCP tool definitions for A2UI skill execution.
 
 Module: mcp_tools.py
-Role: Wraps existing shared_tools as SDK-compatible MCP tools using the @tool decorator.
-Called from: sdk_wrapper.py, agent_v2.py
+Role: Provides tool executors for A2UI skills. Originally wrapped shared_tools as 
+SDK-compatible MCP tools, but the SDK integration has been deprecated.
+Called from: skill_executors.py, agent_v2.py (via fallback executors)
 Invokes: backend.shared_tools (sql_tool, news_tool, analysis_tool)
-Why: The Claude Agent SDK uses MCP (Model Context Protocol) tools. This module 
-     bridges our existing tool implementations to the SDK's expected format.
+
+Note (Jan 9, 2026): Claude Agent SDK integration has been removed due to 2-12s cold boot
+overhead causing timeouts on Render.com. The SDK MCP tool decorators are no longer used.
+The fallback tool executors (execute_query_database, execute_get_news_sentiment, 
+execute_generate_analysis) are now the primary execution path.
 """
 
 from __future__ import annotations

@@ -200,6 +200,16 @@ export interface KpiCardProps {
     deltaType?: BoundString;
 }
 
+export interface ComparisonKpiCardProps {
+    label: BoundString;
+    primaryLabel: BoundString;
+    primaryValue: BoundNumber;
+    secondaryLabel: BoundString;
+    secondaryValue: BoundNumber;
+    unit?: BoundString;
+    delta?: BoundNumber;
+}
+
 export interface DataTableProps {
     columns: BoundArray;
     data: BoundArray;

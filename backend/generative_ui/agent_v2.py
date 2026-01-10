@@ -148,7 +148,7 @@ from .config import get_settings
 from .skills import A2UISkillMeta, build_a2ui_skill_catalog, get_a2ui_skill, get_a2ui_skills
 from .a2ui.emitter import A2UIMessageEmitter, SkillRenderContext
 from .sdk_wrapper import A2UISDKWrapper, get_sdk_wrapper, SDKResponse
-from .mcp_tools import A2UI_MCP_TOOLS, A2UI_MCP_TOOL_NAMES
+# MCP tools removed: using direct tool execution instead of SDK flow
 from .utils import (
     AVAILABLE_TICKERS,
     normalize_tickers,
@@ -337,12 +337,13 @@ class A2UIAgent:
 
     async def _ensure_sdk_initialized(self) -> None:
         """
-        Initialize the Claude Agent SDK with MCP tools and cacheable prompts.
+        Initialize the Anthropic API with cacheable prompts.
 
         Method: A2UIAgent._ensure_sdk_initialized
         Called from: A2UIAgent.select_skill, A2UIAgent.execute_skill_streaming
         Invokes: A2UISDKWrapper.initialize
-        Purpose: Ensures SDK + MCP tool wiring is ready for routing/streaming.
+        Purpose: Ensures API client is ready for routing.
+        Note: Uses direct Anthropic API instead of SDK for faster response times.
         """
         if self._selection_prompt_initialized:
             logger.debug(
@@ -356,13 +357,9 @@ class A2UIAgent:
             )
             self._selection_prompt_initialized = True
 
-        allowed_tools = A2UI_MCP_TOOL_NAMES or None
-        mcp_tools = A2UI_MCP_TOOLS or None
+        # Initialize with system prompt only (no MCP tools - using direct tool execution)
         await self.sdk_wrapper.initialize(
             system_prompt=self._selection_system_prompt,
-            allowed_tools=allowed_tools,
-            mcp_tools=mcp_tools,
-            use_sdk=False,  # Use stable Anthropic API (SDK is experimental)
         )
 
     async def select_skill(self, question: str, max_retries: int = 2) -> SkillSelection:
