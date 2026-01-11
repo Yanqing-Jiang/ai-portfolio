@@ -55,6 +55,8 @@ class TokenStore:
                     min_size=1,
                     max_size=int(os.getenv("SUPABASE_DB_POOL_MAX", "5")),
                     ssl=self._ssl_context,
+                    # Disable statement caching for pgbouncer compatibility (Supabase)
+                    statement_cache_size=0,
                 )
                 print("TokenStore connected to Supabase Postgres")
                 return True

@@ -233,7 +233,7 @@ export function useA2UIStream(
         // Create processor
         processorRef.current = createMessageProcessor(syncState, opts.onAudit);
 
-        // Reset state
+        // Reset state - clear surfaces and dataModels for fresh data
         setState((prev) => ({
             ...prev,
             isConnected: false,
@@ -241,6 +241,10 @@ export function useA2UIStream(
             error: null,
             isDone: false,
             connectionStatus: isRetry ? 'reconnecting' : 'connecting',
+            // Clear previous data when starting a new connection
+            surfaces: new Map(),
+            dataModels: new Map(),
+            pendingClarification: null,
         }));
 
         // Create EventSource

@@ -17,6 +17,8 @@ export interface UseStreamingTextOptions {
     enabled?: boolean;
     /** Callback when streaming completes */
     onComplete?: () => void;
+    /** Key to force reset - when this changes, streaming restarts even if text is same */
+    resetKey?: string | number;
 }
 
 export interface UseStreamingTextResult {
@@ -36,7 +38,7 @@ export function useStreamingText(
     fullText: string,
     options: UseStreamingTextOptions = {}
 ): UseStreamingTextResult {
-    const { speed = 30, enabled = true, onComplete } = options;
+    const { speed = 30, enabled = true, onComplete, resetKey } = options;
 
     const [displayText, setDisplayText] = useState('');
     const [isComplete, setIsComplete] = useState(false);
@@ -44,6 +46,7 @@ export function useStreamingText(
     const intervalRef = useRef<NodeJS.Timeout | null>(null);
     const indexRef = useRef(0);
     const previousTextRef = useRef('');
+    const previousResetKeyRef = useRef<string | number | undefined>(resetKey);
 
     // Cleanup interval on unmount
     useEffect(() => {
@@ -54,7 +57,7 @@ export function useStreamingText(
         };
     }, []);
 
-    // Handle text changes
+    // Handle text changes or resetKey changes
     useEffect(() => {
         if (!enabled) {
             setDisplayText(fullText);
@@ -63,24 +66,43 @@ export function useStreamingText(
             return;
         }
 
-        // If text changed, restart streaming
-        if (fullText !== previousTextRef.current) {
+        // Check if resetKey changed (forces restart even if text is same)
+        const resetKeyChanged = resetKey !== previousResetKeyRef.current;
+        const textChanged = fullText !== previousTextRef.current;
+
+        // If text changed OR resetKey changed, restart streaming
+        if (textChanged || resetKeyChanged) {
+            // Update refs BEFORE starting interval to prevent race conditions
             previousTextRef.current = fullText;
+            if (resetKeyChanged) {
+                previousResetKeyRef.current = resetKey;
+            }
+
+            // Reset state
             indexRef.current = 0;
             setDisplayText('');
             setIsComplete(false);
             setIsStreaming(true);
 
-            // Clear existing interval
+            // Clear existing interval before creating new one
             if (intervalRef.current) {
                 clearInterval(intervalRef.current);
+                intervalRef.current = null;
             }
 
-            // Start streaming
+            // Don't start streaming if text is empty
+            if (fullText.length === 0) {
+                setIsComplete(true);
+                setIsStreaming(false);
+                return;
+            }
+
+            // Start streaming with local copy of fullText to avoid closure issues
+            const targetText = fullText;
             intervalRef.current = setInterval(() => {
-                if (indexRef.current < fullText.length) {
+                if (indexRef.current < targetText.length) {
                     indexRef.current += 1;
-                    setDisplayText(fullText.slice(0, indexRef.current));
+                    setDisplayText(targetText.slice(0, indexRef.current));
                 } else {
                     // Streaming complete
                     if (intervalRef.current) {
@@ -93,7 +115,7 @@ export function useStreamingText(
                 }
             }, speed);
         }
-    }, [fullText, speed, enabled, onComplete]);
+    }, [fullText, speed, enabled, onComplete, resetKey]);
 
     const reset = () => {
         if (intervalRef.current) {

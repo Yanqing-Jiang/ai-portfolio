@@ -1,0 +1,98 @@
+{
+  "trace_id": "898a71e5-f4a2-4224-bad9-2ab0ef97183a",
+  "dashboard_id": "68da7952-0d4d-4223-ae03-eecae90b4c37",
+  "question": "Compare AMD vs INTC revenue",
+  "skill_id": "a2ui_peer_compare",
+  "tickers": [
+    "AMD",
+    "INTC"
+  ],
+  "metric": "Revenue",
+  "time_range": "1Y",
+  "layout_override": null,
+  "steps": [
+    {
+      "step_id": "8927426c",
+      "step_type": "skill_selection",
+      "timestamp": "2026-01-11T06:01:32.142263",
+      "duration_ms": 0.04553794860839844,
+      "success": true,
+      "details": {
+        "skill_id": "a2ui_peer_compare",
+        "tickers": [
+          "AMD",
+          "INTC"
+        ],
+        "metric": "Revenue",
+        "time_range": "1Y"
+      },
+      "error": null
+    },
+    {
+      "step_id": "f6bd0161",
+      "step_type": "stream_component_selection",
+      "timestamp": "2026-01-11T06:01:35.229049",
+      "duration_ms": null,
+      "success": true,
+      "details": {
+        "widget_count": 4,
+        "widget_ids": [
+          "kpi_amd_revenue",
+          "revenue_comparison_chart",
+          "revenue_data_table",
+          "revenue_insights"
+        ]
+      },
+      "error": null
+    },
+    {
+      "step_id": "a37eb54c",
+      "step_type": "layout_planning",
+      "timestamp": "2026-01-11T06:01:35.229077",
+      "duration_ms": 3086.634397506714,
+      "success": true,
+      "details": {
+        "layout_override": null,
+        "component_count": 0,
+        "llm_selected": false,
+        "streaming": true
+      },
+      "error": null
+    },
+    {
+      "step_id": "c5fb1ab3",
+      "step_type": "seed_data",
+      "timestamp": "2026-01-11T06:01:35.229201",
+      "duration_ms": null,
+      "success": true,
+      "details": {
+        "keys": [
+          "title",
+          "ticker",
+          "primary_ticker",
+          "tickers",
+          "time_range",
+          "metric"
+        ]
+      },
+      "error": null
+    },
+    {
+      "step_id": "b7da7ac2",
+      "step_type": "cache_hit",
+      "timestamp": "2026-01-11T06:01:35.229619",
+      "duration_ms": null,
+      "success": true,
+      "details": {
+        "run_id": "be0cf808-b451-4828-9cfd-dec959e741b7"
+      },
+      "error": null
+    }
+  ],
+  "started_at": "2026-01-11T06:01:32.140088",
+  "completed_at": "2026-01-11T06:01:35.229626",
+  "total_duration_ms": 3089.538,
+  "message_count": 19,
+  "success": true,
+  "error": null
+}

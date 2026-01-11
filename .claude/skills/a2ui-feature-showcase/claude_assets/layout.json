@@ -1,0 +1,171 @@
+{
+    "skill_id": "a2ui_feature_showcase",
+    "name": "Feature Showcase",
+    "demo_only": true,
+    "description": "Demonstration skill for showcasing platform capabilities. Not for production analysis.",
+    "data_schema": {
+        "/data/config": {
+            "type": "object",
+            "properties": {
+                "mode": {
+                    "type": "string",
+                    "enum": [
+                        "showcase",
+                        "tour",
+                        "minimal"
+                    ]
+                },
+                "sample_ticker": {
+                    "type": "string"
+                }
+            }
+        },
+        "/data/features": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {
+                        "type": "string"
+                    },
+                    "name": {
+                        "type": "string"
+                    },
+                    "description": {
+                        "type": "string"
+                    },
+                    "icon": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "/data/example_queries": {
+            "type": "array",
+            "items": {
+                "type": "string"
+            }
+        },
+        "/data/next_skill_suggestions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "skill_id": {
+                        "type": "string"
+                    },
+                    "label": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "/data/sample_kpis": {
+            "type": "object",
+            "properties": {
+                "revenue": {
+                    "type": "number"
+                },
+                "revenue_yoy": {
+                    "type": "number"
+                },
+                "gross_margin": {
+                    "type": "number"
+                },
+                "net_income": {
+                    "type": "number"
+                }
+            }
+        }
+    },
+    "widget_bindings": {
+        "Card": {
+            "valid_children": [
+                "Text",
+                "Button",
+                "Row",
+                "Column"
+            ],
+            "use_cases": [
+                "welcome_card",
+                "feature_highlight",
+                "call_to_action"
+            ]
+        },
+        "Text": {
+            "valid_value_paths": [
+                "/data/features/*/name",
+                "/data/features/*/description",
+                "/data/example_queries/*"
+            ]
+        },
+        "KpiCard": {
+            "valid_value_paths": [
+                "/data/sample_kpis/revenue",
+                "/data/sample_kpis/revenue_yoy",
+                "/data/sample_kpis/gross_margin",
+                "/data/sample_kpis/net_income"
+            ]
+        },
+        "MetricChart": {
+            "valid_series_paths": [],
+            "note": "Uses sample data for demo visualization"
+        },
+        "DataTable": {
+            "valid_row_paths": [],
+            "note": "Uses sample data for demo table"
+        },
+        "ExplainMovePanel": {
+            "valid_value_paths": [
+                "/data/features"
+            ],
+            "use_cases": [
+                "explain_capabilities",
+                "highlight_proactive_features"
+            ]
+        },
+        "Button": {
+            "valid_actions": [
+                "navigate_skill",
+                "try_query",
+                "dismiss"
+            ],
+            "valid_label_paths": [
+                "/data/next_skill_suggestions/*/label"
+            ]
+        }
+    },
+    "default_widgets": [
+        "Card",
+        "Text",
+        "Button",
+        "KpiCard",
+        "MetricChart"
+    ],
+    "layout_variants": {
+        "tour": {
+            "description": "Full interactive tour with all features highlighted",
+            "widgets": [
+                "Card",
+                "KpiCard",
+                "MetricChart",
+                "ExplainMovePanel",
+                "Button"
+            ]
+        },
+        "minimal": {
+            "description": "Quick overview with fewer components",
+            "widgets": [
+                "Card",
+                "Text",
+                "Button"
+            ]
+        }
+    },
+    "default_variant": "tour",
+    "notes": [
+        "This skill is for demonstration only - do not use for production analysis",
+        "Always route actual analysis queries to topic-specific skills",
+        "Sample data uses NVDA as default example ticker"
+    ]
+}

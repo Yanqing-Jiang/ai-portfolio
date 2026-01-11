@@ -557,6 +557,8 @@ class A2UISDKWrapper:
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
+        messages: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Dict[str, Any]] = None,
     ) -> SDKResponse:
         """
         Method: A2UISDKWrapper.query - run an API query and return a parsed response.
@@ -569,6 +571,8 @@ class A2UISDKWrapper:
             max_tokens: Maximum tokens in response
             temperature: Sampling temperature
             tools: Optional tool definitions (overrides instance tools if provided)
+            messages: Optional message list for multi-turn context
+            tool_choice: Optional Anthropic tool_choice override
         """
         if not self._client:
             raise RuntimeError("API client not initialized")
@@ -578,6 +582,8 @@ class A2UISDKWrapper:
             max_tokens=max_tokens or 1024,
             temperature=temperature or 0.7,
             tools=tools or self._tools,
+            messages=messages,
+            tool_choice=tool_choice,
         )
 
     async def _query_api(
@@ -586,6 +592,8 @@ class A2UISDKWrapper:
         max_tokens: int = 1024,
         temperature: float = 0.7,
         tools: Optional[List[Dict[str, Any]]] = None,
+        messages: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Dict[str, Any]] = None,
     ) -> SDKResponse:
         """
         Method: A2UISDKWrapper._query_api - execute an Anthropic API query.
@@ -598,6 +606,8 @@ class A2UISDKWrapper:
             max_tokens: Maximum response tokens
             temperature: Sampling temperature
             tools: Optional tool definitions for tool-calling queries
+            messages: Optional message list for multi-turn context
+            tool_choice: Optional Anthropic tool_choice override
         """
         if not self._client:
             raise RuntimeError("API client not initialized")
@@ -611,15 +621,17 @@ class A2UISDKWrapper:
             return SDKResponse(error=str(e), is_complete=True)
 
         try:
-            # Build messages
-            messages = [{"role": "user", "content": prompt}]
-            
             # Build request kwargs
             request_kwargs: Dict[str, Any] = {
                 "model": self.model,
                 "max_tokens": max_tokens,
-                "messages": messages,
             }
+            
+            # Build messages
+            if messages:
+                request_kwargs["messages"] = messages
+            else:
+                request_kwargs["messages"] = [{"role": "user", "content": prompt}]
             
             # Add system prompt if set
             if self._system_prompt:
@@ -632,8 +644,7 @@ class A2UISDKWrapper:
             # Add tools if provided (for tool-calling queries)
             if tools:
                 request_kwargs["tools"] = tools
-                # Force tool use for intent classification
-                request_kwargs["tool_choice"] = {"type": "auto"}
+                request_kwargs["tool_choice"] = tool_choice or {"type": "auto"}
                 logger.debug("API call with %d tools", len(tools))
             
             # Make the API call
@@ -667,6 +678,106 @@ class A2UISDKWrapper:
             circuit.record_failure()
             logger.error(f"API query failed: {e}")
             return SDKResponse(error=str(e), is_complete=True)
+
+    # ========================================================================
+    # Streaming Tool Use (Phase 5 - Fine-Grained Tool Streaming)
+    # ========================================================================
+    
+    async def stream_with_tools(
+        self,
+        prompt: str,
+        tools: List[Dict[str, Any]],
+        max_tokens: int = 1024,
+        temperature: float = 0.3,
+    ):
+        """
+        Stream LLM response with fine-grained tool parameter streaming.
+        
+        Method: stream_with_tools - enables streaming tool use for component selection.
+        Called from: ComponentSelector.stream_components
+        Invokes: anthropic.messages.stream with fine-grained-tool-streaming beta
+        Why: Allows progressive widget rendering as LLM generates selections.
+        
+        Args:
+            prompt: User message to send
+            tools: Tool definitions for component selection
+            max_tokens: Maximum tokens in response
+            temperature: Sampling temperature (lower for more deterministic)
+            
+        Yields:
+            Dict events: {"type": "partial_json" | "block_complete" | "done", ...}
+        """
+        if not self._client:
+            raise RuntimeError("API client not initialized")
+        
+        # Check circuit breaker
+        circuit = get_circuit_breaker()
+        try:
+            circuit.check_or_raise()
+        except CircuitBreakerError as e:
+            logger.warning("Streaming blocked by circuit breaker: %s", e)
+            yield {"type": "error", "error": str(e)}
+            return
+        
+        try:
+            # Build request kwargs
+            request_kwargs: Dict[str, Any] = {
+                "model": self.model,
+                "max_tokens": max_tokens,
+                "messages": [{"role": "user", "content": prompt}],
+                "tools": tools,
+                "tool_choice": {"type": "any"},  # Force tool use
+            }
+            
+            # Add system prompt if set
+            if self._system_prompt:
+                request_kwargs["system"] = self._system_prompt
+            
+            if temperature is not None:
+                request_kwargs["temperature"] = temperature
+            
+            logger.debug(
+                "Starting fine-grained tool streaming: tools=%d, max_tokens=%d",
+                len(tools), max_tokens
+            )
+            
+            # Use streaming with fine-grained tool streaming beta
+            # Beta header enables input_json_delta events for partial JSON
+            with self._client.messages.stream(
+                **request_kwargs,
+                extra_headers={"anthropic-beta": "fine-grained-tool-streaming-2025-05-14"},
+            ) as stream:
+                for event in stream:
+                    # content_block_delta with input_json_delta contains partial JSON
+                    if event.type == "content_block_delta":
+                        if hasattr(event.delta, "partial_json"):
+                            yield {
+                                "type": "partial_json",
+                                "content": event.delta.partial_json,
+                            }
+                        elif hasattr(event.delta, "text"):
+                            # Text delta (if any text output)
+                            yield {
+                                "type": "text_delta",
+                                "content": event.delta.text,
+                            }
+                    
+                    # content_block_stop indicates a complete content block
+                    elif event.type == "content_block_stop":
+                        yield {"type": "block_complete"}
+                    
+                    # message_stop indicates end of response
+                    elif event.type == "message_stop":
+                        yield {"type": "done"}
+            
+            # Record success
+            circuit.record_success()
+            logger.debug("Fine-grained tool streaming completed successfully")
+            
+        except Exception as e:
+            circuit.record_failure()
+            logger.error("Streaming failed: %s", e)
+            yield {"type": "error", "error": str(e)}
 
     # ========================================================================
     # Lifecycle Management

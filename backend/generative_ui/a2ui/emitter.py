@@ -213,6 +213,250 @@ class A2UIMessageEmitter:
             )
         raise ValueError(f"Unsupported skill_id for layout: {skill.skill_id}")
 
+    def build_components_from_selection(
+        self,
+        selection: "DashboardLayout",
+        context: SkillRenderContext,
+    ) -> List[A2UIComponent]:
+        """
+        Build A2UI component tree from LLM-generated selection.
+        
+        Method: build_components_from_selection - converts LLM selection to A2UI tree.
+        Called from: backend.generative_ui.runtime.A2UIRuntime.stream_dashboard
+        Invokes: _build_widget_from_selection, A2UIComponent builders
+        Why: Enables dynamic component generation based on LLM choices.
+        
+        Args:
+            selection: DashboardLayout with widget selections
+            context: Render context with tickers, metrics, etc.
+            
+        Returns:
+            List of A2UIComponent objects forming the dashboard
+        """
+        from ..component_selector import DashboardLayout, WidgetSelection
+        
+        components: List[A2UIComponent] = []
+        
+        # Build title header
+        title_component = A2UIComponent(
+            id="title_text",
+            component={"Text": {
+                "text": {"path": "/data/title"},
+                "style": {"literalString": "h2"},
+            }}
+        )
+        header_row = A2UIComponent(
+            id="header_row",
+            component={"Row": {
+                "children": {"explicitList": ["title_text"]},
+            }}
+        )
+        components.extend([title_component, header_row])
+        
+        # Sort widgets by priority
+        sorted_widgets = sorted(selection.widgets, key=lambda w: w.priority)
+        
+        # Build each widget
+        widget_ids = []
+        for widget_sel in sorted_widgets:
+            widget_component = self._build_widget_from_selection(widget_sel)
+            if widget_component:
+                components.append(widget_component)
+                widget_ids.append(widget_sel.widget_id)
+        
+        # Determine layout based on emphasis
+        if selection.emphasis == "focus_chart":
+            # Chart-focused: stack chart prominently
+            components.append(self._build_grid_layout(
+                "main_grid", 
+                widget_ids, 
+                emphasis="chart"
+            ))
+        elif selection.emphasis == "focus_table":
+            # Table-focused: make table prominent
+            components.append(self._build_grid_layout(
+                "main_grid", 
+                widget_ids, 
+                emphasis="table"
+            ))
+        else:
+            # Balanced: simple column layout
+            main_content = A2UIComponent(
+                id="main_content",
+                component={"Column": {
+                    "children": {"explicitList": widget_ids},
+                    "gap": {"literalNumber": 16},
+                }}
+            )
+            components.append(main_content)
+            widget_ids = ["main_content"]
+        
+        # Build layout root
+        root_children = ["header_row"] + (["main_grid"] if selection.emphasis in ("focus_chart", "focus_table") else widget_ids)
+        layout_root = A2UIComponent(
+            id="layout_root",
+            component={"Column": {
+                "children": {"explicitList": root_children},
+                "gap": {"literalNumber": 24},
+            }}
+        )
+        components.append(layout_root)
+        
+        return components
+    
+    def _build_widget_from_selection(
+        self,
+        widget_sel: "WidgetSelection",
+    ) -> Optional[A2UIComponent]:
+        """
+        Convert a WidgetSelection to an A2UIComponent.
+        
+        Method: _build_widget_from_selection - translates LLM selection to component.
+        Called from: build_components_from_selection
+        Invokes: widget-specific builders
+        Why: Maps LLM widget choices to concrete A2UI components.
+        """
+        from ..component_selector import WidgetSelection
+        
+        widget_type = widget_sel.widget_type
+        widget_id = widget_sel.widget_id
+        bindings = widget_sel.data_bindings
+        
+        # Build component properties from bindings
+        props = {}
+        for prop_name, binding in bindings.items():
+            if isinstance(binding, dict):
+                props[prop_name] = binding
+        
+        # Create the component based on type
+        if widget_type == "KpiCard":
+            return self._build_kpi_from_bindings(widget_id, props)
+        elif widget_type == "MetricChart":
+            return self._build_chart_from_bindings(widget_id, props)
+        elif widget_type == "DataTable":
+            return self._build_table_from_bindings(widget_id, props)
+        elif widget_type == "ExplainMovePanel":
+            return self._build_explain_from_bindings(widget_id, props)
+        elif widget_type == "PriceChart":
+            return self._build_price_chart_from_bindings(widget_id, props)
+        elif widget_type == "NewsTimeline":
+            return self._build_news_from_bindings(widget_id, props)
+        elif widget_type == "CorrelationMatrix":
+            return self._build_correlation_from_bindings(widget_id, props)
+        elif widget_type == "PeerComparePanel":
+            return self._build_peer_compare_from_bindings(widget_id, props)
+        else:
+            # Generic fallback
+            return A2UIComponent(
+                id=widget_id,
+                component={widget_type: props}
+            )
+    
+    def _build_kpi_from_bindings(
+        self,
+        widget_id: str,
+        props: Dict[str, Any],
+    ) -> A2UIComponent:
+        """Build KpiCard from LLM bindings."""
+        return A2UIComponent(
+            id=widget_id,
+            component={"KpiCard": props}
+        )
+    
+    def _build_chart_from_bindings(
+        self,
+        widget_id: str,
+        props: Dict[str, Any],
+    ) -> A2UIComponent:
+        """Build MetricChart from LLM bindings."""
+        return A2UIComponent(
+            id=widget_id,
+            component={"MetricChart": props}
+        )
+    
+    def _build_table_from_bindings(
+        self,
+        widget_id: str,
+        props: Dict[str, Any],
+    ) -> A2UIComponent:
+        """Build DataTable from LLM bindings."""
+        return A2UIComponent(
+            id=widget_id,
+            component={"DataTable": props}
+        )
+    
+    def _build_explain_from_bindings(
+        self,
+        widget_id: str,
+        props: Dict[str, Any],
+    ) -> A2UIComponent:
+        """Build ExplainMovePanel from LLM bindings."""
+        return A2UIComponent(
+            id=widget_id,
+            component={"ExplainMovePanel": props}
+        )
+    
+    def _build_price_chart_from_bindings(
+        self,
+        widget_id: str,
+        props: Dict[str, Any],
+    ) -> A2UIComponent:
+        """Build PriceChart from LLM bindings."""
+        return A2UIComponent(
+            id=widget_id,
+            component={"PriceChart": props}
+        )
+    
+    def _build_news_from_bindings(
+        self,
+        widget_id: str,
+        props: Dict[str, Any],
+    ) -> A2UIComponent:
+        """Build NewsTimeline from LLM bindings."""
+        return A2UIComponent(
+            id=widget_id,
+            component={"NewsTimeline": props}
+        )
+    
+    def _build_correlation_from_bindings(
+        self,
+        widget_id: str,
+        props: Dict[str, Any],
+    ) -> A2UIComponent:
+        """Build CorrelationMatrix from LLM bindings."""
+        return A2UIComponent(
+            id=widget_id,
+            component={"CorrelationMatrix": props}
+        )
+    
+    def _build_peer_compare_from_bindings(
+        self,
+        widget_id: str,
+        props: Dict[str, Any],
+    ) -> A2UIComponent:
+        """Build PeerComparePanel from LLM bindings."""
+        return A2UIComponent(
+            id=widget_id,
+            component={"PeerComparePanel": props}
+        )
+    
+    def _build_grid_layout(
+        self,
+        grid_id: str,
+        widget_ids: List[str],
+        emphasis: str = "balanced",
+    ) -> A2UIComponent:
+        """Build a responsive grid layout for widgets."""
+        # Create grid with emphasis-based weighting
+        return A2UIComponent(
+            id=grid_id,
+            component={"Column": {
+                "children": {"explicitList": widget_ids},
+                "gap": {"literalNumber": 16},
+            }}
+        )
+
+
     def _data_entries_from_dict(self, data: Dict[str, Any]) -> List[DataEntry]:
         """Convert nested dictionaries into DataEntry lists."""
         entries: List[DataEntry] = []

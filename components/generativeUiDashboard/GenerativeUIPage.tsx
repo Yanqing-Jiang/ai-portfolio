@@ -40,6 +40,7 @@ import { useA2UIStream, useSurface } from './a2ui';
 import { A2UISurface, A2UISurfaceLoading, A2UISurfaceError } from './renderer';
 import { ClarificationOverlay, type ClarificationRequest } from './ClarificationOverlay';
 import { FollowUpSuggestions, type FollowUpSuggestion } from './FollowUpSuggestions';
+import type { AnomalyData } from './widgets/AnomalyAlert';
 import type { SkillInfo } from './SkillHeaderBadge';
 import { ContextRibbon, type HistoryItem } from './ContextRibbon';
 import { ProcessPanel, type AuditEvent } from './ProcessPanel';
@@ -313,6 +314,7 @@ export function GenerativeUIPage(): React.ReactElement {
     // Clarification and follow-up state
     const [clarificationRequest, setClarificationRequest] = useState<ClarificationRequest | null>(null);
     const [followUpSuggestions, setFollowUpSuggestions] = useState<FollowUpSuggestion[]>([]);
+    const [anomalies, setAnomalies] = useState<AnomalyData[]>([]);
     const [activeSkill, setActiveSkill] = useState<SkillInfo | null>(null);
     const [history, setHistory] = useState<HistoryItem[]>([]);
 
@@ -472,11 +474,20 @@ export function GenerativeUIPage(): React.ReactElement {
 
     // Handle history selection
     const handleHistorySelect = useCallback((item: HistoryItem) => {
+        // Close existing stream to force fresh reconnection with cached data
+        streamActions.close();
+
+        // Clear UI state that should refresh on tab switch
+        setFollowUpSuggestions([]);
+        setAnomalies([]);
+        setClarificationRequest(null);
+        setAuditTrail([]); // Clear audit trail for new stream
+
+        // Update dashboard context
         setDashboardId(item.id);
         setQuestion(item.query);
         setActiveSkill(null);
-        setAuditTrail([]); // Clear audit trail for new stream
-    }, []);
+    }, [streamActions]);
 
     // Handle suggestion click
     const handleSuggestion = (text: string) => {
@@ -512,6 +523,7 @@ export function GenerativeUIPage(): React.ReactElement {
         setError(null);
         setClarificationRequest(null);
         setFollowUpSuggestions([]);
+        setAnomalies([]);
         setActiveSkill(null);
         streamActions.close();
     };
@@ -607,10 +619,19 @@ export function GenerativeUIPage(): React.ReactElement {
         async (suggestion: FollowUpSuggestion) => {
             setQuestion(suggestion.query);
             setFollowUpSuggestions([]);
+            setAnomalies([]);
 
             // If we have an active dashboard, use the unified query endpoint
             // This allows the LLM to decide if this should be a new dashboard
             // or a modification to the current one
+            // 
+            // Exception: Anomaly category suggestions should always create new analysis
+            if (suggestion.category === 'anomaly') {
+                // Anomaly investigations always need a full new analysis
+                handleSubmit(suggestion.query);
+                return;
+            }
+
             if (dashboardId) {
                 try {
                     addAuditEvent('stream_started', 'Query sent', suggestion.query);
@@ -627,7 +648,13 @@ export function GenerativeUIPage(): React.ReactElement {
                         addAuditEvent('skill_selected', 'New analysis started', result.rationale || '');
                     } else if (result.status === 'success') {
                         // LLM handled it within current dashboard context
-                        addAuditEvent('data_received', `Intent: ${result.intent}`, result.rationale || '');
+                        if (result.intent === 'follow_up') {
+                            // Follow-up questions should create new analysis to show results
+                            // The current backend just returns text, which isn't displayed
+                            handleSubmit(suggestion.query);
+                        } else {
+                            addAuditEvent('data_received', `Intent: ${result.intent}`, result.rationale || '');
+                        }
                     } else if (result.status === 'error') {
                         addAuditEvent('error', 'Query failed', result.message || 'Unknown error');
                     }
@@ -669,6 +696,10 @@ export function GenerativeUIPage(): React.ReactElement {
                         const data = await response.json();
                         if (data.suggestions && Array.isArray(data.suggestions)) {
                             setFollowUpSuggestions(data.suggestions);
+                        }
+                        // Store anomalies for AnomalyAlert display
+                        if (data.anomalies && Array.isArray(data.anomalies)) {
+                            setAnomalies(data.anomalies);
                         }
                     }
                 } catch (err) {
@@ -2410,6 +2441,7 @@ export function GenerativeUIPage(): React.ReactElement {
                                                 <div className="mt-4">
                                                     <FollowUpSuggestions
                                                         suggestions={followUpSuggestions}
+                                                        anomalies={anomalies}
                                                         onSelect={handleFollowUpSelect}
                                                     />
                                                 </div>

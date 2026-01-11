@@ -18,6 +18,8 @@ export interface A2UISurfaceProps {
     onAction: (actionName: string, context: Record<string, unknown>) => void;
     /** Additional CSS class */
     className?: string;
+    /** Set of component IDs that were streamed incrementally (Phase 5) */
+    streamedComponentIds?: Set<string>;
 }
 
 /**
@@ -28,6 +30,7 @@ export function A2UISurface({
     dataModel,
     onAction,
     className = '',
+    streamedComponentIds,
 }: A2UISurfaceProps): React.ReactElement | null {
     // Check if surface has a root
     if (!surface.root) {
@@ -49,6 +52,7 @@ export function A2UISurface({
                 components={surface.components}
                 dataModel={dataModel}
                 onAction={onAction}
+                streamedComponentIds={streamedComponentIds}
             />
         </div>
     );

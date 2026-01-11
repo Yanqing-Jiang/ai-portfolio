@@ -1,3 +1,10 @@
+// --- Function/Class Map ---
+// Hook: useLayoutEventListener
+//   Role: Listen for layout-change events and apply them to LayoutContext.
+//   Called from: components/generativeUiDashboard/DashboardWithLayout.tsx
+//   Invokes: LayoutContext setters (setEmphasis/hide/show/reorder/reset).
+//   Why: Bridges LLM layout intents from /query to client-side layout state.
+// --- End Function/Class Map ---
 /**
  * useLayoutEventListener - Listens for layout change events and applies them.
  * 
@@ -51,19 +58,31 @@ export function useLayoutEventListener(): void {
 
                 case 'hide_widget':
                 case 'toggle_widget': {
-                    const target = params.target || params.widget_type || params.component;
-                    if (target) {
-                        if (action === 'hide_widget') {
-                            hideWidget(target as string);
-                        } else {
-                            toggleWidget(target as string);
-                        }
+                    const target = params.target || params.widget_type || params.component || params.widget;
+                    const visible = typeof params.visible === 'boolean' ? params.visible : undefined;
+                    if (!target) break;
+
+                    if (action === 'hide_widget') {
+                        hideWidget(target as string);
+                        break;
                     }
+
+                    if (visible === true) {
+                        showWidget(target as string);
+                        break;
+                    }
+
+                    if (visible === false) {
+                        hideWidget(target as string);
+                        break;
+                    }
+
+                    toggleWidget(target as string);
                     break;
                 }
 
                 case 'show_widget': {
-                    const target = params.target || params.widget_type || params.component;
+                    const target = params.target || params.widget_type || params.component || params.widget;
                     if (target) {
                         showWidget(target as string);
                     }
@@ -72,7 +91,7 @@ export function useLayoutEventListener(): void {
 
                 case 'reorder_widgets':
                 case 'reorder': {
-                    const order = params.order || params.new_order;
+                    const order = params.order || params.widget_order || params.new_order;
                     if (Array.isArray(order)) {
                         reorderWidgets(order as string[]);
                     } else if (params.infer_order) {
@@ -105,6 +124,14 @@ export function useLayoutEventListener(): void {
                 case 'reset_layout':
                 case 'reset':
                     resetLayout();
+                    break;
+
+                case 'switch_layout':
+                    if (params.emphasis) {
+                        setEmphasis(params.emphasis as LayoutEmphasis);
+                    } else {
+                        resetLayout();
+                    }
                     break;
 
                 case 'focus_chart':

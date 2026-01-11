@@ -1033,9 +1033,33 @@ class A2UIAgent:
 
         correlation = compute_correlation_matrix(series_by_ticker, tickers)
 
+        # Find primary ticker's row for KPIs
+        primary_ticker = tickers[0]
+        primary_row = next((r for r in table_rows if r["ticker"] == primary_ticker), None)
+        
+        # Find leader (highest value) for comparison
+        sorted_by_value = sorted(table_rows, key=lambda r: r.get("latest_value", 0) or 0, reverse=True)
+        leader_row = sorted_by_value[0] if sorted_by_value else None
+        
+        # Build KPIs with keys matching layout.json schema
+        kpis = {}
+        if primary_row:
+            kpis = {
+                # Keys from layout.json data_schema
+                "primary_value": primary_row.get("latest_value", 0),
+                "primary_yoy": primary_row.get("yoy_change", 0),
+                "leader": leader_row["ticker"] if leader_row else primary_ticker,
+                "leader_value": leader_row.get("latest_value", 0) if leader_row else 0,
+                # Legacy keys for backward compatibility
+                "latest_value": primary_row.get("latest_value", 0),
+                "yoy_change": primary_row.get("yoy_change", 0),
+                "ticker": primary_ticker,
+            }
+
         data_model = {
             "tickers": tickers,
-            "primary_ticker": tickers[0],
+            "primary_ticker": primary_ticker,
+            "kpis": kpis,
             "table": {"columns": columns, "rows": table_rows},
             "correlation": {"tickers": tickers, "matrix": correlation},
             "chart": {"series": chart_series, "annotations": []},

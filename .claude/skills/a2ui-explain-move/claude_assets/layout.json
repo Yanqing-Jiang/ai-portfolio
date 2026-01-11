@@ -20,6 +20,110 @@
         "news": "/data/news/events",
         "explanation": "/data/explanation"
     },
+    "data_schema": {
+        "/data/kpis": {
+            "type": "object",
+            "description": "Financial KPIs for the ticker",
+            "properties": {
+                "revenue": {
+                    "type": "number",
+                    "description": "Latest revenue in USD"
+                },
+                "revenue_delta": {
+                    "type": "number",
+                    "description": "Revenue change percentage"
+                },
+                "net_income": {
+                    "type": "number",
+                    "description": "Latest net income in USD"
+                },
+                "net_income_delta": {
+                    "type": "number",
+                    "description": "Net income change percentage"
+                },
+                "gross_margin": {
+                    "type": "number",
+                    "description": "Gross margin percentage"
+                },
+                "operating_margin": {
+                    "type": "number",
+                    "description": "Operating margin percentage"
+                },
+                "net_margin": {
+                    "type": "number",
+                    "description": "Net margin percentage"
+                }
+            }
+        },
+        "/data/news": {
+            "type": "object",
+            "description": "News events data",
+            "properties": {
+                "events": {
+                    "type": "array",
+                    "description": "Array of news events [{date, title, summary, sentiment, source}]"
+                }
+            }
+        },
+        "/data/explanation": {
+            "type": "object",
+            "description": "AI-generated price movement explanation",
+            "properties": {
+                "title": {
+                    "type": "string",
+                    "description": "Explanation panel title"
+                },
+                "text": {
+                    "type": "string",
+                    "description": "Detailed explanation of price movement"
+                },
+                "factors": {
+                    "type": "array",
+                    "description": "Contributing factors [{title, description, impact, source, icon}]"
+                },
+                "citations": {
+                    "type": "array",
+                    "description": "Source citations [{title, url, date}]"
+                }
+            }
+        }
+    },
+    "widget_bindings": {
+        "PriceChart": {
+            "valid_ticker_path": "/data/ticker",
+            "valid_interval_values": [
+                "1D",
+                "1W",
+                "1M",
+                "3M",
+                "6M",
+                "1Y"
+            ]
+        },
+        "KpiCard": {
+            "valid_value_paths": [
+                "/data/kpis/revenue",
+                "/data/kpis/net_income",
+                "/data/kpis/gross_margin",
+                "/data/kpis/operating_margin",
+                "/data/kpis/net_margin"
+            ],
+            "valid_delta_paths": [
+                "/data/kpis/revenue_delta",
+                "/data/kpis/net_income_delta"
+            ],
+            "valid_label_paths": []
+        },
+        "NewsTimeline": {
+            "valid_events_path": "/data/news/events"
+        },
+        "ExplainMovePanel": {
+            "valid_title_path": "/data/explanation/title",
+            "valid_explanation_path": "/data/explanation/text",
+            "valid_factors_path": "/data/explanation/factors",
+            "valid_citations_path": "/data/explanation/citations"
+        }
+    },
     "component_tree": {
         "layout_root": {
             "type": "Column",

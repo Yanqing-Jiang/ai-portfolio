@@ -80,12 +80,15 @@ export function applyDataUpdate(
  * A2UI Message Processor class.
  *
  * Manages surface and data model state as messages arrive.
+ * Tracks incremental (streamed) component IDs for progressive rendering animations (Phase 5).
  */
 export class MessageProcessor {
     private surfaces: Map<string, Surface> = new Map();
     private dataModels: Map<string, DataModel> = new Map();
     private onUpdate: (() => void) | null = null;
     private onAudit: ((event: any) => void) | null = null;
+    // Phase 5: Track streamed component IDs for entrance animations
+    private streamedComponentIds: Set<string> = new Set();
 
     constructor(onUpdate?: () => void, onAudit?: (event: any) => void) {
         this.onUpdate = onUpdate || null;
@@ -108,13 +111,20 @@ export class MessageProcessor {
             if (!this.dataModels.has(surfaceId)) {
                 this.dataModels.set(surfaceId, {});
             }
+            // Clear streamed IDs on new surface
+            this.streamedComponentIds.clear();
         } else if ('surfaceUpdate' in message) {
-            const { surfaceId, components } = message.surfaceUpdate;
+            const { surfaceId, components, incremental } = message.surfaceUpdate;
             const surface = this.surfaces.get(surfaceId);
 
             if (surface) {
                 for (const comp of components) {
                     surface.components.set(comp.id, comp.component);
+
+                    // Phase 5: Track streamed components for entrance animations
+                    if (incremental) {
+                        this.streamedComponentIds.add(comp.id);
+                    }
                 }
             } else {
                 // Auto-create surface if not exists
@@ -125,6 +135,10 @@ export class MessageProcessor {
                 };
                 for (const comp of components) {
                     newSurface.components.set(comp.id, comp.component);
+                    // Track streamed components
+                    if (incremental) {
+                        this.streamedComponentIds.add(comp.id);
+                    }
                 }
                 this.surfaces.set(surfaceId, newSurface);
             }
@@ -194,11 +208,27 @@ export class MessageProcessor {
     }
 
     /**
+     * Get IDs of components that were streamed incrementally (Phase 5).
+     * Used for entrance animations in ComponentRenderer.
+     */
+    getStreamedComponentIds(): Set<string> {
+        return new Set(this.streamedComponentIds);
+    }
+
+    /**
+     * Check if a component was streamed (for animations).
+     */
+    isStreamedComponent(componentId: string): boolean {
+        return this.streamedComponentIds.has(componentId);
+    }
+
+    /**
      * Clear all state.
      */
     clear(): void {
         this.surfaces.clear();
         this.dataModels.clear();
+        this.streamedComponentIds.clear();
         this.onUpdate?.();
     }
 }

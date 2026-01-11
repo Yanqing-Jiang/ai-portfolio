@@ -58,7 +58,14 @@ _CLAUDE_SKILLS_DIR = _PROJECT_ROOT / ".claude" / "skills"
 
 @dataclass(frozen=True)
 class A2UISkillMeta:
-    """Metadata + content parsed from an A2UI skill markdown file."""
+    """
+    Metadata + content parsed from an A2UI skill markdown file.
+    
+    Dataclass: A2UISkillMeta - stores parsed A2UI skill metadata for routing and layout.
+    Called from: backend.generative_ui.skills.load_a2ui_skill, backend.generative_ui.agent_v2.A2UIAgent
+    Invokes: n/a
+    Why: Centralizes skill metadata including data schemas for LLM component selection.
+    """
 
     skill_id: str
     name: str
@@ -71,6 +78,78 @@ class A2UISkillMeta:
     body: str
     tools: List[str] = None  # type: ignore  # Tools declared in skill.md
     layout_config: Optional[Dict[str, Any]] = None  # From claude_assets/layout.json
+
+    @property
+    def data_schema(self) -> Dict[str, Any]:
+        """
+        Return the skill's data schema for LLM prompts.
+        
+        Property: data_schema - provides data path structure for LLM component selection.
+        Called from: component_selector, build_a2ui_skill_catalog
+        Why: Enables LLM to know valid data paths before layout generation.
+        """
+        if self.layout_config:
+            return self.layout_config.get("data_schema", {})
+        return {}
+
+    @property
+    def widget_bindings(self) -> Dict[str, Any]:
+        """
+        Return valid widget-to-path bindings.
+        
+        Property: widget_bindings - maps widget types to valid data paths.
+        Called from: component_validator, component_selector
+        Why: Constrains LLM widget selection to valid data bindings.
+        """
+        if self.layout_config:
+            return self.layout_config.get("widget_bindings", {})
+        return {}
+
+    @property
+    def data_paths(self) -> Dict[str, str]:
+        """
+        Return top-level data paths.
+        
+        Property: data_paths - basic path mapping like {kpis: /data/kpis}.
+        Called from: emitter, skill catalog
+        Why: Provides quick access to primary data locations.
+        """
+        if self.layout_config:
+            return self.layout_config.get("data_paths", {})
+        return {}
+
+    @property
+    def all_data_paths(self) -> List[str]:
+        """
+        Flatten all valid data paths for enum constraints in tool schemas.
+        
+        Property: all_data_paths - complete list of valid binding paths.
+        Called from: component_selector.build_component_selection_tool
+        Why: Provides enum list for strict tool schema validation.
+        """
+        paths = set()
+        
+        # Add top-level paths
+        for path in self.data_paths.values():
+            paths.add(path)
+        
+        # Add nested paths from data_schema
+        for base_path, schema in self.data_schema.items():
+            paths.add(base_path)
+            if isinstance(schema, dict) and "properties" in schema:
+                for prop in schema["properties"]:
+                    paths.add(f"{base_path}/{prop}")
+        
+        # Add paths from widget_bindings
+        for widget_rules in self.widget_bindings.values():
+            if isinstance(widget_rules, dict):
+                for key, value in widget_rules.items():
+                    if isinstance(value, list):
+                        paths.update(value)
+                    elif isinstance(value, str) and value.startswith("/"):
+                        paths.add(value)
+        
+        return sorted(paths)
 
 
 def _parse_yaml_frontmatter(raw_content: str, file_path: Path) -> tuple[Dict[str, Any], str]:
@@ -241,17 +320,50 @@ def get_a2ui_skill(skill_id: str) -> A2UISkillMeta:
 
 
 def build_a2ui_skill_catalog(skills: Sequence[A2UISkillMeta]) -> str:
-    """Format skills into a compact catalog prompt for routing."""
+    """
+    Format skills into a compact catalog prompt for routing.
+    
+    Function: build_a2ui_skill_catalog - formats skill metadata for LLM selection.
+    Called from: backend.generative_ui.agent_v2.A2UIAgent
+    Invokes: n/a
+    Why: Supplies the selection model with skill summaries including data path constraints.
+    """
     lines = ["A2UI Skill Catalog:"]
     for skill in skills:
-        lines.append(f"- {skill.name} ({skill.skill_id})")
-        lines.append(f"  Description: {skill.description}")
-        lines.append(f"  Widgets: {', '.join(skill.widgets)}")
-        lines.append(f"  Layout: {skill.layout}")
+        lines.append(f"\n## {skill.name} ({skill.skill_id})")
+        lines.append(f"Description: {skill.description}")
+        lines.append(f"Widgets: {', '.join(skill.widgets)}")
+        lines.append(f"Layout: {skill.layout}")
         if skill.layout_variants:
-            lines.append(f"  Layout Variants: {', '.join(skill.layout_variants)}")
+            lines.append(f"Layout Variants: {', '.join(skill.layout_variants)}")
         if skill.tools:
-            lines.append(f"  Tools: {', '.join(skill.tools)}")
+            lines.append(f"Tools: {', '.join(skill.tools)}")
+        
+        # Include data paths for LLM component selection context
+        if skill.data_paths:
+            lines.append("\nData Paths Available:")
+            for name, path in skill.data_paths.items():
+                lines.append(f"  - {name}: {path}")
+        
+        # Include data schema summary
+        if skill.data_schema:
+            lines.append("\nData Schema:")
+            for path, schema in skill.data_schema.items():
+                if isinstance(schema, dict) and "properties" in schema:
+                    props = list(schema["properties"].keys())
+                    lines.append(f"  {path}: {', '.join(props)}")
+        
+        # Include widget binding rules
+        if skill.widget_bindings:
+            lines.append("\nWidget Binding Rules:")
+            for widget, rules in skill.widget_bindings.items():
+                if isinstance(rules, dict):
+                    for prop, paths in rules.items():
+                        if isinstance(paths, list) and paths:
+                            lines.append(f"  {widget}.{prop}: {paths}")
+                        elif isinstance(paths, str):
+                            lines.append(f"  {widget}.{prop}: {paths}")
+    
     return "\n".join(lines)
 
 

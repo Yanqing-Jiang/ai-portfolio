@@ -170,7 +170,11 @@ export function PeerComparePanel({
     }, [dataModel]);
 
     // Streaming text for AI analysis (the main insight)
-    const { displayText, isComplete } = useStreamingText(explanationText, { speed: 15 });
+    // Use explanationTitle as resetKey to force restart when analysis changes (e.g., switching history tabs)
+    const { displayText, isComplete } = useStreamingText(explanationText, {
+        speed: 15,
+        resetKey: `${componentId}-${explanationTitle}`,
+    });
 
     // Process chart data - sort by period and deduplicate
     const processedChartData = useMemo(() => {

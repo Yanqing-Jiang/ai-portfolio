@@ -105,7 +105,11 @@ export function ExplainMovePanel({
     const citations = resolveArray<Citation>(panelProps.citations, dataModel, []);
 
     // Use streaming text hook for the narrative
-    const { displayText, isComplete } = useStreamingText(fullExplanation, { speed: 20 });
+    // Use title as resetKey to force restart when analysis changes (e.g., switching history tabs)
+    const { displayText, isComplete } = useStreamingText(fullExplanation, {
+        speed: 20,
+        resetKey: `${componentId}-${title}`,
+    });
 
     const displayFactors = factors.length > 0 ? factors : DEFAULT_FACTORS;
     const showCitations = citations.length > 0;

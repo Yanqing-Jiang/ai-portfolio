@@ -221,49 +221,146 @@ class A2UIRuntime:
             yield emitter.audit("skill_selected", f"skill={skill.name} ({selection.skill_id})")
             message_count += 1
 
-            # Layout planning
+            # -------------------------------------------------------------------------
+            # Component Selection: Streaming (Phase 5) with Fallback
+            # Streaming is the primary path - enables progressive widget rendering
+            # -------------------------------------------------------------------------
             step_start = time.time()
-            layout_override: Optional[LayoutOverride] = await self.layout_planner.propose_override(
-                skill,
-                state.question,
-            )
-            components = emitter.build_components_for_skill(
-                skill,
-                context,
-                variant=layout_override.layout_variant if layout_override else None,
-                widget_order=layout_override.widget_order if layout_override else None,
-                hidden_widgets=layout_override.hidden_widgets if layout_override else None,
-                emphasis=layout_override.emphasis if layout_override else None,
-            )
+            llm_selection = None
+            components = None
+            streaming_succeeded = False
             
-            if layout_override:
-                trace.layout_override = {
-                    "variant": layout_override.layout_variant,
-                    "emphasis": layout_override.emphasis,
-                    "widget_order": layout_override.widget_order,
-                    "hidden_widgets": layout_override.hidden_widgets,
-                }
-                try:
-                    state.update_plan_fields(layout_variant=layout_override.layout_variant)
-                    state.update_params({"layout_override": trace.layout_override})
-                except Exception:
-                    pass
-                yield emitter.audit(
-                    "layout_override", 
-                    f"variant={layout_override.layout_variant or 'default'}, emphasis={layout_override.emphasis or 'none'}"
-                )
+            # Try streaming component selection first (primary path)
+            try:
+                yield emitter.audit("component_selection_mode", "streaming")
                 message_count += 1
+                
+                async for msg in self._stream_component_selection(
+                    emitter, skill, state.question, context, trace
+                ):
+                    yield msg
+                    message_count += 1
+                
+                streaming_succeeded = True
+                # Skip to data execution - components already emitted by streaming
+                components = []  # Mark as handled
+                
+            except Exception as e:
+                logger.warning("[RUNTIME] Streaming component selection failed, falling back: %s", e)
+                yield emitter.audit("streaming_fallback", f"error={str(e)[:100]}")
+                message_count += 1
+                # Continue to standard selection path
+            
+            # Standard LLM component selection (fallback when streaming fails)
+            if not streaming_succeeded:
+                # Try LLM component selection first
+                try:
+                    from .component_selector import get_component_selector
+                    from .component_validator import get_component_validator
+                    
+                    selector = get_component_selector()
+                    validator = get_component_validator()
+                    
+                    # Build context dict for LLM
+                    context_dict = {
+                        "primary_ticker": context.primary_ticker,
+                        "tickers": context.tickers,
+                        "metric": context.metric,
+                        "time_range": context.time_range,
+                    }
+                    
+                    # Get LLM component selection
+                    llm_selection = await selector.select_components(
+                        skill=skill,
+                        question=state.question,
+                        context=context_dict,
+                    )
+                    
+                    if llm_selection:
+                        # Validate LLM selection
+                        is_valid, errors = validator.validate_selection(llm_selection, skill)
+                        
+                        if is_valid:
+                            # Build components from LLM selection
+                            components = emitter.build_components_from_selection(
+                                llm_selection,
+                                context,
+                            )
+                            yield emitter.audit(
+                                "llm_component_selection",
+                                f"widgets={[w.widget_type for w in llm_selection.widgets]}, "
+                                f"emphasis={llm_selection.emphasis}"
+                            )
+                            message_count += 1
+                            trace.add_step(
+                                "llm_component_selection",
+                                details={
+                                    "widgets": [w.widget_type for w in llm_selection.widgets],
+                                    "emphasis": llm_selection.emphasis,
+                                    "rationale": llm_selection.rationale,
+                                },
+                                success=True,
+                            )
+                        else:
+                            # Validation failed, log and fallback
+                            logger.warning(
+                                "[RUNTIME] LLM selection failed validation: %s", 
+                                errors[:3]
+                            )
+                            llm_selection = None
+                            
+                except Exception as e:
+                    logger.warning("[RUNTIME] LLM component selection failed: %s", e)
+                    llm_selection = None
+                
+                # Fallback to hardcoded layouts if LLM selection failed
+                if components is None:
+                    # Use traditional layout planning
+                    layout_override: Optional[LayoutOverride] = await self.layout_planner.propose_override(
+                        skill,
+                        state.question,
+                    )
+                    components = emitter.build_components_for_skill(
+                        skill,
+                        context,
+                        variant=layout_override.layout_variant if layout_override else None,
+                        widget_order=layout_override.widget_order if layout_override else None,
+                        hidden_widgets=layout_override.hidden_widgets if layout_override else None,
+                        emphasis=layout_override.emphasis if layout_override else None,
+                    )
+                    
+                    if layout_override:
+                        trace.layout_override = {
+                            "variant": layout_override.layout_variant,
+                            "emphasis": layout_override.emphasis,
+                            "widget_order": layout_override.widget_order,
+                            "hidden_widgets": layout_override.hidden_widgets,
+                        }
+                        try:
+                            state.update_plan_fields(layout_variant=layout_override.layout_variant)
+                            state.update_params({"layout_override": trace.layout_override})
+                        except Exception:
+                            pass
+                        yield emitter.audit(
+                            "layout_override_fallback", 
+                            f"variant={layout_override.layout_variant or 'default'}, emphasis={layout_override.emphasis or 'none'}"
+                        )
+                        message_count += 1
             
             trace.add_step(
                 "layout_planning",
                 details={
                     "layout_override": trace.layout_override,
                     "component_count": len(components) if components else 0,
+                    "llm_selected": llm_selection is not None,
+                    "streaming": streaming_succeeded,
                 },
                 duration_ms=(time.time() - step_start) * 1000
             )
             
-            yield emitter.surface_update(components)
+            # Emit surface update (skip if streaming already emitted components)
+            if components and not streaming_succeeded:
+                yield emitter.surface_update(components)
             message_count += 1
 
             # Seed data
@@ -343,30 +440,63 @@ class A2UIRuntime:
                 skill = self.agent.skill_lookup[selection.skill_id]
                 context = self.agent._build_render_context(selection, skill)
 
-                layout_override = await self.layout_planner.propose_override(
-                    skill,
-                    state.question,
-                )
-                components = emitter.build_components_for_skill(
-                    skill,
-                    context,
-                    variant=layout_override.layout_variant if layout_override else None,
-                    widget_order=layout_override.widget_order if layout_override else None,
-                    hidden_widgets=layout_override.hidden_widgets if layout_override else None,
-                    emphasis=layout_override.emphasis if layout_override else None,
-                )
-                if layout_override:
-                    trace.layout_override = {
-                        "variant": layout_override.layout_variant,
-                        "emphasis": layout_override.emphasis,
-                        "widget_order": layout_override.widget_order,
-                        "hidden_widgets": layout_override.hidden_widgets,
+                # Try LLM component selection after clarification
+                components = None
+                try:
+                    from .component_selector import get_component_selector
+                    from .component_validator import get_component_validator
+                    
+                    selector = get_component_selector()
+                    validator = get_component_validator()
+                    
+                    context_dict = {
+                        "primary_ticker": context.primary_ticker,
+                        "tickers": context.tickers,
+                        "metric": context.metric,
+                        "time_range": context.time_range,
                     }
-                    try:
-                        state.update_plan_fields(layout_variant=layout_override.layout_variant)
-                        state.update_params({"layout_override": trace.layout_override})
-                    except Exception:
-                        pass
+                    
+                    llm_selection = await selector.select_components(
+                        skill=skill,
+                        question=state.question,
+                        context=context_dict,
+                    )
+                    
+                    if llm_selection:
+                        is_valid, errors = validator.validate_selection(llm_selection, skill)
+                        if is_valid:
+                            components = emitter.build_components_from_selection(
+                                llm_selection, context
+                            )
+                except Exception as e:
+                    logger.warning("[RUNTIME] Post-clarification LLM selection failed: %s", e)
+                
+                # Fallback to hardcoded layout
+                if components is None:
+                    layout_override = await self.layout_planner.propose_override(
+                        skill,
+                        state.question,
+                    )
+                    components = emitter.build_components_for_skill(
+                        skill,
+                        context,
+                        variant=layout_override.layout_variant if layout_override else None,
+                        widget_order=layout_override.widget_order if layout_override else None,
+                        hidden_widgets=layout_override.hidden_widgets if layout_override else None,
+                        emphasis=layout_override.emphasis if layout_override else None,
+                    )
+                    if layout_override:
+                        trace.layout_override = {
+                            "variant": layout_override.layout_variant,
+                            "emphasis": layout_override.emphasis,
+                            "widget_order": layout_override.widget_order,
+                            "hidden_widgets": layout_override.hidden_widgets,
+                        }
+                        try:
+                            state.update_plan_fields(layout_variant=layout_override.layout_variant)
+                            state.update_params({"layout_override": trace.layout_override})
+                        except Exception:
+                            pass
                 yield emitter.surface_update(components)
                 message_count += 1
                 
@@ -476,6 +606,113 @@ class A2UIRuntime:
                 yield msg
             yield json.dumps({"done": True, "error": True})
 
+    async def _stream_component_selection(
+        self,
+        emitter: A2UIMessageEmitter,
+        skill: Any,
+        question: str,
+        context: Any,
+        trace: RunTrace,
+    ) -> AsyncGenerator[str, None]:
+        """
+        Stream component selection for progressive rendering.
+        
+        Method: _stream_component_selection - progressive widget emission.
+        Called from: stream_dashboard (when streaming mode enabled)
+        Invokes: ComponentSelector.stream_components, emitter.incremental_surface_update
+        Why: Enables sub-second time-to-first-paint for dashboard widgets.
+        
+        Args:
+            emitter: A2UI message emitter
+            skill: The selected skill
+            question: User's original question
+            context: Render context
+            trace: Current execution trace
+            
+        Yields:
+            A2UI JSONL messages for incremental surface updates
+        """
+        from .component_selector import get_component_selector
+        from .component_validator import get_component_validator
+        from .a2ui.messages import A2UIComponent, SurfaceUpdate
+        
+        selector = get_component_selector()
+        validator = get_component_validator()
+        
+        emitted_components: List[A2UIComponent] = []
+        pending_ids: List[str] = []
+        widget_count = 0
+        
+        context_dict = {
+            "primary_ticker": context.primary_ticker,
+            "tickers": context.tickers,
+            "metric": context.metric,
+            "time_range": context.time_range,
+        }
+        
+        yield emitter.audit("streaming_components", "started")
+        
+        try:
+            async for widget in selector.stream_components(skill, question, context_dict):
+                # Validate individual widget
+                if widget.widget_type in skill.widgets:
+                    # Build component from widget selection
+                    component = emitter._build_widget_from_selection(widget)
+                    if component:
+                        emitted_components.append(component)
+                        pending_ids.append(widget.widget_id)
+                        widget_count += 1
+                        
+                        # Emit incremental surface update for this widget
+                        incremental_update = SurfaceUpdate(
+                            surfaceId=emitter.surface_id,
+                            components=[component],
+                            incremental=True,  # Mark as streaming for animations
+                        )
+                        yield incremental_update.to_json()
+                        
+                        yield emitter.audit(
+                            "widget_streamed",
+                            f"type={widget.widget_type}, id={widget.widget_id}"
+                        )
+            
+            # Emit final layout root with all widget IDs
+            if pending_ids:
+                layout_root = A2UIComponent(
+                    id="layout_root",
+                    component={"Column": {
+                        "children": {"explicitList": ["header_row"] + pending_ids},
+                        "gap": {"literalNumber": 24},
+                    }}
+                )
+                final_update = SurfaceUpdate(
+                    surfaceId=emitter.surface_id,
+                    components=[layout_root],
+                    incremental=False,  # Final update, not incremental
+                )
+                yield final_update.to_json()
+            
+            yield emitter.audit("streaming_components", f"complete, widgets={widget_count}")
+            
+            trace.add_step(
+                "stream_component_selection",
+                details={
+                    "widget_count": widget_count,
+                    "widget_ids": pending_ids,
+                },
+                success=True,
+            )
+            
+        except Exception as e:
+            logger.warning("[RUNTIME] Streaming component selection failed: %s", e)
+            yield emitter.audit("streaming_components", f"error: {str(e)[:100]}")
+            trace.add_step(
+                "stream_component_selection",
+                details={"error": str(e)},
+                success=False,
+            )
+            # Caller should fallback to non-streaming selection
+
     def _generate_follow_ups(
         self,
         selection: Any,
@@ -484,41 +721,15 @@ class A2UIRuntime:
         """
         Method: A2UIRuntime._generate_follow_ups - generate rule-based follow-up suggestions.
         Called from: backend.generative_ui.runtime.A2UIRuntime.stream_dashboard.
-        Invokes: n/a.
+        Invokes: follow_up_generator.generate_follow_ups_simple.
         Why: Supplies contextual follow-up suggestions without LLM overhead.
         """
+        from .follow_up_generator import generate_follow_ups_simple
+        
         tickers = getattr(selection, 'tickers', [])
-        primary = tickers[0] if tickers else "the stock"
         skill_id = getattr(selection, 'skill_id', '')
         
-        skill_suggestions = {
-            "a2ui_explain_move": [
-                f"What are analysts saying about {primary}?",
-                f"Compare {primary} to its competitors",
-                f"Show {primary} revenue trend",
-            ],
-            "a2ui_peer_compare": [
-                f"Explain {primary} stock movement",
-                "Which company has the best margins?",
-                "Show quarterly revenue breakdown",
-            ],
-            "a2ui_margin_analysis": [
-                f"Compare {primary} margins to peers",
-                f"What drove {primary} margin changes?",
-                "Show margin trend over time",
-            ],
-            "a2ui_revenue_trend": [
-                f"Explain {primary} growth drivers",
-                f"Compare {primary} revenue to peers",
-                "What's the earnings outlook?",
-            ],
-        }
-        
-        return skill_suggestions.get(skill_id, [
-            "Tell me more about this company",
-            "Compare to competitors",
-            "What's the outlook?",
-        ])
+        return generate_follow_ups_simple(skill_id=skill_id, tickers=tickers)
 
     async def process_action(self, state: DashboardState, action: Dict[str, Any]) -> Dict[str, Any]:
         """

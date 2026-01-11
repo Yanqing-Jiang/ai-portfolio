@@ -5,19 +5,134 @@
     "widgets": [
         "KpiCard",
         "DataTable",
-        "MetricChart"
+        "MetricChart",
+        "ExplainMovePanel"
     ],
     "layout": "compact",
     "layout_variants": [
         "compact",
-        "focus_table"
+        "focus_table",
+        "focus_chart"
     ],
     "default_variant": "compact",
     "data_paths": {
         "ticker": "/data/ticker",
+        "tickers": "/data/tickers",
         "kpis": "/data/kpis",
         "table": "/data/table",
         "chart": "/data/chart",
         "explanation": "/data/explanation"
+    },
+    "data_schema": {
+        "/data/kpis": {
+            "type": "object",
+            "description": "Margin KPIs for the analyzed ticker(s)",
+            "properties": {
+                "gross_margin": {
+                    "type": "number",
+                    "description": "Gross margin percentage"
+                },
+                "gross_margin_delta": {
+                    "type": "number",
+                    "description": "Gross margin YoY change"
+                },
+                "operating_margin": {
+                    "type": "number",
+                    "description": "Operating margin percentage"
+                },
+                "operating_margin_delta": {
+                    "type": "number",
+                    "description": "Operating margin YoY change"
+                },
+                "net_margin": {
+                    "type": "number",
+                    "description": "Net margin percentage"
+                },
+                "net_margin_delta": {
+                    "type": "number",
+                    "description": "Net margin YoY change"
+                }
+            }
+        },
+        "/data/table": {
+            "type": "object",
+            "description": "Margin comparison table",
+            "properties": {
+                "columns": {
+                    "type": "array",
+                    "description": "Column definitions [{key, label, type}]"
+                },
+                "rows": {
+                    "type": "array",
+                    "description": "Row data with ticker, gross_margin, operating_margin, net_margin, yoy changes"
+                }
+            }
+        },
+        "/data/chart": {
+            "type": "object",
+            "description": "Margin trend chart data",
+            "properties": {
+                "series": {
+                    "type": "array",
+                    "description": "Array of {ticker, data: [{period, value}]} for each margin type"
+                },
+                "annotations": {
+                    "type": "array",
+                    "description": "Notable events or anomalies"
+                }
+            }
+        },
+        "/data/explanation": {
+            "type": "object",
+            "description": "AI-generated margin analysis insight",
+            "properties": {
+                "title": {
+                    "type": "string",
+                    "description": "Insight panel title"
+                },
+                "text": {
+                    "type": "string",
+                    "description": "Analysis of margin performance"
+                },
+                "factors": {
+                    "type": "array",
+                    "description": "Factors affecting margins [{title, description, impact, source, icon}]"
+                },
+                "citations": {
+                    "type": "array",
+                    "description": "Source citations"
+                }
+            }
+        }
+    },
+    "widget_bindings": {
+        "KpiCard": {
+            "valid_value_paths": [
+                "/data/kpis/gross_margin",
+                "/data/kpis/operating_margin",
+                "/data/kpis/net_margin"
+            ],
+            "valid_delta_paths": [
+                "/data/kpis/gross_margin_delta",
+                "/data/kpis/operating_margin_delta",
+                "/data/kpis/net_margin_delta"
+            ],
+            "valid_label_paths": []
+        },
+        "MetricChart": {
+            "valid_series_path": "/data/chart/series",
+            "valid_annotations_path": "/data/chart/annotations",
+            "valid_title_path": "/data/title"
+        },
+        "DataTable": {
+            "valid_columns_path": "/data/table/columns",
+            "valid_data_path": "/data/table/rows"
+        },
+        "ExplainMovePanel": {
+            "valid_title_path": "/data/explanation/title",
+            "valid_explanation_path": "/data/explanation/text",
+            "valid_factors_path": "/data/explanation/factors",
+            "valid_citations_path": "/data/explanation/citations"
+        }
     }
 }

@@ -530,10 +530,24 @@ class PeerCompareExecutor(BaseSkillExecutor):
         if primary_row is None and table_rows:
             primary_row = table_rows[0]
         
-        # Build KPIs from primary ticker
+        # Find leader (highest value) for comparison
+        sorted_by_value = sorted(table_rows, key=lambda r: r.get("latest_value", 0) or 0, reverse=True)
+        leader_row = sorted_by_value[0] if sorted_by_value else None
+        
+        # Build KPIs with keys matching layout.json schema:
+        # - primary_value: Primary ticker's latest value
+        # - primary_yoy: Primary ticker's YoY change
+        # - leader: Ticker symbol of the leader
+        # - leader_value: Leader's latest value
         kpis = {}
         if primary_row:
             kpis = {
+                # Keys from layout.json data_schema
+                "primary_value": primary_row.get("latest_value", 0),
+                "primary_yoy": primary_row.get("yoy_change", 0),
+                "leader": leader_row["ticker"] if leader_row else self.primary_ticker,
+                "leader_value": leader_row.get("latest_value", 0) if leader_row else 0,
+                # Legacy keys for backward compatibility
                 "latest_value": primary_row.get("latest_value", 0),
                 "yoy_change": primary_row.get("yoy_change", 0),
                 "ticker": self.primary_ticker,

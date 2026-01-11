@@ -4,6 +4,21 @@
 //   Called from: components/generativeUiDashboard/GenerativeUIPage.tsx
 //   Invokes: onSelect callbacks, framer-motion animations, AnomalyAlert component
 //   Why: Keeps the analysis flow conversational with guided next steps and proactive insights.
+// Function: getSuggestionIcon
+//   Role: Resolve the icon displayed for a suggestion pill.
+//   Called from: FollowUpSuggestions render loop.
+//   Invokes: ICONS lookup.
+//   Why: Keeps icon fallback behavior consistent.
+// Function: getPriorityStyles
+//   Role: Apply visual emphasis for high-priority suggestions.
+//   Called from: FollowUpSuggestions render loop.
+//   Invokes: n/a.
+//   Why: Makes anomaly/priority suggestions visually distinct.
+// Function: deriveAnomaliesFromSuggestions
+//   Role: Pull anomaly data from suggestion metadata when explicit anomalies are absent.
+//   Called from: FollowUpSuggestions.
+//   Invokes: n/a.
+//   Why: Ensures anomaly alerts render from backend suggestion metadata.
 // --- End Function/Class Map ---
 /**
  * FollowUpSuggestions Component
@@ -33,6 +48,8 @@ export interface FollowUpSuggestion {
     category?: 'skill' | 'anomaly' | 'web_search' | 'insight';
     /** Priority for ordering */
     priority?: 'high' | 'medium' | 'low';
+    /** Optional metadata payload for rich suggestions */
+    metadata?: Record<string, unknown>;
 }
 
 export interface FollowUpSuggestionsProps {
@@ -107,6 +124,16 @@ function getPriorityStyles(suggestion: FollowUpSuggestion): React.CSSProperties 
 }
 
 /**
+ * Derive anomaly data from suggestion metadata when present.
+ */
+function deriveAnomaliesFromSuggestions(suggestions: FollowUpSuggestion[]): AnomalyData[] {
+    return suggestions
+        .filter((suggestion) => suggestion.category === 'anomaly' && suggestion.metadata)
+        .map((suggestion) => suggestion.metadata as AnomalyData)
+        .filter((anomaly) => Boolean(anomaly?.ticker && anomaly?.metric));
+}
+
+/**
  * FollowUpSuggestions Component
  */
 export function FollowUpSuggestions({
@@ -119,11 +146,15 @@ export function FollowUpSuggestions({
     onCompareAnomaly,
     onDismissAnomaly,
 }: FollowUpSuggestionsProps): React.ReactElement {
+    const fallbackAnomalies = React.useMemo(
+        () => (anomalies.length > 0 ? anomalies : deriveAnomaliesFromSuggestions(suggestions)),
+        [anomalies, suggestions]
+    );
     // State for dismissed anomalies
     const [dismissedAnomalies, setDismissedAnomalies] = React.useState<Set<string>>(new Set());
 
     // Filter out dismissed anomalies
-    const visibleAnomalies = anomalies.filter(
+    const visibleAnomalies = fallbackAnomalies.filter(
         a => !dismissedAnomalies.has(`${a.ticker}-${a.metric}`)
     );
 
@@ -151,6 +182,23 @@ export function FollowUpSuggestions({
         }
     };
 
+    const handleCompare = (anomaly: AnomalyData, peerTicker: string) => {
+        if (onCompareAnomaly) {
+            onCompareAnomaly(anomaly, peerTicker);
+            return;
+        }
+
+        const suggestion: FollowUpSuggestion = {
+            id: `compare-${anomaly.ticker}-${peerTicker}`,
+            label: `Compare ${anomaly.ticker} to ${peerTicker}`,
+            query: `Compare ${anomaly.ticker} to ${peerTicker}`,
+            icon: ICONS.anomaly,
+            category: 'anomaly',
+            priority: 'high',
+        };
+        onSelect(suggestion);
+    };
+
     return (
         <motion.div
             initial={{ opacity: 0, y: 20 }}
@@ -172,7 +220,7 @@ export function FollowUpSuggestions({
                     <AnomalyAlertList
                         anomalies={visibleAnomalies}
                         onInvestigate={handleInvestigate}
-                        onCompare={onCompareAnomaly}
+                        onCompare={handleCompare}
                         onDismiss={handleDismiss}
                     />
                 </div>

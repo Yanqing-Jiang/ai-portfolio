@@ -667,14 +667,16 @@ class SurfaceUpdate(BaseModel):
     """Add or update components in a surface."""
     surfaceId: str
     components: List[A2UIComponent]
+    incremental: Optional[bool] = None  # Phase 5: Mark as streaming update for animation
     
     def to_json(self) -> str:
-        return json.dumps({
-            "surfaceUpdate": {
-                "surfaceId": self.surfaceId,
-                "components": [c.model_dump(exclude_none=True) for c in self.components]
-            }
-        })
+        data = {
+            "surfaceId": self.surfaceId,
+            "components": [c.model_dump(exclude_none=True) for c in self.components]
+        }
+        if self.incremental is not None:
+            data["incremental"] = self.incremental
+        return json.dumps({"surfaceUpdate": data})
 
 
 class DataModelUpdate(BaseModel):

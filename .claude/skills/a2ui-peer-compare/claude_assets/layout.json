@@ -4,9 +4,12 @@
     "root": "layout_root",
     "widgets": [
         "PriceChart",
+        "MetricChart",
         "DataTable",
         "CorrelationMatrix",
-        "PeerComparePanel"
+        "PeerComparePanel",
+        "KpiCard",
+        "ExplainMovePanel"
     ],
     "layout": "grid-3",
     "layout_variants": [
@@ -20,6 +23,140 @@
         "correlation": "/data/correlation",
         "table": "/data/table",
         "chart": "/data/chart",
+        "kpis": "/data/kpis",
         "explanation": "/data/explanation"
+    },
+    "data_schema": {
+        "/data/kpis": {
+            "type": "object",
+            "description": "Key metrics for comparison",
+            "properties": {
+                "primary_value": {
+                    "type": "number",
+                    "description": "Primary ticker's latest value"
+                },
+                "primary_yoy": {
+                    "type": "number",
+                    "description": "Primary ticker's YoY change"
+                },
+                "leader": {
+                    "type": "string",
+                    "description": "Ticker symbol of the leader"
+                },
+                "leader_value": {
+                    "type": "number",
+                    "description": "Leader's latest value"
+                }
+            }
+        },
+        "/data/correlation": {
+            "type": "object",
+            "description": "Correlation matrix data",
+            "properties": {
+                "tickers": {
+                    "type": "array",
+                    "description": "Array of ticker symbols for matrix axes"
+                },
+                "matrix": {
+                    "type": "array",
+                    "description": "2D array of correlation values (-1 to 1)"
+                }
+            }
+        },
+        "/data/table": {
+            "type": "object",
+            "description": "Comparison table data",
+            "properties": {
+                "columns": {
+                    "type": "array",
+                    "description": "Column definitions [{key, label, type}]"
+                },
+                "rows": {
+                    "type": "array",
+                    "description": "Row data with ticker, latest_value, yoy_change"
+                }
+            }
+        },
+        "/data/chart": {
+            "type": "object",
+            "description": "Multi-series chart data",
+            "properties": {
+                "series": {
+                    "type": "array",
+                    "description": "Array of {ticker, data: [{period, value}]}"
+                },
+                "annotations": {
+                    "type": "array",
+                    "description": "Array of event annotations"
+                }
+            }
+        },
+        "/data/explanation": {
+            "type": "object",
+            "description": "AI-generated comparison insight",
+            "properties": {
+                "title": {
+                    "type": "string",
+                    "description": "Insight panel title"
+                },
+                "text": {
+                    "type": "string",
+                    "description": "Comparison analysis text"
+                },
+                "factors": {
+                    "type": "array",
+                    "description": "Key factors [{title, description, impact, source, icon}]"
+                },
+                "citations": {
+                    "type": "array",
+                    "description": "Source citations"
+                }
+            }
+        }
+    },
+    "widget_bindings": {
+        "KpiCard": {
+            "valid_value_paths": [
+                "/data/kpis/primary_value",
+                "/data/kpis/primary_yoy",
+                "/data/kpis/leader_value"
+            ],
+            "valid_delta_paths": [
+                "/data/kpis/primary_yoy"
+            ],
+            "valid_label_paths": [
+                "/data/kpis/leader"
+            ]
+        },
+        "MetricChart": {
+            "valid_series_path": "/data/chart/series",
+            "valid_annotations_path": "/data/chart/annotations",
+            "valid_title_path": "/data/title"
+        },
+        "PriceChart": {
+            "valid_ticker_path": "/data/primary_ticker",
+            "valid_tickers_path": "/data/tickers"
+        },
+        "DataTable": {
+            "valid_columns_path": "/data/table/columns",
+            "valid_data_path": "/data/table/rows"
+        },
+        "CorrelationMatrix": {
+            "valid_tickers_path": "/data/correlation/tickers",
+            "valid_matrix_path": "/data/correlation/matrix"
+        },
+        "PeerComparePanel": {
+            "valid_title_path": "/data/title",
+            "valid_tickers_path": "/data/tickers",
+            "valid_chart_path": "/data/chart",
+            "valid_table_path": "/data/table",
+            "valid_explanation_path": "/data/explanation"
+        },
+        "ExplainMovePanel": {
+            "valid_title_path": "/data/explanation/title",
+            "valid_explanation_path": "/data/explanation/text",
+            "valid_factors_path": "/data/explanation/factors",
+            "valid_citations_path": "/data/explanation/citations"
+        }
     }
 }

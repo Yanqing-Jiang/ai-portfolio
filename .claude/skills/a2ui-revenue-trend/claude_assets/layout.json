@@ -5,7 +5,8 @@
     "widgets": [
         "MetricChart",
         "KpiCard",
-        "DataTable"
+        "DataTable",
+        "ExplainMovePanel"
     ],
     "layout": "standard",
     "layout_variants": [
@@ -19,5 +20,109 @@
         "chart": "/data/chart",
         "table": "/data/table",
         "explanation": "/data/explanation"
+    },
+    "data_schema": {
+        "/data/kpis": {
+            "type": "object",
+            "description": "Key performance indicators for revenue analysis",
+            "properties": {
+                "latest_revenue": {
+                    "type": "number",
+                    "description": "Most recent quarterly revenue in USD"
+                },
+                "yoy_growth": {
+                    "type": "number",
+                    "description": "Year-over-year growth percentage"
+                },
+                "qoq_growth": {
+                    "type": "number",
+                    "description": "Quarter-over-quarter growth percentage"
+                },
+                "cagr": {
+                    "type": "number",
+                    "description": "5-year compound annual growth rate"
+                }
+            }
+        },
+        "/data/chart": {
+            "type": "object",
+            "description": "Time series chart data",
+            "properties": {
+                "series": {
+                    "type": "array",
+                    "description": "Array of {ticker, data: [{period, value}]}"
+                },
+                "annotations": {
+                    "type": "array",
+                    "description": "Array of {period, ticker, label, details}"
+                }
+            }
+        },
+        "/data/table": {
+            "type": "object",
+            "description": "Tabular revenue data",
+            "properties": {
+                "columns": {
+                    "type": "array",
+                    "description": "Column definitions [{key, label, type}]"
+                },
+                "rows": {
+                    "type": "array",
+                    "description": "Row data objects with period, revenue, qoq_change, yoy_change"
+                }
+            }
+        },
+        "/data/explanation": {
+            "type": "object",
+            "description": "AI-generated insight panel",
+            "properties": {
+                "title": {
+                    "type": "string",
+                    "description": "Panel title"
+                },
+                "text": {
+                    "type": "string",
+                    "description": "Explanation text"
+                },
+                "factors": {
+                    "type": "array",
+                    "description": "Contributing factors [{title, description, impact, source, icon}]"
+                },
+                "citations": {
+                    "type": "array",
+                    "description": "Source citations [{title, url, date}]"
+                }
+            }
+        }
+    },
+    "widget_bindings": {
+        "KpiCard": {
+            "valid_value_paths": [
+                "/data/kpis/latest_revenue",
+                "/data/kpis/yoy_growth",
+                "/data/kpis/qoq_growth",
+                "/data/kpis/cagr"
+            ],
+            "valid_delta_paths": [
+                "/data/kpis/yoy_growth",
+                "/data/kpis/qoq_growth"
+            ],
+            "valid_label_paths": []
+        },
+        "MetricChart": {
+            "valid_series_path": "/data/chart/series",
+            "valid_annotations_path": "/data/chart/annotations",
+            "valid_title_path": "/data/title"
+        },
+        "DataTable": {
+            "valid_columns_path": "/data/table/columns",
+            "valid_data_path": "/data/table/rows"
+        },
+        "ExplainMovePanel": {
+            "valid_title_path": "/data/explanation/title",
+            "valid_explanation_path": "/data/explanation/text",
+            "valid_factors_path": "/data/explanation/factors",
+            "valid_citations_path": "/data/explanation/citations"
+        }
     }
 }

@@ -48,6 +48,8 @@ export interface AnomalyAlertProps {
     onCompare?: (peerTicker: string) => void;
     /** Called when user dismisses the alert */
     onDismiss: () => void;
+    /** Suggested peer ticker for comparison (defaults to deriving from anomaly or generic 'peers') */
+    suggestedPeer?: string;
 }
 
 // ============================================================================
@@ -87,9 +89,17 @@ export function AnomalyAlert({
     onInvestigate,
     onCompare,
     onDismiss,
+    suggestedPeer,
 }: AnomalyAlertProps) {
     const styles = IMPORTANCE_STYLES[anomaly.importance];
     const isPositive = anomaly.comparison.percentageDiff > 0;
+
+    // Derive peer ticker: use prop, or extract from comparison if peer type, or fallback
+    const peerTicker = suggestedPeer
+        || (anomaly.comparison.type === 'peer'
+            ? (anomaly.comparison as unknown as { peerTicker?: string }).peerTicker
+            : undefined)
+        || 'peers';  // Generic fallback instead of hard-coded AMD
 
     // Format the value with unit
     const formattedValue = anomaly.unit === '%'
@@ -109,37 +119,37 @@ export function AnomalyAlert({
             exit={{ opacity: 0, y: -10, scale: 0.98 }}
             transition={{ duration: 0.3, ease: 'easeOut' }}
             className={`
-                relative rounded-xl border ${styles.border} ${styles.bg}
-                shadow-lg ${styles.glow} p-4 mb-4
+                relative rounded-lg border ${styles.border} ${styles.bg}
+                shadow-md ${styles.glow} p-3
             `}
             role="alert"
             aria-live="polite"
         >
-            {/* Header */}
-            <div className="flex items-start justify-between mb-3">
-                <div className="flex items-center gap-2">
-                    <span className="text-xl">{styles.icon}</span>
+            {/* Header - Compact */}
+            <div className="flex items-start justify-between mb-2">
+                <div className="flex items-center gap-1.5">
+                    <span className="text-base">{styles.icon}</span>
                     <div>
-                        <h4 className="text-sm font-semibold text-white">
+                        <h4 className="text-xs font-semibold text-white">
                             AI Noticed Something
                         </h4>
-                        <span className={`text-[10px] px-1.5 py-0.5 rounded ${styles.badge} uppercase tracking-wide`}>
-                            {anomaly.importance} priority
+                        <span className={`text-[9px] px-1 py-0.5 rounded ${styles.badge} uppercase tracking-wide`}>
+                            {anomaly.importance}
                         </span>
                     </div>
                 </div>
                 <button
                     onClick={onDismiss}
-                    className="text-slate-500 hover:text-white transition-colors p-1 rounded hover:bg-slate-700/50"
+                    className="text-slate-500 hover:text-white transition-colors p-0.5 rounded hover:bg-slate-700/50 text-xs"
                     aria-label="Dismiss alert"
                 >
                     ✕
                 </button>
             </div>
 
-            {/* Main insight */}
-            <div className="mb-3">
-                <p className="text-slate-200 text-sm leading-relaxed">
+            {/* Main insight - Compact */}
+            <div className="mb-2">
+                <p className="text-slate-200 text-xs leading-snug">
                     <strong className="text-white">{anomaly.ticker}'s {anomaly.metric}</strong>{' '}
                     hit <strong className={isPositive ? 'text-emerald-400' : 'text-rose-400'}>
                         {formattedValue}
@@ -148,28 +158,23 @@ export function AnomalyAlert({
                 </p>
 
                 {/* Comparison detail */}
-                <div className="flex items-center gap-2 mt-2">
+                <div className="flex items-center gap-1.5 mt-1.5">
                     <span className={`
-                        text-xs px-2 py-1 rounded-lg
+                        text-[10px] px-1.5 py-0.5 rounded
                         ${isPositive ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'}
                     `}>
-                        {formattedDiff} from {anomaly.comparison.type} average
+                        {formattedDiff} from {anomaly.comparison.type} avg
                     </span>
                 </div>
 
-                {/* Optional explanation */}
-                {anomaly.explanation && (
-                    <p className="text-xs text-slate-400 mt-2 italic">
-                        {anomaly.explanation}
-                    </p>
-                )}
+                {/* Optional explanation - hidden for compact view */}
             </div>
 
-            {/* Action buttons */}
-            <div className="flex items-center gap-2 flex-wrap">
+            {/* Action buttons - Compact */}
+            <div className="flex items-center gap-1.5 flex-wrap">
                 <button
                     onClick={onInvestigate}
-                    className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white text-xs font-medium transition-colors flex items-center gap-1.5"
+                    className="px-2 py-1 rounded bg-white/10 hover:bg-white/20 text-white text-[10px] font-medium transition-colors flex items-center gap-1"
                 >
                     <span>🔍</span>
                     <span>Investigate</span>
@@ -177,20 +182,13 @@ export function AnomalyAlert({
 
                 {onCompare && (
                     <button
-                        onClick={() => onCompare('AMD')} // Default peer, could be dynamic
-                        className="px-3 py-1.5 rounded-lg bg-slate-700/50 hover:bg-slate-600/50 text-slate-300 text-xs font-medium transition-colors flex items-center gap-1.5"
+                        onClick={() => onCompare(peerTicker)}
+                        className="px-2 py-1 rounded bg-slate-700/50 hover:bg-slate-600/50 text-slate-300 text-[10px] font-medium transition-colors flex items-center gap-1"
                     >
                         <span>📊</span>
-                        <span>Compare to peers</span>
+                        <span>Compare</span>
                     </button>
                 )}
-
-                <button
-                    onClick={onDismiss}
-                    className="px-3 py-1.5 rounded-lg text-slate-500 hover:text-slate-300 text-xs font-medium transition-colors ml-auto"
-                >
-                    Dismiss
-                </button>
             </div>
         </motion.div>
     );
@@ -216,7 +214,7 @@ export function AnomalyAlertList({
     if (anomalies.length === 0) return null;
 
     return (
-        <div className="space-y-2">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
             <AnimatePresence mode="popLayout">
                 {anomalies.map((anomaly, index) => (
                     <AnomalyAlert

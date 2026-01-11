@@ -291,6 +291,7 @@ export interface SurfaceUpdateMessage {
     surfaceUpdate: {
         surfaceId: string;
         components: A2UIComponent[];
+        incremental?: boolean; // Phase 5: Mark as streaming update for animations
     };
 }
 

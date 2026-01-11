@@ -1,0 +1,129 @@
+{
+  "trace_id": "d930c2e0-ede6-4462-a3b2-b4aa7edfe027",
+  "dashboard_id": "8e7200f1-26f1-4bf6-ad3e-c7201c1b72f8",
+  "question": "Explain why AMD revenue is down 32% year-over-year while INTC revenue is higher",
+  "skill_id": "a2ui_peer_compare",
+  "tickers": [
+    "AMD",
+    "INTC"
+  ],
+  "metric": "Revenue",
+  "time_range": "1Y",
+  "layout_override": null,
+  "steps": [
+    {
+      "step_id": "de44ba36",
+      "step_type": "skill_selection",
+      "timestamp": "2026-01-11T06:02:49.193115",
+      "duration_ms": 0.02956390380859375,
+      "success": true,
+      "details": {
+        "skill_id": "a2ui_peer_compare",
+        "tickers": [
+          "AMD",
+          "INTC"
+        ],
+        "metric": "Revenue",
+        "time_range": "1Y"
+      },
+      "error": null
+    },
+    {
+      "step_id": "d23abfff",
+      "step_type": "stream_component_selection",
+      "timestamp": "2026-01-11T06:02:52.695050",
+      "duration_ms": null,
+      "success": true,
+      "details": {
+        "widget_count": 5,
+        "widget_ids": [
+          "kpi_amd_revenue",
+          "kpi_intc_revenue",
+          "revenue_trend_chart",
+          "revenue_comparison_table",
+          "revenue_explanation"
+        ]
+      },
+      "error": null
+    },
+    {
+      "step_id": "e82e2464",
+      "step_type": "layout_planning",
+      "timestamp": "2026-01-11T06:02:52.695091",
+      "duration_ms": 3501.829147338867,
+      "success": true,
+      "details": {
+        "layout_override": null,
+        "component_count": 0,
+        "llm_selected": false,
+        "streaming": true
+      },
+      "error": null
+    },
+    {
+      "step_id": "f0201dd5",
+      "step_type": "seed_data",
+      "timestamp": "2026-01-11T06:02:52.695252",
+      "duration_ms": null,
+      "success": true,
+      "details": {
+        "keys": [
+          "title",
+          "ticker",
+          "primary_ticker",
+          "tickers",
+          "time_range",
+          "metric"
+        ]
+      },
+      "error": null
+    },
+    {
+      "step_id": "08fb2f48",
+      "step_type": "data_update",
+      "timestamp": "2026-01-11T06:02:52.853781",
+      "duration_ms": null,
+      "success": true,
+      "details": {
+        "keys": [
+          "tickers",
+          "primary_ticker",
+          "kpis",
+          "table",
+          "correlation",
+          "chart",
+          "explanation"
+        ]
+      },
+      "error": null
+    },
+    {
+      "step_id": "ae112168",
+      "step_type": "execute_skill_complete",
+      "timestamp": "2026-01-11T06:02:52.854112",
+      "duration_ms": 158.616304397583,
+      "success": true,
+      "details": {
+        "data_keys": [
+          "tickers",
+          "primary_ticker",
+          "kpis",
+          "table",
+          "correlation",
+          "chart",
+          "explanation",
+          "follow_ups"
+        ],
+        "citation_count": 0,
+        "execution_mode": "direct_agent"
+      },
+      "error": null
+    }
+  ],
+  "started_at": "2026-01-11T06:02:49.189861",
+  "completed_at": "2026-01-11T06:02:52.854151",
+  "total_duration_ms": 3664.29,
+  "message_count": 24,
+  "success": true,
+  "error": null
+}

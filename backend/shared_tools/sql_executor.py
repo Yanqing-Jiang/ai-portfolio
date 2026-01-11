@@ -57,7 +57,9 @@ async def get_pool() -> Pool:
                     config.database_url,
                     min_size=2,
                     max_size=10,
-                    statement_cache_size=100,
+                    # Disable statement caching for pgbouncer compatibility
+                    # Supabase uses pgbouncer in transaction mode which doesn't support prepared statements
+                    statement_cache_size=0,
                     command_timeout=30,
                     max_inactive_connection_lifetime=300,
                 )

@@ -40,6 +40,11 @@ class IntentClassification(BaseModel):
     action_params: Dict[str, Any] = Field(default_factory=dict)
     should_continue: bool = True        # Continue on current dashboard?
     rationale: str = ""                 # LLM's reasoning
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0, description="Confidence score 0.0-1.0")
+
+
+# Confidence threshold below which we ask for clarification
+CONFIDENCE_THRESHOLD = 0.7
 
 
 # Tool definitions for Claude intent classification
@@ -245,6 +250,7 @@ Always provide a rationale explaining your reasoning.
         query: str,
         dashboard_id: Optional[str] = None,
         current_context: Optional[Dict[str, Any]] = None,
+        recent_messages: Optional[List[Dict[str, str]]] = None,
     ) -> IntentClassification:
         """
         Classify user intent using LLM tool calling.
@@ -258,6 +264,7 @@ Always provide a rationale explaining your reasoning.
             query: User's text input
             dashboard_id: Current dashboard ID (if any)
             current_context: Current dashboard context (skill, tickers, data)
+            recent_messages: Optional recent message history for context
             
         Returns:
             IntentClassification with intent type and action parameters
@@ -270,6 +277,7 @@ Always provide a rationale explaining your reasoning.
         sdk = get_sdk_wrapper()
         
         try:
+            messages = recent_messages or [{"role": "user", "content": query}]
             # Initialize with intent classification tools
             await sdk.initialize(
                 system_prompt=system_prompt,
@@ -281,6 +289,8 @@ Always provide a rationale explaining your reasoning.
                 prompt=query,
                 max_tokens=512,
                 temperature=0.3,  # Low temperature for consistent classification
+                messages=messages,
+                tool_choice={"type": "any", "disable_parallel_tool_use": True},
             )
             
             if response.error:
@@ -336,14 +346,15 @@ Always provide a rationale explaining your reasoning.
         
         Method: _parse_tool_response
         Called from: classify_intent
-        Why: Converts SDK response to typed classification.
+        Why: Converts SDK response to typed classification with confidence scoring.
         """
         if not response.tool_calls:
             # No tool call - try to infer from text
             logger.warning("No tool call in response, defaulting to unknown")
             return IntentClassification(
                 intent="unknown",
-                rationale="No tool call in response"
+                rationale="No tool call in response",
+                confidence=0.0,
             )
         
         tool_call = response.tool_calls[0]
@@ -362,13 +373,89 @@ Always provide a rationale explaining your reasoning.
         
         intent = intent_map.get(tool_name, "unknown")
         
+        # Calculate confidence based on rationale quality and tool match
+        confidence = self._calculate_confidence(
+            tool_name=tool_name,
+            params=params,
+            intent=intent,
+        )
+        
+        # Apply clarification fallback if confidence is too low
+        if confidence < CONFIDENCE_THRESHOLD and intent != "unknown":
+            logger.info(
+                "[ROUTER] Low confidence (%.2f) for intent '%s', switching to clarification",
+                confidence, intent
+            )
+            return IntentClassification(
+                intent="clarification",
+                action_name=None,
+                action_params={
+                    "original_intent": intent,
+                    "original_params": params,
+                },
+                should_continue=True,
+                rationale=f"Low confidence ({confidence:.2f}) - asking for clarification",
+                confidence=confidence,
+            )
+        
         return IntentClassification(
             intent=intent,
             action_name=params.get("action"),
             action_params=params,
             should_continue=intent != "new_analysis",
             rationale=params.get("rationale", ""),
+            confidence=confidence,
         )
+    
+    def _calculate_confidence(
+        self,
+        tool_name: str,
+        params: Dict[str, Any],
+        intent: str,
+    ) -> float:
+        """
+        Calculate confidence score for an intent classification.
+        
+        Method: _calculate_confidence
+        Called from: _parse_tool_response
+        Why: Enables clarification fallback for ambiguous queries.
+        
+        Heuristics:
+        - Good rationale: +0.2
+        - Valid tool: +0.3
+        - Required params present: +0.2 per param
+        - Intent != unknown: +0.2
+        """
+        confidence = 0.0
+        
+        # Valid tool call adds base confidence
+        if tool_name in ("new_analysis", "modify_layout", "modify_data", "switch_component", "follow_up_question"):
+            confidence += 0.3
+        
+        # Intent resolved adds confidence
+        if intent != "unknown":
+            confidence += 0.2
+        
+        # Rationale present and substantive
+        rationale = params.get("rationale", "")
+        if rationale and len(rationale) > 10:
+            confidence += 0.2
+        
+        # Check for required parameters based on intent
+        if tool_name == "new_analysis" and params.get("query"):
+            confidence += 0.2
+        elif tool_name == "modify_layout" and params.get("action"):
+            confidence += 0.2
+        elif tool_name == "modify_data" and params.get("action"):
+            confidence += 0.2
+            if params.get("ticker") or params.get("timeframe"):
+                confidence += 0.1
+        elif tool_name == "switch_component" and params.get("new_type"):
+            confidence += 0.2
+        elif tool_name == "follow_up_question" and params.get("question_type"):
+            confidence += 0.2
+        
+        return min(1.0, confidence)
 
 
 # Singleton instance
