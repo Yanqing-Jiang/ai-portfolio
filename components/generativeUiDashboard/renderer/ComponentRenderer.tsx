@@ -170,6 +170,23 @@ export function ComponentRenderer({
     const swapContext = useContext(SwapContext);
     const layoutContext = useContext(LayoutContext);
 
+    // IMPORTANT: useCallback must be called before any early returns to satisfy Rules of Hooks
+    const renderChild = useCallback(
+        (childId: string): React.ReactNode => (
+            <AnimatePresence mode="popLayout" key={childId}>
+                <ComponentRenderer
+                    componentId={childId}
+                    components={components}
+                    dataModel={dataModel}
+                    onAction={onAction}
+                    enableSwap={enableSwap}
+                    streamedComponentIds={streamedComponentIds}
+                />
+            </AnimatePresence>
+        ),
+        [components, dataModel, onAction, enableSwap, streamedComponentIds]
+    );
+
     // Get component definition from map
     const componentDef = components.get(componentId);
 
@@ -221,23 +238,6 @@ export function ComponentRenderer({
             </motion.div>
         );
     }
-
-    // Create render child helper with AnimatePresence wrapper
-    const renderChild = useCallback(
-        (childId: string): React.ReactNode => (
-            <AnimatePresence mode="popLayout" key={childId}>
-                <ComponentRenderer
-                    componentId={childId}
-                    components={components}
-                    dataModel={dataModel}
-                    onAction={onAction}
-                    enableSwap={enableSwap}
-                    streamedComponentIds={streamedComponentIds}
-                />
-            </AnimatePresence>
-        ),
-        [components, dataModel, onAction, enableSwap, streamedComponentIds]
-    );
 
     // Render the component with motion wrapper
     const rendererProps: A2UIRendererProps = {

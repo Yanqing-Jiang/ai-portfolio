@@ -40,6 +40,7 @@ import { useA2UIStream, useSurface } from './a2ui';
 import { A2UISurface, A2UISurfaceLoading, A2UISurfaceError } from './renderer';
 import { ClarificationOverlay, type ClarificationRequest } from './ClarificationOverlay';
 import { FollowUpSuggestions, type FollowUpSuggestion } from './FollowUpSuggestions';
+import { getOrCreateSessionId } from './utils/session';
 import type { AnomalyData } from './widgets/AnomalyAlert';
 import type { SkillInfo } from './SkillHeaderBadge';
 import { ContextRibbon, type HistoryItem } from './ContextRibbon';
@@ -318,6 +319,9 @@ export function GenerativeUIPage(): React.ReactElement {
     const [activeSkill, setActiveSkill] = useState<SkillInfo | null>(null);
     const [history, setHistory] = useState<HistoryItem[]>([]);
 
+    // Track dashboards that have completed streaming (for skip-streaming on revisit)
+    const [completedDashboards, setCompletedDashboards] = useState<Set<string>>(new Set());
+
     // Process Panel state (replaces scattered debug/status UI)
     const [isProcessPanelExpanded, setIsProcessPanelExpanded] = useState(false);
 
@@ -336,7 +340,10 @@ export function GenerativeUIPage(): React.ReactElement {
     }, []);
 
     // A2UI stream state
-    const streamUrl = dashboardId ? `/api/dash/${dashboardId}/stream` : null;
+    const sessionId = useMemo(() => getOrCreateSessionId(), []);
+    const streamUrl = dashboardId
+        ? `/api/dash/${dashboardId}/stream?session_id=${encodeURIComponent(sessionId)}`
+        : null;
     const [streamState, streamActions] = useA2UIStream(streamUrl, {
         autoConnect: true,
         dashboardId: dashboardId || undefined,
@@ -348,7 +355,23 @@ export function GenerativeUIPage(): React.ReactElement {
 
     // Get surface data
     const surfaceId = 'dashboard_main';
-    const { surface, dataModel } = useSurface(streamState, surfaceId);
+    const { surface, dataModel: rawDataModel } = useSurface(streamState, surfaceId);
+
+    // Enhance dataModel with isRevisit flag for completed dashboards (skip streaming on tab switch)
+    const dataModel = useMemo(() => {
+        if (!rawDataModel) return rawDataModel;
+        const isRevisit = dashboardId ? completedDashboards.has(dashboardId) : false;
+        return {
+            ...rawDataModel,
+            data: {
+                ...(rawDataModel.data || {}),
+                explanation: {
+                    ...((rawDataModel.data as Record<string, unknown>)?.explanation || {}),
+                    isRevisit,
+                },
+            },
+        };
+    }, [rawDataModel, dashboardId, completedDashboards]);
 
     // Auto-resize textarea
     useEffect(() => {
@@ -474,20 +497,17 @@ export function GenerativeUIPage(): React.ReactElement {
 
     // Handle history selection
     const handleHistorySelect = useCallback((item: HistoryItem) => {
-        // Close existing stream to force fresh reconnection with cached data
-        streamActions.close();
-
         // Clear UI state that should refresh on tab switch
         setFollowUpSuggestions([]);
         setAnomalies([]);
         setClarificationRequest(null);
         setAuditTrail([]); // Clear audit trail for new stream
 
-        // Update dashboard context
+        // Update dashboard context - this will automatically trigger reconnect via streamUrl change
         setDashboardId(item.id);
         setQuestion(item.query);
         setActiveSkill(null);
-    }, [streamActions]);
+    }, []);
 
     // Handle suggestion click
     const handleSuggestion = (text: string) => {
@@ -678,6 +698,13 @@ export function GenerativeUIPage(): React.ReactElement {
             addAuditEvent('stream_complete', 'Stream completed', `${streamState.surfaces.size} surfaces rendered`);
         }
     }, [streamState.isDone, streamState.surfaces.size, auditTrail, addAuditEvent]);
+
+    // Track completed dashboards for skip-streaming on revisit
+    useEffect(() => {
+        if (streamState.isDone && dashboardId && !completedDashboards.has(dashboardId)) {
+            setCompletedDashboards(prev => new Set(prev).add(dashboardId));
+        }
+    }, [streamState.isDone, dashboardId, completedDashboards]);
 
     // Track layout updates when surface changes
     useEffect(() => {
@@ -2429,8 +2456,9 @@ export function GenerativeUIPage(): React.ReactElement {
 
                                     {/* A2UI Surface - Wrapped with LayoutProvider for LLM-driven layout control */}
                                     {surface?.root && (
-                                        <DashboardWithLayout>
+                                        <DashboardWithLayout key={dashboardId}>
                                             <A2UISurface
+                                                key={`surface-${dashboardId}`}
                                                 surface={surface}
                                                 dataModel={dataModel}
                                                 onAction={handleAction}

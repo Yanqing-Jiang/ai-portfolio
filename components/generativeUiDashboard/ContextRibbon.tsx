@@ -51,7 +51,13 @@ export function ContextRibbon({
                     {history.map((item, idx) => {
                         const isActive = item.id === currentId;
                         return (
-                            <React.Fragment key={item.id}>
+                            <motion.div
+                                key={item.id}
+                                style={{ display: 'contents' }}
+                                initial={{ opacity: 0 }}
+                                animate={{ opacity: 1 }}
+                                exit={{ opacity: 0 }}
+                            >
                                 {idx > 0 && (
                                     <motion.span
                                         initial={{ opacity: 0, scale: 0.5 }}
@@ -84,7 +90,7 @@ export function ContextRibbon({
                                         {item.query}
                                     </span>
                                 </motion.button>
-                            </React.Fragment>
+                            </motion.div>
                         );
                     })}
                 </AnimatePresence>

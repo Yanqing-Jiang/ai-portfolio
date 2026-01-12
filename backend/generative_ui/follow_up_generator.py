@@ -4,6 +4,7 @@
 #   Called from: backend.generative_ui.runtime.A2UIRuntime, backend.generative_ui.routes.dashboard
 #   Invokes: LLM wrapper (optional), heuristic suggestion logic
 #   Why: Single source of truth for follow-up suggestion logic, avoiding divergence.
+# Function: generate_follow_ups_with_llm — LLM-assisted suggestion generation with fallback.
 # --- End Function/Class Map ---
 """
 Unified follow-up suggestion generator.
@@ -16,6 +17,8 @@ from __future__ import annotations
 
 import logging
 from typing import Any, Dict, List, Optional
+
+from .sdk_wrapper import ANTHROPIC_AVAILABLE, get_sdk_wrapper
 
 from pydantic import BaseModel
 
@@ -127,6 +130,133 @@ def generate_follow_ups(
     return suggestions[:max_suggestions]
 
 
+async def generate_follow_ups_with_llm(
+    skill_id: str,
+    primary_ticker: str,
+    tickers: List[str],
+    metric: str,
+    data_model: Optional[Dict[str, Any]] = None,
+    anomalies: Optional[List[Any]] = None,
+    max_suggestions: int = 3,
+) -> List[FollowUpSuggestion]:
+    """
+    Generate LLM-enhanced follow-up suggestions based on dashboard data.
+    
+    Function: generate_follow_ups_with_llm — LLM-driven suggestions with fallback.
+    Called from: backend.generative_ui.routes.dashboard.get_follow_up_suggestions.
+    Invokes: A2UISDKWrapper.query, generate_follow_ups.
+    Why: Keeps follow-up generation centralized while enabling richer suggestions.
+    
+    Args:
+        skill_id: Current skill ID
+        primary_ticker: Primary ticker symbol
+        tickers: All tickers in context
+        metric: Metric focus for the dashboard
+        data_model: Latest dashboard data model
+        anomalies: Optional anomaly list for context
+        max_suggestions: Maximum suggestions to return
+        
+    Returns:
+        List of FollowUpSuggestion objects
+    """
+    fallback = generate_follow_ups(
+        skill_id=skill_id,
+        tickers=tickers,
+        data_model=data_model,
+        include_data_insights=True,
+        max_suggestions=max_suggestions,
+    )
+
+    if not ANTHROPIC_AVAILABLE:
+        return fallback
+
+    kpis = (data_model or {}).get("kpis", {})
+    table_rows = (data_model or {}).get("table", {}).get("rows", [])
+    anomaly_list = anomalies or []
+
+    kpi_summary = ", ".join(
+        [f"{k}: {v}" for k, v in kpis.items() if v is not None][:5]
+    )
+
+    table_summary = ""
+    if table_rows:
+        top_rows = table_rows[:3]
+        table_summary = "; ".join([
+            f"{row.get('ticker', 'N/A')}: {row.get('latest_value', 'N/A')}"
+            for row in top_rows
+        ])
+
+    anomaly_summary = ""
+    if anomaly_list:
+        anomaly_summary = "; ".join([
+            f"{getattr(a, 'ticker', '')} {getattr(a, 'metric', '')}: {getattr(a, 'description', '')}"
+            for a in anomaly_list[:2]
+        ])
+
+    prompt = f"""Based on this financial dashboard data, suggest {max_suggestions} brief follow-up questions a user would likely want to explore next.
+
+Dashboard Context:
+- Primary ticker: {primary_ticker}
+- All tickers: {', '.join(tickers)}
+- Metric focus: {metric}
+- Skill used: {skill_id}
+- KPIs: {kpi_summary or 'None'}
+- Top data: {table_summary or 'None'}
+- Anomalies detected: {anomaly_summary or 'None'}
+
+Return ONLY a JSON array of {max_suggestions} objects, each with:
+- "label": Short button label (3-4 words max)
+- "query": The full question to ask
+
+Example format:
+[
+  {{"label": "Compare margins", "query": "Compare {primary_ticker} margins to AMD and INTC"}},
+  {{"label": "Revenue trend", "query": "Show {primary_ticker} quarterly revenue trend"}},
+  {{"label": "Why the drop?", "query": "Explain why {primary_ticker} revenue declined"}}
+]
+
+Return ONLY valid JSON, no other text."""
+
+    try:
+        wrapper = get_sdk_wrapper()
+        if not wrapper.is_initialized:
+            await wrapper.initialize()
+
+        response = await wrapper.query(
+            prompt=prompt,
+            max_tokens=300,
+            temperature=0.5,
+        )
+
+        if response.error or not response.content:
+            logger.warning("LLM follow-up generation failed: %s", response.error)
+            return fallback
+
+        content = response.content.strip()
+        start_idx = content.find('[')
+        end_idx = content.rfind(']') + 1
+        if start_idx < 0 or end_idx <= start_idx:
+            logger.warning("LLM follow-up response missing JSON array")
+            return fallback
+
+        import json
+        suggestions_data = json.loads(content[start_idx:end_idx])
+        suggestions: List[FollowUpSuggestion] = []
+        for i, item in enumerate(suggestions_data[:max_suggestions]):
+            suggestions.append(FollowUpSuggestion(
+                id=f"llm_{i+1}",
+                label=item.get("label", f"Suggestion {i+1}"),
+                query=item.get("query", f"Tell me more about {primary_ticker}"),
+                icon="[ai]",
+                category="llm_generated",
+            ))
+        logger.info("[FOLLOW-UPS] LLM generated %d suggestions", len(suggestions))
+        return suggestions
+    except Exception as exc:
+        logger.error("LLM follow-up generation error: %s", exc)
+        return fallback
+
+
 def _extract_data_insights(
     skill_id: str,
     tickers: List[str],
@@ -203,7 +333,7 @@ def generate_follow_ups_simple(
     Generate simple follow-up queries as list of strings.
     
     Function: generate_follow_ups_simple — backward-compatible string-based follow-ups.
-    Called from: A2UIRuntime._generate_follow_ups (legacy)
+    Called from: legacy callers that expect string-only suggestions.
     Invokes: generate_follow_ups
     Why: Provides backward compatibility with existing runtime interface.
     

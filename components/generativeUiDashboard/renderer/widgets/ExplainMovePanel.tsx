@@ -11,7 +11,7 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import type { A2UIRendererProps } from '../Registry';
-import { resolveArray, resolveString } from '../../a2ui/DataBinder';
+import { getByPath, resolveArray, resolveString } from '../../a2ui/DataBinder';
 import type { ExplainMovePanelProps } from '../../a2ui/types';
 import { useStreamingText } from '../../hooks/useStreamingText';
 
@@ -100,16 +100,28 @@ export function ExplainMovePanel({
 
     const panelProps = props as unknown as ExplainMovePanelProps;
     const title = resolveString(panelProps.title, dataModel, 'AI Insight Analysis');
-    const fullExplanation = resolveString(panelProps.explanation, dataModel, 'Analyzing market conditions...');
+    const DEFAULT_EXPLANATION = 'Analyzing market conditions...';
+    const fullExplanation = resolveString(panelProps.explanation, dataModel, DEFAULT_EXPLANATION);
     const factors = resolveArray<Factor>(panelProps.factors, dataModel, []);
     const citations = resolveArray<Citation>(panelProps.citations, dataModel, []);
+    const isCached = Boolean(getByPath(dataModel, '/data/explanation/cached'));
+    // Check if this is a revisited dashboard (skip streaming animation)
+    const isRevisit = Boolean(getByPath(dataModel, '/data/explanation/isRevisit'));
+
+    // Check if we have real content (not placeholder) to prevent streaming placeholder text
+    const hasRealContent = fullExplanation && fullExplanation !== DEFAULT_EXPLANATION;
 
     // Use streaming text hook for the narrative
-    // Use title as resetKey to force restart when analysis changes (e.g., switching history tabs)
+    // Skip streaming entirely for revisited dashboards - show full text immediately
     const { displayText, isComplete } = useStreamingText(fullExplanation, {
         speed: 20,
-        resetKey: `${componentId}-${title}`,
+        resetKey: `${componentId}-${hasRealContent}`,
+        enabled: !isCached && !isRevisit && hasRealContent,
     });
+
+    // For revisited dashboards, show full text immediately
+    const finalDisplayText = isRevisit && hasRealContent ? fullExplanation : displayText;
+    const finalIsComplete = isRevisit && hasRealContent ? true : isComplete;
 
     const displayFactors = factors.length > 0 ? factors : DEFAULT_FACTORS;
     const showCitations = citations.length > 0;
@@ -185,8 +197,8 @@ export function ExplainMovePanel({
                         </div>
                     </div>
 
-                    {/* Streaming indicator */}
-                    {!isComplete && (
+                    {/* Streaming indicator - hide when cached, complete, or revisit */}
+                    {!finalIsComplete && !isCached && !isRevisit && (
                         <motion.div
                             animate={{ opacity: [0.5, 1, 0.5] }}
                             transition={{ duration: 1.5, repeat: Infinity }}
@@ -280,8 +292,8 @@ export function ExplainMovePanel({
                                         minHeight: '4em',
                                     }}
                                 >
-                                    {displayText}
-                                    {!isComplete && (
+                                    {finalDisplayText}
+                                    {!finalIsComplete && !isCached && !isRevisit && (
                                         <motion.span
                                             animate={{ opacity: [0, 1, 0] }}
                                             transition={{ repeat: Infinity, duration: 0.8 }}

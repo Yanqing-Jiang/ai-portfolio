@@ -157,6 +157,12 @@ export function PeerComparePanel({
         dataModel,
         defaultText
     );
+    const isCached = Boolean(getByPath(dataModel, '/data/explanation/cached'));
+    // Check if this is a revisited dashboard (skip streaming animation)
+    const isRevisit = Boolean(getByPath(dataModel, '/data/explanation/isRevisit'));
+
+    // Check if we have real content (not placeholder) to prevent streaming placeholder text
+    const hasRealContent = explanationText && explanationText !== defaultText;
 
     // Get news data from dataModel using getByPath
     const newsData = useMemo(() => {
@@ -170,11 +176,16 @@ export function PeerComparePanel({
     }, [dataModel]);
 
     // Streaming text for AI analysis (the main insight)
-    // Use explanationTitle as resetKey to force restart when analysis changes (e.g., switching history tabs)
+    // Skip streaming entirely for revisited dashboards - show full text immediately
     const { displayText, isComplete } = useStreamingText(explanationText, {
         speed: 15,
-        resetKey: `${componentId}-${explanationTitle}`,
+        resetKey: `${componentId}-${hasRealContent}`,
+        enabled: !isCached && !isRevisit && hasRealContent,
     });
+
+    // For revisited dashboards, show full text immediately
+    const finalDisplayText = isRevisit && hasRealContent ? explanationText : displayText;
+    const finalIsComplete = isRevisit && hasRealContent ? true : isComplete;
 
     // Process chart data - sort by period and deduplicate
     const processedChartData = useMemo(() => {
@@ -587,7 +598,7 @@ export function PeerComparePanel({
                                     }}>
                                         {explanationTitle}
                                     </h3>
-                                    {!isComplete && (
+                                    {!finalIsComplete && !isCached && !isRevisit && (
                                         <motion.span
                                             animate={{ opacity: [0.5, 1, 0.5] }}
                                             transition={{ duration: 1.5, repeat: Infinity }}
@@ -610,8 +621,8 @@ export function PeerComparePanel({
                                     color: theme.colors.text.secondary,
                                     margin: 0,
                                 }}>
-                                    {displayText}
-                                    {!isComplete && (
+                                    {finalDisplayText}
+                                    {!finalIsComplete && !isCached && !isRevisit && (
                                         <motion.span
                                             animate={{ opacity: [0, 1, 0] }}
                                             transition={{ repeat: Infinity, duration: 0.8 }}

@@ -117,6 +117,54 @@ class ComponentValidator:
             )
         
         return (is_valid, errors)
+
+    def validate_widget(
+        self,
+        widget: WidgetSelection,
+        skill: A2UISkillMeta,
+    ) -> Tuple[bool, List[str]]:
+        """
+        Validate a single widget selection during streaming.
+        
+        Method: validate_widget - per-widget validation for streaming selection.
+        Called from: backend.generative_ui.runtime.A2UIRuntime._stream_component_selection.
+        Invokes: _get_valid_paths, _validate_bindings, _is_valid_widget_id.
+        Why: Ensures incremental widgets are catalog-safe before emission.
+        
+        Args:
+            widget: Single widget selection from the streaming selector
+            skill: The skill providing catalog + schema constraints
+            
+        Returns:
+            (is_valid, list_of_errors)
+        """
+        errors: List[str] = []
+        valid_paths = self._get_valid_paths(skill)
+
+        if widget.widget_type not in skill.widgets:
+            errors.append(
+                f"Widget '{widget.widget_type}' not allowed for skill {skill.skill_id}. "
+                f"Allowed: {skill.widgets}"
+            )
+        elif widget.widget_type not in self.catalog.component_names:
+            errors.append(f"Unknown widget type: {widget.widget_type}")
+
+        if not self._is_valid_widget_id(widget.widget_id):
+            errors.append(
+                f"Invalid widget ID '{widget.widget_id}'. "
+                "Must be lowercase with underscores only."
+            )
+
+        errors.extend(self._validate_bindings(widget, skill, valid_paths))
+
+        is_valid = len(errors) == 0
+        if not is_valid:
+            logger.warning(
+                "[VALIDATOR] Streamed widget rejected: %s",
+                errors[:3]
+            )
+
+        return (is_valid, errors)
     
     def _get_valid_paths(self, skill: A2UISkillMeta) -> Set[str]:
         """

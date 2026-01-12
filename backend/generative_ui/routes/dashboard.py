@@ -158,6 +158,9 @@ from ..clarification import (
 from ..anomaly_detection import detect_anomalies, anomalies_to_suggestions
 from ..command_router import get_command_router, IntentClassification
 from ..conversation_state import get_conversation_store
+from ..follow_up_generator import generate_follow_ups_with_llm
+from ..follow_up_responder import build_follow_up_answer
+from ..session_memory import load_explanation_memory
 from shared_tools.news_service import execute_news_tool
 
 logger = logging.getLogger(__name__)
@@ -306,6 +309,13 @@ async def stream_dashboard(dashboard_id: str, request: Request):
     if not state:
         raise HTTPException(status_code=404, detail="Dashboard not found")
 
+    session_id = request.query_params.get("session_id")
+    if session_id:
+        try:
+            state.update_params({"session_id": session_id})
+        except Exception:
+            pass
+
     await smart_rate_limit(
         request,
         scope=A2UI_RATE_LIMIT_SCOPE,
@@ -363,8 +373,21 @@ async def stream_dashboard(dashboard_id: str, request: Request):
                 logger.warning("[STREAM] Failed to rebuild layout: %s", e)
                 # Continue anyway - data will still be rendered
             
+            cached_payload = dict(state.latest_run.data_json)
+            cached_payload["loading"] = False
+
+            if session_id:
+                cached_explanation = await load_explanation_memory(session_id, dashboard_id)
+                if cached_explanation:
+                    explanation_payload = cached_payload.get("explanation")
+                    if not isinstance(explanation_payload, dict):
+                        explanation_payload = {}
+                    explanation_payload.update(cached_explanation)
+                    explanation_payload["cached"] = True
+                    cached_payload["explanation"] = explanation_payload
+
             # Emit the cached data model
-            yield _sse_data(emitter.data_update(state.latest_run.data_json, path="/data"))
+            yield _sse_data(emitter.data_update(cached_payload, path="/data"))
             
             # Emit audit event for transparency
             yield _sse_data(emitter.audit("cache_replay", f"restored run {state.latest_run.run_id[:8]}"))
@@ -846,14 +869,12 @@ async def _handle_follow_up(
     
     Function: _handle_follow_up
     Called from: handle_query when intent is follow_up
-    Invokes: Could invoke LLM for answer generation
-    Why: Continues conversation without creating new dashboard.
+    Invokes: follow_up_responder.build_follow_up_answer
+    Why: Continues conversation with data-aware answers.
     """
     # Get current data model for context
     data_model = state.latest_data.get("data", {}) if state.latest_data else {}
     
-    # For now, we'll return contextual information
-    # In a full implementation, this could generate an LLM answer
     context = {
         "skill_id": conv_state.skill_id,
         "tickers": conv_state.tickers,
@@ -861,8 +882,13 @@ async def _handle_follow_up(
         "target": classification.action_params.get("target_element"),
     }
     
-    # Add assistant response to conversation
-    answer = f"Based on the current {conv_state.skill_id or 'analysis'}: {classification.rationale}"
+    answer = build_follow_up_answer(
+        question_type=classification.action_params.get("question_type"),
+        target_element=classification.action_params.get("target_element"),
+        data_model=data_model,
+        skill_id=conv_state.skill_id,
+        tickers=conv_state.tickers or [],
+    )
     conv_state.add_message("assistant", answer)
     
     return {
@@ -1120,7 +1146,6 @@ async def get_follow_up_suggestions(dashboard_id: str):
     
     # Try to extract data context from state (use latest_data from most recent run)
     data_model = state.latest_data or {}
-    kpis = data_model.get("kpis", {})
     table_rows = data_model.get("table", {}).get("rows", [])
     
     # Detect anomalies in the data (proactive insights)
@@ -1130,15 +1155,15 @@ async def get_follow_up_suggestions(dashboard_id: str):
     # Insight discovery suggestions removed - now handled by anomaly alerts above
     # Per user request: limit to 3-4 buttons total
 
-    # Generate LLM-powered contextual follow-ups based on actual dashboard data
-    skill_suggestions = await _generate_llm_follow_ups(
+    # Generate contextual follow-ups via shared generator (LLM + fallback)
+    skill_suggestions = await generate_follow_ups_with_llm(
         skill_id=skill_id,
         primary_ticker=primary_ticker,
         tickers=tickers,
         metric=metric,
-        kpis=kpis,
-        table_rows=table_rows,
+        data_model=data_model,
         anomalies=anomalies,
+        max_suggestions=3,
     )
 
     # Web/news fallback suggestion if data is stale or missing
@@ -1211,240 +1236,6 @@ async def get_follow_up_suggestions(dashboard_id: str):
             "explanation": a.explanation,
         } for a in anomalies[:3]],  # Top 3 anomalies for UI display
     }
-
-
-async def _generate_llm_follow_ups(
-    skill_id: str,
-    primary_ticker: str,
-    tickers: list,
-    metric: str,
-    kpis: dict,
-    table_rows: list,
-    anomalies: list,
-) -> list:
-    """
-    Generate LLM-powered follow-up suggestions based on dashboard data context.
-    
-    Function: _generate_llm_follow_ups
-    Called from: get_follow_up_suggestions
-    Invokes: A2UISDKWrapper.query
-    Why: Uses LLM to analyze dashboard data and suggest contextual next steps.
-    """
-    try:
-        from ..sdk_wrapper import get_sdk_wrapper, ANTHROPIC_AVAILABLE
-        
-        if not ANTHROPIC_AVAILABLE:
-            logger.debug("Anthropic not available, falling back to heuristic follow-ups")
-            return _generate_data_aware_follow_ups(
-                skill_id, primary_ticker, tickers, metric, kpis, table_rows
-            )
-        
-        # Build data summary for LLM
-        kpi_summary = ", ".join([f"{k}: {v}" for k, v in kpis.items() if v is not None][:5])
-        
-        # Get top 3 table rows for context
-        table_summary = ""
-        if table_rows:
-            top_rows = table_rows[:3]
-            table_summary = "; ".join([
-                f"{row.get('ticker', 'N/A')}: {row.get('latest_value', 'N/A')}"
-                for row in top_rows
-            ])
-        
-        # Anomaly summary
-        anomaly_summary = ""
-        if anomalies:
-            anomaly_summary = "; ".join([
-                f"{a.ticker} {a.metric}: {a.description}"
-                for a in anomalies[:2]
-            ])
-        
-        prompt = f"""Based on this financial dashboard data, suggest 3 brief follow-up questions a user would likely want to explore next.
-
-Dashboard Context:
-- Primary ticker: {primary_ticker}
-- All tickers: {', '.join(tickers)}
-- Metric focus: {metric}
-- Skill used: {skill_id}
-- KPIs: {kpi_summary or 'None'}
-- Top data: {table_summary or 'None'}
-- Anomalies detected: {anomaly_summary or 'None'}
-
-Return ONLY a JSON array of 3 objects, each with:
-- "label": Short button label (3-4 words max)
-- "query": The full question to ask
-
-Example format:
-[
-  {{"label": "Compare margins", "query": "Compare {primary_ticker} margins to AMD and INTC"}},
-  {{"label": "Revenue trend", "query": "Show {primary_ticker} quarterly revenue trend"}},
-  {{"label": "Why the drop?", "query": "Explain why {primary_ticker} revenue declined"}}
-]
-
-Return ONLY valid JSON, no other text."""
-
-        wrapper = get_sdk_wrapper()
-        if not wrapper.is_initialized:
-            await wrapper.initialize()
-        
-        response = await wrapper.query(
-            prompt=prompt,
-            max_tokens=300,
-            temperature=0.5,
-        )
-        
-        if response.error or not response.content:
-            logger.warning("LLM follow-up generation failed: %s", response.error)
-            return _generate_data_aware_follow_ups(
-                skill_id, primary_ticker, tickers, metric, kpis, table_rows
-            )
-        
-        # Parse LLM response
-        import json
-        try:
-            # Clean response - find JSON array
-            content = response.content.strip()
-            start_idx = content.find('[')
-            end_idx = content.rfind(']') + 1
-            if start_idx >= 0 and end_idx > start_idx:
-                json_str = content[start_idx:end_idx]
-                suggestions_data = json.loads(json_str)
-                
-                suggestions = []
-                for i, s in enumerate(suggestions_data[:3]):
-                    suggestions.append(FollowUpSuggestion(
-                        id=f"llm_{i+1}",
-                        label=s.get("label", f"Suggestion {i+1}"),
-                        query=s.get("query", f"Tell me more about {primary_ticker}"),
-                        icon="[ai]",
-                        category="llm_generated",
-                    ))
-                
-                logger.info("[FOLLOW-UPS] LLM generated %d suggestions", len(suggestions))
-                return suggestions
-            else:
-                raise ValueError("No JSON array found in response")
-                
-        except (json.JSONDecodeError, ValueError) as e:
-            logger.warning("Failed to parse LLM follow-up response: %s", e)
-            return _generate_data_aware_follow_ups(
-                skill_id, primary_ticker, tickers, metric, kpis, table_rows
-            )
-    
-    except Exception as e:
-        logger.error("LLM follow-up generation error: %s", e)
-        return _generate_data_aware_follow_ups(
-            skill_id, primary_ticker, tickers, metric, kpis, table_rows
-        )
-
-def _generate_data_aware_follow_ups(
-    skill_id: str,
-    primary_ticker: str,
-    tickers: list,
-    metric: str,
-    kpis: dict,
-    table_rows: list,
-) -> list:
-    """
-    Generate follow-up suggestions based on actual data findings.
-    
-    Function: _generate_data_aware_follow_ups
-    Called from: get_follow_up_suggestions
-    Why: Creates intelligent follow-ups that reference specific data points.
-    """
-    suggestions = []
-    
-    # Find interesting data points for contextual follow-ups
-    significant_decline = None
-    leader_ticker = None
-    
-    for row in table_rows:
-        ticker = row.get("ticker", "")
-        yoy = row.get("yoy_change")
-        latest = row.get("latest_value")
-        
-        # Track significant declines
-        if yoy is not None and yoy < -20:
-            significant_decline = {"ticker": ticker, "change": yoy}
-        
-        # Track leader (highest value)
-        if latest is not None:
-            if leader_ticker is None or latest > leader_ticker.get("value", 0):
-                leader_ticker = {"ticker": ticker, "value": latest}
-    
-    # Skill-specific base suggestions
-    if skill_id == "a2ui_explain_move":
-        suggestions = [
-            FollowUpSuggestion(id="1", label="Margin analysis", query=f"Show {primary_ticker} margin analysis", icon="[kpi]", category="skill"),
-            FollowUpSuggestion(id="2", label="Compare peers", query=f"Compare {primary_ticker} to its peers", icon="[peers]", category="skill"),
-            FollowUpSuggestion(id="3", label="Revenue trend", query=f"Show {primary_ticker} revenue trend", icon="[trend]", category="skill"),
-        ]
-        
-    elif skill_id == "a2ui_margin_analysis":
-        # Add context-aware suggestions based on margin values
-        gm = kpis.get("gross_margin", 0)
-        nm = kpis.get("net_margin", 0)
-        
-        suggestions = [
-            FollowUpSuggestion(id="1", label="Revenue breakdown", query=f"Show {primary_ticker} revenue trend", icon="[trend]", category="skill"),
-        ]
-        
-        # Add peer comparison if there's only one ticker
-        if len(tickers) <= 1:
-            suggestions.append(
-                FollowUpSuggestion(id="2", label="Compare margins", query=f"Compare {primary_ticker} margins vs AMD and NVDA", icon="[peers]", category="skill")
-            )
-        else:
-            peer_list = ", ".join(tickers[:3])
-            suggestions.append(
-                FollowUpSuggestion(id="2", label="Deeper comparison", query=f"Why does {tickers[0] if tickers else primary_ticker} have different margins than {tickers[1] if len(tickers) > 1 else 'peers'}?", icon="[deep]", category="skill")
-            )
-        
-        suggestions.append(
-            FollowUpSuggestion(id="3", label="Stock movement", query=f"Explain recent {primary_ticker} stock movement", icon="[price]", category="skill")
-        )
-        
-    elif skill_id == "a2ui_revenue_trend":
-        suggestions = [
-            FollowUpSuggestion(id="1", label="Margin analysis", query=f"Show {primary_ticker} margin analysis", icon="[kpi]", category="skill"),
-            FollowUpSuggestion(id="2", label="YoY comparison", query=f"Compare {primary_ticker} revenue year over year", icon="[trend]", category="skill"),
-            FollowUpSuggestion(id="3", label="Peer comparison", query=f"Compare {primary_ticker} vs INTC revenue", icon="[peers]", category="skill"),
-        ]
-        
-    elif skill_id == "a2ui_peer_compare":
-        peer_list = ", ".join(tickers[:3]) if len(tickers) > 1 else f"{primary_ticker} and INTC"
-        
-        suggestions = []
-        
-        # If there's a significant decline, suggest investigating it
-        if significant_decline:
-            suggestions.append(
-                FollowUpSuggestion(
-                    id="1", 
-                    label=f"Why {significant_decline['ticker']} declined", 
-                    query=f"Why did {significant_decline['ticker']} {metric} decline {abs(significant_decline['change']):.0f}%?", 
-                    icon="[deep]",
-                    category="skill"
-                )
-            )
-        else:
-            suggestions.append(
-                FollowUpSuggestion(id="1", label="Deeper on leader", query=f"Show {leader_ticker['ticker'] if leader_ticker else primary_ticker} detailed analysis", icon="[deep]", category="skill")
-            )
-        
-        suggestions.extend([
-            FollowUpSuggestion(id="2", label="Stock comparison", query=f"Compare {peer_list} stock performance", icon="[price]", category="skill"),
-            FollowUpSuggestion(id="3", label="Margin comparison", query=f"Compare {peer_list} margins", icon="[kpi]", category="skill"),
-        ])
-        
-    else:
-        # Default suggestions
-        suggestions = [
-            FollowUpSuggestion(id="1", label="Deeper analysis", query=f"Tell me more about {primary_ticker}", icon="[analysis]", category="skill"),
-            FollowUpSuggestion(id="2", label="Compare peers", query=f"Compare to industry peers", icon="[peers]", category="skill"),
-        ]
-    
-    return suggestions
 
 
 @router.post("/{dashboard_id}/clarification")

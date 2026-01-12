@@ -371,6 +371,7 @@ class A2UIRuntime:
                 "tickers": context.tickers,
                 "time_range": context.time_range,
                 "metric": context.metric,
+                "loading": True,
             }
             yield emitter.data_update(seed_data)
             message_count += 1
@@ -381,7 +382,22 @@ class A2UIRuntime:
             if cached_run and cached_run.data_json:
                 yield emitter.audit("cache_hit", f"reused run {cached_run.run_id}")
                 message_count += 1
-                yield emitter.data_update(cached_run.data_json)
+                cached_data = dict(cached_run.data_json)
+                cached_data["loading"] = False
+
+                session_id = state.params.get("session_id")
+                if session_id:
+                    from .session_memory import load_explanation_memory
+                    cached_explanation = await load_explanation_memory(session_id, state.dashboard_id)
+                    if cached_explanation:
+                        explanation_payload = cached_data.get("explanation")
+                        if not isinstance(explanation_payload, dict):
+                            explanation_payload = {}
+                        explanation_payload.update(cached_explanation)
+                        explanation_payload["cached"] = True
+                        cached_data["explanation"] = explanation_payload
+
+                yield emitter.data_update(cached_data)
                 message_count += 1
                 trace.add_step(
                     "cache_hit",
@@ -507,6 +523,7 @@ class A2UIRuntime:
                     "tickers": context.tickers,
                     "time_range": context.time_range,
                     "metric": context.metric,
+                    "loading": True,
                 }
                 yield emitter.data_update(seed_data)
                 message_count += 1
@@ -534,6 +551,20 @@ class A2UIRuntime:
                 }
                 normalized = _normalize_comparison_kpis(context_data)
                 result.data_model["kpis"] = normalized["kpis"]
+
+            # Mark data loading as complete for per-widget skeletons
+            result.data_model["loading"] = False
+
+            # Ensure explanation cached flag defaults to false on first run
+            explanation = result.data_model.get("explanation")
+            if isinstance(explanation, dict):
+                explanation.setdefault("cached", False)
+
+            # Persist explanation content for session-memory replay
+            session_id = state.params.get("session_id")
+            if session_id and isinstance(explanation, dict):
+                from .session_memory import store_explanation_memory
+                await store_explanation_memory(session_id, state.dashboard_id, explanation)
 
             # Emit data update with full result
             yield emitter.data_update(result.data_model, path="/data")
@@ -619,8 +650,8 @@ class A2UIRuntime:
         
         Method: _stream_component_selection - progressive widget emission.
         Called from: stream_dashboard (when streaming mode enabled)
-        Invokes: ComponentSelector.stream_components, emitter.incremental_surface_update
-        Why: Enables sub-second time-to-first-paint for dashboard widgets.
+        Invokes: ComponentSelector.stream_components, ComponentValidator.validate_widget
+        Why: Enables progressive widget rendering with per-widget safety checks.
         
         Args:
             emitter: A2UI message emitter
@@ -639,9 +670,9 @@ class A2UIRuntime:
         selector = get_component_selector()
         validator = get_component_validator()
         
-        emitted_components: List[A2UIComponent] = []
         pending_ids: List[str] = []
         widget_count = 0
+        rejected_count = 0
         
         context_dict = {
             "primary_ticker": context.primary_ticker,
@@ -651,33 +682,65 @@ class A2UIRuntime:
         }
         
         yield emitter.audit("streaming_components", "started")
+
+        # Emit header + initial layout root so streamed widgets can attach immediately
+        title_component = A2UIComponent.text_bound("title_text", "/data/title", "h2")
+        header_row = A2UIComponent.row("header_row", ["title_text"])
+        layout_root = A2UIComponent(
+            id="layout_root",
+            component={"Column": {
+                "children": {"explicitList": ["header_row"]},
+                "gap": {"literalNumber": 24},
+            }}
+        )
+        header_update = SurfaceUpdate(
+            surfaceId=emitter.surface_id,
+            components=[title_component, header_row, layout_root],
+            incremental=False,
+        )
+        yield header_update.to_json()
         
         try:
             async for widget in selector.stream_components(skill, question, context_dict):
-                # Validate individual widget
-                if widget.widget_type in skill.widgets:
-                    # Build component from widget selection
-                    component = emitter._build_widget_from_selection(widget)
-                    if component:
-                        emitted_components.append(component)
-                        pending_ids.append(widget.widget_id)
-                        widget_count += 1
-                        
-                        # Emit incremental surface update for this widget
-                        incremental_update = SurfaceUpdate(
-                            surfaceId=emitter.surface_id,
-                            components=[component],
-                            incremental=True,  # Mark as streaming for animations
-                        )
-                        yield incremental_update.to_json()
-                        
-                        yield emitter.audit(
-                            "widget_streamed",
-                            f"type={widget.widget_type}, id={widget.widget_id}"
-                        )
-            
-            # Emit final layout root with all widget IDs
-            if pending_ids:
+                is_valid, errors = validator.validate_widget(widget, skill)
+                if not is_valid:
+                    rejected_count += 1
+                    yield emitter.audit(
+                        "widget_rejected",
+                        f"type={widget.widget_type}, id={widget.widget_id}, errors={errors[:2]}"
+                    )
+                    continue
+
+                if widget.widget_id in pending_ids:
+                    rejected_count += 1
+                    yield emitter.audit(
+                        "widget_rejected",
+                        f"type={widget.widget_type}, id={widget.widget_id}, reason=duplicate"
+                    )
+                    continue
+
+                # Build component from widget selection
+                component = emitter._build_widget_from_selection(widget)
+                if not component:
+                    rejected_count += 1
+                    yield emitter.audit(
+                        "widget_rejected",
+                        f"type={widget.widget_type}, id={widget.widget_id}, reason=build_failed"
+                    )
+                    continue
+
+                pending_ids.append(widget.widget_id)
+                widget_count += 1
+
+                # Emit incremental surface update for this widget
+                incremental_update = SurfaceUpdate(
+                    surfaceId=emitter.surface_id,
+                    components=[component],
+                    incremental=True,  # Mark as streaming for animations
+                )
+                yield incremental_update.to_json()
+
+                # Update layout root to include the newly streamed widget
                 layout_root = A2UIComponent(
                     id="layout_root",
                     component={"Column": {
@@ -685,20 +748,32 @@ class A2UIRuntime:
                         "gap": {"literalNumber": 24},
                     }}
                 )
-                final_update = SurfaceUpdate(
+                layout_update = SurfaceUpdate(
                     surfaceId=emitter.surface_id,
                     components=[layout_root],
-                    incremental=False,  # Final update, not incremental
+                    incremental=False,
                 )
-                yield final_update.to_json()
-            
-            yield emitter.audit("streaming_components", f"complete, widgets={widget_count}")
+                yield layout_update.to_json()
+
+                yield emitter.audit(
+                    "widget_streamed",
+                    f"type={widget.widget_type}, id={widget.widget_id}"
+                )
+
+            if widget_count == 0:
+                raise ValueError("streaming produced zero widgets")
+
+            yield emitter.audit(
+                "streaming_components",
+                f"complete, widgets={widget_count}, rejected={rejected_count}"
+            )
             
             trace.add_step(
                 "stream_component_selection",
                 details={
                     "widget_count": widget_count,
                     "widget_ids": pending_ids,
+                    "rejected_count": rejected_count,
                 },
                 success=True,
             )
@@ -721,15 +796,22 @@ class A2UIRuntime:
         """
         Method: A2UIRuntime._generate_follow_ups - generate rule-based follow-up suggestions.
         Called from: backend.generative_ui.runtime.A2UIRuntime.stream_dashboard.
-        Invokes: follow_up_generator.generate_follow_ups_simple.
-        Why: Supplies contextual follow-up suggestions without LLM overhead.
+        Invokes: follow_up_generator.generate_follow_ups.
+        Why: Supplies contextual follow-up suggestions from the shared generator.
         """
-        from .follow_up_generator import generate_follow_ups_simple
+        from .follow_up_generator import generate_follow_ups
         
         tickers = getattr(selection, 'tickers', [])
         skill_id = getattr(selection, 'skill_id', '')
-        
-        return generate_follow_ups_simple(skill_id=skill_id, tickers=tickers)
+
+        suggestions = generate_follow_ups(
+            skill_id=skill_id,
+            tickers=tickers,
+            data_model=data_model,
+            include_data_insights=True,
+            max_suggestions=3,
+        )
+        return [s.query for s in suggestions]
 
     async def process_action(self, state: DashboardState, action: Dict[str, Any]) -> Dict[str, Any]:
         """
