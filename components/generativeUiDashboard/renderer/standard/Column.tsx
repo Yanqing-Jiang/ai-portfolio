@@ -167,7 +167,7 @@ export function A2UIColumn({
     const finalChildIds = orderedChildren.map((child) => child.id);
 
     if (finalChildIds.length === 0) {
-        return <></>;
+        return null;
     }
 
     // Map alignment to CSS

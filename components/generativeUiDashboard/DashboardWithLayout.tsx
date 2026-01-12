@@ -24,11 +24,12 @@ interface DashboardWithLayoutProps {
 /**
  * Inner component that uses the layout event listener.
  * Must be inside LayoutProvider.
+ * Wrapped in div to accept refs from parent motion wrappers.
  */
 function LayoutEventHandler({ children }: { children: ReactNode }) {
     // Listen for layout change events and apply them
     useLayoutEventListener();
-    return <>{children}</>;
+    return <div className="layout-event-handler">{children}</div>;
 }
 
 /**

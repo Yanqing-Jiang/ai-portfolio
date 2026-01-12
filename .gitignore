@@ -65,7 +65,13 @@ htmlcov/
 .pytest_cache/
 .mypy_cache/
 
-# Debug files (removed to allow tooling access)
+# Debug files and traces
+.traces/
+**/. traces/
+docs/a2ui-debug-*.json
+
+# Claude temporary working directories
+tmpclaude-*/
 
 # OS generated
 Thumbs.db

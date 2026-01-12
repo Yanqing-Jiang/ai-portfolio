@@ -26,7 +26,10 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from ..rate_limiter import redis_pool
+try:
+    from rate_limiter import redis_pool
+except ImportError:  # pragma: no cover - support module execution
+    from ..rate_limiter import redis_pool  # type: ignore
 
 logger = logging.getLogger(__name__)
 
