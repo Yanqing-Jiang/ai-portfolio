@@ -2507,13 +2507,6 @@ export function GenerativeUIPage(): React.ReactElement {
                                         </DashboardWithLayout>
                                     )}
 
-                                    {/* Clarification Overlay */}
-                                    <ClarificationOverlay
-                                        request={clarificationRequest}
-                                        onSubmit={handleClarificationSubmit}
-                                        onDismiss={handleClarificationDismiss}
-                                        fullScreen={!clarificationRequest?.targetComponentId}
-                                    />
                                 </div>
                             </div>
                         </div>
@@ -2775,6 +2768,14 @@ export function GenerativeUIPage(): React.ReactElement {
 
                 {/* Debug Panel Portal */}
                 {renderDebugPanel()}
+
+                {/* Clarification Overlay - At page root for proper viewport coverage */}
+                <ClarificationOverlay
+                    request={clarificationRequest}
+                    onSubmit={handleClarificationSubmit}
+                    onDismiss={handleClarificationDismiss}
+                    fullScreen={!clarificationRequest?.targetComponentId}
+                />
             </div>
 
             {/* Authentication Modal */}
