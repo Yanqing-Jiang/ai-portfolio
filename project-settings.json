@@ -1,0 +1,46 @@
+{
+  "project": "conversational-analytics",
+  "telemetry": {
+    "emit_run_traces": true,
+    "fields": ["run_id", "step_id", "tool", "duration_ms", "success", "agent_mode", "skill_id"]
+  },
+  "timeouts": {
+    "run_seconds": 60,
+    "specialist_seconds": 30,
+    "default_tool_seconds": 20,
+    "per_tool": {
+      "query_database": 25,
+      "generate_echarts": 20,
+      "create_tradingview_chart": 20,
+      "generate_analysis": 10,
+      "get_news_sentiment": 25,
+      "web_search": 30
+    }
+  },
+  "allowlists": {
+    "agents": {
+      "database_admin": ["query_database", "generate_analysis"],
+      "chart_builder": ["generate_echarts", "create_tradingview_chart", "generate_analysis"],
+      "news": ["web_search", "get_news_sentiment", "generate_analysis"]
+    },
+    "tools": ["query_database", "generate_echarts", "create_tradingview_chart", "generate_analysis", "get_news_sentiment", "web_search"]
+  },
+  "hooks": {
+    "pre_tool": {
+      "enforce_allowlist": true,
+      "reject_unlisted": true
+    },
+    "post_tool": {
+      "redact_keys": ["traceback", "raw_sql", "api_key"],
+      "capture_timings": true
+    },
+    "on_error": {
+      "emit_debug": true,
+      "include_trace": false
+    }
+  },
+  "permissions": {
+    "kill_switch_enabled": true,
+    "honor_blocked_tools": true
+  }
+}

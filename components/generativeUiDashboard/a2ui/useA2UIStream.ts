@@ -36,6 +36,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createMessageProcessor, MessageProcessor } from './MessageProcessor';
 import type { Surface, DataModel, UserActionMessage } from './types';
+import { configService } from '../../../services/config';
 
 /** Backend clarification field */
 export interface BackendClarificationField {
@@ -117,7 +118,7 @@ export interface UseA2UIStreamOptions {
 
 const DEFAULT_OPTIONS: UseA2UIStreamOptions = {
     autoConnect: true,
-    apiBaseUrl: '/api/dash',
+    apiBaseUrl: `${configService.getBackendUrl()}/api/dash`,
 };
 
 // Reconnection constants

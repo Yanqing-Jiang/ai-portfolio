@@ -10,6 +10,7 @@ import React, { useCallback, useState, useRef } from 'react';
 import { useA2UIStream, useSurface } from './a2ui';
 import { A2UISurface, A2UISurfaceLoading, A2UISurfaceError } from './renderer';
 import { dashboardStyles } from './styles';
+import { configService } from '../../services/config';
 
 // Context providers for layout/swapping
 import { LayoutProvider, ComponentSwapProvider, ComponentSelectionProvider } from './context';
@@ -39,7 +40,7 @@ export interface DashboardViewerProps {
 export function DashboardViewer({
     dashboardId,
     streamUrl,
-    apiBaseUrl = '/api/dash',
+    apiBaseUrl = `${configService.getBackendUrl()}/api/dash`,
     className = '',
     enableLayoutControls = true,
     enableSwapping = true,
@@ -161,7 +162,7 @@ export function DashboardViewer({
  */
 export function CreateDashboardForm({
     onCreated,
-    apiBaseUrl = '/api/dash',
+    apiBaseUrl = `${configService.getBackendUrl()}/api/dash`,
 }: {
     onCreated: (dashboardId: string) => void;
     apiBaseUrl?: string;

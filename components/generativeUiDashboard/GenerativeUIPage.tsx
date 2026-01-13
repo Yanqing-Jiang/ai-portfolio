@@ -33,6 +33,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 // Auth & API
 import { authService, type AuthState } from '../../services/auth';
 import { apiService, type UsageStats } from '../../services/apiService';
+import { configService } from '../../services/config';
 import { AuthModal } from '../AuthModal';
 
 // A2UI imports
@@ -341,13 +342,14 @@ export function GenerativeUIPage(): React.ReactElement {
 
     // A2UI stream state
     const sessionId = useMemo(() => getOrCreateSessionId(), []);
+    const backendUrl = configService.getBackendUrl();
     const streamUrl = dashboardId
-        ? `/api/dash/${dashboardId}/stream?session_id=${encodeURIComponent(sessionId)}`
+        ? `${backendUrl}/api/dash/${dashboardId}/stream?session_id=${encodeURIComponent(sessionId)}`
         : null;
     const [streamState, streamActions] = useA2UIStream(streamUrl, {
         autoConnect: true,
         dashboardId: dashboardId || undefined,
-        apiBaseUrl: '/api/dash',
+        apiBaseUrl: `${backendUrl}/api/dash`,
         onAudit: (event) => {
             addAuditEvent(event.event, event.event.replace(/_/g, ' '), event.details);
         }
@@ -392,17 +394,43 @@ export function GenerativeUIPage(): React.ReactElement {
         setShowSuggestions(false);
 
         try {
-            const response = await fetch('/api/dash/create', {
+            const response = await fetch(`${backendUrl}/api/dash/create`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ question: nextQuestion }),
             });
 
+            // Detailed HTTP error handling
+            if (response.status === 401) {
+                throw new Error('Authentication required. Please sign in.');
+            }
+            if (response.status === 429) {
+                const retryAfter = response.headers.get('Retry-After');
+                throw new Error(retryAfter
+                    ? `Rate limited. Retry in ${retryAfter}s`
+                    : 'Rate limited. Try again shortly.');
+            }
             if (!response.ok) {
-                throw new Error(`Failed to create dashboard: ${response.statusText}`);
+                let detail = response.statusText;
+                try {
+                    const errorBody = await response.text();
+                    const parsed = JSON.parse(errorBody);
+                    detail = parsed.detail || parsed.message || errorBody.slice(0, 200);
+                } catch {
+                    // Keep default statusText
+                }
+                throw new Error(`HTTP ${response.status}: ${detail}`);
             }
 
-            const data = await response.json();
+            // Safe JSON parsing with detailed error
+            const text = await response.text();
+            let data;
+            try {
+                data = JSON.parse(text);
+            } catch (parseErr) {
+                console.error('[A2UI] JSON parse failed. Response text:', text.slice(0, 500));
+                throw new Error(`Invalid JSON response (${text.length} chars). Check console for details.`);
+            }
             const newId = data.dashboard_id;
 
             setDashboardId(newId);
@@ -413,12 +441,14 @@ export function GenerativeUIPage(): React.ReactElement {
             });
             addAuditEvent('stream_started', 'Dashboard created', `ID: ${newId}`);
         } catch (err) {
-            setError(err instanceof Error ? err.message : 'Unknown error');
-            addAuditEvent('error', 'Creation failed', err instanceof Error ? err.message : 'Unknown error');
+            const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+            console.error('[A2UI] Dashboard creation failed:', errorMsg);
+            setError(errorMsg);
+            addAuditEvent('error', 'Creation failed', errorMsg);
         } finally {
             setIsCreating(false);
         }
-    }, [question, isCreating, addAuditEvent]);
+    }, [question, isCreating, addAuditEvent, backendUrl]);
 
     /**
      * handleInput - Unified input handler for chat input.
@@ -553,7 +583,7 @@ export function GenerativeUIPage(): React.ReactElement {
         if (dashboardId && !activeSkill) {
             const fetchSkillInfo = async () => {
                 try {
-                    const response = await fetch(`/api/dash/${dashboardId}/spec`);
+                    const response = await fetch(`${backendUrl}/api/dash/${dashboardId}/spec`);
                     if (response.ok) {
                         const data = await response.json();
                         if (data.plan?.skill_id) {
@@ -565,7 +595,7 @@ export function GenerativeUIPage(): React.ReactElement {
                         }
                     }
                 } catch (err) {
-                    console.error('Failed to fetch skill info:', err);
+                    console.error('[A2UI] Failed to fetch skill info:', err);
                 }
             };
             fetchSkillInfo();
@@ -610,7 +640,7 @@ export function GenerativeUIPage(): React.ReactElement {
             // Send response to backend
             if (dashboardId) {
                 try {
-                    await fetch(`/api/dash/${dashboardId}/clarification`, {
+                    await fetch(`${backendUrl}/api/dash/${dashboardId}/clarification`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
@@ -718,7 +748,7 @@ export function GenerativeUIPage(): React.ReactElement {
         if (streamState.isDone && surface?.root && followUpSuggestions.length === 0 && dashboardId) {
             const fetchFollowUps = async () => {
                 try {
-                    const response = await fetch(`/api/dash/${dashboardId}/follow-ups`);
+                    const response = await fetch(`${backendUrl}/api/dash/${dashboardId}/follow-ups`);
                     if (response.ok) {
                         const data = await response.json();
                         if (data.suggestions && Array.isArray(data.suggestions)) {

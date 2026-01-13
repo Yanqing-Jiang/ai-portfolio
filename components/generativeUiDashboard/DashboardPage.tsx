@@ -7,6 +7,7 @@
 import React, { useState } from 'react';
 import { DashboardViewer, CreateDashboardForm } from './DashboardViewer';
 import { dashboardStyles } from './styles';
+import { configService } from '../../services/config';
 
 export interface DashboardPageProps {
     /** Initial dashboard ID to load */
@@ -22,7 +23,7 @@ export interface DashboardPageProps {
  */
 export function DashboardPage({
     initialDashboardId,
-    apiBaseUrl = '/api/dash',
+    apiBaseUrl = `${configService.getBackendUrl()}/api/dash`,
 }: DashboardPageProps): React.ReactElement {
     const [dashboardId, setDashboardId] = useState<string | null>(initialDashboardId || null);
     const [history, setHistory] = useState<string[]>([]);

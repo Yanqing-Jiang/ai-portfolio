@@ -32,12 +32,12 @@ def should_use_sdk_assets(enable_flag: bool = True) -> bool:
 @lru_cache(maxsize=1)
 def load_project_settings() -> Dict[str, Any]:
     """
-    Function: load_project_settings — reads `.claude/settings.json` for hooks/allowlists/timeouts.
+    Function: load_project_settings — reads `project-settings.json` for hooks/allowlists/timeouts.
     Called from: agent and supervisor to align tool allowlists and budgets.
     Invokes: json.load on the project settings file.
     Purpose: Centralizes SDK settings consumption across the backend.
     """
-    settings_path = CLAUDE_DIR / "settings.json"
+    settings_path = PROJECT_ROOT / "project-settings.json"
     if not settings_path.exists():
         return {}
     try:
