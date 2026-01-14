@@ -310,12 +310,12 @@ export function ExplainMovePanel({
                                 </p>
                             </div>
 
-                            {/* Quick Stats Grid */}
+                            {/* Quick Stats Grid - responsive */}
                             <div
                                 style={{
                                     display: 'grid',
-                                    gridTemplateColumns: 'repeat(3, 1fr)',
-                                    gap: '0.75rem',
+                                    gridTemplateColumns: 'repeat(auto-fit, minmax(100px, 1fr))', // 1-3 cols based on width
+                                    gap: 'clamp(0.5rem, 2vw, 0.75rem)',
                                 }}
                             >
                                 {displayFactors.slice(0, 3).map((factor, idx) => (

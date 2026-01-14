@@ -307,3 +307,42 @@
     opacity: 1;
   }
 }
+
+/* A2UI Mobile Responsive Styles */
+@layer components {
+  /* Reduce blur effects on mobile for performance */
+  @media (max-width: 640px) {
+    .generative-ui-page [style*="blur(120px)"],
+    .generative-ui-page [style*="blur(100px)"],
+    .generative-ui-page [style*="blur(80px)"] {
+      filter: blur(40px) !important;
+    }
+
+    /* Reduce ambient orb sizes on mobile */
+    .generative-ui-page .absolute[class*="w-[800px]"],
+    .generative-ui-page .absolute[class*="w-[600px]"],
+    .generative-ui-page .absolute[class*="w-[500px]"],
+    .generative-ui-page .absolute[class*="w-[400px]"] {
+      transform: scale(0.5);
+    }
+
+    /* Hide scrollbar but keep functionality */
+    .scrollbar-hide {
+      -ms-overflow-style: none;
+      scrollbar-width: none;
+    }
+
+    .scrollbar-hide::-webkit-scrollbar {
+      display: none;
+    }
+  }
+
+  /* A2UI Row responsive stacking */
+  .a2ui-row {
+    flex-wrap: wrap;
+  }
+
+  .a2ui-row__item {
+    min-width: 280px;
+  }
+}

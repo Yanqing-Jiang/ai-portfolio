@@ -261,7 +261,8 @@ export function DataTable({
                             className="a2ui-data-table"
                             style={{
                                 overflowX: 'auto',
-                                maxHeight: '400px', // Limit height for large datasets
+                                maxHeight: 'clamp(250px, 50vh, 400px)', // Responsive: smaller on mobile
+                                WebkitOverflowScrolling: 'touch', // Smooth scroll on iOS
                             }}
                         >
                             <table
@@ -271,7 +272,8 @@ export function DataTable({
                                 style={{
                                     width: '100%',
                                     borderCollapse: 'collapse',
-                                    fontSize: '0.875rem',
+                                    fontSize: 'clamp(0.75rem, 2.5vw, 0.875rem)', // Responsive font
+                                    minWidth: '300px', // Ensure minimum readable width
                                 }}
                             >
                                 <thead>

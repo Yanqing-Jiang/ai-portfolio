@@ -190,13 +190,22 @@ export function A2UIRow({
             style={{
                 display: 'flex',
                 flexDirection: 'row',
+                flexWrap: 'wrap', // Allow wrapping on small screens
                 justifyContent,
-                gap: '1rem',
+                gap: 'clamp(0.5rem, 2vw, 1rem)', // Responsive gap
                 width: '100%',
             }}
         >
             {finalChildIds.map((childId) => (
-                <div key={childId} className="a2ui-row__item" style={{ flex: '1 1 0' }}>
+                <div
+                    key={childId}
+                    className="a2ui-row__item"
+                    style={{
+                        flex: '1 1 280px', // Grow, shrink, min 280px basis
+                        minWidth: '280px', // Force wrap on small screens
+                        maxWidth: '100%', // Prevent overflow
+                    }}
+                >
                     {renderChild(componentsHasId(components, childId) ? childId : templateValue || childId)}
                 </div>
             ))}

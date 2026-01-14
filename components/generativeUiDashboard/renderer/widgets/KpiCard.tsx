@@ -78,10 +78,11 @@ export function KpiCard({
             aria-describedby={delta !== null ? deltaId : undefined}
             tabIndex={0}
             style={{
-                padding: '1rem',
+                padding: 'clamp(0.75rem, 3vw, 1rem)', // Responsive padding
                 backgroundColor: 'rgba(30, 41, 59, 0.5)',
                 borderRadius: '8px',
                 textAlign: 'center',
+                minWidth: '120px', // Ensure minimum readable width
             }}
         >
             <div
@@ -105,10 +106,11 @@ export function KpiCard({
                 aria-live="polite"
                 aria-atomic="true"
                 style={{
-                    fontSize: '1.75rem',
+                    fontSize: 'clamp(1.25rem, 4vw, 1.75rem)', // Responsive font size
                     fontWeight: 700,
                     color: '#f8fafc',
                     marginBottom: delta !== null ? '0.5rem' : 0,
+                    wordBreak: 'break-word', // Prevent overflow on very long values
                 }}
             >
                 {formattedValue}

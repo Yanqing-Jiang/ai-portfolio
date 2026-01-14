@@ -264,10 +264,13 @@ export function MetricChart({
         >
             <LazyECharts
                 option={option}
-                style={{ height: '320px', width: '100%' }}
+                style={{
+                    height: 'clamp(200px, 40vh, 320px)', // Responsive: min 200px mobile, max 320px desktop
+                    width: '100%',
+                }}
                 opts={{ renderer: 'svg' }}
                 theme="dark"
-                fallbackHeight={320}
+                fallbackHeight={280}
             />
         </motion.div>
     );

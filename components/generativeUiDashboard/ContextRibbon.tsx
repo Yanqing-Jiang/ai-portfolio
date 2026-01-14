@@ -46,7 +46,10 @@ export function ContextRibbon({
 
     return (
         <div className="context-ribbon-wrapper mb-4 overflow-hidden">
-            <div className="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-hide">
+            <div
+                className="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-hide"
+                style={{ WebkitOverflowScrolling: 'touch' }} // Smooth scroll on iOS
+            >
                 <AnimatePresence mode="popLayout">
                     {history.map((item, idx) => {
                         const isActive = item.id === currentId;
