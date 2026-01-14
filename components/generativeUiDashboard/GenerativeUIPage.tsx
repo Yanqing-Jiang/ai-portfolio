@@ -289,6 +289,7 @@ export function GenerativeUIPage(): React.ReactElement {
     const [authState, setAuthState] = useState<AuthState>({ user: null, loading: true, error: null });
     const [usageStats, setUsageStats] = useState<UsageStats | null>(null);
     const [showAuthModal, setShowAuthModal] = useState(false);
+    const [authToken, setAuthToken] = useState<string | null>(null);
 
     // Fetch usage stats
     const fetchUsageStats = useCallback(async () => {
@@ -306,6 +307,17 @@ export function GenerativeUIPage(): React.ReactElement {
         const unsubscribe = authService.subscribe(setAuthState);
         return unsubscribe;
     }, []);
+
+    // Keep auth token in sync for SSE streams (EventSource doesn't support headers)
+    useEffect(() => {
+        const updateToken = async () => {
+            const token = await authService.getAccessToken();
+            setAuthToken(token);
+        };
+        if (!authState.loading) {
+            updateToken();
+        }
+    }, [authState.loading, authState.user]);
 
     useEffect(() => {
         if (!authState.loading) {
@@ -343,9 +355,12 @@ export function GenerativeUIPage(): React.ReactElement {
     // A2UI stream state
     const sessionId = useMemo(() => getOrCreateSessionId(), []);
     const backendUrl = configService.getBackendUrl();
-    const streamUrl = dashboardId
-        ? `${backendUrl}/api/dash/${dashboardId}/stream?session_id=${encodeURIComponent(sessionId)}`
-        : null;
+    const streamUrl = useMemo(() => {
+        if (!dashboardId) return null;
+        const params = new URLSearchParams({ session_id: sessionId });
+        if (authToken) params.set('token', authToken);
+        return `${backendUrl}/api/dash/${dashboardId}/stream?${params.toString()}`;
+    }, [dashboardId, sessionId, authToken, backendUrl]);
     const [streamState, streamActions] = useA2UIStream(streamUrl, {
         autoConnect: true,
         dashboardId: dashboardId || undefined,
@@ -394,9 +409,10 @@ export function GenerativeUIPage(): React.ReactElement {
         setShowSuggestions(false);
 
         try {
+            const authHeaders = await authService.getAuthHeaders();
             const response = await fetch(`${backendUrl}/api/dash/create`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 'Content-Type': 'application/json', ...authHeaders },
                 body: JSON.stringify({ question: nextQuestion }),
             });
 
@@ -583,7 +599,10 @@ export function GenerativeUIPage(): React.ReactElement {
         if (dashboardId && !activeSkill) {
             const fetchSkillInfo = async () => {
                 try {
-                    const response = await fetch(`${backendUrl}/api/dash/${dashboardId}/spec`);
+                    const authHeaders = await authService.getAuthHeaders();
+                    const response = await fetch(`${backendUrl}/api/dash/${dashboardId}/spec`, {
+                        headers: authHeaders,
+                    });
                     if (response.ok) {
                         const data = await response.json();
                         if (data.plan?.skill_id) {
@@ -640,9 +659,10 @@ export function GenerativeUIPage(): React.ReactElement {
             // Send response to backend
             if (dashboardId) {
                 try {
+                    const authHeaders = await authService.getAuthHeaders();
                     await fetch(`${backendUrl}/api/dash/${dashboardId}/clarification`, {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
+                        headers: { 'Content-Type': 'application/json', ...authHeaders },
                         body: JSON.stringify({
                             request_id: requestId,
                             values: responses,
@@ -748,7 +768,10 @@ export function GenerativeUIPage(): React.ReactElement {
         if (streamState.isDone && surface?.root && followUpSuggestions.length === 0 && dashboardId) {
             const fetchFollowUps = async () => {
                 try {
-                    const response = await fetch(`${backendUrl}/api/dash/${dashboardId}/follow-ups`);
+                    const authHeaders = await authService.getAuthHeaders();
+                    const response = await fetch(`${backendUrl}/api/dash/${dashboardId}/follow-ups`, {
+                        headers: authHeaders,
+                    });
                     if (response.ok) {
                         const data = await response.json();
                         if (data.suggestions && Array.isArray(data.suggestions)) {

@@ -11,6 +11,7 @@ import { useA2UIStream, useSurface } from './a2ui';
 import { A2UISurface, A2UISurfaceLoading, A2UISurfaceError } from './renderer';
 import { dashboardStyles } from './styles';
 import { configService } from '../../services/config';
+import { authService } from '../../services/auth';
 
 // Context providers for layout/swapping
 import { LayoutProvider, ComponentSwapProvider, ComponentSelectionProvider } from './context';
@@ -179,9 +180,10 @@ export function CreateDashboardForm({
         setError(null);
 
         try {
+            const authHeaders = await authService.getAuthHeaders();
             const response = await fetch(`${apiBaseUrl}/create`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 'Content-Type': 'application/json', ...authHeaders },
                 body: JSON.stringify({ question }),
             });
 

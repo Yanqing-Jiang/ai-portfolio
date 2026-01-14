@@ -37,6 +37,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createMessageProcessor, MessageProcessor } from './MessageProcessor';
 import type { Surface, DataModel, UserActionMessage } from './types';
 import { configService } from '../../../services/config';
+import { authService } from '../../../services/auth';
 
 /** Backend clarification field */
 export interface BackendClarificationField {
@@ -384,10 +385,12 @@ export function useA2UIStream(
             abortControllerRef.current = controller;
 
             try {
+                const authHeaders = await authService.getAuthHeaders();
                 const response = await fetch(`${opts.apiBaseUrl}/${opts.dashboardId}/action`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
+                        ...authHeaders,
                     },
                     body: JSON.stringify({ userAction: action }),
                     signal: controller.signal,
@@ -459,10 +462,12 @@ export function useA2UIStream(
             abortControllerRef.current = controller;
 
             try {
+                const authHeaders = await authService.getAuthHeaders();
                 const response = await fetch(`${opts.apiBaseUrl}/${opts.dashboardId}/query`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
+                        ...authHeaders,
                     },
                     body: JSON.stringify({ query }),
                     signal: controller.signal,

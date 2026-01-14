@@ -190,11 +190,25 @@ def parse_user_id(token: str) -> Optional[str]:
         return None
 
 async def who_am_i(request: Request) -> str:
-    """Identifier function that switches between IP and user_id based on authentication"""
-    # Check for Authorization header
+    """
+    Identifier function that switches between IP and user_id based on authentication.
+
+    Function: who_am_i — extracts user identity from auth header or query param.
+    Called from: smart_rate_limit
+    Invokes: parse_user_id
+    Why: Supports both header auth (fetch) and query param auth (EventSource/SSE).
+    """
+    # Check for Authorization header first
     auth_header = request.headers.get("Authorization")
     print(f"AUTH DEBUG - Authorization header: {auth_header}")
-    
+
+    # Fallback to query param for EventSource (SSE doesn't support headers)
+    if not auth_header:
+        token = request.query_params.get("token")
+        if token:
+            auth_header = f"Bearer {token}"
+            print(f"AUTH DEBUG - Token from query param")
+
     if auth_header:
         user_id = parse_user_id(auth_header)
         print(f"AUTH DEBUG - Parsed user ID: {user_id}")
@@ -202,7 +216,7 @@ async def who_am_i(request: Request) -> str:
             result = f"user:{user_id}"
             print(f"AUTH DEBUG - Returning authenticated identifier: {result}")
             return result
-    
+
     # Fallback to IP for guests
     forwarded = request.headers.get("X-Forwarded-For")
     client_ip = forwarded.split(',')[0] if forwarded else request.client.host
