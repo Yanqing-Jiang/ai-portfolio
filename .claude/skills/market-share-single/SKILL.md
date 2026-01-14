@@ -1,23 +1,11 @@
 ---
-name: market_share_single
+name: market-share-single
 description: |
-  Calculate a single company's market share versus the peer set for a given metric and time period.
-  
-  USE THIS SKILL WHEN the user asks about:
-  - Market share, market position, share of market
-  - What percentage of the market a company has
-  - How big a company is relative to competitors
-  - Market dominance or market leadership
-  
-  DO NOT USE for:
-  - Revenue comparisons without market share context (use revenue_comparison)
-  - Margin analysis (use margins_vs_peers)
-  - Growth rate calculations (use revenue_growth)
-tools:
-  - query_database
-  - generate_echarts
-  - generate_analysis
-  - get_news_sentiment
+  Calculates a single company's market share versus the peer set for a given metric and time
+  period. Use when the user asks about market share, market position, share of market, what
+  percentage of the market a company has, how big a company is relative to competitors, or
+  market dominance/leadership. DO NOT USE for revenue comparisons without market share
+  context, margin analysis, or growth rate calculations.
 ---
 
 # Skill: Market Share (Single Company)

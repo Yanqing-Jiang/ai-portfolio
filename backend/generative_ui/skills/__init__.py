@@ -5,7 +5,7 @@
 #   Invokes: n/a
 #   Why: Centralizes skill metadata for selection and rendering.
 # Function: load_claude_skill
-#   Role: Parse skill.md from official .claude/skills/<name>/skill.md format.
+#   Role: Parse SKILL.md from official .claude/skills/<name>/SKILL.md format.
 #   Called from: backend.generative_ui.skills.load_claude_skills
 #   Invokes: yaml.safe_load, json.load, A2UISkillMeta
 #   Why: Supports the official Claude Agent Skills format.
@@ -33,9 +33,9 @@
 """
 A2UI skill registry and loader utilities.
 
-Supports both:
-1. Official Claude Agent Skills format: .claude/skills/<name>/skill.md
-2. Legacy A2UI format: backend/generative_ui/skills/a2ui_skill_*.md
+Supports official Claude Agent Skills format: .claude/skills/<name>/SKILL.md
+
+Updated to use SKILL.md (uppercase) per official Anthropic spec.
 """
 
 from __future__ import annotations
@@ -189,43 +189,47 @@ def _parse_list_field(field_raw: Any) -> List[str]:
 def load_claude_skill(skill_dir: Path) -> A2UISkillMeta:
     """
     Parse a skill from the official Claude Agent Skills format.
-    
+
     Expected structure:
     .claude/skills/<skill-name>/
-        skill.md          # Required: skill definition
+        SKILL.md          # Required: skill definition (uppercase per Anthropic spec)
         claude_assets/    # Optional: additional assets
             layout.json   # Optional: A2UI layout configuration
-    
-    The skill.md frontmatter uses:
-    - name: skill name (matches directory name, hyphenated)
-    - description: skill description
-    - tools: list of tools the skill uses
+
+    The SKILL.md frontmatter uses:
+    - name: skill name (matches directory name, kebab-case)
+    - description: skill description (third-person, includes "when to use")
     """
-    skill_md_path = skill_dir / "skill.md"
+    # Try uppercase first (official spec)
+    skill_md_path = skill_dir / "SKILL.md"
     if not skill_md_path.exists():
-        raise ValueError(f"Missing skill.md in skill directory: {skill_dir}")
+        # Fall back to lowercase for backward compatibility
+        skill_md_path = skill_dir / "skill.md"
+        if not skill_md_path.exists():
+            raise ValueError(f"Missing SKILL.md in skill directory: {skill_dir}")
 
     raw = skill_md_path.read_text(encoding="utf-8")
     meta, body = _parse_yaml_frontmatter(raw, skill_md_path)
 
-    # Claude Agent Skills uses 'name' field for the skill name (hyphenated)
+    # Claude Agent Skills uses 'name' field for the skill name (kebab-case)
     name_raw = str(meta.get("name", "")).strip()
     if not name_raw:
         raise ValueError(f"Skill file missing name: {skill_md_path}")
-    
-    # Convert hyphenated name to skill_id format (a2ui_<name> with underscores)
+
+    # Convert kebab-case name to skill_id format (a2ui_<name> with underscores)
     # e.g., "a2ui-explain-move" -> "a2ui_explain_move"
     skill_id = name_raw.replace("-", "_")
-    
+
     # For display, convert to Title Case
     name_display = name_raw.replace("a2ui-", "").replace("-", " ").title()
-    
+
     description = str(meta.get("description", "")).strip()
     if not description:
         raise ValueError(f"Skill file missing description: {skill_md_path}")
-    
-    # Tools is a new field in Claude Agent Skills format
-    tools = _parse_list_field(meta.get("tools", []))
+
+    # Tools field removed from official spec - use empty list
+    # (tools are defined in layout.json or handled by the agent)
+    tools = []
 
     # Try to load layout configuration from claude_assets/layout.json
     layout_config = None
@@ -274,22 +278,31 @@ def load_legacy_skills(directory: Path | None = None) -> List[A2UISkillMeta]:
 
 
 def load_claude_skills(directory: Path | None = None) -> List[A2UISkillMeta]:
-    """Load all skills from .claude/skills/ directory."""
+    """Load all A2UI skills from .claude/skills/ directory."""
     directory = directory or _CLAUDE_SKILLS_DIR
     if not directory.exists():
         return []
-    
+
     skills = []
     for skill_dir in sorted(directory.iterdir()):
         if not skill_dir.is_dir():
             continue
-        skill_md = skill_dir / "skill.md"
+
+        # Only load A2UI skills (prefixed with a2ui-)
+        if not skill_dir.name.startswith("a2ui-"):
+            continue
+
+        # Check for SKILL.md (uppercase) or skill.md (lowercase fallback)
+        skill_md = skill_dir / "SKILL.md"
+        if not skill_md.exists():
+            skill_md = skill_dir / "skill.md"
+
         if skill_md.exists():
             try:
                 skills.append(load_claude_skill(skill_dir))
             except Exception as e:
                 logger.warning(f"Failed to load skill from {skill_dir}: {e}")
-    
+
     return skills
 
 

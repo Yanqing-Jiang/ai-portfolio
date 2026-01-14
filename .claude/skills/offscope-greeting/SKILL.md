@@ -1,18 +1,11 @@
 ---
-name: offscope_greeting
+name: offscope-greeting
 description: |
-  Handle greetings, chit-chat, or non-financial/off-scope requests with a polite redirect.
-  
-  USE THIS SKILL WHEN the user:
-  - Says hello, hi, hey, or other greetings
-  - Asks personal questions unrelated to financials
-  - Requests something outside semiconductor financial analysis
-  - Engages in casual conversation
-  
-  DO NOT USE for:
-  - Any financial data requests (use appropriate financial skill)
-  - Revenue, margin, or market share questions
-tools: []
+  Handles greetings, chit-chat, or non-financial/off-scope requests with a polite redirect.
+  Use when the user says hello, hi, hey, or other greetings, asks personal questions unrelated
+  to financials, requests something outside semiconductor financial analysis, or engages in
+  casual conversation. DO NOT USE for any financial data requests, revenue, margin, or market
+  share questions.
 ---
 
 # Skill: Off-Scope / Greeting Handler

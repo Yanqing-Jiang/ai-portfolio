@@ -147,7 +147,20 @@ from pydantic import BaseModel, Field
 from .config import get_settings
 from .skills import A2UISkillMeta, build_a2ui_skill_catalog, get_a2ui_skill, get_a2ui_skills
 from .a2ui.emitter import A2UIMessageEmitter, SkillRenderContext
-from .sdk_wrapper import A2UISDKWrapper, get_sdk_wrapper, SDKResponse
+from .sdk_wrapper import (
+    A2UISDKWrapper,
+    get_sdk_wrapper,
+    SDKResponse,
+    SKILL_MANAGER_AVAILABLE,
+    SKILLS_BETA_HEADERS,
+    CODE_EXECUTION_TOOL,
+)
+# Import SkillManager for Native Skills API support
+try:
+    from shared.skill_manager import SkillManager, get_skill_manager
+except ImportError:
+    SkillManager = None  # type: ignore
+    get_skill_manager = None  # type: ignore
 # MCP tools removed: using direct tool execution instead of SDK flow
 from .utils import (
     AVAILABLE_TICKERS,
@@ -301,8 +314,13 @@ class SkillSelection(BaseModel):
 class A2UIAgent:
     """A2UI-native agent that streams dashboard messages."""
 
-    def __init__(self, model: Optional[str] = None) -> None:
-        """Initialize the agent with model + skill catalog."""
+    def __init__(self, model: Optional[str] = None, use_native_skills: bool = False) -> None:
+        """Initialize the agent with model + skill catalog.
+
+        Args:
+            model: Claude model to use (defaults to settings)
+            use_native_skills: If True, use Native Skills API for routing (experimental)
+        """
         self.settings = get_settings()
         if not self.settings.claude_api_key:
             raise A2UIAgentError("Claude API key not configured")
@@ -319,6 +337,20 @@ class A2UIAgent:
             model=self.model,
             api_key=self.settings.claude_api_key,
         )
+
+        # Native Skills API support
+        self.use_native_skills = use_native_skills and SKILL_MANAGER_AVAILABLE
+        self._skill_manager: Optional[SkillManager] = None
+        self._skills_uploaded = False
+        self._anthropic_skill_ids: Dict[str, str] = {}  # local_id -> anthropic_id
+
+        if self.use_native_skills and SkillManager is not None:
+            try:
+                self._skill_manager = get_skill_manager() if get_skill_manager else None
+                logger.info("Native Skills API enabled for A2UIAgent")
+            except Exception as e:
+                logger.warning(f"Failed to initialize SkillManager: {e}")
+                self.use_native_skills = False
 
     def _build_selection_system_prompt(self) -> str:
         """
@@ -362,19 +394,195 @@ class A2UIAgent:
             system_prompt=self._selection_system_prompt,
         )
 
+    async def _ensure_skills_uploaded(self) -> None:
+        """
+        Upload skills to Anthropic if using Native Skills API.
+
+        Method: A2UIAgent._ensure_skills_uploaded
+        Called from: A2UIAgent.select_skill (when use_native_skills=True)
+        Invokes: SkillManager.upload_all_skills
+        Purpose: Skills must be uploaded before use in container.skills.
+        """
+        if not self.use_native_skills or self._skills_uploaded:
+            return
+
+        if self._skill_manager is None:
+            logger.warning("SkillManager not available, disabling Native Skills")
+            self.use_native_skills = False
+            return
+
+        try:
+            self._anthropic_skill_ids = await self._skill_manager.upload_all_skills()
+            self._skills_uploaded = True
+            logger.info(f"Uploaded {len(self._anthropic_skill_ids)} A2UI skills to Anthropic")
+        except Exception as e:
+            logger.error(f"Failed to upload skills: {e}")
+            self.use_native_skills = False
+
+    def _build_container_skills(self) -> List[Dict[str, Any]]:
+        """
+        Build container.skills array for Native Skills API.
+
+        Method: A2UIAgent._build_container_skills
+        Called from: A2UIAgent._select_skill_native
+        Purpose: Formats skills for Anthropic Native Skills API.
+
+        Returns:
+            List of skill dicts: [{"type": "custom", "skill_id": "sk_xxx", "version": "latest"}, ...]
+        """
+        container_skills = []
+        for skill in self.skills:
+            local_id = skill.skill_id
+            if local_id in self._anthropic_skill_ids:
+                container_skills.append({
+                    "type": "custom",
+                    "skill_id": self._anthropic_skill_ids[local_id],
+                    "version": "latest",
+                })
+            else:
+                logger.warning(f"Skill {local_id} not uploaded, skipping")
+        return container_skills
+
+    async def _select_skill_native(self, question: str) -> SkillSelection:
+        """
+        Select skill using Native Skills API (experimental).
+
+        Method: A2UIAgent._select_skill_native
+        Called from: A2UIAgent.select_skill (when use_native_skills=True)
+        Invokes: sdk_wrapper.query_with_skills
+        Purpose: Routes to skills using Claude's native skill selection.
+        """
+        await self._ensure_skills_uploaded()
+
+        if not self._anthropic_skill_ids:
+            raise A2UIAgentError("No skills uploaded to Anthropic")
+
+        container_skills = self._build_container_skills()
+        if not container_skills:
+            raise A2UIAgentError("No valid skills for Native Skills API")
+
+        # Build messages for skill selection
+        messages = [{
+            "role": "user",
+            "content": (
+                f"Route this request to the appropriate skill: {question}\n"
+                f"Available tickers: {', '.join(AVAILABLE_TICKERS)}\n"
+                f"Time ranges: {', '.join(sorted(ALLOWED_TIME_RANGES))}"
+            )
+        }]
+
+        # Use Native Skills API
+        response = await self.sdk_wrapper.query_with_skills(
+            messages=messages,
+            skills=container_skills,
+            max_tokens=512,
+        )
+
+        if response.error:
+            raise A2UIAgentError(f"Native Skills API error: {response.error}")
+
+        # Extract skill_id from response
+        skill_id = self.sdk_wrapper.extract_skill_from_response(response)
+        if not skill_id:
+            # Fallback: try to extract from response content
+            skill_id = getattr(response, 'skill_id', None)
+
+        if not skill_id:
+            # If no skill detected, fall back to prompt-based routing
+            logger.warning("Native Skills API did not select a skill, falling back")
+            raise A2UIAgentError("No skill selected by Native Skills API")
+
+        # Map Anthropic skill_id back to local skill_id
+        local_skill_id = None
+        for local_id, anthropic_id in self._anthropic_skill_ids.items():
+            if anthropic_id == skill_id:
+                local_skill_id = local_id
+                break
+
+        if not local_skill_id:
+            # Try direct match (skill_id might be the local ID)
+            if skill_id in self.skill_lookup:
+                local_skill_id = skill_id
+
+        if not local_skill_id:
+            raise A2UIAgentError(f"Unknown skill from Native API: {skill_id}")
+
+        # Parse tickers and other slots from response content
+        tickers = self._extract_tickers_from_text(question)
+        metric = self._extract_metric_from_text(question)
+        time_range = self._extract_time_range_from_text(question)
+
+        return SkillSelection(
+            skill_id=local_skill_id,
+            tickers=tickers,
+            metric=metric,
+            time_range=time_range,
+        )
+
+    def _extract_tickers_from_text(self, text: str) -> List[str]:
+        """Extract ticker symbols from text."""
+        tickers = []
+        text_upper = text.upper()
+        for ticker in AVAILABLE_TICKERS:
+            if ticker in text_upper:
+                tickers.append(ticker)
+        return tickers[:6] if tickers else ["NVDA"]  # Default to NVDA
+
+    def _extract_metric_from_text(self, text: str) -> str:
+        """Extract metric from text."""
+        text_lower = text.lower()
+        if "margin" in text_lower:
+            if "gross" in text_lower:
+                return "Gross Margin"
+            if "operating" in text_lower:
+                return "Operating Margin"
+            if "net" in text_lower:
+                return "Net Margin"
+            return "Gross Margin"
+        if "profit" in text_lower:
+            return "Net Income"
+        return DEFAULT_METRIC
+
+    def _extract_time_range_from_text(self, text: str) -> str:
+        """Extract time range from text."""
+        text_lower = text.lower()
+        if "1 year" in text_lower or "1y" in text_lower or "annual" in text_lower:
+            return "1Y"
+        if "6 month" in text_lower or "6m" in text_lower:
+            return "6M"
+        if "1 month" in text_lower or "1m" in text_lower:
+            return "1M"
+        return DEFAULT_TIME_RANGE
+
     async def select_skill(self, question: str, max_retries: int = 2) -> SkillSelection:
         """Select a skill and slots using the model with retry logic.
-        
+
+        Method: A2UIAgent.select_skill
+        Called from: routes.dashboard.create_dashboard
+        Purpose: Routes user questions to the appropriate A2UI skill.
+
+        Supports two modes:
+        - Native Skills API (experimental): Uses container.skills for Claude-native routing
+        - Prompt injection (default): Uses skill catalog in system prompt
+
         Args:
             question: User's question to route.
             max_retries: Number of retries on validation failure (default: 2).
-            
+
         Returns:
             SkillSelection with skill_id, tickers, metric, and time_range.
-            
+
         Raises:
             A2UIAgentError: If skill selection fails after all retries.
         """
+        # Try Native Skills API first if enabled
+        if self.use_native_skills:
+            try:
+                return await self._select_skill_native(question)
+            except A2UIAgentError as e:
+                logger.warning(f"Native Skills API failed, falling back: {e}")
+                # Fall through to prompt-based routing
+
         last_error: Optional[Exception] = None
         allowed_ranges = ", ".join(sorted(ALLOWED_TIME_RANGES))
 
@@ -1390,9 +1598,22 @@ class A2UIAgent:
 _agent_instance: Optional[A2UIAgent] = None
 
 
-def get_a2ui_agent() -> A2UIAgent:
-    """Get or create the singleton A2UI agent."""
+def get_a2ui_agent(use_native_skills: Optional[bool] = None) -> A2UIAgent:
+    """Get or create the singleton A2UI agent.
+
+    Function: get_a2ui_agent
+    Called from: routes.dashboard
+    Purpose: Provides singleton A2UIAgent instance.
+
+    Args:
+        use_native_skills: If True, enable Native Skills API (experimental).
+            If None, uses A2UI_NATIVE_SKILLS env var (default: False).
+    """
     global _agent_instance
     if _agent_instance is None:
-        _agent_instance = A2UIAgent()
+        # Check environment variable if not explicitly set
+        import os
+        if use_native_skills is None:
+            use_native_skills = os.environ.get("A2UI_NATIVE_SKILLS", "").lower() in ("true", "1", "yes")
+        _agent_instance = A2UIAgent(use_native_skills=use_native_skills)
     return _agent_instance

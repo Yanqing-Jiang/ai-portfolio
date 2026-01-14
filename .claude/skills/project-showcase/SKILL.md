@@ -1,13 +1,11 @@
 ---
-name: Project Showcase / Architecture Demo
+name: project-showcase
 description: |
-  Explain the Next Gen Analytics Agent project architecture and provide a demo walkthrough.
-  USE THIS SKILL WHEN the user asks about:
-  - Project tour, showcase, demo, walkthrough
-  - How does this work, system overview, architecture
-  - Explain agents, single-agent, multi-agent, supervisor
-  - What is a skill, how skills work, skill explanation
-  DO NOT USE for actual financial data queries - this is informational only.
+  Explains the Next Gen Analytics Agent project architecture and provides a demo walkthrough.
+  Use when the user asks about project tour, showcase, demo, walkthrough, how does this work,
+  system overview, architecture, explain agents, single-agent, multi-agent, supervisor, what
+  is a skill, or how skills work. DO NOT USE for actual financial data queries - this skill
+  is informational only.
 ---
 
 # Skill: Project Showcase / Architecture Demo

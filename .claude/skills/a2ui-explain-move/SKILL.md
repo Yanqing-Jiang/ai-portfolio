@@ -1,13 +1,10 @@
 ---
 name: a2ui-explain-move
 description: |
-  Analyze why a stock price changed significantly. Use this skill when the user asks
-  "Why did X drop/rise/fall/surge?", "What caused X to drop?", "Explain the X price movement",
-  or "What happened to X stock?". DO NOT use for general price queries without "why" intent.
-tools:
-  - query_database
-  - get_news_sentiment
-  - generate_analysis
+  Analyzes why a stock price changed significantly by combining financial data with news
+  sentiment. Use when the user asks "Why did X drop/rise/fall/surge?", "What caused X to
+  drop?", "Explain the X price movement", or "What happened to X stock?". DO NOT use for
+  general price queries without "why" intent.
 ---
 
 # Price Movement Analysis Skill

@@ -1,13 +1,10 @@
 ---
 name: a2ui-revenue-trend
 description: |
-  Show revenue trends over time for a company.
-  Use this skill when the user asks "X revenue trend", "How has X revenue grown?",
+  Shows revenue trends over time for a company with growth metrics and insights.
+  Use when the user asks "X revenue trend", "How has X revenue grown?",
   "X sales history", "X quarterly/annual revenue", or "Show me X revenue over time".
   DO NOT use for revenue comparisons across multiple companies - use peer-compare instead.
-tools:
-  - query_database
-  - generate_analysis
 ---
 
 # Revenue Trend Skill

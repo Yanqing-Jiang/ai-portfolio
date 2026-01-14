@@ -5,11 +5,15 @@ Function: NativeSkillsClient — Wraps Anthropic beta API with container.skills 
 Called from: ConversationalAnalyticsAgent.run_with_tools (when native skills enabled).
 Invokes: anthropic.beta.messages.stream with skills-2025 beta headers.
 Purpose: Enables Claude-native skill routing without hardcoded keyword detection.
+
+Updated to use SkillManager for uploading skills to Anthropic before use.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 try:
@@ -25,6 +29,14 @@ from .skills.native_registry import (
     CLAUDE_SKILLS_DIR,
 )
 from .config import settings
+
+# Import SkillManager for uploading skills to Anthropic
+try:
+    from shared.skill_manager import SkillManager, get_skill_manager
+except ImportError:
+    # Fallback if shared module not available
+    SkillManager = None  # type: ignore
+    get_skill_manager = None  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +101,7 @@ class NativeSkillsClient:
     ):
         """
         Initialize the native skills client.
-        
+
         Args:
             api_key: Anthropic API key (defaults to settings.claude_api_key)
             model: Model to use (defaults to settings.claude_model)
@@ -100,36 +112,118 @@ class NativeSkillsClient:
                 "Native Skills Client requires the 'anthropic' package. "
                 "Install with: pip install anthropic>=0.40.0"
             )
-        
+
         self.api_key = api_key or settings.claude_api_key
         self.model = model or settings.claude_model
         self.client = anthropic.Anthropic(api_key=self.api_key)
-        
-        # Load skills from directory
-        from pathlib import Path
+
+        # Initialize skill manager for uploading skills to Anthropic
+        self.skill_manager: Optional[SkillManager] = None
+        self._skills_uploaded = False
+        self._anthropic_skill_ids: Dict[str, str] = {}  # local_id -> anthropic_id
+
+        skills_path = Path(skills_dir) if skills_dir else CLAUDE_SKILLS_DIR
+
+        if SkillManager is not None:
+            try:
+                self.skill_manager = SkillManager(
+                    api_key=self.api_key,
+                    skills_dir=skills_path,
+                )
+                logger.info("SkillManager initialized for skill uploads")
+            except Exception as e:
+                logger.warning(f"Failed to initialize SkillManager: {e}")
+                self.skill_manager = None
+
+        # Load skills from directory (for local metadata)
         if skills_dir:
-            skills_path = Path(skills_dir)
-            self.skills = load_all_native_skills(skills_path, prefix_filter="skill_")
+            self.skills = load_all_native_skills(skills_path, prefix_filter=None)
         else:
             self.skills = get_native_skills()
-        
+
         # Build skill ID to skill mapping for quick lookup
         self._skill_map: Dict[str, NativeSkill] = {
             skill.skill_id: skill for skill in self.skills
         }
-        
+
         logger.info(
             f"NativeSkillsClient initialized with {len(self.skills)} skills: "
             f"{[s.skill_id for s in self.skills]}"
         )
+
+    async def upload_skills(self) -> Dict[str, str]:
+        """
+        Upload all skills to Anthropic.
+
+        Function: upload_skills — Uploads skills via SkillManager.
+        Called from: NativeSkillsClient.stream_with_skills (on first use).
+        Invokes: SkillManager.upload_all_skills.
+        Purpose: Skills must be uploaded before use in container.skills.
+
+        Returns:
+            Dict mapping local_id -> anthropic_id
+        """
+        if self._skills_uploaded:
+            return self._anthropic_skill_ids
+
+        if self.skill_manager is None:
+            logger.warning("SkillManager not available, skills won't be uploaded")
+            self._skills_uploaded = True
+            return {}
+
+        try:
+            self._anthropic_skill_ids = await self.skill_manager.upload_all_skills()
+            self._skills_uploaded = True
+            logger.info(f"Uploaded {len(self._anthropic_skill_ids)} skills to Anthropic")
+            return self._anthropic_skill_ids
+        except Exception as e:
+            logger.error(f"Failed to upload skills: {e}")
+            self._skills_uploaded = True
+            return {}
+
+    def _ensure_skills_uploaded(self) -> None:
+        """Synchronously ensure skills are uploaded (for sync API calls)."""
+        if not self._skills_uploaded and self.skill_manager is not None:
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # Already in async context, create a task
+                    asyncio.create_task(self.upload_skills())
+                else:
+                    loop.run_until_complete(self.upload_skills())
+            except RuntimeError:
+                # No event loop, create one
+                asyncio.run(self.upload_skills())
     
     def _build_container_skills(self) -> List[Dict[str, Any]]:
         """
         Build container.skills array for API call.
-        
-        Returns format: [{"type": "custom", "skill_id": "revenue_growth"}, ...]
+
+        Uses Anthropic skill IDs from SkillManager if available,
+        otherwise falls back to local skill IDs (which won't work without upload).
+
+        Returns format: [{"type": "custom", "skill_id": "sk_xxx", "version": "latest"}, ...]
         """
-        return [skill.to_container_skill() for skill in self.skills]
+        # Ensure skills are uploaded before building container
+        self._ensure_skills_uploaded()
+
+        container_skills = []
+        for skill in self.skills:
+            local_id = skill.skill_id
+
+            # Use uploaded Anthropic ID if available
+            if local_id in self._anthropic_skill_ids:
+                container_skills.append({
+                    "type": "custom",
+                    "skill_id": self._anthropic_skill_ids[local_id],
+                    "version": "latest",
+                })
+            else:
+                # Fallback to local ID (won't work without upload)
+                logger.warning(f"Skill {local_id} not uploaded, using local ID")
+                container_skills.append(skill.to_container_skill())
+
+        return container_skills
     
     def get_skill_by_id(self, skill_id: str) -> Optional[NativeSkill]:
         """Look up a skill by its ID."""

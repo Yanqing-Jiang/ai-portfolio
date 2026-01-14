@@ -1,14 +1,11 @@
 ---
 name: a2ui-margin-analysis
 description: |
-  Analyze profit margins (gross, operating, net) for one or more companies.
-  Use this skill when the user asks about margins, profitability, "What are X's margins?",
+  Analyzes profit margins (gross, operating, net) for one or more companies.
+  Use when the user asks about margins, profitability, "What are X's margins?",
   "X profitability analysis", "Gross/operating/net margin for X", "How profitable is X?",
   or margin-focused comparisons like "X vs Y margins" or "Compare margins for X and Y".
   DO NOT use for revenue comparisons without margin context or stock price comparisons.
-tools:
-  - query_database
-  - generate_analysis
 ---
 
 # Margin Analysis Skill

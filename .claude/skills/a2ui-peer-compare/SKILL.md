@@ -1,13 +1,10 @@
 ---
 name: a2ui-peer-compare
 description: |
-  Compare revenue, stock price, or general performance across multiple companies.
-  Use this skill when the user asks "Compare X vs Y", "How does X stack up against Y?",
+  Compares revenue, stock price, or general performance across multiple companies.
+  Use when the user asks "Compare X vs Y", "How does X stack up against Y?",
   "X vs Y revenue", "Side-by-side comparison of X and Y", or "Stock price comparison".
   DO NOT use for single-company analysis or margin/profitability comparisons.
-tools:
-  - query_database
-  - generate_analysis
 ---
 
 # Peer Comparison Skill

@@ -54,7 +54,29 @@ except ImportError:
 
 from .config import get_settings
 
+# Import SkillManager for Native Skills API support
+try:
+    from shared.skill_manager import SkillManager, get_skill_manager
+    SKILL_MANAGER_AVAILABLE = True
+except ImportError:
+    SkillManager = None  # type: ignore
+    get_skill_manager = None  # type: ignore
+    SKILL_MANAGER_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
+
+# Beta headers for Native Skills API (December 2025)
+SKILLS_BETA_HEADERS = [
+    "skills-2025-10-02",           # Enables Agent Skills
+    "code-execution-2025-08-25",   # Required for skills execution
+    "files-api-2025-04-14",        # Required for file handling
+]
+
+# Code execution tool required by Skills beta API
+CODE_EXECUTION_TOOL = {
+    "type": "code_execution_20250825",
+    "name": "code_execution",
+}
 
 # Alias for backwards compatibility
 SDK_AVAILABLE = ANTHROPIC_AVAILABLE
@@ -882,6 +904,231 @@ class A2UISDKWrapper:
             yield {"type": "error", "error": str(e)}
 
     # ========================================================================
+    # Native Skills API (Phase 6 - Skill-Based Routing)
+    # ========================================================================
+
+    def stream_with_skills(
+        self,
+        messages: List[Dict[str, Any]],
+        skills: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+        max_tokens: int = 4096,
+    ):
+        """
+        Stream LLM response with Native Skills API support.
+
+        Method: stream_with_skills - enables native skill routing via container.skills.
+        Called from: A2UIAgent.select_skill (when using Native Skills API)
+        Invokes: anthropic.beta.messages.stream with skills-2025-10-02 beta header
+        Why: Allows Claude to autonomously route to skills based on descriptions.
+
+        Args:
+            messages: Conversation messages [{role, content}, ...]
+            skills: Skill definitions [{type: "custom", skill_id: "sk_xxx", version: "latest"}, ...]
+            tools: Optional additional tools (code_execution is auto-added)
+            max_tokens: Maximum tokens in response
+
+        Returns:
+            Context manager for streaming response
+
+        Example:
+            with sdk.stream_with_skills(messages, skills) as stream:
+                for event in stream:
+                    if hasattr(event, 'delta') and hasattr(event.delta, 'text'):
+                        yield event.delta.text
+                response = stream.get_final_message()
+        """
+        if not self._client:
+            raise RuntimeError("API client not initialized")
+
+        # Skills beta requires code_execution tool
+        tools_with_code_exec = list(tools or []) + [CODE_EXECUTION_TOOL]
+
+        logger.debug(
+            "Native Skills API call: skills=%d, tools=%d, model=%s",
+            len(skills), len(tools_with_code_exec), self.model
+        )
+
+        # Build request kwargs
+        request_kwargs: Dict[str, Any] = {
+            "model": self.model,
+            "max_tokens": max_tokens,
+            "betas": SKILLS_BETA_HEADERS,
+            "container": {"skills": skills},
+            "tools": tools_with_code_exec,
+            "messages": messages,
+        }
+
+        # Add system prompt with native cache_control
+        if self._system_prompt:
+            request_kwargs["system"] = [
+                {
+                    "type": "text",
+                    "text": self._system_prompt,
+                    "cache_control": {"type": "ephemeral"}
+                }
+            ]
+
+        return self._client.beta.messages.stream(**request_kwargs)
+
+    async def query_with_skills(
+        self,
+        messages: List[Dict[str, Any]],
+        skills: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+        max_tokens: int = 4096,
+    ) -> SDKResponse:
+        """
+        Non-streaming query with Native Skills API support.
+
+        Method: query_with_skills - single-shot skill routing via container.skills.
+        Called from: A2UIAgent.select_skill (non-streaming mode)
+        Invokes: anthropic.beta.messages.create with skills-2025-10-02 beta header
+        Why: Simple skill selection without streaming overhead.
+
+        Args:
+            messages: Conversation messages [{role, content}, ...]
+            skills: Skill definitions [{type: "custom", skill_id: "sk_xxx", version: "latest"}, ...]
+            tools: Optional additional tools (code_execution is auto-added)
+            max_tokens: Maximum tokens in response
+
+        Returns:
+            SDKResponse with content and metadata
+        """
+        if not self._client:
+            raise RuntimeError("API client not initialized")
+
+        # Check circuit breaker
+        circuit = get_circuit_breaker()
+        try:
+            circuit.check_or_raise()
+        except CircuitBreakerError as e:
+            logger.warning("Skills query blocked by circuit breaker: %s", e)
+            return SDKResponse(error=str(e), is_complete=True)
+
+        try:
+            # Skills beta requires code_execution tool
+            tools_with_code_exec = list(tools or []) + [CODE_EXECUTION_TOOL]
+
+            # Build request kwargs
+            request_kwargs: Dict[str, Any] = {
+                "model": self.model,
+                "max_tokens": max_tokens,
+                "betas": SKILLS_BETA_HEADERS,
+                "container": {"skills": skills},
+                "tools": tools_with_code_exec,
+                "messages": messages,
+            }
+
+            # Add system prompt with native cache_control
+            if self._system_prompt:
+                request_kwargs["system"] = [
+                    {
+                        "type": "text",
+                        "text": self._system_prompt,
+                        "cache_control": {"type": "ephemeral"}
+                    }
+                ]
+
+            logger.debug(
+                "Native Skills API query: skills=%d, tools=%d",
+                len(skills), len(tools_with_code_exec)
+            )
+
+            # Make the API call
+            response = self._client.beta.messages.create(**request_kwargs)
+
+            # Extract content and skill usage
+            content_parts = []
+            tool_calls = []
+            skill_id_used = None
+
+            for block in response.content:
+                if hasattr(block, 'text'):
+                    content_parts.append(block.text)
+                elif hasattr(block, 'type'):
+                    if block.type == 'tool_use':
+                        tool_calls.append(SDKToolCall(
+                            id=block.id,
+                            name=block.name,
+                            input=block.input,
+                        ))
+                    elif block.type == 'skill_use':
+                        skill_id_used = getattr(block, 'skill_id', None)
+
+            # Record success
+            circuit.record_success()
+
+            result = SDKResponse(
+                content="".join(content_parts),
+                tool_calls=tool_calls,
+                is_complete=True,
+            )
+
+            # Attach skill_id as metadata (custom attribute)
+            result.skill_id = skill_id_used  # type: ignore
+
+            return result
+
+        except anthropic.RateLimitError as e:
+            circuit.record_failure()
+            retry_after = None
+            try:
+                if hasattr(e, "response") and e.response is not None:
+                    retry_after = e.response.headers.get("retry-after")
+            except Exception:
+                pass
+
+            if retry_after:
+                logger.warning("skills_rate_limit: retry-after=%s", retry_after)
+                return SDKResponse(
+                    error=f"Rate limit exceeded. Retry after {retry_after}s.",
+                    is_complete=True,
+                )
+            return SDKResponse(error=str(e), is_complete=True)
+
+        except Exception as e:
+            circuit.record_failure()
+            logger.error("Skills query failed: %s", e)
+            return SDKResponse(error=str(e), is_complete=True)
+
+    def extract_skill_from_response(self, response: Any) -> Optional[str]:
+        """
+        Extract skill_id from Native Skills API response.
+
+        Method: extract_skill_from_response - gets skill ID from response metadata.
+        Called from: A2UIAgent after skill selection query.
+        Why: Native Skills API returns skill_id in response, no text parsing needed.
+
+        Args:
+            response: The Message response from Claude
+
+        Returns:
+            skill_id if a skill was used, None otherwise
+        """
+        # Option 1: Direct skill_use attribute
+        if hasattr(response, 'skill_use') and response.skill_use:
+            skill_use = response.skill_use
+            if hasattr(skill_use, 'skill_id'):
+                return skill_use.skill_id
+            if isinstance(skill_use, dict):
+                return skill_use.get('skill_id')
+
+        # Option 2: Check content blocks for skill_use type
+        if hasattr(response, 'content'):
+            for block in response.content:
+                if hasattr(block, 'type') and block.type == 'skill_use':
+                    return getattr(block, 'skill_id', None)
+
+        # Option 3: Check metadata
+        if hasattr(response, 'metadata'):
+            metadata = response.metadata
+            if isinstance(metadata, dict) and 'skill_id' in metadata:
+                return metadata['skill_id']
+
+        return None
+
+    # ========================================================================
     # Lifecycle Management
     # ========================================================================
     
@@ -949,6 +1196,9 @@ def create_sdk_hooks() -> None:
 __all__ = [
     "SDK_AVAILABLE",
     "ANTHROPIC_AVAILABLE",
+    "SKILL_MANAGER_AVAILABLE",
+    "SKILLS_BETA_HEADERS",
+    "CODE_EXECUTION_TOOL",
     "SDKToolCall",
     "SDKToolResult",
     "SDKResponse",

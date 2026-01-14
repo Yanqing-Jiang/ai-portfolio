@@ -1,23 +1,11 @@
 ---
-name: revenue_comparison
+name: revenue-comparison
 description: |
-  Compare absolute revenue totals across selected peer tickers over a time period.
-  
-  USE THIS SKILL WHEN the user asks about:
-  - Compare revenue between companies
-  - Revenue vs, revenue among, side-by-side revenue
-  - Which company has higher/lower revenue
-  - Revenue rankings or revenue leaders
-  
-  DO NOT USE for:
-  - Revenue growth rates or YoY/QoQ changes (use revenue_growth)
-  - Market share percentages (use market_share_single)
-  - Profit margins (use margins_vs_peers)
-tools:
-  - query_database
-  - generate_echarts
-  - generate_analysis
-  - get_news_sentiment
+  Compares absolute revenue totals across selected peer tickers over a time period.
+  Use when the user asks about comparing revenue between companies, revenue vs, revenue among,
+  side-by-side revenue, which company has higher/lower revenue, or revenue rankings/leaders.
+  DO NOT USE for revenue growth rates or YoY/QoQ changes (use revenue-growth), market share
+  percentages, or profit margins.
 ---
 
 # Skill: Revenue Comparison (Peers)

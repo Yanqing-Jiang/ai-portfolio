@@ -3,8 +3,10 @@ Native Agent Skills registry for Anthropic API container.skills field.
 
 Function: NativeSkillRegistry — Loads and manages skills from .claude/skills/ directory.
 Called from: NativeSkillsClient to build container.skills array for API calls.
-Invokes: yaml.safe_load for parsing skill.md frontmatter.
+Invokes: yaml.safe_load for parsing SKILL.md frontmatter.
 Purpose: Enables Claude-native skill routing without hardcoded keyword detection.
+
+Updated to use SKILL.md (uppercase) per official Anthropic spec.
 """
 from __future__ import annotations
 
@@ -98,22 +100,27 @@ def _strip_yaml_frontmatter(content: str) -> str:
 
 def _extract_skill_id(frontmatter: Dict[str, Any], file_path: Path) -> str:
     """
-    Extract skill_id from frontmatter or derive from filename.
-    
+    Extract skill_id from frontmatter or derive from filename/directory.
+
     Priority:
-    1. 'name' field in frontmatter (converted to snake_case)
-    2. Filename without extension (converted to snake_case)
+    1. 'name' field in frontmatter (kebab-case, per official spec)
+    2. Parent directory name (for SKILL.md in subdirectory)
+    3. Filename without extension
     """
     name = frontmatter.get("name", "")
     if name:
-        # Convert hyphenated name to snake_case skill_id
-        return re.sub(r"[- ]", "_", name.lower())
-    
+        # Use name as-is (should already be kebab-case per spec)
+        return name.lower().strip()
+
+    # For SKILL.md in a subdirectory, use the directory name
+    if file_path.name.upper() == "SKILL.MD":
+        return file_path.parent.name.lower()
+
     # Fallback to filename
     filename = file_path.stem
     if filename.startswith("skill_"):
-        return filename[6:]  # Remove "skill_" prefix
-    return filename.replace("-", "_")
+        return filename[6:].replace("_", "-")  # Convert to kebab-case
+    return filename.replace("_", "-")
 
 
 def _extract_display_name(frontmatter: Dict[str, Any], skill_id: str) -> str:
@@ -178,69 +185,77 @@ def load_skill_from_file(skill_path: Path) -> Optional[NativeSkill]:
 
 def load_skill_from_directory(skill_dir: Path) -> Optional[NativeSkill]:
     """
-    Load a skill from a directory containing skill.md (official format).
-    
+    Load a skill from a directory containing SKILL.md (official format).
+
     Expected structure:
     .claude/skills/<skill-name>/
-        skill.md          # Required
+        SKILL.md          # Required (uppercase per Anthropic spec)
         claude_assets/    # Optional
+
+    Falls back to skill.md (lowercase) for backward compatibility.
     """
-    skill_md = skill_dir / "skill.md"
+    # Try uppercase first (official spec)
+    skill_md = skill_dir / "SKILL.md"
     if not skill_md.exists():
-        return None
-    
+        # Fall back to lowercase for backward compatibility
+        skill_md = skill_dir / "skill.md"
+        if not skill_md.exists():
+            return None
+
     return load_skill_from_file(skill_md)
 
 
 def load_all_native_skills(
     skills_dir: Optional[Path] = None,
     prefix_filter: Optional[str] = None,
+    exclude_a2ui: bool = True,
 ) -> List[NativeSkill]:
     """
     Load all native skills from .claude/skills/ directory.
-    
+
     Function: load_all_native_skills — Loads all skills for conversational analytics.
     Called from: NativeSkillsClient initialization, get_native_skills.
     Invokes: load_skill_from_file and load_skill_from_directory.
     Purpose: Populates the skill registry for API container.skills field.
-    
+
     Args:
         skills_dir: Override skills directory (default: .claude/skills/)
-        prefix_filter: Only load skills whose filename starts with this prefix
-                      (e.g., "skill_" for conv analytics flat files)
-    
+        prefix_filter: Only load skills whose name starts with this prefix
+                      (deprecated - all skills now in subdirectories)
+        exclude_a2ui: If True, skip A2UI skills (they have their own loader)
+
     Returns: List of NativeSkill objects
     """
     skills_dir = skills_dir or CLAUDE_SKILLS_DIR
     if not skills_dir.exists():
         logger.warning(f"Skills directory does not exist: {skills_dir}")
         return []
-    
+
     skills: List[NativeSkill] = []
-    
+
     for item in sorted(skills_dir.iterdir()):
-        # Skip A2UI skills (they have their own loader)
-        if item.name.startswith("a2ui-"):
+        # Skip A2UI skills if requested (they have their own loader)
+        if exclude_a2ui and item.name.startswith("a2ui-"):
             continue
-        
-        # Handle flat .md files (e.g., skill_revenue_growth.md)
-        if item.is_file() and item.suffix == ".md":
+
+        # Handle nested directories with SKILL.md (official format)
+        if item.is_dir():
+            skill = load_skill_from_directory(item)
+            if skill:
+                # Apply prefix filter if specified
+                if prefix_filter and not skill.skill_id.startswith(prefix_filter):
+                    continue
+                skills.append(skill)
+
+        # Handle legacy flat .md files (backward compatibility)
+        elif item.is_file() and item.suffix == ".md":
             if prefix_filter and not item.name.startswith(prefix_filter):
                 continue
-            
+
             skill = load_skill_from_file(item)
             if skill:
                 skills.append(skill)
-        
-        # Handle nested directories (e.g., revenue-growth/skill.md)
-        elif item.is_dir():
-            if prefix_filter:
-                continue  # Skip directories when using prefix filter
-            
-            skill = load_skill_from_directory(item)
-            if skill:
-                skills.append(skill)
-    
+
     logger.info(f"Loaded {len(skills)} native skills from {skills_dir}")
     return skills
 
@@ -249,10 +264,11 @@ def load_all_native_skills(
 def get_native_skills() -> List[NativeSkill]:
     """
     Get cached list of native skills for conversational analytics.
-    
-    Only loads flat file skills (skill_*.md) to avoid A2UI skills.
+
+    Loads all skills except A2UI skills (which have their own loader).
+    All skills are now in subdirectories with SKILL.md files.
     """
-    return load_all_native_skills(prefix_filter="skill_")
+    return load_all_native_skills(exclude_a2ui=True)
 
 
 def get_native_skill_by_id(skill_id: str) -> Optional[NativeSkill]:

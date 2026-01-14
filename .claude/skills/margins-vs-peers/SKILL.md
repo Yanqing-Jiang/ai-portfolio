@@ -1,19 +1,20 @@
 ---
-name: Margins vs Peers
+name: margins-vs-peers
 description: |
-  Compare profit margins (gross, operating, net) for a company versus peer averages.
-  USE THIS SKILL WHEN the user asks about:
-  - Margins, profit margins, gross margin, operating margin, net margin
-  - Margin comparison vs peers, vs industry average
-  - Profitability analysis, how profitable is X compared to peers
-  - Follow-ups like "show net margin instead", "quarterly view" when discussing margins
-  DO NOT USE for margin growth/expansion trends (use Margin Growth vs Peers instead).
+  Compares profit margins (gross, operating, or net) for a target company versus peer averages.
+  Use when the user asks about profit margins, gross margin, operating margin, net margin,
+  how a company's margins compare to industry or peers, margin benchmarking, margin vs
+  competitors, or industry average margins. DO NOT USE for margin changes over time
+  (use margin-growth-peers instead), revenue comparisons, or market share analysis.
 ---
 
 # Skill: Margins vs Peers
 
 ## Intent
 Compare profit margins (gross, operating, net) for a target ticker versus peer averages.
+
+## Triggers
+- "margin", "profit margin", "vs peers", "industry average margin"
 
 ## Inputs
 - `target_ticker` (required)
@@ -41,4 +42,5 @@ Compare profit margins (gross, operating, net) for a target ticker versus peer a
 - If user asks for causes/why, call `get_news_sentiment` for the target ticker.
 
 ## Example Prompt Snippet
-"Use Margins vs Peers skill. Target NVDA, peers default. Metric net margin. Chart = line vs peer avg. If asked for reasons, call get_news_sentiment for NVDA."
+“Use Margins vs Peers skill. Target NVDA, peers default. Metric net margin. Chart = line vs peer avg. If asked for reasons, call get_news_sentiment for NVDA.”
+

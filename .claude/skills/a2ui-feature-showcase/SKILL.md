@@ -1,24 +1,11 @@
 ---
 name: a2ui-feature-showcase
 description: |
-  Demonstration skill that showcases the capabilities of the A2UI analytics platform.
-  Use this skill when the user says "demo", "show me what you can do", "showcase features",
+  Demonstrates the capabilities of the A2UI analytics platform through an interactive tour.
+  Use when the user says "demo", "show me what you can do", "showcase features",
   "walk me through the capabilities", "what can you do", or when onboarding a new user.
   This skill provides an interactive tour, NOT a full analysis workflow.
   For actual analysis, route to topic-specific skills (explain-move, peer-compare, etc.).
-tools:
-  - query_database
-  - generate_analysis
-widgets:
-  - KpiCard
-  - MetricChart
-  - DataTable
-  - ExplainMovePanel
-layout: feature_showcase
-layout_variants:
-  - tour
-  - minimal
-default_variant: tour
 ---
 
 # Feature Showcase Skill
