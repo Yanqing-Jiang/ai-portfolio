@@ -415,8 +415,8 @@ class A2UIRuntime:
                 yield json.dumps({"done": True})
                 return
 
-            # Clarification gate
-            clarification = build_visual_clarification(state.question, selection, state.plan_json, state.params)
+            # Clarification gate (async - LLM generates ticker-aware options)
+            clarification = await build_visual_clarification(state.question, selection, state.plan_json, state.params)
             if clarification:
                 trace.add_step(
                     "clarification_request",

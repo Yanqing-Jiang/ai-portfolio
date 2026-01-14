@@ -198,7 +198,7 @@ export function ClarificationOverlay({
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
                     exit={{ opacity: 0 }}
-                    className={`clarification-overlay ${fullScreen ? 'fixed inset-0 z-[100]' : 'absolute inset-0'}`}
+                    className="clarification-overlay fixed inset-0 z-[100]"
                     ref={overlayRef}
                     style={{
                         backgroundColor: theme.colors.bg.overlay,

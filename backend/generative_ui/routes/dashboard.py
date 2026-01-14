@@ -1271,45 +1271,44 @@ async def submit_clarification(dashboard_id: str, request: ClarificationSubmitRe
 
     # Extract clarification values and merge into plan
     values = validated_values
-    plan = state.plan_json
-    
-    # Map clarification fields to plan properties
-    if "comparison_type" in values:
-        comp_type = values["comparison_type"]
-        # Switch skill based on comparison type
-        if comp_type == "margins":
-            plan["skill_id"] = "a2ui_margin_analysis"
-        elif comp_type == "revenue":
-            plan["skill_id"] = "a2ui_peer_compare"
-            plan["metric"] = "Revenue"
-        elif comp_type == "stock":
-            primary = plan.get("ticker") or (plan.get("tickers") or [None])[0]
-            if primary:
-                plan["ticker"] = primary
-                plan["tickers"] = [primary]
-                plan["peers"] = []
-            plan["skill_id"] = "a2ui_explain_move"
-            plan["metric"] = DEFAULT_METRIC
-    
+    plan = dict(state.plan_json)  # Make a copy to modify
+
+    # Direct field mapping - LLM clarifications use field_id directly as plan field
+    # NO skill_id switching - skills auto-reveal and clarification only refines params
+
+    # Handle new LLM-generated field IDs (metric, time_range, tickers)
+    if "metric" in values and values["metric"]:
+        plan["metric"] = values["metric"]
+
+    if "time_range" in values and values["time_range"]:
+        plan["time_range"] = values["time_range"]
+
+    if "tickers" in values and values["tickers"]:
+        if isinstance(values["tickers"], list):
+            plan["tickers"] = values["tickers"]
+        else:
+            plan["tickers"] = [values["tickers"]]
+
+    # Legacy field support (for backwards compatibility with old clarifications)
     if "ticker" in values and values["ticker"]:
         tickers = plan.get("tickers", [])
         if values["ticker"] not in tickers:
             tickers.insert(0, values["ticker"])
             plan["tickers"] = tickers
-    
+
     if "custom_ticker" in values and values["custom_ticker"]:
         custom = values["custom_ticker"].upper().strip()
         tickers = plan.get("tickers", [])
         if custom not in tickers:
             tickers.insert(0, custom)
             plan["tickers"] = tickers
-    
+
     if "timeframe" in values:
         plan["time_range"] = values["timeframe"]
-    
+
     if "period" in values:
         plan["period"] = values["period"]
-    
+
     if "margin_types" in values:
         plan["margin_types"] = values["margin_types"]
     

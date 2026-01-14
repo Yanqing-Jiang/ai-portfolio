@@ -64,6 +64,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 from typing import Any, Dict, List, Literal, Optional, Sequence
 from pydantic import BaseModel, Field
@@ -310,6 +311,203 @@ def clarification_to_sse_event(clarification: ClarificationRequest) -> str:
     return f"event: clarification_request\ndata: {clarification.model_dump_json()}\n\n"
 
 
+# -----------------------------------------------------------------------------
+# LLM-Driven Clarification Generator
+# -----------------------------------------------------------------------------
+
+# Hardcoded from DB schema (these don't change)
+AVAILABLE_TICKERS = ["AMD", "NVDA", "INTC", "QCOM", "MU", "AVGO", "TXN"]
+AVAILABLE_METRICS = ["Revenue", "Gross Margin", "Operating Margin", "Net Margin", "EPS", "Free Cash Flow"]
+
+
+async def generate_clarification_with_llm(
+    question: str,
+    skill_id: str,
+    tickers: List[str],
+    request_id: str,
+) -> ClarificationRequest:
+    """
+    Generate ticker-aware clarification options using LLM.
+
+    Called from: build_visual_clarification()
+    Why: Dynamic options that reference actual tickers, not hardcoded generic text
+
+    NOTE: skill_id is passed for CONTEXT ONLY - LLM should NOT generate skill changes.
+    """
+    from .sdk_wrapper import get_sdk_wrapper
+
+    wrapper = get_sdk_wrapper()
+    if not wrapper.is_initialized:
+        await wrapper.initialize()
+
+    tickers_str = ", ".join(tickers) if tickers else "no specific tickers"
+
+    # Combined prompt (system + user context) for single query
+    prompt = f"""You generate clarification prompts for a financial analytics dashboard.
+
+AVAILABLE TICKERS: {", ".join(AVAILABLE_TICKERS)}
+AVAILABLE METRICS: {", ".join(AVAILABLE_METRICS)}
+
+Context:
+- User question: "{question}"
+- Current skill: {skill_id} (for context only - DO NOT suggest changing this)
+- Detected tickers: {tickers_str}
+
+Generate a clarification to help the user specify their analysis parameters.
+
+Rules:
+1. Title should mention the actual tickers (e.g., "Comparing NVDA, AMD")
+2. field_id MUST be one of: "metric", "time_range", "tickers"
+3. Option id values:
+   - For metric: use exact metric names from AVAILABLE METRICS
+   - For time_range: use "1M", "3M", "6M", "1Y", "3Y"
+   - For tickers: use ticker symbols from AVAILABLE TICKERS
+4. Make descriptions ticker-specific (e.g., "NVDA vs AMD revenue growth")
+5. Include 2-4 options per field
+6. Use emoji icons
+
+Output ONLY valid JSON (no markdown, no explanation) with this structure:
+{{
+  "title": "string",
+  "subtitle": "string (optional)",
+  "fields": [
+    {{
+      "field_id": "metric" | "time_range" | "tickers",
+      "input_type": "single_choice" | "multi_choice",
+      "label": "string",
+      "options": [
+        {{"id": "string", "label": "string", "description": "string (optional)", "icon": "string (optional)"}}
+      ]
+    }}
+  ]
+}}
+
+Generate clarification for: "{question}" with tickers: {tickers_str}"""
+
+    try:
+        response = await wrapper.query(
+            prompt=prompt,
+            max_tokens=1024,
+            temperature=0.3,
+        )
+
+        if response.error:
+            logger.warning("LLM clarification generation failed: %s, falling back to defaults", response.error)
+            return _fallback_clarification(question, skill_id, tickers, request_id)
+
+        # Parse JSON from response
+        text = response.content
+        # Handle potential markdown code blocks
+        if "```json" in text:
+            text = text.split("```json")[1].split("```")[0]
+        elif "```" in text:
+            text = text.split("```")[1].split("```")[0]
+
+        data = json.loads(text.strip())
+
+        fields = [
+            ClarificationField(
+                field_id=f["field_id"],
+                input_type=f["input_type"],
+                label=f["label"],
+                options=[
+                    ClarificationOption(
+                        id=opt["id"],
+                        label=opt["label"],
+                        description=opt.get("description"),
+                        icon=opt.get("icon")
+                    )
+                    for opt in f.get("options", [])
+                ]
+            )
+            for f in data.get("fields", [])
+        ]
+
+        return ClarificationRequest(
+            request_id=request_id,
+            title=data.get("title", f"Clarify: {question[:50]}"),
+            subtitle=data.get("subtitle"),
+            fields=fields,
+        )
+
+    except json.JSONDecodeError as e:
+        logger.warning("Failed to parse LLM clarification JSON: %s", e)
+        return _fallback_clarification(question, skill_id, tickers, request_id)
+    except Exception as e:
+        logger.error("LLM clarification generation error: %s", e)
+        return _fallback_clarification(question, skill_id, tickers, request_id)
+
+
+def _fallback_clarification(
+    question: str,
+    skill_id: str,
+    tickers: List[str],
+    request_id: str,
+) -> ClarificationRequest:
+    """
+    Fallback to hardcoded clarification when LLM fails.
+
+    Called from: generate_clarification_with_llm() on error
+    Why: Ensures clarification still works even when LLM is unavailable
+    """
+    tickers_str = ", ".join(tickers) if tickers else "stocks"
+
+    if skill_id == "a2ui_peer_compare":
+        return ClarificationRequest(
+            request_id=request_id,
+            title=f"Comparing {tickers_str}",
+            subtitle="What would you like to compare?",
+            fields=[
+                ClarificationField(
+                    field_id="metric",
+                    input_type="single_choice",
+                    label="Metric to compare",
+                    options=[
+                        ClarificationOption(id="Revenue", label="Revenue", icon="💰"),
+                        ClarificationOption(id="Gross Margin", label="Gross Margin", icon="📊"),
+                        ClarificationOption(id="Operating Margin", label="Operating Margin", icon="⚙️"),
+                    ],
+                ),
+            ],
+        )
+    elif skill_id == "a2ui_explain_move":
+        ticker = tickers[0] if tickers else "stock"
+        return ClarificationRequest(
+            request_id=request_id,
+            title=f"Analyzing {ticker}",
+            subtitle="What time period?",
+            fields=[
+                ClarificationField(
+                    field_id="time_range",
+                    input_type="single_choice",
+                    label="Time period",
+                    options=[
+                        ClarificationOption(id="1M", label="Last Month", icon="📅"),
+                        ClarificationOption(id="3M", label="Last Quarter", icon="📅"),
+                        ClarificationOption(id="1Y", label="Last Year", icon="📅"),
+                    ],
+                ),
+            ],
+        )
+    else:
+        # Generic fallback
+        return ClarificationRequest(
+            request_id=request_id,
+            title="Clarify your request",
+            fields=[
+                ClarificationField(
+                    field_id="metric",
+                    input_type="single_choice",
+                    label="What to analyze?",
+                    options=[
+                        ClarificationOption(id="Revenue", label="Revenue", icon="💰"),
+                        ClarificationOption(id="Gross Margin", label="Margins", icon="📊"),
+                    ],
+                ),
+            ],
+        )
+
+
 def validate_clarification_response(
     response: ClarificationResponse,
     original_request: ClarificationRequest,
@@ -364,12 +562,16 @@ def _needs_peer_compare_clarification(question: str, plan: Dict[str, Any], param
     """Return True when peer comparisons need metric clarification."""
     if params.get("clarified") or params.get("pending_clarification"):
         return False
-    if plan.get("comparison_type"):
+    # Only for peer compare skill
+    skill_id = plan.get("skill_id", "")
+    if skill_id != "a2ui_peer_compare":
         return False
     question_lower = question.lower()
     if not any(token in question_lower for token in ("compare", "vs", "versus")):
         return False
-    return not any(token in question_lower for token in COMPARISON_KEYWORDS)
+    # Use word boundary matching to avoid false positives (e.g., "stocks" matching "stock")
+    words = set(re.findall(r'\b\w+\b', question_lower))
+    return not any(keyword in words for keyword in COMPARISON_KEYWORDS)
 
 
 def _needs_explain_move_period_clarification(question: str, plan: Dict[str, Any], params: Dict[str, Any]) -> bool:
@@ -396,42 +598,38 @@ def _needs_margin_clarification(question: str, plan: Dict[str, Any], params: Dic
     return not any(token in question_lower for token in MARGIN_KEYWORDS)
 
 
-def build_visual_clarification(
+async def build_visual_clarification(
     question: str,
     selection: Any,
     plan: Dict[str, Any],
     params: Dict[str, Any],
 ) -> Optional[ClarificationRequest]:
     """
-    Decide whether a visual-specific clarification is needed and build it.
-    
+    Decide whether a visual-specific clarification is needed and build it via LLM.
+
     Called from: dashboard route and runtime orchestrator.
+    Why: Uses LLM to generate ticker-aware options instead of hardcoded generic text.
     """
+    needs_clarification = False
+
     if selection.skill_id == "a2ui_peer_compare" and _needs_peer_compare_clarification(question, plan, params):
-        request_id = f"clarify_peer_{time.time_ns()}"
-        return build_clarification_for_ambiguous_comparison(
-            selection.tickers,
-            question,
-            request_id,
-            target_component_id="peer_metric_chart",
-        )
-    if selection.skill_id == "a2ui_explain_move" and _needs_explain_move_period_clarification(question, plan, params):
-        request_id = f"clarify_time_{time.time_ns()}"
-        ticker = selection.tickers[0] if selection.tickers else "Selected ticker"
-        return build_clarification_for_time_period(
-            ticker,
-            request_id,
-            target_component_id="explain_move_panel",
-        )
-    if selection.skill_id == "a2ui_margin_analysis" and _needs_margin_clarification(question, plan, params):
-        request_id = f"clarify_margin_{time.time_ns()}"
-        ticker = selection.tickers[0] if selection.tickers else "Selected ticker"
-        return build_clarification_for_margin_detail(
-            ticker,
-            request_id,
-            target_component_id="margin_chart",
-        )
-    return None
+        needs_clarification = True
+    elif selection.skill_id == "a2ui_explain_move" and _needs_explain_move_period_clarification(question, plan, params):
+        needs_clarification = True
+    elif selection.skill_id == "a2ui_margin_analysis" and _needs_margin_clarification(question, plan, params):
+        needs_clarification = True
+
+    if not needs_clarification:
+        return None
+
+    # Generate clarification via LLM for ticker-aware options
+    request_id = f"clarify_{selection.skill_id}_{time.time_ns()}"
+    return await generate_clarification_with_llm(
+        question=question,
+        skill_id=selection.skill_id,
+        tickers=selection.tickers,
+        request_id=request_id,
+    )
 
 
 async def await_clarification_response(
