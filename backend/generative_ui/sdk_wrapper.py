@@ -586,6 +586,45 @@ class A2UISDKWrapper:
             tool_choice=tool_choice,
         )
 
+    def _log_rate_limit_status(self, headers: Any) -> None:
+        """
+        Method: _log_rate_limit_status - monitor rate limit headers proactively.
+        Called from: _query_api after API response.
+        Why: Warns before hitting rate limits, per Anthropic best practices.
+        """
+        try:
+            remaining_requests = headers.get("x-ratelimit-remaining-requests")
+            remaining_tokens = headers.get("x-ratelimit-remaining-tokens")
+
+            if remaining_requests is not None:
+                remaining_req = int(remaining_requests)
+                if remaining_req <= 5:
+                    logger.warning(
+                        "rate_limit_warning: requests remaining=%d (critical)",
+                        remaining_req,
+                    )
+                elif remaining_req <= 20:
+                    logger.info(
+                        "rate_limit_status: requests remaining=%d",
+                        remaining_req,
+                    )
+
+            if remaining_tokens is not None:
+                remaining_tok = int(remaining_tokens)
+                if remaining_tok <= 10000:
+                    logger.warning(
+                        "rate_limit_warning: tokens remaining=%d (critical)",
+                        remaining_tok,
+                    )
+                elif remaining_tok <= 50000:
+                    logger.info(
+                        "rate_limit_status: tokens remaining=%d",
+                        remaining_tok,
+                    )
+        except (TypeError, ValueError, AttributeError) as e:
+            # Headers not available or malformed - skip monitoring
+            logger.debug("rate_limit_headers not available: %s", e)
+
     async def _query_api(
         self,
         prompt: str,
@@ -632,11 +671,17 @@ class A2UISDKWrapper:
                 request_kwargs["messages"] = messages
             else:
                 request_kwargs["messages"] = [{"role": "user", "content": prompt}]
-            
-            # Add system prompt if set
+
+            # Add system prompt with native cache_control for 1-hour Anthropic cache
             if self._system_prompt:
-                request_kwargs["system"] = self._system_prompt
-            
+                request_kwargs["system"] = [
+                    {
+                        "type": "text",
+                        "text": self._system_prompt,
+                        "cache_control": {"type": "ephemeral"}
+                    }
+                ]
+
             # Add temperature if provided
             if temperature is not None:
                 request_kwargs["temperature"] = temperature
@@ -647,9 +692,13 @@ class A2UISDKWrapper:
                 request_kwargs["tool_choice"] = tool_choice or {"type": "auto"}
                 logger.debug("API call with %d tools", len(tools))
             
-            # Make the API call
-            response = self._client.messages.create(**request_kwargs)
-            
+            # Make the API call with raw response to access rate limit headers
+            raw_response = self._client.messages.with_raw_response.create(**request_kwargs)
+            response = raw_response.parse()
+
+            # Monitor rate limit headers (proactive warning before hitting limits)
+            self._log_rate_limit_status(raw_response.headers)
+
             # Extract content from response
             content_parts = []
             tool_calls = []
@@ -672,6 +721,29 @@ class A2UISDKWrapper:
                 tool_calls=tool_calls,
                 is_complete=True,
             )
+
+        except anthropic.RateLimitError as e:
+            # Handle 429 rate limit errors with retry-after header
+            circuit.record_failure()
+            retry_after = None
+            try:
+                if hasattr(e, "response") and e.response is not None:
+                    retry_after = e.response.headers.get("retry-after")
+            except Exception:
+                pass
+
+            if retry_after:
+                logger.warning(
+                    "rate_limit_exceeded: retry-after=%s seconds",
+                    retry_after,
+                )
+                return SDKResponse(
+                    error=f"Rate limit exceeded. Retry after {retry_after} seconds.",
+                    is_complete=True,
+                )
+            else:
+                logger.warning("rate_limit_exceeded: no retry-after header")
+                return SDKResponse(error=str(e), is_complete=True)
 
         except Exception as e:
             # Record failure for circuit breaker
@@ -728,10 +800,16 @@ class A2UISDKWrapper:
                 "tools": tools,
                 "tool_choice": {"type": "any"},  # Force tool use
             }
-            
-            # Add system prompt if set
+
+            # Add system prompt with native cache_control for 1-hour Anthropic cache
             if self._system_prompt:
-                request_kwargs["system"] = self._system_prompt
+                request_kwargs["system"] = [
+                    {
+                        "type": "text",
+                        "text": self._system_prompt,
+                        "cache_control": {"type": "ephemeral"}
+                    }
+                ]
             
             if temperature is not None:
                 request_kwargs["temperature"] = temperature
@@ -774,6 +852,30 @@ class A2UISDKWrapper:
             circuit.record_success()
             logger.debug("Fine-grained tool streaming completed successfully")
             
+        except anthropic.RateLimitError as e:
+            # Handle 429 rate limit errors with retry-after header
+            circuit.record_failure()
+            retry_after = None
+            try:
+                if hasattr(e, "response") and e.response is not None:
+                    retry_after = e.response.headers.get("retry-after")
+            except Exception:
+                pass
+
+            if retry_after:
+                logger.warning(
+                    "streaming_rate_limit_exceeded: retry-after=%s seconds",
+                    retry_after,
+                )
+                yield {
+                    "type": "error",
+                    "error": f"Rate limit exceeded. Retry after {retry_after} seconds.",
+                    "retry_after": retry_after,
+                }
+            else:
+                logger.warning("streaming_rate_limit_exceeded: no retry-after header")
+                yield {"type": "error", "error": str(e)}
+
         except Exception as e:
             circuit.record_failure()
             logger.error("Streaming failed: %s", e)
