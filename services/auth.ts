@@ -228,9 +228,26 @@ class AuthService {
 
   async getAccessToken(): Promise<string | null> {
     try {
+      // First try getSession which uses cached session
       const { data: { session } } = await supabase.auth.getSession()
-      return session?.access_token || null
-    } catch {
+      if (session?.access_token) {
+        return session.access_token
+      }
+
+      // If no session but we have a user, force refresh to get a new token
+      if (this.currentState.user) {
+        console.warn('[Auth] Session missing but user exists, attempting refresh...')
+        const { data: { session: refreshedSession }, error } = await supabase.auth.refreshSession()
+        if (error) {
+          console.error('[Auth] Session refresh failed:', error.message)
+          return null
+        }
+        return refreshedSession?.access_token || null
+      }
+
+      return null
+    } catch (error) {
+      console.error('[Auth] getAccessToken error:', error)
       return null
     }
   }
@@ -238,7 +255,10 @@ class AuthService {
   // Helper to get auth headers for API calls
   async getAuthHeaders(): Promise<Record<string, string>> {
     const token = await this.getAccessToken()
-    return token 
+    if (!token && this.currentState.user) {
+      console.error('[Auth] WARNING: User logged in but no access token available!')
+    }
+    return token
       ? { 'Authorization': `Bearer ${token}` }
       : {}
   }
