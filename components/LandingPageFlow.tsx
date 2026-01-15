@@ -4,7 +4,7 @@ import gsap from 'gsap';
 import { ScrollTrigger } from 'gsap/ScrollTrigger';
 import { useGSAP } from '@gsap/react';
 import type { Project, ProjectYear } from '../types';
-import { motion, useMotionValue, useSpring, useTransform } from 'framer-motion';
+import { motion, useMotionValue, useSpring, useTransform, AnimatePresence } from 'framer-motion';
 // @ts-ignore
 import { Helmet } from 'react-helmet-async';
 import Lenis from 'lenis';
@@ -95,6 +95,90 @@ const getYearTheme = (year: number | string): YearTheme => {
 };
 
 
+// AI Summary Footer - Provider configuration
+// Function: AI_PROVIDERS — used by footer to open AI chat with recruiter prompt
+interface AIProvider {
+    name: string;
+    icon: React.ReactNode;
+    buildUrl: (prompt: string) => string;
+    supportsUrlPrompt: boolean;
+    color: string;
+}
+
+const RECRUITER_PROMPT = `As a recruiter or hiring manager reviewing Yanqing Jiang's AI portfolio (https://yanqing.app), I'd like a concise summary of his technical capabilities.
+
+Please analyze these 5 highlighted projects:
+
+1. **Agent to UI (2026)**: Streams custom financial dashboards from natural language using A2UI protocol, Claude Agent SDK, React Renderer, SSE Streaming.
+   - Key achievement: Real-time widget generation from conversational queries
+
+2. **Next Gen Analytics (2025)**: Multi-agent system with three workflow modes (Direct, Single-Agent, Multi-Agent) plus human-in-the-loop clarifications.
+   - Key achievement: Explainable AI with task graph visualization
+
+3. **Agentic Trading Bot (2025)**: LangGraph multi-agent system that achieved 200% realized gain on options before risk-triggered shutdown.
+   - Key achievement: Demonstrates disciplined risk management in production
+
+4. **LLM Invoice Processor (2024)**: Automates invoice reconciliation saving 1,000+ analyst hours annually with 90% reduction in late payments.
+   - Key achievement: Measurable enterprise ROI with OpenAI function calling
+
+5. **Ask My Resume RAG (2023)**: Career copilot achieving 95% question coverage via retrieval-augmented generation.
+   - Key achievement: Evidence-backed responses with source citations`;
+
+// SVG Icons for AI providers
+const ChatGPTIcon = () => (
+    <svg viewBox="0 0 24 24" fill="currentColor" className="w-full h-full">
+        <path d="M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.8956zm16.0993 3.8558L12.6 8.3829l2.02-1.1638a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.407-.667zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654l2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997-2.6067-1.4997Z" />
+    </svg>
+);
+
+const ClaudeIcon = () => (
+    <svg viewBox="0 0 24 24" fill="currentColor" className="w-full h-full">
+        <path d="M4.709 15.955l4.72-2.647.08-.079-.08-.08-2.086-1.2a.383.383 0 0 0-.392.007l-2.399 1.39a.39.39 0 0 0-.132.536l.29.073zm8.493-4.044l.937-.526-.94-.542-4.91-2.829a.383.383 0 0 0-.392.007L5.62 9.597l7.582 2.314zm2.02-.598l2.379-1.334-2.1-1.218-1.216.684 1.064 1.787-.127.081zm4.069-2.283l-1.748 1.005-1.636-.947 1.178-.662-.007-.088-2.156-1.245-.078.044-1.66.931 1.064 1.787-.08.08.08.08 5.043 2.919v-2.57a.39.39 0 0 0-.195-.337l.195-.997zm-6.168.399l-1.064-1.787.08-.08-.08-.08L7.017 4.73a.383.383 0 0 0-.392.007L4.63 5.92l7.349 4.239 1.144-.73zm7.168 4.12L18.16 12.6l-2.1 1.178v2.436l4.231-2.386v-.83a.39.39 0 0 0-.195-.337l.195-.012zm-2.231 4.4l-2.1-1.218v2.389l2.1 1.218v-2.389zm-4.231 2.379l2.1-1.178v-2.436l-2.1 1.178v2.436zm-2.1-4.853v2.436l2.1 1.218v-2.389l-2.1-1.265zm-2.1 1.218l2.1-1.178v-2.436l-2.1 1.178v2.436zm6.231-3.654l2.1-1.218-2.1-1.178-2.1 1.178 2.1 1.218zm-4.131-2.396l-2.1-1.178v2.389l2.1 1.218v-2.429zm8.231 5.823v-2.389l-2.1 1.178v2.436l2.1-1.225z" />
+    </svg>
+);
+
+const GeminiIcon = () => (
+    <svg viewBox="0 0 24 24" fill="currentColor" className="w-full h-full">
+        <path d="M12 24A14.304 14.304 0 0 0 0 12 14.304 14.304 0 0 0 12 0a14.305 14.305 0 0 0 12 12 14.305 14.305 0 0 0-12 12" />
+    </svg>
+);
+
+const PerplexityIcon = () => (
+    <svg viewBox="0 0 24 24" fill="currentColor" className="w-full h-full">
+        <path d="M12.051.24a.72.72 0 0 0-.722.72v6.328L6.006 2.86a.72.72 0 0 0-.963 1.071l5.81 5.22H4.679a.72.72 0 0 0 0 1.44h6.172l-5.808 5.218a.72.72 0 1 0 .963 1.072l5.323-4.782v6.662a.72.72 0 1 0 1.44 0V11.93l5.177 4.65a.72.72 0 1 0 .963-1.071l-5.66-5.085h6.072a.72.72 0 1 0 0-1.44h-6.072l5.66-5.085a.72.72 0 1 0-.963-1.071l-5.177 4.65V.96a.72.72 0 0 0-.718-.72z" />
+    </svg>
+);
+
+const AI_PROVIDERS: AIProvider[] = [
+    {
+        name: 'ChatGPT',
+        icon: <ChatGPTIcon />,
+        buildUrl: (prompt: string) => `https://chat.openai.com/?q=${encodeURIComponent(prompt)}`,
+        supportsUrlPrompt: true,
+        color: '#10a37f',
+    },
+    {
+        name: 'Claude',
+        icon: <ClaudeIcon />,
+        buildUrl: () => 'https://claude.ai/new',
+        supportsUrlPrompt: false,
+        color: '#d97757',
+    },
+    {
+        name: 'Gemini',
+        icon: <GeminiIcon />,
+        buildUrl: (prompt: string) => `https://gemini.google.com/app?q=${encodeURIComponent(prompt)}`,
+        supportsUrlPrompt: true,
+        color: '#4285f4',
+    },
+    {
+        name: 'Perplexity',
+        icon: <PerplexityIcon />,
+        buildUrl: (prompt: string) => `https://www.perplexity.ai/?q=${encodeURIComponent(prompt)}`,
+        supportsUrlPrompt: true,
+        color: '#20b8cd',
+    },
+];
 
 
 interface LandingPageFlowProps {
@@ -111,6 +195,7 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
     const preAiSectionRef = useRef<HTMLDivElement>(null);
 
     const [pageMouse, setPageMouse] = useState<{ x: number; y: number } | null>(null);
+    const [showToast, setShowToast] = useState(false);
     const lenisRef = useRef<Lenis | null>(null);
 
     // Tilt Effect Logic for Hero Dashboard
@@ -131,6 +216,22 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
     const handleHeroMouseLeave = () => {
         heroMouseX.set(0);
         heroMouseY.set(0);
+    };
+
+    // Handler for AI provider click - copies prompt if needed, opens provider URL
+    // Function: handleProviderClick — triggered by footer AI icons; opens AI chat with recruiter prompt
+    const handleProviderClick = async (provider: AIProvider) => {
+        if (!provider.supportsUrlPrompt) {
+            try {
+                await navigator.clipboard.writeText(RECRUITER_PROMPT);
+                setShowToast(true);
+                setTimeout(() => setShowToast(false), 3000);
+            } catch {
+                // Fallback: prompt user to copy manually
+                console.warn('Clipboard API not available');
+            }
+        }
+        window.open(provider.buildUrl(RECRUITER_PROMPT), '_blank', 'noopener,noreferrer');
     };
 
     // Separate AI projects from Pre-AI projects
@@ -890,6 +991,92 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                             </div>
                         </section>
                     )}
+
+                    {/* AI Summary Footer */}
+                    {/* Function: AI Footer — renders AI provider icons for recruiters to get portfolio summary */}
+                    <footer className="relative py-16 px-4 sm:px-6 lg:px-8 border-t border-white/5 mt-24">
+                        <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/95 to-transparent pointer-events-none" />
+
+                        <div className="relative max-w-4xl mx-auto text-center space-y-8">
+                            {/* Heading */}
+                            <div className="space-y-3">
+                                <h3 className="text-xl sm:text-2xl font-bold text-white">
+                                    Analyze this portfolio with AI
+                                </h3>
+                                <p className="text-sm text-gray-400 max-w-xl mx-auto">
+                                    Let your preferred AI summarize my technical capabilities and project highlights
+                                </p>
+                            </div>
+
+                            {/* AI Provider Icons */}
+                            <div className="flex flex-col items-center gap-4">
+                                <div className="flex items-center justify-center gap-6 sm:gap-8">
+                                {AI_PROVIDERS.map((provider) => (
+                                    <motion.button
+                                        key={provider.name}
+                                        onClick={() => handleProviderClick(provider)}
+                                        className="group relative flex flex-col items-center gap-2"
+                                        whileHover={{ scale: 1.1 }}
+                                        whileTap={{ scale: 0.95 }}
+                                    >
+                                        {/* Icon container */}
+                                        <div
+                                            className="relative w-14 h-14 sm:w-16 sm:h-16 rounded-xl bg-slate-900/80 border border-white/10 flex items-center justify-center backdrop-blur-sm transition-all duration-300 group-hover:border-white/30"
+                                        >
+                                            {/* SVG Icon */}
+                                            <div className="w-8 h-8 text-gray-400 group-hover:text-white transition-colors">
+                                                {provider.icon}
+                                            </div>
+                                            {/* Hover glow */}
+                                            <div
+                                                className="absolute inset-0 rounded-xl opacity-0 group-hover:opacity-20 transition-opacity"
+                                                style={{ backgroundColor: provider.color }}
+                                            />
+                                        </div>
+
+                                        {/* Label */}
+                                        <span className="text-xs text-gray-500 group-hover:text-gray-300 transition-colors">
+                                            {provider.name}
+                                        </span>
+
+                                        {/* Clipboard indicator for Claude */}
+                                        {!provider.supportsUrlPrompt && (
+                                            <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-sky-500/80 flex items-center justify-center" title="Copies prompt to clipboard">
+                                                <svg className="w-2.5 h-2.5 text-white" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                                                    <path strokeLinecap="round" strokeLinejoin="round" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
+                                                </svg>
+                                            </span>
+                                        )}
+                                    </motion.button>
+                                ))}
+                                </div>
+                                <p className="text-xs text-gray-500">
+                                    Perplexity auto-answers • Others pre-fill prompt
+                                </p>
+                            </div>
+
+                            {/* Copyright */}
+                            <div className="pt-8 border-t border-white/5">
+                                <p className="text-xs text-gray-600">
+                                    &copy; {new Date().getFullYear()} Yanqing Jiang
+                                </p>
+                            </div>
+                        </div>
+
+                        {/* Toast notification for clipboard */}
+                        <AnimatePresence>
+                            {showToast && (
+                                <motion.div
+                                    initial={{ opacity: 0, y: 20 }}
+                                    animate={{ opacity: 1, y: 0 }}
+                                    exit={{ opacity: 0, y: 20 }}
+                                    className="fixed bottom-6 left-1/2 -translate-x-1/2 px-4 py-2 bg-sky-600 text-white text-sm rounded-lg shadow-xl z-50"
+                                >
+                                    Prompt copied! Paste it in Claude.
+                                </motion.div>
+                            )}
+                        </AnimatePresence>
+                    </footer>
                 </div>
 
                 {/* Gradient animation styles */}
