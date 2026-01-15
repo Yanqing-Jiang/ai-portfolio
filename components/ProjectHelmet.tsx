@@ -16,6 +16,7 @@ import {
 import {
   buildArticleSchema,
   buildBreadcrumbList,
+  buildSoftwareSchema,
 } from '../constants/structuredData';
 
 interface ProjectHelmetProps {
@@ -59,6 +60,7 @@ export const ProjectHelmet: React.FC<ProjectHelmetProps> = ({ project }) => {
     [project.title, canonicalUrl]
   );
   const articleSchema = useMemo(() => buildArticleSchema(project), [project]);
+  const softwareSchema = useMemo(() => buildSoftwareSchema(project), [project]);
   const imageType = useMemo(() => {
     if (!image) return undefined;
     try {
@@ -132,6 +134,7 @@ export const ProjectHelmet: React.FC<ProjectHelmetProps> = ({ project }) => {
       ))}
 
       <script type="application/ld+json">{JSON.stringify(articleSchema)}</script>
+      <script type="application/ld+json">{JSON.stringify(softwareSchema)}</script>
       <script type="application/ld+json">{JSON.stringify(breadcrumbSchema)}</script>
     </Helmet>
   );

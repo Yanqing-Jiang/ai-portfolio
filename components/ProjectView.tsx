@@ -105,9 +105,9 @@ const ProjectView: React.FC<ProjectViewProps> = ({ project }) => {
           <div className="p-3 sm:p-4 md:p-6 lg:p-8 relative">
             <div className="flex flex-col md:flex-row gap-4 sm:gap-6 md:gap-8">
               <div className="flex-1 flex flex-col justify-center min-w-0">
-                <h2 className="text-xl sm:text-2xl md:text-3xl lg:text-4xl xl:text-5xl font-bold text-white mb-2 sm:mb-3 md:mb-4 leading-tight">
+                <h1 className="text-xl sm:text-2xl md:text-3xl lg:text-4xl xl:text-5xl font-bold text-white mb-2 sm:mb-3 md:mb-4 leading-tight">
                   {project.title}
-                </h2>
+                </h1>
                 <div className="text-gray-400 text-sm sm:text-base md:text-base lg:text-lg max-w-none md:max-w-3xl mb-3 sm:mb-4 md:mb-6 space-y-2 sm:space-y-3 overflow-y-auto flex-1 md:flex-none">
                   {project.description.split('\n').map((line, idx) => {
                     const trimmed = line.trim();

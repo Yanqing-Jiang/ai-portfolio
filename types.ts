@@ -21,6 +21,7 @@
   dateModified?: string;
   serviceTags?: string[];
   statHighlights?: string[];
+  linkText?: string; // SEO-friendly anchor text, e.g., "Agent-to-UI case study"
   primaryMetricValue?: {
     label?: string;
     value: number;

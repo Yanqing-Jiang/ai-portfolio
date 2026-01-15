@@ -1,43 +1,44 @@
-# Updated: 2025-12-10
+# Updated: 2026-01-15
 
-# --- AI answer-engine allowlist ---
-User-agent: GPTBot
-Allow: /
-
-User-agent: ChatGPT-User
-Allow: /
-
-User-agent: Google-Extended
-Allow: /
-
-User-agent: ClaudeBot
-Allow: /
-
-User-agent: PerplexityBot
-Allow: /
-
-User-agent: Amazonbot
-Allow: /
-
-# --- Training / high-volume crawlers to monitor ---
-User-agent: Bytespider
-Disallow: /
-
-User-agent: DataForSeoBot
-Disallow: /
-
-# --- General rules ---
 User-agent: *
 Allow: /
-
-# Disallow common non-content paths
+Disallow: /api/
 Disallow: /backend/
 Disallow: /venv/
 Disallow: /node_modules/
-Disallow: /*.config.*$
 
-# Sitemaps
 Sitemap: https://yanqing.app/sitemap.xml
 
-# Crawl-delay to be respectful to server resources
-Crawl-delay: 1
+# OpenAI (search + training)
+User-agent: OAI-SearchBot
+Allow: /
+User-agent: ChatGPT-User
+Allow: /
+User-agent: GPTBot
+Allow: /
+
+# Anthropic (search + training)
+User-agent: Claude-SearchBot
+Allow: /
+User-agent: Claude-User
+Allow: /
+User-agent: ClaudeBot
+Allow: /
+
+# Google (training)
+User-agent: Google-Extended
+Allow: /
+
+# Perplexity
+User-agent: PerplexityBot
+Allow: /
+
+# Amazon
+User-agent: Amazonbot
+Allow: /
+
+# Block high-volume scrapers
+User-agent: Bytespider
+Disallow: /
+User-agent: DataForSeoBot
+Disallow: /

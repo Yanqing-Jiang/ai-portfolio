@@ -200,6 +200,52 @@ const ensureDescription = (project: Project) => {
   return LANDING_SEO.description;
 };
 
+// Function: buildPersonSchema — called from LandingPageFlow to embed Person JSON-LD for SEO and LLM discoverability; returns schema.org Person with stable @id, job title, skills, and social links.
+export const buildPersonSchema = () => ({
+  '@context': 'https://schema.org',
+  '@type': 'Person',
+  '@id': `${SITE_BASE_URL}/#person`,
+  name: sanitizeText(LANDING_SEO.author),
+  jobTitle: 'Senior Advanced Analytics Manager',
+  url: SITE_BASE_URL,
+  image: DEFAULT_OG_IMAGE,
+  sameAs: LANDING_SEO.sameAs ?? DEFAULT_SAME_AS,
+  knowsAbout: [
+    'AI Systems Engineering',
+    'LangGraph Agent Orchestration',
+    'Claude Agent SDK',
+    'Analytics Automation',
+    'Generative UI (A2UI)',
+    'RAG Systems',
+    'Multi-Agent Workflows',
+  ],
+});
+
+// Function: buildSoftwareSchema — called from ProjectHelmet to add SoftwareSourceCode JSON-LD for code projects; references Person @id as author.
+export const buildSoftwareSchema = (project: Project) => {
+  const slug = project.canonicalId ?? project.id;
+  const description = sanitizeText(ensureDescription(project));
+  const resolvedImage =
+    toAbsoluteUrl(project.ogImage ?? project.coverUrl ?? project.imageUrl ?? DEFAULT_OG_IMAGE) ??
+    DEFAULT_OG_IMAGE;
+
+  return {
+    '@context': 'https://schema.org',
+    '@type': 'SoftwareSourceCode',
+    name: sanitizeText(project.seoTitle ?? project.title),
+    description,
+    url: `${SITE_BASE_URL}/project/${slug}`,
+    image: resolvedImage,
+    datePublished: project.datePublished ?? LANDING_SEO.updatedTime,
+    dateModified: project.dateModified ?? LANDING_SEO.updatedTime,
+    programmingLanguage: sanitizeStringList(project.technologies),
+    author: {
+      '@id': `${SITE_BASE_URL}/#person`,
+    },
+    keywords: sanitizeStringList(project.seoKeywords ?? project.serviceTags ?? project.technologies),
+  };
+};
+
 export const buildArticleSchema = (project: Project) => {
   const slug = project.canonicalId ?? project.id;
   const keywords = sanitizeStringList(ensureKeywords(project));

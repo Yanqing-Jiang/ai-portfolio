@@ -17,7 +17,7 @@ import {
     LANDING_SEO,
     SITE_NAME,
 } from '../constants/seo';
-import { buildLandingSchemas, toNavigationFromProjects } from '../constants/structuredData';
+import { buildLandingSchemas, buildPersonSchema, toNavigationFromProjects } from '../constants/structuredData';
 
 // Register GSAP plugins
 gsap.registerPlugin(ScrollTrigger);
@@ -157,6 +157,7 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
         () => buildLandingSchemas(allProjects, navigationLinks, LANDING_FAQ),
         [allProjects, navigationLinks]
     );
+    const personSchema = useMemo(() => buildPersonSchema(), []);
     const landingKeywords = useMemo(() => LANDING_SEO.keywords.join(', '), []);
 
     // Initialize Lenis Smooth Scroll
@@ -502,6 +503,7 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                 <meta name="twitter:description" content={LANDING_SEO.description} />
                 <meta name="twitter:image" content={DEFAULT_OG_IMAGE} />
                 <meta name="theme-color" content={DEFAULT_THEME_COLOR} />
+                <script type="application/ld+json">{JSON.stringify(personSchema)}</script>
                 {landingSchemas.map((schema, index) => (
                     <script key={`landing-schema-${index}`} type="application/ld+json">
                         {JSON.stringify(schema)}
@@ -690,7 +692,7 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                                                                     to={`/project/${project.id}`}
                                                                     onClick={() => onSelectProject(project)}
                                                                 >
-                                                                    <span>View Project</span>
+                                                                    <span>{project.linkText ?? project.title}</span>
                                                                 </Link>
                                                                 <span className="text-lg">→</span>
                                                             </div>
@@ -780,7 +782,7 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                                                     onClick={() => onSelectProject(project)}
                                                     className="inline-flex items-center gap-2 text-sm font-semibold text-blue-400 hover:text-blue-300 transition-colors"
                                                 >
-                                                    View Details
+                                                    {project.linkText ?? project.title}
                                                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 8l4 4m0 0l-4 4m4-4H3" />
                                                     </svg>
@@ -875,7 +877,7 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                                                         onClick={() => onSelectProject(project)}
                                                         className="inline-flex items-center gap-2 text-sm font-medium text-amber-400 hover:text-amber-300 transition-colors"
                                                     >
-                                                        Explore project
+                                                        {project.linkText ?? project.title}
                                                         <svg className="h-4 w-4 transition-transform group-hover:translate-x-1" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
                                                             <path strokeLinecap="round" strokeLinejoin="round" d="M17 8l4 4m0 0l-4 4m4-4H3" />
                                                         </svg>

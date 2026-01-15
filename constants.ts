@@ -62,6 +62,7 @@ Protocol: A2UI v0.8 with custom financial component catalog extension
         datePublished: '2026-01-01',
         dateModified: '2026-01-05',
         serviceTags: ['Generative UI', 'Agent UX', 'Financial Analytics'],
+        linkText: 'A2UI dashboard demo',
         statHighlights: [
           'Streams custom dashboards from natural language queries via A2UI protocol',
           'Renders TradingView charts, ECharts visualizations, and real-time KPIs',
@@ -128,6 +129,7 @@ Backend: FastAPI router /api/linkedin-photo/generate, Gemini LLM for prompt expa
         datePublished: '2025-06-01',
         dateModified: '2026-01-05',
         serviceTags: ['AI Image Editing', 'UX Wizard Design', 'Prompt Engineering'],
+        linkText: 'AI headshot generator',
         statHighlights: [
           'Three-step wizard keeps upload, style prompt, and review on a single focused screen',
           'Displays the expanded prompt beside the generated headshot for transparency and trust',
@@ -167,6 +169,7 @@ Backend: FastAPI router /api/linkedin-photo/generate, Gemini LLM for prompt expa
         datePublished: '2025-11-01',
         dateModified: '2026-01-05',
         serviceTags: ['Analytics Automation', 'AI Agents', 'Decision Intelligence'],
+        linkText: 'Analytics agent architecture',
         statHighlights: [
           'Supports direct, single-agent, and supervisor-led workflows in one UI',
           'Caches SQL, RAG, and visualization context for repeatable market insights',
@@ -203,6 +206,7 @@ Backend: FastAPI router /api/linkedin-photo/generate, Gemini LLM for prompt expa
         datePublished: '2025-05-10',
         dateModified: '2025-09-12',
         serviceTags: ['Agentic Trading', 'Automation', 'Risk Management'],
+        linkText: 'Trading bot case study',
         statHighlights: [
           'Delivered a 200% realized gain on SOUN puts before shutdown safeguards triggered',
           'Combines quant, trend, sizing, and execution agents orchestrated through LangGraph',
@@ -285,6 +289,7 @@ Time Series: Quarterly financial data
         datePublished: '2024-11-15',
         dateModified: '2025-08-20',
         serviceTags: ['Analytics Automation', 'SQL Generation', 'Visualization'],
+        linkText: 'SQL copilot demo',
         statHighlights: [
           'Auto-compares semiconductor tickers with streaming commentary and ECharts visualizations',
           'LangGraph state machine coordinates schema, SQL, visualization, and narrative agents',
@@ -349,6 +354,7 @@ This production-grade web application automates the invoice validation and match
         datePublished: '2024-08-12',
         dateModified: '2025-07-20',
         serviceTags: ['Data Automation', 'Document AI', 'Finance Operations'],
+        linkText: 'Invoice automation pipeline',
         statHighlights: [
           'Automates 1,000+ analyst hours annually across P&G Walgreens teams',
           'Reduces late payment rate by roughly 90% through automated discrepancy reports',
@@ -392,6 +398,7 @@ This production-grade web application automates the invoice validation and match
         datePublished: '2023-09-01',
         dateModified: '2025-07-15',
         serviceTags: ['RAG', 'Talent AI', 'Personal Branding'],
+        linkText: 'Resume RAG agent',
         statHighlights: [
           'Vector store ingestion of resume sections and case studies via LangChain',
           'Delivers recruiter-ready answers with embedded citations and follow-ups',
@@ -429,6 +436,7 @@ This production-grade web application automates the invoice validation and match
         datePublished: '2023-06-20',
         dateModified: '2025-07-05',
         serviceTags: ['Conversational AI', 'Voice Agent', 'Motivation'],
+        linkText: 'Motivational voice agent',
         statHighlights: [
           'Realtime Gemini-to-ElevenLabs speech with animated UI and message history',
           'Toggleable Goggins Mode swaps prompts to yield drill-sergeant coaching',
@@ -472,6 +480,7 @@ This production-grade web application automates the invoice validation and match
         datePublished: '2022-10-05',
         dateModified: '2025-07-10',
         serviceTags: ['Research Automation', 'Web Browsing', 'LangChain'],
+        linkText: 'Research agent demo',
         statHighlights: [
           'Automates Serper search + Browserless scraping with summarization loops',
           'Captures memoized context for iterative research conversations',
@@ -534,6 +543,7 @@ This production-grade web application automates the invoice validation and match
         datePublished: '2021-10-01',
         dateModified: '2025-07-01',
         serviceTags: ['Supply Chain Analytics', 'BI Automation', 'Data Governance'],
+        linkText: 'Inventory control tower',
         statHighlights: [
           'Consolidates 20+ regional reports into a single Power BI control tower',
           'Action cards capture risk mitigations and reduce executive response time to minutes',
@@ -587,6 +597,7 @@ This production-grade web application automates the invoice validation and match
         datePublished: '2021-05-01',
         dateModified: '2025-06-20',
         serviceTags: ['Forecasting', 'Analytics Automation', 'Power BI'],
+        linkText: 'R forecasting pipeline',
         statHighlights: [
           'Benchmarks seven time-series models and deploys best performer per SKU',
           'Automated Power BI refresh pushes forecasts directly into decision workflows',
@@ -635,6 +646,7 @@ This production-grade web application automates the invoice validation and match
         datePublished: '2021-04-10',
         dateModified: '2025-06-20',
         serviceTags: ['Procurement Automation', 'Power Platform', 'Collaboration'],
+        linkText: 'Supplier scorecard system',
         statHighlights: [
           'Generates PDF scorecards and automated emails directly from Power BI workspace',
           'Converges qualitative notes, KPIs, and supplier actions in one dashboard',
@@ -684,6 +696,7 @@ This production-grade web application automates the invoice validation and match
         datePublished: '2021-02-15',
         dateModified: '2025-06-20',
         serviceTags: ['Power Platform', 'Capital Planning', 'Workflow Automation'],
+        linkText: 'Capex approval tracker',
         statHighlights: [
           'Shopping-cart approvals reduce finance turnaround time for capital requests',
           'Power BI pipeline shares intake, approvals, and spend with finance/procurement',
@@ -733,6 +746,7 @@ This production-grade web application automates the invoice validation and match
         datePublished: '2021-03-10',
         dateModified: '2025-06-20',
         serviceTags: ['Procurement Automation', 'Workflow Platform', 'Business Rules'],
+        linkText: 'Engagement intake portal',
         statHighlights: [
           'Serves two procurement departments with 100-200 daily active submitters',
           'Thousands of business rules drive automatic approvals and downstream notifications',

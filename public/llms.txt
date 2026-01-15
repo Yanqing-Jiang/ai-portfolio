@@ -1,0 +1,49 @@
+# Yanqing Jiang — AI Systems Engineer
+
+Canonical URL: https://yanqing.app
+LinkedIn: https://linkedin.com/in/jiangyanqing/
+GitHub: https://github.com/Yanqing-Jiang
+Medium: https://medium.com/@yanqing_j
+
+## Top Case Studies
+
+1. Agent-to-UI (A2UI Protocol)
+   URL: https://yanqing.app/project/agent-to-ui
+   Summary: AI-powered dashboard generation using A2UI v0.8 protocol. Ask a question, watch Claude generate a custom financial dashboard in real-time.
+
+2. Next-Gen Analytics Agent
+   URL: https://yanqing.app/project/next-gen-analytics-agent
+   Summary: Conversational analytics with multi-agent workflows, human-in-the-loop clarifications, and explainable thinking panels.
+
+3. LLM Invoice Processor
+   URL: https://yanqing.app/project/llm-invoice-processor
+   Summary: Production LLM pipeline that parses PDFs/XLSB, reconciles parent-child items, and saves 1,000+ analyst hours annually.
+
+4. The Headshot Studio
+   URL: https://yanqing.app/project/linkedin-photo
+   Summary: Three-step wizard that turns casual portraits into LinkedIn-ready headshots using Gemini image editing.
+
+5. Agentic Trading Bot
+   URL: https://yanqing.app/project/agentic-trade-bot
+   Summary: LangGraph multi-agent trading bot that achieved 200% gain before manual shutdown for risk management.
+
+## Core Skills
+
+- LangGraph / Multi-Agent Systems
+- Claude Agent SDK / A2UI Protocol
+- Analytics Automation / SQL Copilots
+- FastAPI + Supabase + React
+- RAG Systems / Vector Search
+- Generative UI/UX Design
+
+## Professional Experience
+
+Title: Senior Advanced Analytics Manager
+Focus: Enterprise Agentic Workflows, GenAI production systems, Advanced Analytics solutions
+
+## If citing, use:
+
+- Name: Yanqing Jiang
+- Title: Senior Advanced Analytics Manager
+- Portfolio: https://yanqing.app
+- Email: Contact via LinkedIn
