@@ -37,6 +37,233 @@ const GOGGINS_DEFAULT_PROMPTS = [
 const GOGGINS_IMG_URL = 'https://yanqinghot.blob.core.windows.net/public-access/Goggins%20Yelling.jpg';
 const LINKEDIN_FOLLOW_URL = 'https://www.linkedin.com/in/jiangyanqing/';
 
+// --- Sub-components for performance optimization ---
+
+const AgentStatusView = React.memo(({ agentStatus }: { agentStatus: string }) => {
+  return (
+    <div className="bg-gray-800/90 border-b border-gray-700/50 p-2 sm:p-3 max-w-4xl mx-auto w-full">
+      <div className="flex items-center gap-2 mb-2">
+        <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div>
+        <span className="text-xs font-medium text-gray-300">Agent Status</span>
+      </div>
+      <div className="bg-gray-900/50 rounded-lg p-2 sm:p-3 max-h-32 sm:max-h-40 overflow-y-auto">
+        <div className="text-xs text-gray-300 whitespace-pre-wrap font-mono leading-relaxed">
+          {agentStatus.split('\n').map((line, index) => (
+            <div key={index} className={`
+              ${line.startsWith('🔎') || line.startsWith('🔍') || line.startsWith('📄') || line.startsWith('🤖') || line.startsWith('📝') || line.startsWith('💭') || line.startsWith('✅') ? 'text-blue-400 font-medium' : ''}
+              ${line.startsWith('>') ? 'text-gray-500 ml-2' : ''}
+              ${line.includes('Invoking:') ? 'text-yellow-400' : ''}
+              ${line.includes('completed') ? 'text-green-400' : ''}
+            `}>
+              {line}
+            </div>
+          ))}
+          {!agentStatus && <span className="text-gray-500">Initializing...</span>}
+        </div>
+      </div>
+    </div>
+  );
+});
+AgentStatusView.displayName = 'AgentStatusView';
+
+const MessageItem = React.memo(({ 
+  message, 
+  isGogginsProject, 
+  isGogginsMode, 
+  isLoading, 
+  isLast 
+}: { 
+  message: ChatMessage; 
+  isGogginsProject: boolean; 
+  isGogginsMode: boolean;
+  isLoading: boolean;
+  isLast: boolean;
+}) => {
+  const isModelGoggins = isGogginsProject && isGogginsMode && message.role === 'model';
+  
+  return (
+    <div className={`flex items-start gap-2 sm:gap-3 md:gap-4`}>
+        {message.role === 'model' && (
+        <div className="w-6 h-6 sm:w-8 sm:h-8 rounded-full bg-gray-600 flex items-center justify-center shrink-0 mt-1 overflow-hidden">
+            {isModelGoggins ? (
+                <img src={GOGGINS_IMG_URL} alt="David Goggins" className="w-full h-full object-cover" />
+            ) : (
+              <div className="w-full h-full bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center">
+                <RobotIcon />
+              </div>
+            )}
+        </div>
+        )}
+        <div className={`flex-1 flex flex-col min-w-0 ${message.role === 'user' ? 'items-end' : 'items-start'}`}>
+            <div className={`max-w-full sm:max-w-xl md:max-w-2xl rounded-xl shadow-md ${message.role === 'user' ? 'bg-blue-600 text-white rounded-br-none' : 'bg-gray-700 text-gray-200 rounded-bl-none'}`}>
+                {message.role === 'user' ? (
+                    <p className="text-sm sm:text-base whitespace-pre-wrap leading-relaxed px-3 sm:px-4 py-2 sm:py-3 break-words">{message.text}</p>
+                ) : (
+                    <div className="prose prose-sm sm:prose-base prose-invert max-w-none p-3 sm:p-4 prose-p:text-gray-200 prose-headings:text-white prose-strong:text-white prose-a:text-blue-400 hover:prose-a:text-blue-300 prose-pre:text-xs sm:prose-pre:text-sm prose-code:text-xs sm:prose-code:text-sm">
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                            {message.text}
+                        </ReactMarkdown>
+                        {isLoading && isLast && !message.text && (
+                            <span className="inline-block w-2 h-4 bg-gray-400 animate-pulse rounded-full"></span>
+                        )}
+                    </div>
+                )}
+            </div>
+        </div>
+        {message.role === 'user' && (
+        <div className="w-6 h-6 sm:w-8 sm:h-8 rounded-full bg-gray-600 flex items-center justify-center shrink-0 mt-1">
+            <UserIcon />
+        </div>
+        )}
+    </div>
+  );
+});
+MessageItem.displayName = 'MessageItem';
+
+const MessageList = React.memo(({ 
+  messages, 
+  isGogginsProject, 
+  isGogginsMode, 
+  isLoading, 
+  messagesEndRef 
+}: {
+  messages: ChatMessage[];
+  isGogginsProject: boolean;
+  isGogginsMode: boolean;
+  isLoading: boolean;
+  messagesEndRef: React.RefObject<HTMLDivElement>;
+}) => {
+  return (
+    <div className="flex-1 overflow-y-auto">
+      <div className="max-w-4xl mx-auto p-3 sm:p-4 md:p-6 space-y-4 sm:space-y-6 md:space-y-8">
+          {messages.filter(msg => msg.role !== 'audio').map((message, index) => (
+            <MessageItem 
+              key={message.id} 
+              message={message} 
+              isGogginsProject={isGogginsProject} 
+              isGogginsMode={isGogginsMode}
+              isLoading={isLoading}
+              isLast={index === messages.length - 1}
+            />
+          ))}
+          <div ref={messagesEndRef} />
+      </div>
+    </div>
+  );
+});
+MessageList.displayName = 'MessageList';
+
+const UsageStatusView = React.memo(({ 
+  authState, 
+  usageStats, 
+  onSignOut, 
+  onSignIn 
+}: { 
+  authState: AuthState; 
+  usageStats: UsageStats | null;
+  onSignOut: () => void;
+  onSignIn: () => void;
+}) => {
+  return (
+    <div className="max-w-4xl mx-auto mt-2 flex justify-between items-center text-xs text-gray-400">
+      <div className="flex items-center gap-2">
+        {authState.user ? (
+          <>
+            <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+            <span>Signed in as {authState.user.email}</span>
+            <span>• {usageStats ? `${usageStats.current_usage}/${usageStats.limit}` : 'Loading...'} requests/day</span>
+            <button
+              onClick={onSignOut}
+              className="text-blue-400 hover:text-blue-300 underline ml-2"
+            >
+              Sign out
+            </button>
+          </>
+        ) : (
+          <>
+            <div className="w-2 h-2 bg-yellow-500 rounded-full"></div>
+            <span>Guest</span>
+            <span>• {usageStats ? `${usageStats.current_usage}/${usageStats.limit}` : 'Loading...'} requests/day</span>
+            <button
+              onClick={onSignIn}
+              className="text-blue-400 hover:text-blue-300 underline ml-2"
+            >
+              Sign in for more
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+});
+UsageStatusView.displayName = 'UsageStatusView';
+
+const ChatInput = React.memo(({ 
+  onSend, 
+  isLoading, 
+  isGogginsProject, 
+  isGogginsMode 
+}: {
+  onSend: (text: string) => void;
+  isLoading: boolean;
+  isGogginsProject: boolean;
+  isGogginsMode: boolean;
+}) => {
+  const [localInput, setLocalInput] = useState('');
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const adjustTextareaHeight = () => {
+    const textarea = textareaRef.current;
+    if (textarea) {
+      textarea.style.height = 'auto';
+      textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`;
+    }
+  };
+
+  useEffect(adjustTextareaHeight, [localInput]);
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (localInput.trim() && !isLoading) {
+      onSend(localInput);
+      setLocalInput('');
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        handleSubmit(e as unknown as React.FormEvent);
+    }
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="relative max-w-4xl mx-auto">
+      <textarea
+        ref={textareaRef}
+        rows={1}
+        value={localInput}
+        onChange={e => setLocalInput(e.target.value)}
+        onKeyDown={handleKeyDown}
+        placeholder={isGogginsProject && isGogginsMode ? "What's your excuse?" : "Ask a question..."}
+        disabled={isLoading}
+        className="w-full bg-gray-700 border border-gray-600 rounded-lg py-2 sm:py-3 pl-3 sm:pl-4 pr-12 sm:pr-14 text-sm sm:text-base text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all resize-none leading-tight min-h-[44px] sm:min-h-[52px]"
+      />
+      <button
+        type="submit"
+        disabled={isLoading || !localInput.trim()}
+        className="absolute right-2 sm:right-3 top-1/2 -translate-y-1/2 p-1.5 sm:p-2 rounded-full bg-blue-600 text-white hover:bg-blue-500 disabled:bg-gray-500 disabled:cursor-not-allowed transition-colors"
+        aria-label="Send message"
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 sm:h-5 sm:w-5" viewBox="0 0 20 20" fill="currentColor">
+          <path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z" />
+        </svg>
+      </button>
+    </form>
+  );
+});
+ChatInput.displayName = 'ChatInput';
+
 // Add this at the top of the file (or in a types file if preferred)
 declare global {
   interface ImportMeta {
