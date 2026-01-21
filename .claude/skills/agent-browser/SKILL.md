@@ -6,6 +6,12 @@ allowed-tools: Bash(agent-browser:*)
 
 # Browser Automation with agent-browser
 
+## First-time setup
+
+```bash
+agent-browser install           # Install Chromium binaries (required once)
+```
+
 ## Quick start
 
 ```bash
@@ -22,6 +28,13 @@ agent-browser close             # Close browser
 2. Snapshot: `agent-browser snapshot -i` (returns elements with refs like `@e1`, `@e2`)
 3. Interact using refs from the snapshot
 4. Re-snapshot after navigation or significant DOM changes
+
+## Best practices
+
+- **Use full snapshot first** (`agent-browser snapshot`) to understand page structure, then `-i` for interactions
+- **Direct URL navigation** is more reliable than clicking links in SPAs
+- **Chain commands with `&&`** for dependent operations: `agent-browser click @e1 && sleep 1 && agent-browser snapshot -i`
+- **Always close browser** when done to free resources: `agent-browser close`
 
 ## Commands
 
@@ -235,18 +248,46 @@ agent-browser get text @e1 --json
 ## Debugging
 
 ```bash
-agent-browser open example.com --headed              # Show browser window
-agent-browser console                                # View console messages
-agent-browser errors                                 # View page errors
-agent-browser record start ./debug.webm   # Record from current page
-agent-browser record stop                            # Save recording
-agent-browser open example.com --headed  # Show browser window
-agent-browser --cdp 9222 snapshot        # Connect via CDP
-agent-browser console                    # View console messages
+agent-browser open example.com --headed   # Show browser window (not headless)
+agent-browser --cdp 9222 snapshot         # Connect via Chrome DevTools Protocol
+agent-browser console                     # View console messages
 agent-browser console --clear             # Clear console
-agent-browser errors                     # View page errors
-agent-browser errors --clear             # Clear errors
-agent-browser highlight @e1              # Highlight element
-agent-browser trace start                # Start recording trace
-agent-browser trace stop trace.zip       # Stop and save trace
+agent-browser errors                      # View page errors
+agent-browser errors --clear              # Clear errors
+agent-browser highlight @e1               # Highlight element visually
+agent-browser trace start                 # Start recording trace
+agent-browser trace stop trace.zip        # Stop and save trace
+agent-browser record start ./debug.webm   # Record video from current page
+agent-browser record stop                 # Save recording
+```
+
+## Troubleshooting
+
+### Daemon failed to start
+Run `agent-browser install` to install browser binaries.
+
+### Click fails on SPA links
+Single-page apps (React, Vue) may not respond to ref clicks. Use direct navigation:
+```bash
+# Instead of: agent-browser click @e5
+agent-browser open http://localhost:5173/project/my-page
+```
+
+### Context destroyed / navigation error
+Page navigated during command execution. Wait for stability:
+```bash
+agent-browser wait --load networkidle
+agent-browser snapshot -i
+```
+
+### Stale refs after DOM change
+Re-snapshot to get fresh refs:
+```bash
+agent-browser snapshot -i   # Get new refs after any navigation/AJAX
+```
+
+### Timeout on slow pages
+Use Bash timeout parameter:
+```bash
+# In Claude Code, set timeout: 30000 for slow operations
 ```
