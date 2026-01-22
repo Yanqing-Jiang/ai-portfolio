@@ -38,9 +38,9 @@ __pycache__/
 *.sln
 *.sw?
 
-# Claude local settings (keep skills tracked)
-.claude/*
-!.claude/skills/
+# Claude config (track agents, commands, skills, hooks; ignore local settings)
+.claude/settings.local.json
+.claude/todos.json
 # Temporary runtime files
 *_pid.txt
 temp_view.txt
@@ -82,3 +82,4 @@ Thumbs.db
 *.egg-info/
 *.egg
 build/
+opencode-antigravity-auth

@@ -106,6 +106,11 @@ export function ComponentSelectionProvider({
         const handleClick = (event: MouseEvent) => {
             const target = event.target as HTMLElement;
 
+            // Ignore clicks on action menu (prevents clearing selection before button handler runs)
+            if (target.closest('[data-ignore-selection="true"]')) {
+                return;
+            }
+
             // Find the closest component wrapper
             const componentEl = target.closest('[data-component-id]') as HTMLElement | null;
 

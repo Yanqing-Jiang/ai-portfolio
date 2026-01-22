@@ -23,10 +23,12 @@
 /**
  * A2UI Row Component
  *
- * Horizontal flexbox layout container.
+ * Horizontal flexbox layout container with drag-and-drop reordering.
+ * Supports per-container ordering via LayoutContext.containerOrder.
  */
 
-import React from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Reorder, useDragControls, motion } from 'framer-motion';
 import { extractComponent, type A2UIRendererProps } from '../Registry';
 import type {
     CardProps,
@@ -38,6 +40,7 @@ import type {
 } from '../../a2ui/types';
 import { getByPath } from '../../a2ui/DataBinder';
 import LayoutContext from '../../context/LayoutContext';
+import { InlineDragHandle } from '../../widgets/DragHandle';
 
 const LAYOUT_WIDGET_TYPES = new Set([
     'KpiCard',
@@ -139,6 +142,11 @@ export function A2UIRow({
 
     const widgetOrder = layoutContext?.preferences.widgetOrder ?? [];
     const hiddenWidgets = new Set(layoutContext?.preferences.hiddenWidgets ?? []);
+    const reorderModeEnabled = layoutContext?.preferences.reorderModeEnabled ?? false;
+
+    // Check for container-specific order
+    const containerOrder = layoutContext?.getContainerOrder?.(componentId);
+
     const childMeta = childIds.map((childId, index) => ({
         id: childId,
         index,
@@ -147,24 +155,48 @@ export function A2UIRow({
     const visibleChildren = childMeta.filter(
         (child) => !child.widgetType || !hiddenWidgets.has(child.widgetType)
     );
-    const orderedChildren = widgetOrder.length
-        ? (() => {
-            const orderIndex = new Map(widgetOrder.map((type, idx) => [type, idx]));
-            const orderedOnly = visibleChildren
-                .filter((child) => child.widgetType && orderIndex.has(child.widgetType))
-                .sort((a, b) => (orderIndex.get(a.widgetType!) ?? 0) - (orderIndex.get(b.widgetType!) ?? 0));
-            let cursor = 0;
-            return visibleChildren.map((child) => {
-                if (child.widgetType && orderIndex.has(child.widgetType)) {
-                    const next = orderedOnly[cursor];
-                    cursor += 1;
-                    return next;
-                }
-                return child;
-            });
-        })()
-        : visibleChildren;
-    const finalChildIds = orderedChildren.map((child) => child.id);
+
+    // Apply container-specific order if exists, then fall back to widget order
+    let orderedChildren = visibleChildren;
+    if (containerOrder && containerOrder.length > 0) {
+        // Use container-specific order
+        const orderMap = new Map(containerOrder.map((id, idx) => [id, idx]));
+        orderedChildren = [...visibleChildren].sort((a, b) => {
+            const aOrder = orderMap.get(a.id) ?? 999;
+            const bOrder = orderMap.get(b.id) ?? 999;
+            return aOrder - bOrder;
+        });
+    } else if (widgetOrder.length > 0) {
+        // Fall back to legacy widget type ordering
+        const orderIndex = new Map(widgetOrder.map((type, idx) => [type, idx]));
+        const orderedOnly = visibleChildren
+            .filter((child) => child.widgetType && orderIndex.has(child.widgetType))
+            .sort((a, b) => (orderIndex.get(a.widgetType!) ?? 0) - (orderIndex.get(b.widgetType!) ?? 0));
+        let cursor = 0;
+        orderedChildren = visibleChildren.map((child) => {
+            if (child.widgetType && orderIndex.has(child.widgetType)) {
+                const next = orderedOnly[cursor];
+                cursor += 1;
+                return next;
+            }
+            return child;
+        });
+    }
+
+    const [localOrder, setLocalOrder] = useState(() => orderedChildren.map(c => c.id));
+
+    // Sync local order with context changes
+    useEffect(() => {
+        setLocalOrder(orderedChildren.map(c => c.id));
+    }, [containerOrder?.join(','), orderedChildren.length]);
+
+    const handleReorder = useCallback((newOrder: string[]) => {
+        setLocalOrder(newOrder);
+        // Debounce persistence to avoid excessive writes
+        layoutContext?.reorderContainer?.(componentId, newOrder);
+    }, [layoutContext, componentId]);
+
+    const finalChildIds = reorderModeEnabled ? localOrder : orderedChildren.map((child) => child.id);
 
     if (finalChildIds.length === 0) {
         return null;
@@ -183,33 +215,122 @@ export function A2UIRow({
         ? alignmentMap[rowProps.alignment] || 'flex-start'
         : 'flex-start';
 
+    // Render with Reorder when mode enabled, otherwise standard div
+    if (reorderModeEnabled) {
+        return (
+            <Reorder.Group
+                axis="x"
+                values={localOrder}
+                onReorder={handleReorder}
+                className="a2ui-row a2ui-row--reorder"
+                data-component-id={componentId}
+                style={{
+                    display: 'flex',
+                    flexDirection: 'row',
+                    flexWrap: 'wrap',
+                    justifyContent,
+                    gap: 'clamp(0.5rem, 2vw, 1rem)',
+                    width: '100%',
+                    listStyle: 'none',
+                    padding: 0,
+                    margin: 0,
+                }}
+            >
+                {localOrder.map((childId) => (
+                    <ReorderableRowItem
+                        key={childId}
+                        childId={childId}
+                        templateValue={templateValue}
+                        components={components}
+                        renderChild={renderChild}
+                    />
+                ))}
+            </Reorder.Group>
+        );
+    }
+
+    // Use CSS Grid so layout span classes (col-span-2, row-span-2) work properly
+    // Apply emphasis classes to direct grid children for CSS Grid spans to work
+    const getEmphasisClasses = layoutContext?.getEmphasisClasses;
+
     return (
         <div
             className="a2ui-row"
             data-component-id={componentId}
             style={{
-                display: 'flex',
-                flexDirection: 'row',
-                flexWrap: 'wrap', // Allow wrapping on small screens
-                justifyContent,
-                gap: 'clamp(0.5rem, 2vw, 1rem)', // Responsive gap
+                display: 'grid',
+                gridTemplateColumns: 'repeat(3, 1fr)', // Fixed 3-column grid for span classes
+                gap: 'clamp(0.5rem, 2vw, 1rem)',
                 width: '100%',
             }}
         >
-            {finalChildIds.map((childId) => (
-                <div
-                    key={childId}
-                    className="a2ui-row__item"
-                    style={{
-                        flex: '1 1 280px', // Grow, shrink, min 280px basis
-                        minWidth: '280px', // Force wrap on small screens
-                        maxWidth: '100%', // Prevent overflow
-                    }}
-                >
-                    {renderChild(componentsHasId(components, childId) ? childId : templateValue || childId)}
-                </div>
-            ))}
+            {finalChildIds.map((childId) => {
+                // Get widget type to apply emphasis classes to direct grid children
+                const widgetType = getWidgetTypeForComponent(childId, components, dataModel);
+                const emphasisClasses = widgetType && getEmphasisClasses
+                    ? getEmphasisClasses(widgetType)
+                    : '';
+
+                return (
+                    <div
+                        key={childId}
+                        className={`a2ui-row__item ${emphasisClasses}`.trim()}
+                    >
+                        {renderChild(componentsHasId(components, childId) ? childId : templateValue || childId)}
+                    </div>
+                );
+            })}
         </div>
+    );
+}
+
+/**
+ * Reorderable row item wrapper with drag handle.
+ */
+function ReorderableRowItem({
+    childId,
+    templateValue,
+    components,
+    renderChild,
+}: {
+    childId: string;
+    templateValue?: string;
+    components: Map<string, A2UIComponentType>;
+    renderChild: (id: string) => React.ReactNode;
+}) {
+    const dragControls = useDragControls();
+    const [isDragging, setIsDragging] = useState(false);
+
+    return (
+        <Reorder.Item
+            value={childId}
+            dragListener={false}
+            dragControls={dragControls}
+            onDragStart={() => setIsDragging(true)}
+            onDragEnd={() => setIsDragging(false)}
+            className="a2ui-row__item a2ui-row__item--reorderable"
+            style={{
+                flex: '1 1 280px',
+                minWidth: '280px',
+                maxWidth: '100%',
+                position: 'relative',
+                listStyle: 'none',
+            }}
+            whileDrag={{
+                scale: 1.02,
+                boxShadow: '0 10px 30px rgba(0,0,0,0.3)',
+                zIndex: 50,
+            }}
+            layout
+        >
+            <InlineDragHandle
+                isDragging={isDragging}
+                dragControls={dragControls}
+                ariaLabel={`Drag ${childId} to reorder`}
+                className="absolute -left-2 top-1/2 -translate-y-1/2 z-10"
+            />
+            {renderChild(componentsHasId(components, childId) ? childId : templateValue || childId)}
+        </Reorder.Item>
     );
 }
 

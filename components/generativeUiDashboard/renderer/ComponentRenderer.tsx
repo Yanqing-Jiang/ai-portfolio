@@ -30,7 +30,7 @@
  * Supports layout preferences via LayoutContext.
  */
 
-import React, { useCallback, useContext } from 'react';
+import React, { useCallback, useContext, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import type {
     CardProps,
@@ -48,6 +48,7 @@ import { WidgetErrorBoundary } from './WidgetErrorBoundary';
 import SwapContext, { getSwapOptions } from '../context/ComponentSwapContext';
 import LayoutContext from '../context/LayoutContext';
 import { SwapButton } from '../widgets/SwapButton';
+import { SwapPreviewOverlay } from '../widgets/SwapPreviewOverlay';
 
 export interface ComponentRendererProps {
     /** ID of the component to render */
@@ -170,6 +171,9 @@ export function ComponentRenderer({
     const swapContext = useContext(SwapContext);
     const layoutContext = useContext(LayoutContext);
 
+    // Phase 1 FIX: All hooks must be before any early returns (Rules of Hooks)
+    const hasRegisteredRef = useRef(false);
+
     // IMPORTANT: useCallback must be called before any early returns to satisfy Rules of Hooks
     const renderChild = useCallback(
         (childId: string): React.ReactNode => (
@@ -187,25 +191,54 @@ export function ComponentRenderer({
         [components, dataModel, onAction, enableSwap, streamedComponentIds]
     );
 
-    // Get component definition from map
+    // Get component definition and extract early (for use in useEffect)
     const componentDef = components.get(componentId);
+    const extracted = componentDef ? extractComponent(componentDef) : null;
 
+    // Phase 1 FIX: Register original props for snapshot system
+    // Note: Only depends on componentId to avoid re-running on every render
+    // The hasRegisteredRef ensures we only register once per component instance
+    useEffect(() => {
+        if (!hasRegisteredRef.current && extracted && swapContext?.registerOriginalProps) {
+            swapContext.registerOriginalProps(
+                componentId,
+                extracted.type,
+                extracted.props as Record<string, unknown>
+            );
+            hasRegisteredRef.current = true;
+        }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [componentId]); // Intentionally minimal deps - register once per mount
+
+    // Early returns AFTER all hooks
     if (!componentDef) {
         console.warn(`Component not found: ${componentId}`);
         return null;
     }
 
-    // Extract type and props
-    const extracted = extractComponent(componentDef);
     if (!extracted) {
         return null;
     }
 
-    const { type: originalType, props } = extracted;
+    const { type: originalType, props: originalProps } = extracted;
 
     // Check for swap override (if context available)
     const type = swapContext?.getSwappedType(componentId, originalType) ?? originalType;
+
+    // Phase 1 FIX: Use transformed data from swap override or snapshot when available
+    // This preserves data through swap/revert cycles
+    const swapOverride = swapContext?.getSwapOverride?.(componentId);
+    const transformedData = swapContext?.getTransformedData?.(componentId);
+    const props = transformedData
+        ? { ...originalProps, ...transformedData }
+        : (swapOverride?.transformedData
+            ? { ...originalProps, ...swapOverride.transformedData }
+            : originalProps);
+
     const isSwappable = enableSwap && getSwapOptions(originalType).length > 0;
+    const isSwapped = swapContext?.isSwapped(componentId) ?? false;
+    const isSwapping = swapContext?.swapLoading?.get(componentId) ?? false;
+    const isPreview = swapContext?.isPreviewing?.(componentId) ?? false;
 
     const layoutType = getLayoutType(type, props as Record<string, unknown>, components, dataModel)
         || getLayoutType(originalType, props as Record<string, unknown>, components, dataModel);
@@ -265,14 +298,33 @@ export function ComponentRenderer({
                 layout
                 layoutId={componentId}
                 initial={{ opacity: 0, y: isStreamedComponent ? 30 : 20, scale: isStreamedComponent ? 0.95 : 1 }}
-                animate={{ opacity: 1, y: 0, scale: 1 }}
+                animate={{
+                    opacity: 1,
+                    y: 0,
+                    scale: isSwapping ? 0.98 : 1,
+                    // Smooth morphing animation for swapped components
+                    boxShadow: isSwapped
+                        ? '0 0 0 1px rgba(16, 185, 129, 0.3), 0 0 20px rgba(16, 185, 129, 0.1)'
+                        : isSwapping
+                            ? '0 0 0 2px rgba(251, 191, 36, 0.4), 0 0 30px rgba(251, 191, 36, 0.2)'
+                            : 'none',
+                }}
                 exit={{ opacity: 0, scale: 0.95 }}
-                transition={isStreamedComponent ? streamingEntranceConfig : springConfig}
-                className={`a2ui-component-wrapper relative group ${emphasisClasses}`}
+                transition={isSwapping
+                    ? { duration: 0.3, ease: 'easeInOut' }
+                    : isStreamedComponent
+                        ? streamingEntranceConfig
+                        : springConfig
+                }
+                className={`a2ui-component-wrapper relative group ${emphasisClasses} ${
+                    isSwapping ? 'pointer-events-none' : ''
+                }`}
                 data-component-id={componentId}
                 data-component-type={type}
                 data-original-type={originalType}
                 data-streamed={isStreamedComponent ? 'true' : undefined}
+                data-swapped={isSwapped ? 'true' : undefined}
+                data-swapping={isSwapping ? 'true' : undefined}
             >
                 {/* Swap button overlay - appears on hover for swappable components */}
                 {isSwappable && swapContext && (
@@ -280,6 +332,8 @@ export function ComponentRenderer({
                         <SwapButton componentId={componentId} componentType={originalType} />
                     </div>
                 )}
+                {/* Preview Overlay */}
+                {isPreview && <SwapPreviewOverlay componentId={componentId} />}
                 <Component {...rendererProps} />
             </motion.div>
         </WidgetErrorBoundary>

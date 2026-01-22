@@ -584,7 +584,7 @@ class A2UIMessageEmitter:
             main_row = A2UIComponent.row("main_row", main_children)
             components.append(main_row)
 
-        # Explain panel
+        # Explain panel (with reasoning_steps support for AI disclosure)
         explain_card = None
         if "ExplainMovePanel" not in hidden:
             explain = A2UIComponent.explain_move_panel(
@@ -593,6 +593,7 @@ class A2UIMessageEmitter:
                 explanation_path="/data/explanation/text",
                 factors_path="/data/explanation/factors",
                 citations_path="/data/explanation/citations",
+                reasoning_steps_path="/data/explanation/reasoning_steps",
             )
             explain_card = A2UIComponent.card("explain_card", "explain_panel")
             components.extend([explain, explain_card])

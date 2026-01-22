@@ -182,7 +182,7 @@ from conversational_analytics.tools import execute_sql_tool, execute_news_tool, 
 
 logger = logging.getLogger(__name__)
 
-ALLOWED_TIME_RANGES = {"1M", "3M", "6M", "1Y"}
+ALLOWED_TIME_RANGES = {"1M", "3M", "6M", "1Y", "3Y"}
 DEFAULT_TIME_RANGE = "3M"
 DEFAULT_METRIC = "Revenue"
 DEFAULT_MODEL = "claude-haiku-4-5-20251001"
@@ -546,6 +546,9 @@ class A2UIAgent:
     def _extract_time_range_from_text(self, text: str) -> str:
         """Extract time range from text."""
         text_lower = text.lower()
+        # Check 3Y first (longer match before 1Y)
+        if "3 year" in text_lower or "3y" in text_lower or "three year" in text_lower or "3-year" in text_lower:
+            return "3Y"
         if "1 year" in text_lower or "1y" in text_lower or "annual" in text_lower:
             return "1Y"
         if "6 month" in text_lower or "6m" in text_lower:

@@ -20,8 +20,12 @@ export interface LayoutPreferences {
     emphasis: LayoutEmphasis;
     /** List of widget types that are hidden */
     hiddenWidgets: string[];
-    /** Custom widget ordering (widget type IDs) */
+    /** Custom widget ordering (widget type IDs) - legacy global order */
     widgetOrder: string[];
+    /** Per-container ordering: Map<containerId, childIds[]> */
+    containerOrder: Record<string, string[]>;
+    /** Whether reorder mode is enabled */
+    reorderModeEnabled: boolean;
 }
 
 export interface LayoutContextValue {
@@ -37,8 +41,16 @@ export interface LayoutContextValue {
     showWidget: (widgetType: string) => void;
     /** Check if widget type is hidden */
     isWidgetHidden: (widgetType: string) => boolean;
-    /** Reorder widgets */
+    /** Reorder widgets (legacy global) */
     reorderWidgets: (newOrder: string[]) => void;
+    /** Reorder children within a specific container */
+    reorderContainer: (containerId: string, newOrder: string[]) => void;
+    /** Get order for a specific container */
+    getContainerOrder: (containerId: string) => string[] | null;
+    /** Toggle reorder mode */
+    toggleReorderMode: () => void;
+    /** Set reorder mode */
+    setReorderMode: (enabled: boolean) => void;
     /** Reset to default layout */
     resetLayout: () => void;
     /** Get CSS classes for emphasis mode */
@@ -53,6 +65,8 @@ const DEFAULT_PREFERENCES: LayoutPreferences = {
     emphasis: 'balanced',
     hiddenWidgets: [],
     widgetOrder: [],
+    containerOrder: {},
+    reorderModeEnabled: false,
 };
 
 const STORAGE_KEY = 'a2ui-layout-preferences';
@@ -186,9 +200,41 @@ export function LayoutProvider({ children, initialPreferences }: LayoutProviderP
         return preferences.hiddenWidgets.includes(widgetType);
     }, [preferences.hiddenWidgets]);
 
-    // Reorder widgets
+    // Reorder widgets (legacy global)
     const reorderWidgets = useCallback((newOrder: string[]) => {
         setPreferences(prev => ({ ...prev, widgetOrder: newOrder }));
+    }, []);
+
+    // Reorder children within a specific container
+    const reorderContainer = useCallback((containerId: string, newOrder: string[]) => {
+        setPreferences(prev => ({
+            ...prev,
+            containerOrder: {
+                ...prev.containerOrder,
+                [containerId]: newOrder,
+            },
+        }));
+    }, []);
+
+    // Get order for a specific container
+    const getContainerOrder = useCallback((containerId: string): string[] | null => {
+        return preferences.containerOrder[containerId] || null;
+    }, [preferences.containerOrder]);
+
+    // Toggle reorder mode
+    const toggleReorderMode = useCallback(() => {
+        setPreferences(prev => ({
+            ...prev,
+            reorderModeEnabled: !prev.reorderModeEnabled,
+        }));
+    }, []);
+
+    // Set reorder mode
+    const setReorderMode = useCallback((enabled: boolean) => {
+        setPreferences(prev => ({
+            ...prev,
+            reorderModeEnabled: enabled,
+        }));
     }, []);
 
     // Reset to defaults
@@ -210,6 +256,10 @@ export function LayoutProvider({ children, initialPreferences }: LayoutProviderP
         showWidget,
         isWidgetHidden,
         reorderWidgets,
+        reorderContainer,
+        getContainerOrder,
+        toggleReorderMode,
+        setReorderMode,
         resetLayout,
         getEmphasisClasses,
     };

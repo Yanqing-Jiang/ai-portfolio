@@ -71,7 +71,8 @@ export function useStreamingText(
         const textChanged = fullText !== previousTextRef.current;
 
         // If text changed OR resetKey changed, restart streaming
-        if (textChanged || resetKeyChanged) {
+        // But only reset if we have NEW valid content - don't clear on empty text
+        if ((textChanged || resetKeyChanged) && fullText.length > 0) {
             // Update refs BEFORE starting interval to prevent race conditions
             previousTextRef.current = fullText;
             if (resetKeyChanged) {
@@ -88,13 +89,6 @@ export function useStreamingText(
             if (intervalRef.current) {
                 clearInterval(intervalRef.current);
                 intervalRef.current = null;
-            }
-
-            // Don't start streaming if text is empty
-            if (fullText.length === 0) {
-                setIsComplete(true);
-                setIsStreaming(false);
-                return;
             }
 
             // Start streaming with local copy of fullText to avoid closure issues

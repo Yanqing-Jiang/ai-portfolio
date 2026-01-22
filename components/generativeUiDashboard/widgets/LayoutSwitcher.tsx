@@ -10,6 +10,7 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { Scale, TrendingUp, Table2, Newspaper, ChevronDown, Check, type LucideIcon } from 'lucide-react';
 
 export interface LayoutSwitcherProps {
     currentLayout?: string;
@@ -21,15 +22,15 @@ export interface LayoutSwitcherProps {
 interface LayoutOption {
     id: string;
     label: string;
-    icon: string;
+    Icon: LucideIcon;
     description: string;
 }
 
 const LAYOUTS: LayoutOption[] = [
-    { id: 'balanced', label: 'Balanced View', icon: '⚖️', description: 'All widgets equally sized' },
-    { id: 'focus_chart', label: 'Chart Focus', icon: '📈', description: 'Larger charts, compact data' },
-    { id: 'focus_table', label: 'Table Focus', icon: '📋', description: 'Data table prominent' },
-    { id: 'focus_news', label: 'News Focus', icon: '📰', description: 'News timeline first' },
+    { id: 'balanced', label: 'Balanced View', Icon: Scale, description: 'All widgets equally sized' },
+    { id: 'focus_chart', label: 'Chart Focus', Icon: TrendingUp, description: 'Larger charts, compact data' },
+    { id: 'focus_table', label: 'Table Focus', Icon: Table2, description: 'Data table prominent' },
+    { id: 'focus_news', label: 'News Focus', Icon: Newspaper, description: 'News timeline first' },
 ];
 
 /**
@@ -84,28 +85,22 @@ export function LayoutSwitcher({
                 aria-expanded={isOpen}
                 aria-label={`Current layout: ${selected.label}. Click to change.`}
                 className={`
-          flex items-center gap-2 px-3 py-1.5 rounded-lg 
-          bg-slate-800/60 border border-slate-700 
-          transition-all duration-200
+          flex items-center gap-2 px-3 py-1.5 rounded-lg
+          bg-slate-800/60 border border-slate-700
+          transition-colors duration-200
           ${disabled
                         ? 'opacity-50 cursor-not-allowed'
-                        : 'hover:border-rose-500/30 hover:bg-slate-700/60 cursor-pointer'
+                        : 'hover:border-slate-600 hover:bg-slate-700/60 cursor-pointer'
                     }
         `}
             >
-                <span className="text-base" role="img" aria-label={selected.label}>
-                    {selected.icon}
-                </span>
+                <selected.Icon size={16} className="text-slate-400" aria-label={selected.label} />
                 <span className="text-sm text-slate-300 font-medium">{selected.label}</span>
-                <svg
-                    className={`w-4 h-4 text-slate-500 transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`}
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
+                <ChevronDown
+                    size={16}
+                    className={`text-slate-500 transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`}
                     aria-hidden="true"
-                >
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                </svg>
+                />
             </button>
 
             <AnimatePresence>
@@ -141,26 +136,24 @@ export function LayoutSwitcher({
                                     aria-selected={layout.id === currentLayout}
                                     onClick={() => handleSelect(layout.id)}
                                     className={`
-                    w-full text-left px-4 py-3 
-                    transition-all duration-150
+                    w-full text-left px-4 py-3
+                    transition-colors duration-150
                     ${layout.id === currentLayout
-                                            ? 'bg-rose-500/15 border-l-2 border-rose-500'
+                                            ? 'bg-slate-700/50 border-l-2 border-slate-400'
                                             : 'border-l-2 border-transparent hover:bg-slate-700/50'
                                         }
                   `}
                                 >
                                     <div className="flex items-center gap-3">
-                                        <span
-                                            className="text-lg"
-                                            role="img"
+                                        <layout.Icon
+                                            size={18}
+                                            className={layout.id === currentLayout ? 'text-slate-300' : 'text-gray-400'}
                                             aria-hidden="true"
-                                        >
-                                            {layout.icon}
-                                        </span>
+                                        />
                                         <div>
                                             <span className={`
                         text-sm font-medium block
-                        ${layout.id === currentLayout ? 'text-rose-400' : 'text-slate-200'}
+                        ${layout.id === currentLayout ? 'text-slate-200' : 'text-slate-300'}
                       `}>
                                                 {layout.label}
                                             </span>
@@ -169,18 +162,11 @@ export function LayoutSwitcher({
                                             </p>
                                         </div>
                                         {layout.id === currentLayout && (
-                                            <svg
-                                                className="w-4 h-4 text-rose-400 ml-auto"
-                                                fill="currentColor"
-                                                viewBox="0 0 20 20"
+                                            <Check
+                                                size={16}
+                                                className="text-slate-300 ml-auto"
                                                 aria-hidden="true"
-                                            >
-                                                <path
-                                                    fillRule="evenodd"
-                                                    d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
-                                                    clipRule="evenodd"
-                                                />
-                                            </svg>
+                                            />
                                         )}
                                     </div>
                                 </button>

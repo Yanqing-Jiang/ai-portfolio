@@ -134,6 +134,7 @@ TIMEFRAME_OPTIONS = [
     ClarificationOption(id="3M", label="3 Months", icon="📅"),
     ClarificationOption(id="6M", label="6 Months", icon="📅"),
     ClarificationOption(id="1Y", label="1 Year", icon="📅"),
+    ClarificationOption(id="3Y", label="3 Years", icon="📅"),
 ]
 
 MARGIN_TYPE_OPTIONS = [

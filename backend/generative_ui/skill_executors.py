@@ -120,6 +120,73 @@ def coerce_float(value: Any) -> Optional[float]:
         return None
 
 
+def calculate_gross_margin(
+    gross_margin_series: List[Dict[str, Any]],
+    gross_profit_series: List[Dict[str, Any]],
+    revenue_series: List[Dict[str, Any]],
+) -> Optional[float]:
+    """
+    Calculate gross margin with fallback.
+
+    Function: calculate_gross_margin
+    Role: Get latest gross margin, falling back to Gross Profit / Revenue if 0 or missing.
+    Called from: ExplainMoveExecutor, MarginAnalysisExecutor
+    Why: Centralizes fallback logic for when Gross Margin metric is 0 or unavailable.
+
+    Args:
+        gross_margin_series: Series from 'Gross Margin' metric (may be empty or have 0 values)
+        gross_profit_series: Series from 'Gross Profit' metric
+        revenue_series: Series from 'Revenue' metric
+
+    Returns:
+        Gross margin percentage, or None if unavailable.
+    """
+    gross_latest, _ = latest_and_previous(gross_margin_series)
+
+    # Use direct value if valid
+    if gross_latest is not None and gross_latest != 0:
+        return gross_latest
+
+    # Fallback: calculate from Gross Profit / Revenue
+    if gross_profit_series and revenue_series:
+        gp_latest, _ = latest_and_previous(gross_profit_series)
+        rev_latest, _ = latest_and_previous(revenue_series)
+        if gp_latest is not None and rev_latest is not None and rev_latest != 0:
+            return (gp_latest / rev_latest) * 100
+
+    return None
+
+
+def calculate_net_margin_series(
+    revenue_series: List[Dict[str, Any]],
+    net_income_series: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """
+    Calculate net margin series from revenue and net income.
+
+    Function: calculate_net_margin_series
+    Role: Compute net margin (Net Income / Revenue * 100) for each period.
+    Called from: MarginAnalysisExecutor._parse_single_ticker, _parse_multi_ticker
+    Why: Centralizes net margin calculation to avoid duplication.
+
+    Args:
+        revenue_series: Series from 'Revenue' metric
+        net_income_series: Series from 'Net Income' metric
+
+    Returns:
+        List of {period, value} dicts with net margin percentages.
+    """
+    net_income_by_period = {e["period"]: e["value"] for e in net_income_series}
+    result = []
+    for entry in revenue_series:
+        period = entry["period"]
+        rev_value = entry["value"]
+        net_value = net_income_by_period.get(period)
+        if net_value is not None and rev_value != 0:
+            result.append({"period": period, "value": (net_value / rev_value) * 100})
+    return result
+
+
 # ============================================================================
 # Base Executor
 # ============================================================================
@@ -307,23 +374,20 @@ class ExplainMoveExecutor(BaseSkillExecutor):
     def parse_result(self, results: Dict[str, List[Dict[str, Any]]]) -> Dict[str, Any]:
         rows = results.get("financials", [])
         ticker = self.primary_ticker
-        
+
         revenue_series = metric_series(rows, "Revenue")
         net_income_series = metric_series(rows, "Net Income")
         gross_profit_series = metric_series(rows, "Gross Profit")
-        
+
         revenue_latest, revenue_prev = latest_and_previous(revenue_series)
         net_latest, net_prev = latest_and_previous(net_income_series)
-        gross_profit_latest, _ = latest_and_previous(gross_profit_series)
-        
+
         revenue_delta = percentage_change(revenue_latest, revenue_prev)
         net_delta = percentage_change(net_latest, net_prev)
-        
-        # Calculate gross margin as percentage from gross profit and revenue
-        gross_margin = None
-        if gross_profit_latest is not None and revenue_latest is not None and revenue_latest != 0:
-            gross_margin = (gross_profit_latest / revenue_latest) * 100.0
-        
+
+        # Use centralized gross margin calculation (no Gross Margin metric here, so pass empty list)
+        gross_margin = calculate_gross_margin([], gross_profit_series, revenue_series)
+
         return {
             "ticker": ticker,
             "kpis": {
@@ -703,9 +767,9 @@ class MarginAnalysisExecutor(BaseSkillExecutor):
                 sql=(
                     f"SELECT ticker, calendar_year, calendar_quarter_num, calendar_quarter, metric, value "
                     f"FROM comp_financials "
-                    f"WHERE ticker = '{ticker}' AND metric IN ('Gross Margin', 'Operating Margin', 'Net Income', 'Revenue') "
+                    f"WHERE ticker = '{ticker}' AND metric IN ('Gross Margin', 'Operating Margin', 'Net Income', 'Revenue', 'Gross Profit') "
                     f"ORDER BY calendar_year DESC, calendar_quarter_num DESC "
-                    f"LIMIT 48"
+                    f"LIMIT 60"
                 ),
                 reason="Margin analysis",
                 key="margins",
@@ -719,9 +783,9 @@ class MarginAnalysisExecutor(BaseSkillExecutor):
                 sql=(
                     f"SELECT ticker, calendar_year, calendar_quarter_num, calendar_quarter, metric, value "
                     f"FROM comp_financials "
-                    f"WHERE ticker IN ({tickers_sql}) AND metric IN ('Gross Margin', 'Operating Margin', 'Net Income', 'Revenue') "
+                    f"WHERE ticker IN ({tickers_sql}) AND metric IN ('Gross Margin', 'Operating Margin', 'Net Income', 'Revenue', 'Gross Profit') "
                     f"ORDER BY ticker, calendar_year DESC, calendar_quarter_num DESC "
-                    f"LIMIT 200"
+                    f"LIMIT 300"
                 ),
                 reason="Multi-ticker margin comparison",
                 key="margins",
@@ -736,26 +800,17 @@ class MarginAnalysisExecutor(BaseSkillExecutor):
     def _parse_single_ticker(self, results: Dict[str, List[Dict[str, Any]]]) -> Dict[str, Any]:
         rows = results.get("margins", [])
         ticker = self.primary_ticker
-        
+
         gross_series = metric_series(rows, "Gross Margin")
         operating_series = metric_series(rows, "Operating Margin")
         revenue_series = metric_series(rows, "Revenue")
         net_income_series = metric_series(rows, "Net Income")
-        
-        net_income_by_period = {e["period"]: e["value"] for e in net_income_series}
-        
-        gross_latest, _ = latest_and_previous(gross_series)
+        gross_profit_series = metric_series(rows, "Gross Profit")
+
+        # Use centralized margin calculations
+        gross_latest = calculate_gross_margin(gross_series, gross_profit_series, revenue_series)
         operating_latest, _ = latest_and_previous(operating_series)
-        
-        # Calculate net margin
-        net_margin_series = []
-        for entry in revenue_series:
-            period = entry["period"]
-            rev_value = entry["value"]
-            net_value = net_income_by_period.get(period)
-            if net_value is not None and rev_value != 0:
-                net_margin_series.append({"period": period, "value": (net_value / rev_value) * 100})
-        
+        net_margin_series = calculate_net_margin_series(revenue_series, net_income_series)
         net_latest, _ = latest_and_previous(net_margin_series)
         
         # Build table
@@ -785,9 +840,9 @@ class MarginAnalysisExecutor(BaseSkillExecutor):
         return {
             "ticker": ticker,
             "kpis": {
-                "gross_margin": gross_latest or 0,
-                "operating_margin": operating_latest or 0,
-                "net_margin": net_latest or 0,
+                "gross_margin": gross_latest,      # Keep None, don't convert to 0
+                "operating_margin": operating_latest,
+                "net_margin": net_latest,
             },
             "table": {"columns": columns, "rows": table_rows},
             "chart": {"series": chart_series, "annotations": []},
@@ -811,20 +866,12 @@ class MarginAnalysisExecutor(BaseSkillExecutor):
             operating_series = metric_series(ticker_rows, "Operating Margin")
             revenue_series = metric_series(ticker_rows, "Revenue")
             net_income_series = metric_series(ticker_rows, "Net Income")
-            
-            net_income_by_period = {e["period"]: e["value"] for e in net_income_series}
-            
-            gross_latest, _ = latest_and_previous(gross_series)
+            gross_profit_series = metric_series(ticker_rows, "Gross Profit")
+
+            # Use centralized margin calculations
+            gross_latest = calculate_gross_margin(gross_series, gross_profit_series, revenue_series)
             operating_latest, _ = latest_and_previous(operating_series)
-            
-            net_margin_series = []
-            for entry in revenue_series:
-                period = entry["period"]
-                rev_value = entry["value"]
-                net_value = net_income_by_period.get(period)
-                if net_value is not None and rev_value != 0:
-                    net_margin_series.append({"period": period, "value": (net_value / rev_value) * 100})
-            
+            net_margin_series = calculate_net_margin_series(revenue_series, net_income_series)
             net_margin = net_margin_series[0]["value"] if net_margin_series else None
             
             if net_margin_series:
@@ -832,9 +879,9 @@ class MarginAnalysisExecutor(BaseSkillExecutor):
             
             table_rows.append({
                 "ticker": ticker,
-                "gross_margin": gross_latest or 0,
-                "operating_margin": operating_latest or 0,
-                "net_margin": net_margin or 0,
+                "gross_margin": gross_latest,      # Keep None, don't convert to 0
+                "operating_margin": operating_latest,
+                "net_margin": net_margin,
             })
         
         columns = [
@@ -853,9 +900,9 @@ class MarginAnalysisExecutor(BaseSkillExecutor):
             "tickers": self.tickers,
             "primary_ticker": self.primary_ticker,
             "kpis": {
-                "gross_margin": primary_row["gross_margin"] if primary_row else 0,
-                "operating_margin": primary_row["operating_margin"] if primary_row else 0,
-                "net_margin": primary_row["net_margin"] if primary_row else 0,
+                "gross_margin": primary_row["gross_margin"] if primary_row else None,
+                "operating_margin": primary_row["operating_margin"] if primary_row else None,
+                "net_margin": primary_row["net_margin"] if primary_row else None,
             },
             "table": {"columns": columns, "rows": table_rows},
             "chart": {"series": chart_series, "annotations": []},

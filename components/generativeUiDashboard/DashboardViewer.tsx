@@ -15,7 +15,7 @@ import { authService } from '../../services/auth';
 
 // Context providers for layout/swapping
 import { LayoutProvider, ComponentSwapProvider, ComponentSelectionProvider } from './context';
-import { LayoutSwitcher, ComponentActionMenu } from './widgets';
+import { LayoutSwitcher, ComponentActionMenu, ReorderToggleIcon } from './widgets';
 
 export interface DashboardViewerProps {
     /** Dashboard ID to load */
@@ -107,7 +107,7 @@ export function DashboardViewer({
 
     return (
         <LayoutProvider initialPreferences={{ emphasis: currentLayout as 'balanced' | 'focus_chart' | 'focus_table' | 'focus_news' }}>
-            <ComponentSwapProvider>
+            <ComponentSwapProvider dashboardId={dashboardId}>
                 <div
                     ref={containerRef}
                     className={`dashboard-viewer ${className}`}
@@ -127,15 +127,23 @@ export function DashboardViewer({
                             </span>
                         </div>
 
-                        {/* Layout Switcher */}
-                        {enableLayoutControls && (
-                            <LayoutSwitcher
-                                currentLayout={currentLayout}
-                                surfaceId={surfaceId}
-                                onLayoutChange={handleLayoutChange}
-                                disabled={!state.isDone}
-                            />
-                        )}
+                        {/* Layout and Reorder Controls */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            {/* Reorder Toggle */}
+                            {enableLayoutControls && state.isDone && (
+                                <ReorderToggleIcon />
+                            )}
+
+                            {/* Layout Switcher */}
+                            {enableLayoutControls && (
+                                <LayoutSwitcher
+                                    currentLayout={currentLayout}
+                                    surfaceId={surfaceId}
+                                    onLayoutChange={handleLayoutChange}
+                                    disabled={!state.isDone}
+                                />
+                            )}
+                        </div>
                     </div>
 
                     {/* Main surface with selection context for component targeting */}

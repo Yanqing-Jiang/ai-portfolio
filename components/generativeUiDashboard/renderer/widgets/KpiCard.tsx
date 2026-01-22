@@ -2,20 +2,23 @@
  * KPI Card Widget
  *
  * Single metric display with optional delta indicator.
- * 
+ *
  * Component: KpiCard — displays a key performance indicator.
  * Called from: ComponentRenderer via Registry
- * Invokes: DataBinder.resolveString, DataBinder.resolveNumber
+ * Invokes: DataBinder.resolveString, DataBinder.resolveNumber, useAnimatedNumber
  * Why: Provides at-a-glance metrics in A2UI dashboards.
- * 
+ *
  * Accessibility: Implements optimization #15 with ARIA labels,
  * keyboard navigation, and screen reader support.
+ *
+ * Animation: Uses useAnimatedNumber for smooth value transitions.
  */
 
 import React from 'react';
 import type { A2UIRendererProps } from '../Registry';
 import { resolveString, resolveNumber } from '../../a2ui/DataBinder';
 import type { KpiCardProps } from '../../a2ui/types';
+import { useAnimatedNumber } from '../../hooks/useAnimatedNumber';
 
 export function KpiCard({
     componentId,
@@ -25,10 +28,24 @@ export function KpiCard({
     const kpiProps = props as unknown as KpiCardProps;
 
     const label = resolveString(kpiProps.label, dataModel, 'Value');
-    const value = resolveNumber(kpiProps.value, dataModel, 0);
+    const rawValue = resolveNumber(kpiProps.value, dataModel, 0);
     const unit = resolveString(kpiProps.unit, dataModel, '');
-    const delta = kpiProps.delta ? resolveNumber(kpiProps.delta, dataModel, 0) : null;
+    const rawDelta = kpiProps.delta ? resolveNumber(kpiProps.delta, dataModel, 0) : null;
     const deltaType = resolveString(kpiProps.deltaType, dataModel, 'absolute');
+
+    // Animate the numeric values
+    const value = useAnimatedNumber(rawValue, {
+        duration: 800,
+        easing: 'easeOutExpo',
+        animateOnMount: true,
+    });
+    const delta = rawDelta !== null
+        ? useAnimatedNumber(rawDelta, { duration: 600, easing: 'easeOut' })
+        : null;
+
+    // Only show N/A when value is explicitly null/undefined, not when 0
+    // (0% margin is a valid value, different from "no data")
+    const shouldShowNA = rawValue === null || rawValue === undefined;
 
     // Format value
     const formatValue = (val: number, u: string): string => {
@@ -56,16 +73,16 @@ export function KpiCard({
         return `${prefix}${d.toFixed(2)}`;
     };
 
-    // Delta color
-    const deltaColor = delta !== null ? (delta >= 0 ? '#22c55e' : '#ef4444') : '#94a3b8';
-    const deltaIcon = delta !== null ? (delta >= 0 ? '↑' : '↓') : '';
+    // Delta color (based on raw value for consistency)
+    const deltaColor = rawDelta !== null ? (rawDelta >= 0 ? '#22c55e' : '#ef4444') : '#94a3b8';
+    const deltaIcon = rawDelta !== null ? (rawDelta >= 0 ? '↑' : '↓') : '';
 
     // Accessibility: Build descriptive labels
-    const formattedValue = formatValue(value, unit);
+    const formattedValue = shouldShowNA ? 'N/A' : formatValue(value, unit);
     const ariaLabel = `${label}: ${formattedValue}`;
     const deltaId = `${componentId}-delta`;
-    const deltaAriaLabel = delta !== null
-        ? `Change: ${delta >= 0 ? 'up' : 'down'} ${formatDelta(Math.abs(delta), deltaType)}`
+    const deltaAriaLabel = rawDelta !== null
+        ? `Change: ${rawDelta >= 0 ? 'up' : 'down'} ${formatDelta(Math.abs(rawDelta), deltaType)}`
         : undefined;
 
     return (
@@ -116,7 +133,7 @@ export function KpiCard({
                 {formattedValue}
             </div>
 
-            {delta !== null && (
+            {delta !== null && !shouldShowNA && (
                 <div
                     id={deltaId}
                     className="a2ui-kpi-card__delta"

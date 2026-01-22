@@ -46,7 +46,16 @@ export function resolveBoundValue(
     boundValue: BoundValue | undefined,
     dataModel: DataModel
 ): unknown {
-    if (!boundValue) return undefined;
+    if (boundValue === undefined || boundValue === null) return undefined;
+
+    // If it's a primitive (string, number, boolean, array), return it directly
+    // This handles cases where props are already resolved values (e.g., from swap)
+    if (typeof boundValue !== 'object') {
+        return boundValue;
+    }
+    if (Array.isArray(boundValue)) {
+        return boundValue;
+    }
 
     // Check for path first
     if ('path' in boundValue && boundValue.path) {

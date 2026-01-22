@@ -14,6 +14,7 @@ import type { A2UIRendererProps } from '../Registry';
 import { getByPath, resolveArray, resolveString } from '../../a2ui/DataBinder';
 import type { ExplainMovePanelProps } from '../../a2ui/types';
 import { useStreamingText } from '../../hooks/useStreamingText';
+import { ReasoningDisclosure, type ReasoningStep } from '../../widgets/ReasoningDisclosure';
 
 
 interface Factor {
@@ -107,20 +108,30 @@ export function ExplainMovePanel({
     const isCached = Boolean(getByPath(dataModel, '/data/explanation/cached'));
     // Check if this is a revisited dashboard (skip streaming animation)
     const isRevisit = Boolean(getByPath(dataModel, '/data/explanation/isRevisit'));
+    // Get AI reasoning steps for disclosure
+    const reasoningSteps = resolveArray<ReasoningStep>(
+        panelProps.reasoningSteps ?? { path: '/data/explanation/reasoning_steps' },
+        dataModel,
+        []
+    );
 
     // Check if we have real content (not placeholder) to prevent streaming placeholder text
     const hasRealContent = fullExplanation && fullExplanation !== DEFAULT_EXPLANATION;
 
     // Use streaming text hook for the narrative
     // Skip streaming entirely for revisited dashboards - show full text immediately
+    // Use stable resetKey (just componentId) to prevent content clearing on data load
     const { displayText, isComplete } = useStreamingText(fullExplanation, {
         speed: 20,
-        resetKey: `${componentId}-${hasRealContent}`,
+        resetKey: componentId,
         enabled: !isCached && !isRevisit && hasRealContent,
     });
 
     // For revisited dashboards, show full text immediately
-    const finalDisplayText = isRevisit && hasRealContent ? fullExplanation : displayText;
+    // Show placeholder if no real content available (don't show empty)
+    const finalDisplayText = hasRealContent
+        ? (isRevisit ? fullExplanation : displayText)
+        : DEFAULT_EXPLANATION;
     const finalIsComplete = isRevisit && hasRealContent ? true : isComplete;
 
     const displayFactors = factors.length > 0 ? factors : DEFAULT_FACTORS;
@@ -309,6 +320,17 @@ export function ExplainMovePanel({
                                     )}
                                 </p>
                             </div>
+
+                            {/* AI Reasoning Disclosure */}
+                            {reasoningSteps.length > 0 && (
+                                <div style={{ marginBottom: '1rem' }}>
+                                    <ReasoningDisclosure
+                                        steps={reasoningSteps}
+                                        label="Why this insight?"
+                                        defaultExpanded={false}
+                                    />
+                                </div>
+                            )}
 
                             {/* Quick Stats Grid - responsive */}
                             <div

@@ -162,6 +162,7 @@ from ..follow_up_generator import generate_follow_ups_with_llm
 from ..follow_up_responder import build_follow_up_answer
 from ..session_memory import load_explanation_memory
 from shared_tools.news_service import execute_news_tool
+from ..utils.swap_advisor import suggest_swaps_for_component, suggest_swaps_with_llm
 
 logger = logging.getLogger(__name__)
 
@@ -843,7 +844,7 @@ async def _handle_component_switch(
     data_model = state.latest_data.get("data", {}) if state.latest_data else {}
     
     # Transform data for the swap
-    transformed_data = _transform_data_for_swap(
+    transformed_data, warnings = _transform_data_for_swap(
         data_model=data_model,
         component_id=params.get("target_component", ""),
         from_type=params.get("target_component", ""),  # Best guess
@@ -854,6 +855,7 @@ async def _handle_component_switch(
         "from_type": params.get("target_component"),
         "to_type": params.get("new_type"),
         "transformed_data": transformed_data,
+        "warnings": warnings,
         "message": f"Swapped to {params.get('new_type')}",
     }
 
@@ -975,17 +977,18 @@ async def swap_component(dashboard_id: str, swap: SwapRequest, request: Request)
         raise HTTPException(status_code=404, detail="Dashboard not found")
     
     # Get current component data from latest data model
-    data_model = state.latest_data.get("data", {}) if state.latest_data else {}
-    
+    # FIX: latest_data returns data_json directly, not nested under "data" key
+    data_model = state.latest_data if state.latest_data else {}
+
     # Transform data based on swap type
-    transformed_data = _transform_data_for_swap(
+    transformed_data, warnings = _transform_data_for_swap(
         data_model=data_model,
         component_id=swap.component_id,
         from_type=swap.from_type,
         to_type=swap.to_type,
     )
     
-    if transformed_data is None:
+    if transformed_data is None and not warnings:
         # No transformation needed - client handles simple swaps
         return {
             "status": "no_transform_needed",
@@ -993,6 +996,7 @@ async def swap_component(dashboard_id: str, swap: SwapRequest, request: Request)
             "from_type": swap.from_type,
             "to_type": swap.to_type,
             "message": "This swap can be handled client-side without data transformation",
+            "warnings": [],
         }
     
     return {
@@ -1001,7 +1005,57 @@ async def swap_component(dashboard_id: str, swap: SwapRequest, request: Request)
         "from_type": swap.from_type,
         "to_type": swap.to_type,
         "transformed_data": transformed_data,
+        "warnings": warnings,
     }
+
+
+@router.get("/{dashboard_id}/swap/suggest")
+async def get_swap_suggestions(
+    dashboard_id: str,
+    component_type: str,
+    component_id: Optional[str] = None,
+    use_llm: bool = True,
+):
+    """
+    Get ranked swap suggestions for a component.
+
+    Function: get_swap_suggestions
+    Called from: Frontend ComponentSwapContext (suggestSwaps)
+    Invokes: swap_advisor.suggest_swaps_with_llm (LLM) or suggest_swaps_for_component (heuristic)
+    Why: Provides AI/heuristic-driven recommendations for better visualizations.
+
+    Query params:
+        component_type: Current component type (e.g., 'KpiCard')
+        component_id: Optional component ID for specific context
+        use_llm: Whether to use LLM-enhanced suggestions (default: True)
+    """
+    store = get_dashboard_store()
+    state = store.get(dashboard_id)
+
+    if not state:
+        raise HTTPException(status_code=404, detail="Dashboard not found")
+
+    # Use latest data model to inform suggestions
+    data_model = state.latest_data if state.latest_data else {}
+
+    if use_llm:
+        # Use LLM-enhanced suggestions (with heuristic fallback)
+        suggestions = await suggest_swaps_with_llm(
+            current_type=component_type,
+            data_model=data_model,
+            component_id=component_id,
+            max_suggestions=3,
+        )
+        logger.info(
+            "[SWAP_SUGGEST] LLM suggestions for %s: %d results",
+            component_type,
+            len(suggestions),
+        )
+    else:
+        # Use heuristic-only suggestions
+        suggestions = suggest_swaps_for_component(component_type, data_model)
+
+    return {"suggestions": suggestions}
 
 
 def _transform_data_for_swap(
@@ -1009,30 +1063,32 @@ def _transform_data_for_swap(
     component_id: str,
     from_type: str,
     to_type: str,
-) -> Optional[Dict[str, Any]]:
+) -> tuple[Optional[Dict[str, Any]], list[str]]:
     """
     Transform data for component type swap.
-    
+
     Function: _transform_data_for_swap
     Called from: swap_component endpoint
     Invokes: Type-specific transformation functions
     Why: Different visualizations need different data shapes.
-    
-    Returns None if no transformation is needed (client can handle).
+
+    Returns (transformed_data, warnings).
     """
+    warnings: list[str] = []
+
     # PriceChart/MetricChart -> DataTable: Convert timeseries to rows
     if from_type in ("PriceChart", "MetricChart") and to_type == "DataTable":
         series_data = data_model.get("chart", {}).get("series", [])
         if not series_data:
-            return None
-        
+            return None, ["No chart data available to convert"]
+
         # Convert series data to table rows
         rows = []
         for series in series_data:
             values = series.get("values", [])
             labels = series.get("labels", [])
             name = series.get("name", series.get("metric", "Value"))
-            
+
             for i, value in enumerate(values):
                 label = labels[i] if i < len(labels) else f"Period {i+1}"
                 rows.append({
@@ -1040,75 +1096,160 @@ def _transform_data_for_swap(
                     name: value,
                 })
         
+        if len(rows) > 50:
+            warnings.append(f"Data truncated: showing first 50 of {len(rows)} rows")
+            rows = rows[:50]
+
+        # Return FLAT props for frontend compatibility
         return {
-            "type": "DataTable",
-            "props": {
-                "columns": [
-                    {"key": "period", "label": "Period"},
-                    {"key": series_data[0].get("name", "Value"), "label": series_data[0].get("name", "Value")},
-                ],
-                "rows": rows,
-                "sortable": True,
-            }
-        }
-    
+            "columns": [
+                {"key": "period", "label": "Period"},
+                {"key": series_data[0].get("name", "Value"), "label": series_data[0].get("name", "Value")},
+            ],
+            "rows": rows,
+            "sortable": True,
+        }, warnings
+
     # DataTable -> MetricChart: Convert rows to series
     if from_type == "DataTable" and to_type in ("MetricChart", "PriceChart"):
         table_data = data_model.get("table", {})
         rows = table_data.get("rows", [])
         if not rows:
-            return None
-        
+            return None, ["No table data available to convert"]
+
         # Find numeric columns for chart series
         numeric_cols = []
         for key, val in rows[0].items():
             if isinstance(val, (int, float)) and key.lower() not in ("year", "quarter", "period"):
                 numeric_cols.append(key)
-        
+
         if not numeric_cols:
-            return None
-        
+            return None, ["No numeric columns found for chart"]
+
         # Extract series from first numeric column
         values = [row.get(numeric_cols[0]) for row in rows]
         labels = [row.get("period", row.get("ticker", f"Row {i}")) for i, row in enumerate(rows)]
-        
+
+        # Return FLAT props for frontend compatibility
         return {
-            "type": to_type,
-            "props": {
-                "series": [{
-                    "name": numeric_cols[0],
-                    "values": values,
-                    "labels": labels,
-                }],
-                "title": f"{numeric_cols[0]} Over Time",
-                "chartType": "line",
-            }
-        }
-    
-    # KpiCard -> MetricChart: Need historical data from database
+            "series": [{
+                "name": numeric_cols[0],
+                "values": values,
+                "labels": labels,
+            }],
+            "title": f"{numeric_cols[0]} Over Time",
+            "chartType": "line",
+        }, warnings
+
+    # KpiCard -> MetricChart: Use existing chart series from data model
     if from_type == "KpiCard" and to_type == "MetricChart":
-        kpis = data_model.get("kpis", {})
-        if not kpis:
-            return None
-        
-        # For now, return a placeholder indicating we'd need to fetch historical data
-        # In production, this would query the database for historical values
-        return {
-            "type": "MetricChart",
-            "props": {
-                "series": [{
-                    "name": "Historical Data",
-                    "values": [],  # Would be populated from database
-                    "labels": [],
-                }],
-                "title": "Historical Trend",
+        # Chart data is already available in the data model from skill executor
+        chart_data = data_model.get("chart", {})
+        existing_series = chart_data.get("series", [])
+
+        if existing_series:
+            # Filter out series with empty data arrays
+            valid_series = [s for s in existing_series if s.get("data")]
+
+            if not valid_series:
+                return None, ["No valid historical data found"]
+
+            # Series are already in correct format: {"ticker": "...", "data": [{period, value}]}
+            # MetricChart expects the same format - just pass through
+            return {
+                "series": valid_series,
+                "title": data_model.get("title", "Margin Trend Over Time"),
                 "chartType": "line",
-                "message": "Historical data would be fetched from database",
-            }
-        }
-    
+                "annotations": chart_data.get("annotations", []),
+            }, warnings
+
+        # Fallback: No chart data available
+        return None, ["No historical data available for this KPI"]
+
+    # PeerComparePanel -> DataTable: Extract comparison table
+    if from_type == "PeerComparePanel" and to_type == "DataTable":
+        table_data = data_model.get("table", {})
+        if not table_data:
+            return None, ["No comparison data available"]
+
+        # Return FLAT props for frontend compatibility
+        return {
+            "columns": table_data.get("columns", []),
+            "rows": table_data.get("rows", []),
+            "sortable": True,
+            "title": data_model.get("title", "Peer Comparison Data"),
+        }, warnings
+
+    # PeerComparePanel -> MetricChart: Extract chart data
+    if from_type == "PeerComparePanel" and to_type == "MetricChart":
+        chart_data = data_model.get("chart", {})
+        if not chart_data:
+            return None, ["No chart data available"]
+
+        # Return FLAT props for frontend compatibility
+        return {
+            "series": chart_data.get("series", []),
+            "title": data_model.get("title", "Peer Comparison"),
+            "chartType": "line",
+            "annotations": chart_data.get("annotations", []),
+        }, warnings
+
+    # PeerComparePanel -> SplitView: Decompose into separate components
+    if from_type == "PeerComparePanel" and to_type == "SplitView":
+        chart_data = data_model.get("chart", {})
+        table_data = data_model.get("table", {})
+        explanation = data_model.get("explanation", {})
+
+        components = []
+
+        # Add MetricChart component
+        if chart_data and chart_data.get("series"):
+            components.append({
+                "componentId": f"{component_id}_chart",
+                "type": "MetricChart",
+                "props": {
+                    "series": chart_data.get("series", []),
+                    "title": "Comparison Chart",
+                    "chartType": "line",
+                },
+            })
+
+        # Add DataTable component
+        if table_data and table_data.get("rows"):
+            components.append({
+                "componentId": f"{component_id}_table",
+                "type": "DataTable",
+                "props": {
+                    "columns": table_data.get("columns", []),
+                    "rows": table_data.get("rows", []),
+                    "sortable": True,
+                },
+            })
+
+        # Add ExplainMovePanel component for insights
+        if explanation and explanation.get("text"):
+            components.append({
+                "componentId": f"{component_id}_insight",
+                "type": "ExplainMovePanel",
+                "props": {
+                    "title": explanation.get("title", "Analysis"),
+                    "explanation": explanation.get("text", ""),
+                    "factors": explanation.get("factors", []),
+                },
+            })
+
+        if not components:
+            return None, ["No content available to split"]
+
+        return {
+            "type": "SplitView",
+            "originalComponentId": component_id,
+            "components": components,
+            "layout": "column",  # Stack vertically by default
+        }, warnings
+
     # No transformation needed - client can handle this swap
-    return None
+    return None, []
 
 
 class FollowUpSuggestion(BaseModel):

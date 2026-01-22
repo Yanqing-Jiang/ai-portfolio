@@ -2507,9 +2507,13 @@ export function GenerativeUIPage(): React.ReactElement {
                                         <A2UISurfaceError error={streamState.error} onRetry={streamActions.reconnect} />
                                     )}
 
-                                    {/* A2UI Surface - Wrapped with LayoutProvider for LLM-driven layout control */}
+                                    {/* A2UI Surface - Wrapped with full context for Wow Factor features */}
                                     {surface?.root && (
-                                        <DashboardWithLayout key={dashboardId}>
+                                        <DashboardWithLayout
+                                            key={dashboardId}
+                                            dashboardId={dashboardId ?? undefined}
+                                            enableSwapping={true}
+                                        >
                                             <A2UISurface
                                                 key={`surface-${dashboardId}`}
                                                 surface={surface}
