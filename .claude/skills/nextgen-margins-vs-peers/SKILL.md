@@ -1,5 +1,5 @@
 ---
-name: margins-vs-peers
+name: nextgen-margins-vs-peers
 description: |
   Compares profit margins (gross, operating, or net) for a target company versus peer averages.
   Use when the user asks about profit margins, gross margin, operating margin, net margin,

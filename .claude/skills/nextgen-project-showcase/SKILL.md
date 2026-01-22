@@ -1,5 +1,5 @@
 ---
-name: project-showcase
+name: nextgen-project-showcase
 description: |
   Explains the Next Gen Analytics Agent project architecture and provides a demo walkthrough.
   Use when the user asks about project tour, showcase, demo, walkthrough, how does this work,

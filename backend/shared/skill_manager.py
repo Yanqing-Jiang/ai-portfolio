@@ -345,6 +345,11 @@ class SkillManager:
             if not skill_dir.is_dir():
                 continue
 
+            # Skip CLI skills (agent-*, cli-*) - these are for Claude Code, not Anthropic API
+            if skill_dir.name.startswith("agent-") or skill_dir.name.startswith("cli-"):
+                logger.debug(f"Skipping CLI skill: {skill_dir.name}")
+                continue
+
             # Check for SKILL.md or skill.md
             skill_md = skill_dir / "SKILL.md"
             if not skill_md.exists():

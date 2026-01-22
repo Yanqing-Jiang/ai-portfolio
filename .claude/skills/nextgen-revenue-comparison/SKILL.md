@@ -1,5 +1,5 @@
 ---
-name: revenue-comparison
+name: nextgen-revenue-comparison
 description: |
   Compares absolute revenue totals across selected peer tickers over a time period.
   Use when the user asks about comparing revenue between companies, revenue vs, revenue among,

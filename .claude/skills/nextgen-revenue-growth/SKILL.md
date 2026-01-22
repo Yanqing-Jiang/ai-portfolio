@@ -1,5 +1,5 @@
 ---
-name: revenue-growth
+name: nextgen-revenue-growth
 description: |
   Calculates and visualizes revenue growth rates (YoY and/or QoQ) for semiconductor companies.
   Use when the user asks about revenue growth, growth rate, YoY growth, QoQ growth,

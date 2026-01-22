@@ -1,5 +1,5 @@
 ---
-name: offscope-greeting
+name: nextgen-offscope-greeting
 description: |
   Handles greetings, chit-chat, or non-financial/off-scope requests with a polite redirect.
   Use when the user says hello, hi, hey, or other greetings, asks personal questions unrelated

@@ -1,5 +1,5 @@
 ---
-name: market-share-single
+name: nextgen-market-share-single
 description: |
   Calculates a single company's market share versus the peer set for a given metric and time
   period. Use when the user asks about market share, market position, share of market, what

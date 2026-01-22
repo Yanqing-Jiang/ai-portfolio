@@ -1,5 +1,5 @@
 ---
-name: margin-growth-peers
+name: nextgen-margin-growth-peers
 description: |
   Tracks margin expansion or contraction (in percentage points) and compares to peer averages.
   Use when the user asks about margin growth, margin expansion, margin contraction, change in

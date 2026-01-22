@@ -208,21 +208,22 @@ def load_skill_from_directory(skill_dir: Path) -> Optional[NativeSkill]:
 def load_all_native_skills(
     skills_dir: Optional[Path] = None,
     prefix_filter: Optional[str] = None,
-    exclude_a2ui: bool = True,
 ) -> List[NativeSkill]:
     """
-    Load all native skills from .claude/skills/ directory.
+    Load all nextgen-* skills from .claude/skills/ directory.
 
-    Function: load_all_native_skills — Loads all skills for conversational analytics.
+    Function: load_all_native_skills — Loads nextgen-* skills for conversational analytics.
     Called from: NativeSkillsClient initialization, get_native_skills.
     Invokes: load_skill_from_file and load_skill_from_directory.
     Purpose: Populates the skill registry for API container.skills field.
 
+    Only loads skills with `nextgen-` prefix. Other prefixes are for different projects:
+    - `a2ui-*` — Generative UI project (separate loader)
+    - `agent-*`, `cli-*` — Claude Code CLI skills (not for backends)
+
     Args:
         skills_dir: Override skills directory (default: .claude/skills/)
-        prefix_filter: Only load skills whose name starts with this prefix
-                      (deprecated - all skills now in subdirectories)
-        exclude_a2ui: If True, skip A2UI skills (they have their own loader)
+        prefix_filter: Additional filter on skill_id (optional)
 
     Returns: List of NativeSkill objects
     """
@@ -234,8 +235,9 @@ def load_all_native_skills(
     skills: List[NativeSkill] = []
 
     for item in sorted(skills_dir.iterdir()):
-        # Skip A2UI skills if requested (they have their own loader)
-        if exclude_a2ui and item.name.startswith("a2ui-"):
+        # Only load nextgen-* skills (Conv Analytics project)
+        # Skip all other prefixes: a2ui-* (Generative UI), agent-*/cli-* (Claude Code CLI)
+        if not item.name.startswith("nextgen-"):
             continue
 
         # Handle nested directories with SKILL.md (official format)
@@ -263,12 +265,11 @@ def load_all_native_skills(
 @lru_cache(maxsize=1)
 def get_native_skills() -> List[NativeSkill]:
     """
-    Get cached list of native skills for conversational analytics.
+    Get cached list of nextgen-* skills for conversational analytics.
 
-    Loads all skills except A2UI skills (which have their own loader).
-    All skills are now in subdirectories with SKILL.md files.
+    Only loads skills with `nextgen-` prefix from .claude/skills/.
     """
-    return load_all_native_skills(exclude_a2ui=True)
+    return load_all_native_skills()
 
 
 def get_native_skill_by_id(skill_id: str) -> Optional[NativeSkill]:
