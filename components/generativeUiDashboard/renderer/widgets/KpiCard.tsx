@@ -39,9 +39,10 @@ export function KpiCard({
         easing: 'easeOutExpo',
         animateOnMount: true,
     });
-    const delta = rawDelta !== null
-        ? useAnimatedNumber(rawDelta, { duration: 600, easing: 'easeOut' })
-        : null;
+    // FIX: Always call hook unconditionally (React rules of hooks)
+    // Pass 0 as fallback when rawDelta is null to maintain consistent hook count
+    const animatedDelta = useAnimatedNumber(rawDelta ?? 0, { duration: 600, easing: 'easeOut' });
+    const delta = rawDelta !== null ? animatedDelta : null;
 
     // Only show N/A when value is explicitly null/undefined, not when 0
     // (0% margin is a valid value, different from "no data")

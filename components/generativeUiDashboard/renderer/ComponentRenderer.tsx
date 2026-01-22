@@ -30,7 +30,7 @@
  * Supports layout preferences via LayoutContext.
  */
 
-import React, { useCallback, useContext, useEffect, useRef } from 'react';
+import React, { useCallback, useContext, useLayoutEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import type {
     CardProps,
@@ -40,7 +40,7 @@ import type {
     DataModel,
     RowProps,
 } from '../a2ui/types';
-import { getByPath } from '../a2ui/DataBinder';
+import { getByPath, resolveBoundProps } from '../a2ui/DataBinder';
 import { extractComponent, resolveComponent, type A2UIRendererProps } from './Registry';
 import { WidgetErrorBoundary } from './WidgetErrorBoundary';
 
@@ -191,24 +191,32 @@ export function ComponentRenderer({
         [components, dataModel, onAction, enableSwap, streamedComponentIds]
     );
 
-    // Get component definition and extract early (for use in useEffect)
+    // Get component definition and extract early (for use in registration)
     const componentDef = components.get(componentId);
     const extracted = componentDef ? extractComponent(componentDef) : null;
 
-    // Phase 1 FIX: Register original props for snapshot system
-    // Note: Only depends on componentId to avoid re-running on every render
-    // The hasRegisteredRef ensures we only register once per component instance
-    useEffect(() => {
-        if (!hasRegisteredRef.current && extracted && swapContext?.registerOriginalProps) {
-            swapContext.registerOriginalProps(
-                componentId,
-                extracted.type,
-                extracted.props as Record<string, unknown>
-            );
+    // FIX: Compute resolved props synchronously, but register in useLayoutEffect
+    // useLayoutEffect runs synchronously after DOM commit but before paint,
+    // ensuring registration completes before user can interact with swap buttons.
+    // We resolve BoundValue objects to actual values so snapshots contain real data.
+    const resolvedPropsRef = useRef<Record<string, unknown> | null>(null);
+    if (!hasRegisteredRef.current && extracted) {
+        // CRITICAL: Resolve binding paths to actual values BEFORE registering
+        // Without this, snapshots contain {path: "/data/..."} instead of actual numbers
+        resolvedPropsRef.current = resolveBoundProps(
+            extracted.props as Record<string, unknown>,
+            dataModel
+        );
+    }
+
+    // Register in useLayoutEffect to avoid "setState during render" error
+    // useLayoutEffect is synchronous and runs before browser paint
+    useLayoutEffect(() => {
+        if (!hasRegisteredRef.current && extracted && swapContext?.registerOriginalProps && resolvedPropsRef.current) {
+            swapContext.registerOriginalProps(componentId, extracted.type, resolvedPropsRef.current);
             hasRegisteredRef.current = true;
         }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [componentId]); // Intentionally minimal deps - register once per mount
+    }, [componentId, extracted, swapContext]);
 
     // Early returns AFTER all hooks
     if (!componentDef) {
@@ -316,9 +324,8 @@ export function ComponentRenderer({
                         ? streamingEntranceConfig
                         : springConfig
                 }
-                className={`a2ui-component-wrapper relative group ${emphasisClasses} ${
-                    isSwapping ? 'pointer-events-none' : ''
-                }`}
+                className={`a2ui-component-wrapper relative group ${emphasisClasses} ${isSwapping ? 'pointer-events-none' : ''
+                    }`}
                 data-component-id={componentId}
                 data-component-type={type}
                 data-original-type={originalType}

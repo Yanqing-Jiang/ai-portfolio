@@ -109,7 +109,7 @@ export interface SwapContextValue {
     swapStates: Map<string, SwapState>;
     /** Dashboard ID for server swaps */
     dashboardId: string | null;
-    
+
     // --- Core Actions ---
     /** Request a swap (supports preview mode) */
     requestSwap: (componentId: string, originalType: string, targetType: string, isPreview?: boolean) => Promise<SwapResult>;
@@ -153,7 +153,7 @@ export interface SwapContextValue {
     getSwappedType: (componentId: string, defaultType: string) => string;
     /** Legacy compatibility: Sync swap */
     swapComponent: (componentId: string, originalType: string, newType: string) => void;
-    
+
     getSwapTargets: (componentType: string) => SwapTarget[];
     needsServerSwap: (fromType: string, toType: string) => boolean;
     swapLoading: Map<string, boolean>;
@@ -325,16 +325,26 @@ export function ComponentSwapProvider({ children, dashboardId = null }: Componen
         }
 
         const needsServer = requiresServerSwap(originalType, targetType);
-        
+
         // Optimistic update for client swaps
         if (!needsServer) {
             const currentState = getOrCreateState(componentId, originalType);
+
+            // FIX: Guard against preview before registration completes
+            // If originalSnapshot is undefined, component hasn't registered its resolved props yet
+            if (isPreview && !currentState.originalSnapshot) {
+                console.warn('[Swap] Cannot preview - component not initialized with resolved props');
+                return { success: false, mode: 'client', error: 'Component not ready for swap' };
+            }
+
             const newState: SwapState = { ...currentState, lastModified: Date.now() };
 
             if (isPreview) {
                 newState.previewType = targetType;
-                newState.previewData = undefined; // No data transform needed
-                newState.previewSnapshot = { type: targetType, props: {} };
+                // FIX: Use resolved props from originalSnapshot (now contains actual values, not binding paths)
+                const preservedProps = currentState.originalSnapshot?.props ?? {};
+                newState.previewData = preservedProps;
+                newState.previewSnapshot = { type: targetType, props: preservedProps };
                 newState.warnings = [];
             } else {
                 // Commit to history
@@ -372,7 +382,7 @@ export function ComponentSwapProvider({ children, dashboardId = null }: Componen
 
         try {
             // Check if we have a preview for this target already? (Caching could be added here)
-            
+
             const response = await fetch(`/api/dash/${dashboardId}/swap`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -424,11 +434,11 @@ export function ComponentSwapProvider({ children, dashboardId = null }: Componen
             }
             updateState(componentId, newState);
 
-            return { 
-                success: true, 
-                mode: 'server', 
+            return {
+                success: true,
+                mode: 'server',
                 transformedData: result.transformed_data,
-                warnings: result.warnings 
+                warnings: result.warnings
             };
 
         } catch (error) {
