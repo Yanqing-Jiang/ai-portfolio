@@ -6,35 +6,104 @@ allowed-tools: Bash(agent-browser:*)
 
 # Browser Automation with agent-browser
 
+## Project URLs (Direct Navigation)
+
+Base: `http://localhost:5173`
+
+### A2UI (Current Project) ⭐
+| Page | URL | Notes |
+|------|-----|-------|
+| Dashboard | `/project/agent-to-ui` | Main A2UI demo page |
+| Query input ref | `@e13` | Textbox for queries |
+| Generate button ref | `@e14` | Triggers AI analysis |
+| New Query button | `@e35` | Reset for new query |
+
+### Other Projects
+| Project | URL |
+|---------|-----|
+| Headshot Studio | `/project/linkedin-photo` |
+| Next Gen Analytics (Agents) | `/project/next-gen-analytics-agent` |
+| Agentic Trading Bot | `/project/agentic-trade-bot` |
+| Next Gen Analytics (SQL) | `/project/next-gen-analytics-sql` |
+| LLM Invoice Processor | `/project/llm-invoice-processor` |
+| Ask My Resume | `/project/ask-my-resume` |
+| Goggins GPT | `/project/goggins-gpt` |
+| Research GPT | `/project/research-gpt` |
+
+---
+
+## A2UI Quick Tests ⭐
+
+### Test 1: Basic Dashboard Load
+```bash
+agent-browser open http://localhost:5173/project/agent-to-ui --headed && agent-browser wait 1000 && agent-browser snapshot -i && agent-browser screenshot docs/testing/screenshots/a2ui-load.png
+```
+
+### Test 2: Query Flow (Revenue Trend)
+```bash
+agent-browser open http://localhost:5173/project/agent-to-ui --headed && agent-browser wait 1000 && agent-browser snapshot -i
+# Then:
+agent-browser fill @e13 "NVDA revenue trend" && agent-browser click @e14 && agent-browser wait 4000 && agent-browser screenshot docs/testing/screenshots/a2ui-revenue.png
+```
+
+### Test 3: Query Flow (Peer Compare)
+```bash
+agent-browser fill @e13 "Compare AMD vs NVDA" && agent-browser click @e14 && agent-browser wait 4000 && agent-browser screenshot docs/testing/screenshots/a2ui-compare.png
+```
+
+### Test 4: Query Flow (Margin Analysis)
+```bash
+agent-browser fill @e13 "AMD margin analysis" && agent-browser click @e14 && agent-browser wait 4000 && agent-browser screenshot docs/testing/screenshots/a2ui-margin.png
+```
+
+### Test 5: Query Flow (Explain Move)
+```bash
+agent-browser fill @e13 "Why did NVDA drop?" && agent-browser click @e14 && agent-browser wait 4000 && agent-browser screenshot docs/testing/screenshots/a2ui-explain.png
+```
+
+### Test 6: Full A2UI Flow (Complete)
+```bash
+agent-browser open http://localhost:5173/project/agent-to-ui --headed && agent-browser wait 1000 && agent-browser snapshot -i && \
+agent-browser fill @e13 "Compare AMD vs NVDA revenue" && agent-browser click @e14 && agent-browser wait 4000 && \
+agent-browser screenshot docs/testing/screenshots/a2ui-full-test.png && agent-browser close
+```
+
+### A2UI Sample Queries
+- `"NVDA revenue trend"` - Revenue Trend skill
+- `"Compare AMD vs NVDA"` - Peer Compare skill
+- `"AMD margin analysis"` - Margin Analysis skill
+- `"Why did NVDA drop?"` - Explain Move skill
+- `"Show me what you can do"` - Feature Showcase skill
+
+---
+
+## Speed Tips (IMPORTANT)
+
+1. **Chain with `&&`** - Multiple commands in one bash call = faster
+2. **ONE snapshot per page** - Don't re-snapshot unless page reloads/navigates
+3. **Direct URL** - Use URLs above, faster than clicking SPA links
+4. **Batch interactions** - `fill @e1 "a" && fill @e2 "b" && click @e3`
+5. **Skip verbose waits** - `wait 2000-4000` is usually enough
+
 ## First-time setup
 
 ```bash
 agent-browser install           # Install Chromium binaries (required once)
 ```
 
-## Quick start
-
-```bash
-agent-browser open <url>        # Navigate to page
-agent-browser snapshot -i       # Get interactive elements with refs
-agent-browser click @e1         # Click element by ref
-agent-browser fill @e2 "text"   # Fill input by ref
-agent-browser close             # Close browser
-```
-
 ## Core workflow
 
-1. Navigate: `agent-browser open <url>`
-2. Snapshot: `agent-browser snapshot -i` (returns elements with refs like `@e1`, `@e2`)
-3. Interact using refs from the snapshot
-4. Re-snapshot after navigation or significant DOM changes
+1. Navigate: `agent-browser open <url> --headed`
+2. Snapshot ONCE: `agent-browser snapshot -i` (returns refs like `@e1`, `@e2`)
+3. Chain all interactions: `agent-browser fill @e1 "text" && agent-browser click @e2`
+4. Screenshot + close: `agent-browser screenshot path.png && agent-browser close`
 
 ## Best practices
 
-- **Use full snapshot first** (`agent-browser snapshot`) to understand page structure, then `-i` for interactions
-- **Direct URL navigation** is more reliable than clicking links in SPAs
-- **Chain commands with `&&`** for dependent operations: `agent-browser click @e1 && sleep 1 && agent-browser snapshot -i`
-- **Always close browser** when done to free resources: `agent-browser close`
+- **Chain commands with `&&`** - ALWAYS chain to reduce round-trips
+- **Direct URL navigation** - Use project URLs table above
+- **Always close browser** when done: `agent-browser close`
+- **Minimal snapshots** - Only re-snapshot if page structure changes
 
 ## Commands
 

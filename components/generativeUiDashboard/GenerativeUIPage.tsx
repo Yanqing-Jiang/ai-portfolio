@@ -390,6 +390,23 @@ export function GenerativeUIPage(): React.ReactElement {
         };
     }, [rawDataModel, dashboardId, completedDashboards]);
 
+    // Calculate total WIDGET count (exclude layout containers like Column, Row, Text)
+    // FIX #1: Only count actual user-facing widgets, not layout containers
+    const WIDGET_TYPES = ['PriceChart', 'KpiCard', 'NewsTimeline', 'ExplainMovePanel', 'DataTable', 'BarChart', 'MetricChart'];
+    const componentCount = useMemo(() => {
+        let count = 0;
+        streamState.surfaces.forEach(s => {
+            s.components.forEach((component) => {
+                // Extract the component type (first key of the component object)
+                const componentType = Object.keys(component)[0];
+                if (WIDGET_TYPES.includes(componentType)) {
+                    count++;
+                }
+            });
+        });
+        return count;
+    }, [streamState.surfaces]);
+
     // Auto-resize textarea
     useEffect(() => {
         const textarea = textareaRef.current;
@@ -1125,6 +1142,8 @@ export function GenerativeUIPage(): React.ReactElement {
                                             connectionStatus: streamState.connectionStatus,
 
                                             surfaceCount: streamState.surfaces.size,
+
+                                            componentCount,
 
                                             error: streamState.error?.message ?? null,
 

@@ -112,27 +112,6 @@ Output markdown report with:
 Save to docs/verification/[task-name]-verification.md"' 2>&1
 ```
 
-### Security Audit
-```bash
-wsl bash -lc 'codex -m "gpt-5.2-codex" -c model_reasoning_effort="xhigh" exec --dangerously-bypass-approvals-and-sandbox "Read the code files. Perform security verification for: [FILES/FEATURE].
-
-Check for:
-- SQL Injection
-- XSS vulnerabilities
-- CSRF protection
-- Authentication/Authorization flaws
-- Input validation
-- Sensitive data exposure
-
-Output markdown with:
-- Security Score (0-100)
-- Vulnerabilities Found
-- Severity Levels
-- Remediation Steps
-
-Save to docs/verification/[feature]-security.md"' 2>&1
-```
-
 ### Fallback (if model unavailable)
 ```bash
 wsl bash -lc 'codex exec --dangerously-bypass-approvals-and-sandbox "[TASK]. Save output to docs/[dir]/[filename].md"' 2>&1
@@ -201,20 +180,6 @@ Top Recommendations: [1-3 items]
 ✗ Use --json flag (causes token overflow)
 ✗ Make implementation decisions
 ✗ Modify any code
-
----
-
-## CRITICAL: Bash Timeout
-
-**MANDATORY**: Always set timeout to 900000ms (15 minutes) for Codex commands.
-
-```json
-{
-  "command": "wsl bash -lc 'codex ...' 2>&1",
-  "timeout": 900000,
-  "description": "Execute Codex task"
-}
-```
 
 ---
 

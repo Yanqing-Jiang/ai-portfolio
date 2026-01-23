@@ -123,6 +123,17 @@ export function A2UIColumn({
     // Get child IDs (supports ChildrenTemplate)
     const childIds: string[] = [];
     let templateValue: string | undefined;
+
+    // DEBUG: Log children resolution with actual values
+    if (process.env.NODE_ENV === 'development') {
+        const explicitListValues = 'explicitList' in children ? children.explicitList : [];
+        console.log(`[COLUMN] ${componentId} children prop:`, {
+            childrenType: 'explicitList' in children ? 'explicitList' : 'template',
+            explicitListValues,
+            childrenJSON: JSON.stringify(children),
+        });
+    }
+
     if ('explicitList' in children) {
         childIds.push(...children.explicitList);
     } else if ('template' in children && children.template) {
@@ -151,10 +162,21 @@ export function A2UIColumn({
         id: childId,
         index,
         widgetType: getWidgetTypeForComponent(childId, components, dataModel),
+        existsInMap: components.has(childId),
     }));
     const visibleChildren = childMeta.filter(
         (child) => !child.widgetType || !hiddenWidgets.has(child.widgetType)
     );
+
+    // DEBUG: Log child resolution results
+    if (process.env.NODE_ENV === 'development') {
+        console.log(`[COLUMN] ${componentId} resolved children:`, {
+            childIds,
+            childMeta: childMeta.map(c => ({ id: c.id, type: c.widgetType, exists: c.existsInMap })),
+            visibleChildren: visibleChildren.map(c => c.id),
+            hiddenWidgets: Array.from(hiddenWidgets),
+        });
+    }
 
     // Apply container-specific order if exists, then fall back to widget order
     let orderedChildren = visibleChildren;

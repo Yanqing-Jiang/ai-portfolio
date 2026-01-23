@@ -37,6 +37,7 @@ export interface ProcessPanelProps {
         isLoading?: boolean;
         connectionStatus?: string;
         surfaceCount: number;
+        componentCount?: number;  // Actual widget count (not just surfaces)
         error?: string | null;
     };
     activeSkill: { id: string; name: string } | null;
@@ -653,7 +654,7 @@ export function ProcessPanel({
                                 </p>
                                 {activeSkill && (
                                     <p className="text-[10px]" style={{ color: theme.colors.text.muted }}>
-                                        {skillMeta.icon} {skillMeta.name} • {streamState.surfaceCount} widgets
+                                        {skillMeta.icon} {skillMeta.name} • {streamState.componentCount ?? streamState.surfaceCount} widgets
                                     </p>
                                 )}
                             </div>
@@ -884,6 +885,7 @@ export function ProcessPanel({
                                                     isDone: streamState.isDone,
                                                     connectionStatus: streamState.connectionStatus,
                                                     surfaceCount: streamState.surfaceCount,
+                                                    componentCount: streamState.componentCount,
                                                     error: streamState.error,
                                                 },
                                                 // NEW: Structured tool use information

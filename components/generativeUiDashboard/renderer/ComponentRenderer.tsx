@@ -258,6 +258,7 @@ export function ComponentRenderer({
 
     // Check if this widget type is hidden
     const isHidden = layoutContext?.isWidgetHidden(hiddenTarget) ?? false;
+
     if (isHidden) {
         return null; // Don't render hidden widgets
     }

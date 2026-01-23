@@ -41,6 +41,25 @@ export function A2UISurface({
         );
     }
 
+    // Defensive check: ensure root component exists in the map
+    // This prevents "Component not found" errors during race conditions
+    if (!surface.components.has(surface.root)) {
+        return <A2UISurfaceLoading />;
+    }
+
+    // DEBUG: Log surface state for visibility debugging
+    if (process.env.NODE_ENV === 'development') {
+        const componentIds = Array.from(surface.components.keys());
+        const rootDef = surface.components.get(surface.root);
+        console.log(`[A2UI_SURFACE] Surface render:`, {
+            surfaceId: surface.surfaceId,
+            root: surface.root,
+            componentCount: surface.components.size,
+            componentIds,
+            rootDef: rootDef ? Object.keys(rootDef) : null,
+        });
+    }
+
     // Render from root
     return (
         <div

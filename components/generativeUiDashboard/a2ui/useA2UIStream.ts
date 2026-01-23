@@ -209,12 +209,30 @@ export function useA2UIStream(
         syncTimerRef.current = setTimeout(() => {
             if (!processorRef.current) return;
             const { surfaces, dataModels } = processorRef.current.getState();
+
+            // Smart loading state: only set false when components exist
+            // This prevents race condition where isLoading=false triggers render before components sync
+            const hasComponents = Array.from(surfaces.values()).some(
+                surface => surface.components.size > 0
+            );
+
+            // FIX: Create deep copies of Surface objects to ensure React detects changes
+            // Without this, React may skip re-renders because Surface object references don't change
+            const deepCopiedSurfaces = new Map<string, Surface>();
+            surfaces.forEach((surface, surfaceId) => {
+                deepCopiedSurfaces.set(surfaceId, {
+                    ...surface,
+                    components: new Map(surface.components),  // Create new Map reference
+                });
+            });
+
             setState((prev) => ({
                 ...prev,
-                surfaces: new Map(surfaces),
+                surfaces: deepCopiedSurfaces,
                 dataModels: new Map(dataModels),
+                isLoading: hasComponents ? false : prev.isLoading,  // Atomic update
             }));
-        }, 16); // ~1 frame at 60fps
+        }, 50); // FIX #4: Increased from 16ms to 50ms to prevent race condition with widget streaming
     }, []);
 
     // Connect to the stream
@@ -285,6 +303,7 @@ export function useA2UIStream(
                         ...prev,
                         isDone: true,
                         isConnected: false,
+                        isLoading: false,  // Ensure loading state clears on completion
                         connectionStatus: 'complete',
                     }));
                     eventSource.close();
@@ -295,14 +314,13 @@ export function useA2UIStream(
             }
 
             // Process A2UI messages (may be multiple lines)
+            // Note: isLoading is set atomically with surfaces in syncState to prevent race condition
             const lines = data.split('\n');
             for (const line of lines) {
                 if (line.trim()) {
                     processorRef.current?.processLine(line);
                 }
             }
-
-            setState((prev) => ({ ...prev, isLoading: false }));
         };
 
         eventSource.onerror = (event) => {

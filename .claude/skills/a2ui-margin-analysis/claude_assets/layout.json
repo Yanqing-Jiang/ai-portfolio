@@ -4,6 +4,8 @@
     "root": "layout_root",
     "widgets": [
         "KpiCard",
+        "KpiCard",
+        "KpiCard",
         "DataTable",
         "MetricChart",
         "ExplainMovePanel"

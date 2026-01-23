@@ -33,12 +33,12 @@ logger = logging.getLogger(__name__)
 class WidgetSelection(BaseModel):
     """
     LLM-selected widget configuration.
-    
+
     Model: WidgetSelection - represents a single widget selection by the LLM.
     Called from: ComponentSelector.select_components
     Why: Structured representation of LLM widget choices with data bindings.
     """
-    
+
     widget_type: str = Field(
         ...,
         description="Component type from catalog (e.g., 'KpiCard', 'MetricChart')"
@@ -54,6 +54,25 @@ class WidgetSelection(BaseModel):
     priority: int = Field(
         default=50,
         description="Display priority (0=top, 100=bottom)"
+    )
+
+
+class WidgetTypeSelection(BaseModel):
+    """
+    LLM-selected widget types (without IDs/bindings - those come from layout.json).
+
+    Model: WidgetTypeSelection - LLM decides WHICH types to show, layout.json provides HOW.
+    Called from: ComponentSelector.stream_widget_types
+    Why: Separates LLM reasoning (what to show) from hardcoded config (IDs, bindings).
+    """
+
+    widget_types: List[str] = Field(
+        ...,
+        description="Widget types to display (e.g., ['PriceChart', 'KpiCard', 'NewsTimeline'])"
+    )
+    rationale: str = Field(
+        ...,
+        description="Brief explanation of why these widgets were selected for this query"
     )
 
 
@@ -621,6 +640,144 @@ Return ONLY valid JSON. No markdown, no explanation."""
             return layout.widgets
         return []
 
+    async def select_widget_types(
+        self,
+        skill: A2UISkillMeta,
+        question: str,
+        context: Dict[str, Any],
+    ) -> Optional[WidgetTypeSelection]:
+        """
+        LLM selects widget TYPES only. IDs and bindings come from layout.json.
+
+        Method: select_widget_types - simplified LLM selection (types + rationale only).
+        Called from: A2UIRuntime._stream_component_selection
+        Invokes: A2UISDKWrapper.query
+        Why: LLM decides WHAT to show, layout.json provides HOW (IDs, bindings).
+        """
+        try:
+            wrapper = await self._get_sdk_wrapper()
+
+            tickers = context.get("tickers", [])
+            primary_ticker = context.get("primary_ticker", tickers[0] if tickers else "")
+            metric = context.get("metric", "")
+
+            prompt = f"""Select which widget types to display for this question.
+
+Question: {question}
+Primary Ticker: {primary_ticker}
+All Tickers: {', '.join(tickers)}
+Metric Focus: {metric}
+Skill: {skill.name}
+
+Available Widget Types: {', '.join(skill.widgets)}
+
+Return a JSON object with:
+- widget_types: array of widget type names to display (from Available Widget Types)
+- rationale: brief explanation of why you selected these widgets for this query
+
+Guidelines:
+- Select 2-5 widget types based on what's most relevant to the question
+- PriceChart: for stock price visualization
+- KpiCard: for key financial metrics (revenue, margins, etc.)
+- NewsTimeline: when news/events are relevant to the question
+- ExplainMovePanel: for AI-generated analysis and explanations
+- DataTable: for detailed tabular data
+
+Return ONLY valid JSON. No markdown, no explanation outside the rationale field.
+
+Example response:
+{{
+  "widget_types": ["PriceChart", "KpiCard", "ExplainMovePanel"],
+  "rationale": "Selected PriceChart to show NVDA price movement, KpiCard for key financials, and ExplainMovePanel for AI analysis of the drop."
+}}"""
+
+            response = await wrapper.query(
+                prompt=prompt,
+                max_tokens=500,
+                temperature=0.3,
+            )
+
+            # Handle SDKResponse object (has .content attribute, not .get() method)
+            if response.error:
+                logger.warning("Widget type selection API error: %s", response.error)
+                return None
+
+            content = response.content
+            if not content:
+                return None
+
+            # Extract JSON from response
+            start_idx = content.find('{')
+            end_idx = content.rfind('}') + 1
+
+            if start_idx < 0 or end_idx <= start_idx:
+                logger.warning("No JSON object found in widget type selection response")
+                return None
+
+            json_str = content[start_idx:end_idx]
+            data = json.loads(json_str)
+
+            # Validate widget types
+            valid_types = [t for t in data.get("widget_types", []) if t in skill.widgets]
+            if not valid_types:
+                logger.warning("No valid widget types in LLM response")
+                return None
+
+            return WidgetTypeSelection(
+                widget_types=valid_types,
+                rationale=data.get("rationale", ""),
+            )
+
+        except Exception as e:
+            logger.error("Widget type selection error: %s", e)
+            return None
+
+
+def get_components_by_types(
+    skill: A2UISkillMeta,
+    selected_types: List[str],
+) -> List[WidgetSelection]:
+    """
+    Map LLM-selected widget types to hardcoded components from layout.json.
+
+    Function: get_components_by_types - converts types to full widget specs.
+    Called from: A2UIRuntime._stream_component_selection
+    Invokes: skill.layout_config["component_tree"]
+    Why: Ensures widget IDs and data bindings are consistent (from layout.json).
+    """
+    if not skill.layout_config:
+        logger.warning("No layout_config for skill %s", skill.skill_id)
+        return []
+
+    component_tree = skill.layout_config.get("component_tree", {})
+    widgets = []
+
+    # Find all components matching the selected types
+    for comp_id, comp_def in component_tree.items():
+        comp_type = comp_def.get("type")
+        if comp_type in selected_types:
+            # Build data_bindings from props
+            props = comp_def.get("props", {})
+            data_bindings = {}
+            for prop_name, prop_value in props.items():
+                if isinstance(prop_value, dict):
+                    data_bindings[prop_name] = prop_value
+
+            widgets.append(WidgetSelection(
+                widget_type=comp_type,
+                widget_id=comp_id,
+                data_bindings=data_bindings,
+                priority=len(widgets) * 10,  # Order by appearance in component_tree
+            ))
+
+    logger.info(
+        "[SELECTOR] Mapped %d types to %d components: %s",
+        len(selected_types),
+        len(widgets),
+        [w.widget_id for w in widgets]
+    )
+    return widgets
+
 
 # Singleton instance
 _selector: Optional[ComponentSelector] = None
@@ -636,8 +793,10 @@ def get_component_selector() -> ComponentSelector:
 
 __all__ = [
     "WidgetSelection",
+    "WidgetTypeSelection",
     "DashboardLayout",
     "ComponentSelector",
     "get_component_selector",
+    "get_components_by_types",
     "build_component_selection_tool",
 ]

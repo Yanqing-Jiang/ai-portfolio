@@ -294,9 +294,10 @@ export function ComponentSwapProvider({ children, dashboardId = null }: Componen
             return { ...originalProps, ...state.previewSnapshot.props };
         }
 
-        // Get snapshot for current history index
+        // Get snapshot for current history index ONLY if swap occurred
+        // Without isDirty check, resolved props would override binding paths
         const currentSnapshot = state.historySnapshots[state.historyIndex];
-        if (currentSnapshot) {
+        if (state.isDirty && currentSnapshot) {
             return { ...originalProps, ...currentSnapshot.props };
         }
 
@@ -305,8 +306,8 @@ export function ComponentSwapProvider({ children, dashboardId = null }: Componen
             return { ...originalProps, ...state.transformedData };
         }
 
-        // Final fallback to original snapshot
-        if (state.originalSnapshot) {
+        // Final fallback to original snapshot ONLY if swap occurred
+        if (state.isDirty && state.originalSnapshot) {
             return { ...originalProps, ...state.originalSnapshot.props };
         }
 
@@ -646,9 +647,10 @@ export function ComponentSwapProvider({ children, dashboardId = null }: Componen
             return state.previewData;
         }
 
-        // Phase 1 FIX: Use history snapshot for current index
+        // Phase 1 FIX: Use history snapshot for current index ONLY if swap occurred
+        // Without isDirty check, resolved props from registerOriginalProps would override binding paths
         const currentSnapshot = state.historySnapshots?.[state.historyIndex];
-        if (currentSnapshot?.props && Object.keys(currentSnapshot.props).length > 0) {
+        if (state.isDirty && currentSnapshot?.props && Object.keys(currentSnapshot.props).length > 0) {
             return currentSnapshot.props;
         }
 
@@ -657,8 +659,11 @@ export function ComponentSwapProvider({ children, dashboardId = null }: Componen
             return state.transformedData;
         }
 
-        // Final fallback to original snapshot
-        if (state.originalSnapshot?.props) {
+        // FIX: Only return originalSnapshot.props when a swap actually occurred (isDirty)
+        // Without this check, registeredOriginalProps (which contain RESOLVED values like value:0)
+        // would override the original binding paths (value:{path:'/data/kpis/revenue'})
+        // on subsequent renders, breaking data binding for KpiCards
+        if (state.isDirty && state.originalSnapshot?.props) {
             return state.originalSnapshot.props;
         }
 

@@ -1320,8 +1320,10 @@ class A2UIAgent:
         operating_income_by_period = {entry["period"]: entry["value"] for entry in operating_income_series}
         cost_of_revenue_by_period = {entry["period"]: entry["value"] for entry in cost_of_revenue_series}
         
-        # Calculate Gross Margin if not directly available
-        if not gross_series:
+        # Calculate Gross Margin - use fallback if direct values are missing or zero
+        gross_latest_direct, _ = latest_and_previous(gross_series)
+        if not gross_series or gross_latest_direct == 0 or gross_latest_direct is None:
+            gross_series = []  # Reset to recalculate
             for entry in revenue_series:
                 period = entry["period"]
                 revenue = entry["value"]
@@ -1333,9 +1335,11 @@ class A2UIAgent:
                     gross_series.append({"period": period, "value": (gross_profit / revenue) * 100})
                 elif cost is not None:
                     gross_series.append({"period": period, "value": ((revenue - cost) / revenue) * 100})
-        
-        # Calculate Operating Margin if not directly available
-        if not operating_series:
+
+        # Calculate Operating Margin - use fallback if direct values are missing or zero
+        operating_latest_direct, _ = latest_and_previous(operating_series)
+        if not operating_series or operating_latest_direct == 0 or operating_latest_direct is None:
+            operating_series = []  # Reset to recalculate
             for entry in revenue_series:
                 period = entry["period"]
                 revenue = entry["value"]
@@ -1445,8 +1449,10 @@ class A2UIAgent:
             operating_income_by_period = {e["period"]: e["value"] for e in operating_income_series}
             cost_by_period = {e["period"]: e["value"] for e in cost_of_revenue_series}
             
-            # Calculate Gross Margin if not directly available
-            if not gross_series:
+            # Calculate Gross Margin - use fallback if direct values are missing or zero
+            gross_latest_direct, _ = latest_and_previous(gross_series)
+            if not gross_series or gross_latest_direct == 0 or gross_latest_direct is None:
+                gross_series = []  # Reset to recalculate
                 for entry in revenue_series:
                     period = entry["period"]
                     revenue = entry["value"]
@@ -1458,9 +1464,11 @@ class A2UIAgent:
                         gross_series.append({"period": period, "value": (gp / revenue) * 100})
                     elif cost is not None:
                         gross_series.append({"period": period, "value": ((revenue - cost) / revenue) * 100})
-            
-            # Calculate Operating Margin if not directly available
-            if not operating_series:
+
+            # Calculate Operating Margin - use fallback if direct values are missing or zero
+            operating_latest_direct, _ = latest_and_previous(operating_series)
+            if not operating_series or operating_latest_direct == 0 or operating_latest_direct is None:
+                operating_series = []  # Reset to recalculate
                 for entry in revenue_series:
                     period = entry["period"]
                     revenue = entry["value"]
