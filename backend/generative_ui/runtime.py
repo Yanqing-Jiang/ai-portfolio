@@ -650,8 +650,8 @@ class A2UIRuntime:
 
         Method: _stream_component_selection - progressive widget emission.
         Called from: stream_dashboard (when streaming mode enabled)
-        Invokes: ComponentSelector.select_widget_types, get_components_by_types
-        Why: LLM selects widget TYPES, layout.json provides IDs and data bindings.
+        Invokes: LLMComponentGenerator.generate_components
+        Why: LLM generates complete widget specs (IDs, bindings) for skills without component_tree.
 
         Args:
             emitter: A2UI message emitter
@@ -663,11 +663,11 @@ class A2UIRuntime:
         Yields:
             A2UI JSONL messages for incremental surface updates
         """
-        from .component_selector import get_component_selector, get_components_by_types
+        from .component_selector import get_llm_component_generator
         from .component_validator import get_component_validator
         from .a2ui.messages import A2UIComponent, SurfaceUpdate
 
-        selector = get_component_selector()
+        generator = get_llm_component_generator()
         validator = get_component_validator()
 
         pending_ids: List[str] = []
@@ -701,29 +701,23 @@ class A2UIRuntime:
         yield header_update.to_json()
 
         try:
-            # Step 1: LLM selects widget TYPES (with rationale)
-            type_selection = await selector.select_widget_types(skill, question, context_dict)
-
-            if not type_selection or not type_selection.widget_types:
-                # Fallback: use all widget types from skill
-                selected_types = skill.widgets
-                rationale = "Using all available widgets (LLM selection failed)"
-            else:
-                selected_types = type_selection.widget_types
-                rationale = type_selection.rationale
-
-            yield emitter.audit(
-                "widget_types_selected",
-                f"types={selected_types}, rationale={rationale[:100]}"
-            )
-
-            # Step 2: Map types to hardcoded components from layout.json
-            widgets = get_components_by_types(skill, selected_types)
+            # Use LLMComponentGenerator for full widget generation
+            # This handles backward compat for component_tree skills automatically
+            widgets = await generator.generate_components(skill, question, context_dict)
 
             if not widgets:
-                raise ValueError(f"No components found for types: {selected_types}")
+                raise ValueError(f"No components generated for skill: {skill.skill_id}")
 
-            # Step 3: Emit each widget with hardcoded IDs and bindings
+            # Determine generation mode for audit
+            has_component_tree = skill.layout_config and skill.layout_config.get("component_tree")
+            generation_mode = "component_tree" if has_component_tree else "llm_generated"
+
+            yield emitter.audit(
+                "component_generation_mode",
+                f"mode={generation_mode}, widget_count={len(widgets)}"
+            )
+
+            # Emit each widget with generated IDs and bindings
             for widget in widgets:
                 is_valid, errors = validator.validate_widget(widget, skill)
                 if not is_valid:
@@ -742,7 +736,7 @@ class A2UIRuntime:
                     )
                     continue
 
-                # Build component from widget selection (uses hardcoded bindings)
+                # Build component from widget selection
                 component = emitter._build_widget_from_selection(widget)
                 if not component:
                     rejected_count += 1
@@ -764,7 +758,6 @@ class A2UIRuntime:
                 yield incremental_update.to_json()
 
                 # Update layout root to include the newly streamed widget
-                # FIX #4: Use incremental=True to prevent race condition
                 layout_root = A2UIComponent(
                     id="layout_root",
                     component={"Column": {
@@ -775,7 +768,7 @@ class A2UIRuntime:
                 layout_update = SurfaceUpdate(
                     surfaceId=emitter.surface_id,
                     components=[layout_root],
-                    incremental=True,  # FIX: was False, causing race condition
+                    incremental=True,
                 )
                 yield layout_update.to_json()
 
@@ -793,7 +786,7 @@ class A2UIRuntime:
 
             yield emitter.audit(
                 "streaming_components",
-                f"complete, widgets={widget_count}, rejected={rejected_count}"
+                f"complete, widgets={widget_count}, rejected={rejected_count}, mode={generation_mode}"
             )
 
             trace.add_step(
@@ -801,8 +794,7 @@ class A2UIRuntime:
                 details={
                     "widget_count": widget_count,
                     "widget_ids": pending_ids,
-                    "selected_types": selected_types,
-                    "rationale": rationale,
+                    "generation_mode": generation_mode,
                     "rejected_count": rejected_count,
                 },
                 success=True,
@@ -816,7 +808,7 @@ class A2UIRuntime:
                 details={"error": str(e)},
                 success=False,
             )
-            # Caller should fallback to non-streaming selection
+            raise  # Re-raise to trigger fallback in caller
 
     def _generate_follow_ups(
         self,

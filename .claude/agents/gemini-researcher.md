@@ -1,7 +1,7 @@
 ---
 name: gemini-researcher
 description: CLI wrapper for Gemini CLI (gemini-3-flash-preview) for web research, documentation lookup, and real-time info. Use when user requests "research", "find documentation", "what's the latest", "look up", "search for". Use proactively.
-tools: Bash
+tools: Bash, TaskCreate, TaskUpdate, TaskList, TaskGet
 model: sonnet
 permissionMode: default
 ---

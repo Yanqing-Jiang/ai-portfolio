@@ -1,7 +1,7 @@
 ---
 name: gemini-designer
 description: CLI wrapper for Gemini CLI (gemini-3-flash-preview) for frontend/UI component design. Use when user requests "design", "UI", "component", "layout", "frontend", "responsive", "styling". Use proactively.
-tools: Bash
+tools: Bash, TaskCreate, TaskUpdate, TaskList, TaskGet
 model: sonnet
 permissionMode: default
 ---

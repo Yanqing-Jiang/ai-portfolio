@@ -1,7 +1,7 @@
 ---
 name: codex-agent
 description: Generalized CLI wrapper for OpenAI Codex CLI (gpt-5.2-codex xhigh). Handles planning, debugging, verification, and architecture tasks. Triggered by keywords "plan", "debug", "verify", "architect", "analyze", "review".
-tools: Bash, Read
+tools: Bash, Read, TaskCreate, TaskUpdate, TaskList, TaskGet
 model: sonnet
 permissionMode: default
 ---

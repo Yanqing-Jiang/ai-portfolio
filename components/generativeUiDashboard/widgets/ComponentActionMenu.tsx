@@ -10,87 +10,10 @@
 
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Loader2, Undo2, X, Eye, EyeOff, Crosshair, Sparkles, Lightbulb } from 'lucide-react';
+import { Loader2, Undo2, X, Eye, EyeOff, Crosshair, GripVertical, Check } from 'lucide-react';
 import { useComponentSelection } from '../context/ComponentSelectionContext';
-import { useComponentSwap, getComponentIcon, getComponentLabel, type SwapTarget, type SwapSuggestion } from '../context/ComponentSwapContext';
+import { useComponentSwap, getComponentIcon, getComponentLabel } from '../context/ComponentSwapContext';
 import { useLayoutPreferences } from '../context/LayoutContext';
-
-// ============================================================================
-// Speculative Pre-fetch Cache for Snappy UX
-// ============================================================================
-
-/**
- * Cache for speculative pre-fetched swap data.
- * Key format: `${dashboardId}:${componentId}:${targetType}`
- * Caches are invalidated after 60 seconds.
- */
-const speculativeCache = new Map<string, { data: unknown; timestamp: number }>();
-const CACHE_TTL_MS = 60000; // 60 seconds
-
-/**
- * Pre-fetch swap data on hover for instant swap experience.
- * Called when user hovers over a swap option.
- */
-async function prefetchSwapData(
-    dashboardId: string | null,
-    componentId: string,
-    fromType: string,
-    toType: string
-): Promise<void> {
-    if (!dashboardId) return;
-
-    const cacheKey = `${dashboardId}:${componentId}:${toType}`;
-    const cached = speculativeCache.get(cacheKey);
-
-    // Skip if already cached and fresh
-    if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
-        return;
-    }
-
-    try {
-        const response = await fetch(`/api/dash/${dashboardId}/swap`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                component_id: componentId,
-                from_type: fromType,
-                to_type: toType,
-            }),
-        });
-
-        if (response.ok) {
-            const result = await response.json();
-            speculativeCache.set(cacheKey, {
-                data: result.transformed_data,
-                timestamp: Date.now(),
-            });
-            console.log('[Speculative] Pre-fetched swap data for', toType);
-        }
-    } catch (error) {
-        // Silently fail - this is speculative, not critical
-        console.debug('[Speculative] Pre-fetch failed:', error);
-    }
-}
-
-/**
- * Get cached swap data if available.
- */
-function getCachedSwapData(
-    dashboardId: string | null,
-    componentId: string,
-    toType: string
-): unknown | null {
-    if (!dashboardId) return null;
-
-    const cacheKey = `${dashboardId}:${componentId}:${toType}`;
-    const cached = speculativeCache.get(cacheKey);
-
-    if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
-        return cached.data;
-    }
-
-    return null;
-}
 
 // ============================================================================
 // Component
@@ -98,10 +21,9 @@ function getCachedSwapData(
 
 export function ComponentActionMenu() {
     const { selectedComponent, showActionMenu, clearSelection } = useComponentSelection();
-    const { requestSwap, isSwapped, resetSwap, getSwapTargets, swapLoading, dashboardId, suggestSwaps, previewSwap, cancelPreview } = useComponentSwap();
-    const { toggleWidget, isWidgetHidden } = useLayoutPreferences();
+    const { requestSwap, isSwapped, resetSwap, getSwapTargets, swapLoading, previewSwap, cancelPreview } = useComponentSwap();
+    const { toggleWidget, isWidgetHidden, toggleReorderMode, preferences } = useLayoutPreferences();
     const [swapError, setSwapError] = useState<string | null>(null);
-    const [suggestions, setSuggestions] = useState<SwapSuggestion[]>([]);
     const prefetchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
     // Extract values safely (may be null)
@@ -110,12 +32,34 @@ export function ComponentActionMenu() {
     const originalType = selectedComponent?.originalType ?? '';
     const boundingRect = selectedComponent?.boundingRect;
 
-    // Fetch suggestions on open
+    // Escape key handler - close menu on Escape
     useEffect(() => {
-        if (componentId && originalType && showActionMenu) {
-            suggestSwaps(componentId, originalType).then(setSuggestions);
-        }
-    }, [componentId, originalType, showActionMenu, suggestSwaps]);
+        if (!showActionMenu) return;
+        const handleEscape = (e: KeyboardEvent) => {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                clearSelection();
+            }
+        };
+        document.addEventListener('keydown', handleEscape);
+        return () => document.removeEventListener('keydown', handleEscape);
+    }, [showActionMenu, clearSelection]);
+
+    // Click-outside handler - close menu when clicking outside
+    useEffect(() => {
+        if (!showActionMenu) return;
+        const handleClickOutside = (e: MouseEvent) => {
+            const target = e.target as HTMLElement;
+            // Don't close if clicking on the menu itself or on a component
+            if (target.closest('[role="dialog"]') || target.closest('[data-component-id]')) {
+                return;
+            }
+            clearSelection();
+        };
+        // Use capture to handle before other handlers
+        document.addEventListener('mousedown', handleClickOutside, { capture: true });
+        return () => document.removeEventListener('mousedown', handleClickOutside, { capture: true });
+    }, [showActionMenu, clearSelection]);
 
     // Handle hover to preview
     const handlePreview = useCallback((targetType: string) => {
@@ -144,8 +88,11 @@ export function ComponentActionMenu() {
         const result = await requestSwap(componentId, originalType, targetType);
         if (!result.success) {
             setSwapError(result.error || 'Swap failed');
+        } else {
+            // Close menu after successful swap
+            clearSelection();
         }
-    }, [componentId, originalType, requestSwap]);
+    }, [componentId, originalType, requestSwap, clearSelection]);
 
     // Don't render if nothing selected or menu hidden (after all hooks)
     if (!selectedComponent || !showActionMenu) return null;
@@ -155,37 +102,78 @@ export function ComponentActionMenu() {
     const swapped = isSwapped(componentId);
     const isLoading = swapLoading.get(componentId) ?? false;
 
-    // Position menu near the selected component
-    // Use smooth constraint: stay on right side, but slide left to stay in viewport
-    const menuWidth = 288; // w-72 = 18rem = 288px
-    const rightMargin = 10;
-    const viewportPadding = 10;
+    // Position menu near the selected component (center-biased algorithm)
+    const menuWidth = 320; // w-80 = 20rem = 320px
+    const menuHeight = 450; // Approximate max height
+    const gap = 12;
+    const viewportPadding = 16;
 
-    const menuStyle: React.CSSProperties = boundingRect ? {
-        position: 'fixed',
-        top: Math.min(boundingRect.top + 10, window.innerHeight - 400),
-        // Calculate ideal position on right, then constrain to viewport
-        left: Math.min(
-            boundingRect.right + rightMargin,                    // Ideal: right of component
-            window.innerWidth - menuWidth - viewportPadding     // Max: stay in viewport
-        ),
-        zIndex: 1000,
-    } : {
-        position: 'fixed',
-        top: '50%',
-        left: '50%',
-        transform: 'translate(-50%, -50%)',
-        zIndex: 1000,
+    const calculateMenuPosition = (): React.CSSProperties => {
+        if (!boundingRect) {
+            return {
+                position: 'fixed',
+                top: '50%',
+                left: '50%',
+                transform: 'translate(-50%, -50%)',
+                zIndex: 1000,
+            };
+        }
+
+        // Available space on each side
+        const spaceRight = window.innerWidth - boundingRect.right - gap;
+        const spaceLeft = boundingRect.left - gap;
+
+        let left: number;
+
+        // Priority: right > left > center overlay
+        if (spaceRight >= menuWidth + viewportPadding) {
+            // Fits on right
+            left = boundingRect.right + gap;
+        } else if (spaceLeft >= menuWidth + viewportPadding) {
+            // Fits on left
+            left = boundingRect.left - menuWidth - gap;
+        } else {
+            // Center overlay on component
+            left = Math.max(
+                viewportPadding,
+                Math.min(
+                    boundingRect.left + (boundingRect.width / 2) - (menuWidth / 2),
+                    window.innerWidth - menuWidth - viewportPadding
+                )
+            );
+        }
+
+        // Vertical: align with component top, constrained to viewport
+        const top = Math.max(
+            viewportPadding,
+            Math.min(boundingRect.top, window.innerHeight - menuHeight - viewportPadding)
+        );
+
+        return {
+            position: 'fixed',
+            top,
+            left,
+            maxHeight: window.innerHeight - 2 * viewportPadding,
+            overflowY: 'auto',
+            zIndex: 1000,
+        };
     };
+
+    const menuStyle = calculateMenuPosition();
 
     return (
         <AnimatePresence>
             <motion.div
-                initial={{ opacity: 0, x: -10, scale: 0.95 }}
-                animate={{ opacity: 1, x: 0, scale: 1 }}
-                exit={{ opacity: 0, x: -10, scale: 0.95 }}
-                transition={{ duration: 0.2, ease: 'easeOut' }}
-                className="bg-slate-900/95 backdrop-blur-xl border border-slate-700 rounded-xl shadow-2xl shadow-black/50 p-3 w-72"
+                initial={{ opacity: 0, y: -8, scale: 0.96 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: -8, scale: 0.96 }}
+                transition={{
+                    type: 'spring',
+                    stiffness: 400,
+                    damping: 28,
+                    mass: 0.8,
+                }}
+                className="bg-slate-900/95 backdrop-blur-xl border border-slate-700 rounded-xl shadow-2xl shadow-black/50 p-3 w-80"
                 style={menuStyle}
                 role="dialog"
                 aria-label={`Actions for ${getComponentLabel(componentType)}`}
@@ -226,39 +214,11 @@ export function ComponentActionMenu() {
 
                 {/* Actions */}
                 <div className="space-y-1">
-
-                    {/* AI Suggestions */}
-                    {suggestions.length > 0 && (
-                        <div className="mb-3">
-                            <p className="text-[10px] text-indigo-400 mb-1 px-2 uppercase tracking-wide flex items-center gap-1">
-                                <Sparkles size={10} />
-                                Smart Suggestions
-                            </p>
-                            {suggestions.map(s => (
-                                <button
-                                    key={`suggest-${s.targetType}`}
-                                    onClick={() => handleSwap(s.targetType)}
-                                    onMouseEnter={() => handlePreview(s.targetType)}
-                                    className="w-full text-left px-2 py-2 rounded-lg text-sm bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/20 mb-1 flex items-start gap-2 transition-all"
-                                >
-                                    <span className="text-lg mt-0.5">{getComponentIcon(s.targetType)}</span>
-                                    <div className="flex-1">
-                                        <span className="text-indigo-200 font-medium block text-xs">{getComponentLabel(s.targetType)}</span>
-                                        <span className="text-[10px] text-indigo-300/70 leading-tight block">{s.reason}</span>
-                                    </div>
-                                    <div className="text-[9px] font-bold text-indigo-400 bg-indigo-950/50 px-1.5 py-0.5 rounded-full">
-                                        {Math.round(s.score * 100)}%
-                                    </div>
-                                </button>
-                            ))}
-                        </div>
-                    )}
-
                     {/* Swap options from catalog */}
                     {swapTargets.length > 0 && (
                         <div className="mb-2">
                             <p className="text-[10px] text-slate-500 mb-1 px-2 uppercase tracking-wide">
-                                All Options
+                                Options
                             </p>
                             {swapTargets.map(target => {
                                 return (
@@ -290,7 +250,10 @@ export function ComponentActionMenu() {
                             })}
                             {swapped && (
                                 <button
-                                    onClick={() => resetSwap(componentId)}
+                                    onClick={() => {
+                                        resetSwap(componentId);
+                                        clearSelection();
+                                    }}
                                     disabled={isLoading}
                                     className={`
                                         w-full text-left px-2 py-1.5 rounded-lg text-sm text-slate-300 flex items-center gap-2 transition-colors
@@ -311,7 +274,10 @@ export function ComponentActionMenu() {
 
                     {/* Visibility toggle */}
                     <button
-                        onClick={() => toggleWidget(originalType)}
+                        onClick={() => {
+                            toggleWidget(originalType);
+                            clearSelection();
+                        }}
                         className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-slate-700/50 text-sm text-slate-300 flex items-center gap-2 transition-colors"
                     >
                         {isHidden ? (
@@ -333,6 +299,30 @@ export function ComponentActionMenu() {
                     >
                         <Crosshair size={16} className="text-gray-400" />
                         <span>Focus on this</span>
+                    </button>
+
+                    {/* Divider before reorder */}
+                    <div className="border-t border-slate-700/50 my-2" />
+
+                    {/* Reorder widgets toggle */}
+                    <button
+                        onClick={() => {
+                            toggleReorderMode();
+                            clearSelection();
+                        }}
+                        className={`
+                            w-full text-left px-2 py-1.5 rounded-lg text-sm flex items-center gap-2 transition-colors
+                            ${preferences.reorderModeEnabled
+                                ? 'bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30'
+                                : 'text-slate-300 hover:bg-slate-700/50'}
+                        `}
+                    >
+                        {preferences.reorderModeEnabled ? (
+                            <Check size={16} className="text-emerald-400" />
+                        ) : (
+                            <GripVertical size={16} className="text-gray-400" />
+                        )}
+                        <span>{preferences.reorderModeEnabled ? 'Done reordering' : 'Reorder widgets'}</span>
                     </button>
                 </div>
 

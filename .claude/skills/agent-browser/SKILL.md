@@ -34,38 +34,46 @@ Base: `http://localhost:5173`
 
 ## A2UI Quick Tests ⭐
 
+### ⚡ FASTEST: Single-Command Test (Recommended)
+```bash
+# Prerequisite: Set env var once per session
+export AGENT_BROWSER_EXECUTABLE_PATH="C:/Users/Y_J/AppData/Local/ms-playwright/chromium-1200/chrome-win64/chrome.exe"
+
+# Complete A2UI test in ONE command
+agent-browser open http://localhost:5173/project/agent-to-ui --headed && agent-browser wait 2000 && agent-browser snapshot -i -c && agent-browser fill @e13 "Compare NVDA to AMD" && agent-browser click @e14 && agent-browser wait 8000 && agent-browser snapshot -c && agent-browser close
+```
+
 ### Test 1: Basic Dashboard Load
 ```bash
-agent-browser open http://localhost:5173/project/agent-to-ui --headed && agent-browser wait 1000 && agent-browser snapshot -i && agent-browser screenshot docs/testing/screenshots/a2ui-load.png
+agent-browser open http://localhost:5173/project/agent-to-ui --headed && agent-browser wait 2000 && agent-browser snapshot -i -c
 ```
 
-### Test 2: Query Flow (Revenue Trend)
+### Test 2: Query + Verify Widgets (Peer Compare)
 ```bash
-agent-browser open http://localhost:5173/project/agent-to-ui --headed && agent-browser wait 1000 && agent-browser snapshot -i
-# Then:
-agent-browser fill @e13 "NVDA revenue trend" && agent-browser click @e14 && agent-browser wait 4000 && agent-browser screenshot docs/testing/screenshots/a2ui-revenue.png
+# After Test 1, refs are: @e13=textbox, @e14=Generate button
+agent-browser fill @e13 "Compare AMD vs NVDA" && agent-browser click @e14 && agent-browser wait 8000 && agent-browser snapshot -c
+# Look for: "Generated X valid components" in backend logs
+# Look for: "Swap visualization" buttons in snapshot = widgets rendered
 ```
 
-### Test 3: Query Flow (Peer Compare)
+### Test 3: Query Flow (Revenue Trend)
 ```bash
-agent-browser fill @e13 "Compare AMD vs NVDA" && agent-browser click @e14 && agent-browser wait 4000 && agent-browser screenshot docs/testing/screenshots/a2ui-compare.png
+agent-browser fill @e13 "NVDA revenue trend" && agent-browser click @e14 && agent-browser wait 8000 && agent-browser snapshot -c
 ```
 
 ### Test 4: Query Flow (Margin Analysis)
 ```bash
-agent-browser fill @e13 "AMD margin analysis" && agent-browser click @e14 && agent-browser wait 4000 && agent-browser screenshot docs/testing/screenshots/a2ui-margin.png
+agent-browser fill @e13 "AMD margin analysis" && agent-browser click @e14 && agent-browser wait 8000 && agent-browser snapshot -c
 ```
 
 ### Test 5: Query Flow (Explain Move)
 ```bash
-agent-browser fill @e13 "Why did NVDA drop?" && agent-browser click @e14 && agent-browser wait 4000 && agent-browser screenshot docs/testing/screenshots/a2ui-explain.png
+agent-browser fill @e13 "Why did NVDA drop?" && agent-browser click @e14 && agent-browser wait 8000 && agent-browser snapshot -c
 ```
 
-### Test 6: Full A2UI Flow (Complete)
+### Test 6: Cleanup
 ```bash
-agent-browser open http://localhost:5173/project/agent-to-ui --headed && agent-browser wait 1000 && agent-browser snapshot -i && \
-agent-browser fill @e13 "Compare AMD vs NVDA revenue" && agent-browser click @e14 && agent-browser wait 4000 && \
-agent-browser screenshot docs/testing/screenshots/a2ui-full-test.png && agent-browser close
+agent-browser close
 ```
 
 ### A2UI Sample Queries
@@ -74,6 +82,18 @@ agent-browser screenshot docs/testing/screenshots/a2ui-full-test.png && agent-br
 - `"AMD margin analysis"` - Margin Analysis skill
 - `"Why did NVDA drop?"` - Explain Move skill
 - `"Show me what you can do"` - Feature Showcase skill
+
+### ✅ Verify A2UI Widget Rendering Fix
+Check backend logs for success indicators:
+```bash
+# In backend terminal, look for:
+# ✅ SUCCESS: "[LLM_GENERATOR] Generated 6 valid components"
+# ❌ FAILURE: "No components found for types"
+
+# In browser snapshot, look for:
+# ✅ SUCCESS: Multiple "Swap visualization" buttons
+# ❌ FAILURE: No widget buttons, only error text
+```
 
 ---
 
@@ -89,7 +109,130 @@ agent-browser screenshot docs/testing/screenshots/a2ui-full-test.png && agent-br
 
 ```bash
 agent-browser install           # Install Chromium binaries (required once)
+npx playwright install chromium # Fallback if version mismatch
 ```
+
+## ⚡ Quick Start (Optimized)
+
+```bash
+# Set env var ONCE per session to skip version checks
+export AGENT_BROWSER_EXECUTABLE_PATH="C:/Users/Y_J/AppData/Local/ms-playwright/chromium-1200/chrome-win64/chrome.exe"
+
+# Then all commands are faster:
+agent-browser open http://localhost:5173/project/agent-to-ui --headed && agent-browser snapshot -i -c
+```
+
+## 🔧 Chromium Version Mismatch Fix
+
+If you see `Executable doesn't exist at chromium-1208`:
+
+```bash
+# Option 1: Close daemon and use existing chromium
+agent-browser close
+agent-browser --executable-path "C:/Users/Y_J/AppData/Local/ms-playwright/chromium-1200/chrome-win64/chrome.exe" open <url> --headed
+
+# Option 2: Check available versions and use newest
+ls C:/Users/Y_J/AppData/Local/ms-playwright/ | grep chromium
+# Then use the path to the available version
+
+# Option 3: Set env var (persistent for session)
+export AGENT_BROWSER_EXECUTABLE_PATH="C:/Users/Y_J/AppData/Local/ms-playwright/chromium-1200/chrome-win64/chrome.exe"
+```
+
+## 🔄 Daemon Management
+
+```bash
+agent-browser close              # MUST close before changing --executable-path
+agent-browser session            # Show current session
+agent-browser session list       # List all active sessions
+```
+
+**Important**: Daemon caches settings. If changing `--executable-path`, `--headed`, or `--profile`, close first.
+
+## ☁️ Cloud Browser Providers
+
+Run browsers in the cloud (no local installation needed):
+
+```bash
+# Browserbase (requires BROWSERBASE_API_KEY + BROWSERBASE_PROJECT_ID)
+agent-browser -p browserbase open https://example.com
+
+# Browser Use (requires BROWSER_USE_API_KEY)
+agent-browser -p browseruse open https://example.com
+
+# Or set env var
+export AGENT_BROWSER_PROVIDER=browserbase
+```
+
+## 🔌 CDP Mode (Connect to Existing Browser)
+
+Control existing Chrome/Electron instances via DevTools Protocol:
+
+```bash
+# Connect via port
+agent-browser --cdp 9222 snapshot
+
+# Connect via WebSocket URL
+agent-browser --cdp ws://localhost:9222/devtools/browser/xxx open https://example.com
+
+# Launch Chrome with debugging port first:
+# chrome --remote-debugging-port=9222
+```
+
+## 📡 WebSocket Streaming (Live Preview)
+
+Enable real-time browser streaming for human-AI pair browsing:
+
+```bash
+export AGENT_BROWSER_STREAM_PORT=9223
+agent-browser open https://example.com --headed
+
+# Connect viewer to ws://localhost:9223 for live JPEG frames
+# Supports mouse, keyboard, touch event injection via JSON payloads
+```
+
+## 🔐 Authenticated Headers
+
+Set origin-scoped HTTP headers (useful for API tokens, auth bypass):
+
+```bash
+# Headers apply only to matching origin
+agent-browser --headers '{"Authorization": "Bearer token123"}' open https://api.example.com
+
+# Combine with profile for persistent auth
+agent-browser --profile ~/.myapp --headers '{"X-API-Key": "secret"}' open https://app.com
+```
+
+## 🌐 Proxy Configuration
+
+```bash
+# Basic proxy
+agent-browser --proxy "http://127.0.0.1:8080" open https://example.com
+
+# Authenticated proxy
+agent-browser --proxy "http://user:pass@proxy.example.com:8080" open https://example.com
+
+# Bypass proxy for specific hosts
+agent-browser --proxy "http://proxy:8080" --proxy-bypass "localhost,*.internal.com" open https://example.com
+
+# Or use env vars
+export AGENT_BROWSER_PROXY="http://proxy:8080"
+export AGENT_BROWSER_PROXY_BYPASS="localhost"
+```
+
+## 🔧 All Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `AGENT_BROWSER_SESSION` | Session name (default: "default") |
+| `AGENT_BROWSER_PROFILE` | Persistent browser profile path |
+| `AGENT_BROWSER_EXECUTABLE_PATH` | Custom browser binary path |
+| `AGENT_BROWSER_ARGS` | Browser launch args (comma-separated) |
+| `AGENT_BROWSER_USER_AGENT` | Custom User-Agent string |
+| `AGENT_BROWSER_PROXY` | Proxy server URL |
+| `AGENT_BROWSER_PROXY_BYPASS` | Hosts to bypass proxy |
+| `AGENT_BROWSER_PROVIDER` | Cloud provider (browserbase/browseruse) |
+| `AGENT_BROWSER_STREAM_PORT` | WebSocket streaming port |
 
 ## Core workflow
 
@@ -256,6 +399,30 @@ agent-browser frame "#iframe"     # Switch to iframe
 agent-browser frame main          # Back to main frame
 ```
 
+### Browser Extensions
+```bash
+# Load extension (repeatable for multiple)
+agent-browser --extension /path/to/extension open https://example.com
+agent-browser --extension ./ext1 --extension ./ext2 open https://example.com
+```
+
+### Browser Launch Args
+```bash
+# Custom Chromium flags
+agent-browser --args "--no-sandbox,--disable-blink-features=AutomationControlled" open https://example.com
+
+# Or via env var
+export AGENT_BROWSER_ARGS="--no-sandbox,--disable-web-security"
+```
+
+### Custom User Agent
+```bash
+agent-browser --user-agent "Mozilla/5.0 Custom Agent" open https://example.com
+
+# Or via env var
+export AGENT_BROWSER_USER_AGENT="Custom Agent String"
+```
+
 ### Dialogs
 ```bash
 agent-browser dialog accept [text]  # Accept dialog
@@ -298,6 +465,19 @@ agent-browser state load auth.json
 agent-browser open https://app.example.com/dashboard
 ```
 
+## Example: Persistent Profile (Alternative to State)
+
+```bash
+# Use --profile for automatic state persistence across restarts
+# Stores: cookies, localStorage, IndexedDB, login sessions
+
+agent-browser --profile ~/.myapp open https://app.example.com/login
+agent-browser snapshot -i && agent-browser fill @e1 "user" && agent-browser fill @e2 "pass" && agent-browser click @e3
+
+# Next time - already logged in!
+agent-browser --profile ~/.myapp open https://app.example.com/dashboard
+```
+
 ## Sessions (parallel browsers)
 
 ```bash
@@ -335,6 +515,26 @@ agent-browser record stop                 # Save recording
 ### Daemon failed to start
 Run `agent-browser install` to install browser binaries.
 
+### Executable doesn't exist (version mismatch)
+```bash
+# 1. Close existing daemon
+agent-browser close
+
+# 2. Find available chromium
+ls C:/Users/Y_J/AppData/Local/ms-playwright/ | grep chromium
+
+# 3. Use available version
+agent-browser --executable-path "C:/Users/Y_J/AppData/Local/ms-playwright/chromium-1200/chrome-win64/chrome.exe" open <url>
+```
+
+### Connection timeout / os error 10060
+Daemon connection timed out. Retry the command:
+```bash
+# If you see "connected party did not properly respond"
+# Just retry the same command - daemon may need warmup
+agent-browser click @e2  # Retry
+```
+
 ### Click fails on SPA links
 Single-page apps (React, Vue) may not respond to ref clicks. Use direct navigation:
 ```bash
@@ -360,3 +560,27 @@ Use Bash timeout parameter:
 ```bash
 # In Claude Code, set timeout: 30000 for slow operations
 ```
+
+### --executable-path ignored warning
+Daemon is already running with different settings:
+```bash
+agent-browser close  # Close first
+agent-browser --executable-path "..." open <url>  # Then reopen
+```
+
+---
+
+## Architecture
+
+```
+┌─────────────────┐     ┌──────────────────┐     ┌─────────────┐
+│  CLI (Rust)     │────▶│  Daemon (Node)   │────▶│  Playwright │
+│  Fast parsing   │     │  Browser mgmt    │     │  Chromium   │
+└─────────────────┘     └──────────────────┘     └─────────────┘
+```
+
+- **Rust CLI**: Fast command parsing, daemon communication
+- **Node.js Daemon**: Persistent process managing Playwright browser instances
+- **Daemon auto-starts** on first command, maintains state between calls
+- **93% context savings** vs Playwright MCP (optimized for AI agents)
+- **Fallback**: Uses Node.js directly if native binaries unavailable

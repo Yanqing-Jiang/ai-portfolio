@@ -252,7 +252,7 @@ export function ExplainMovePanel({
                 {tabs.map((tab) => (
                     <button
                         key={tab.id}
-                        onClick={() => setActiveTab(tab.id)}
+                        onClick={(e) => { e.stopPropagation(); setActiveTab(tab.id); }}
                         style={{
                             display: 'flex',
                             alignItems: 'center',

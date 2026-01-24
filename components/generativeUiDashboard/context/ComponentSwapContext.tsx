@@ -11,7 +11,6 @@
 
 import { createContext, useContext, useState, useCallback, ReactNode } from 'react';
 import {
-    SWAP_CATALOG,
     getSwapOptionsFromCatalog,
     requiresServerSwap,
     isValidSwap,
@@ -33,6 +32,8 @@ export interface PropsSnapshot {
     type: string;
     props: Record<string, unknown>;
     warnings?: string[];
+    /** Whether props contain real data (not just defaults like 0) */
+    isComplete?: boolean;
 }
 
 export interface SwapState {
@@ -97,13 +98,6 @@ export interface SwapResult {
     warnings?: string[];
 }
 
-export interface SwapSuggestion {
-    targetType: string;
-    reason: string;
-    score: number;
-    icon: string;
-}
-
 export interface SwapContextValue {
     /** Map of component ID to swap state */
     swapStates: Map<string, SwapState>;
@@ -115,8 +109,6 @@ export interface SwapContextValue {
     requestSwap: (componentId: string, originalType: string, targetType: string, isPreview?: boolean) => Promise<SwapResult>;
     /** Enter preview mode for a target type */
     previewSwap: (componentId: string, originalType: string, targetType: string) => Promise<SwapResult>;
-    /** Get smart swap suggestions */
-    suggestSwaps: (componentId: string, currentType: string) => Promise<SwapSuggestion[]>;
     /** Commit the current preview to active state */
     commitSwap: (componentId: string) => void;
     /** Cancel the current preview and revert to previous state */
@@ -239,6 +231,9 @@ export function ComponentSwapProvider({ children, dashboardId = null }: Componen
      * Phase 1: Register original props for a component.
      * Called by ComponentRenderer on first render to capture resolved props
      * BEFORE any swap occurs. This ensures we can safely revert.
+     *
+     * FIX: Handles race condition where state is created by hover before registration.
+     * Also allows re-registration when better data becomes available.
      */
     const registerOriginalProps = useCallback((
         componentId: string,
@@ -247,21 +242,22 @@ export function ComponentSwapProvider({ children, dashboardId = null }: Componen
     ) => {
         const existingState = swapStates.get(componentId);
 
-        // Only register if no state exists OR state has no original snapshot yet
-        if (!existingState || !existingState.originalSnapshot) {
-            const originalSnapshot: PropsSnapshot = {
-                type: originalType,
-                props: { ...props }, // Deep copy to prevent mutation
-            };
+        // Check if props contain meaningful data (not just defaults)
+        const hasRealData = Object.values(props).some(v =>
+            v !== 0 && v !== '' && v !== null && v !== undefined &&
+            !(Array.isArray(v) && v.length === 0) &&
+            !(typeof v === 'object' && v !== null && Object.keys(v).length === 0)
+        );
 
-            const newState: SwapState = existingState ? {
-                ...existingState,
-                originalSnapshot,
-                // Also set first history snapshot if not present
-                historySnapshots: existingState.historySnapshots.length === 0
-                    ? [originalSnapshot]
-                    : existingState.historySnapshots,
-            } : {
+        const originalSnapshot: PropsSnapshot = {
+            type: originalType,
+            props: { ...props }, // Deep copy to prevent mutation
+            isComplete: hasRealData,
+        };
+
+        // Case 1: No existing state - create new
+        if (!existingState) {
+            const newState: SwapState = {
                 componentId,
                 originalType,
                 currentType: originalType,
@@ -272,9 +268,36 @@ export function ComponentSwapProvider({ children, dashboardId = null }: Componen
                 isDirty: false,
                 lastModified: Date.now(),
             };
+            updateState(componentId, newState);
+            return;
+        }
 
+        // Case 2: State exists but no snapshot (race condition - hover before registration)
+        if (!existingState.originalSnapshot) {
+            console.debug('[Swap] Backfilling originalSnapshot for', componentId);
+            const newState: SwapState = {
+                ...existingState,
+                originalSnapshot,
+                historySnapshots: existingState.historySnapshots.length === 0
+                    ? [originalSnapshot]
+                    : [originalSnapshot, ...existingState.historySnapshots.slice(1)],
+            };
+            updateState(componentId, newState);
+            return;
+        }
+
+        // Case 3: Existing snapshot is incomplete but new data is better
+        if (!existingState.originalSnapshot.isComplete && hasRealData) {
+            console.debug('[Swap] Upgrading incomplete snapshot for', componentId);
+            const newState: SwapState = {
+                ...existingState,
+                originalSnapshot,
+                // Update first history snapshot too
+                historySnapshots: [originalSnapshot, ...existingState.historySnapshots.slice(1)],
+            };
             updateState(componentId, newState);
         }
+        // Case 4: Existing snapshot is complete - do nothing
     }, [swapStates, updateState]);
 
     /**
@@ -331,10 +354,10 @@ export function ComponentSwapProvider({ children, dashboardId = null }: Componen
         if (!needsServer) {
             const currentState = getOrCreateState(componentId, originalType);
 
-            // FIX: Guard against preview before registration completes
+            // FIX: Guard against swap before registration completes (for both preview AND direct swaps)
             // If originalSnapshot is undefined, component hasn't registered its resolved props yet
-            if (isPreview && !currentState.originalSnapshot) {
-                console.warn('[Swap] Cannot preview - component not initialized with resolved props');
+            if (!currentState.originalSnapshot) {
+                console.warn('[Swap] Cannot swap - component not initialized with resolved props');
                 return { success: false, mode: 'client', error: 'Component not ready for swap' };
             }
 
@@ -462,18 +485,6 @@ export function ComponentSwapProvider({ children, dashboardId = null }: Componen
         return executeSwap(id, orig, target, true);
     }, [executeSwap]);
 
-    const suggestSwaps = useCallback(async (componentId: string, currentType: string): Promise<SwapSuggestion[]> => {
-        if (!dashboardId) return [];
-        try {
-            const res = await fetch(`/api/dash/${dashboardId}/swap/suggest?component_type=${currentType}`);
-            if (res.ok) {
-                const data = await res.json();
-                return data.suggestions || [];
-            }
-        } catch (e) { console.error('Error fetching suggestions:', e); }
-        return [];
-    }, [dashboardId]);
-
     /**
      * Commit the current preview to active state.
      * Phase 2: Also commits previewSnapshot to historySnapshots.
@@ -592,36 +603,42 @@ export function ComponentSwapProvider({ children, dashboardId = null }: Componen
      * Reset a component to its original state.
      * Phase 1 FIX: Restore from originalSnapshot instead of deleting state.
      * This preserves resolved data values instead of falling back to broken bindings.
+     *
+     * CRITICAL FIX: Never delete state - always reset to preserve component in layout.
      */
     const resetSwap = useCallback((componentId: string) => {
         const state = swapStates.get(componentId);
         if (!state) return;
 
-        // Phase 1 FIX: Restore from original snapshot if available
-        if (state.originalSnapshot) {
-            const newState: SwapState = {
-                ...state,
-                currentType: state.originalType,
-                transformedData: state.originalSnapshot.props,
-                history: [state.originalType],
-                historyIndex: 0,
-                historySnapshots: [state.originalSnapshot],
-                isDirty: false,
-                previewType: undefined,
-                previewData: undefined,
-                previewSnapshot: undefined,
-                serverSwap: false,
-                lastModified: Date.now(),
-            };
-            updateState(componentId, newState);
-        } else {
-            // Fallback: delete state if no snapshot (shouldn't happen normally)
-            setSwapStates(prev => {
-                const next = new Map(prev);
-                next.delete(componentId);
-                return next;
-            });
+        // Build the reset state - always preserve the component
+        const resetSnapshot = state.originalSnapshot?.props && Object.keys(state.originalSnapshot.props).length > 0
+            ? state.originalSnapshot
+            : { type: state.originalType, props: {}, isComplete: false };
+
+        const newState: SwapState = {
+            ...state,
+            currentType: state.originalType,
+            // Use snapshot props if available, otherwise clear transformedData to let bindings re-resolve
+            transformedData: resetSnapshot.props && Object.keys(resetSnapshot.props).length > 0
+                ? resetSnapshot.props
+                : undefined,
+            history: [state.originalType],
+            historyIndex: 0,
+            historySnapshots: [resetSnapshot],
+            isDirty: false,
+            previewType: undefined,
+            previewData: undefined,
+            previewSnapshot: undefined,
+            serverSwap: false,
+            lastModified: Date.now(),
+        };
+
+        if (!state.originalSnapshot?.props || Object.keys(state.originalSnapshot.props).length === 0) {
+            console.warn('[Swap] resetSwap: No valid snapshot for', componentId,
+                '- resetting to original type. Data will re-resolve from bindings.');
         }
+
+        updateState(componentId, newState);
     }, [swapStates, updateState]);
 
     const resetAll = useCallback(() => setSwapStates(new Map()), []);
@@ -720,7 +737,6 @@ export function ComponentSwapProvider({ children, dashboardId = null }: Componen
         dashboardId,
         requestSwap,
         previewSwap,
-        suggestSwaps,
         commitSwap,
         cancelPreview,
         undoSwap,

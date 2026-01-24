@@ -264,7 +264,14 @@ export function ComponentRenderer({
     }
 
     // Get React component from registry (using potentially swapped type)
-    const Component = resolveComponent(type);
+    // FIX: Fallback to original type if swapped type fails to resolve
+    let Component = resolveComponent(type);
+    let renderType = type;
+    if (!Component && type !== originalType) {
+        console.warn(`[ComponentRenderer] Swapped type "${type}" not found, falling back to "${originalType}"`);
+        Component = resolveComponent(originalType);
+        renderType = originalType;
+    }
     if (!Component) {
         // Render placeholder for unknown components
         return (
@@ -276,7 +283,7 @@ export function ComponentRenderer({
                 exit={{ opacity: 0, scale: 0.95 }}
                 transition={springConfig}
             >
-                Unknown: {type}
+                Unknown: {renderType}
             </motion.div>
         );
     }

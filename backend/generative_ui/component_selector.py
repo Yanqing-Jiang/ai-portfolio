@@ -791,6 +791,537 @@ def get_component_selector() -> ComponentSelector:
     return _selector
 
 
+def build_llm_component_tool(skill: A2UISkillMeta) -> dict:
+    """
+    Build Anthropic tool schema for generate_dashboard_components.
+
+    Function: build_llm_component_tool - creates tool for full LLM component generation.
+    Called from: LLMComponentGenerator.generate_components
+    Invokes: skill.widgets, skill.widget_bindings, skill.all_data_paths
+    Why: Enables LLM to generate complete widget specs with IDs and bindings.
+    """
+    # Build widget binding documentation for the prompt
+    binding_docs = []
+    for widget_type, rules in skill.widget_bindings.items():
+        if widget_type not in skill.widgets:
+            continue
+        doc = f"\n{widget_type}:"
+        for key, value in rules.items():
+            if isinstance(value, list):
+                doc += f"\n  - {key}: {value}"
+            elif isinstance(value, str):
+                doc += f"\n  - {key}: {value}"
+        binding_docs.append(doc)
+
+    return {
+        "name": "generate_dashboard_components",
+        "description": f"""Generate dashboard components for {skill.name}.
+
+You MUST create 3-6 widgets with:
+1. Unique widget_id in snake_case (e.g., 'kpi_revenue', 'chart_comparison')
+2. Valid widget_type from: {', '.join(skill.widgets)}
+3. Correct data_bindings using paths from the skill schema
+
+Widget Binding Rules:
+{''.join(binding_docs)}
+
+For data bindings, use:
+- {{"path": "/data/..."}} for data-bound values
+- {{"literalString": "..."}} for static text
+- {{"literalNumber": ...}} for static numbers
+
+Include follow_up_actions for continuous analysis opportunities.""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "components": {
+                    "type": "array",
+                    "description": "List of widget components to render",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {
+                                "type": "string",
+                                "description": "Unique widget ID in snake_case (e.g., 'kpi_revenue')"
+                            },
+                            "type": {
+                                "type": "string",
+                                "enum": list(set(skill.widgets)),  # Dedupe widget types
+                                "description": "Widget type from skill's available widgets"
+                            },
+                            "bindings": {
+                                "type": "object",
+                                "description": "Property-to-data-path mappings"
+                            },
+                            "priority": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 100,
+                                "description": "Display priority (0=top, 100=bottom)"
+                            }
+                        },
+                        "required": ["id", "type", "bindings"]
+                    },
+                    "minItems": 2,
+                    "maxItems": 8
+                },
+                "rationale": {
+                    "type": "string",
+                    "description": "Brief explanation of widget selection"
+                },
+                "follow_up_actions": {
+                    "type": "array",
+                    "description": "Suggested follow-up analyses",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "label": {"type": "string"},
+                            "action": {
+                                "type": "string",
+                                "enum": ["new_tab", "swap", "drill_down"]
+                            },
+                            "query": {"type": "string"}
+                        },
+                        "required": ["label", "action", "query"]
+                    }
+                }
+            },
+            "required": ["components"]
+        }
+    }
+
+
+def validate_llm_components(
+    components: List[dict],
+    skill: A2UISkillMeta
+) -> tuple[List[WidgetSelection], List[str]]:
+    """
+    Validate LLM-generated components against skill schema.
+
+    Function: validate_llm_components - enforces schema compliance.
+    Called from: LLMComponentGenerator._parse_and_validate
+    Invokes: n/a
+    Why: Catches invalid components before they reach the frontend.
+
+    Returns:
+        (valid_widgets, errors) - tuple of valid selections and error messages
+    """
+    valid: List[WidgetSelection] = []
+    errors: List[str] = []
+    seen_ids: set = set()
+
+    # Get valid widget types (deduplicated)
+    valid_types = set(skill.widgets)
+
+    # Get valid data paths
+    valid_paths: set = set()
+    for path in skill.data_paths.values():
+        valid_paths.add(path)
+    for base_path, schema in skill.data_schema.items():
+        valid_paths.add(base_path)
+        if isinstance(schema, dict) and "properties" in schema:
+            for prop in schema["properties"]:
+                valid_paths.add(f"{base_path}/{prop}")
+    for widget_rules in skill.widget_bindings.values():
+        if isinstance(widget_rules, dict):
+            for key, value in widget_rules.items():
+                if isinstance(value, list):
+                    valid_paths.update(value)
+                elif isinstance(value, str) and value.startswith("/"):
+                    valid_paths.add(value)
+
+    for comp in components:
+        comp_type = comp.get("type")
+        comp_id = comp.get("id")
+        bindings = comp.get("bindings", {})
+        priority = comp.get("priority", len(valid) * 10)
+
+        # Check type is valid
+        if comp_type not in valid_types:
+            errors.append(f"Invalid widget type: {comp_type}. Valid: {valid_types}")
+            continue
+
+        # Check ID exists and is unique
+        if not comp_id:
+            errors.append(f"Missing widget ID for {comp_type}")
+            continue
+
+        if comp_id in seen_ids:
+            errors.append(f"Duplicate widget ID: {comp_id}")
+            continue
+        seen_ids.add(comp_id)
+
+        # Check ID format (snake_case)
+        import re
+        if not re.match(r'^[a-z][a-z0-9_]*$', comp_id):
+            errors.append(f"Invalid ID format '{comp_id}'. Must be lowercase snake_case.")
+            continue
+
+        # Validate bindings have valid paths
+        binding_errors = []
+        for prop_name, binding in bindings.items():
+            if isinstance(binding, dict) and "path" in binding:
+                path = binding["path"]
+                # Check if path is valid (starts with /data and exists in schema)
+                if not path.startswith("/data"):
+                    binding_errors.append(f"{comp_type}.{prop_name}: path must start with /data")
+                elif path not in valid_paths:
+                    # Allow nested paths even if not explicitly in schema
+                    path_valid = any(
+                        path.startswith(valid + "/") or path == valid
+                        for valid in valid_paths
+                    )
+                    if not path_valid:
+                        # Log warning but don't reject - schema might be incomplete
+                        logger.debug(
+                            "[VALIDATOR] Path %s not in schema for %s.%s",
+                            path, comp_type, prop_name
+                        )
+
+        if binding_errors:
+            errors.extend(binding_errors)
+            continue
+
+        # Component is valid
+        valid.append(WidgetSelection(
+            widget_type=comp_type,
+            widget_id=comp_id,
+            data_bindings=bindings,
+            priority=priority,
+        ))
+
+    return valid, errors
+
+
+class LLMComponentGenerator:
+    """
+    LLM-powered component generator for A2UI dashboards.
+
+    Class: LLMComponentGenerator - generates complete widget specs via LLM tool calls.
+    Called from: backend.generative_ui.runtime.A2UIRuntime._stream_component_selection
+    Invokes: A2UISDKWrapper.query_with_tools, validate_llm_components
+    Why: Replaces static component_tree with dynamic LLM-generated layouts.
+    """
+
+    def __init__(self):
+        """Initialize the component generator."""
+        self._sdk_wrapper = None
+
+    async def _get_sdk_wrapper(self):
+        """Lazy-load SDK wrapper to avoid circular imports."""
+        if self._sdk_wrapper is None:
+            from .sdk_wrapper import get_sdk_wrapper
+            self._sdk_wrapper = get_sdk_wrapper()
+            if not self._sdk_wrapper.is_initialized:
+                await self._sdk_wrapper.initialize()
+        return self._sdk_wrapper
+
+    async def generate_components(
+        self,
+        skill: A2UISkillMeta,
+        question: str,
+        context: Dict[str, Any],
+    ) -> List[WidgetSelection]:
+        """
+        Generate dashboard components using LLM tool call.
+
+        Method: generate_components - LLM-powered widget generation.
+        Called from: A2UIRuntime._stream_component_selection
+        Invokes: build_llm_component_tool, A2UISDKWrapper.query
+        Why: Generates contextual component IDs and bindings based on user query.
+
+        Args:
+            skill: The selected A2UI skill
+            question: User's original question
+            context: Render context with tickers, metrics, etc.
+
+        Returns:
+            List of validated WidgetSelection objects
+        """
+        # Check for backward compatibility - if skill has component_tree, use it
+        component_tree = skill.layout_config.get("component_tree") if skill.layout_config else None
+        if component_tree:
+            logger.info(
+                "[LLM_GENERATOR] Skill %s has component_tree, using static layout",
+                skill.skill_id
+            )
+            return get_components_from_tree(skill, component_tree)
+
+        # Generate components via LLM
+        try:
+            wrapper = await self._get_sdk_wrapper()
+
+            tickers = context.get("tickers", [])
+            primary_ticker = context.get("primary_ticker", tickers[0] if tickers else "")
+            metric = context.get("metric", "")
+            time_range = context.get("time_range", "1Y")
+
+            prompt = f"""Generate dashboard components for this question:
+
+Question: {question}
+Primary Ticker: {primary_ticker}
+All Tickers: {', '.join(tickers)}
+Metric Focus: {metric}
+Time Range: {time_range}
+Skill: {skill.name}
+
+Available Widgets: {', '.join(set(skill.widgets))}
+
+Valid Data Paths:
+{json.dumps(skill.all_data_paths, indent=2)}
+
+Widget Binding Rules:
+{json.dumps(skill.widget_bindings, indent=2)}
+
+Create 3-6 components with:
+1. Meaningful IDs (e.g., 'kpi_amd_revenue', 'chart_peer_comparison')
+2. Correct data bindings from the paths above
+3. Appropriate priorities (0=top, 100=bottom)
+
+Also suggest 1-2 follow_up_actions for continuous analysis.
+
+Call the generate_dashboard_components tool with your selection."""
+
+            response = await wrapper.query(
+                prompt=prompt,
+                tools=[build_llm_component_tool(skill)],
+                max_tokens=1500,
+                temperature=0.3,
+                tool_choice={"type": "any"},  # Force tool use
+            )
+
+            return self._parse_and_validate(response, skill)
+
+        except Exception as e:
+            logger.warning("[LLM_GENERATOR] LLM generation failed: %s, falling back", e)
+            return self._generate_fallback(skill, context)
+
+    def _parse_and_validate(
+        self,
+        response: Any,
+        skill: A2UISkillMeta,
+    ) -> List[WidgetSelection]:
+        """
+        Parse LLM tool response and validate components.
+
+        Method: _parse_and_validate - extracts and validates LLM output.
+        Called from: generate_components
+        Invokes: validate_llm_components
+        Why: Ensures LLM output conforms to skill schema.
+        """
+        try:
+            # Handle response based on type
+            if hasattr(response, 'tool_calls') and response.tool_calls:
+                # Extract tool call result
+                tool_result = response.tool_calls[0]
+                if hasattr(tool_result, 'input'):
+                    data = tool_result.input
+                elif isinstance(tool_result, dict):
+                    data = tool_result.get("input", tool_result)
+                else:
+                    data = {}
+            elif hasattr(response, 'content') and response.content:
+                # Try to parse JSON from content
+                content = response.content
+                start_idx = content.find('{')
+                end_idx = content.rfind('}') + 1
+                if start_idx >= 0 and end_idx > start_idx:
+                    data = json.loads(content[start_idx:end_idx])
+                else:
+                    data = {}
+            else:
+                data = {}
+
+            components = data.get("components", [])
+            if not components:
+                logger.warning("[LLM_GENERATOR] No components in LLM response")
+                return []
+
+            # Validate components
+            valid_widgets, errors = validate_llm_components(components, skill)
+
+            if errors:
+                logger.warning(
+                    "[LLM_GENERATOR] Validation errors: %s",
+                    errors[:5]
+                )
+
+            if valid_widgets:
+                logger.info(
+                    "[LLM_GENERATOR] Generated %d valid components: %s",
+                    len(valid_widgets),
+                    [w.widget_id for w in valid_widgets]
+                )
+
+                # Store follow-up actions if present
+                follow_ups = data.get("follow_up_actions", [])
+                if follow_ups:
+                    logger.info(
+                        "[LLM_GENERATOR] Follow-up actions: %s",
+                        [f.get("label") for f in follow_ups]
+                    )
+
+            return valid_widgets
+
+        except Exception as e:
+            logger.warning("[LLM_GENERATOR] Parse error: %s", e)
+            return []
+
+    def _generate_fallback(
+        self,
+        skill: A2UISkillMeta,
+        context: Dict[str, Any],
+    ) -> List[WidgetSelection]:
+        """
+        Generate fallback components when LLM fails.
+
+        Method: _generate_fallback - creates default layout from widget_bindings.
+        Called from: generate_components (on LLM failure)
+        Invokes: skill.widget_bindings
+        Why: Ensures dashboard renders even when LLM unavailable.
+        """
+        widgets: List[WidgetSelection] = []
+        seen_types: set = set()
+        priority = 0
+
+        # Get unique widget types from skill
+        unique_types = list(dict.fromkeys(skill.widgets))  # Preserve order, remove dupes
+
+        for widget_type in unique_types:
+            if widget_type in seen_types:
+                continue
+            seen_types.add(widget_type)
+
+            # Build default bindings from widget_bindings schema
+            bindings = self._build_default_bindings(widget_type, skill)
+
+            widget_id = f"{widget_type.lower()}_{len(widgets)}"
+
+            widgets.append(WidgetSelection(
+                widget_type=widget_type,
+                widget_id=widget_id,
+                data_bindings=bindings,
+                priority=priority,
+            ))
+            priority += 10
+
+        logger.info(
+            "[LLM_GENERATOR] Fallback generated %d widgets: %s",
+            len(widgets),
+            [w.widget_id for w in widgets]
+        )
+
+        return widgets
+
+    def _build_default_bindings(
+        self,
+        widget_type: str,
+        skill: A2UISkillMeta,
+    ) -> Dict[str, Any]:
+        """
+        Build default data bindings from widget_bindings schema.
+
+        Method: _build_default_bindings - extracts paths from skill config.
+        Called from: _generate_fallback
+        Invokes: skill.widget_bindings
+        Why: Creates sensible defaults when LLM doesn't specify bindings.
+        """
+        bindings: Dict[str, Any] = {}
+        rules = skill.widget_bindings.get(widget_type, {})
+
+        # Map common binding keys to property names
+        key_to_prop = {
+            "valid_value_paths": "value",
+            "valid_delta_paths": "delta",
+            "valid_label_paths": "label",
+            "valid_series_path": "series",
+            "valid_annotations_path": "annotations",
+            "valid_title_path": "title",
+            "valid_columns_path": "columns",
+            "valid_data_path": "data",
+            "valid_events_path": "items",
+            "valid_ticker_path": "ticker",
+            "valid_tickers_path": "tickers",
+            "valid_explanation_path": "explanation",
+            "valid_factors_path": "factors",
+            "valid_citations_path": "citations",
+            "valid_matrix_path": "matrix",
+            "valid_chart_path": "chart",
+            "valid_table_path": "table",
+        }
+
+        for key, prop_name in key_to_prop.items():
+            if key in rules:
+                value = rules[key]
+                if isinstance(value, list) and value:
+                    # Use first valid path
+                    bindings[prop_name] = {"path": value[0]}
+                elif isinstance(value, str) and value.startswith("/"):
+                    bindings[prop_name] = {"path": value}
+
+        return bindings
+
+
+def get_components_from_tree(
+    skill: A2UISkillMeta,
+    component_tree: Dict[str, Any],
+) -> List[WidgetSelection]:
+    """
+    Extract widget selections from a static component_tree.
+
+    Function: get_components_from_tree - backward compat for component_tree skills.
+    Called from: LLMComponentGenerator.generate_components
+    Invokes: n/a
+    Why: Supports existing skills with component_tree (e.g., explain_move).
+    """
+    widgets: List[WidgetSelection] = []
+
+    for comp_id, comp_def in component_tree.items():
+        comp_type = comp_def.get("type")
+
+        # Skip layout components (Row, Column, Card)
+        if comp_type in ("Row", "Column", "Card", "Text"):
+            continue
+
+        # Skip if not in skill's widget list
+        if comp_type not in skill.widgets:
+            continue
+
+        # Build data_bindings from props
+        props = comp_def.get("props", {})
+        data_bindings = {}
+        for prop_name, prop_value in props.items():
+            if isinstance(prop_value, dict):
+                data_bindings[prop_name] = prop_value
+
+        widgets.append(WidgetSelection(
+            widget_type=comp_type,
+            widget_id=comp_id,
+            data_bindings=data_bindings,
+            priority=len(widgets) * 10,
+        ))
+
+    logger.info(
+        "[TREE_EXTRACT] Extracted %d widgets from component_tree: %s",
+        len(widgets),
+        [w.widget_id for w in widgets]
+    )
+
+    return widgets
+
+
+# Singleton for LLM generator
+_llm_generator: Optional[LLMComponentGenerator] = None
+
+
+def get_llm_component_generator() -> LLMComponentGenerator:
+    """Get the LLM component generator singleton."""
+    global _llm_generator
+    if _llm_generator is None:
+        _llm_generator = LLMComponentGenerator()
+    return _llm_generator
+
+
 __all__ = [
     "WidgetSelection",
     "WidgetTypeSelection",
@@ -799,4 +1330,9 @@ __all__ = [
     "get_component_selector",
     "get_components_by_types",
     "build_component_selection_tool",
+    "LLMComponentGenerator",
+    "get_llm_component_generator",
+    "build_llm_component_tool",
+    "validate_llm_components",
+    "get_components_from_tree",
 ]

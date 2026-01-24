@@ -15,7 +15,7 @@ import { authService } from '../../services/auth';
 
 // Context providers for layout/swapping
 import { LayoutProvider, ComponentSwapProvider, ComponentSelectionProvider } from './context';
-import { LayoutSwitcher, ComponentActionMenu, ReorderToggleIcon } from './widgets';
+import { LayoutSwitcher, ComponentActionMenu } from './widgets';
 
 export interface DashboardViewerProps {
     /** Dashboard ID to load */
@@ -127,13 +127,8 @@ export function DashboardViewer({
                             </span>
                         </div>
 
-                        {/* Layout and Reorder Controls */}
+                        {/* Layout Controls */}
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                            {/* Reorder Toggle */}
-                            {enableLayoutControls && state.isDone && (
-                                <ReorderToggleIcon />
-                            )}
-
                             {/* Layout Switcher */}
                             {enableLayoutControls && (
                                 <LayoutSwitcher

@@ -111,6 +111,12 @@ export function ComponentSelectionProvider({
                 return;
             }
 
+            // FIX: Ignore clicks on interactive elements (buttons, links, inputs)
+            // This prevents swap menu from opening when clicking tabs, buttons, etc.
+            if (target.closest('button, a, input, select, textarea, [role="button"], [role="tab"]')) {
+                return;
+            }
+
             // Find the closest component wrapper
             const componentEl = target.closest('[data-component-id]') as HTMLElement | null;
 
