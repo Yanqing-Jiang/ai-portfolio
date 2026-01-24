@@ -45,7 +45,7 @@ Run via Bash with timeout: 600000ms (10 minutes). Gemini CLI handles:
 
 ### Step 4: Read Output File
 ```bash
-type docs\[research|designs]\[filename].md
+cat docs/[research|designs]/[filename].md
 ```
 
 ### Step 5: Return Summary
@@ -67,11 +67,11 @@ If both Gemini 3 models fail, return error to orchestrator. NEVER fall back to g
 
 ---
 
-## Command Templates (PowerShell Environment)
+## Command Templates (macOS/Unix Environment)
 
 ### Research Tasks
-```powershell
-powershell -Command "gemini -m 'gemini-3-flash-preview' -p 'Research: [TOPIC] in 2026. Include latest info, best practices, authoritative sources.
+```bash
+gemini -m 'gemini-3-flash-preview' -p 'Research: [TOPIC] in 2026. Include latest info, best practices, authoritative sources.
 
 Output concise markdown with:
 - Summary (3-5 sentences)
@@ -79,12 +79,12 @@ Output concise markdown with:
 - Sources (max 5 links)
 - Recommendations (max 5)
 
-Save to docs/research/[topic]-research.md' -y"
+Save to docs/research/[topic]-research.md' -y
 ```
 
 ### Design Tasks
-```powershell
-powershell -Command "gemini -m 'gemini-3-flash-preview' -p 'Read existing codebase first. Design [COMPONENT] with:
+```bash
+gemini -m 'gemini-3-flash-preview' -p 'Read existing codebase first. Design [COMPONENT] with:
 - Component structure
 - Props/state (TypeScript)
 - Responsive design
@@ -98,12 +98,12 @@ Output concise markdown with:
 - Styling Notes (max 10 points)
 - Usage Example (1 code block)
 
-Save to docs/designs/[component]-design.md' -y"
+Save to docs/designs/[component]-design.md' -y
 ```
 
 ### Compare Tasks
-```powershell
-powershell -Command "gemini -m 'gemini-3-flash-preview' -p 'Compare [TECH_A] vs [TECH_B] for [USE_CASE] in 2026.
+```bash
+gemini -m 'gemini-3-flash-preview' -p 'Compare [TECH_A] vs [TECH_B] for [USE_CASE] in 2026.
 
 Output concise markdown with:
 - Summary (2-3 sentences)
@@ -111,12 +111,12 @@ Output concise markdown with:
 - Pros/Cons (max 5 each)
 - Recommendation (1 paragraph)
 
-Save to docs/research/[techA]-vs-[techB].md' -y"
+Save to docs/research/[techA]-vs-[techB].md' -y
 ```
 
 ### Documentation Lookup
-```powershell
-powershell -Command "gemini -m 'gemini-3-flash-preview' -p 'Find official documentation for [TECHNOLOGY]. Include setup, API reference, examples.
+```bash
+gemini -m 'gemini-3-flash-preview' -p 'Find official documentation for [TECHNOLOGY]. Include setup, API reference, examples.
 
 Output concise markdown with:
 - Summary (2-3 sentences)
@@ -125,25 +125,25 @@ Output concise markdown with:
 - Code Examples (max 3)
 - Official Links (max 5)
 
-Save to docs/research/[technology]-docs.md' -y"
+Save to docs/research/[technology]-docs.md' -y
 ```
 
 ### Codebase-Aware Analysis
-```powershell
-powershell -Command "gemini -m 'gemini-3-flash-preview' -p 'Read the codebase structure first. Then [TASK_DESCRIPTION].
+```bash
+gemini -m 'gemini-3-flash-preview' -p 'Read the codebase structure first. Then [TASK_DESCRIPTION].
 
 Output concise markdown with:
 - Summary (2-3 sentences)
 - Findings (max 10 points)
 - Recommendations (max 5)
 
-Save to docs/[appropriate-folder]/[topic].md' -y"
+Save to docs/[appropriate-folder]/[topic].md' -y
 ```
 
 ### Backup Commands (gemini-3-pro-preview)
 If `gemini-3-flash-preview` fails, retry with `gemini-3-pro-preview`:
-```powershell
-powershell -Command "gemini -m 'gemini-3-pro-preview' -p '[SAME_PROMPT]' -y"
+```bash
+gemini -m 'gemini-3-pro-preview' -p '[SAME_PROMPT]' -y
 ```
 
 ---
@@ -235,7 +235,7 @@ Suggestion: Check Gemini CLI installation or model availability
 ## Pre-Flight Check (Optional)
 
 Verify Gemini CLI is available:
-```powershell
+```bash
 gemini --version
 ```
 

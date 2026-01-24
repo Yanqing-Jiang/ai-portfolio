@@ -152,11 +152,11 @@ If you see `Executable doesn't exist at chromium-XXXX`:
 npx playwright@latest install chromium
 # This installs the version agent-browser expects
 
-# Option 2: Use existing chromium
-ls C:/Users/Y_J/AppData/Local/ms-playwright/ | grep chromium
+# Option 2: Use existing chromium (macOS)
+ls ~/Library/Caches/ms-playwright/ | grep chromium
 # Find available version (e.g., chromium-1208), then:
 agent-browser close  # Close daemon first!
-agent-browser --executable-path "C:/Users/Y_J/AppData/Local/ms-playwright/chromium-1208/chrome-win/chrome.exe" open <url>
+agent-browser --executable-path ~/Library/Caches/ms-playwright/chromium-1208/chrome-mac-arm64/Chromium.app/Contents/MacOS/Chromium open <url>
 ```
 
 ## 🔄 Session Best Practices
@@ -552,11 +552,11 @@ Run `agent-browser install` to install browser binaries.
 # 1. Close existing daemon
 agent-browser close
 
-# 2. Find available chromium
-ls C:/Users/Y_J/AppData/Local/ms-playwright/ | grep chromium
+# 2. Find available chromium (macOS)
+ls ~/Library/Caches/ms-playwright/ | grep chromium
 
-# 3. Use available version
-agent-browser --executable-path "C:/Users/Y_J/AppData/Local/ms-playwright/chromium-1200/chrome-win64/chrome.exe" open <url>
+# 3. Use available version (macOS)
+agent-browser --executable-path ~/Library/Caches/ms-playwright/chromium-1208/chrome-mac-arm64/Chromium.app/Contents/MacOS/Chromium open <url>
 ```
 
 ### Connection timeout / os error 10060

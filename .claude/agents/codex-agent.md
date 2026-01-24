@@ -52,23 +52,23 @@ Report to orchestrator with task-specific format (see templates below).
 
 ---
 
-## Command Templates (WSL Environment)
+## Command Templates (macOS/Unix Environment)
 
 ### Planning Tasks
 ```bash
-wsl bash -lc 'codex -m "gpt-5.2-codex" -c model_reasoning_effort="xhigh" exec --dangerously-bypass-approvals-and-sandbox "Read the codebase first to understand the project structure. Then create a plan for: [TASK_DESCRIPTION].
+codex -m "gpt-5.2-codex" -c model_reasoning_effort="xhigh" exec --dangerously-bypass-approvals-and-sandbox "Read the codebase first to understand the project structure. Then create a plan for: [TASK_DESCRIPTION].
 
 Output a concise markdown plan with:
 - Summary (2-3 sentences)
 - Implementation Steps (max 10, with file paths)
 - Files to Modify (max 15)
 
-Save the complete plan to docs/planning/[topic]-plan.md"' 2>&1
+Save the complete plan to docs/planning/[topic]-plan.md" 2>&1
 ```
 
 ### Architecture Analysis
 ```bash
-wsl bash -lc 'codex -m "gpt-5.2-codex" -c model_reasoning_effort="xhigh" exec --dangerously-bypass-approvals-and-sandbox "Read and analyze the codebase architecture. Then provide architecture analysis for: [TOPIC].
+codex -m "gpt-5.2-codex" -c model_reasoning_effort="xhigh" exec --dangerously-bypass-approvals-and-sandbox "Read and analyze the codebase architecture. Then provide architecture analysis for: [TOPIC].
 
 Output markdown with:
 - Current Architecture Summary
@@ -76,12 +76,12 @@ Output markdown with:
 - Impact Assessment
 - Implementation Steps
 
-Save to docs/planning/[topic]-architecture.md"' 2>&1
+Save to docs/planning/[topic]-architecture.md" 2>&1
 ```
 
 ### Bug/Debug Analysis
 ```bash
-wsl bash -lc 'codex -m "gpt-5.2-codex" -c model_reasoning_effort="xhigh" exec --dangerously-bypass-approvals-and-sandbox "Read the codebase to find and analyze bug: [BUG_DESCRIPTION].
+codex -m "gpt-5.2-codex" -c model_reasoning_effort="xhigh" exec --dangerously-bypass-approvals-and-sandbox "Read the codebase to find and analyze bug: [BUG_DESCRIPTION].
 
 Output markdown with:
 - Root Cause (max 5 sentences)
@@ -89,12 +89,12 @@ Output markdown with:
 - Fix Strategy (max 10 steps)
 - Test Cases
 
-Save to docs/bugs/[bug-name]-analysis.md"' 2>&1
+Save to docs/bugs/[bug-name]-analysis.md" 2>&1
 ```
 
 ### Verification/Review
 ```bash
-wsl bash -lc 'codex -m "gpt-5.2-codex" -c model_reasoning_effort="xhigh" exec --dangerously-bypass-approvals-and-sandbox "Read the recently modified code files. Verify implementation quality for: [TASK_DESCRIPTION].
+codex -m "gpt-5.2-codex" -c model_reasoning_effort="xhigh" exec --dangerously-bypass-approvals-and-sandbox "Read the recently modified code files. Verify implementation quality for: [TASK_DESCRIPTION].
 
 Check for:
 - Completeness (task requirements met)
@@ -109,12 +109,12 @@ Output markdown report with:
 - Critical Issues (if any)
 - Recommendations (max 5)
 
-Save to docs/verification/[task-name]-verification.md"' 2>&1
+Save to docs/verification/[task-name]-verification.md" 2>&1
 ```
 
 ### Fallback (if model unavailable)
 ```bash
-wsl bash -lc 'codex exec --dangerously-bypass-approvals-and-sandbox "[TASK]. Save output to docs/[dir]/[filename].md"' 2>&1
+codex exec --dangerously-bypass-approvals-and-sandbox "[TASK]. Save output to docs/[dir]/[filename].md" 2>&1
 ```
 
 ---
@@ -200,9 +200,9 @@ Suggestion: [how to resolve or manual alternative]
 
 ## Pre-Flight Check (Optional)
 
-Verify WSL and Codex are available:
+Verify Codex CLI is available:
 ```bash
-wsl --status && wsl bash -lc 'which codex'
+codex --version
 ```
 
 ---
