@@ -27,6 +27,7 @@ find . -type f -name "*.png" ! -path "*/node_modules/*" ! -path "*/.venv/*" ! -p
 find . -type f \( -name "*.test.ts" -o -name "*.test.tsx" -o -name "*.test.js" -o -name "*.test.jsx" -o -name "*.spec.ts" -o -name "*.spec.tsx" -o -name "*.spec.js" -o -name "*.spec.jsx" -o -name "test_*.py" -o -name "test*.js" -o -name "test*.mjs" -o -name "test*.cjs" -o -name "test*.ts" -o -name "test*.tsx" \) ! -path "*/node_modules/*" ! -path "*/.venv/*" ! -path "*/tests/*" -delete
 find . -type f \( -name "*.log" -o -name "*-debug.log" -o -name "*-error.log" \) ! -path "*/node_modules/*" ! -path "*/.venv/*" -delete
 find . -type f \( -name "*_pid.txt" -o -name "temp_view.txt" \) ! -path "*/node_modules/*" ! -path "*/.venv/*" -delete
+find ./docs -mindepth 2 -type f -name "*.md" -delete
 ```
 
 Report cleanup:
@@ -249,6 +250,10 @@ Use these prefixes based on change type:
 
 **Temp Files**:
 - `tmpclaude-*`, `*_pid.txt`, `temp_view.txt`
+
+**Docs Subfolders**:
+- `docs/**/*.md` (analysis/debug/temp docs in subfolders only)
+- Main `docs/*.md` files preserved (architecture docs)
 
 **Exclusions**: `node_modules/`, `.venv/`, `tests/`, `public/`, `assets/` directories never touched
 

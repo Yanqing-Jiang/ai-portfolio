@@ -72,9 +72,12 @@ A2UI message emitter for skill-driven dashboards.
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional
+
+logger = logging.getLogger(__name__)
 
 from .catalog import get_catalog
 from .messages import (
@@ -358,6 +361,8 @@ class A2UIMessageEmitter:
         props: Dict[str, Any],
     ) -> A2UIComponent:
         """Build KpiCard from LLM bindings."""
+        # DEBUG: Log the bindings for KpiCard to debug path issues
+        logger.info(f"[EMITTER] KpiCard {widget_id} bindings: {props}")
         return A2UIComponent(
             id=widget_id,
             component={"KpiCard": props}

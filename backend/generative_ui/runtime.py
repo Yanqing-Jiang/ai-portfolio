@@ -567,6 +567,9 @@ class A2UIRuntime:
                 await store_explanation_memory(session_id, state.dashboard_id, explanation)
 
             # Emit data update with full result
+            # DEBUG: Log the kpis to verify data
+            kpis = result.data_model.get("kpis", {})
+            logger.info(f"[RUNTIME] Data update kpis: primary_value={kpis.get('primary_value')}, leader_value={kpis.get('leader_value')}, leader={kpis.get('leader')}")
             yield emitter.data_update(result.data_model, path="/data")
             message_count += 1
             trace.add_step("data_update", details={"keys": list(result.data_model.keys())})

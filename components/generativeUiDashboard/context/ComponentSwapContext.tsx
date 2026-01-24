@@ -9,7 +9,7 @@
  *      Refactored to support "Preview-First" flow, history (undo/redo), and state preservation.
  */
 
-import { createContext, useContext, useState, useCallback, ReactNode } from 'react';
+import { createContext, useContext, useState, useCallback, useEffect, ReactNode } from 'react';
 import {
     getSwapOptionsFromCatalog,
     requiresServerSwap,
@@ -19,6 +19,7 @@ import {
     type SwapTarget,
     type SwapMode,
 } from '../constants/swapCatalog';
+import { useSwapPersistence, type SwapStateSnapshot as PersistedSwapState } from '../hooks/useSwapPersistence';
 
 // ============================================================================
 // Types
@@ -155,6 +156,18 @@ export interface SwapContextValue {
     registerOriginalProps: (componentId: string, originalType: string, props: Record<string, unknown>) => void;
     /** Get render props (respects snapshots for data preservation) */
     getRenderProps: (componentId: string, originalProps: Record<string, unknown>) => Record<string, unknown>;
+
+    // --- Phase 2: Persistence ---
+    /** Whether swap states are being restored from backend (loading state) */
+    isRestoringStates: boolean;
+
+    // --- Phase 3: Preview Empty State ---
+    /** Check if a component has complete data for swapping */
+    hasDataForComponent: (componentId: string) => boolean;
+    /** Map of component IDs to preview loading state (fetching data for preview) */
+    previewLoading: Map<string, boolean>;
+    /** Trigger data fetch for a component that has no data */
+    fetchDataForPreview: (componentId: string, componentType: string) => Promise<boolean>;
 }
 
 // ============================================================================
@@ -203,6 +216,101 @@ export interface ComponentSwapProviderProps {
 export function ComponentSwapProvider({ children, dashboardId = null }: ComponentSwapProviderProps) {
     const [swapStates, setSwapStates] = useState<Map<string, SwapState>>(new Map());
     const [swapLoading, setSwapLoading] = useState<Map<string, boolean>>(new Map());
+    const [previewLoading, setPreviewLoading] = useState<Map<string, boolean>>(new Map());
+    const [isRestoringStates, setIsRestoringStates] = useState(false);
+
+    // Initialize persistence hook
+    const { loadSwapStates, saveSwapState, clearSwapStates } = useSwapPersistence({
+        dashboardId,
+        saveDebounceMs: 500,
+        debug: process.env.NODE_ENV === 'development',
+    });
+
+    /**
+     * Convert frontend SwapState to backend-compatible PersistedSwapState.
+     */
+    const toPersistedState = useCallback((state: SwapState): PersistedSwapState => ({
+        component_id: state.componentId,
+        original_type: state.originalType,
+        current_type: state.currentType,
+        history: state.history,
+        history_index: state.historyIndex,
+        is_dirty: state.isDirty,
+        updated_at: new Date(state.lastModified).toISOString(),
+        transformed_data: state.transformedData,
+        warnings: state.warnings,
+    }), []);
+
+    /**
+     * Convert backend PersistedSwapState to frontend SwapState.
+     */
+    const fromPersistedState = useCallback((persisted: PersistedSwapState): SwapState => ({
+        componentId: persisted.component_id,
+        originalType: persisted.original_type,
+        currentType: persisted.current_type,
+        history: persisted.history,
+        historyIndex: persisted.history_index,
+        historySnapshots: [], // Will be populated by registerOriginalProps
+        isDirty: persisted.is_dirty,
+        lastModified: new Date(persisted.updated_at).getTime(),
+        transformedData: persisted.transformed_data,
+        warnings: persisted.warnings,
+    }), []);
+
+    /**
+     * Load swap states from backend on mount (restore previous session).
+     */
+    useEffect(() => {
+        if (!dashboardId) return;
+
+        let cancelled = false;
+        setIsRestoringStates(true);
+
+        loadSwapStates()
+            .then((loadedStates) => {
+                if (cancelled) return;
+                if (loadedStates.size === 0) {
+                    setIsRestoringStates(false);
+                    return;
+                }
+
+                console.log('[SwapContext] Restoring', loadedStates.size, 'swap states');
+                setSwapStates((prev) => {
+                    const next = new Map(prev);
+                    for (const [componentId, persisted] of loadedStates) {
+                        // Only restore if not already initialized
+                        if (!next.has(componentId)) {
+                            next.set(componentId, fromPersistedState(persisted));
+                        }
+                    }
+                    return next;
+                });
+                setIsRestoringStates(false);
+            })
+            .catch((error) => {
+                console.error('[SwapContext] Failed to restore swap states:', error);
+                if (!cancelled) setIsRestoringStates(false);
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [dashboardId, loadSwapStates, fromPersistedState]);
+
+    /**
+     * Cleanup swap states on unmount (fire-and-forget).
+     * Only runs when dashboardId was set and we're unmounting.
+     */
+    useEffect(() => {
+        return () => {
+            // Fire-and-forget cleanup on unmount
+            if (dashboardId) {
+                clearSwapStates().catch((e) =>
+                    console.warn('[SwapContext] Cleanup failed:', e)
+                );
+            }
+        };
+    }, [dashboardId, clearSwapStates]);
 
     // Helper: Initialize state for a component if missing
     const getOrCreateState = useCallback((componentId: string, originalType: string): SwapState => {
@@ -242,12 +350,25 @@ export function ComponentSwapProvider({ children, dashboardId = null }: Componen
     ) => {
         const existingState = swapStates.get(componentId);
 
-        // Check if props contain meaningful data (not just defaults)
-        const hasRealData = Object.values(props).some(v =>
-            v !== 0 && v !== '' && v !== null && v !== undefined &&
-            !(Array.isArray(v) && v.length === 0) &&
-            !(typeof v === 'object' && v !== null && Object.keys(v).length === 0)
-        );
+        // Helper: Check if value is a binding path object (not real data)
+        const isBindingPath = (v: unknown): boolean =>
+            typeof v === 'object' && v !== null && 'path' in v;
+
+        // Check if props contain meaningful RESOLVED data (not binding paths or defaults)
+        // FIX: For numeric KPI props (value, primary_value, etc.), 0 is NOT real data
+        // This prevents snapshots with value=0 from being marked as complete
+        const numericPropNames = ['value', 'primary_value', 'leader_value', 'delta', 'change', 'percent_change'];
+        const hasRealData = Object.entries(props).some(([key, v]) => {
+            // For known numeric KPI props, 0 is NOT real data
+            if (numericPropNames.includes(key)) {
+                return typeof v === 'number' && v !== 0;
+            }
+            // For other props, use standard checks
+            return v !== 0 && v !== '' && v !== null && v !== undefined &&
+                !isBindingPath(v) && // Exclude binding path objects
+                !(Array.isArray(v) && v.length === 0) &&
+                !(typeof v === 'object' && v !== null && Object.keys(v).length === 0);
+        });
 
         const originalSnapshot: PropsSnapshot = {
             type: originalType,
@@ -304,6 +425,9 @@ export function ComponentSwapProvider({ children, dashboardId = null }: Componen
      * Phase 1: Get render props for a component.
      * Returns snapshot-backed props when available, otherwise original props.
      * This ensures data persists through swap/revert cycles.
+     *
+     * BUG FIX: Only use snapshot for components that have been through a swap cycle.
+     * For non-swapped components, return original props to allow normal data binding.
      */
     const getRenderProps = useCallback((
         componentId: string,
@@ -312,25 +436,35 @@ export function ComponentSwapProvider({ children, dashboardId = null }: Componen
         const state = swapStates.get(componentId);
         if (!state) return originalProps;
 
-        // Priority: preview snapshot → current history snapshot → transformed data → original props
+        // Priority 1: Preview snapshot (transient)
         if (state.previewType && state.previewSnapshot) {
             return { ...originalProps, ...state.previewSnapshot.props };
         }
 
-        // Get snapshot for current history index ONLY if swap occurred
+        // Priority 2: Current history snapshot (when actively swapped)
         // Without isDirty check, resolved props would override binding paths
         const currentSnapshot = state.historySnapshots[state.historyIndex];
         if (state.isDirty && currentSnapshot) {
             return { ...originalProps, ...currentSnapshot.props };
         }
 
-        // Fall back to transformed data if available
+        // Priority 3: Explicit transformedData
         if (state.transformedData) {
             return { ...originalProps, ...state.transformedData };
         }
 
-        // Final fallback to original snapshot ONLY if swap occurred
+        // Priority 4: Original snapshot when actively swapped
         if (state.isDirty && state.originalSnapshot) {
+            return { ...originalProps, ...state.originalSnapshot.props };
+        }
+
+        // Priority 5: After reset from a swap, use snapshot to preserve data
+        // CRITICAL: Only apply for components that WERE swapped (history.length > 1)
+        // This prevents non-swapped components with literal props from having
+        // their snapshot (with value=0) override the actual data binding.
+        const wasEverSwapped = state.history.length > 1;
+        if (!state.isDirty && wasEverSwapped && state.originalSnapshot?.isComplete &&
+            state.originalSnapshot?.props && Object.keys(state.originalSnapshot.props).length > 0) {
             return { ...originalProps, ...state.originalSnapshot.props };
         }
 
@@ -522,7 +656,12 @@ export function ComponentSwapProvider({ children, dashboardId = null }: Componen
             lastModified: Date.now(),
         };
         updateState(componentId, newState);
-    }, [swapStates, updateState]);
+
+        // Phase 2: Persist to backend (fire-and-forget)
+        if (dashboardId) {
+            saveSwapState(componentId, toPersistedState(newState));
+        }
+    }, [swapStates, updateState, dashboardId, saveSwapState, toPersistedState]);
 
     /**
      * Cancel the current preview and revert to previous state.
@@ -610,21 +749,17 @@ export function ComponentSwapProvider({ children, dashboardId = null }: Componen
         const state = swapStates.get(componentId);
         if (!state) return;
 
-        // Build the reset state - always preserve the component
-        const resetSnapshot = state.originalSnapshot?.props && Object.keys(state.originalSnapshot.props).length > 0
-            ? state.originalSnapshot
-            : { type: state.originalType, props: {}, isComplete: false };
-
+        // FIX: Clear transformedData to undefined so bindings can re-resolve from dataModel
+        // This prevents stale snapshot data (with value=0) from overriding live data bindings
         const newState: SwapState = {
             ...state,
             currentType: state.originalType,
-            // Use snapshot props if available, otherwise clear transformedData to let bindings re-resolve
-            transformedData: resetSnapshot.props && Object.keys(resetSnapshot.props).length > 0
-                ? resetSnapshot.props
-                : undefined,
+            // CRITICAL: Always clear transformedData on reset to let DataBinder re-resolve
+            transformedData: undefined,
             history: [state.originalType],
             historyIndex: 0,
-            historySnapshots: [resetSnapshot],
+            // Clear history snapshots to prevent stale data from being used
+            historySnapshots: [],
             isDirty: false,
             previewType: undefined,
             previewData: undefined,
@@ -633,11 +768,7 @@ export function ComponentSwapProvider({ children, dashboardId = null }: Componen
             lastModified: Date.now(),
         };
 
-        if (!state.originalSnapshot?.props || Object.keys(state.originalSnapshot.props).length === 0) {
-            console.warn('[Swap] resetSwap: No valid snapshot for', componentId,
-                '- resetting to original type. Data will re-resolve from bindings.');
-        }
-
+        console.debug('[Swap] resetSwap:', componentId, '- cleared transformedData, bindings will re-resolve');
         updateState(componentId, newState);
     }, [swapStates, updateState]);
 
@@ -654,33 +785,47 @@ export function ComponentSwapProvider({ children, dashboardId = null }: Componen
     /**
      * Get transformed data for rendering.
      * Phase 1 FIX: Uses snapshot system to ensure data persists through undo/redo/reset.
+     *
+     * BUG FIX: Only return snapshot data when component has been through a swap cycle.
+     * For non-swapped components, let normal data binding resolve values from dataModel.
+     * The previous "Priority 5" logic caused a bug where components with literal string
+     * props (like label) would have isComplete=true even when value was still 0,
+     * preventing proper data binding on subsequent renders.
      */
     const getTransformedData = useCallback((componentId: string): Record<string, unknown> | undefined => {
         const state = swapStates.get(componentId);
         if (!state) return undefined;
 
-        // Priority: preview → current history snapshot → transformedData → original snapshot
+        // Priority 1: Preview data (transient)
         if (state.previewType && state.previewData) {
             return state.previewData;
         }
 
-        // Phase 1 FIX: Use history snapshot for current index ONLY if swap occurred
+        // Priority 2: Current history snapshot (when actively swapped)
         // Without isDirty check, resolved props from registerOriginalProps would override binding paths
         const currentSnapshot = state.historySnapshots?.[state.historyIndex];
         if (state.isDirty && currentSnapshot?.props && Object.keys(currentSnapshot.props).length > 0) {
             return currentSnapshot.props;
         }
 
-        // Fall back to transformedData
+        // Priority 3: Explicit transformedData (from server swap or reset)
         if (state.transformedData) {
             return state.transformedData;
         }
 
-        // FIX: Only return originalSnapshot.props when a swap actually occurred (isDirty)
-        // Without this check, registeredOriginalProps (which contain RESOLVED values like value:0)
-        // would override the original binding paths (value:{path:'/data/kpis/revenue'})
-        // on subsequent renders, breaking data binding for KpiCards
+        // Priority 4: Original snapshot when actively swapped
         if (state.isDirty && state.originalSnapshot?.props) {
+            return state.originalSnapshot.props;
+        }
+
+        // Priority 5: After reset from a swap, use snapshot to preserve data
+        // CRITICAL: Only apply this for components that WERE swapped (history.length > 1)
+        // This prevents the bug where non-swapped components with literal label props
+        // would have isComplete=true (due to non-empty label) but value=0, causing
+        // the snapshot to override the data binding and display 0 instead of real values.
+        const wasEverSwapped = state.history.length > 1;
+        if (!state.isDirty && wasEverSwapped && state.originalSnapshot?.isComplete &&
+            state.originalSnapshot?.props && Object.keys(state.originalSnapshot.props).length > 0) {
             return state.originalSnapshot.props;
         }
 
@@ -732,6 +877,76 @@ export function ComponentSwapProvider({ children, dashboardId = null }: Componen
     const getSwapTargets = useCallback((type: string) => getSwapOptionsFromCatalog(type), []);
     const needsServerSwap = useCallback((from: string, to: string) => requiresServerSwap(from, to), []);
 
+    // --- Phase 3: Preview Empty State ---
+
+    /**
+     * Check if a component has complete data for swapping.
+     * Returns true if originalSnapshot exists and isComplete is true.
+     */
+    const hasDataForComponent = useCallback((componentId: string): boolean => {
+        const state = swapStates.get(componentId);
+        return state?.originalSnapshot?.isComplete ?? false;
+    }, [swapStates]);
+
+    /**
+     * Set preview loading state for a component.
+     */
+    const setComponentPreviewLoading = useCallback((componentId: string, loading: boolean) => {
+        setPreviewLoading(prev => {
+            const next = new Map(prev);
+            if (loading) {
+                next.set(componentId, true);
+            } else {
+                next.delete(componentId);
+            }
+            return next;
+        });
+    }, []);
+
+    /**
+     * Fetch data for a component that has no data (for preview).
+     * Triggers a refresh of the dashboard data and waits for registration to complete.
+     * Returns true if data becomes available.
+     */
+    const fetchDataForPreview = useCallback(async (
+        componentId: string,
+        _componentType: string
+    ): Promise<boolean> => {
+        if (!dashboardId) {
+            console.warn('[Swap] fetchDataForPreview: No dashboardId available');
+            return false;
+        }
+
+        setComponentPreviewLoading(componentId, true);
+
+        try {
+            // Fetch fresh data from the dashboard endpoint
+            const response = await fetch(`/api/dash/${dashboardId}/data`);
+            if (!response.ok) {
+                throw new Error(`Failed to fetch data: ${response.statusText}`);
+            }
+
+            // Wait a tick for the data to propagate through DataBinder
+            // and for ComponentRenderer to re-register with new data
+            await new Promise(resolve => setTimeout(resolve, 100));
+
+            // Check if data is now available
+            const state = swapStates.get(componentId);
+            const hasData = state?.originalSnapshot?.isComplete ?? false;
+
+            if (!hasData) {
+                console.warn('[Swap] fetchDataForPreview: Data still not available after fetch');
+            }
+
+            return hasData;
+        } catch (error) {
+            console.error('[Swap] fetchDataForPreview error:', error);
+            return false;
+        } finally {
+            setComponentPreviewLoading(componentId, false);
+        }
+    }, [dashboardId, swapStates, setComponentPreviewLoading]);
+
     const value: SwapContextValue = {
         swapStates,
         dashboardId,
@@ -760,6 +975,12 @@ export function ComponentSwapProvider({ children, dashboardId = null }: Componen
         // Phase 1: Snapshot System
         registerOriginalProps,
         getRenderProps,
+        // Phase 2: Persistence
+        isRestoringStates,
+        // Phase 3: Preview Empty State
+        hasDataForComponent,
+        previewLoading,
+        fetchDataForPreview,
     };
 
     return (

@@ -36,11 +36,8 @@ Base: `http://localhost:5173`
 
 ### ⚡ FASTEST: Single-Command Test (Recommended)
 ```bash
-# Prerequisite: Set env var once per session
-export AGENT_BROWSER_EXECUTABLE_PATH="C:/Users/Y_J/AppData/Local/ms-playwright/chromium-1200/chrome-win64/chrome.exe"
-
-# Complete A2UI test in ONE command
-agent-browser open http://localhost:5173/project/agent-to-ui --headed && agent-browser wait 2000 && agent-browser snapshot -i -c && agent-browser fill @e13 "Compare NVDA to AMD" && agent-browser click @e14 && agent-browser wait 8000 && agent-browser snapshot -c && agent-browser close
+# Complete A2UI test in ONE command (no setup needed if chromium installed)
+agent-browser --session test open http://localhost:5173/project/agent-to-ui && agent-browser --session test wait 2000 && agent-browser --session test snapshot -i -c && agent-browser --session test fill @e13 "Compare NVDA to AMD" && agent-browser --session test click @e14 && agent-browser --session test wait 8000 && agent-browser --session test snapshot -c && agent-browser --session test close
 ```
 
 ### Test 1: Basic Dashboard Load
@@ -95,6 +92,40 @@ Check backend logs for success indicators:
 # ❌ FAILURE: No widget buttons, only error text
 ```
 
+### 🔄 Test Swap/Revert Flow (Component Swap Bug Testing)
+```bash
+# 1. Generate dashboard and find KPI values
+agent-browser --session swap open http://localhost:5173/project/agent-to-ui
+agent-browser --session swap fill 'textbox[placeholder*="Ask"]' "AMD revenue trend"
+agent-browser --session swap click 'button:has-text("Generate")'
+agent-browser --session swap wait 10000
+agent-browser --session swap snapshot -c | head -60
+# Note the KPI values (e.g., "58.458", "9,246,000,128")
+
+# 2. Click a Swap visualization button (find ref from snapshot)
+agent-browser --session swap click @e25  # Adjust ref based on snapshot
+agent-browser --session swap wait 500
+agent-browser --session swap snapshot -i -c  # Look for menu items
+
+# 3. Click swap option (e.g., "Metric Chart")
+agent-browser --session swap click @e18  # menuitem ref
+agent-browser --session swap wait 500
+agent-browser --session swap click 'button:has-text("Apply")'  # Or click Apply button
+agent-browser --session swap wait 1000
+
+# 4. Revert and verify value preserved
+agent-browser --session swap click 'button:has-text("Revert")'
+agent-browser --session swap wait 500
+agent-browser --session swap click 'menuitem:has-text("Revert to KPI")'
+agent-browser --session swap wait 1000
+agent-browser --session swap snapshot -c | head -60
+# ✅ SUCCESS: KPI shows original value (e.g., "58.458")
+# ❌ FAILURE: KPI shows "0" after revert
+
+# 5. Cleanup
+agent-browser --session swap close
+```
+
 ---
 
 ## Speed Tips (IMPORTANT)
@@ -105,38 +136,39 @@ Check backend logs for success indicators:
 4. **Batch interactions** - `fill @e1 "a" && fill @e2 "b" && click @e3`
 5. **Skip verbose waits** - `wait 2000-4000` is usually enough
 
-## First-time setup
+## ⚡ Quick Start
 
 ```bash
-agent-browser install           # Install Chromium binaries (required once)
-npx playwright install chromium # Fallback if version mismatch
+# Most commands just work:
+agent-browser open http://localhost:5173/project/agent-to-ui && agent-browser snapshot -i -c
 ```
 
-## ⚡ Quick Start (Optimized)
+## 🔧 First-Time Setup / Version Mismatch Fix
+
+If you see `Executable doesn't exist at chromium-XXXX`:
 
 ```bash
-# Set env var ONCE per session to skip version checks
-export AGENT_BROWSER_EXECUTABLE_PATH="C:/Users/Y_J/AppData/Local/ms-playwright/chromium-1200/chrome-win64/chrome.exe"
+# Option 1: Install latest chromium (RECOMMENDED)
+npx playwright@latest install chromium
+# This installs the version agent-browser expects
 
-# Then all commands are faster:
-agent-browser open http://localhost:5173/project/agent-to-ui --headed && agent-browser snapshot -i -c
-```
-
-## 🔧 Chromium Version Mismatch Fix
-
-If you see `Executable doesn't exist at chromium-1208`:
-
-```bash
-# Option 1: Close daemon and use existing chromium
-agent-browser close
-agent-browser --executable-path "C:/Users/Y_J/AppData/Local/ms-playwright/chromium-1200/chrome-win64/chrome.exe" open <url> --headed
-
-# Option 2: Check available versions and use newest
+# Option 2: Use existing chromium
 ls C:/Users/Y_J/AppData/Local/ms-playwright/ | grep chromium
-# Then use the path to the available version
+# Find available version (e.g., chromium-1208), then:
+agent-browser close  # Close daemon first!
+agent-browser --executable-path "C:/Users/Y_J/AppData/Local/ms-playwright/chromium-1208/chrome-win/chrome.exe" open <url>
+```
 
-# Option 3: Set env var (persistent for session)
-export AGENT_BROWSER_EXECUTABLE_PATH="C:/Users/Y_J/AppData/Local/ms-playwright/chromium-1200/chrome-win64/chrome.exe"
+## 🔄 Session Best Practices
+
+```bash
+# Use named sessions for isolation
+agent-browser --session mytest open <url>
+agent-browser --session mytest snapshot -i -c
+agent-browser --session mytest close  # Always close when done!
+
+# If connection timeout (os error 10060), just retry:
+agent-browser --session mytest click @e1  # Retry same command
 ```
 
 ## 🔄 Daemon Management

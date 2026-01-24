@@ -177,7 +177,7 @@ export function ComponentRenderer({
     // IMPORTANT: useCallback must be called before any early returns to satisfy Rules of Hooks
     const renderChild = useCallback(
         (childId: string): React.ReactNode => (
-            <AnimatePresence mode="popLayout" key={childId}>
+            <AnimatePresence mode="wait" key={childId}>
                 <ComponentRenderer
                     componentId={childId}
                     components={components}
@@ -200,23 +200,44 @@ export function ComponentRenderer({
     // ensuring registration completes before user can interact with swap buttons.
     // We resolve BoundValue objects to actual values so snapshots contain real data.
     const resolvedPropsRef = useRef<Record<string, unknown> | null>(null);
-    if (!hasRegisteredRef.current && extracted) {
-        // CRITICAL: Resolve binding paths to actual values BEFORE registering
-        // Without this, snapshots contain {path: "/data/..."} instead of actual numbers
-        resolvedPropsRef.current = resolveBoundProps(
-            extracted.props as Record<string, unknown>,
-            dataModel
-        );
+
+    // REVERT BUG FIX: Always compute resolved props when dataModel changes
+    // Initial render may have empty dataModel (all values resolve to 0)
+    // When data arrives, we need to re-register to capture real values
+    const currentResolvedProps = extracted
+        ? resolveBoundProps(extracted.props as Record<string, unknown>, dataModel)
+        : null;
+
+    // Track if current resolved props have real data (not just 0s)
+    const hasRealData = currentResolvedProps && Object.values(currentResolvedProps).some(v =>
+        v !== 0 && v !== '' && v !== null && v !== undefined &&
+        !(typeof v === 'object' && v !== null && 'path' in v) // Exclude binding paths
+    );
+
+    // Update ref for initial registration
+    if (!hasRegisteredRef.current && currentResolvedProps) {
+        resolvedPropsRef.current = currentResolvedProps;
     }
 
     // Register in useLayoutEffect to avoid "setState during render" error
     // useLayoutEffect is synchronous and runs before browser paint
     useLayoutEffect(() => {
+        // Initial registration
         if (!hasRegisteredRef.current && extracted && swapContext?.registerOriginalProps && resolvedPropsRef.current) {
             swapContext.registerOriginalProps(componentId, extracted.type, resolvedPropsRef.current);
             hasRegisteredRef.current = true;
         }
     }, [componentId, extracted, swapContext]);
+
+    // REVERT BUG FIX: Re-register when better data arrives
+    // This upgrades incomplete snapshots (Case 3 in registerOriginalProps)
+    useLayoutEffect(() => {
+        if (hasRegisteredRef.current && hasRealData && currentResolvedProps && swapContext?.registerOriginalProps) {
+            // registerOriginalProps handles the Case 3 check internally:
+            // only upgrades if existing snapshot is incomplete but new data is better
+            swapContext.registerOriginalProps(componentId, extracted?.type || '', currentResolvedProps);
+        }
+    }, [componentId, dataModel, hasRealData, currentResolvedProps, swapContext, extracted?.type]);
 
     // Early returns AFTER all hooks
     if (!componentDef) {
@@ -312,18 +333,12 @@ export function ComponentRenderer({
         >
             <motion.div
                 layout
-                layoutId={componentId}
+                layoutId={`${componentId}-${type}`}
                 initial={{ opacity: 0, y: isStreamedComponent ? 30 : 20, scale: isStreamedComponent ? 0.95 : 1 }}
                 animate={{
                     opacity: 1,
                     y: 0,
-                    scale: isSwapping ? 0.98 : 1,
-                    // Smooth morphing animation for swapped components
-                    boxShadow: isSwapped
-                        ? '0 0 0 1px rgba(16, 185, 129, 0.3), 0 0 20px rgba(16, 185, 129, 0.1)'
-                        : isSwapping
-                            ? '0 0 0 2px rgba(251, 191, 36, 0.4), 0 0 30px rgba(251, 191, 36, 0.2)'
-                            : 'none',
+                    scale: 1,
                 }}
                 exit={{ opacity: 0, scale: 0.95 }}
                 transition={isSwapping

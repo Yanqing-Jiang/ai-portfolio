@@ -2,17 +2,16 @@
 // Component: ProcessPanel
 //   Role: Collapsible status panel with separated tabs and pipeline stages.
 //   Called from: GenerativeUIPage.tsx
-//   Invokes: onViewFullDebug callback, dispatches 'a2ui:toggle-reorder' event
-//   Why: Unified status/skill display + reorder mode toggle.
+//   Invokes: onViewFullDebug callback
+//   Why: Unified status/skill display. Reorder via natural language (no button).
 // Component: StatusDot
 //   Role: Animated status indicator.
 // Component: ExpandableStage
 //   Role: Clickable pipeline stage with detailed info (SQL, Layouts).
 // --- End Function/Class Map ---
 
-import { useState, useCallback } from 'react';
+import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { GripVertical, Check } from 'lucide-react';
 
 // ============================================================================
 // Types
@@ -559,15 +558,6 @@ export function ProcessPanel({
     onViewFullDebug,
 }: ProcessPanelProps) {
     const [expandedStage, setExpandedStage] = useState<string | null>(null);
-    const [isReorderMode, setIsReorderMode] = useState(false);
-
-    // Toggle reorder mode via custom event (DashboardWithLayout listens for this)
-    const handleToggleReorder = useCallback(() => {
-        const newMode = !isReorderMode;
-        setIsReorderMode(newMode);
-        window.dispatchEvent(new CustomEvent('a2ui:toggle-reorder'));
-        console.log('[ProcessPanel] Dispatched toggle-reorder event, mode:', newMode);
-    }, [isReorderMode]);
 
     // Determine current status
     const getStatus = (): StatusDotProps['status'] => {
@@ -659,32 +649,6 @@ export function ProcessPanel({
                                 )}
                             </div>
                         </div>
-
-                        {/* Reorder Toggle - Only show when streaming is done */}
-                        {streamState.isDone && (
-                            <button
-                                onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleToggleReorder();
-                                }}
-                                className={`
-                                    p-1.5 rounded-lg transition-colors duration-200
-                                    ${isReorderMode
-                                        ? 'bg-slate-600/50 border border-slate-500 text-slate-300'
-                                        : 'bg-slate-800/80 border border-slate-700 text-gray-400 hover:border-slate-600 hover:text-slate-300'
-                                    }
-                                `}
-                                aria-pressed={isReorderMode}
-                                aria-label={isReorderMode ? 'Disable reorder mode' : 'Enable reorder mode'}
-                                title={isReorderMode ? 'Done Reordering' : 'Reorder Widgets'}
-                            >
-                                {isReorderMode ? (
-                                    <Check size={16} className="text-slate-300" />
-                                ) : (
-                                    <GripVertical size={16} className="text-gray-400" />
-                                )}
-                            </button>
-                        )}
 
                         {/* Mini Stage Indicators (Visible when collapsed only) */}
                         {!isExpanded && (

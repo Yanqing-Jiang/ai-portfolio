@@ -927,10 +927,18 @@ async def delete_dashboard(dashboard_id: str):
     # Create deleteSurface message for clients
     emitter = A2UIMessageEmitter(surface_id=state.surface_id)
     delete_message = emitter.delete_surface()
-    
+
     # Delete the dashboard state
     store.delete(dashboard_id)
-    
+
+    # Clean up swap states (fire-and-forget)
+    try:
+        from ..swap_state import get_swap_state_repo
+        swap_repo = get_swap_state_repo()
+        await swap_repo.clear(dashboard_id)
+    except Exception as e:
+        logger.warning("[DELETE] Swap state cleanup failed: %s", e)
+
     return {
         "status": "deleted",
         "dashboard_id": dashboard_id,
@@ -1056,6 +1064,139 @@ async def get_swap_suggestions(
         suggestions = suggest_swaps_for_component(component_type, data_model)
 
     return {"suggestions": suggestions}
+
+
+# ============================================================================
+# Swap State Persistence Endpoints
+# ============================================================================
+
+@router.post("/{dashboard_id}/swap/state")
+async def save_swap_states(dashboard_id: str, request: Request):
+    """
+    Save swap states for components in a dashboard.
+
+    Function: save_swap_states
+    Called from: Frontend useSwapPersistence hook after commitSwap
+    Invokes: SwapStateRepository.save_batch
+    Why: Persists swap states to Redis for cross-refresh restoration.
+
+    Request body: { "states": { componentId: SwapStateSnapshot, ... } }
+    """
+    from ..swap_state import get_swap_state_repo
+    from ..models.swap_state import SwapStateSnapshot
+
+    store = get_dashboard_store()
+    state = store.get(dashboard_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Dashboard not found")
+
+    try:
+        body = await request.json()
+        states_raw = body.get("states", {})
+
+        # Parse and validate states
+        states = {}
+        for component_id, state_data in states_raw.items():
+            if isinstance(state_data, dict):
+                states[component_id] = SwapStateSnapshot.model_validate(state_data)
+            else:
+                logger.warning("[SWAP_STATE] Invalid state format for %s", component_id)
+
+        if not states:
+            return {"status": "no_op", "message": "No valid states to save"}
+
+        repo = get_swap_state_repo()
+        await repo.save_batch(dashboard_id, states)
+
+        return {
+            "status": "success",
+            "saved_count": len(states),
+            "dashboard_id": dashboard_id,
+        }
+
+    except Exception as e:
+        logger.exception("[SWAP_STATE] Save failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Failed to save swap states: {e}")
+
+
+@router.get("/{dashboard_id}/swap/state")
+async def load_swap_states(dashboard_id: str):
+    """
+    Load all swap states for a dashboard.
+
+    Function: load_swap_states
+    Called from: Frontend useSwapPersistence hook on mount
+    Invokes: SwapStateRepository.load_all
+    Why: Restores swap states from Redis on page refresh.
+
+    Returns: { "states": { componentId: SwapStateSnapshot, ... } }
+    """
+    from ..swap_state import get_swap_state_repo
+
+    store = get_dashboard_store()
+    state = store.get(dashboard_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Dashboard not found")
+
+    repo = get_swap_state_repo()
+    states = await repo.load_all(dashboard_id)
+
+    return {
+        "status": "success",
+        "dashboard_id": dashboard_id,
+        "states": {cid: s.model_dump() for cid, s in states.items()},
+        "loaded_count": len(states),
+    }
+
+
+@router.delete("/{dashboard_id}/swap/state/{component_id}")
+async def delete_swap_state(dashboard_id: str, component_id: str):
+    """
+    Delete swap state for a single component.
+
+    Function: delete_swap_state
+    Called from: Frontend when resetting a specific component
+    Invokes: SwapStateRepository.delete
+    Why: Allows selective cleanup of individual component states.
+    """
+    from ..swap_state import get_swap_state_repo
+
+    store = get_dashboard_store()
+    state = store.get(dashboard_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Dashboard not found")
+
+    repo = get_swap_state_repo()
+    await repo.delete(dashboard_id, component_id)
+
+    return {
+        "status": "success",
+        "dashboard_id": dashboard_id,
+        "component_id": component_id,
+    }
+
+
+@router.post("/{dashboard_id}/swap/state/clear")
+async def clear_swap_states(dashboard_id: str):
+    """
+    Clear all swap states for a dashboard.
+
+    Function: clear_swap_states
+    Called from: Frontend on dashboard unmount or session end
+    Invokes: SwapStateRepository.clear
+    Why: Cleans up swap state storage when dashboard/session ends.
+    """
+    from ..swap_state import get_swap_state_repo
+
+    # Note: Don't require dashboard to exist - might be cleaning up after deletion
+    repo = get_swap_state_repo()
+    cleared_count = await repo.clear(dashboard_id)
+
+    return {
+        "status": "success",
+        "dashboard_id": dashboard_id,
+        "cleared_count": cleared_count,
+    }
 
 
 def _transform_data_for_swap(
