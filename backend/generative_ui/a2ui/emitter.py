@@ -945,8 +945,20 @@ class A2UIMessageEmitter:
                 value_path="/data/kpis/yoy_growth",
                 unit="%",
             )
-            kpi_column = A2UIComponent.column("kpi_column", ["kpi_latest_revenue", "kpi_yoy_growth"])
-            components.extend([kpi_latest, kpi_yoy, kpi_column])
+            kpi_qoq = A2UIComponent.kpi_card(
+                "kpi_qoq_growth",
+                label="QoQ Growth",
+                value_path="/data/kpis/qoq_growth",
+                unit="%",
+            )
+            kpi_cagr = A2UIComponent.kpi_card(
+                "kpi_cagr",
+                label="5Y CAGR",
+                value_path="/data/kpis/cagr",
+                unit="%",
+            )
+            kpi_column = A2UIComponent.column("kpi_column", ["kpi_latest_revenue", "kpi_yoy_growth", "kpi_qoq_growth", "kpi_cagr"])
+            components.extend([kpi_latest, kpi_yoy, kpi_qoq, kpi_cagr, kpi_column])
 
         main_row = None
         if chart_card or kpi_column:

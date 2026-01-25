@@ -413,6 +413,7 @@ export function SwapDeckOverlay({
                         tabIndex={0}
                         role="menu"
                         aria-label="Component swap options"
+                        data-ignore-selection="true"
                         className={`
                             ${isMobile
                                 ? 'fixed bottom-0 left-0 right-0 z-50 rounded-t-2xl'

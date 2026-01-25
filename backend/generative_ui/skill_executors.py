@@ -1020,12 +1020,30 @@ class RevenueTrendExecutor(BaseSkillExecutor):
         
         revenue_series = metric_series(rows, "Revenue")
         latest, previous = latest_and_previous(revenue_series)
+
+        # DEBUG: Log revenue series for troubleshooting
+        logger.info(f"[RevenueTrend] ticker={ticker}, series_len={len(revenue_series)}, latest={latest}, previous={previous}")
         
+        # YoY Growth: Compare latest (index 0) to same quarter last year (index 4)
         yoy_growth = None
         if len(revenue_series) > 4:
             yoy_value = coerce_float(revenue_series[4].get("value"))
             yoy_growth = percentage_change(latest, yoy_value)
-        
+
+        # QoQ Growth: Compare latest (index 0) to previous quarter (index 1)
+        latest_float = coerce_float(latest)
+        previous_float = coerce_float(previous)
+        qoq_growth = percentage_change(latest_float, previous_float)
+
+        # CAGR: Compound annual growth rate over available data (max 5 years)
+        cagr = None
+        if len(revenue_series) >= 5:
+            periods = min(len(revenue_series) - 1, 20)  # Max 5 years (20 quarters)
+            beginning_value = coerce_float(revenue_series[periods].get("value"))
+            if latest_float and beginning_value and beginning_value > 0:
+                years = periods / 4
+                cagr = ((latest_float / beginning_value) ** (1 / years) - 1) * 100
+
         columns = [
             {"key": "period", "label": "Period", "type": "string"},
             {"key": "revenue", "label": "Revenue", "type": "currency"},
@@ -1043,6 +1061,8 @@ class RevenueTrendExecutor(BaseSkillExecutor):
             "kpis": {
                 "latest_revenue": latest or 0,
                 "yoy_growth": yoy_growth or 0,
+                "qoq_growth": qoq_growth or 0,
+                "cagr": cagr or 0,
             },
             "table": {"columns": columns, "rows": table_rows},
             "chart": {"series": chart_series, "annotations": []},

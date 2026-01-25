@@ -355,6 +355,7 @@ export function ComponentRenderer({
                 data-streamed={isStreamedComponent ? 'true' : undefined}
                 data-swapped={isSwapped ? 'true' : undefined}
                 data-swapping={isSwapping ? 'true' : undefined}
+                data-preview={isPreview ? 'true' : undefined}
             >
                 {/* Swap button overlay - appears on hover for swappable components */}
                 {isSwappable && swapContext && (

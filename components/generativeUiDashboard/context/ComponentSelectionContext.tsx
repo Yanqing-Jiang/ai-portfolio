@@ -121,6 +121,13 @@ export function ComponentSelectionProvider({
             const componentEl = target.closest('[data-component-id]') as HTMLElement | null;
 
             if (componentEl) {
+                // FIX: Don't trigger selection if component is in swap preview/swapping state
+                // This prevents ComponentActionMenu from appearing during swap interactions
+                if (componentEl.getAttribute('data-swapping') === 'true' ||
+                    componentEl.getAttribute('data-preview') === 'true') {
+                    return;
+                }
+
                 const componentId = componentEl.getAttribute('data-component-id') || '';
                 const componentType = componentEl.getAttribute('data-component-type') || '';
                 const originalType = componentEl.getAttribute('data-original-type') || componentType;

@@ -124,5 +124,53 @@
             "valid_factors_path": "/data/explanation/factors",
             "valid_citations_path": "/data/explanation/citations"
         }
+    },
+    "component_tree": {
+        "kpi_latest_revenue": {
+            "type": "KpiCard",
+            "props": {
+                "label": {"literalString": "Latest Revenue"},
+                "value": {"path": "/data/kpis/latest_revenue"},
+                "unit": {"literalString": "$"}
+            }
+        },
+        "kpi_yoy_growth": {
+            "type": "KpiCard",
+            "props": {
+                "label": {"literalString": "YoY Growth"},
+                "value": {"path": "/data/kpis/yoy_growth"},
+                "unit": {"literalString": "%"}
+            }
+        },
+        "kpi_qoq_growth": {
+            "type": "KpiCard",
+            "props": {
+                "label": {"literalString": "QoQ Growth"},
+                "value": {"path": "/data/kpis/qoq_growth"},
+                "unit": {"literalString": "%"}
+            }
+        },
+        "kpi_cagr": {
+            "type": "KpiCard",
+            "props": {
+                "label": {"literalString": "5Y CAGR"},
+                "value": {"path": "/data/kpis/cagr"},
+                "unit": {"literalString": "%"}
+            }
+        },
+        "main_chart": {
+            "type": "MetricChart",
+            "props": {
+                "series": {"path": "/data/chart/series"},
+                "annotations": {"path": "/data/chart/annotations"}
+            }
+        },
+        "data_table": {
+            "type": "DataTable",
+            "props": {
+                "columns": {"path": "/data/table/columns"},
+                "data": {"path": "/data/table/rows"}
+            }
+        }
     }
 }

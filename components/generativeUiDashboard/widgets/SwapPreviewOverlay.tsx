@@ -9,7 +9,10 @@ export function SwapPreviewOverlay({ componentId }: { componentId: string }) {
     const warnings = state?.warnings || [];
 
     return (
-        <div className="absolute inset-0 z-50 pointer-events-none flex flex-col items-end justify-start p-4">
+        <div
+            className="absolute inset-0 z-50 pointer-events-none flex flex-col items-end justify-start p-4"
+            data-ignore-selection="true"
+        >
             {/* Border effect - inset slightly to match component bounds */}
             <div className={`absolute inset-0 border-2 border-dashed rounded-xl pointer-events-none ${
                 warnings.length > 0 ? 'border-amber-500/80' : 'border-emerald-400/50'
