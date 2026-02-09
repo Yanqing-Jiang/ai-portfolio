@@ -1,8 +1,12 @@
 import redis.asyncio as redis
 from enum import Enum
 from fastapi import Request, HTTPException, status, Depends
-from fastapi_limiter import FastAPILimiter
-from fastapi_limiter.depends import RateLimiter
+try:
+    from fastapi_limiter import FastAPILimiter
+    from fastapi_limiter.depends import RateLimiter
+except ImportError:
+    FastAPILimiter = None  # type: ignore
+    RateLimiter = None  # type: ignore
 from jose import jwt, JWTError
 from math import ceil
 import os

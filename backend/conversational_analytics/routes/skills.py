@@ -4,9 +4,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Depends
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
-from ..skills import SKILL_INDEX
+from ..skills import SKILL_INDEX, load_skill_content
 from rate_limiter import conversational_analytics_rate_limit
 
 router = APIRouter(prefix="/api/conv-analytics/skills", tags=["conversational-analytics-skills"])
@@ -40,11 +40,17 @@ async def download_skill(skill_id: str, _: None = Depends(conversational_analyti
     skill = _find_skill(skill_id)
     if not skill:
         raise HTTPException(status_code=404, detail="Skill not found")
-    return FileResponse(
-        path=skill.path,
-        media_type="text/markdown",
-        filename=f"{skill.skill_id}.md",
-    )
+
+    # Load skill content (handles SDK override fallback)
+    try:
+        content = load_skill_content(skill)
+        return Response(
+            content=content,
+            media_type="text/markdown",
+            headers={"Content-Disposition": f'inline; filename="{skill.skill_id}.md"'},
+        )
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"Skill file not found: {str(e)}")
 
 
 @router.get("/showcase")

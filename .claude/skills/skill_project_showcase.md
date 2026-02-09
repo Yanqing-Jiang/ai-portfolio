@@ -1,0 +1,1 @@
+nextgen-project-showcase/SKILL.md
