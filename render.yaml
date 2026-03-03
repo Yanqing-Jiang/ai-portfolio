@@ -25,6 +25,10 @@ services:
     
     # Environment variables
     envVars:
+      # Pin Python version (3.14 breaks langchain/pydantic type annotations)
+      - key: PYTHON_VERSION
+        value: 3.12.8
+
       # Required: Set your Claude API key in Render dashboard
       - key: CLAUDE_API_KEY
         sync: false  # Will prompt to set manually
