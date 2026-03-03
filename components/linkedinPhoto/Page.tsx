@@ -742,12 +742,19 @@ const LinkedInPhotoPage: React.FC<LinkedInPhotoPageProps> = ({ apiPath = '/api/h
                 </a>
               </p>
               <div className="flex justify-center">
-                <img
-                  src="https://yanqinghot.blob.core.windows.net/public-access/3-photo-rotate.gif"
-                  alt="Before and after transformation showcase"
+                <video
+                  autoPlay
+                  muted
+                  loop
+                  playsInline
+                  poster="https://yanqinghot.blob.core.windows.net/public-access/3-photo-rotate-poster.jpg"
                   className="w-full max-w-3xl rounded-2xl shadow-2xl border-2 border-amber-500/40"
-                  loading="lazy"
-                />
+                  aria-label="Before and after transformation showcase"
+                >
+                  <source src="https://yanqinghot.blob.core.windows.net/public-access/3-photo-rotate.webm" type="video/webm" />
+                  <source src="https://yanqinghot.blob.core.windows.net/public-access/3-photo-rotate.mp4" type="video/mp4" />
+                  <img src="https://yanqinghot.blob.core.windows.net/public-access/3-photo-rotate-poster.jpg" alt="Before and after transformation showcase" loading="lazy" />
+                </video>
               </div>
             </div>
             {/* Only show credits badge when signed in - no sign-in banner here */}

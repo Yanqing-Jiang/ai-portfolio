@@ -7,6 +7,7 @@ import { Page as LinkedInPhotoPage } from './linkedinPhoto/Page';
 import { ConversationalAnalyticsPage } from './conversationalAnalytics';
 import LegacyProjectPage from './LegacyProjectPage';
 import ProjectHelmet from './ProjectHelmet';
+import ProjectMedia from './ProjectMedia';
 
 interface ProjectViewProps {
   project: Project;
@@ -158,10 +159,12 @@ const ProjectView: React.FC<ProjectViewProps> = ({ project }) => {
                   ))}
                 </div>
               </div>
-              {(project.gifUrl || project.imageUrl) && (
+              {(project.videoUrl || project.gifUrl || project.imageUrl) && (
                 <div className="hidden md:block md:w-1/3 lg:w-2/5 rounded-xl overflow-hidden shadow-2xl">
-                  <img
-                    src={project.gifUrl ?? project.imageUrl}
+                  <ProjectMedia
+                    src={project.gifUrl ?? project.imageUrl ?? ''}
+                    videoUrl={project.videoUrl}
+                    posterUrl={project.posterUrl}
                     alt={project.title}
                     className="w-full h-full object-cover hover:scale-105 transition-transform duration-300"
                   />

@@ -249,7 +249,7 @@ const TimelineDemo: React.FC = () => {
                                             {/* PARALLAX IMAGE CONTAINER */}
                                             <div className="absolute inset-0 overflow-hidden">
                                                 <img
-                                                    src={project.coverUrl || project.imageUrl}
+                                                    src={project.posterUrl || project.coverUrl || project.imageUrl}
                                                     alt={project.title}
                                                     className="parallax-img w-[120%] h-full object-cover opacity-60 group-hover:opacity-80 transition-opacity duration-700 grayscale group-hover:grayscale-0"
                                                     style={{ transform: 'translateX(-50px)' }} // Initial offset for parallax

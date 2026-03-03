@@ -1,6 +1,7 @@
 import React from 'react';
 import type { Project } from '../types';
 import ProjectHelmet from './ProjectHelmet';
+import ProjectMedia from './ProjectMedia';
 
 interface LegacyProjectPageProps {
   project: Project;
@@ -12,10 +13,12 @@ const LegacyProjectPage: React.FC<LegacyProjectPageProps> = ({ project }) => {
       <ProjectHelmet project={project} />
       <div className="flex flex-col min-h-full bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 text-slate-100">
         <header className="relative overflow-hidden">
-          {project.coverUrl && (
+          {(project.videoUrl || project.coverUrl) && (
             <div className="absolute inset-0">
-              <img
-                src={project.coverUrl}
+              <ProjectMedia
+                src={project.coverUrl ?? ''}
+                videoUrl={project.videoUrl}
+                posterUrl={project.posterUrl}
                 alt={project.title}
                 className="w-full h-full object-cover opacity-30"
               />

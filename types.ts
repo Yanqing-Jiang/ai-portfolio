@@ -13,6 +13,8 @@
   link?: string;
   contentHtml?: string;
   gifUrl?: string;
+  videoUrl?: string;
+  posterUrl?: string;
   seoTitle?: string;
   seoDescription?: string;
   seoKeywords?: string[];

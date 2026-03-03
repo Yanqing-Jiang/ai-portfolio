@@ -8,6 +8,7 @@ import { motion, useMotionValue, useSpring, useTransform, AnimatePresence } from
 // @ts-ignore
 import { Helmet } from 'react-helmet-async';
 import Lenis from 'lenis';
+import ProjectMedia from './ProjectMedia';
 import { AdvancedNeuralField, HolographicTerminal } from './demos/StreamingInsightDemo';
 import {
     DEFAULT_OG_IMAGE,
@@ -788,8 +789,10 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                                                         {/* PARALLAX IMAGE CONTAINER */}
                                                         <div className="absolute inset-0 overflow-hidden pointer-events-none">
                                                             <div className="absolute -inset-4 grayscale group-hover:grayscale-0 opacity-60 group-hover:opacity-80 transition-opacity duration-700">
-                                                                <img
-                                                                    src={project.coverUrl ?? project.imageUrl}
+                                                                <ProjectMedia
+                                                                    src={project.coverUrl ?? project.imageUrl ?? ''}
+                                                                    videoUrl={project.videoUrl}
+                                                                    posterUrl={project.posterUrl}
                                                                     alt={project.title}
                                                                     className="parallax-img w-full h-full object-cover grayscale group-hover:grayscale-0"
                                                                     style={{ transform: 'scale(1.15)' }}
@@ -867,8 +870,10 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                                         >
                                             {/* Project Image */}
                                             <div className="relative h-48 overflow-hidden">
-                                                <img
-                                                    src={project.coverUrl ?? project.imageUrl}
+                                                <ProjectMedia
+                                                    src={project.coverUrl ?? project.imageUrl ?? ''}
+                                                    videoUrl={project.videoUrl}
+                                                    posterUrl={project.posterUrl}
                                                     alt={project.title}
                                                     className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
                                                     loading="lazy"
@@ -962,8 +967,10 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                                                 <div className="absolute inset-0 pointer-events-none z-10 opacity-0 group-hover:opacity-10 bg-amber-500/5 mix-blend-overlay transition-opacity" />
 
                                                 <div className="relative w-full h-56 overflow-hidden">
-                                                    <img
-                                                        src={project.coverUrl ?? project.imageUrl}
+                                                    <ProjectMedia
+                                                        src={project.coverUrl ?? project.imageUrl ?? ''}
+                                                        videoUrl={project.videoUrl}
+                                                        posterUrl={project.posterUrl}
                                                         alt={project.title}
                                                         className="w-full h-full object-cover transition-all duration-1000 group-hover:scale-105 filter grayscale sepia-[0.3] group-hover:sepia-0 group-hover:grayscale-0"
                                                         loading="lazy"

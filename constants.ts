@@ -44,6 +44,8 @@ Protocol: A2UI v0.8 with custom financial component catalog extension
         coverUrl: 'https://yanqinghot.blob.core.windows.net/public-access/a2ui-hero.gif',
         imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/a2ui-hero.gif',
         ogImage: 'https://yanqinghot.blob.core.windows.net/public-access/a2ui-hero.gif',
+        videoUrl: 'https://yanqinghot.blob.core.windows.net/public-access/a2ui-hero.webm',
+        posterUrl: 'https://yanqinghot.blob.core.windows.net/public-access/a2ui-hero-poster.jpg',
         seoTitle: 'Agent to UI | Agentic UI UX Design | A2UI',
         seoDescription:
           'Agent-guided A2UI dashboard generation that streams widgets, KPIs, and news from finance questions using Claude Agent SDK, FastAPI SSE, and a custom React renderer.',
@@ -116,6 +118,8 @@ Backend: FastAPI router /api/linkedin-photo/generate, Gemini LLM for prompt expa
         coverUrl: 'https://yanqinghot.blob.core.windows.net/public-access/3-photo-rotate.gif',
         imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/3-photo-rotate.gif',
         ogImage: 'https://yanqinghot.blob.core.windows.net/public-access/3-photo-rotate.gif',
+        videoUrl: 'https://yanqinghot.blob.core.windows.net/public-access/3-photo-rotate.webm',
+        posterUrl: 'https://yanqinghot.blob.core.windows.net/public-access/3-photo-rotate-poster.jpg',
         seoTitle: 'AI LinkedIn Headshot Generator | Gemini Image Editing | Yanqing Jiang',
         seoDescription:
           'Upload a portrait, choose an executive style, and generate a LinkedIn-ready headshot with FastAPI + Gemini image editing and transparent prompts.',
@@ -150,6 +154,8 @@ Backend: FastAPI router /api/linkedin-photo/generate, Gemini LLM for prompt expa
         coverUrl: 'https://yanqing.app/next-gen-analytics-agent-hero.gif',
         imageUrl: 'https://yanqing.app/next-gen-analytics-agent-hero.gif',
         ogImage: 'https://yanqing.app/next-gen-analytics-agent-hero.gif',
+        videoUrl: 'https://yanqinghot.blob.core.windows.net/public-access/next-gen-analytics-agent-hero.webm',
+        posterUrl: 'https://yanqinghot.blob.core.windows.net/public-access/next-gen-analytics-agent-hero-poster.jpg',
         seoTitle: 'Conversational Analytics Agent | Claude Agent SDK + SQL + Charts | Yanqing Jiang',
         seoDescription:
           'Conversational analytics agent that clarifies intent, queries a Postgres financial dataset, generates SQL and charts, and delivers analyst-grade explanations with traceable steps.',
@@ -341,6 +347,8 @@ This production-grade web application automates the invoice validation and match
         coverUrl: 'https://yanqinghot.blob.core.windows.net/public-access/Deal%20Matching%20Cover',
         gifUrl: 'https://yanqinghot.blob.core.windows.net/public-access/Deal%20Matching%20GIF',
         imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/Deal%20Matching%20GIF',
+        videoUrl: 'https://yanqinghot.blob.core.windows.net/public-access/Deal-Matching.webm',
+        posterUrl: 'https://yanqinghot.blob.core.windows.net/public-access/Deal-Matching-poster.jpg',
         seoTitle: 'LLM Invoice Processor | Multi-Format Automation Copilot',
         seoDescription:
           'Production LLM invoice processor that parses PDFs/XLSB files, reconciles parent-child items, and auto-generates discrepancy reports saving 1,000+ hours every year.',
@@ -567,6 +575,8 @@ This production-grade web application automates the invoice validation and match
         ],
         coverUrl: 'https://yanqinghot.blob.core.windows.net/public-access/R-Time-Series/R-Script-1.gif',
         imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/R-Time-Series/R-Script-1.gif',
+        videoUrl: 'https://yanqinghot.blob.core.windows.net/public-access/R-Time-Series/R-Script-1.webm',
+        posterUrl: 'https://yanqinghot.blob.core.windows.net/public-access/R-Time-Series/R-Script-1-poster.jpg',
         link: 'https://www.jiangyanqing.com/portfolio/machine-learning-forecasting-visual/',
         contentHtml: `<div class='legacy-content'>
           <img class='legacy-hero' src='https://yanqinghot.blob.core.windows.net/public-access/R-Time-Series/R-dashboard.png' alt='R Time Series dashboard overview' loading='lazy' />
@@ -621,6 +631,8 @@ This production-grade web application automates the invoice validation and match
         ],
         coverUrl: 'https://yanqinghot.blob.core.windows.net/public-access/supplier-review-system/Email-PDF-Blurred-pbi.gif',
         imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/supplier-review-system/Email-PDF-Blurred-pbi.gif',
+        videoUrl: 'https://yanqinghot.blob.core.windows.net/public-access/supplier-review-system/Email-PDF-Blurred-pbi.webm',
+        posterUrl: 'https://yanqinghot.blob.core.windows.net/public-access/supplier-review-system/Email-PDF-Blurred-pbi-poster.jpg',
         link: 'https://www.jiangyanqing.com/portfolio/all-in-one-supplier-review-system/',
         contentHtml: `<div class="legacy-content">
           <p><em>*Real project, hence sensitive data is blurred.</em></p>
@@ -670,6 +682,8 @@ This production-grade web application automates the invoice validation and match
         ],
         coverUrl: 'https://yanqinghot.blob.core.windows.net/public-access/capex-tracker/Capex-Project.gif',
         imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/capex-tracker/Capex-Project.gif',
+        videoUrl: 'https://yanqinghot.blob.core.windows.net/public-access/capex-tracker/Capex-Project.webm',
+        posterUrl: 'https://yanqinghot.blob.core.windows.net/public-access/capex-tracker/Capex-Project-poster.jpg',
         link: 'https://www.jiangyanqing.com/portfolio/capex-project-tracker/',
         contentHtml: `<div class="legacy-content">
           <p><em>*Real project, hence sensitive data is blurred.</em></p>
@@ -720,6 +734,8 @@ This production-grade web application automates the invoice validation and match
         ],
         coverUrl: 'https://yanqinghot.blob.core.windows.net/public-access/engagement-tracker/Engagement-Intake.gif',
         imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/engagement-tracker/Engagement-Intake.gif',
+        videoUrl: 'https://yanqinghot.blob.core.windows.net/public-access/engagement-tracker/Engagement-Intake.webm',
+        posterUrl: 'https://yanqinghot.blob.core.windows.net/public-access/engagement-tracker/Engagement-Intake-poster.jpg',
         link: 'https://www.jiangyanqing.com/portfolio/all-in-one-engagement-intake/',
         contentHtml: `<div class="legacy-content">
           <p>All-in-one Engagement Intake orchestrates procurement submissions with thousands of embedded business rules.</p>

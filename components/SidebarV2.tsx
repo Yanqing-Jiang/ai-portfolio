@@ -376,7 +376,7 @@ const SidebarV2: React.FC<SidebarV2Props> = ({
                             {/* Content Container */}
                             <div className="relative w-full h-full rounded-[1.8rem] overflow-hidden">
                                 <img
-                                    src={hoveredProject.coverUrl || hoveredProject.imageUrl}
+                                    src={hoveredProject.posterUrl || hoveredProject.coverUrl || hoveredProject.imageUrl}
                                     alt={hoveredProject.title}
                                     className="w-full h-full object-cover opacity-80"
                                 />
