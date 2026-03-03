@@ -62,9 +62,16 @@ in_memory_usage = {}
 
 # Supabase JWT secret - get this from your Supabase dashboard
 SUPABASE_JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET")
-if not SUPABASE_JWT_SECRET or SUPABASE_JWT_SECRET == "your-jwt-secret-here":
-    print("Warning: SUPABASE_JWT_SECRET not properly configured in .env file")
+_SUPABASE_JWT_CONFIGURED = bool(SUPABASE_JWT_SECRET and SUPABASE_JWT_SECRET != "your-jwt-secret-here")
+if not _SUPABASE_JWT_CONFIGURED:
+    print("Warning: SUPABASE_JWT_SECRET not properly configured — JWT auth disabled")
     SUPABASE_JWT_SECRET = "fallback-secret-key"
+
+SUPERUSER_EMAILS: set = set(
+    e.strip().lower()
+    for e in os.getenv("SUPERUSER_EMAILS", "").split(",")
+    if e.strip()
+)
 
 # Rate limiting constants (prompt units)
 GUEST_LIMIT = 5  # default guest limit for non-chat scopes
@@ -109,6 +116,12 @@ class UsageSnapshot:
     count: int
     limit: int
     reset_epoch: int
+
+
+@dataclass(slots=True)
+class ParsedToken:
+    user_id: str
+    email: Optional[str] = None
 
 
 def _redis_key(scoped_identifier: str) -> str:
@@ -163,29 +176,39 @@ def resolve_scope(value: Optional[str]) -> RateLimitScope:
     normalized = value.strip().lower()
     return SCOPE_ALIAS_MAP.get(normalized, RateLimitScope.GLOBAL)
 
-def parse_user_id(token: str) -> Optional[str]:
-    """Extract user ID from Supabase JWT token"""
+def parse_user_id(token: str) -> Optional[ParsedToken]:
+    """Extract user ID and email from Supabase JWT token"""
+    if not _SUPABASE_JWT_CONFIGURED:
+        print("JWT DEBUG - SUPABASE_JWT_SECRET not configured, refusing to verify tokens")
+        return None
     try:
         print(f"JWT DEBUG - Raw token (first 50 chars): {token[:50]}...")
-        
+
         # Remove 'Bearer ' prefix if present
         if token.startswith("Bearer "):
             token = token[7:]
             print(f"JWT DEBUG - After removing Bearer prefix: {token[:50]}...")
-        
+
         # Decode the JWT token with proper audience validation
         # Supabase JWTs use 'authenticated' as the audience
         payload = jwt.decode(
-            token, 
-            SUPABASE_JWT_SECRET, 
+            token,
+            SUPABASE_JWT_SECRET,
             algorithms=["HS256"],
             audience="authenticated"
         )
         print(f"JWT DEBUG - Decoded payload: {payload}")
-        
+
         user_id = payload.get("sub")
-        print(f"JWT DEBUG - Extracted user ID: {user_id}")
-        return user_id
+        email = payload.get("email")
+        if isinstance(email, str):
+            email = email.strip().lower() or None
+        else:
+            email = None
+        print(f"JWT DEBUG - Extracted user ID: {user_id}, email: {email}")
+        if not user_id:
+            return None
+        return ParsedToken(user_id=user_id, email=email)
     except JWTError as e:
         print(f"JWT DEBUG - JWT decode error: {e}")
         return None
@@ -214,10 +237,11 @@ async def who_am_i(request: Request) -> str:
             print(f"AUTH DEBUG - Token from query param")
 
     if auth_header:
-        user_id = parse_user_id(auth_header)
-        print(f"AUTH DEBUG - Parsed user ID: {user_id}")
-        if user_id:
-            result = f"user:{user_id}"
+        parsed = parse_user_id(auth_header)
+        print(f"AUTH DEBUG - Parsed token: {parsed}")
+        if parsed:
+            request.state.user_email = parsed.email
+            result = f"user:{parsed.user_id}"
             print(f"AUTH DEBUG - Returning authenticated identifier: {result}")
             return result
 
@@ -243,6 +267,13 @@ async def rate_limit_callback(request: Request, response, pexpire: int):
         detail="Rate limit exceeded",
         headers={"Retry-After": str(ceil(pexpire/1000))}
     )
+
+
+def is_superuser(request: Request) -> bool:
+    """Check if the current request is from a superuser (unlimited access)."""
+    email = getattr(request.state, "user_email", None)
+    return bool(email and SUPERUSER_EMAILS and email in SUPERUSER_EMAILS)
+
 
 async def manual_increment_counter(
     identifier: str,
@@ -395,6 +426,14 @@ async def smart_rate_limit(
 
     # Get user identifier and check authentication
     identifier = await who_am_i(request)
+
+    if is_superuser(request):
+        print(f"SUPERUSER BYPASS - {identifier} skipping rate limit (scope={scope.value})")
+        request.state.rate_limit_snapshot = UsageSnapshot(count=0, limit=999999, reset_epoch=0)
+        request.state.rate_limit_weight = weight
+        request.state.token_fallback_used = False
+        return
+
     is_authenticated = not identifier.startswith("ip:")
     scoped_identifier = build_scoped_identifier(identifier, scope)
     limit = resolve_limits(scope, is_authenticated)

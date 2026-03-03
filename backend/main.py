@@ -129,6 +129,7 @@ from rate_limiter import (
     RateLimitScope,
     analytics_agent_rate_limit,
     analytics_sql_rate_limit,
+    is_superuser,
 )
 try:
     from token_store import token_store
@@ -1082,7 +1083,28 @@ async def get_usage_stats(request: Request):
         # Get user identifier
         identifier = await who_am_i(request)
         scope = resolve_scope(request.query_params.get("scope"))
-        
+
+        if is_superuser(request):
+            scoped_identifier = build_scoped_identifier(identifier, scope)
+            return JSONResponse(
+                content={
+                    "current_usage": 0,
+                    "limit": 999999,
+                    "remaining": 999999,
+                    "user_type": "superuser",
+                    "identifier": scoped_identifier,
+                    "base_identifier": identifier,
+                    "scope": scope.value,
+                    "prompt_units_spent_today": 0,
+                    "daily_reset_epoch": 0,
+                    "daily_reset_iso": None,
+                    "token_balance": None,
+                    "token_balance_updated_at": None,
+                    "daily_reset_notice": "Superuser — unlimited access.",
+                },
+                headers={"Access-Control-Allow-Origin": "*"},
+            )
+
         # Get usage stats
         snapshot = await get_user_usage(identifier, scope)
         scoped_identifier = build_scoped_identifier(identifier, scope)

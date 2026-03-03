@@ -3,9 +3,9 @@ from typing import Dict
 from fastapi import APIRouter, File, Form, UploadFile, Request, HTTPException
 
 try:
-    from rate_limiter import smart_rate_limit, RateLimitScope, who_am_i, redis_pool
+    from rate_limiter import smart_rate_limit, RateLimitScope, who_am_i, redis_pool, is_superuser
 except ImportError:  # pragma: no cover - support module execution
-    from ..rate_limiter import smart_rate_limit, RateLimitScope, who_am_i, redis_pool  # type: ignore
+    from ..rate_limiter import smart_rate_limit, RateLimitScope, who_am_i, redis_pool, is_superuser  # type: ignore
 from .schemas import LinkedInPhotoResponse, PhotoAnalysisResponse
 from .service import LinkedInPhotoService
 from .fixed_prompts import load_fixed_prompts
@@ -105,6 +105,8 @@ async def list_linkedin_prompts() -> Dict[str, str]:
 )
 async def get_linkedin_credits(request: Request) -> Dict[str, int]:
     user_id = await _require_authenticated_user(request)
+    if is_superuser(request):
+        return {"used": 0, "remaining": 999999, "limit": 999999}
     return await _get_credit_response(user_id)
 
 
@@ -150,7 +152,8 @@ async def generate_linkedin_photo(
     user_id = await _require_authenticated_user(request)
     await smart_rate_limit(request, scope=RateLimitScope.GLOBAL, weight=LINKEDIN_PROMPT_WEIGHT)
     response = await service.generate(photo, prompt, prompt_mode=prompt_mode)
-    await _consume_credit_if_available(user_id)
+    if not is_superuser(request):
+        await _consume_credit_if_available(user_id)
     return response
 
 
@@ -196,5 +199,6 @@ async def generate_linkedin_photo_variation(
         pose=pose,
         prop=prop,
     )
-    await _consume_credit_if_available(user_id)
+    if not is_superuser(request):
+        await _consume_credit_if_available(user_id)
     return response
