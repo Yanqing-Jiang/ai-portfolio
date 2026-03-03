@@ -19,23 +19,46 @@ async def with_heartbeat(
     interval: float = HEARTBEAT_INTERVAL,
     max_duration: float = MAX_STREAM_DURATION,
 ) -> AsyncGenerator[str, None]:
-    """Wrap an async SSE generator with periodic heartbeat comments and absolute timeout."""
+    """Wrap an async SSE generator with periodic heartbeat comments and absolute timeout.
+
+    Uses asyncio.wait on a shielded task to avoid cancelling the upstream generator
+    when the heartbeat interval elapses (asyncio.wait_for would cancel __anext__).
+    """
     start = time.monotonic()
     ait = gen.__aiter__()
-    while True:
-        elapsed = time.monotonic() - start
-        if elapsed >= max_duration:
-            yield ": timeout\n\n"
-            break
-        try:
-            remaining = max_duration - elapsed
-            wait = min(interval, remaining)
-            chunk = await asyncio.wait_for(ait.__anext__(), timeout=wait)
-            yield chunk
-        except asyncio.TimeoutError:
-            if time.monotonic() - start >= max_duration:
+    pending_next: asyncio.Task | None = None
+    try:
+        while True:
+            elapsed = time.monotonic() - start
+            if elapsed >= max_duration:
                 yield ": timeout\n\n"
                 break
-            yield ": heartbeat\n\n"
-        except StopAsyncIteration:
-            break
+
+            remaining = max_duration - elapsed
+            wait = min(interval, remaining)
+
+            if pending_next is None:
+                pending_next = asyncio.ensure_future(ait.__anext__())
+
+            done, _ = await asyncio.wait({pending_next}, timeout=wait)
+
+            if pending_next in done:
+                try:
+                    chunk = pending_next.result()
+                except StopAsyncIteration:
+                    break
+                pending_next = None
+                yield chunk
+            else:
+                # Heartbeat — task is still running, don't cancel it
+                if time.monotonic() - start >= max_duration:
+                    yield ": timeout\n\n"
+                    break
+                yield ": heartbeat\n\n"
+    finally:
+        if pending_next is not None and not pending_next.done():
+            pending_next.cancel()
+            try:
+                await pending_next
+            except (asyncio.CancelledError, StopAsyncIteration):
+                pass
