@@ -272,7 +272,7 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
         const lenis = new Lenis({
             wrapper: mainEl,
             content: mainEl,
-            duration: 1.2,
+            duration: 0.7,
             easing: (t) => Math.min(1, 1.001 - Math.pow(2, -10 * t)),
             touchMultiplier: 1.5,
             infinite: false,
@@ -302,6 +302,10 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
     useGSAP(() => {
         // Wait for scroller to be available
         const scroller = mainScrollerRef.current || window;
+
+        // Hoisted for cleanup access outside gsap.context()
+        let aberrationRafId = 0;
+        const cardListeners: Array<{ el: HTMLElement; type: string; fn: EventListener }> = [];
 
         const ctx = gsap.context(() => {
             ScrollTrigger.defaults({
@@ -357,7 +361,7 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                             start: 'top top',
                             end: () => `+=${track.scrollWidth - window.innerWidth}`,
                             pin: true,
-                            scrub: 1,
+                            scrub: 0.3,
                             invalidateOnRefresh: true,
                             onToggle: (self) => {
                                 // Performance: Lower neural field visibility instead of hiding it
@@ -513,7 +517,13 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
             cards.forEach(card => {
                 const inner = card.querySelector('div') as HTMLElement;
 
-                card.addEventListener('mousemove', (e) => {
+                // Throttled mousemove (~60fps cap)
+                let lastMoveTime = 0;
+                const onMouseMove = ((e: MouseEvent) => {
+                    const now = performance.now();
+                    if (now - lastMoveTime < 16) return;
+                    lastMoveTime = now;
+
                     const rect = card.getBoundingClientRect();
                     const x = e.clientX - rect.left;
                     const y = e.clientY - rect.top;
@@ -533,13 +543,13 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                     gsap.to(inner, {
                         rotateX: rotateX,
                         rotateY: rotateY,
-                        duration: 0.1, // Snappy response
+                        duration: 0.1,
                         ease: 'power1.out',
                         overwrite: true
                     });
-                });
+                }) as EventListener;
 
-                card.addEventListener('mouseleave', () => {
+                const onMouseLeave = (() => {
                     gsap.to(inner, {
                         rotateX: 0,
                         rotateY: 0,
@@ -547,26 +557,37 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                         ease: 'elastic.out(1, 0.3)',
                         overwrite: true
                     });
-                });
+                }) as EventListener;
+
+                card.addEventListener('mousemove', onMouseMove);
+                card.addEventListener('mouseleave', onMouseLeave);
+                cardListeners.push({ el: card, type: 'mousemove', fn: onMouseMove });
+                cardListeners.push({ el: card, type: 'mouseleave', fn: onMouseLeave });
             });
 
             // 5. Chromatic Aberration based on Scroll Velocity
-            const mainScroller = document.querySelector('main');
-            if (mainScroller) {
+            // Uses opacity instead of drop-shadow for GPU-accelerated compositing
+            const mainScrollerEl = document.querySelector('main');
+            if (mainScrollerEl) {
                 let lastScroll = 0;
                 const updateAberration = () => {
                     const currentScroll = lenisRef.current?.scroll || 0;
                     const velocity = Math.abs(currentScroll - lastScroll);
-                    const shift = Math.min(velocity * 0.1, 5); // Max 5px shift
-
-                    gsap.set('.stream-card img', {
-                        filter: velocity > 5 ? `drop-shadow(${shift}px 0 rgba(255,0,0,0.3)) drop-shadow(-${shift}px 0 rgba(0,255,255,0.3))` : 'none'
-                    });
-
                     lastScroll = currentScroll;
-                    requestAnimationFrame(updateAberration);
+
+                    // Reset opacity when not scrolling, then skip further work
+                    if (velocity < 1) {
+                        gsap.set('.stream-card img', { opacity: 1 });
+                        aberrationRafId = requestAnimationFrame(updateAberration);
+                        return;
+                    }
+
+                    const opacity = velocity > 5 ? Math.max(0.7, 1 - velocity * 0.005) : 1;
+                    gsap.set('.stream-card img', { opacity });
+
+                    aberrationRafId = requestAnimationFrame(updateAberration);
                 };
-                requestAnimationFrame(updateAberration);
+                aberrationRafId = requestAnimationFrame(updateAberration);
             }
 
         }, containerRef);
@@ -579,6 +600,10 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
 
         return () => {
             clearTimeout(refreshTimeout);
+            // Cancel rAF loop to prevent it surviving unmount
+            cancelAnimationFrame(aberrationRafId);
+            // Remove card DOM event listeners (ctx.revert only cleans GSAP tweens)
+            cardListeners.forEach(({ el, type, fn }) => el.removeEventListener(type, fn));
             ctx.revert();
         };
     }, { scope: containerRef, dependencies: [displayYears, preAiProjects] });

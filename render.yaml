@@ -13,15 +13,14 @@ services:
     plan: free  # Use 'starter' or higher for production
     rootDir: backend
     
-    # Build command: Install Claude Code CLI globally, then Python deps
-    # Render's Python runtime includes Node.js/npm pre-installed
-    buildCommand: npm install -g @anthropic-ai/claude-code && pip install -r requirements.txt
-    
-    # Start command for FastAPI
-    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
-    
-    # Health check endpoint
-    healthCheckPath: /docs
+    # Build command: Python deps only (claude-code removed — saves ~15-20s per deploy)
+    buildCommand: pip install -r requirements.txt
+
+    # Start command: gunicorn with uvicorn workers for better concurrency
+    startCommand: gunicorn main:app -w 2 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT --timeout 120
+
+    # Health check endpoint (lightweight JSON, not /docs which renders Swagger UI)
+    healthCheckPath: /health
     
     # Environment variables
     envVars:

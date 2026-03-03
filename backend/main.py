@@ -176,6 +176,12 @@ except ImportError as e:
 
 
 
+@app.get("/health")
+async def health():
+    """Lightweight health check for Render deployment probes."""
+    return {"status": "ok"}
+
+
 @app.get("/project-showcase")
 async def project_showcase():
     """Serve the conversational analytics project showcase HTML at a friendly URL."""
