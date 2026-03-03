@@ -30,8 +30,9 @@ Yanqing Jiang’s AI portfolio is a full-stack system that pairs a Vite + React 
 | Backend API | Mac Mini (Docker) | `https://portfolio-api.yanqing.app` → `localhost:8100` |
 | Redis | Mac Mini (Docker) | `redis://redis:6379/0` (internal Docker network) |
 | Database | Supabase (AWS us-west-1) | PostgreSQL via `asyncpg` connection pool |
-| DNS | Cloudflare (zone: `yanqing.app`) | Authoritative nameservers |
+| DNS | Cloudflare (zones: `yanqing.app`, `jiangyanqing.com`) | Authoritative nameservers |
 | Tunnel | Cloudflare Tunnel (`homer-tunnel`) | Routes `portfolio-api.yanqing.app` → local backend |
+| Redirect | Cloudflare Pages | `jiangyanqing.com` / `www.jiangyanqing.com` → 301 to `yanqing.app` |
 
 ## Application Architecture
 
@@ -233,15 +234,19 @@ Review & Download
 - Backend rebuild: `docker compose up -d --build`
 
 **DNS & CDN** – Cloudflare
-- Zone: `yanqing.app`
-- `yanqing.app` → CF Pages (proxied CNAME)
-- `portfolio-api.yanqing.app` → CF Tunnel → `localhost:8100`
+- Zone `yanqing.app`: `yanqing.app` → CF Pages (proxied CNAME), `portfolio-api.yanqing.app` → CF Tunnel → `localhost:8100`
+- Zone `jiangyanqing.com`: `jiangyanqing.com` + `www` → CF Pages redirect project (`jiangyanqing-redirect`) → 301 to `yanqing.app`
+
+**Domain Redirect** – `jiangyanqing.com`
+- Separate CF Pages project (`jiangyanqing-redirect`) with a `_redirects` file: `/* https://yanqing.app/:splat 301`
+- Custom domains `jiangyanqing.com` and `www.jiangyanqing.com` attached to that project
+- All paths preserved in redirect (e.g., `/project/agent-to-ui` → `https://yanqing.app/project/agent-to-ui`)
 
 **Key deployment notes**:
 - `SITE_BASE_URL` in `constants/seo.ts` must match the deployed domain.
-- SSE streams require heartbeats every 15-30s (CF Tunnel has 100s idle timeout on Free plan).
+- SSE streams require heartbeats every 20s (`backend/sse_utils.py`). CF Tunnel Free plan has 100s idle timeout. The heartbeat wrapper uses `asyncio.wait` (not `wait_for`) to avoid cancelling upstream generators.
 - Backend `.env.production` is mounted by Docker; never commit secrets.
-- `render.yaml` is retained for reference but Render is no longer used in production.
+- Render is fully decommissioned — no services remain on Render.
 
 ## Observability & Assets
 
