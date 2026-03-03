@@ -1,3 +1,4 @@
+import logging
 import redis.asyncio as redis
 from enum import Enum
 from fastapi import Request, HTTPException, status, Depends
@@ -16,6 +17,8 @@ from pathlib import Path
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
+
+logger = logging.getLogger(__name__)
 
 try:
     from .token_store import token_store
@@ -41,7 +44,7 @@ redis_pool = None
 disable_rate_limit = os.getenv("DISABLE_RATE_LIMIT", "false").lower() == "true"
 
 if disable_rate_limit:
-    print("INFO: Rate limiting disabled via DISABLE_RATE_LIMIT=true")
+    logger.info("Rate limiting disabled via DISABLE_RATE_LIMIT=true")
     redis_pool = None
 else:
     try:
@@ -51,10 +54,10 @@ else:
             encoding="utf-8",
             decode_responses=True
         )
-        print(f"Redis configured with URL: {redis_url}")
+        logger.info(f"Redis configured with URL: {redis_url}")
     except Exception as e:
-        print(f"Redis not available: {e}")
-        print("INFO: Rate limiting will use in-memory fallback (development mode)")
+        logger.warning(f"Redis not available: {e}")
+        logger.info("Rate limiting will use in-memory fallback (development mode)")
         redis_pool = None
 
 # In-memory fallback for development
@@ -64,8 +67,8 @@ in_memory_usage = {}
 SUPABASE_JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET")
 _SUPABASE_JWT_CONFIGURED = bool(SUPABASE_JWT_SECRET and SUPABASE_JWT_SECRET != "your-jwt-secret-here")
 if not _SUPABASE_JWT_CONFIGURED:
-    print("Warning: SUPABASE_JWT_SECRET not properly configured — JWT auth disabled")
-    SUPABASE_JWT_SECRET = "fallback-secret-key"
+    logger.warning("SUPABASE_JWT_SECRET not properly configured — JWT auth disabled")
+    SUPABASE_JWT_SECRET = None
 
 SUPERUSER_EMAILS: set = set(
     e.strip().lower()
@@ -179,25 +182,19 @@ def resolve_scope(value: Optional[str]) -> RateLimitScope:
 def parse_user_id(token: str) -> Optional[ParsedToken]:
     """Extract user ID and email from Supabase JWT token"""
     if not _SUPABASE_JWT_CONFIGURED:
-        print("JWT DEBUG - SUPABASE_JWT_SECRET not configured, refusing to verify tokens")
+        logger.debug("SUPABASE_JWT_SECRET not configured, refusing to verify tokens")
         return None
     try:
-        print(f"JWT DEBUG - Raw token (first 50 chars): {token[:50]}...")
-
         # Remove 'Bearer ' prefix if present
         if token.startswith("Bearer "):
             token = token[7:]
-            print(f"JWT DEBUG - After removing Bearer prefix: {token[:50]}...")
 
-        # Decode the JWT token with proper audience validation
-        # Supabase JWTs use 'authenticated' as the audience
         payload = jwt.decode(
             token,
             SUPABASE_JWT_SECRET,
             algorithms=["HS256"],
             audience="authenticated"
         )
-        print(f"JWT DEBUG - Decoded payload: {payload}")
 
         user_id = payload.get("sub")
         email = payload.get("email")
@@ -205,15 +202,15 @@ def parse_user_id(token: str) -> Optional[ParsedToken]:
             email = email.strip().lower() or None
         else:
             email = None
-        print(f"JWT DEBUG - Extracted user ID: {user_id}, email: {email}")
+        logger.debug("JWT parsed: user_id=%s", user_id)
         if not user_id:
             return None
         return ParsedToken(user_id=user_id, email=email)
     except JWTError as e:
-        print(f"JWT DEBUG - JWT decode error: {e}")
+        logger.debug("JWT decode error: %s", e)
         return None
     except Exception as e:
-        print(f"JWT DEBUG - Unexpected error: {e}")
+        logger.debug("JWT unexpected error: %s", e)
         return None
 
 async def who_am_i(request: Request) -> str:
@@ -227,30 +224,22 @@ async def who_am_i(request: Request) -> str:
     """
     # Check for Authorization header first
     auth_header = request.headers.get("Authorization")
-    print(f"AUTH DEBUG - Authorization header: {auth_header}")
 
     # Fallback to query param for EventSource (SSE doesn't support headers)
     if not auth_header:
         token = request.query_params.get("token")
         if token:
             auth_header = f"Bearer {token}"
-            print(f"AUTH DEBUG - Token from query param")
 
     if auth_header:
         parsed = parse_user_id(auth_header)
-        print(f"AUTH DEBUG - Parsed token: {parsed}")
         if parsed:
             request.state.user_email = parsed.email
-            result = f"user:{parsed.user_id}"
-            print(f"AUTH DEBUG - Returning authenticated identifier: {result}")
-            return result
+            return f"user:{parsed.user_id}"
 
     # Fallback to IP for guests
-    forwarded = request.headers.get("X-Forwarded-For")
-    client_ip = forwarded.split(',')[0] if forwarded else request.client.host
-    result = f"ip:{client_ip}"
-    print(f"AUTH DEBUG - Returning guest identifier: {result}")
-    return result
+    client_ip = request.client.host if request.client else "unknown"
+    return f"ip:{client_ip}"
 
 async def auth_required_callback(request: Request, response, pexpire: int):
     """Custom callback that returns 401 instead of 429 when rate limit is exceeded"""
@@ -286,15 +275,15 @@ async def manual_increment_counter(
     limit = resolve_limits(scope, is_authenticated)
 
     if weight <= 0:
-        print(f"Ignoring non-positive weight={weight} for {scoped_identifier}")
+        logger.debug(f"Ignoring non-positive weight={weight} for {scoped_identifier}")
         return
 
     if redis_pool is None:
         # Use in-memory fallback for development
-        print(f"Using in-memory increment for identifier: {scoped_identifier}")
+        logger.debug(f"Using in-memory increment for identifier: {scoped_identifier}")
         bucket = _touch_in_memory_usage(scoped_identifier)
         bucket["count"] += weight
-        print(
+        logger.debug(
             f"In-memory count incremented: {scoped_identifier} -> "
             f"{bucket['count']} (limit {limit}, weight {weight})"
         )
@@ -306,16 +295,16 @@ async def manual_increment_counter(
         ttl = await redis_pool.ttl(key)
         if ttl is None or ttl <= 0:
             await redis_pool.expire(key, seconds_until_midnight_utc())
-        print(
+        logger.debug(
             f"REDIS INCREMENT - Key: {key}, New count: {new_count}, "
             f"Limit: {limit}, Weight: {weight}"
         )
     except Exception as e:
-        print(f"ERROR: Failed to manually increment counter for {scoped_identifier}: {e}")
+        logger.error(f"Failed to manually increment counter for {scoped_identifier}: {e}")
         # Fall back to in-memory tracking
         bucket = _touch_in_memory_usage(scoped_identifier)
         bucket["count"] += weight
-        print(
+        logger.debug(
             f"Fallback increment: {scoped_identifier} -> {bucket['count']} "
             f"(limit {limit}, weight {weight})"
         )
@@ -333,7 +322,7 @@ async def get_user_usage(
         bucket = _touch_in_memory_usage(scoped_identifier)
         current_count = bucket["count"]
         reset_epoch = _in_memory_reset_epoch(bucket)
-        print(
+        logger.debug(
             f"FALLBACK RESULT - Identifier: {scoped_identifier}, Count: {current_count}, "
             f"Limit: {limit}, Is Guest: {is_guest}"
         )
@@ -352,17 +341,17 @@ async def get_user_usage(
         else:
             reset_epoch = int((datetime.now(timezone.utc) + timedelta(seconds=ttl)).timestamp())
 
-        print(
+        logger.debug(
             f"REDIS RESULT - Identifier: {scoped_identifier}, Key: {key}, "
             f"Count: {current_count}, Limit: {limit}, Is Guest: {is_guest}"
         )
         return UsageSnapshot(current_count, limit, reset_epoch)
     except Exception as e:
-        print(f"ERROR: Failed to get usage count for {scoped_identifier}: {e}")
+        logger.error(f"Failed to get usage count for {scoped_identifier}: {e}")
         bucket = _touch_in_memory_usage(scoped_identifier)
         current_count = bucket["count"]
         reset_epoch = _in_memory_reset_epoch(bucket)
-        print(
+        logger.debug(
             f"FALLBACK RESULT - Identifier: {scoped_identifier}, Count: {current_count}, "
             f"Limit: {limit}, Is Guest: {is_guest}"
         )
@@ -371,16 +360,16 @@ async def get_user_usage(
 async def init_rate_limiter():
     """Initialize the rate limiter with Redis"""
     if redis_pool is None:
-        print("INFO: Redis not available, using in-memory rate limiting for development")
+        logger.info("Redis not available, using in-memory rate limiting for development")
         return False
 
     try:
         await FastAPILimiter.init(redis_pool)
-        print("Rate limiter initialized successfully with Redis")
+        logger.info("Rate limiter initialized successfully with Redis")
         return True
     except Exception as e:
-        print(f"WARNING: Failed to initialize rate limiter: {e}")
-        print("INFO: Falling back to in-memory rate limiting")
+        logger.warning(f"Failed to initialize rate limiter: {e}")
+        logger.info("Falling back to in-memory rate limiting")
         return False
 
 # Create a unified rate limiter
@@ -392,10 +381,10 @@ def create_unified_rate_limiter():
 # Initialize unified limiter with error handling
 try:
     unified_rate_limiter = create_unified_rate_limiter()
-    print("Unified rate limiter created successfully")
+    logger.info("Unified rate limiter created successfully")
 except Exception as e:
-    print(f"WARNING: Failed to create rate limiter: {e}")
-    print("INFO: Rate limiting will use fallback mechanisms")
+    logger.warning(f"Failed to create rate limiter: {e}")
+    logger.info("Rate limiting will use fallback mechanisms")
     unified_rate_limiter = None
 
 async def smart_rate_limit(
@@ -407,28 +396,26 @@ async def smart_rate_limit(
     # Check if rate limiting is disabled for local development
     disable_rate_limit = os.getenv("DISABLE_RATE_LIMIT", "false").lower()
     if disable_rate_limit == "true":
-        # Double check that this is a local request for extra security
+        # Use request.client.host only (not spoofable X-Forwarded-For)
         client_ip = request.client.host if request.client else "unknown"
-        forwarded = request.headers.get("X-Forwarded-For")
-        actual_ip = forwarded.split(',')[0] if forwarded else client_ip
-        
-        is_local = actual_ip in ["127.0.0.1", "localhost", "::1"] or actual_ip.startswith("192.168.") or actual_ip.startswith("10.") or actual_ip.startswith("172.")
-        
+
+        is_local = client_ip in ("127.0.0.1", "::1") or client_ip.startswith("192.168.") or client_ip.startswith("10.") or (client_ip.startswith("172.") and 16 <= int(client_ip.split(".")[1]) <= 31)
+
         if is_local:
-            print(f"RATE LIMIT BYPASS - Rate limiting disabled for local development (IP: {actual_ip})")
+            logger.debug("Rate limit bypass for local dev (IP: %s)", client_ip)
             return
         else:
-            print(f"RATE LIMIT BYPASS DENIED - DISABLE_RATE_LIMIT=true but request not from local IP (IP: {actual_ip})")
+            logger.warning("Rate limit bypass denied — not local IP: %s", client_ip)
 
     if weight <= 0:
-        print(f"RATE LIMIT - Ignoring non-positive weight={weight}")
+        logger.debug(f"RATE LIMIT - Ignoring non-positive weight={weight}")
         return
 
     # Get user identifier and check authentication
     identifier = await who_am_i(request)
 
     if is_superuser(request):
-        print(f"SUPERUSER BYPASS - {identifier} skipping rate limit (scope={scope.value})")
+        logger.debug(f"SUPERUSER BYPASS - {identifier} skipping rate limit (scope={scope.value})")
         request.state.rate_limit_snapshot = UsageSnapshot(count=0, limit=999999, reset_epoch=0)
         request.state.rate_limit_weight = weight
         request.state.token_fallback_used = False
@@ -438,7 +425,7 @@ async def smart_rate_limit(
     scoped_identifier = build_scoped_identifier(identifier, scope)
     limit = resolve_limits(scope, is_authenticated)
 
-    print(
+    logger.debug(
         f"RATE LIMIT CHECK - Identifier: {identifier}, Scope: {scope.value}, "
         f"Scoped ID: {scoped_identifier}, Limit: {limit}, Weight: {weight}, "
         f"Is Authenticated: {is_authenticated}"
@@ -452,7 +439,7 @@ async def smart_rate_limit(
     token_fallback_error: Optional[str] = None
 
     if projected_total > limit:
-        print(
+        logger.debug(
             f"RATE LIMIT THRESHOLD - {scoped_identifier} projected {projected_total}/{limit} "
             f"(weight {weight})"
         )
@@ -462,13 +449,13 @@ async def smart_rate_limit(
                 try:
                     token_fallback_used = await token_store.consume(user_id, weight)
                     if token_fallback_used:
-                        print(
+                        logger.debug(
                             f"TOKEN FALLBACK - Consumed {weight} tokens for {user_id}; "
                             f"continuing request"
                         )
                 except Exception as token_error:
                     token_fallback_error = str(token_error)
-                    print(f"TOKEN FALLBACK ERROR - {token_fallback_error}")
+                    logger.debug(f"TOKEN FALLBACK ERROR - {token_fallback_error}")
             if not token_fallback_used:
                 detail = "Rate limit exceeded. Please try again later."
                 if token_fallback_error:
@@ -479,7 +466,7 @@ async def smart_rate_limit(
                     headers={"Retry-After": retry_after_seconds},
                 )
         else:
-            print(f"GUEST RATE LIMIT - Guest {scoped_identifier} exceeded free quota")
+            logger.debug(f"GUEST RATE LIMIT - Guest {scoped_identifier} exceeded free quota")
             raise HTTPException(
                 status_code=401,
                 detail="Sign-in required after free quota",
@@ -490,7 +477,7 @@ async def smart_rate_limit(
     try:
         await manual_increment_counter(identifier, is_authenticated, scope, weight=weight)
         updated_snapshot = await get_user_usage(identifier, scope)
-        print(
+        logger.debug(
             f"Rate limit check passed for {scoped_identifier}. "
             f"Usage now {updated_snapshot.count}/{updated_snapshot.limit}"
         )
@@ -500,7 +487,7 @@ async def smart_rate_limit(
     except HTTPException:
         raise
     except Exception as e:
-        print(f"ERROR: Rate limiting error for {scoped_identifier}: {e}")
+        logger.error(f"Rate limiting error for {scoped_identifier}: {e}")
         raise
 
 

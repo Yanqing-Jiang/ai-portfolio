@@ -2,9 +2,42 @@
 
 Yanqing Jiang’s AI portfolio is a full-stack system that pairs a Vite + React experience with a FastAPI backend. The platform showcases multiple AI workflows (analytics copilots, research agents, resume Q&A, LinkedIn headshot generation) while prerendering static assets and streaming real-time insights.
 
+## Infrastructure
+
+```
+                         Cloudflare Network
+                    ┌──────────────────────────┐
+    Users ────────▶ │  yanqing.app             │──▶  Cloudflare Pages (static frontend)
+                    │  portfolio-api.yanqing.app│──▶  Cloudflare Tunnel ──┐
+                    └──────────────────────────┘                         │
+                                                                         ▼
+                                                              Mac Mini (Apple Silicon)
+                                                         ┌────────────────────────────┐
+                                                         │  Docker Compose            │
+                                                         │  ├─ portfolio-backend :8100│
+                                                         │  │  (gunicorn + uvicorn)   │
+                                                         │  └─ portfolio-redis        │
+                                                         │                            │
+                                                         │  launchd services          │
+                                                         │  ├─ cloudflared (tunnel)   │
+                                                         │  └─ com.portfolio.monitor  │
+                                                         └────────────────────────────┘
+```
+
+| Component | Host | URL |
+|-----------|------|-----|
+| Frontend (static) | Cloudflare Pages | `https://yanqing.app` (`ai-portfolio-6jm.pages.dev`) |
+| Backend API | Mac Mini (Docker) | `https://portfolio-api.yanqing.app` → `localhost:8100` |
+| Redis | Mac Mini (Docker) | `redis://redis:6379/0` (internal Docker network) |
+| Database | Supabase (AWS us-west-1) | PostgreSQL via `asyncpg` connection pool |
+| DNS | Cloudflare (zone: `yanqing.app`) | Authoritative nameservers |
+| Tunnel | Cloudflare Tunnel (`homer-tunnel`) | Routes `portfolio-api.yanqing.app` → local backend |
+
+## Application Architecture
+
 ```
 ┌──────────────┐      HTTPS / SSE       ┌──────────────────────────┐
-│  React 19 /  │  ───────────────────▶  │  FastAPI (uvicorn)        │
+│  React 19 /  │  ───────────────────▶  │  FastAPI (gunicorn)       │
 │  Vite client │   Auth, REST, Streams  │  - Analytics suite        │
 │  (SSR-ready) │  ◀───────────────────  │  - LinkedIn photo router  │
 └──────┬───────┘      JSON / events     │  - Research & resume      │
@@ -109,6 +142,7 @@ Yanqing Jiang’s AI portfolio is a full-stack system that pairs a Vite + React 
 ### Configuration and Environment
 
 - `.env` files at repo root and `backend/.env` control Supabase, Gemini, OpenAI, Redis, Stripe, PayPal, and rate-limit toggles.
+- `backend/.env.production` contains production-specific settings (used by Docker via `docker-compose.yml`).
 - `backend/config/schemas/` stores YAML definitions for analytics catalogues and SQL scaffolding.
 - `public/` holds static assets (project images, OG banners, JSON feeds) served by the frontend build and referenced in SEO metadata.
 
@@ -183,17 +217,37 @@ Review & Download
   - `py -m uvicorn main:app --reload --port 8000`
   - `pytest backend`
 - **Prerender**: `node scripts/prerender.mjs` (invoked by build) emits `dist/`, `dist-ssr/`, `sitemap.xml`, `sitemap-pages.xml`, `sitemap-projects.xml`, and project JSON caches.
-- **PowerShell automation**: Root-level workflow (see README) clears ports 8000/5173, launches backend/frontend processes, tails logs, and cleans up.
-- **Deployment**:
-  - Static hosting of `dist/` (Vercel, Netlify, Azure Static Web Apps).
-  - Backend hosted on containers/VMs with Redis, Supabase keys, and Stripe/PayPal credentials configured.
-  - `SITE_BASE_URL` in `constants/seo.ts` must match the deployed domain before publishing to ensure correct canonicals and sitemaps.
+### Production Deployment
+
+**Frontend** – Cloudflare Pages (static site)
+- Deployed via GitHub Actions on push to `main` (`.github/workflows/deploy.yml`)
+- Build: `npm run build` → output `dist/`
+- Environment variables set in CF Pages dashboard (VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY, VITE_APP_URL, VITE_BACKEND_URL, NODE_VERSION)
+- Custom domain: `yanqing.app` (CNAME → `ai-portfolio-6jm.pages.dev`)
+
+**Backend** – Mac Mini via Docker Compose + Cloudflare Tunnel
+- `docker-compose.yml` runs FastAPI (gunicorn, 2 uvicorn workers) + Redis 7
+- Container `portfolio-backend` on port 8100, `portfolio-redis` on internal network
+- Exposed via Cloudflare Tunnel at `portfolio-api.yanqing.app`
+- Health monitor: `com.portfolio.monitor.plist` (launchd, checks every 5 min)
+- Backend rebuild: `docker compose up -d --build`
+
+**DNS & CDN** – Cloudflare
+- Zone: `yanqing.app`
+- `yanqing.app` → CF Pages (proxied CNAME)
+- `portfolio-api.yanqing.app` → CF Tunnel → `localhost:8100`
+
+**Key deployment notes**:
+- `SITE_BASE_URL` in `constants/seo.ts` must match the deployed domain.
+- SSE streams require heartbeats every 15-30s (CF Tunnel has 100s idle timeout on Free plan).
+- Backend `.env.production` is mounted by Docker; never commit secrets.
+- `render.yaml` is retained for reference but Render is no longer used in production.
 
 ## Observability & Assets
 
-- `backend/backend_uvicorn.log` captures FastAPI access logs (tail via PowerShell snippet in README).
-- Prerender logs (and analytics demo replays) live in `backend/baseline_log.txt`, `scripts/replay_revision.py`, and `scripts/report_slot_catalog_usage.py`.
-- Generated LinkedIn photos (demo) stored temporarily via `scripts/run_linkedin_photo_demo.py`.
+- Backend logs: `docker compose logs -f backend`
+- Health monitor log: `~/scripts/portfolio-monitor.log`
+- Prerender logs and analytics demo replays live in `backend/baseline_log.txt`, `scripts/replay_revision.py`, and `scripts/report_slot_catalog_usage.py`.
 - Sitemap and SSR outputs reside in `dist/`, `dist-ssr/`, and `docs/` snapshots for verification.
 
 ## Documentation Map

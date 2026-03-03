@@ -19,6 +19,8 @@ except ImportError:  # pragma: no cover - optional dependency
     stripe = None  # type: ignore
 import httpx
 
+from sse_utils import with_heartbeat
+
 logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parents[1]
@@ -295,13 +297,13 @@ async def shutdown_event():
     except Exception as e:
         logger.warning("[SHUTDOWN] News HTTP client close failed: %s", e)
 
-# Allow CORS for local frontend dev
-origins = [
+# CORS: use CORS_ORIGINS env var in production, fall back to localhost for dev
+_cors_env = os.getenv("CORS_ORIGINS", "")
+origins = [o.strip() for o in _cors_env.split(",") if o.strip()] if _cors_env else [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
     "http://localhost:3000",
     "http://127.0.0.1:3000",
-    "*"
 ]
 app.add_middleware(
     CORSMiddleware,
@@ -385,7 +387,12 @@ async def ai_facts_endpoint():
 
 
 @app.get("/api/debug/session/{session_id}")
-async def debug_session_state(session_id: str):
+async def debug_session_state(session_id: str, request: Request):
+    # Gate behind superuser check in production
+    if os.getenv("ENVIRONMENT") == "production":
+        identifier = await who_am_i(request)
+        if not is_superuser(request):
+            raise HTTPException(status_code=403, detail="Forbidden")
     repo = get_session_state_repository()
     try:
         snapshot = await repo.load(session_id)
@@ -540,7 +547,7 @@ async def research_stream_endpoint(query: str, request: Request):
                 return
     
     return StreamingResponse(
-        generate_stream(),
+        with_heartbeat(generate_stream()),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -634,7 +641,7 @@ async def resume_search_stream_endpoint(query: str, request: Request, chat_histo
                 return
     
     return StreamingResponse(
-        generate_stream(),
+        with_heartbeat(generate_stream()),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -667,7 +674,7 @@ async def test_stream_endpoint():
             await asyncio.sleep(0)
     
     return StreamingResponse(
-        generate_test_stream(),
+        with_heartbeat(generate_test_stream()),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -684,14 +691,12 @@ async def tts_endpoint(request: TTSRequest):
         audio_bytes = get_voice_bytes(request.text)
         return Response(content=audio_bytes, media_type="audio/mpeg", headers={"Access-Control-Allow-Origin": "*"})
     except Exception as e:
-        # Log full traceback on server for debugging
-        import traceback, logging
-        logging.error("TTS generation failed", exc_info=True)
-        error_detail = {
-            "error": str(e),
-            "detail": traceback.format_exc(),
-        }
-        return JSONResponse(content=error_detail, status_code=500, headers={"Access-Control-Allow-Origin": "*"})
+        logger.error("TTS generation failed", exc_info=True)
+        error_detail = {"error": str(e)}
+        if os.getenv("ENVIRONMENT") != "production":
+            import traceback
+            error_detail["detail"] = traceback.format_exc()
+        return JSONResponse(content=error_detail, status_code=500)
 
 # -------------------- Streaming TTS Endpoints --------------------
 
@@ -707,13 +712,12 @@ async def start_tts_stream(request: TTSStreamRequest):
         )
         
     except Exception as e:
-        import traceback, logging
-        logging.error("TTS stream start failed", exc_info=True)
-        error_detail = {
-            "error": str(e),
-            "detail": traceback.format_exc(),
-        }
-        return JSONResponse(content=error_detail, status_code=500, headers={"Access-Control-Allow-Origin": "*"})
+        logger.error("TTS stream start failed", exc_info=True)
+        error_detail = {"error": str(e)}
+        if os.getenv("ENVIRONMENT") != "production":
+            import traceback
+            error_detail["detail"] = traceback.format_exc()
+        return JSONResponse(content=error_detail, status_code=500)
 
 @app.get("/api/tts/stream/{session_id}")
 async def stream_tts_audio(session_id: str, text: str):
@@ -769,7 +773,7 @@ async def stream_tts_audio(session_id: str, text: str):
                 return
     
     return StreamingResponse(
-        generate_audio_stream(),
+        with_heartbeat(generate_audio_stream()),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -874,13 +878,12 @@ async def create_gemini_chat(request: GeminiChatRequest):
         )
         
     except Exception as e:
-        import traceback, logging
-        logging.error("Gemini chat creation failed", exc_info=True)
-        error_detail = {
-            "error": str(e),
-            "detail": traceback.format_exc(),
-        }
-        return JSONResponse(content=error_detail, status_code=500, headers={"Access-Control-Allow-Origin": "*"})
+        logger.error("Gemini chat creation failed", exc_info=True)
+        error_detail = {"error": str(e)}
+        if os.getenv("ENVIRONMENT") != "production":
+            import traceback
+            error_detail["detail"] = traceback.format_exc()
+        return JSONResponse(content=error_detail, status_code=500)
 
 @app.get("/api/gemini/chat/stream")
 async def gemini_chat_stream(session_id: str, message: str, request: Request):
@@ -939,7 +942,7 @@ async def gemini_chat_stream(session_id: str, message: str, request: Request):
                 return
     
     return StreamingResponse(
-        generate_stream(),
+        with_heartbeat(generate_stream()),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -968,13 +971,12 @@ async def send_gemini_message(request: GeminiMessageRequest):
         )
         
     except Exception as e:
-        import traceback, logging
-        logging.error("Gemini message failed", exc_info=True)
-        error_detail = {
-            "error": str(e),
-            "detail": traceback.format_exc(),
-        }
-        return JSONResponse(content=error_detail, status_code=500, headers={"Access-Control-Allow-Origin": "*"})
+        logger.error("Gemini message failed", exc_info=True)
+        error_detail = {"error": str(e)}
+        if os.getenv("ENVIRONMENT") != "production":
+            import traceback
+            error_detail["detail"] = traceback.format_exc()
+        return JSONResponse(content=error_detail, status_code=500)
 
 @app.delete("/api/gemini/chat/{session_id}")
 async def delete_gemini_chat(session_id: str):
@@ -1499,11 +1501,11 @@ async def analytics_stream_endpoint(query: str, request: Request, _: None = Depe
                 return
     
     return StreamingResponse(
-        generate_analytics_stream(),
+        with_heartbeat(generate_analytics_stream()),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
-            "Connection": "keep-alive", 
+            "Connection": "keep-alive",
             "Access-Control-Allow-Origin": "*",
             "X-Accel-Buffering": "no",
         }
@@ -1582,12 +1584,12 @@ async def analytics_memory_stream_endpoint(
     
     
     return StreamingResponse(
-        generate_analytics_memory_stream(),
+        with_heartbeat(generate_analytics_memory_stream()),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
-            "Access-Control-Allow-Origin": "*", 
+            "Access-Control-Allow-Origin": "*",
             "X-Accel-Buffering": "no",
         }
     )

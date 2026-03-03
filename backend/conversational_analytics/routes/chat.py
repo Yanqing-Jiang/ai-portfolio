@@ -16,6 +16,7 @@ from ..supervisor import SupervisorOrchestrator, get_supervisor_orchestrator
 from ..models import ChatRequest, SelectionReply
 from ..memory import session_store
 from rate_limiter import conversational_analytics_rate_limit
+from sse_utils import with_heartbeat
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +84,7 @@ async def stream_chat(
                 yield event
     
     return StreamingResponse(
-        event_generator(),
+        with_heartbeat(event_generator()),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

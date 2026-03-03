@@ -137,12 +137,49 @@ The repo root contains a ready-made sequence (see user instructions above):
 
 Continuous integration should run `npm run build` and `pytest backend` before deployment; large analytics bundles may trigger Vite chunk warnings (see build logs).
 
-## Deployment Notes
+## Deployment
 
-- **Frontend**: Static assets from `dist/` can be hosted on Vercel, Netlify, or Azure Static Web Apps. Upload `dist-ssr/entry-server.js` if SSR is required.
-- **Backend**: Deploy FastAPI with Uvicorn/Gunicorn. Configure Redis, Supabase keys, Gemini/OpenAI tokens, and payment providers. Keep `backend/.env` synchronized with production secrets (never commit keys).
-- **Sitemaps & SEO**: `scripts/prerender.mjs` writes `sitemap.xml`, `sitemap-pages.xml`, `sitemap-projects.xml`. Ensure `SITE_BASE_URL` in `constants/seo.ts` points to the deployed domain before running the build.
-- **Rate limiting**: Enable Redis or provide `DISABLE_REDIS=true` for in-memory fallback; Stripe/PayPal enable paid token packs per docs.
+### Production Architecture
+
+| Component | Host | URL |
+|-----------|------|-----|
+| Frontend | Cloudflare Pages | `https://yanqing.app` |
+| Backend API | Mac Mini (Docker) | `https://portfolio-api.yanqing.app` |
+| Redis | Mac Mini (Docker) | Internal Docker network |
+| Database | Supabase (AWS) | PostgreSQL via `asyncpg` |
+| DNS & CDN | Cloudflare | Authoritative for `yanqing.app` |
+
+### Frontend (Cloudflare Pages)
+
+- Auto-deployed on push to `main` via GitHub Actions (`.github/workflows/deploy.yml`)
+- Build: `npm run build` → output `dist/`
+- Environment variables configured in CF Pages dashboard
+- Manual deploy: `CLOUDFLARE_API_TOKEN=<token> CLOUDFLARE_ACCOUNT_ID=<id> npx wrangler pages deploy dist --project-name=ai-portfolio`
+
+### Backend (Mac Mini + Docker)
+
+```bash
+# Start/rebuild backend
+docker compose up -d --build
+
+# View logs
+docker compose logs -f backend
+
+# Health check
+curl https://portfolio-api.yanqing.app/health
+```
+
+- `docker-compose.yml` runs FastAPI + Redis containers
+- Exposed via Cloudflare Tunnel (`~/.cloudflared/config.yml`)
+- Health monitor: `com.portfolio.monitor.plist` (launchd)
+- Env: `backend/.env.production` (mounted by Docker, never committed)
+
+### Notes
+
+- **Sitemaps & SEO**: `scripts/prerender.mjs` writes sitemaps. `SITE_BASE_URL` in `constants/seo.ts` must match the deployed domain.
+- **SSE streaming**: Heartbeats every 15-30s required (CF Tunnel 100s idle timeout).
+- **Rate limiting**: Redis-backed (`rate_limiter.py`) with in-memory fallback; Stripe/PayPal enable paid token packs.
+- **Render**: `render.yaml` retained for reference but no longer used in production.
 
 ## Additional Resources
 

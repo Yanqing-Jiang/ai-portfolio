@@ -147,6 +147,7 @@ from ..agent_v2 import DEFAULT_METRIC, get_a2ui_agent, A2UIAgentError
 from ..a2ui.emitter import A2UIMessageEmitter
 from ..layout_planner import LayoutPlanner
 from ..runtime import A2UIRuntime
+from sse_utils import with_heartbeat
 from ..clarification import (
     ClarificationRequest,
     ClarificationResponse,
@@ -397,7 +398,7 @@ async def stream_dashboard(dashboard_id: str, request: Request):
             yield _sse_data(json.dumps({"done": True}))
         
         return StreamingResponse(
-            generate_cached(),
+            with_heartbeat(generate_cached()),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
@@ -429,7 +430,7 @@ async def stream_dashboard(dashboard_id: str, request: Request):
             await _release_stream_slot(client_ip)
     
     return StreamingResponse(
-        generate(),
+        with_heartbeat(generate()),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
